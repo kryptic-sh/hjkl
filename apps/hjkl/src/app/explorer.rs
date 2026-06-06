@@ -1152,6 +1152,13 @@ impl super::App {
             self.bus.error(format!("explorer: {err}"));
         }
 
+        // Refresh tree.nodes from disk so the list reflects the applied ops:
+        // created files appear, trashed/renamed files update. `explorer_rebuild_buffer`
+        // only re-renders the EXISTING nodes, so without this fresh walk a
+        // trashed file would linger in the list (and a created one would vanish).
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.tree.rebuild();
+        }
         // Re-read disk, rebuild tree, reset buffer text + cursor (sticky on path).
         self.explorer_rebuild_buffer();
         self.recompute_explorer_git_base();
@@ -2077,8 +2084,60 @@ mod tests {
 
         let created = tmp.path().join("made.rs");
         let exists = created.exists();
+        // The list must reflect disk: the created file appears in the buffer.
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
         std::env::set_current_dir(prev).unwrap();
         assert!(exists, "o + type + Esc must create the file on disk");
+        assert!(
+            buf.contains("made.rs"),
+            "created file must appear in the explorer list; buf=<<<{buf}>>>"
+        );
+    }
+
+    #[test]
+    fn explorer_dd_trashes_file_and_drops_it_from_list() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("victim.txt"), "bye").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        // Move onto the victim.txt line (line 1, below the root) and delete it.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let on_disk = tmp.path().join("victim.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(!on_disk, "dd must remove victim.txt from disk (to trash)");
+        assert!(
+            !buf.contains("victim.txt"),
+            "dd'd file must drop from the list; buf=<<<{buf}>>>"
+        );
     }
 
     #[test]
