@@ -2013,6 +2013,75 @@ mod tests {
     }
 
     #[test]
+    fn explorer_reconcile_creates_file_on_disk() {
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let idx = app.explorer_slot_idx().expect("explorer slot");
+        // Append a new file line at the root depth (name_col = 2).
+        let cur = app.slots[idx].editor.buffer().as_string();
+        let newtext = format!("{cur}\n  newfile.rs");
+        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
+        // Explorer is in Normal mode by default; run the reconcile.
+        app.maybe_reconcile_explorer();
+
+        let created = tmp.path().join("newfile.rs");
+        let exists = created.exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(exists, "reconcile must create newfile.rs on disk");
+    }
+
+    #[test]
+    fn explorer_o_type_esc_creates_file_real_flow() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // Replicate the event loop: handle each key; on FallThrough, route to
+        // the insert dispatcher (insert mode) or the engine (otherwise); then
+        // run the post-key reconcile hook exactly as run() does.
+        use crate::app::event_loop::KeyOutcome;
+        use hjkl_engine::VimMode;
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        press(&mut app, KeyCode::Char('o'));
+        for c in "made.rs".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        let created = tmp.path().join("made.rs");
+        let exists = created.exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(exists, "o + type + Esc must create the file on disk");
+    }
+
+    #[test]
     fn buffer_line_click_maps_past_interleaved_explorer_slot() {
         use crate::app::mouse::{Zone, buffer_line_x_ranges, hit_test_zone};
         use crate::keymap_actions::AppAction;
