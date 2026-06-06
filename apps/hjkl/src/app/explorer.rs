@@ -630,6 +630,152 @@ pub(crate) struct ExplorerPane {
     /// Used to restore ("un-trash") when a `CreateFile` op targets a name
     /// matching a trashed entry — making `dd` + `p` a lossless move.
     pub trashed: Vec<(String, std::path::PathBuf)>,
+    /// The last-reconciled buffer state: `(absolute_path, is_dir)` per line,
+    /// index 0 = root. This is the baseline for `reconcile()`. Kept in sync
+    /// with every reconcile cycle and every `explorer_rebuild_buffer` call so
+    /// the diff always starts from the correct "last-known-good" state and vim
+    /// undo can reverse filesystem ops by reverting the buffer text.
+    pub baseline: Vec<(PathBuf, bool)>,
+}
+
+// ── nodes_from_buffer ──────────────────────────────────────────────────────────
+
+/// Derive the render-tree (`Vec<ExplorerNode>`) from the current buffer text.
+///
+/// Parses the buffer using the same indent→depth rules as
+/// `explorer_reconcile::parse_buffer` (which `reconcile()` calls internally),
+/// then fills in `is_last` and `branches` by scanning forward in the depth
+/// sequence, mirroring the logic used by `ExplorerTree::push_children` so the
+/// guide overlay produced by `render.rs` stays aligned.
+///
+/// The root line (line 0) becomes a depth-0 node for `path = root`.
+/// Subsequent lines: `depth = ((indent - 2) / 2).max(1)`.
+///
+/// `is_last[i]` — scanning forward from `i`, if the first node whose
+/// `depth < nodes[i].depth` is reached before finding a node with
+/// `depth == nodes[i].depth`, then `is_last = true`.
+///
+/// `branches[i]` (length `depth - 1` for `depth >= 1`; empty for depth 0):
+/// for each ancestor level `a` in `1..depth`, the entry is `!is_last` of the
+/// most-recent earlier node at depth `a`. I.e. draw a vertical bar at an
+/// ancestor column iff that ancestor still has a following sibling.
+pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
+    // ── Pass 1: parse path / depth / is_dir ─────────────────────────────────
+    struct RawNode {
+        path: PathBuf,
+        depth: usize,
+        is_dir: bool,
+    }
+
+    let mut raw: Vec<RawNode> = Vec::new();
+    let mut dir_stack: Vec<(usize, PathBuf)> = Vec::new(); // (depth, abs_path)
+
+    for (line_idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_end();
+        if line_idx == 0 {
+            // Root line — always depth 0.
+            raw.push(RawNode {
+                path: root.to_path_buf(),
+                depth: 0,
+                is_dir: true,
+            });
+            dir_stack.push((0, root.to_path_buf()));
+            continue;
+        }
+        if trimmed.trim_start().is_empty() {
+            continue;
+        }
+        let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+        let depth = ((indent.saturating_sub(2)) / 2).max(1);
+        let name_part = trimmed[indent..].trim_end();
+        let is_dir = name_part.ends_with('/');
+        let name = name_part.trim_end_matches('/');
+        if name.is_empty() {
+            continue;
+        }
+        // Pop dir_stack entries at depth >= current.
+        while dir_stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
+            dir_stack.pop();
+        }
+        let parent = dir_stack
+            .last()
+            .filter(|(d, _)| *d == depth - 1)
+            .map(|(_, p)| p.as_path())
+            .unwrap_or(root);
+        let path = parent.join(name);
+        if is_dir {
+            dir_stack.push((depth, path.clone()));
+        }
+        raw.push(RawNode {
+            path,
+            depth,
+            is_dir,
+        });
+    }
+
+    let n = raw.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // ── Pass 2: compute is_last ──────────────────────────────────────────────
+    let mut is_last_flags: Vec<bool> = vec![false; n];
+    for i in 0..n {
+        let d = raw[i].depth;
+        let mut last = true;
+        for node in raw.iter().skip(i + 1) {
+            if node.depth < d {
+                break; // left the parent's scope
+            }
+            if node.depth == d {
+                last = false;
+                break;
+            }
+        }
+        is_last_flags[i] = last;
+    }
+
+    // ── Pass 3: compute branches ─────────────────────────────────────────────
+    // For each node at depth d (d >= 1), branches[a-1] for a in 1..d is
+    // `!is_last` of the most-recent ancestor at depth a.
+    // We maintain a table: ancestor_is_last[depth] = is_last of the last node
+    // seen at that depth.
+    let mut ancestor_is_last: Vec<Option<bool>> = vec![None; n + 2];
+
+    let mut nodes: Vec<ExplorerNode> = Vec::with_capacity(n);
+    for i in 0..n {
+        let d = raw[i].depth;
+        // Update the ancestor table for this depth.
+        if d < ancestor_is_last.len() {
+            ancestor_is_last[d] = Some(is_last_flags[i]);
+        }
+
+        let branches: Vec<bool> = if d == 0 {
+            Vec::new()
+        } else {
+            (1..d)
+                .map(|a| {
+                    // draw a bar if the ancestor at depth `a` is NOT last
+                    ancestor_is_last
+                        .get(a)
+                        .and_then(|v| *v)
+                        .map(|last| !last)
+                        .unwrap_or(false)
+                })
+                .collect()
+        };
+
+        nodes.push(ExplorerNode {
+            path: raw[i].path.clone(),
+            depth: d,
+            is_dir: raw[i].is_dir,
+            is_last: is_last_flags[i],
+            branches,
+            git: None, // git overlay is recomputed separately
+        });
+    }
+
+    nodes
 }
 
 // ── Explorer search worker ─────────────────────────────────────────────────────
@@ -967,11 +1113,29 @@ impl super::App {
         self.set_focused_window(new_win_id);
         self.sync_viewport_to_editor();
 
+        // Build the initial baseline from the freshly-built tree nodes.
+        let initial_baseline: Vec<(PathBuf, bool)> = tree
+            .nodes
+            .iter()
+            .map(|n| (n.path.clone(), n.is_dir))
+            .collect();
+
+        // Record the dirty_gen AFTER set_content so the first reconcile check
+        // starts from the correct generation and doesn't fire immediately.
+        let initial_gen = self
+            .slots
+            .iter()
+            .rev()
+            .find(|s| s.is_explorer)
+            .map(|s| s.editor.buffer().dirty_gen())
+            .unwrap_or(0);
+
         self.explorer = Some(ExplorerPane {
             win_id: new_win_id,
             tree,
-            last_reconcile_gen: 0,
+            last_reconcile_gen: initial_gen,
             trashed: Vec::new(),
+            baseline: initial_baseline,
         });
 
         // Overlay any already-dirty open buffers onto the freshly-built tree
@@ -1023,6 +1187,11 @@ impl super::App {
 
     /// Rebuild the explorer buffer text (after expand/collapse). Keeps the
     /// cursor row on the same path when possible.
+    ///
+    /// This is a full structural reset: it calls `set_content` (which clears
+    /// undo history) and then syncs `baseline` and `last_reconcile_gen` so
+    /// the next reconcile starts from the new content — not from the
+    /// pre-toggle state. Undo across a fold-toggle is not expected.
     pub(crate) fn explorer_rebuild_buffer(&mut self) {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
@@ -1045,9 +1214,31 @@ impl super::App {
             .map(|n| n.path.clone());
 
         // Write new content directly (bypasses readonly guard intentionally).
+        // set_content clears undo/redo — correct for structural nav (toggle/root).
         self.slots[slot_idx].editor.set_content(&text);
         let _ = self.slots[slot_idx].editor.take_content_edits();
         let _ = self.slots[slot_idx].editor.take_content_reset();
+
+        // Sync the baseline from the freshly-rendered tree so the next
+        // reconcile diffs against the post-toggle state. Also update
+        // last_reconcile_gen to the new dirty_gen so the structural reset
+        // doesn't trigger a spurious reconcile.
+        let new_baseline: Vec<(PathBuf, bool)> = self
+            .explorer
+            .as_ref()
+            .map(|ep| {
+                ep.tree
+                    .nodes
+                    .iter()
+                    .map(|n| (n.path.clone(), n.is_dir))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let new_gen = self.slots[slot_idx].editor.buffer().dirty_gen();
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.baseline = new_baseline;
+            ep.last_reconcile_gen = new_gen;
+        }
 
         // Try to keep cursor on the same path.
         let new_row = if let Some(ref p) = prev_path {
@@ -1075,9 +1266,15 @@ impl super::App {
     }
 
     /// When the explorer is open and in Normal mode and the buffer has changed
-    /// since the last reconcile, diff the buffer against the tree baseline and
-    /// apply the resulting filesystem ops. Cheap when nothing changed (guarded
-    /// by the `dirty_gen` check and the Normal-mode check).
+    /// since the last reconcile, diff the buffer against the pane's explicit
+    /// `baseline` and apply the resulting filesystem ops.
+    ///
+    /// **Buffer-is-source-of-truth model**: after applying ops the buffer is
+    /// left exactly as the user edited it (no `set_content` reset). The render
+    /// overlay (`tree.nodes`) is derived from the current buffer text via
+    /// `nodes_from_buffer`. This preserves vim's native undo history so `u`
+    /// can reverse a `dd`/`o` by reverting the buffer — the next reconcile
+    /// then sees the reverted buffer and applies the inverse op on disk.
     pub(crate) fn maybe_reconcile_explorer(&mut self) {
         use hjkl_engine::VimMode;
 
@@ -1113,23 +1310,32 @@ impl super::App {
         // Clone what we need out of `self.explorer` before borrowing self mutably.
         let (baseline, text, root) = {
             let ep = self.explorer.as_ref().unwrap();
-            let baseline: Vec<(PathBuf, bool)> = ep
-                .tree
-                .nodes
-                .iter()
-                .map(|n| (n.path.clone(), n.is_dir))
-                .collect();
+            let baseline = ep.baseline.clone();
             let text = self.slots[slot_idx].editor.buffer().as_string();
             let root = ep.tree.root.clone();
             (baseline, text, root)
         };
 
         let ops = super::explorer_reconcile::reconcile(&baseline, &text, &root);
+
+        // Always derive new_nodes and update baseline from the current buffer
+        // text, regardless of whether there are ops. This keeps the render
+        // overlay aligned with the user's edits (e.g. a cosmetic rename before
+        // the user presses Esc).
+        let new_nodes = nodes_from_buffer(&text, &root);
+        let new_baseline: Vec<(PathBuf, bool)> = new_nodes
+            .iter()
+            .map(|n| (n.path.clone(), n.is_dir))
+            .collect();
+
         if ops.is_empty() {
-            // Nothing to do — update the gen so we don't re-check next tick.
+            // No fs changes — just update the overlay + baseline + gen.
             if let Some(ep) = self.explorer.as_mut() {
+                ep.tree.nodes = new_nodes;
+                ep.baseline = new_baseline;
                 ep.last_reconcile_gen = cur_gen;
             }
+            self.recompute_explorer_git_base();
             return;
         }
 
@@ -1152,37 +1358,35 @@ impl super::App {
             self.bus.error(format!("explorer: {err}"));
         }
 
-        // Refresh tree.nodes from disk so the list reflects the applied ops:
-        // created files appear, trashed/renamed files update. `explorer_rebuild_buffer`
-        // only re-renders the EXISTING nodes, so without this fresh walk a
-        // trashed file would linger in the list (and a created one would vanish).
+        // Update the render overlay and baseline from the buffer text.
+        // The buffer itself is NOT touched — preserving vim's undo history so
+        // `u` can reverse this edit's effect and trigger an inverse op next
+        // reconcile.
         if let Some(ep) = self.explorer.as_mut() {
-            ep.tree.rebuild();
+            ep.tree.nodes = new_nodes;
+            ep.baseline = new_baseline;
+            ep.last_reconcile_gen = cur_gen;
         }
-        // Re-read disk, rebuild tree, reset buffer text + cursor (sticky on path).
-        self.explorer_rebuild_buffer();
+
+        // Refresh git colors for the new state (no fs walk — cheap overlay).
         self.recompute_explorer_git_base();
 
-        // Update last_reconcile_gen to the NEW dirty_gen (after the rebuild
-        // which changes buffer text and thus bumps dirty_gen again).
-        let new_gen = self
-            .explorer_slot_idx()
-            .map(|idx| self.slots[idx].editor.buffer().dirty_gen())
-            .unwrap_or(cur_gen);
-        if let Some(ep) = self.explorer.as_mut() {
-            ep.last_reconcile_gen = new_gen;
-        }
-
         // Open newly-created files in the nearest non-explorer window.
+        // Suppress both the open-notice toast and the explorer-reveal (which
+        // would call tree.rebuild() + set_content, clobbering the undo history).
         for path in newly_created {
             let target_win = self.nearest_non_explorer_window();
             if let Some(win_id) = target_win {
                 self.switch_focus(win_id);
             }
             self.suppress_open_notice = true;
+            self.suppress_explorer_reveal = true;
             let s = Self::explorer_open_arg(&path);
             self.dispatch_ex(&format!("edit {s}"));
             self.suppress_open_notice = false;
+            // suppress_explorer_reveal is cleared by explorer_reveal_active or
+            // stays false if the reveal was never called (e.g. no explorer open).
+            self.suppress_explorer_reveal = false;
         }
     }
 
@@ -1212,7 +1416,15 @@ impl super::App {
     /// explorer's selection to it — so the buffer you're editing is the
     /// highlighted row in the tree. Does NOT change window focus. No-op for
     /// scratch buffers or files outside the tree root.
+    ///
+    /// Skipped when `suppress_explorer_reveal` is set (e.g. when
+    /// `maybe_reconcile_explorer` opens a newly-created file — we don't want
+    /// to clobber the explorer buffer and its undo history with a fresh fs walk).
     pub(crate) fn explorer_reveal_active(&mut self) {
+        if self.suppress_explorer_reveal {
+            self.suppress_explorer_reveal = false;
+            return;
+        }
         if self.explorer.is_none() {
             return;
         }
@@ -2649,6 +2861,255 @@ mod tests {
             resolve(&[KmKeyEvent::char('g'), KmKeyEvent::char('i')]),
             Some(AppAction::ExplorerToggleGitignore),
             "gi must map to ExplorerToggleGitignore"
+        );
+    }
+
+    // ── nodes_from_buffer round-trip tests ─────────────────────────────────
+
+    /// `render_text` → `nodes_from_buffer` must reproduce the same
+    /// path/depth/is_dir/is_last/branches for a non-trivial tree.
+    #[test]
+    fn nodes_from_buffer_roundtrip_simple() {
+        let root = make_tree();
+        // Expand a_dir so we have depth-2 nodes.
+        let mut tree = ExplorerTree::new(root.clone());
+        let a_dir = tree.nodes[1].path.clone();
+        tree.toggle(&a_dir);
+
+        let text = tree.render_text();
+        let parsed = nodes_from_buffer(&text, &root);
+
+        assert_eq!(
+            tree.nodes.len(),
+            parsed.len(),
+            "roundtrip must preserve node count; tree.nodes={} parsed={}",
+            tree.nodes.len(),
+            parsed.len()
+        );
+
+        for (i, (orig, got)) in tree.nodes.iter().zip(parsed.iter()).enumerate() {
+            assert_eq!(orig.path, got.path, "node[{i}] path mismatch");
+            assert_eq!(orig.depth, got.depth, "node[{i}] depth mismatch");
+            assert_eq!(orig.is_dir, got.is_dir, "node[{i}] is_dir mismatch");
+            assert_eq!(orig.is_last, got.is_last, "node[{i}] is_last mismatch");
+            assert_eq!(orig.branches, got.branches, "node[{i}] branches mismatch");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Round-trip for a deeper nested tree with mixed last/non-last siblings.
+    #[test]
+    fn nodes_from_buffer_roundtrip_nested_mixed() {
+        // Build: root/{ p/ { a/ { x.rs }, b.rs }, q.rs }
+        let base = std::env::temp_dir().join(format!("hjkl_nfb_nested_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("p").join("a")).unwrap();
+        fs::write(base.join("p").join("a").join("x.rs"), "").unwrap();
+        fs::write(base.join("p").join("b.rs"), "").unwrap();
+        fs::write(base.join("q.rs"), "").unwrap();
+
+        let mut tree = ExplorerTree::new(base.clone());
+        // Expand everything.
+        let p = base.join("p");
+        tree.toggle(&p);
+        let pa = base.join("p").join("a");
+        tree.toggle(&pa);
+
+        let text = tree.render_text();
+        let parsed = nodes_from_buffer(&text, &base);
+
+        assert_eq!(tree.nodes.len(), parsed.len(), "node count mismatch");
+        for (i, (orig, got)) in tree.nodes.iter().zip(parsed.iter()).enumerate() {
+            assert_eq!(orig.path, got.path, "node[{i}] path");
+            assert_eq!(orig.depth, got.depth, "node[{i}] depth");
+            assert_eq!(orig.is_dir, got.is_dir, "node[{i}] is_dir");
+            assert_eq!(orig.is_last, got.is_last, "node[{i}] is_last");
+            assert_eq!(orig.branches, got.branches, "node[{i}] branches");
+        }
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ── Shared key-press helper ─────────────────────────────────────────────
+
+    /// Press a key through the full event loop path (same as existing tests).
+    fn press(app: &mut super::super::App, code: crossterm::event::KeyCode) {
+        use crate::app::event_loop::KeyOutcome;
+        use crossterm::event::{KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let key = KeyEvent::new(code, KeyModifiers::NONE);
+        let consumed = matches!(
+            app.handle_keypress(key),
+            KeyOutcome::Continue | KeyOutcome::Break
+        );
+        if !consumed {
+            if app.active().editor.vim_mode() == VimMode::Insert {
+                app.dispatch_insert_key(key);
+            } else {
+                hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+            }
+        }
+        app.maybe_reconcile_explorer();
+    }
+
+    // ── Undo / redo filesystem op tests ────────────────────────────────────
+
+    /// `dd` trashes a file; `u` undoes the buffer edit → reconcile restores
+    /// the file from trash and the line reappears in the explorer.
+    #[test]
+    fn ddu_restores_file() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
+        // Isolate the trash directory so the restore doesn't pick up stale
+        // entries from parallel tests.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // j → move onto victim.txt; dd → delete the line.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let on_disk_after_dd = tmp.path().join("victim.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf_after_dd = app.slots[idx].editor.buffer().as_string();
+
+        // u → undo the buffer deletion; reconcile should restore the file.
+        press(&mut app, KeyCode::Char('u'));
+
+        let on_disk_after_u = tmp.path().join("victim.txt").exists();
+        let buf_after_u = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk_after_dd, "dd must trash victim.txt");
+        assert!(
+            !buf_after_dd.contains("victim.txt"),
+            "dd must drop victim.txt from buffer; buf=<<<{buf_after_dd}>>>"
+        );
+        assert!(
+            on_disk_after_u,
+            "u must restore victim.txt from trash; buf_after_u=<<<{buf_after_u}>>>"
+        );
+        assert!(
+            buf_after_u.contains("victim.txt"),
+            "u must restore victim.txt line in buffer; buf=<<<{buf_after_u}>>>"
+        );
+    }
+
+    /// `o` + name + `<Esc>` creates a file; `u` removes it again.
+    #[test]
+    fn create_then_undo_removes_file() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // o → insert line below; type "fresh.rs"; Esc → reconcile.
+        press(&mut app, KeyCode::Char('o'));
+        for c in "fresh.rs".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        let on_disk_after_create = tmp.path().join("fresh.rs").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf_after_create = app.slots[idx].editor.buffer().as_string();
+
+        // Creating a new file opens it in the main window (focus moves there).
+        // Refocus the explorer so `u` operates on the explorer buffer.
+        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        app.set_focused_window(ep_win);
+        app.sync_viewport_to_editor();
+
+        // u → undo the insert; reconcile should trash fresh.rs.
+        press(&mut app, KeyCode::Char('u'));
+
+        let on_disk_after_u = tmp.path().join("fresh.rs").exists();
+        let buf_after_u = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(
+            on_disk_after_create,
+            "o+type+Esc must create fresh.rs on disk"
+        );
+        assert!(
+            buf_after_create.contains("fresh.rs"),
+            "created file must appear in buffer; buf=<<<{buf_after_create}>>>"
+        );
+        assert!(
+            !on_disk_after_u,
+            "u must remove fresh.rs from disk (trash it); buf_after_u=<<<{buf_after_u}>>>"
+        );
+        assert!(
+            !buf_after_u.contains("fresh.rs"),
+            "u must drop fresh.rs from buffer; buf=<<<{buf_after_u}>>>"
+        );
+    }
+
+    /// `dd` → `u` (restored) → `<C-r>` re-trashes the file.
+    #[test]
+    fn ddu_then_redo_retrashes() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("victim.txt"), "data").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // j, dd → trash.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(!tmp.path().join("victim.txt").exists(), "dd must trash");
+
+        // u → restore.
+        press(&mut app, KeyCode::Char('u'));
+        assert!(tmp.path().join("victim.txt").exists(), "u must restore");
+
+        // <C-r> → redo → re-trash.
+        // Ctrl+r is handled by hjkl_vim_tui::handle_key (not handle_keypress).
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        let consumed = matches!(
+            app.handle_keypress(ctrl_r),
+            KeyOutcome::Continue | KeyOutcome::Break
+        );
+        if !consumed {
+            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ctrl_r);
+        }
+        app.maybe_reconcile_explorer();
+
+        let on_disk = tmp.path().join("victim.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk, "<C-r> must re-trash victim.txt");
+        assert!(
+            !buf.contains("victim.txt"),
+            "<C-r> must remove victim.txt from buffer; buf=<<<{buf}>>>"
         );
     }
 }

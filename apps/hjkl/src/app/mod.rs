@@ -335,6 +335,11 @@ pub struct App {
     /// by the explorer when opening a file under the cursor — the buffer visibly
     /// changes, so the toast is just noise.
     pub(crate) suppress_open_notice: bool,
+    /// Suppresses `explorer_reveal_active` (and the full tree rebuild it
+    /// triggers) for the next `do_edit` call. Set by `maybe_reconcile_explorer`
+    /// when opening a newly-created file so that the automatic reveal does not
+    /// clobber the explorer buffer (and its undo history) with a fresh fs walk.
+    pub(crate) suppress_explorer_reveal: bool,
     /// Whether the which-key feature is enabled (from config).
     pub which_key_enabled: bool,
     /// Idle delay before the which-key popup appears (from config).
@@ -1534,6 +1539,7 @@ impl App {
             which_key_sticky: false,
             chord_history: Vec::new(),
             suppress_open_notice: false,
+            suppress_explorer_reveal: false,
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),
