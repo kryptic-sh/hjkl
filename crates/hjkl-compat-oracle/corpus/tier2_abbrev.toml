@@ -1,0 +1,157 @@
+# Tier 2 — insert-mode abbreviations (`:iabbrev` / `:abbrev` / `:unabbreviate`
+# / `:abclear`). Expected behaviour captured from live `nvim --headless`.
+# Driven through the `hjkl --nvim-api` binary (needs the `:` command line to
+# DEFINE the abbreviation before typing in insert).
+#
+# Abbreviation types (vim `:h abbreviations`):
+#   full-id : lhs all keyword chars (e.g. "teh")
+#   end-id  : lhs ends keyword, other chars non-keyword (e.g. "#i")
+#   non-id  : lhs ends non-keyword (e.g. ";;") — expands ONLY on <CR>/<Esc>/<C-]>
+
+# ── full-id ──────────────────────────────────────────────────────────────
+[[cases]]
+name = "abbr_full_id_space"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>iteh <Esc>"
+expected_buffer = "the \n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_full_id_punct"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>iteh.<Esc>"
+expected_buffer = "the.\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_full_id_esc"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>iteh<Esc>"
+expected_buffer = "the\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_full_id_cr"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>iteh<CR>x<Esc>"
+expected_buffer = "the\nx\n"
+expected_mode = "normal"
+
+# No expansion: lhs followed by a keyword char (not a standalone word).
+[[cases]]
+name = "abbr_full_id_suffix_keyword_no_expand"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>itehy <Esc>"
+expected_buffer = "tehy \n"
+expected_mode = "normal"
+
+# No expansion: lhs preceded by a keyword char.
+[[cases]]
+name = "abbr_full_id_prefix_keyword_no_expand"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>ixteh <Esc>"
+expected_buffer = "xteh \n"
+expected_mode = "normal"
+
+# Expansion: lhs preceded by a non-keyword char.
+[[cases]]
+name = "abbr_full_id_prefix_nonkeyword"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>i!teh <Esc>"
+expected_buffer = "!the \n"
+expected_mode = "normal"
+
+# <C-]> expands without inserting a trailing char.
+[[cases]]
+name = "abbr_ctrl_rbracket"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>iteh<C-]><Esc>"
+expected_buffer = "the\n"
+expected_mode = "normal"
+
+
+# ── end-id ───────────────────────────────────────────────────────────────
+[[cases]]
+name = "abbr_end_id_space"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab #i #include<CR>i#i <Esc>"
+expected_buffer = "#include \n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_end_id_suffix_keyword_no_expand"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab #i #include<CR>i#ix<Esc>"
+expected_buffer = "#ix\n"
+expected_mode = "normal"
+
+# ── non-id (expands on <Esc>/<CR>/<C-]>, NOT on space/punct) ──────────────
+[[cases]]
+name = "abbr_non_id_esc"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab ;; SEMI<CR>i;;<Esc>"
+expected_buffer = "SEMI\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_non_id_space_no_expand"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab ;; SEMI<CR>i;; <Esc>"
+expected_buffer = ";; \n"
+expected_mode = "normal"
+
+[[cases]]
+name = "abbr_non_id_cr"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab ;; SEMI<CR>i;;<CR>x<Esc>"
+expected_buffer = "SEMI\nx\n"
+expected_mode = "normal"
+
+# ── recursion: rhs is NOT re-expanded ────────────────────────────────────
+[[cases]]
+name = "abbr_rhs_not_reexpanded"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab a aa<CR>ia <Esc>"
+expected_buffer = "aa \n"
+expected_mode = "normal"
+
+# ── :unabbreviate removes it ─────────────────────────────────────────────
+[[cases]]
+name = "abbr_unabbreviate"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>:una teh<CR>iteh <Esc>"
+expected_buffer = "teh \n"
+expected_mode = "normal"
+
+# ── :abclear wipes all ───────────────────────────────────────────────────
+[[cases]]
+name = "abbr_abclear"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab teh the<CR>:abclear<CR>iteh <Esc>"
+expected_buffer = "teh \n"
+expected_mode = "normal"
+
+# ── multi-word rhs ───────────────────────────────────────────────────────
+[[cases]]
+name = "abbr_multiword_rhs"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = ":iab btw by the way<CR>ibtw <Esc>"
+expected_buffer = "by the way \n"
+expected_mode = "normal"

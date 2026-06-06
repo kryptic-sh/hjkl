@@ -2641,6 +2641,8 @@ fn insert_session_round_trips() {
         row_max: 0,
         before_rope: ropey::Rope::from_str("hello"),
         reason: hjkl_engine::InsertReason::Enter(hjkl_engine::InsertEntry::I),
+        start_row: 0,
+        start_col: 0,
     }));
     assert_eq!(e.insert_session().map(|s| s.count), Some(3));
     let taken = e.take_insert_session();

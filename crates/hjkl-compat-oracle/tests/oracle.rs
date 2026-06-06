@@ -310,6 +310,11 @@ async fn tier2_ex_undo_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_ex_undo.toml", "tier2_ex_undo").await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_abbrev_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_abbrev.toml", "tier2_abbrev").await;
+}
+
 // NOTE: `@:` (repeat last ex) is implemented in the TUI app chord layer
 // (route_chord_key / replay_last_ex) with unit tests in
 // apps/hjkl/src/app/tests/marks_registers.rs. It is NOT oracle-tested because

@@ -51,8 +51,9 @@ pub use types::{
     SpecialKey, Style, Viewport, WrapMode,
 };
 pub use vim::{
-    InsertDir, InsertEntry, InsertReason, InsertSession, LastChange, LastVisual, Motion, Operator,
-    Pending, RangeKind, ScrollDir, SearchPrompt, op_is_change, parse_motion,
+    Abbrev, AbbrevTrigger, InsertDir, InsertEntry, InsertReason, InsertSession, LastChange,
+    LastVisual, Motion, Operator, Pending, RangeKind, ScrollDir, SearchPrompt, op_is_change,
+    parse_motion,
 };
 
 /// The FSM-internal mode discriminator used by `Editor::fsm_mode()` and

@@ -1523,6 +1523,116 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 3,
         run: recover_handler::<H>,
     });
+
+    // ---- abbreviations (#abbreviations) -------------------------------------
+
+    // `:abbreviate {lhs} {rhs}` / `:ab {lhs} {rhs}` — insert + cmdline abbrev.
+    reg.add(ExCommand {
+        name: "abbreviate",
+        aliases: &["ab"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: abbreviate_handler::<H>,
+    });
+
+    // `:iabbrev {lhs} {rhs}` / `:iab {lhs} {rhs}` — insert-only abbrev.
+    reg.add(ExCommand {
+        name: "iabbrev",
+        aliases: &["iab"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: iabbrev_handler::<H>,
+    });
+
+    // `:cabbrev {lhs} {rhs}` / `:cab {lhs} {rhs}` — cmdline-only abbrev.
+    reg.add(ExCommand {
+        name: "cabbrev",
+        aliases: &["cab"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: cabbrev_handler::<H>,
+    });
+
+    // `:noreabbrev {lhs} {rhs}` — non-recursive insert + cmdline abbrev.
+    reg.add(ExCommand {
+        name: "noreabbrev",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 5,
+        run: noreabbrev_handler::<H>,
+    });
+
+    // `:inoreabbrev {lhs} {rhs}` — non-recursive insert-only abbrev.
+    reg.add(ExCommand {
+        name: "inoreabbrev",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 6,
+        run: inoreabbrev_handler::<H>,
+    });
+
+    // `:cnoreabbrev {lhs} {rhs}` — non-recursive cmdline-only abbrev.
+    reg.add(ExCommand {
+        name: "cnoreabbrev",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 6,
+        run: cnoreabbrev_handler::<H>,
+    });
+
+    // `:unabbreviate {lhs}` / `:una {lhs}` — remove insert + cmdline abbrev.
+    reg.add(ExCommand {
+        name: "unabbreviate",
+        aliases: &["una"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: unabbreviate_handler::<H>,
+    });
+
+    // `:iunabbrev {lhs}` / `:iun {lhs}` — remove insert-only abbrev.
+    reg.add(ExCommand {
+        name: "iunabbrev",
+        aliases: &["iun"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: iunabbrev_handler::<H>,
+    });
+
+    // `:cunabbrev {lhs}` / `:cun {lhs}` — remove cmdline-only abbrev.
+    reg.add(ExCommand {
+        name: "cunabbrev",
+        aliases: &["cun"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: cunabbrev_handler::<H>,
+    });
+
+    // `:abclear` — clear all insert + cmdline abbreviations.
+    reg.add(ExCommand {
+        name: "abclear",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: abclear_handler::<H>,
+    });
+
+    // `:iabclear` — clear all insert-only abbreviations.
+    reg.add(ExCommand {
+        name: "iabclear",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 4,
+        run: iabclear_handler::<H>,
+    });
+
+    // `:cabclear` — clear all cmdline-only abbreviations.
+    reg.add(ExCommand {
+        name: "cabclear",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 4,
+        run: cabclear_handler::<H>,
+    });
 }
 
 // ---- :redraw ---------------------------------------------------------------
@@ -1941,6 +2051,180 @@ fn retab_impl<H: Host>(
     editor.push_undo();
     editor.restore(new_lines, (start_row, 0));
     editor.mark_content_dirty();
+    Some(ExEffect::Ok)
+}
+
+// ---- abbreviations ---------------------------------------------------------
+
+/// Parse abbreviation args: `{lhs} {rhs}`.
+///
+/// The lhs is the first whitespace-delimited token.  The rhs is everything
+/// after the first run of whitespace (preserving internal spaces).  A
+/// `<buffer>` arg is silently stripped.
+fn parse_abbrev_args(args: &str) -> Option<(String, String)> {
+    let args = args.trim();
+    // Strip leading `<buffer>` modifier (unsupported; ignore it).
+    let args = if let Some(rest) = args.strip_prefix("<buffer>") {
+        rest.trim_start()
+    } else {
+        args
+    };
+    let mut parts = args.splitn(2, [' ', '\t']);
+    let lhs = parts.next()?.trim();
+    if lhs.is_empty() {
+        return None;
+    }
+    let rhs = parts.next().unwrap_or("").trim();
+    Some((lhs.to_string(), rhs.to_string()))
+}
+
+// `:abbreviate {lhs} {rhs}` — define insert + cmdline abbreviation.
+fn abbreviate_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok); // no args → list (not implemented; no-op)
+    };
+    editor.add_abbrev(&lhs, &rhs, true, true, false);
+    Some(ExEffect::Ok)
+}
+
+// `:iabbrev {lhs} {rhs}` — insert-mode only abbreviation.
+fn iabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok);
+    };
+    editor.add_abbrev(&lhs, &rhs, true, false, false);
+    Some(ExEffect::Ok)
+}
+
+// `:cabbrev {lhs} {rhs}` — cmdline-mode only abbreviation (stored, not expanded).
+fn cabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok);
+    };
+    editor.add_abbrev(&lhs, &rhs, false, true, false);
+    Some(ExEffect::Ok)
+}
+
+// `:noreabbrev {lhs} {rhs}` — non-recursive insert + cmdline abbreviation.
+fn noreabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok);
+    };
+    editor.add_abbrev(&lhs, &rhs, true, true, true);
+    Some(ExEffect::Ok)
+}
+
+// `:inoreabbrev {lhs} {rhs}` — non-recursive insert-only abbreviation.
+fn inoreabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok);
+    };
+    editor.add_abbrev(&lhs, &rhs, true, false, true);
+    Some(ExEffect::Ok)
+}
+
+// `:cnoreabbrev {lhs} {rhs}` — non-recursive cmdline-only abbreviation.
+fn cnoreabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let Some((lhs, rhs)) = parse_abbrev_args(args) else {
+        return Some(ExEffect::Ok);
+    };
+    editor.add_abbrev(&lhs, &rhs, false, true, true);
+    Some(ExEffect::Ok)
+}
+
+// `:unabbreviate {lhs}` — remove insert + cmdline abbreviation.
+fn unabbreviate_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let lhs = args.trim();
+    if lhs.is_empty() {
+        return Some(ExEffect::Ok);
+    }
+    editor.remove_abbrev(lhs, true, true);
+    Some(ExEffect::Ok)
+}
+
+// `:iunabbrev {lhs}` — remove insert-only abbreviation.
+fn iunabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let lhs = args.trim();
+    if lhs.is_empty() {
+        return Some(ExEffect::Ok);
+    }
+    editor.remove_abbrev(lhs, true, false);
+    Some(ExEffect::Ok)
+}
+
+// `:cunabbrev {lhs}` — remove cmdline-only abbreviation.
+fn cunabbrev_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let lhs = args.trim();
+    if lhs.is_empty() {
+        return Some(ExEffect::Ok);
+    }
+    editor.remove_abbrev(lhs, false, true);
+    Some(ExEffect::Ok)
+}
+
+// `:abclear` — clear all insert + cmdline abbreviations.
+fn abclear_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    editor.clear_abbrevs(true, true);
+    Some(ExEffect::Ok)
+}
+
+// `:iabclear` — clear all insert-only abbreviations.
+fn iabclear_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    editor.clear_abbrevs(true, false);
+    Some(ExEffect::Ok)
+}
+
+// `:cabclear` — clear all cmdline-only abbreviations.
+fn cabclear_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    editor.clear_abbrevs(false, true);
     Some(ExEffect::Ok)
 }
 

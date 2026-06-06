@@ -463,6 +463,37 @@ pub enum LastHorizontalMotion {
     Sneak,
 }
 
+/// A single abbreviation entry (insert-mode or cmdline-mode, recursive or noremap).
+///
+/// Mode flags: `insert` = expand in Insert mode, `cmdline` = expand in Cmdline mode.
+/// `noremap` stores whether the definition was made with `noreabbrev`; expansion
+/// is always literal text regardless of this flag, but it is preserved for future use.
+///
+/// NOTE: Abbreviations are currently per-editor (global in vim would share across
+/// buffers; per-editor is equivalent for single-buffer use and is acceptable for
+/// now — cross-buffer global behaviour is a follow-up).
+#[derive(Debug, Clone)]
+pub struct Abbrev {
+    pub lhs: String,
+    pub rhs: String,
+    pub insert: bool,
+    pub cmdline: bool,
+    pub noremap: bool,
+}
+
+/// Trigger kind for abbreviation expansion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbbrevTrigger {
+    /// A non-keyword character was typed (e.g. space, punctuation).
+    NonKeyword(char),
+    /// `<C-]>` was pressed — expand without inserting any character.
+    CtrlBracket,
+    /// `<CR>` (Enter) was pressed.
+    Cr,
+    /// `<Esc>` was pressed to leave insert mode.
+    Esc,
+}
+
 #[derive(Default)]
 pub struct VimState {
     /// Internal FSM mode. Kept in sync with `current_mode` after every
@@ -622,6 +653,9 @@ pub struct VimState {
     /// Tracks which kind of horizontal motion was last performed, so `;` / `,`
     /// can dispatch to sneak-repeat vs. find-char-repeat as appropriate.
     pub last_horizontal_motion: LastHorizontalMotion,
+    /// Insert-mode (and cmdline-mode) abbreviations. Populated by `:abbreviate`,
+    /// `:iabbrev`, `:cabbrev`, `:noreabbrev`, etc. Empty by default.
+    pub abbrevs: Vec<Abbrev>,
 }
 
 pub(crate) const SEARCH_HISTORY_MAX: usize = 100;
@@ -653,6 +687,12 @@ pub struct InsertSession {
     /// `ropey::Rope::clone` is Arc-clone — no byte copying.
     pub before_rope: ropey::Rope,
     pub reason: InsertReason,
+    /// (row, col) where the insert session began (char-indexed). Abbreviation
+    /// expansion uses `start_col` as `mincol` — only chars at or after this
+    /// column on `start_row` are eligible as part of the `lhs` match, so
+    /// pre-existing buffer text is never consumed by expansion.
+    pub start_row: usize,
+    pub start_col: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1341,13 +1381,15 @@ pub(crate) fn begin_insert<H: crate::types::Host>(
     } else {
         reason
     };
-    let (row, _) = ed.cursor();
+    let (row, col) = ed.cursor();
     ed.vim.insert_session = Some(InsertSession {
         count,
         row_min: row,
         row_max: row,
         before_rope: crate::types::Query::rope(&ed.buffer),
         reason,
+        start_row: row,
+        start_col: col,
     });
     ed.vim.mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
@@ -1893,12 +1935,28 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
     let in_replace = matches!(
         ed.vim.insert_session.as_ref().map(|s| &s.reason),
         Some(InsertReason::Replace)
     );
+
+    // ── Abbreviation expansion (insert mode, non-replace) ────────────────────
+    // A non-keyword char typed in insert mode can trigger expansion.
+    // We check BEFORE inserting the character; if an abbrev matches, we delete
+    // the lhs and insert the rhs, then continue to insert `ch` as normal.
+    // `<C-v>` (literal-insert) must bypass this — callers that want literal
+    // insertion should NOT call this bridge; they use insert_char_literal.
+    if !in_replace && !ed.vim.abbrevs.is_empty() {
+        let iskeyword = ed.settings.iskeyword.clone();
+        if !is_keyword_char(ch, &iskeyword) {
+            // Only non-keyword trigger chars fire abbreviation expansion.
+            check_and_apply_abbrev(ed, AbbrevTrigger::NonKeyword(ch));
+            // (we do NOT return early; continue to insert `ch` below)
+        }
+    }
+    // Read cursor (after any abbreviation expansion that may have changed the buffer).
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
 
     // ── Skip-over: if the typed char matches the top of the pending-closes
     // stack AND the char currently under the cursor IS that close char,
@@ -2046,6 +2104,14 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
+
+    // ── Abbreviation expansion on CR ─────────────────────────────────────────
+    // CR triggers expansion for full-id / end-id / non-id abbreviations.
+    // We expand BEFORE the newline is inserted; CR is then inserted as normal.
+    if !ed.vim.abbrevs.is_empty() {
+        check_and_apply_abbrev(ed, AbbrevTrigger::Cr);
+    }
+
     let cursor = buf_cursor_pos(&ed.buffer);
     let prev_line = buf_line(&ed.buffer, cursor.row)
         .unwrap_or_default()
@@ -2521,6 +2587,13 @@ pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.vim.pending_closes.clear();
+
+    // ── Abbreviation expansion on Esc ────────────────────────────────────────
+    // Esc triggers expansion for all abbreviation types.
+    if !ed.vim.abbrevs.is_empty() {
+        check_and_apply_abbrev(ed, AbbrevTrigger::Esc);
+    }
+
     finish_insert_session(ed);
     // Paired-tag auto-rename (issue #182). Must run BEFORE the cursor moves
     // left (the move-left is vim's "leave-insert cursor adjustment"; the
@@ -5066,13 +5139,15 @@ fn begin_insert_noundo<H: crate::types::Host>(
     } else {
         reason
     };
-    let (row, _) = ed.cursor();
+    let (row, col) = ed.cursor();
     ed.vim.insert_session = Some(InsertSession {
         count,
         row_min: row,
         row_max: row,
         before_rope: crate::types::Query::rope(&ed.buffer),
         reason,
+        start_row: row,
+        start_col: col,
     });
     ed.vim.mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
@@ -7248,6 +7323,238 @@ fn is_wordchar(c: char) -> bool {
 // one parser, one default, one bug surface.
 pub(crate) use hjkl_buffer::is_keyword_char;
 
+/// Classify a vim abbreviation lhs into its type.
+///
+/// - **Full**: every char in `lhs` is a keyword char (full-id).
+/// - **End**: the last char is a keyword char, at least one other is not (end-id).
+/// - **None**: the last char is a non-keyword char (non-id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbbrevKind {
+    /// All keyword chars (full-id).
+    Full,
+    /// Last char keyword, others include non-keyword (end-id).
+    End,
+    /// Last char is non-keyword (non-id).
+    NonKw,
+}
+
+pub(crate) fn abbrev_kind(lhs: &str, iskeyword: &str) -> AbbrevKind {
+    let chars: Vec<char> = lhs.chars().collect();
+    if chars.is_empty() {
+        return AbbrevKind::NonKw;
+    }
+    let last = *chars.last().unwrap();
+    let last_is_kw = is_keyword_char(last, iskeyword);
+    if !last_is_kw {
+        return AbbrevKind::NonKw;
+    }
+    // last is keyword — check if all chars are keyword
+    let all_kw = chars.iter().all(|&c| is_keyword_char(c, iskeyword));
+    if all_kw {
+        AbbrevKind::Full
+    } else {
+        AbbrevKind::End
+    }
+}
+
+/// Try to match and expand an abbreviation given the text before the cursor.
+///
+/// # Parameters
+/// - `abbrevs` — the active abbreviation table (insert-mode entries).
+/// - `line_before` — the text on the current line *before* the cursor (char slice).
+/// - `mincol` — first column index (0-based, char-indexed) that belongs to the
+///   current insert session on the **same row as the cursor**.  Chars before
+///   `mincol` were in the buffer before insert mode started and must NOT be
+///   consumed as part of the lhs.  When the cursor is on a different row than
+///   `start_row`, `mincol` is treated as 0 (the entire line was typed in this
+///   session).
+/// - `trigger` — what the user did (typed a non-kw char, pressed CR/Esc/C-]).
+/// - `iskeyword` — the active iskeyword spec string.
+///
+/// Returns `Some((lhs_char_len, rhs))` on a match, where `lhs_char_len` is the
+/// number of characters to delete before the cursor (the lhs), and `rhs` is the
+/// text to insert in their place.  Returns `None` when no abbreviation matches.
+pub(crate) fn try_abbrev_expand(
+    abbrevs: &[Abbrev],
+    line_before: &str,
+    mincol: usize,
+    trigger: AbbrevTrigger,
+    iskeyword: &str,
+) -> Option<(usize, String)> {
+    let chars: Vec<char> = line_before.chars().collect();
+    let cursor_col = chars.len(); // col of the cursor (0-based)
+
+    for abbrev in abbrevs {
+        if !abbrev.insert {
+            continue;
+        }
+        let lhs_chars: Vec<char> = abbrev.lhs.chars().collect();
+        if lhs_chars.is_empty() {
+            continue;
+        }
+        let lhs_len = lhs_chars.len();
+
+        // Determine the lhs type.
+        let kind = abbrev_kind(&abbrev.lhs, iskeyword);
+
+        // Trigger rules by lhs type.
+        match kind {
+            AbbrevKind::Full | AbbrevKind::End => {
+                // full-id / end-id: trigger char must be a NON-keyword char
+                // (space, punctuation, CR, Esc, C-]).
+                let trigger_char_is_kw = match trigger {
+                    AbbrevTrigger::NonKeyword(c) => is_keyword_char(c, iskeyword),
+                    AbbrevTrigger::CtrlBracket | AbbrevTrigger::Cr | AbbrevTrigger::Esc => false,
+                };
+                if trigger_char_is_kw {
+                    // A keyword trigger char would extend the word — no expand.
+                    continue;
+                }
+            }
+            AbbrevKind::NonKw => {
+                // non-id: only expand on CR, Esc, C-].  NOT on regular typed chars.
+                match trigger {
+                    AbbrevTrigger::Cr | AbbrevTrigger::Esc | AbbrevTrigger::CtrlBracket => {}
+                    AbbrevTrigger::NonKeyword(_) => continue,
+                }
+            }
+        }
+
+        // Check that the text before the cursor ends with the lhs.
+        if cursor_col < lhs_len {
+            continue;
+        }
+        let lhs_start_col = cursor_col - lhs_len;
+
+        // Enforce mincol: the lhs must not start before the insert-start column.
+        if lhs_start_col < mincol {
+            continue;
+        }
+
+        // Compare chars.
+        let text_slice: &[char] = &chars[lhs_start_col..cursor_col];
+        if text_slice != lhs_chars.as_slice() {
+            continue;
+        }
+
+        // Check "front" rule: the char immediately before the lhs.
+        if lhs_start_col > 0 {
+            let ch_before = chars[lhs_start_col - 1];
+            match kind {
+                AbbrevKind::Full => {
+                    // full-id: char before lhs must be a non-keyword char.
+                    // Single-char full-id exception: if the char before is a
+                    // non-keyword char that is NOT space/tab, it is NOT recognised
+                    // (vim `:h abbreviations`: "A word in front of a full-id abbrev
+                    // is a non-keyword char; but a single char abbrev is not
+                    // recognised after a non-blank, non-keyword char").
+                    // Actually vim's rule: full-id is not recognised if the char
+                    // before is a NON-keyword char other than space/tab AND the lhs
+                    // is a single keyword char. For multi-char full-id the rule is
+                    // just "char before must be non-keyword".
+                    if is_keyword_char(ch_before, iskeyword) {
+                        continue; // char before is keyword → lhs is part of a longer word
+                    }
+                    if lhs_len == 1 && ch_before != ' ' && ch_before != '\t' {
+                        // single-char full-id: non-blank non-keyword before → skip
+                        continue;
+                    }
+                }
+                AbbrevKind::End => {
+                    // end-id: no constraint on the char before (any char is fine,
+                    // including keyword chars — the non-keyword prefix of the lhs
+                    // acts as the boundary).
+                }
+                AbbrevKind::NonKw => {
+                    // non-id: the char before the lhs must be blank (space/tab) or
+                    // it must be the start of the typed portion (mincol boundary).
+                    if ch_before != ' ' && ch_before != '\t' {
+                        continue;
+                    }
+                }
+            }
+        }
+        // lhs_start_col == 0 means the lhs starts at the very beginning of the
+        // line (or at the insert-start position); all types accept this.
+
+        return Some((lhs_len, abbrev.rhs.clone()));
+    }
+
+    None
+}
+
+/// Check abbreviations and apply the expansion if a match is found.
+///
+/// Reads the current cursor position and the text before it, calls
+/// `try_abbrev_expand`, and if a match is found, deletes the `lhs` chars
+/// and inserts the `rhs`. Returns `true` if an expansion was applied.
+///
+/// `trigger` is what the user did; the trigger char itself is NOT inserted
+/// here — the caller inserts it (or not, in the case of `C-]`).
+pub(crate) fn check_and_apply_abbrev<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    trigger: AbbrevTrigger,
+) -> bool {
+    use hjkl_buffer::{Edit, Position};
+
+    // Collect the data we need without holding borrows.
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let row = cursor.row;
+    let col = cursor.col;
+    let line_before: String = {
+        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        line.chars().take(col).collect()
+    };
+    let (mincol, on_start_row) = if let Some(ref s) = ed.vim.insert_session {
+        if row == s.start_row {
+            (s.start_col, true)
+        } else {
+            (0, false)
+        }
+    } else {
+        (0, false)
+    };
+    // If cursor is before the insert start column on the same row, no lhs possible.
+    if on_start_row && col <= mincol {
+        return false;
+    }
+
+    let iskeyword = ed.settings.iskeyword.clone();
+    let abbrevs = ed.vim.abbrevs.clone();
+
+    let Some((lhs_len, rhs)) =
+        try_abbrev_expand(&abbrevs, &line_before, mincol, trigger, &iskeyword)
+    else {
+        return false;
+    };
+
+    // Delete `lhs_len` chars before the cursor.
+    let lhs_start = col.saturating_sub(lhs_len);
+    if lhs_len > 0 {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(row, lhs_start),
+            end: Position::new(row, col),
+            kind: hjkl_buffer::MotionKind::Char,
+        });
+    }
+
+    // Insert rhs at the (now updated) cursor position.
+    let insert_pos = Position::new(row, lhs_start);
+    if !rhs.is_empty() {
+        ed.mutate_edit(Edit::InsertStr {
+            at: insert_pos,
+            text: rhs.clone(),
+        });
+    }
+
+    // Move cursor to end of inserted rhs.
+    let new_col = lhs_start + rhs.chars().count();
+    buf_set_cursor_rc(&mut ed.buffer, row, new_col);
+    ed.push_buffer_cursor_to_textarea();
+
+    true
+}
+
 fn word_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
@@ -9324,5 +9631,223 @@ mod indent_count_tests {
         ed.jump_cursor(2, 0);
         execute_line_op(&mut ed, Operator::Indent, 1);
         assert_eq!(content(&ed), "a\nb\n    c\n");
+    }
+}
+
+// ── try_abbrev_expand unit tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod abbrev_tests {
+    use super::{Abbrev, AbbrevKind, AbbrevTrigger, abbrev_kind, try_abbrev_expand};
+    use AbbrevKind::{End, Full, NonKw};
+
+    const ISK: &str = "@,48-57,_,192-255"; // default iskeyword
+
+    fn make_abbrev(lhs: &str, rhs: &str) -> Abbrev {
+        Abbrev {
+            lhs: lhs.to_string(),
+            rhs: rhs.to_string(),
+            insert: true,
+            cmdline: false,
+            noremap: false,
+        }
+    }
+
+    fn expand(
+        abbrevs: &[Abbrev],
+        before: &str,
+        mincol: usize,
+        trig: AbbrevTrigger,
+    ) -> Option<(usize, String)> {
+        try_abbrev_expand(abbrevs, before, mincol, trig, ISK)
+    }
+
+    // ── abbrev_type classification ────────────────────────────────────────────
+
+    #[test]
+    fn fullid_all_keyword_chars() {
+        assert_eq!(abbrev_kind("teh", ISK), Full);
+        assert_eq!(abbrev_kind("abc123", ISK), Full);
+        assert_eq!(abbrev_kind("_foo", ISK), Full);
+    }
+
+    #[test]
+    fn endid_ends_with_kw_has_nonkw() {
+        assert_eq!(abbrev_kind("#i", ISK), End);
+        assert_eq!(abbrev_kind("#include", ISK), End);
+    }
+
+    #[test]
+    fn nonid_ends_with_nonkw() {
+        assert_eq!(abbrev_kind(";;", ISK), NonKw);
+        assert_eq!(abbrev_kind("->", ISK), NonKw);
+    }
+
+    // ── full-id expansion ─────────────────────────────────────────────────────
+
+    #[test]
+    fn fullid_expands_on_space_trigger() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "teh", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    #[test]
+    fn fullid_expands_on_esc_trigger() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "teh", 0, AbbrevTrigger::Esc);
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    #[test]
+    fn fullid_expands_on_cr_trigger() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "teh", 0, AbbrevTrigger::Cr);
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    #[test]
+    fn fullid_expands_on_ctrl_bracket() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "teh", 0, AbbrevTrigger::CtrlBracket);
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    #[test]
+    fn fullid_does_not_expand_on_keyword_trigger() {
+        // Typing a keyword char after "teh" would extend the word — no expand.
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "teh", 0, AbbrevTrigger::NonKeyword('a'));
+        // 'a' is keyword — should not trigger
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn fullid_no_expand_when_lhs_not_at_end() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        // "ateh" — 'a' before is keyword, so skip.
+        let r = expand(&abbrevs, "ateh", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn fullid_expands_after_nonkw_prefix() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        // "!teh" — '!' before is non-keyword → expand.
+        let r = expand(&abbrevs, "!teh", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    #[test]
+    fn fullid_single_char_no_expand_after_nonblank_nonkw() {
+        let abbrevs = [make_abbrev("a", "b")];
+        // "!a" — '!' is non-blank non-keyword before single-char lhs → no expand.
+        let r = expand(&abbrevs, "!a", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn fullid_single_char_expands_after_space() {
+        let abbrevs = [make_abbrev("a", "b")];
+        // " a" — space before single-char lhs → expand.
+        let r = expand(&abbrevs, " a", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((1, "b".to_string())));
+    }
+
+    // ── mincol: pre-existing text must not be consumed ────────────────────────
+
+    #[test]
+    fn mincol_blocks_consuming_preexisting_text() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        // "teh" is at cols 0..3, but insert started at col 3 → no match.
+        let r = expand(&abbrevs, "teh", 3, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn mincol_allows_match_starting_at_mincol() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        // Existing text "!! " at 0..3, then user typed "teh" → mincol=3.
+        // The char before the lhs is ' ' (non-keyword), so full-id expands.
+        let r = expand(&abbrevs, "!! teh", 3, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((3, "the".to_string())));
+    }
+
+    // ── end-id expansion ──────────────────────────────────────────────────────
+
+    #[test]
+    fn endid_expands_on_space_trigger() {
+        let abbrevs = [make_abbrev("#i", "#include")];
+        let r = expand(&abbrevs, "#i", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((2, "#include".to_string())));
+    }
+
+    #[test]
+    fn endid_expands_on_esc_trigger() {
+        let abbrevs = [make_abbrev("#i", "#include")];
+        let r = expand(&abbrevs, "#i", 0, AbbrevTrigger::Esc);
+        assert_eq!(r, Some((2, "#include".to_string())));
+    }
+
+    // ── non-id expansion ──────────────────────────────────────────────────────
+
+    #[test]
+    fn nonid_expands_on_esc_trigger() {
+        let abbrevs = [make_abbrev(";;", "std::endl;")];
+        let r = expand(&abbrevs, ";;", 0, AbbrevTrigger::Esc);
+        assert_eq!(r, Some((2, "std::endl;".to_string())));
+    }
+
+    #[test]
+    fn nonid_expands_on_cr_trigger() {
+        let abbrevs = [make_abbrev(";;", "std::endl;")];
+        let r = expand(&abbrevs, ";;", 0, AbbrevTrigger::Cr);
+        assert_eq!(r, Some((2, "std::endl;".to_string())));
+    }
+
+    #[test]
+    fn nonid_does_not_expand_on_nonkw_trigger() {
+        // non-id abbreviations must NOT expand on regular typed chars like space.
+        let abbrevs = [make_abbrev(";;", "std::endl;")];
+        let r = expand(&abbrevs, ";;", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn nonid_expands_on_ctrl_bracket() {
+        let abbrevs = [make_abbrev(";;", "std::endl;")];
+        let r = expand(&abbrevs, ";;", 0, AbbrevTrigger::CtrlBracket);
+        assert_eq!(r, Some((2, "std::endl;".to_string())));
+    }
+
+    // ── multiword rhs ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn multiword_rhs_expansion() {
+        let abbrevs = [make_abbrev("hw", "hello world")];
+        let r = expand(&abbrevs, "hw", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, Some((2, "hello world".to_string())));
+    }
+
+    // ── empty / no match ─────────────────────────────────────────────────────
+
+    #[test]
+    fn no_match_returns_none() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "xyz", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn empty_abbrevs_returns_none() {
+        let r = expand(&[], "teh", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn empty_before_text_returns_none() {
+        let abbrevs = [make_abbrev("teh", "the")];
+        let r = expand(&abbrevs, "", 0, AbbrevTrigger::NonKeyword(' '));
+        assert_eq!(r, None);
     }
 }

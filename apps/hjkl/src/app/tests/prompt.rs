@@ -48,9 +48,10 @@ fn wq_readonly_does_not_exit() {
 fn palette_esc_in_insert_drops_to_normal_then_motions_apply() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
-    type_str(&mut app, "abc");
-    // First Esc: popup is open (typed "abc" matches no commands → popup is None).
-    // "abc" has no matching commands so popup should be None.
+    // Use "xyz" — a prefix that matches no registered commands, so no popup opens.
+    type_str(&mut app, "xyz");
+    // First Esc: popup is open (typed "xyz" matches no commands → popup is None).
+    // "xyz" has no matching commands so popup should be None.
     // If popup is Some, Esc dismisses popup. If None, Esc drops to Normal.
     // Either way we need Normal mode — press Esc until we get there.
     if app.completion.is_some() {
@@ -63,7 +64,7 @@ fn palette_esc_in_insert_drops_to_normal_then_motions_apply() {
     assert!(app.command_field.is_some());
     let f = app.command_field.as_ref().unwrap();
     assert_eq!(f.vim_mode(), VimMode::Normal);
-    assert_eq!(f.text(), "abc");
+    assert_eq!(f.text(), "xyz");
     app.handle_command_field_key(key(KeyCode::Char('b')));
     app.handle_command_field_key(key(KeyCode::Char('d')));
     app.handle_command_field_key(key(KeyCode::Char('w')));

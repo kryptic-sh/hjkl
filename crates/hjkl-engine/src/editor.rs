@@ -4929,6 +4929,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.widen_insert_row(row);
     }
 
+    /// `<C-]>` in insert mode — expand abbreviation at the cursor WITHOUT
+    /// inserting any character. This is the "pure expand" trigger that expands
+    /// all abbreviation types (full-id, end-id, non-id) without adding a
+    /// trailing space or punctuation.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_bracket(&mut self) {
+        if vim::check_and_apply_abbrev(self, vim::AbbrevTrigger::CtrlBracket) {
+            self.after_insert_mutation();
+        }
+    }
+
     /// Exit insert mode to Normal: finish the insert session, step the cursor
     /// one cell left (vim convention on Esc), record the `gi` target position,
     /// and update the sticky column.
@@ -5402,6 +5414,48 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Install a new insert session, replacing any existing one.
     pub fn set_insert_session(&mut self, s: Option<vim::InsertSession>) {
         self.vim.insert_session = s;
+    }
+
+    // ── Abbreviations ─────────────────────────────────────────────────────────
+
+    /// Register an abbreviation. If an entry for `lhs` already exists (same
+    /// mode flags), it is replaced. Inserts at the front so newer definitions
+    /// take priority (first-match wins in `try_abbrev_expand`).
+    pub fn add_abbrev(&mut self, lhs: &str, rhs: &str, insert: bool, cmdline: bool, noremap: bool) {
+        // Remove existing entry with same lhs + overlapping mode flags.
+        self.vim
+            .abbrevs
+            .retain(|a| a.lhs != lhs || (a.insert && !insert) || (a.cmdline && !cmdline));
+        self.vim.abbrevs.insert(
+            0,
+            vim::Abbrev {
+                lhs: lhs.to_string(),
+                rhs: rhs.to_string(),
+                insert,
+                cmdline,
+                noremap,
+            },
+        );
+    }
+
+    /// Remove the abbreviation with the given `lhs`. Only removes entries
+    /// whose mode flags overlap with the requested `insert`/`cmdline` flags.
+    pub fn remove_abbrev(&mut self, lhs: &str, insert: bool, cmdline: bool) {
+        self.vim
+            .abbrevs
+            .retain(|a| a.lhs != lhs || (!insert || !a.insert) && (!cmdline || !a.cmdline));
+    }
+
+    /// Clear all abbreviations matching the given mode flags.
+    ///
+    /// `insert=true` removes insert-mode abbrevs; `cmdline=true` removes
+    /// cmdline-mode abbrevs. Both `true` clears everything.
+    pub fn clear_abbrevs(&mut self, insert: bool, cmdline: bool) {
+        self.vim.abbrevs.retain(|a| {
+            // Keep entries that do NOT match any of the cleared modes.
+            let cleared = (insert && a.insert) || (cmdline && a.cmdline);
+            !cleared
+        });
     }
 
     // ── Visual anchors ────────────────────────────────────────────────────────

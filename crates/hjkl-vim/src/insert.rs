@@ -63,6 +63,11 @@ pub fn step_insert<H: Host>(
                 ed.insert_ctrl_d();
                 return true;
             }
+            Key::Char(']') => {
+                // `<C-]>` — expand abbreviation WITHOUT inserting any character.
+                ed.insert_ctrl_bracket();
+                return true;
+            }
             _ => {}
         }
     }
