@@ -402,10 +402,9 @@ pub enum AppAction {
     OpenCmdLineWindow(CmdLineWindowKind),
 
     // ── File-explorer actions (sidebar context) ───────────────────────────
-    /// `l` / `<CR>` / `<Right>` — open or expand the node under the cursor.
+    /// `<CR>` — open a file, or toggle (expand/collapse) the directory under
+    /// the cursor.
     ExplorerActivate,
-    /// `h` / `<Left>` — collapse a directory or jump to its parent.
-    ExplorerCollapse,
     /// `a` — create a new file or directory.
     ExplorerCreate,
     /// `r` — rename the node under the cursor.

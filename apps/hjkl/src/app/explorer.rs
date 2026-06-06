@@ -543,12 +543,6 @@ impl ExplorerTree {
         true
     }
 
-    /// Collapse the directory at `path` (no-op if not expanded).
-    pub(crate) fn collapse(&mut self, path: &Path) {
-        self.expanded.remove(path);
-        self.rebuild();
-    }
-
     pub(crate) fn is_expanded(&self, path: &Path) -> bool {
         self.expanded.contains(path)
     }
@@ -1237,58 +1231,11 @@ impl super::App {
                 self.switch_focus(win_id);
             }
             let s = Self::explorer_open_arg(&node.path);
+            // Suppress the `"file" NL` open toast — opening from the tree is an
+            // explicit action and the buffer visibly changes.
+            self.suppress_open_notice = true;
             self.dispatch_ex(&format!("edit {s}"));
-        }
-    }
-
-    /// h/Left: collapse expanded dir or move to parent line.
-    pub(crate) fn explorer_collapse(&mut self) {
-        let cursor_row = {
-            let ep = self.explorer.as_ref().unwrap();
-            let win = self.windows.get(ep.win_id).and_then(|w| w.as_ref());
-            win.map(|w| w.cursor_row).unwrap_or(0)
-        };
-
-        let node = self
-            .explorer
-            .as_ref()
-            .and_then(|ep| ep.tree.nodes.get(cursor_row))
-            .cloned();
-        let Some(node) = node else { return };
-
-        if node.is_dir
-            && let Some(ref ep) = self.explorer
-            && ep.tree.is_expanded(&node.path)
-        {
-            let path = node.path.clone();
-            if let Some(ref mut ep) = self.explorer {
-                ep.tree.collapse(&path);
-            }
-            self.explorer_rebuild_buffer();
-            return;
-        }
-
-        // Move cursor to the parent row.
-        if node.depth == 0 {
-            return;
-        }
-        let target_depth = node.depth - 1;
-        let parent_row = self.explorer.as_ref().and_then(|ep| {
-            ep.tree.nodes[..cursor_row]
-                .iter()
-                .rposition(|n| n.depth == target_depth)
-        });
-        if let Some(row) = parent_row {
-            let ep = self.explorer.as_ref().unwrap();
-            let win_id = ep.win_id;
-            if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                win.cursor_row = row;
-                win.cursor_col = 0;
-            }
-            let fw = self.focused_window();
-            if fw == win_id {
-                self.sync_viewport_to_explorer_editor();
-            }
+            self.suppress_open_notice = false;
         }
     }
 
@@ -1917,7 +1864,6 @@ impl super::App {
         use crate::keymap_actions::AppAction;
         match action {
             AppAction::ExplorerActivate => self.explorer_activate(),
-            AppAction::ExplorerCollapse => self.explorer_collapse(),
             AppAction::ExplorerCreate => self.explorer_create(),
             AppAction::ExplorerRename => self.explorer_rename(),
             AppAction::ExplorerDelete => self.explorer_delete(),
@@ -2325,7 +2271,7 @@ mod tests {
         let a_dir_path = tree.nodes[1].path.clone();
         tree.toggle(&a_dir_path); // expand
         assert_eq!(tree.nodes.len(), 6); // root + 4 + inner
-        tree.collapse(&a_dir_path);
+        tree.toggle(&a_dir_path); // collapse (toggle on an expanded dir)
         assert_eq!(
             child_names(&tree),
             vec!["a_dir", "b_dir", "m_file.txt", "z_file.txt"]

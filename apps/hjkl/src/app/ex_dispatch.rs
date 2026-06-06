@@ -1774,14 +1774,16 @@ impl App {
                     // Arm the PID-lock swap immediately on successful open so a
                     // concurrent second instance sees it before any edit is made.
                     self.arm_swap_on_open(current_slot_idx);
-                    let line_count = self.active().editor.buffer().line_count() as usize;
-                    let path_display = self
-                        .active()
-                        .filename
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default();
-                    self.bus.info(format!("\"{path_display}\" {line_count}L"));
+                    if !self.suppress_open_notice {
+                        let line_count = self.active().editor.buffer().line_count() as usize;
+                        let path_display = self
+                            .active()
+                            .filename
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        self.bus.info(format!("\"{path_display}\" {line_count}L"));
+                    }
                 }
                 self.refresh_git_signs_force();
                 // Follow the opened buffer in the explorer (select its row).

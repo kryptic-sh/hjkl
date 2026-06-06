@@ -113,7 +113,6 @@ impl App {
 
             // ── File-explorer actions ──────────────────────────────────────
             AppAction::ExplorerActivate
-            | AppAction::ExplorerCollapse
             | AppAction::ExplorerCreate
             | AppAction::ExplorerRename
             | AppAction::ExplorerDelete

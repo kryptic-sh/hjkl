@@ -724,12 +724,10 @@ pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::H
 
     let bindings: &[(&str, AppAction, &str)] = &[
         // ── Navigation / open ─────────────────────────────────────────────
-        // NOTE: `h`/`l` are intentionally NOT bound — they fall through to the
-        // engine as normal cursor left/right motions. Use <CR>/arrows to
-        // open/expand and collapse.
-        ("<CR>", AppAction::ExplorerActivate, "open / expand"),
-        ("<Right>", AppAction::ExplorerActivate, "open / expand"),
-        ("<Left>", AppAction::ExplorerCollapse, "collapse / parent"),
+        // NOTE: h/l and the arrow keys are intentionally NOT bound — they fall
+        // through to the engine as normal cursor motions. <CR> opens a file or
+        // toggles a directory (expand/collapse).
+        ("<CR>", AppAction::ExplorerActivate, "open / toggle"),
         // ── File operations ───────────────────────────────────────────────
         ("a", AppAction::ExplorerCreate, "create file/dir"),
         ("r", AppAction::ExplorerRename, "rename"),

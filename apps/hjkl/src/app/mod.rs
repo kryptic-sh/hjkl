@@ -336,6 +336,10 @@ pub struct App {
     /// engine's own pending). Cleared when the chord commits/cancels. Used by
     /// Backspace to pop one level: cancel all pending, then replay all-but-last.
     pub(crate) chord_history: Vec<crossterm::event::KeyEvent>,
+    /// Suppresses the `"file" NL` open notice for the next `do_edit` call. Set
+    /// by the explorer when opening a file under the cursor — the buffer visibly
+    /// changes, so the toast is just noise.
+    pub(crate) suppress_open_notice: bool,
     /// Whether the which-key feature is enabled (from config).
     pub which_key_enabled: bool,
     /// Idle delay before the which-key popup appears (from config).
@@ -1516,6 +1520,7 @@ impl App {
             which_key_active: false,
             which_key_sticky: false,
             chord_history: Vec::new(),
+            suppress_open_notice: false,
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),
