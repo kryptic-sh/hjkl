@@ -5193,9 +5193,39 @@ fn apply_op_with_text_object<H: crate::types::Host>(
     inner: bool,
     count: usize,
 ) {
-    let Some((start, end, kind)) = text_object_range(ed, obj, inner, count) else {
+    let Some((mut start, mut end, mut kind)) = text_object_range(ed, obj, inner, count) else {
         return;
     };
+    // vim's exclusive-motion adjustment (`:h exclusive`), applied to the
+    // OPERATOR form of an inner bracket object spanning multiple lines (the
+    // visual form keeps the raw charwise region). When the exclusive end sits
+    // in column 0, pull it back to the end of the previous line and make the
+    // motion inclusive; if the start is at or before the first non-blank of its
+    // line, promote to linewise. This is what makes `di{` on a contentful
+    // multi-line block collapse to bare braces ("{\n}") and a clean block
+    // delete its body linewise.
+    if inner
+        && matches!(obj, TextObject::Bracket(_))
+        && kind == RangeKind::Exclusive
+        && end.0 > start.0
+        && end.1 == 0
+    {
+        let prev = end.0 - 1;
+        let prev_len = buf_line_chars(&ed.buffer, prev);
+        let fnb = buf_line(&ed.buffer, start.0)
+            .unwrap_or_default()
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .count();
+        if start.1 <= fnb {
+            start = (start.0, 0);
+            end = (prev, prev_len);
+            kind = RangeKind::Linewise;
+        } else {
+            end = (prev, prev_len.saturating_sub(1));
+            kind = RangeKind::Inclusive;
+        }
+    }
     ed.jump_cursor(start.0, start.1);
     run_operator_over_range(ed, op, start, end, kind);
 }
@@ -5291,10 +5321,16 @@ fn run_operator_over_range<H: crate::types::Host>(
     kind: RangeKind,
 ) {
     let (top, bot) = order(start, end);
-    // Charwise empty range (same position) — nothing to act on. For Linewise
-    // the range `top == bot` means "operate on this one line" which is
-    // perfectly valid (e.g. `Vd` on a single-line VisualLine selection).
+    // Charwise empty range (same position). For Delete/Yank there is nothing to
+    // act on. For Change, vim still enters insert at that point — `ci(` on `()`
+    // and `ci{` on a whitespace-only block both place the cursor inside and
+    // start inserting without deleting anything.
     if top == bot && !matches!(kind, RangeKind::Linewise) {
+        if op == Operator::Change {
+            ed.vim.change_mark_start = Some(top);
+            ed.push_undo();
+            begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+        }
         return;
     }
 
@@ -7757,30 +7793,64 @@ fn bracket_text_object<H: crate::types::Host>(
     };
     // End positions are *exclusive*.
     if inner {
-        // Multi-line `iB` / `i{` etc: vim deletes the full lines between
-        // the braces (linewise), preserving the `{` and `}` lines
-        // themselves and the newlines that directly abut them. E.g.:
-        //   {\n    body\n}\n  →  {\n}\n    (cursor on `}` line)
-        // Single-line `i{` falls back to charwise exclusive.
-        if close_pos.0 > open_pos.0 + 1 {
-            // There is at least one line strictly between open and close.
-            let inner_row_start = open_pos.0 + 1;
-            let inner_row_end = close_pos.0 - 1;
-            let end_col = lines
-                .get(inner_row_end)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
-            return Some((
-                (inner_row_start, 0),
-                (inner_row_end, end_col),
-                RangeKind::Linewise,
-            ));
-        }
-        let inner_start = advance_pos(lines, open_pos);
+        // The inner region is the raw charwise span from just after `{` to just
+        // before `}`. Returned as Exclusive: the VISUAL path uses it directly
+        // (so `vi{` is charwise — `vi{d` → "{}"), while the OPERATOR path
+        // (`di{`/`ci{`) applies vim's exclusive-motion adjustment in
+        // `apply_op_with_text_object` to collapse a contentful multi-line block
+        // to bare braces ("{\n}") or promote a clean one to linewise.
+        // Inner start = position just after `{`. When `{` is the last char on
+        // its line, the inner region begins at the start of the next line (so
+        // the exclusive-motion adjustment can promote to linewise). `advance_pos`
+        // stops at end-of-line, so wrap explicitly here.
+        let open_line_len = lines[open_pos.0].chars().count();
+        let inner_start = if open_pos.1 + 1 >= open_line_len && open_pos.0 + 1 < lines.len() {
+            (open_pos.0 + 1, 0)
+        } else {
+            advance_pos(lines, open_pos)
+        };
+        // Empty inner (`{}` / `( )` degenerate) → empty range at the inner
+        // start. `di{` then no-ops; `ci{` inserts at that point.
         if inner_start.0 > close_pos.0
             || (inner_start.0 == close_pos.0 && inner_start.1 >= close_pos.1)
         {
-            return None;
+            return Some((inner_start, inner_start, RangeKind::Exclusive));
+        }
+        // Whitespace-only multi-line inner: vim's `di{` is a no-op and `ci{`
+        // inserts at the inner start without deleting the whitespace. Model as
+        // an empty range at the inner start. Detected when every char strictly
+        // between the braces (excluding newlines) is a space/tab, and there is
+        // at least one — an inner of only newlines (empty lines) does NOT count
+        // and falls through to the normal collapse.
+        if close_pos.0 > open_pos.0 {
+            let mut saw_ws = false;
+            let mut saw_other = false;
+            for r in inner_start.0..=close_pos.0 {
+                let line: Vec<char> = lines
+                    .get(r)
+                    .map(|l| l.chars().collect())
+                    .unwrap_or_default();
+                let from = if r == inner_start.0 { inner_start.1 } else { 0 };
+                let to = if r == close_pos.0 {
+                    close_pos.1
+                } else {
+                    line.len()
+                };
+                for &c in line
+                    .iter()
+                    .take(to.min(line.len()))
+                    .skip(from.min(line.len()))
+                {
+                    if c == ' ' || c == '\t' {
+                        saw_ws = true;
+                    } else {
+                        saw_other = true;
+                    }
+                }
+            }
+            if saw_ws && !saw_other {
+                return Some((inner_start, inner_start, RangeKind::Exclusive));
+            }
         }
         Some((inner_start, close_pos, RangeKind::Exclusive))
     } else {

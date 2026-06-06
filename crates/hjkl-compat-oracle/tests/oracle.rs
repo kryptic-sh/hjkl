@@ -342,6 +342,11 @@ async fn tier2_text_objects_edge_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_block_textobj_corpus_passes() {
+    run_corpus("corpus/tier2_block_textobj.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_paragraph_word_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_paragraph_word.toml");

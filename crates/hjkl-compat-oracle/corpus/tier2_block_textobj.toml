@@ -1,0 +1,152 @@
+# Tier 2 — inner/around bracket text objects across multi-line layouts.
+# Captures vim's exclusive-motion adjustment for operator+inner-block (di{/ci{)
+# and the whitespace-only-inner special case. Live nvim compare (in-process).
+#
+# Key vim behaviours (verified against nvim -u NONE):
+#  - di{ on a clean/contentful multi-line block collapses to bare braces "{\n}"
+#    (operator exclusive→inclusive/linewise adjustment), even when the `{` line
+#    has trailing text or the `}` line has leading text.
+#  - di{ where the inner is ONLY whitespace (non-empty) is a no-op; ci{ there
+#    keeps the whitespace and inserts at the inner start.
+#  - da{/ca{ (around) are plain charwise and delete the braces too.
+
+# ── di{ ──────────────────────────────────────────────────────────────────
+[[cases]]
+name = "di_brace_clean"
+initial_buffer = "{\nbody\n}\n"
+initial_cursor = [1, 1]
+keys = "di{"
+expected_buffer = "{\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_empty_line"
+initial_buffer = "{\n\n}\n"
+initial_cursor = [1, 0]
+keys = "di{"
+expected_buffer = "{\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_ws_only_noop"
+initial_buffer = "{\n   \n}\n"
+initial_cursor = [1, 1]
+keys = "di{"
+expected_buffer = "{\n   \n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_ws_two_lines_noop"
+initial_buffer = "{\n  \n  \n}\n"
+initial_cursor = [1, 1]
+keys = "di{"
+expected_buffer = "{\n  \n  \n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_open_trailing"
+initial_buffer = "{ a\n  b\n}\n"
+initial_cursor = [1, 2]
+keys = "di{"
+expected_buffer = "{\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_lead_on_close"
+initial_buffer = "{\n  b\nx}\n"
+initial_cursor = [1, 2]
+keys = "di{"
+expected_buffer = "{\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_mixed_ws_real"
+initial_buffer = "{\n  \nx\n}\n"
+initial_cursor = [1, 1]
+keys = "di{"
+expected_buffer = "{\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_brace_single_line"
+initial_buffer = "x{abc}y\n"
+initial_cursor = [0, 3]
+keys = "di{"
+expected_buffer = "x{}y\n"
+expected_mode = "normal"
+
+# ── di(/di[ parity ───────────────────────────────────────────────────────
+[[cases]]
+name = "di_paren_open_trailing"
+initial_buffer = "( a\n  b\n)\n"
+initial_cursor = [1, 2]
+keys = "di("
+expected_buffer = "(\n)\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "di_bracket_open_trailing"
+initial_buffer = "[ a\n  b\n]\n"
+initial_cursor = [1, 2]
+keys = "di["
+expected_buffer = "[\n]\n"
+expected_mode = "normal"
+
+# ── ci{ ──────────────────────────────────────────────────────────────────
+[[cases]]
+name = "ci_brace_clean"
+initial_buffer = "{\nbody\n}\n"
+initial_cursor = [1, 1]
+keys = "ci{Z<Esc>"
+expected_buffer = "{\nZ\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "ci_brace_open_trailing"
+initial_buffer = "{ a\n  b\n}\n"
+initial_cursor = [1, 2]
+keys = "ci{Z<Esc>"
+expected_buffer = "{Z\n}\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "ci_brace_ws_only_keeps_ws"
+initial_buffer = "{\n   \n}\n"
+initial_cursor = [1, 1]
+keys = "ci{Z<Esc>"
+expected_buffer = "{\nZ   \n}\n"
+expected_mode = "normal"
+
+# ── da{ / ca{ (around: charwise, deletes the braces) ─────────────────────
+[[cases]]
+name = "da_brace_surrounded"
+initial_buffer = "x{\nbody\n}y\n"
+initial_cursor = [1, 1]
+keys = "da{"
+expected_buffer = "xy\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "da_brace_single_line"
+initial_buffer = "x{abc}y\n"
+initial_cursor = [0, 3]
+keys = "da{"
+expected_buffer = "xy\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "ca_brace_surrounded"
+initial_buffer = "x{\nbody\n}y\n"
+initial_cursor = [1, 1]
+keys = "ca{Z<Esc>"
+expected_buffer = "xZy\n"
+expected_mode = "normal"
+
+# ── visual vi{ is charwise (differs from operator di{) ───────────────────
+[[cases]]
+name = "vi_brace_open_trailing_charwise"
+initial_buffer = "{ a\n  b\n}\n"
+initial_cursor = [1, 2]
+keys = "vi{d"
+expected_buffer = "{}\n"
+expected_mode = "normal"

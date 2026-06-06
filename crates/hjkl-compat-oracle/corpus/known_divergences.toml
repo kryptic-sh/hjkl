@@ -16,29 +16,8 @@
 # visual_block_jl_c_change_block) were fixed in hjkl-engine 0.5.8 and
 # re-promoted to their tier-2 corpus files (kryptic-sh/hjkl#83).
 
-# ─── di{ inner-block linewise-promotion quirks ───────────────────────────────
-# vim's `current_block` ("i{") has two subtle multi-line behaviours hjkl does
-# not yet replicate. The common cases (single-line, clean multi-line, nested,
-# count, cursor-on-brace) all pass in tier2_text_objects; only these remain.
-
-# Whitespace-only body: vim PRESERVES a body line that is only whitespace —
-# `di{` is effectively a no-op on the content. hjkl currently deletes the
-# blank line (treats it as empty inner content).
-[[cases]]
-name = "textobj_di_curlybrace_ws_only_body_DIVERGES"
-initial_buffer = "{\n   \n}\n"
-initial_cursor = [1, 1]
-keys = "di{"
-expected_buffer = "{\n   \n}\n"
-expected_cursor = [1, 0]
-
-# Open-brace line carries trailing content: vim's linewise inner delete also
-# strips the open line's trailing text, collapsing to `{` / `}` on bare lines.
-# hjkl keeps the open line's trailing content (`{ a`).
-[[cases]]
-name = "textobj_di_curlybrace_open_trailing_DIVERGES"
-initial_buffer = "{ a\n  b\n}\n"
-initial_cursor = [1, 2]
-keys = "di{"
-expected_buffer = "{\n}\n"
-expected_cursor = [0, 0]
+# ─── di{ inner-block linewise-promotion quirks — FIXED ───────────────────────
+# Both former divergences (whitespace-only inner = no-op; brace-line trailing
+# content collapses to bare braces) now match nvim via the operator
+# exclusive-motion adjustment in `apply_op_with_text_object`. Promoted to
+# corpus/tier2_block_textobj.toml (di/ci/da/ca across {}/()/[] + visual vi{).
