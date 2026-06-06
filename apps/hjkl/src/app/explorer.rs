@@ -610,50 +610,36 @@ impl ExplorerTree {
     ///
     /// Each line in the returned `String` corresponds to `nodes[i]`, so
     /// `cursor_row` in the editor maps directly to `nodes[cursor_row]`.
-    pub(crate) fn render_text(&self, icons: hjkl_icons::IconMode) -> String {
+    ///
+    /// The buffer contains **only** indentation spaces + the bare name — no
+    /// tree-guide glyphs, no connector, no icon. All glyphs are painted as a
+    /// render overlay in `render.rs` (same approach as the git-color overlay)
+    /// so that the buffer text stays clean for future oil.nvim-style editing.
+    ///
+    /// Column layout (identical to what was emitted before; the overlay paints
+    /// the leading cells):
+    ///   depth 0  : `"  " + name`  (2-space indent for the icon+space slot)
+    ///   depth ≥ 1: `" ".repeat(depth*2 + 2) + name`
+    pub(crate) fn render_text(&self) -> String {
         let mut out = String::new();
         for (i, node) in self.nodes.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            if node.depth == 0 {
-                // Root line: just the directory path (or name).
-                let name = node
-                    .path
+            let name_col = node.depth * 2 + 2;
+            let name = if node.depth == 0 {
+                node.path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| node.path.to_string_lossy().into_owned());
-                out.push(hjkl_icons::dir_icon_for_path(
-                    &node.path,
-                    self.is_expanded(&node.path),
-                    icons,
-                ));
-                out.push(' ');
-                out.push_str(&name);
+                    .unwrap_or_else(|| node.path.to_string_lossy().into_owned())
             } else {
-                // Guide columns for each ancestor level.
-                for &b in &node.branches {
-                    out.push(if b { '│' } else { ' ' });
-                    out.push(' ');
-                }
-                // Connector glyph.
-                out.push(if node.is_last { '└' } else { '├' });
-                out.push('╴');
-                // Icon + space + name.
-                let icon = if node.is_dir {
-                    hjkl_icons::dir_icon_for_path(&node.path, self.is_expanded(&node.path), icons)
-                } else {
-                    hjkl_icons::file_icon_for_path(&node.path, icons)
-                };
-                out.push(icon);
-                out.push(' ');
-                let name = node
-                    .path
+                node.path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                out.push_str(&name);
-            }
+                    .unwrap_or_default()
+            };
+            out.push_str(&" ".repeat(name_col));
+            out.push_str(&name);
         }
         out
     }
@@ -905,7 +891,7 @@ impl super::App {
         // absolute).
         let reveal_row: Option<usize> = active_file.as_deref().and_then(|p| tree.reveal(p));
 
-        let text = tree.render_text(self.icon_mode);
+        let text = tree.render_text();
         // Nodes are rebuilt by new() above; no extra rebuild needed.
 
         let buffer_id = self.next_buffer_id;
@@ -1070,9 +1056,8 @@ impl super::App {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
-        let icons = self.icon_mode;
         let (text, win_id) = match self.explorer.as_ref() {
-            Some(ep) => (ep.tree.render_text(icons), ep.win_id),
+            Some(ep) => (ep.tree.render_text(), ep.win_id),
             None => return,
         };
         // Stash the path currently under cursor before we rebuild.
@@ -2283,7 +2268,7 @@ mod tests {
     fn render_text_line_count_matches_nodes() {
         let root = make_tree();
         let tree = ExplorerTree::new(root.clone());
-        let text = tree.render_text(hjkl_icons::IconMode::Nerd);
+        let text = tree.render_text();
         let line_count = text.lines().count();
         assert_eq!(
             line_count,
@@ -2299,7 +2284,7 @@ mod tests {
         let mut tree = ExplorerTree::new(root.clone());
         let a_dir_path = tree.nodes[1].path.clone();
         tree.toggle(&a_dir_path);
-        let text = tree.render_text(hjkl_icons::IconMode::Nerd);
+        let text = tree.render_text();
         let line_count = text.lines().count();
         assert_eq!(line_count, tree.nodes.len());
         let _ = fs::remove_dir_all(&root);

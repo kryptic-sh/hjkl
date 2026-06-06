@@ -1156,11 +1156,27 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     // ── Explorer devicon + git-status color overlay ───────────────────────
     //
-    // Post-render cell walk: repaint the icon cell with a devicon RGB color
-    // and every name cell with the git-status color (or the devicon base for
-    // clean files). Applied only to the window whose win_id matches the
-    // explorer pane's win_id, so multiple windows showing the same buffer
-    // don't get double-painted.
+    // Post-render cell walk applied only to the window matching the explorer
+    // pane's win_id so multiple windows on the same buffer are not
+    // double-painted.
+    //
+    // The buffer now contains only indentation spaces + bare names (no glyphs).
+    // This pass does two things in one loop:
+    //   1. PAINT GLYPHS — write the tree-guide, connector, and icon characters
+    //      into the leading blank cells that `render_text` left empty.
+    //   2. PAINT COLORS — repaint the icon cell with a devicon/dir RGB fg and
+    //      every name cell with the git-status color (or devicon fg for clean).
+    //
+    // Column layout (depth-0 root / depth ≥ 1):
+    //   depth 0 : col 0 = icon, col 1 = space, col 2.. = name
+    //   depth ≥ 1:
+    //     col i*2        (i in 0..branches.len()) = '│' or space  (guide)
+    //     col i*2+1                                = space
+    //     col (depth-1)*2   = '└' or '├'          (connector)
+    //     col (depth-1)*2+1 = '╴'
+    //     col depth*2       = icon
+    //     col depth*2+1     = space
+    //     col depth*2+2..   = name
     if is_explorer_slot
         && let Some(ref pane) = app.explorer
         && pane.win_id == win_id
@@ -1174,6 +1190,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // The viewport top row for this window (same variable as the BufferView uses).
         let vp_top_ex = vp_top;
 
+        // Dim color used for tree guides and connectors.
+        let guide_fg = app.theme.ui.indent_guide_fg;
+
         for vis_row in 0..screen_height {
             let buf_row = vp_top_ex + vis_row;
             let screen_row = screen_top + vis_row as u16;
@@ -1185,8 +1204,73 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 continue;
             };
 
+            let right = area.x + area.width;
+
+            // ── Glyph painting ────────────────────────────────────────────
+
+            let is_expanded = pane.tree.is_expanded(&node.path);
+
+            // Icon character for this node.
+            let icon_ch = if node.is_dir {
+                hjkl_icons::dir_icon_for_path(&node.path, is_expanded, app.icon_mode)
+            } else {
+                hjkl_icons::file_icon_for_path(&node.path, app.icon_mode)
+            };
+
+            if node.depth == 0 {
+                // Root: icon at col 0, space at col 1.
+                let icon_abs = text_x;
+                if icon_abs < right
+                    && let Some(cell) = buf.cell_mut((icon_abs, screen_row))
+                {
+                    cell.set_symbol(&icon_ch.to_string());
+                }
+                // col 1 is already space from the buffer — nothing to write.
+            } else {
+                // Guide columns: for each ancestor level.
+                for (i, &has_sibling) in node.branches.iter().enumerate() {
+                    let col = text_x + (i as u16) * 2;
+                    if col < right
+                        && let Some(cell) = buf.cell_mut((col, screen_row))
+                    {
+                        let sym = if has_sibling { "│" } else { " " };
+                        cell.set_symbol(sym);
+                        cell.set_fg(guide_fg);
+                    }
+                    // col+1 stays space — leave it.
+                }
+
+                // Connector: at col (depth-1)*2 and (depth-1)*2+1.
+                let connector_col = text_x + (node.branches.len() as u16) * 2;
+                if connector_col < right
+                    && let Some(cell) = buf.cell_mut((connector_col, screen_row))
+                {
+                    let sym = if node.is_last { "└" } else { "├" };
+                    cell.set_symbol(sym);
+                    cell.set_fg(guide_fg);
+                }
+                let connector_col2 = connector_col + 1;
+                if connector_col2 < right
+                    && let Some(cell) = buf.cell_mut((connector_col2, screen_row))
+                {
+                    cell.set_symbol("╴");
+                    cell.set_fg(guide_fg);
+                }
+
+                // Icon: at col depth*2 (= name_col - 2).
+                let icon_abs = text_x + node.depth as u16 * 2;
+                if icon_abs < right
+                    && let Some(cell) = buf.cell_mut((icon_abs, screen_row))
+                {
+                    cell.set_symbol(&icon_ch.to_string());
+                }
+                // col depth*2+1 is the space between icon and name — leave it.
+            }
+
+            // ── Color painting ────────────────────────────────────────────
+
             // Compute icon and name screen-column offsets.
-            // Layout (from render_text):
+            // Layout (same as what render_text used to emit):
             //   depth-0 (root): icon(1) + space(1) + name(...)
             //   depth>0: branches*(2) + connector(2) + icon(1) + space(1) + name(...)
             let (icon_col, name_col) = if node.depth == 0 {
@@ -1225,8 +1309,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 rgb(hjkl_icons::file_color_for_path(&node.path))
             }
             .unwrap_or(app.theme.ui.text);
-
-            let right = area.x + area.width;
 
             // Repaint the icon cell foreground (icon keeps its filetype/dir color
             // regardless of git state — the icon column never gets a git bg).
