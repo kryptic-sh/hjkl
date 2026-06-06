@@ -1389,7 +1389,13 @@ impl App {
             return col;
         }
         let line = hjkl_buffer::rope_line_str(&rope, row);
-        let end = col.min(line.len());
+        // Clamp to the line length AND down to a char boundary: `col` is a byte
+        // column but may land inside a multibyte char (e.g. a nerd-font icon in
+        // the explorer tree), which would panic the `line[..end]` slice below.
+        let mut end = col.min(line.len());
+        while end > 0 && !line.is_char_boundary(end) {
+            end -= 1;
+        }
         let mut start = end;
         // `char_indices` is double-ended, so walk back from the cursor over the
         // contiguous run of identifier chars; `b` is the char's byte offset.

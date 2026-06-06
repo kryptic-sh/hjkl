@@ -1117,6 +1117,18 @@ fn identifier_start_col_snaps_to_word_boundary() {
 }
 
 #[test]
+fn identifier_start_col_handles_col_inside_multibyte_char() {
+    // A byte column landing inside a multibyte char (e.g. a nerd-font icon in
+    // the explorer tree) must not panic the internal `line[..end]` slice.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "\u{f1617} buffer_ops.rs"); // icon is 4 bytes (0..4)
+    // col 2 is inside the icon — must clamp to a boundary and return safely.
+    let _ = app.identifier_start_col(0, 2);
+    // A col past the line length also clamps without panicking.
+    let _ = app.identifier_start_col(0, 9999);
+}
+
+#[test]
 fn accept_completion_inserts_selected_item() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer with some text and enter insert mode at col 0.
