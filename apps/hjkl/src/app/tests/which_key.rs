@@ -139,6 +139,68 @@ fn nmap_desc_truncated_at_40_chars() {
     );
 }
 
+// ── Backspace/Esc chord navigation (Phase 4) ──────────────────────────────────
+
+fn nkey(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+}
+
+#[test]
+fn esc_cancels_engine_g_pending() {
+    // Regression: Esc in Normal mode must cancel an in-flight engine/app chord
+    // (the which-key toggle must not swallow the cancel).
+    let mut app = App::new(None, false, None, None).unwrap();
+    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "abc\ndef");
+    let _ = app.handle_keypress(nkey('g'));
+    assert!(app.any_chord_pending(), "after 'g' a chord must be pending");
+    let _ = app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.any_chord_pending(),
+        "Esc must cancel the pending g-chord"
+    );
+}
+
+#[test]
+fn backspace_pops_chord_to_root() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "abc\ndef");
+    let _ = app.handle_keypress(nkey('g'));
+    assert!(app.any_chord_pending());
+    assert_eq!(app.chord_history.len(), 1, "history holds the 'g'");
+    let _ = app.handle_keypress(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert!(
+        !app.any_chord_pending(),
+        "Backspace at depth 1 pops back to root"
+    );
+    assert!(app.chord_history.is_empty());
+    assert!(
+        app.which_key_sticky,
+        "popped to root keeps the which-key popup showing root entries"
+    );
+}
+
+#[test]
+fn backspace_pops_one_level_within_g_chord() {
+    // `gc` enters the comment operator (engine pending); Backspace pops the `c`
+    // back to the `g` level so e.g. `gc<BS>cc` resolves as `gcc`.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().editor.set_filetype("rust");
+    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "let x = 1;\n");
+    let _ = app.handle_keypress(nkey('g'));
+    let _ = app.handle_keypress(nkey('c'));
+    assert!(app.any_chord_pending(), "gc must leave a chord pending");
+    let _ = app.handle_keypress(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert!(
+        app.any_chord_pending(),
+        "after gc<BS> a chord is still pending (back at the g level)"
+    );
+    assert_eq!(
+        app.chord_history,
+        vec![nkey('g')],
+        "history popped back to just [g]"
+    );
+}
+
 // ── Entry struct construction ─────────────────────────────────────────────────
 
 #[test]

@@ -644,20 +644,15 @@ impl App {
                 }
             }
 
-            // ── Escape: cancel pending prefix, else toggle top-level which-key ──
+            // ── Escape: cancel any pending chord, else toggle which-key ─────────
             if key.code == KeyCode::Esc {
-                let pending_non_empty = !self
-                    .ctx_keymap()
-                    .pending(crate::app::keymap::HjklMode::Normal)
-                    .is_empty();
-                // Reset both keymaps so stale explorer pending can't linger.
-                self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-                self.explorer_keymap
-                    .reset(crate::app::keymap::HjklMode::Normal);
-                self.pending_count.reset();
-                self.clear_prefix_state();
-                if pending_non_empty {
-                    // Was mid-chord → cancel it and hide the popup.
+                let had_pending = self.any_chord_pending() || !self.pending_count.is_empty();
+                // Cancel across all three pending owners (trie, app pending_state,
+                // engine pending) + reset count. This restores Esc-cancels-chord
+                // behaviour that the which-key toggle would otherwise swallow.
+                self.cancel_all_pending();
+                self.chord_history.clear();
+                if had_pending {
                     self.which_key_sticky = false;
                     self.which_key_active = false;
                     return KeyOutcome::Continue;
@@ -675,30 +670,29 @@ impl App {
                 return KeyOutcome::Continue;
             }
 
-            // ── which-key Backspace (chord navigate-up) ─────────────────
+            // ── Backspace: pop one chord level, else toggle which-key ───────────
             if key.code == KeyCode::Backspace
                 && key.modifiers == KeyModifiers::NONE
                 && self.active().editor.vim_mode() == VimMode::Normal
             {
-                let pending_non_empty = !self
-                    .ctx_keymap()
-                    .pending(crate::app::keymap::HjklMode::Normal)
-                    .is_empty();
-                if pending_non_empty {
-                    self.ctx_keymap_mut()
-                        .pop(crate::app::keymap::HjklMode::Normal);
-                    // If pop emptied the buffer, enter sticky so the popup
-                    // stays showing root entries until the user types something.
-                    if self
-                        .ctx_keymap()
-                        .pending(crate::app::keymap::HjklMode::Normal)
-                        .is_empty()
-                    {
+                if self.any_chord_pending() {
+                    // Pop one level across ALL pending owners (trie, app
+                    // pending_state, engine pending): cancel everything, then
+                    // replay the chord's keys minus the last. This makes engine
+                    // chords poppable too — e.g. `gc<BS>cc` resolves to `gcc`.
+                    let mut hist = std::mem::take(&mut self.chord_history);
+                    hist.pop();
+                    self.cancel_all_pending();
+                    for ev in hist {
+                        self.chord_history.push(ev);
+                        self.route_chord_key(ev);
+                    }
+                    if self.chord_history.is_empty() {
+                        // Popped to root — keep the popup showing root entries.
                         self.which_key_sticky = true;
                     }
-                    // Re-arm the which-key timer and force-show the popup.
-                    self.note_prefix_set();
                     self.which_key_active = true;
+                    self.note_prefix_set();
                     return KeyOutcome::Continue;
                 }
                 // Nothing pending → toggle the top-level which-key display,
@@ -763,11 +757,27 @@ impl App {
         //   (3) Normal-mode keymap dispatch (mode == Normal, pending_state.is_none())
         // count-prefix, engine-pending bypass, and replay logic are encapsulated
         // inside route_chord_key for step (3).
+        //
+        // Record Normal-mode keys into `chord_history` so Backspace can pop one
+        // chord level. Push before routing, then reconcile: keep the key only
+        // while a chord is still pending afterwards, otherwise the chord
+        // committed/cancelled and the history resets.
+        let track_chord = self.active().editor.vim_mode() == VimMode::Normal
+            && !matches!(key.code, KeyCode::Backspace | KeyCode::Esc);
+        if track_chord {
+            self.chord_history.push(key);
+        }
         if self.route_chord_key(key) {
+            if track_chord && !self.any_chord_pending() {
+                self.chord_history.clear();
+            }
             if self.exit_requested {
                 return KeyOutcome::Break;
             }
             return KeyOutcome::Continue;
+        }
+        if track_chord {
+            self.chord_history.clear();
         }
 
         // ── Insert-mode completion key handling ──────────────────

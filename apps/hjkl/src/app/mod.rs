@@ -331,6 +331,11 @@ pub struct App {
     /// emptied the chord buffer. Stays open showing root entries until any
     /// non-Backspace key is pressed.
     pub(crate) which_key_sticky: bool,
+    /// Raw keys of the chord currently being built in Normal mode, accumulated
+    /// while any chord is pending (app keymap trie, app `pending_state`, or the
+    /// engine's own pending). Cleared when the chord commits/cancels. Used by
+    /// Backspace to pop one level: cancel all pending, then replay all-but-last.
+    pub(crate) chord_history: Vec<crossterm::event::KeyEvent>,
     /// Whether the which-key feature is enabled (from config).
     pub which_key_enabled: bool,
     /// Idle delay before the which-key popup appears (from config).
@@ -1510,6 +1515,7 @@ impl App {
             pending_prefix_at: None,
             which_key_active: false,
             which_key_sticky: false,
+            chord_history: Vec::new(),
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),
@@ -1957,6 +1963,31 @@ impl App {
         self.which_key_active = false;
     }
 
+    /// True when a chord is mid-flight across any of the three pending owners:
+    /// the app keymap trie, the app-side `pending_state` FSM, or the engine's
+    /// own pending chord.
+    pub(crate) fn any_chord_pending(&self) -> bool {
+        self.pending_state.is_some()
+            || self.active().editor.is_chord_pending()
+            || !self
+                .ctx_keymap()
+                .pending(crate::app::keymap::HjklMode::Normal)
+                .is_empty()
+    }
+
+    /// Cancel every in-flight chord (trie, app `pending_state`, engine pending)
+    /// and reset the count prefix + which-key prefix timer. Does not touch
+    /// `chord_history` (callers manage that).
+    pub(crate) fn cancel_all_pending(&mut self) {
+        self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+        self.explorer_keymap
+            .reset(crate::app::keymap::HjklMode::Normal);
+        self.pending_count.reset();
+        self.pending_state = None;
+        let _ = self.active_mut().editor.take_pending();
+        self.clear_prefix_state();
+    }
+
     /// Return a shared reference to the keymap that owns chord state and
     /// which-key entries for the current focus context.
     ///
@@ -1967,15 +1998,6 @@ impl App {
             &self.explorer_keymap
         } else {
             &self.app_keymap
-        }
-    }
-
-    /// Mutable version of [`ctx_keymap`](Self::ctx_keymap).
-    pub(crate) fn ctx_keymap_mut(&mut self) -> &mut Keymap<AppAction, keymap::HjklMode> {
-        if self.explorer_buf_focused() {
-            &mut self.explorer_keymap
-        } else {
-            &mut self.app_keymap
         }
     }
 
