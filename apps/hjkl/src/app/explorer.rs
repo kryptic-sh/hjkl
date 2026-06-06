@@ -1379,20 +1379,28 @@ impl super::App {
         // Refresh git colors after rebuild.
         self.recompute_explorer_git_base();
 
-        // Open newly-created files in the nearest non-explorer window.
-        // Suppress the open-notice toast and explorer-reveal (the rebuild
-        // above already rendered the tree correctly).
-        for path in newly_created {
-            let target_win = self.nearest_non_explorer_window();
-            if let Some(win_id) = target_win {
+        // Open newly-created files in the nearest non-explorer window, but KEEP
+        // focus in the explorer afterward — convenient for a long restructure
+        // session (creating many files shouldn't yank focus away each time).
+        // Suppress the open-notice toast and explorer-reveal (the rebuild above
+        // already rendered the tree correctly).
+        if !newly_created.is_empty() {
+            let explorer_win = self.explorer.as_ref().map(|ep| ep.win_id);
+            for path in newly_created {
+                if let Some(win_id) = self.nearest_non_explorer_window() {
+                    self.switch_focus(win_id);
+                }
+                self.suppress_open_notice = true;
+                self.suppress_explorer_reveal = true;
+                let s = Self::explorer_open_arg(&path);
+                self.dispatch_ex(&format!("edit {s}"));
+                self.suppress_open_notice = false;
+                self.suppress_explorer_reveal = false;
+            }
+            // Return focus to the explorer window.
+            if let Some(win_id) = explorer_win {
                 self.switch_focus(win_id);
             }
-            self.suppress_open_notice = true;
-            self.suppress_explorer_reveal = true;
-            let s = Self::explorer_open_arg(&path);
-            self.dispatch_ex(&format!("edit {s}"));
-            self.suppress_open_notice = false;
-            self.suppress_explorer_reveal = false;
         }
     }
 
@@ -2454,6 +2462,50 @@ mod tests {
         assert!(
             !buf.contains("victim.txt"),
             "dd'd file must drop from the list; buf=<<<{buf}>>>"
+        );
+    }
+
+    #[test]
+    fn create_keeps_focus_in_explorer() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        press(&mut app, KeyCode::Char('o'));
+        for c in "newone.rs".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        let focused_explorer = app.explorer_buf_focused();
+        let on_disk = tmp.path().join("newone.rs").exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(on_disk, "file should be created");
+        assert!(
+            focused_explorer,
+            "focus must stay in the explorer after creating a file"
         );
     }
 
