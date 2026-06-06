@@ -29,6 +29,7 @@ mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
 pub(crate) mod explorer;
+pub(crate) mod explorer_reconcile;
 pub(crate) mod git_hunks;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
