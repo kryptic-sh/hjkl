@@ -156,9 +156,15 @@ impl App {
             let Some(fname) = slot.filename.as_ref() else {
                 continue;
             };
+            // Overlay only reflects UNSAVED buffer state on top of the disk base.
+            // Use `slot.dirty` (buffer differs from the on-disk file), NOT
+            // `git_signs` (buffer-vs-HEAD): after `git add` the file is saved
+            // (not dirty) but still differs from HEAD, so keying on git_signs
+            // would mask the freshly-staged status. The disk base already holds
+            // the correct staged/modified/untracked for the saved-on-disk file.
             let cand = if slot.is_untracked {
                 hjkl_app::git::ExplorerGit::Untracked
-            } else if !slot.git_signs.is_empty() {
+            } else if slot.dirty {
                 hjkl_app::git::ExplorerGit::Modified
             } else {
                 continue;
