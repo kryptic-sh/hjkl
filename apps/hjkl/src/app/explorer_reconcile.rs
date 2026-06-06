@@ -316,6 +316,30 @@ pub(crate) fn reconcile(baseline: &[(PathBuf, bool)], buffer: &str, root: &Path)
     ops
 }
 
+// ── Applied-op journal ────────────────────────────────────────────────────────
+
+/// A concrete action that was carried out by [`apply_ops`].
+///
+/// Carries enough information to reverse the action (undo) and, from the
+/// undo side, to re-apply it (redo).  The undo / redo path is implemented by
+/// [`revert_ops`].
+#[derive(Debug, Clone)]
+pub(crate) enum AppliedOp {
+    /// A new file or directory was created at `path`.
+    /// Reverse: trash it.
+    Created(PathBuf),
+    /// A file or directory at `original` was moved to the trash at `dest`.
+    /// Reverse: move `dest` back to `original`.
+    Trashed { original: PathBuf, dest: PathBuf },
+    /// A file or directory was renamed / moved from `from` to `to`.
+    /// Reverse: rename `to` back to `from`.
+    Renamed { from: PathBuf, to: PathBuf },
+    /// A trashed entry at `from_trash` was restored to `to` (the
+    /// trash-restore branch of CreateFile).
+    /// Reverse: trash `to` again.
+    Restored { from_trash: PathBuf, to: PathBuf },
+}
+
 // ── Filesystem application ────────────────────────────────────────────────────
 
 /// Move a file across device boundaries: `fs::rename` first; on `CrossesDevices`
@@ -367,8 +391,9 @@ fn move_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// Apply reconcile ops to disk. Deletions go to the trash (recoverable);
 /// a `CreateFile` whose basename matches a pending trashed entry is **restored**
 /// from trash instead of created empty (this is how `dd` then `p` becomes a
-/// move). Returns the paths of genuinely newly-created FILES (to open) and a
-/// list of error strings from non-fatal op failures (best-effort).
+/// move). Returns the paths of genuinely newly-created FILES (to open), the
+/// concrete [`AppliedOp`] journal entries (for undo/redo), and a list of error
+/// strings from non-fatal op failures (best-effort).
 ///
 /// # Arguments
 /// - `ops`: output of [`reconcile`], already in renames→trashes→creates order.
@@ -378,8 +403,9 @@ fn move_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 pub(crate) fn apply_ops(
     ops: &[FsOp],
     trashed: &mut Vec<(String, PathBuf)>,
-) -> (Vec<PathBuf>, Vec<String>) {
+) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
     let mut created: Vec<PathBuf> = Vec::new();
+    let mut applied: Vec<AppliedOp> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
     for op in ops {
@@ -401,8 +427,16 @@ pub(crate) fn apply_ops(
                 } else {
                     move_file(from, to)
                 };
-                if let Err(e) = result {
-                    errors.push(format!("rename {from:?} → {to:?}: {e}"));
+                match result {
+                    Ok(()) => {
+                        applied.push(AppliedOp::Renamed {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("rename {from:?} → {to:?}: {e}"));
+                    }
                 }
             }
 
@@ -425,7 +459,11 @@ pub(crate) fn apply_ops(
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        trashed.push((name, dest));
+                        trashed.push((name, dest.clone()));
+                        applied.push(AppliedOp::Trashed {
+                            original: path.clone(),
+                            dest,
+                        });
                     }
                     Err(e) => {
                         errors.push(format!("trash {path:?}: {e}"));
@@ -436,6 +474,8 @@ pub(crate) fn apply_ops(
             FsOp::CreateDir(path) => {
                 if let Err(e) = std::fs::create_dir_all(path) {
                     errors.push(format!("create_dir_all({path:?}): {e}"));
+                } else {
+                    applied.push(AppliedOp::Created(path.clone()));
                 }
             }
 
@@ -464,14 +504,23 @@ pub(crate) fn apply_ops(
                 if let Some(idx) = restore_idx {
                     let (_, trash_dest) = trashed.remove(idx);
                     // Restore from trash.
-                    if let Err(e) = move_file(&trash_dest, path) {
-                        errors.push(format!("restore {trash_dest:?} → {path:?}: {e}"));
+                    match move_file(&trash_dest, path) {
+                        Ok(()) => {
+                            applied.push(AppliedOp::Restored {
+                                from_trash: trash_dest,
+                                to: path.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            errors.push(format!("restore {trash_dest:?} → {path:?}: {e}"));
+                        }
                     }
                     // Not a new file — do NOT add to `created`.
                 } else {
                     match std::fs::File::create(path) {
                         Ok(_) => {
                             created.push(path.clone());
+                            applied.push(AppliedOp::Created(path.clone()));
                         }
                         Err(e) => {
                             errors.push(format!("create_file({path:?}): {e}"));
@@ -482,7 +531,286 @@ pub(crate) fn apply_ops(
         }
     }
 
-    (created, errors)
+    (created, applied, errors)
+}
+
+/// Reverse a slice of [`AppliedOp`]s **in reverse order** (last op undone first).
+///
+/// Each reversal is applied to the filesystem immediately.  The function
+/// returns a new `Vec<AppliedOp>` that, when passed to [`apply_applied`],
+/// re-performs the original forward actions (i.e. the redo journal).
+///
+/// `trashed` is the pane's trash registry; it is updated as new trash
+/// destinations are created during the reversal.
+pub(crate) fn revert_ops(
+    applied: &[AppliedOp],
+    trashed: &mut Vec<(String, PathBuf)>,
+) -> (Vec<AppliedOp>, Vec<String>) {
+    let mut redo_journal: Vec<AppliedOp> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    // Reverse-iterate so the last op is undone first (symmetrical with apply
+    // order: if we created dir/file in order A→B, undo is B→A).
+    for op in applied.iter().rev() {
+        match op {
+            // A file/dir was created → trash it to undo.
+            AppliedOp::Created(path) => {
+                let dest = match hjkl_app::trash::trash_path(path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        errors.push(format!("revert created: trash_path({path:?}): {e}"));
+                        continue;
+                    }
+                };
+                let result = if path.is_dir() {
+                    move_dir(path, &dest)
+                } else {
+                    move_file(path, &dest)
+                };
+                match result {
+                    Ok(()) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        trashed.push((name, dest.clone()));
+                        // Redo = restore from this new trash dest back to path.
+                        redo_journal.push(AppliedOp::Restored {
+                            from_trash: dest,
+                            to: path.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("revert created: trash {path:?}: {e}"));
+                    }
+                }
+            }
+
+            // A file/dir was trashed → move it back from trash to original.
+            AppliedOp::Trashed { original, dest } => {
+                if let Some(parent) = original.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("revert trashed: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+                let result = if dest.is_dir() {
+                    move_dir(dest, original)
+                } else {
+                    move_file(dest, original)
+                };
+                match result {
+                    Ok(()) => {
+                        // Remove the now-restored entry from the trashed registry
+                        // (it's back on disk).
+                        if let Some(pos) = trashed.iter().position(|(_, d)| d == dest) {
+                            trashed.remove(pos);
+                        }
+                        // Redo = trash original again (fresh dest computed at redo time).
+                        redo_journal.push(AppliedOp::Trashed {
+                            original: original.clone(),
+                            dest: dest.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "revert trashed: restore {dest:?} → {original:?}: {e}"
+                        ));
+                    }
+                }
+            }
+
+            // A rename from→to → rename back to→from.
+            AppliedOp::Renamed { from, to } => {
+                if let Some(parent) = from.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("revert renamed: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+                let result = if to.is_dir() {
+                    move_dir(to, from)
+                } else {
+                    move_file(to, from)
+                };
+                match result {
+                    Ok(()) => {
+                        // Redo = rename from→to again.
+                        redo_journal.push(AppliedOp::Renamed {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("revert renamed: {to:?} → {from:?}: {e}"));
+                    }
+                }
+            }
+
+            // A trashed entry was restored to `to` → trash `to` again.
+            AppliedOp::Restored { from_trash: _, to } => {
+                let new_dest = match hjkl_app::trash::trash_path(to) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        errors.push(format!("revert restored: trash_path({to:?}): {e}"));
+                        continue;
+                    }
+                };
+                let result = if to.is_dir() {
+                    move_dir(to, &new_dest)
+                } else {
+                    move_file(to, &new_dest)
+                };
+                match result {
+                    Ok(()) => {
+                        let name = to
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        trashed.push((name, new_dest.clone()));
+                        // Redo = restore from this new trash dest back to `to`.
+                        redo_journal.push(AppliedOp::Restored {
+                            from_trash: new_dest,
+                            to: to.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("revert restored: trash {to:?}: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    // The redo journal was built in undo order (reversed). Reverse it once more
+    // so that re-applying it (via apply_applied) repeats the original forward
+    // order.
+    redo_journal.reverse();
+    (redo_journal, errors)
+}
+
+/// Re-apply a set of [`AppliedOp`]s that were produced by [`revert_ops`] as the
+/// "redo" journal. This is the forward direction of redo.
+///
+/// Returns the newly-created file paths (for opening) and any errors.
+pub(crate) fn apply_applied(
+    ops: &[AppliedOp],
+    trashed: &mut Vec<(String, PathBuf)>,
+) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
+    let mut created: Vec<PathBuf> = Vec::new();
+    let mut new_applied: Vec<AppliedOp> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for op in ops {
+        match op {
+            AppliedOp::Created(path) => {
+                // Re-create the file/dir.
+                let result = if path.extension().is_none() && !path.to_string_lossy().contains('.')
+                {
+                    // Heuristic: no extension → treat as dir.  But the journal
+                    // knows exactly what was created; we don't have is_dir info
+                    // here.  Safe fallback: try create_file first; if the path
+                    // was a dir the Restored/Trashed variant would have been used.
+                    std::fs::File::create(path).map(|_| ())
+                } else {
+                    std::fs::File::create(path).map(|_| ())
+                };
+                match result {
+                    Ok(()) => {
+                        created.push(path.clone());
+                        new_applied.push(AppliedOp::Created(path.clone()));
+                    }
+                    Err(e) => {
+                        errors.push(format!("redo created: create {path:?}: {e}"));
+                    }
+                }
+            }
+
+            AppliedOp::Trashed { original, dest: _ } => {
+                // Re-trash: original should be back on disk (from the undo).
+                // Compute a fresh trash dest.
+                let new_dest = match hjkl_app::trash::trash_path(original) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        errors.push(format!("redo trashed: trash_path({original:?}): {e}"));
+                        continue;
+                    }
+                };
+                let result = if original.is_dir() {
+                    move_dir(original, &new_dest)
+                } else {
+                    move_file(original, &new_dest)
+                };
+                match result {
+                    Ok(()) => {
+                        let name = original
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        trashed.push((name, new_dest.clone()));
+                        new_applied.push(AppliedOp::Trashed {
+                            original: original.clone(),
+                            dest: new_dest,
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("redo trashed: trash {original:?}: {e}"));
+                    }
+                }
+            }
+
+            AppliedOp::Renamed { from, to } => {
+                if let Some(parent) = to.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("redo renamed: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+                let result = if from.is_dir() {
+                    move_dir(from, to)
+                } else {
+                    move_file(from, to)
+                };
+                match result {
+                    Ok(()) => {
+                        new_applied.push(AppliedOp::Renamed {
+                            from: from.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("redo renamed: {from:?} → {to:?}: {e}"));
+                    }
+                }
+            }
+
+            AppliedOp::Restored { from_trash, to } => {
+                if let Some(parent) = to.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("redo restored: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+                match move_file(from_trash, to) {
+                    Ok(()) => {
+                        // Remove from the trashed registry.
+                        if let Some(pos) = trashed.iter().position(|(_, d)| d == from_trash) {
+                            trashed.remove(pos);
+                        }
+                        new_applied.push(AppliedOp::Restored {
+                            from_trash: from_trash.clone(),
+                            to: to.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        errors.push(format!("redo restored: {from_trash:?} → {to:?}: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    (created, new_applied, errors)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -985,9 +1313,14 @@ mod tests {
         isolated_trash(&td);
         let target = td.path().join("new.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
-        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
+        assert_eq!(applied.len(), 1, "one AppliedOp must be recorded");
+        assert!(
+            matches!(&applied[0], AppliedOp::Created(p) if p == &target),
+            "must record Created AppliedOp"
+        );
         assert!(target.exists(), "file must exist after CreateFile");
         assert_eq!(
             std::fs::metadata(&target).unwrap().len(),
@@ -1002,9 +1335,10 @@ mod tests {
         isolated_trash(&td);
         let target = td.path().join("a").join("b").join("c.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
-        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
+        assert_eq!(applied.len(), 1);
         assert!(target.exists(), "nested file must exist");
     }
 
@@ -1017,9 +1351,10 @@ mod tests {
         std::fs::write(&src, b"hello").unwrap();
         let ops = vec![FsOp::Trash(src.clone())];
         let mut trashed = Vec::new();
-        let (created, errors) = apply_ops(&ops, &mut trashed);
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert!(created.is_empty());
+        assert_eq!(applied.len(), 1, "one AppliedOp must be recorded");
         // Source must be gone.
         assert!(!src.exists(), "source must be gone after Trash");
         // A file must exist inside the trash dir.
@@ -1029,6 +1364,12 @@ mod tests {
         assert!(dest.exists(), "trash destination must exist: {dest:?}");
         // Verify content survived.
         assert_eq!(std::fs::read(dest).unwrap(), b"hello");
+        // AppliedOp::Trashed must record the correct original + dest.
+        assert!(
+            matches!(&applied[0], AppliedOp::Trashed { original, dest: d }
+                if original == &src && d.exists()),
+            "AppliedOp::Trashed must record original + dest"
+        );
     }
 
     #[test]
@@ -1042,9 +1383,15 @@ mod tests {
             from: foo.clone(),
             to: bar.clone(),
         }];
-        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert!(created.is_empty());
+        assert_eq!(applied.len(), 1);
+        assert!(
+            matches!(&applied[0], AppliedOp::Renamed { from, to }
+                if from == &foo && to == &bar),
+            "must record Renamed AppliedOp"
+        );
         assert!(!foo.exists(), "source must be gone after rename");
         assert!(bar.exists(), "destination must exist after rename");
         assert_eq!(
@@ -1067,7 +1414,7 @@ mod tests {
         // Step 1: Trash foo.rs.
         let mut trashed: Vec<(String, PathBuf)> = Vec::new();
         let trash_ops = vec![FsOp::Trash(foo.clone())];
-        let (c, e) = apply_ops(&trash_ops, &mut trashed);
+        let (c, _a1, e) = apply_ops(&trash_ops, &mut trashed);
         assert!(e.is_empty(), "trash must succeed: {e:?}");
         assert!(c.is_empty());
         assert_eq!(trashed.len(), 1);
@@ -1077,7 +1424,7 @@ mod tests {
         let dir2 = td.path().join("dir2");
         let dest = dir2.join("foo.rs");
         let create_ops = vec![FsOp::CreateFile(dest.clone())];
-        let (created, errors) = apply_ops(&create_ops, &mut trashed);
+        let (created, applied, errors) = apply_ops(&create_ops, &mut trashed);
         assert!(errors.is_empty(), "restore must succeed: {errors:?}");
         // Restored from trash → NOT in the "created" list.
         assert!(
@@ -1093,5 +1440,132 @@ mod tests {
             b"x",
             "content must be preserved through trash-restore cycle"
         );
+        // AppliedOp::Restored must be recorded.
+        assert!(
+            matches!(&applied[0], AppliedOp::Restored { to, .. } if to == &dest),
+            "must record Restored AppliedOp"
+        );
+    }
+
+    // ── revert_ops round-trip tests ───────────────────────────────────────────
+
+    #[test]
+    fn revert_create_removes_file_redo_recreates() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let target = td.path().join("round.rs");
+
+        // Apply: create
+        let ops = vec![FsOp::CreateFile(target.clone())];
+        let mut trashed = Vec::new();
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty());
+        assert!(target.exists(), "file must exist before revert");
+
+        // Revert (undo)
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        assert!(errs.is_empty(), "revert errors: {errs:?}");
+        assert!(!target.exists(), "file must be gone after revert");
+
+        // Redo: re-apply the redo journal
+        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed);
+        assert!(errs2.is_empty(), "redo errors: {errs2:?}");
+        assert!(target.exists(), "file must exist again after redo");
+    }
+
+    #[test]
+    fn revert_trash_restores_file_redo_retrashes() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let src = td.path().join("restore_me.txt");
+        std::fs::write(&src, b"data").unwrap();
+
+        // Apply: trash
+        let ops = vec![FsOp::Trash(src.clone())];
+        let mut trashed = Vec::new();
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty());
+        assert!(!src.exists(), "must be trashed");
+
+        // Revert (undo): restore from trash
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        assert!(errs.is_empty(), "revert errors: {errs:?}");
+        assert!(src.exists(), "file must be back on disk after revert");
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"data",
+            "content must survive"
+        );
+
+        // Redo: re-trash
+        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed);
+        assert!(errs2.is_empty(), "redo errors: {errs2:?}");
+        assert!(!src.exists(), "file must be trashed again after redo");
+    }
+
+    #[test]
+    fn revert_rename_swaps_back_redo_renames_again() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let foo = td.path().join("orig.rs");
+        let bar = td.path().join("renamed.rs");
+        std::fs::write(&foo, b"content").unwrap();
+
+        // Apply: rename
+        let ops = vec![FsOp::Rename {
+            from: foo.clone(),
+            to: bar.clone(),
+        }];
+        let mut trashed = Vec::new();
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty());
+        assert!(!foo.exists() && bar.exists(), "rename must have happened");
+
+        // Revert (undo)
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        assert!(errs.is_empty(), "revert errors: {errs:?}");
+        assert!(
+            foo.exists() && !bar.exists(),
+            "must be back to orig after revert"
+        );
+
+        // Redo
+        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
+        assert!(errs2.is_empty(), "redo errors: {errs2:?}");
+        assert!(!foo.exists() && bar.exists(), "redo must rename again");
+    }
+
+    #[test]
+    fn revert_restore_retrashes_redo_restores() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let src = td.path().join("moved.txt");
+        std::fs::write(&src, b"hello").unwrap();
+
+        // Step 1: trash it
+        let mut trashed: Vec<(String, PathBuf)> = Vec::new();
+        let (_, applied_trash, e) = apply_ops(&[FsOp::Trash(src.clone())], &mut trashed);
+        assert!(e.is_empty());
+        assert!(!src.exists());
+
+        // Step 2: restore to a new location (simulate dd + p move)
+        let dest = td.path().join("dest_dir").join("moved.txt");
+        let (_, applied_restore, e2) = apply_ops(&[FsOp::CreateFile(dest.clone())], &mut trashed);
+        assert!(e2.is_empty());
+        assert!(dest.exists(), "restored file must exist at dest");
+
+        // Combined applied journal for the move
+        let mut all_applied = applied_trash;
+        all_applied.extend(applied_restore);
+
+        // Revert (undo): dest must be trashed, src does NOT come back (only dest→trash)
+        let (redo_journal, errs) = revert_ops(&all_applied, &mut trashed);
+        assert!(errs.is_empty(), "revert errors: {errs:?}");
+        assert!(!dest.exists(), "dest must be trashed after revert");
+
+        // Redo: restore dest from trash again
+        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
+        assert!(errs2.is_empty(), "redo errors: {errs2:?}");
+        assert!(dest.exists(), "dest must be restored again after redo");
     }
 }

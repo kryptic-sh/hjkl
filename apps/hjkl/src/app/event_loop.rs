@@ -485,9 +485,17 @@ impl App {
         //   - `<Esc>` with an active filter → clear the filter.
         if self.explorer_buf_focused()
             && self.active().editor.vim_mode() == VimMode::Normal
+            && self.pending_state.is_none()
             && key.modifiers == KeyModifiers::NONE
         {
             match key.code {
+                // `u` — undo the last explorer fs transaction (journal-based,
+                // not vim buffer undo; the buffer is set_content-reset after
+                // each reconcile so vim undo is meaningless here).
+                KeyCode::Char('u') => {
+                    self.explorer_undo();
+                    return KeyOutcome::Continue;
+                }
                 // `k`/Up from the top tree row moves focus up into the search
                 // box. Anywhere else, fall through to the engine for normal
                 // upward movement.
@@ -532,6 +540,17 @@ impl App {
                 }
                 _ => {} // fall through to explorer_keymap / engine
             }
+        }
+
+        // <C-r> in the explorer while in Normal mode and no pending: redo.
+        if self.explorer_buf_focused()
+            && self.active().editor.vim_mode() == VimMode::Normal
+            && self.pending_state.is_none()
+            && key.code == KeyCode::Char('r')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.explorer_redo();
+            return KeyOutcome::Continue;
         }
 
         // ── Visual-mode `:` → command prompt prefilled with '<,'> ─

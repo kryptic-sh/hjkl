@@ -633,14 +633,22 @@ pub(crate) struct ExplorerPane {
     /// The last-reconciled buffer state: `(absolute_path, is_dir)` per line,
     /// index 0 = root. This is the baseline for `reconcile()`. Kept in sync
     /// with every reconcile cycle and every `explorer_rebuild_buffer` call so
-    /// the diff always starts from the correct "last-known-good" state and vim
-    /// undo can reverse filesystem ops by reverting the buffer text.
+    /// the diff always starts from the correct "last-known-good" state.
     pub baseline: Vec<(PathBuf, bool)>,
+    /// Undo stack: each entry is one reconcile transaction
+    /// (`Vec<AppliedOp>`) that can be reverted by [`App::explorer_undo`].
+    pub undo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
+    /// Redo stack: each entry is the redo journal produced by
+    /// [`super::explorer_reconcile::revert_ops`], ready to be re-applied by
+    /// [`App::explorer_redo`].
+    pub redo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
 }
 
 // ── nodes_from_buffer ──────────────────────────────────────────────────────────
 
 /// Derive the render-tree (`Vec<ExplorerNode>`) from the current buffer text.
+/// Used only in tests (round-trip assertions); production code now uses
+/// `ExplorerTree::rebuild` for all render-tree updates.
 ///
 /// Parses the buffer using the same indent→depth rules as
 /// `explorer_reconcile::parse_buffer` (which `reconcile()` calls internally),
@@ -659,6 +667,7 @@ pub(crate) struct ExplorerPane {
 /// for each ancestor level `a` in `1..depth`, the entry is `!is_last` of the
 /// most-recent earlier node at depth `a`. I.e. draw a vertical bar at an
 /// ancestor column iff that ancestor still has a following sibling.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
     // ── Pass 1: parse path / depth / is_dir ─────────────────────────────────
     struct RawNode {
@@ -1136,6 +1145,8 @@ impl super::App {
             last_reconcile_gen: initial_gen,
             trashed: Vec::new(),
             baseline: initial_baseline,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
 
         // Overlay any already-dirty open buffers onto the freshly-built tree
@@ -1269,12 +1280,13 @@ impl super::App {
     /// since the last reconcile, diff the buffer against the pane's explicit
     /// `baseline` and apply the resulting filesystem ops.
     ///
-    /// **Buffer-is-source-of-truth model**: after applying ops the buffer is
-    /// left exactly as the user edited it (no `set_content` reset). The render
-    /// overlay (`tree.nodes`) is derived from the current buffer text via
-    /// `nodes_from_buffer`. This preserves vim's native undo history so `u`
-    /// can reverse a `dd`/`o` by reverting the buffer — the next reconcile
-    /// then sees the reverted buffer and applies the inverse op on disk.
+    /// **Git-aware rebuild model**: after applying ops the tree is rebuilt from
+    /// disk + git so that tracked-but-deleted files reappear in red
+    /// (git WT_DELETED injection). The buffer is fully reset via
+    /// `explorer_rebuild_buffer` → `set_content`, which clears vim's undo
+    /// stack. Explicit undo/redo is provided by the pane's `undo_stack` /
+    /// `redo_stack` journal (see [`App::explorer_undo`] /
+    /// [`App::explorer_redo`]).
     pub(crate) fn maybe_reconcile_explorer(&mut self) {
         use hjkl_engine::VimMode;
 
@@ -1318,24 +1330,13 @@ impl super::App {
 
         let ops = super::explorer_reconcile::reconcile(&baseline, &text, &root);
 
-        // Always derive new_nodes and update baseline from the current buffer
-        // text, regardless of whether there are ops. This keeps the render
-        // overlay aligned with the user's edits (e.g. a cosmetic rename before
-        // the user presses Esc).
-        let new_nodes = nodes_from_buffer(&text, &root);
-        let new_baseline: Vec<(PathBuf, bool)> = new_nodes
-            .iter()
-            .map(|n| (n.path.clone(), n.is_dir))
-            .collect();
-
         if ops.is_empty() {
-            // No fs changes — just update the overlay + baseline + gen.
+            // No fs changes. Update last_reconcile_gen so this gen is not
+            // re-processed, but do NOT reset the buffer — it's a cosmetic
+            // mid-edit change (cursor on unchanged content).
             if let Some(ep) = self.explorer.as_mut() {
-                ep.tree.nodes = new_nodes;
-                ep.baseline = new_baseline;
                 ep.last_reconcile_gen = cur_gen;
             }
-            self.recompute_explorer_git_base();
             return;
         }
 
@@ -1346,7 +1347,8 @@ impl super::App {
             .map(|ep| std::mem::take(&mut ep.trashed))
             .unwrap_or_default();
 
-        let (newly_created, errors) = super::explorer_reconcile::apply_ops(&ops, &mut trashed);
+        let (newly_created, applied, errors) =
+            super::explorer_reconcile::apply_ops(&ops, &mut trashed);
 
         // Put the trashed registry back.
         if let Some(ep) = self.explorer.as_mut() {
@@ -1358,22 +1360,28 @@ impl super::App {
             self.bus.error(format!("explorer: {err}"));
         }
 
-        // Update the render overlay and baseline from the buffer text.
-        // The buffer itself is NOT touched — preserving vim's undo history so
-        // `u` can reverse this edit's effect and trigger an inverse op next
-        // reconcile.
-        if let Some(ep) = self.explorer.as_mut() {
-            ep.tree.nodes = new_nodes;
-            ep.baseline = new_baseline;
-            ep.last_reconcile_gen = cur_gen;
+        // Push to undo stack if ops actually happened; clear redo stack.
+        if !applied.is_empty()
+            && let Some(ep) = self.explorer.as_mut()
+        {
+            ep.undo_stack.push(applied);
+            ep.redo_stack.clear();
         }
 
-        // Refresh git colors for the new state (no fs walk — cheap overlay).
+        // Rebuild the tree from disk + git so that tracked-but-deleted files
+        // appear as red nodes (WT_DELETED injection in push_children).
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.tree.rebuild();
+        }
+        // Reset the buffer content from the freshly-rebuilt tree and sync
+        // baseline + last_reconcile_gen so the next tick is a no-op.
+        self.explorer_rebuild_buffer();
+        // Refresh git colors after rebuild.
         self.recompute_explorer_git_base();
 
         // Open newly-created files in the nearest non-explorer window.
-        // Suppress both the open-notice toast and the explorer-reveal (which
-        // would call tree.rebuild() + set_content, clobbering the undo history).
+        // Suppress the open-notice toast and explorer-reveal (the rebuild
+        // above already rendered the tree correctly).
         for path in newly_created {
             let target_win = self.nearest_non_explorer_window();
             if let Some(win_id) = target_win {
@@ -1384,10 +1392,107 @@ impl super::App {
             let s = Self::explorer_open_arg(&path);
             self.dispatch_ex(&format!("edit {s}"));
             self.suppress_open_notice = false;
-            // suppress_explorer_reveal is cleared by explorer_reveal_active or
-            // stays false if the reveal was never called (e.g. no explorer open).
             self.suppress_explorer_reveal = false;
         }
+    }
+
+    /// Undo the last explorer filesystem transaction.
+    ///
+    /// Pops one entry from `undo_stack`, reverses it on disk via
+    /// [`super::explorer_reconcile::revert_ops`], pushes the redo journal onto
+    /// `redo_stack`, and rebuilds the buffer so the tree reflects the reverted
+    /// state.  Returns `true` when something was undone.
+    ///
+    /// After this call `last_reconcile_gen` matches the new buffer gen so the
+    /// subsequent `maybe_reconcile_explorer` tick is a no-op.
+    pub(crate) fn explorer_undo(&mut self) -> bool {
+        // Pop the top transaction from the undo stack.
+        let txn = {
+            let ep = match self.explorer.as_mut() {
+                Some(ep) => ep,
+                None => return false,
+            };
+            match ep.undo_stack.pop() {
+                Some(t) => t,
+                None => return false,
+            }
+        };
+
+        // Take the trashed registry.
+        let mut trashed = self
+            .explorer
+            .as_mut()
+            .map(|ep| std::mem::take(&mut ep.trashed))
+            .unwrap_or_default();
+
+        let (redo_journal, errors) = super::explorer_reconcile::revert_ops(&txn, &mut trashed);
+
+        // Put the trashed registry back and push to redo stack.
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.trashed = trashed;
+            ep.redo_stack.push(redo_journal);
+        }
+
+        for err in &errors {
+            self.bus.error(format!("explorer undo: {err}"));
+        }
+
+        // Rebuild tree + buffer from disk + git.
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.tree.rebuild();
+        }
+        self.explorer_rebuild_buffer();
+        self.recompute_explorer_git_base();
+
+        true
+    }
+
+    /// Redo the last undone explorer filesystem transaction.
+    ///
+    /// Pops one entry from `redo_stack`, re-applies it via
+    /// [`super::explorer_reconcile::apply_applied`], pushes the new applied
+    /// journal back onto `undo_stack`, and rebuilds the buffer.
+    pub(crate) fn explorer_redo(&mut self) {
+        // Pop the top transaction from the redo stack.
+        let redo_txn = {
+            let ep = match self.explorer.as_mut() {
+                Some(ep) => ep,
+                None => return,
+            };
+            match ep.redo_stack.pop() {
+                Some(t) => t,
+                None => return,
+            }
+        };
+
+        // Take the trashed registry.
+        let mut trashed = self
+            .explorer
+            .as_mut()
+            .map(|ep| std::mem::take(&mut ep.trashed))
+            .unwrap_or_default();
+
+        let (_newly_created, new_applied, errors) =
+            super::explorer_reconcile::apply_applied(&redo_txn, &mut trashed);
+
+        // Put the trashed registry back and push to undo stack.
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.trashed = trashed;
+            if !new_applied.is_empty() {
+                ep.undo_stack.push(new_applied);
+            }
+        }
+
+        for err in &errors {
+            self.bus.error(format!("explorer redo: {err}"));
+        }
+
+        // Rebuild tree + buffer from disk + git.
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.tree.rebuild();
+        }
+        self.explorer_rebuild_buffer();
+        self.recompute_explorer_git_base();
     }
 
     /// Sync the explorer editor's cursor from the explorer window's snapshot.
@@ -3059,6 +3164,261 @@ mod tests {
         assert!(
             !buf_after_u.contains("fresh.rs"),
             "u must drop fresh.rs from buffer; buf=<<<{buf_after_u}>>>"
+        );
+    }
+
+    // ── Git-aware reconcile tests ───────────────────────────────────────────
+
+    /// `dd` on a git-tracked file: the file is gone from disk but stays in the
+    /// explorer list as a red (Deleted) node because it was tracked by git.
+    #[test]
+    fn git_repo_dd_tracked_stays_red() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        // Create an isolated git repo with one committed file.
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+
+        // Init a git repo, create + commit a tracked file.
+        let run = |args: &[&str], dir: &std::path::Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("git command failed")
+        };
+        run(&["init"], tmp.path());
+        run(&["config", "user.email", "t@t.com"], tmp.path());
+        run(&["config", "user.name", "T"], tmp.path());
+        std::fs::write(tmp.path().join("tracked.txt"), "tracked").unwrap();
+        run(&["add", "tracked.txt"], tmp.path());
+        run(&["commit", "-m", "init"], tmp.path());
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // Navigate to tracked.txt and delete it (dd).
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let on_disk = tmp.path().join("tracked.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+
+        // Check that the node has Deleted git status.
+        let node_git = app
+            .explorer
+            .as_ref()
+            .and_then(|ep| {
+                ep.tree.nodes.iter().find(|n| {
+                    n.path
+                        .file_name()
+                        .map(|f| f == "tracked.txt")
+                        .unwrap_or(false)
+                })
+            })
+            .map(|n| n.git);
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk, "dd must remove tracked.txt from disk (to trash)");
+        assert!(
+            buf.contains("tracked.txt"),
+            "tracked deleted file must remain in explorer list; buf=<<<{buf}>>>"
+        );
+        assert!(
+            matches!(node_git, Some(Some(hjkl_app::git::ExplorerGit::Deleted))),
+            "deleted tracked file node must have git status Deleted; got {node_git:?}"
+        );
+    }
+
+    /// `dd` on a file in a non-git directory: file is gone AND gone from list.
+    #[test]
+    fn non_git_dd_vanishes() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        // Temp dir that is NOT a git repo.
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        std::fs::write(tmp.path().join("untracked.txt"), "bye").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let on_disk = tmp.path().join("untracked.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk, "dd must remove untracked.txt from disk");
+        assert!(
+            !buf.contains("untracked.txt"),
+            "non-git dd'd file must vanish from list; buf=<<<{buf}>>>"
+        );
+    }
+
+    /// `dd` → `u` (journal undo) → file back on disk + listed normally.
+    /// After undo: undo_stack empty, redo_stack has one entry.
+    #[test]
+    fn dd_then_u_restores() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("recover.txt"), "restore_me").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // dd
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(
+            !tmp.path().join("recover.txt").exists(),
+            "must be trashed after dd"
+        );
+        // undo_stack has 1 entry after dd.
+        let undo_len = app
+            .explorer
+            .as_ref()
+            .map(|ep| ep.undo_stack.len())
+            .unwrap_or(0);
+        assert_eq!(undo_len, 1, "undo_stack must have 1 entry after dd");
+
+        // u → journal undo
+        press(&mut app, KeyCode::Char('u'));
+        let on_disk = tmp.path().join("recover.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+        let undo_len2 = app
+            .explorer
+            .as_ref()
+            .map(|ep| ep.undo_stack.len())
+            .unwrap_or(1);
+        let redo_len = app
+            .explorer
+            .as_ref()
+            .map(|ep| ep.redo_stack.len())
+            .unwrap_or(0);
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(on_disk, "u must restore recover.txt to disk");
+        assert!(
+            buf.contains("recover.txt"),
+            "u must show recover.txt in list; buf=<<<{buf}>>>"
+        );
+        assert_eq!(undo_len2, 0, "undo_stack must be empty after u");
+        assert_eq!(redo_len, 1, "redo_stack must have 1 entry after u");
+    }
+
+    /// `dd` → `u` → `<C-r>` → file trashed again.
+    #[test]
+    fn dd_u_then_ctrl_r_retrashes() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("trashable.txt"), "yo").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(!tmp.path().join("trashable.txt").exists(), "dd must trash");
+
+        press(&mut app, KeyCode::Char('u'));
+        assert!(tmp.path().join("trashable.txt").exists(), "u must restore");
+
+        // <C-r> redo
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        let consumed = matches!(
+            app.handle_keypress(ctrl_r),
+            KeyOutcome::Continue | KeyOutcome::Break
+        );
+        if !consumed {
+            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ctrl_r);
+        }
+        app.maybe_reconcile_explorer();
+
+        let on_disk = tmp.path().join("trashable.txt").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk, "<C-r> must re-trash trashable.txt");
+        assert!(
+            !buf.contains("trashable.txt"),
+            "<C-r> must drop trashable.txt from buffer; buf=<<<{buf}>>>"
+        );
+    }
+
+    /// `o` + name + `<Esc>` creates; `u` trashes the new file.
+    #[test]
+    fn create_then_u_removes() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        press(&mut app, KeyCode::Char('o'));
+        for c in "newborn.rs".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        assert!(
+            tmp.path().join("newborn.rs").exists(),
+            "o+type+Esc must create the file"
+        );
+
+        // Refocus explorer after file creation opened it in the editor window.
+        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        app.set_focused_window(ep_win);
+        app.sync_viewport_to_editor();
+
+        press(&mut app, KeyCode::Char('u'));
+
+        let on_disk = tmp.path().join("newborn.rs").exists();
+        let idx = app.explorer_slot_idx().unwrap();
+        let buf = app.slots[idx].editor.buffer().as_string();
+
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(!on_disk, "u must remove newborn.rs (trash it)");
+        assert!(
+            !buf.contains("newborn.rs"),
+            "u must drop newborn.rs from buffer; buf=<<<{buf}>>>"
         );
     }
 
