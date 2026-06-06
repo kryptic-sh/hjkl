@@ -90,6 +90,47 @@ pub fn file_icon_for_path(path: &Path, mode: IconMode) -> char {
     file_icon(ext, mode)
 }
 
+/// Devicon-style RGB color for a file, keyed by extension (case-insensitive).
+///
+/// Returns `None` for unknown extensions — callers should fall back to the
+/// active theme's default text color. Colors mirror the nvim-web-devicons
+/// palette used by neo-tree.
+pub fn file_color_for_path(path: &Path) -> Option<(u8, u8, u8)> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "rs" => Some((0xde, 0xa5, 0x84)),              // rust orange
+        "md" | "markdown" => Some((0x51, 0x9a, 0xba)), // markdown blue-grey
+        "toml" | "ini" | "conf" | "cfg" => Some((0x9c, 0x4d, 0x21)), // toml brown/rust
+        "lock" => Some((0x80, 0x80, 0x80)),            // grey
+        "json" => Some((0xcb, 0xcb, 0x41)),            // json yellow
+        "yaml" | "yml" => Some((0xcb, 0xcb, 0x41)),    // yaml yellow
+        "html" | "htm" => Some((0xe4, 0x4d, 0x26)),    // html orange-red
+        "css" | "scss" => Some((0x56, 0x4f, 0xd8)),    // css purple
+        "js" | "mjs" | "cjs" => Some((0xcb, 0xcb, 0x41)), // js yellow
+        "ts" | "tsx" => Some((0x00, 0x7a, 0xcc)),      // ts blue
+        "py" => Some((0x45, 0x84, 0xb6)),              // python blue
+        "go" => Some((0x00, 0xad, 0xd8)),              // go cyan
+        "sh" | "bash" | "zsh" | "fish" => Some((0x4e, 0xaa, 0x25)), // shell green
+        "txt" | "text" => Some((0x80, 0x80, 0x80)),    // plain grey
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => Some((0xa0, 0x74, 0xc4)), // image purple
+        _ => None,
+    }
+}
+
+/// Devicon-style RGB color for a directory.
+///
+/// Returns a folder-blue consistent with VS Code / neo-tree. The `_name`
+/// parameter is reserved for future special-folder coloring (e.g. `.git` in
+/// a distinct hue); pass the directory's file-name string or `None`.
+pub fn dir_color(_name: Option<&str>) -> Option<(u8, u8, u8)> {
+    // Folder blue — matches VS Code's default folder icon color.
+    Some((0x56, 0x9c, 0xd6))
+}
+
 fn nerd_dir_icon(name: Option<&str>, expanded: bool) -> char {
     if let Some(name) = name {
         match name {
@@ -178,5 +219,52 @@ mod tests {
             dir_icon_for_path(Path::new("/proj/.git"), false, IconMode::Nerd),
             '\u{e702}'
         );
+    }
+
+    #[test]
+    fn file_color_known_extensions_return_some() {
+        // Rust — devicon orange
+        assert_eq!(
+            file_color_for_path(Path::new("src/main.rs")),
+            Some((0xde, 0xa5, 0x84))
+        );
+        // Python — devicon blue
+        assert_eq!(
+            file_color_for_path(Path::new("script.py")),
+            Some((0x45, 0x84, 0xb6))
+        );
+        // JSON — yellow
+        assert_eq!(
+            file_color_for_path(Path::new("package.json")),
+            Some((0xcb, 0xcb, 0x41))
+        );
+    }
+
+    #[test]
+    fn file_color_unknown_extension_returns_none() {
+        assert_eq!(file_color_for_path(Path::new("binary.exe")), None);
+        assert_eq!(file_color_for_path(Path::new("no_extension")), None);
+        assert_eq!(file_color_for_path(Path::new("")), None);
+    }
+
+    #[test]
+    fn file_color_case_insensitive() {
+        // Extension matching is case-insensitive.
+        assert_eq!(
+            file_color_for_path(Path::new("main.RS")),
+            file_color_for_path(Path::new("main.rs"))
+        );
+        assert_eq!(
+            file_color_for_path(Path::new("app.PY")),
+            file_color_for_path(Path::new("app.py"))
+        );
+    }
+
+    #[test]
+    fn dir_color_returns_folder_blue() {
+        let color = dir_color(None);
+        assert_eq!(color, Some((0x56, 0x9c, 0xd6)));
+        // Named dirs also return the folder blue (no special casing yet).
+        assert_eq!(dir_color(Some("src")), Some((0x56, 0x9c, 0xd6)));
     }
 }

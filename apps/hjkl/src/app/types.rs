@@ -373,6 +373,11 @@ pub struct BufferSlot {
     /// Used to skip re-extraction when the tree hasn't changed since the
     /// last fold pass.
     pub(super) last_fold_dirty_gen: Option<u64>,
+    /// Cached result of `hjkl_app::git::path_in_repo` for this slot's file.
+    /// `None` = not yet probed (probe runs lazily on first git-signs refresh).
+    /// `Some(false)` = outside a repo — git-sign jobs are skipped entirely.
+    /// Reset to `None` when the slot's filename changes.
+    pub(crate) git_repo_present: Option<bool>,
     /// Cached per-row git blame. `blame[row]` is `None` when the row has no
     /// attribution (new file, untracked, or row past blame output).
     /// Cleared when `blame_inline` is toggled off.

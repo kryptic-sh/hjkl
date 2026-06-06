@@ -26,6 +26,26 @@ use hjkl_prompt_tui::{PromptTheme, build_prompt_line};
 use hjkl_tabs::TabBar;
 use hjkl_tabs_tui::{TabBarTheme, build_line as build_tab_line};
 
+// ── Explorer color constants ──────────────────────────────────────────────────
+
+/// Git-status BACKGROUND colors for explorer filenames. The status is shown as
+/// the name's background so the filetype/dir foreground color stays distinct
+/// from the git state. The name text itself is repainted [`GIT_TEXT`] for
+/// contrast against these mid-tone backgrounds.
+const GIT_MODIFIED: Color = Color::Rgb(0xd7, 0x87, 0x5f);
+const GIT_STAGED: Color = Color::Rgb(0x87, 0xaf, 0x5f);
+const GIT_DELETED: Color = Color::Rgb(0xd7, 0x5f, 0x5f);
+const GIT_UNTRACKED: Color = Color::Rgb(0x5f, 0xaf, 0xaf);
+
+/// High-contrast text color painted over a git-status background so the
+/// filename stays readable on any of the mid-tone status backgrounds.
+const GIT_TEXT: Color = Color::Rgb(0x1c, 0x1c, 0x1c);
+
+/// Convert an `Option<(u8,u8,u8)>` RGB triple to a ratatui `Color::Rgb`.
+fn rgb(o: Option<(u8, u8, u8)>) -> Option<Color> {
+    o.map(|(r, g, b)| Color::Rgb(r, g, b))
+}
+
 /// Convert a `ratatui::style::Color::Rgb` to `hjkl_statusline::Color`.
 /// Named/indexed colors fall back to white.
 fn ratatui_rgb_to_sl(c: Color) -> SlColor {
@@ -1132,6 +1152,123 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         },
     };
     frame.render_widget(view, area);
+
+    // ── Explorer devicon + git-status color overlay ───────────────────────
+    //
+    // Post-render cell walk: repaint the icon cell with a devicon RGB color
+    // and every name cell with the git-status color (or the devicon base for
+    // clean files). Applied only to the window whose win_id matches the
+    // explorer pane's win_id, so multiple windows showing the same buffer
+    // don't get double-painted.
+    if is_explorer_slot
+        && let Some(ref pane) = app.explorer
+        && pane.win_id == win_id
+    {
+        let buf = frame.buffer_mut();
+        let screen_top = area.y;
+        let screen_height = area.height as usize;
+        // Explorer is gutterless: text starts at area.x (sign_w=fold_w=num_gw=0).
+        let text_x = area.x;
+
+        // The viewport top row for this window (same variable as the BufferView uses).
+        let vp_top_ex = vp_top;
+
+        for vis_row in 0..screen_height {
+            let buf_row = vp_top_ex + vis_row;
+            let screen_row = screen_top + vis_row as u16;
+            if screen_row >= screen_top + area.height {
+                break;
+            }
+
+            let Some(node) = pane.tree.nodes.get(buf_row) else {
+                continue;
+            };
+
+            // Compute icon and name screen-column offsets.
+            // Layout (from render_text):
+            //   depth-0 (root): icon(1) + space(1) + name(...)
+            //   depth>0: branches*(2) + connector(2) + icon(1) + space(1) + name(...)
+            let (icon_col, name_col) = if node.depth == 0 {
+                (text_x, text_x + 2)
+            } else {
+                let guide_cols = node.branches.len() as u16 * 2;
+                let icon_off = guide_cols + 2; // +2 for the connector (e.g. `├╴`)
+                (text_x + icon_off, text_x + icon_off + 2)
+            };
+
+            // Icon color: devicon per-filetype or folder blue.
+            let icon_color = if node.is_dir {
+                let name = node.path.file_name().and_then(|n| n.to_str());
+                rgb(hjkl_icons::dir_color(name))
+            } else {
+                rgb(hjkl_icons::file_color_for_path(&node.path))
+            };
+
+            // Git status → name BACKGROUND (so the filetype/dir foreground stays
+            // distinct). Clean nodes keep their devicon/dir foreground and the
+            // normal background.
+            let git_bg = match node.git {
+                Some(hjkl_app::git::ExplorerGit::Modified) => Some(GIT_MODIFIED),
+                Some(hjkl_app::git::ExplorerGit::Staged) => Some(GIT_STAGED),
+                Some(hjkl_app::git::ExplorerGit::Deleted) => Some(GIT_DELETED),
+                Some(hjkl_app::git::ExplorerGit::Untracked) => Some(GIT_UNTRACKED),
+                None => None,
+            };
+            // Foreground for the name when clean: devicon (files) / folder (dirs),
+            // falling back to the theme text color.
+            let clean_name_fg = if node.is_dir {
+                rgb(hjkl_icons::dir_color(
+                    node.path.file_name().and_then(|n| n.to_str()),
+                ))
+            } else {
+                rgb(hjkl_icons::file_color_for_path(&node.path))
+            }
+            .unwrap_or(app.theme.ui.text);
+
+            let right = area.x + area.width;
+
+            // Repaint the icon cell foreground (icon keeps its filetype/dir color
+            // regardless of git state — the icon column never gets a git bg).
+            if icon_col < right
+                && let Some(cell) = buf.cell_mut((icon_col, screen_row))
+                && let Some(ic) = icon_color
+            {
+                cell.set_fg(ic);
+            }
+
+            // Name span width in display cells (filename; root uses the full
+            // path when it has no file_name). Bound the painted region to the
+            // actual name so the git bg is a tight highlight, not a full bar.
+            let name_str = node
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| {
+                    if node.depth == 0 {
+                        node.path.to_string_lossy().into_owned()
+                    } else {
+                        String::new()
+                    }
+                });
+            let name_len = name_str.chars().count() as u16;
+            let name_end = name_col.saturating_add(name_len).min(right);
+
+            // Repaint name cells.
+            for col in name_col..name_end {
+                if let Some(cell) = buf.cell_mut((col, screen_row)) {
+                    match git_bg {
+                        Some(bg) => {
+                            cell.set_bg(bg);
+                            cell.set_fg(GIT_TEXT);
+                        }
+                        None => {
+                            cell.set_fg(clean_name_fg);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // ── Auto-indent flash overlay ─────────────────────────────────────────
     //

@@ -153,6 +153,7 @@ impl App {
             slot.diag_signs.clear();
             slot.git_signs.clear();
             slot.last_git_dirty_gen = None;
+            slot.git_repo_present = None; // re-probe on next edit
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;
@@ -271,6 +272,7 @@ impl App {
             slot.diag_signs.clear();
             slot.git_signs.clear();
             slot.last_git_dirty_gen = None;
+            slot.git_repo_present = None; // re-probe on next edit
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;

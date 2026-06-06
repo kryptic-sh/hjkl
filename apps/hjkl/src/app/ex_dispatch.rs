@@ -536,6 +536,7 @@ impl App {
                 let idx = self.focused_slot_idx();
                 let p = PathBuf::from(&name);
                 self.slots[idx].filename = Some(p.clone());
+                self.slots[idx].git_repo_present = None; // re-probe for new path
                 self.slots[idx]
                     .editor
                     .registers_mut()
@@ -796,6 +797,7 @@ impl App {
                 swap_path: None,
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
+                git_repo_present: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -881,6 +883,7 @@ impl App {
                 swap_path: None,
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
+                git_repo_present: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -1089,6 +1092,7 @@ impl App {
                         }
                         self.slots[idx].disk_state = DiskState::Synced;
                         self.slots[idx].filename = Some(p.clone());
+                        self.slots[idx].git_repo_present = None; // re-probe for new path
                         // Keep `"%` in sync when the buffer gets a (new) filename.
                         self.slots[idx]
                             .editor
@@ -1358,6 +1362,7 @@ impl App {
                 swap_path: None,
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
+                git_repo_present: None,
             };
             slot.snapshot_saved();
             // Re-mark dirty after snapshot (snapshot_saved clears dirty).
@@ -2155,6 +2160,7 @@ impl App {
                 swap_path: None,
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
+                git_repo_present: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);

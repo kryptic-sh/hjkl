@@ -53,9 +53,11 @@ impl App {
     }
 
     /// Queue a git diff-sign refresh for the current buffer, bypassing
-    /// the 250 ms throttle.
+    /// the 250 ms throttle. Also recomputes the explorer's on-disk git base so
+    /// save / stage / checkout sites all get fresh sidebar colors.
     pub(crate) fn refresh_git_signs_force(&mut self) {
         self.refresh_git_signs_inner(true);
+        self.recompute_explorer_git_base();
     }
 
     pub(crate) fn refresh_git_signs_inner(&mut self, force: bool) {
@@ -71,6 +73,21 @@ impl App {
                 return;
             }
         };
+
+        // Lazily probe and cache whether the file's directory is inside a git
+        // repo. This probe runs once per slot and is cached on `git_repo_present`.
+        // When the result is `false`, skip all git logic (no libgit2 diff calls).
+        if self.active().git_repo_present.is_none() {
+            let present = hjkl_app::git::path_in_repo(&path);
+            self.active_mut().git_repo_present = Some(present);
+        }
+        if self.active().git_repo_present == Some(false) {
+            let slot = self.active_mut();
+            slot.git_signs.clear();
+            slot.last_git_dirty_gen = None;
+            return; // gate: no-repo → skip all git work
+        }
+
         let dg = self.active().editor.buffer().dirty_gen();
         if !force && self.active().last_git_dirty_gen == Some(dg) {
             return;
@@ -112,7 +129,72 @@ impl App {
                 redraw = true;
             }
         }
+        if redraw {
+            self.refresh_explorer_git();
+        }
         redraw
+    }
+
+    /// Overlay open dirty buffers' git state onto the cached disk base and
+    /// re-tag the explorer tree. Cheap: no git syscalls. No-op when the
+    /// explorer is closed or its root isn't in a git repo.
+    ///
+    /// The merged map starts from `git_base` (on-disk state), then upgrades
+    /// any entry whose buffer is open and dirty (has git signs or is
+    /// untracked). When a buffer's edits are undone so it matches HEAD,
+    /// `git_signs` is empty → no overlay → the node falls back to
+    /// `git_base` (clean). Returns `true` when the tree was re-tagged.
+    pub(crate) fn refresh_explorer_git(&mut self) -> bool {
+        let Some(pane) = self.explorer.as_ref() else {
+            return false;
+        };
+        if !pane.tree.repo_present {
+            return false;
+        }
+        let mut map = pane.tree.git_base.clone();
+        for slot in &self.slots {
+            let Some(fname) = slot.filename.as_ref() else {
+                continue;
+            };
+            let cand = if slot.is_untracked {
+                hjkl_app::git::ExplorerGit::Untracked
+            } else if !slot.git_signs.is_empty() {
+                hjkl_app::git::ExplorerGit::Modified
+            } else {
+                continue;
+            };
+            if let Some(key) = hjkl_app::git::explorer_key_for(fname) {
+                // Merge with precedence: keep the higher-priority status.
+                let entry = map.entry(key).or_insert(cand);
+                if crate::app::explorer::git_status_priority(cand)
+                    > crate::app::explorer::git_status_priority(*entry)
+                {
+                    *entry = cand;
+                }
+            }
+        }
+        let pane = self.explorer.as_mut().unwrap();
+        pane.tree.retag_git(&map);
+        true
+    }
+
+    /// Recompute the explorer's on-disk git status base via git, then
+    /// re-apply the live overlay. Call when on-disk git state may have
+    /// changed (save / stage / checkout). No-op when explorer is closed or
+    /// root is not in a git repo.
+    pub(crate) fn recompute_explorer_git_base(&mut self) -> bool {
+        let Some(pane) = self.explorer.as_ref() else {
+            return false;
+        };
+        if !pane.tree.repo_present {
+            return false;
+        }
+        let root = pane.tree.root.clone();
+        let base = hjkl_app::git::explorer_status_map(&root);
+        if let Some(pane) = self.explorer.as_mut() {
+            pane.tree.git_base = base;
+        }
+        self.refresh_explorer_git()
     }
 
     /// Queue a git blame refresh for the current buffer (throttled).

@@ -681,6 +681,7 @@ pub(super) fn build_slot(
         swap_path,
         last_swap_dirty_gen: None,
         last_fold_dirty_gen: None,
+        git_repo_present: None,
     };
     slot.snapshot_saved();
     Ok(slot)

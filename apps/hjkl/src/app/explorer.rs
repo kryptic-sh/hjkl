@@ -67,6 +67,9 @@ pub(crate) struct ExplorerNode {
     /// that ancestor has a following sibling (draw a `│` in that column).
     /// Length `depth - 1` for `depth >= 1`; empty for the root.
     pub branches: Vec<bool>,
+    /// Git status for this path (from the workdir status map). `None` when the
+    /// path is clean or the explorer root is outside a git repo.
+    pub git: Option<hjkl_app::git::ExplorerGit>,
 }
 
 /// Pure tree model. Owned by `ExplorerPane` on `App`.
@@ -101,6 +104,14 @@ pub(crate) struct ExplorerTree {
     /// last filtered rebuild, so the search can focus the BEST match rather than
     /// the first in tree order. `None` when unfiltered or no match.
     pub(crate) best_match_row: Option<usize>,
+    /// Last-known on-disk git status map (keyed by the same absolute paths as
+    /// [`hjkl_app::git::explorer_status_map`] produces). Populated on each
+    /// full rebuild; used by [`Self::retag_git`] for cheap live overlay.
+    pub(crate) git_base: HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
+    /// `true` when `root` is inside a git repository (cached from the last
+    /// rebuild). Gates `retag_git` so no git syscalls occur per keystroke
+    /// outside a repo.
+    pub(crate) repo_present: bool,
 }
 
 impl ExplorerTree {
@@ -120,6 +131,8 @@ impl ExplorerTree {
             match_count: 0,
             total_count: 0,
             best_match_row: None,
+            git_base: HashMap::new(),
+            repo_present: false,
         };
         tree.rebuild();
         tree
@@ -177,6 +190,12 @@ impl ExplorerTree {
     }
 
     /// Recursively append `dir`'s expanded children to `out`.
+    ///
+    /// `status` carries the git workdir status map built once per rebuild.
+    /// Each file/dir node gets its `git` field set from the map. Deleted files
+    /// (present in `status` with `ExplorerGit::Deleted` but absent from the
+    /// filesystem) are injected at the end of the directory's child list and
+    /// re-sorted so they appear in tree order.
     fn push_children(
         &self,
         dir: &Path,
@@ -184,22 +203,53 @@ impl ExplorerTree {
         prefix: &[bool],
         out: &mut Vec<ExplorerNode>,
         repo: Option<&git2::Repository>,
+        status: &HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
     ) {
-        let children = self.read_children(dir, repo);
+        let mut children = self.read_children(dir, repo);
+
+        // Inject deleted files: paths in the status map whose parent is `dir`
+        // and whose status is Deleted, that are not already present on disk.
+        // Collect disk paths into owned set first to avoid borrow conflicts.
+        let disk_paths: HashSet<PathBuf> = children.iter().map(|(p, _)| p.clone()).collect();
+        for (abs_path, &git_status) in status.iter() {
+            if git_status != hjkl_app::git::ExplorerGit::Deleted {
+                continue;
+            }
+            if abs_path.parent() != Some(dir) {
+                continue;
+            }
+            if disk_paths.contains(abs_path) {
+                continue;
+            }
+            // Not on disk — inject as a file entry.
+            children.push((abs_path.clone(), false));
+        }
+
+        // Re-sort: dirs first, then case-insensitive name (same order as read_children).
+        children.sort_by(|(a, a_dir), (b, b_dir)| {
+            b_dir.cmp(a_dir).then_with(|| {
+                let an = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
+                let bn = b.file_name().map(|n| n.to_string_lossy().to_lowercase());
+                an.cmp(&bn)
+            })
+        });
+
         let n = children.len();
         for (i, (path, is_dir)) in children.into_iter().enumerate() {
             let is_last = i + 1 == n;
+            let git = status.get(&path).copied();
             out.push(ExplorerNode {
                 path: path.clone(),
                 depth,
                 is_dir,
                 is_last,
                 branches: prefix.to_vec(),
+                git,
             });
             if is_dir && self.expanded.contains(&path) {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children(&path, depth + 1, &child_prefix, out, repo);
+                self.push_children(&path, depth + 1, &child_prefix, out, repo, status);
             }
         }
     }
@@ -219,6 +269,12 @@ impl ExplorerTree {
     }
 
     fn rebuild_unfiltered(&mut self) {
+        // Build the git status map once for the whole walk. Empty when not in a
+        // repo — no git2 calls are made inside push_children in that case.
+        let status = hjkl_app::git::explorer_status_map(&self.root);
+        self.repo_present = git2::Repository::discover(&self.root).is_ok();
+        self.git_base = status.clone();
+
         let mut out = Vec::new();
         let root = self.root.clone();
         out.push(ExplorerNode {
@@ -227,11 +283,13 @@ impl ExplorerTree {
             is_dir: true,
             is_last: true,
             branches: Vec::new(),
+            git: None, // root dir rollup applied below
         });
         if self.expanded.contains(&root) {
             let repo = self.open_repo();
-            self.push_children(&root, 1, &[], &mut out, repo.as_ref());
+            self.push_children(&root, 1, &[], &mut out, repo.as_ref(), &status);
         }
+        roll_up_dir_status(&mut out);
         self.nodes = out;
         self.match_count = 0;
         self.total_count = 0;
@@ -318,6 +376,11 @@ impl ExplorerTree {
             show.insert(path.clone());
         }
 
+        // Build the git status map once for the whole walk (empty outside a repo).
+        let status = hjkl_app::git::explorer_status_map(&self.root);
+        self.repo_present = git2::Repository::discover(&self.root).is_ok();
+        self.git_base = status.clone();
+
         // DFS to build nodes — force-expanded, include only `show` members.
         let mut out = Vec::new();
         out.push(ExplorerNode {
@@ -326,8 +389,9 @@ impl ExplorerTree {
             is_dir: true,
             is_last: true,
             branches: Vec::new(),
+            git: None,
         });
-        self.push_children_filtered(&root, 1, &[], &show, &mut out, repo.as_ref());
+        self.push_children_filtered(&root, 1, &[], &show, &mut out, repo.as_ref(), &status);
         self.nodes = out;
 
         // Focus the highest-scoring match (not the first in tree order). Pick
@@ -341,7 +405,9 @@ impl ExplorerTree {
 
     /// Recursive helper for filtered rebuild — mirrors `push_children` but
     /// limits children to those in `show` and always recurses into dirs
-    /// (force-expanded).
+    /// (force-expanded). Deleted-file injection is skipped in the filtered
+    /// path (search results show only matched on-disk files).
+    #[allow(clippy::too_many_arguments)]
     fn push_children_filtered(
         &self,
         dir: &Path,
@@ -350,6 +416,7 @@ impl ExplorerTree {
         show: &HashSet<PathBuf>,
         out: &mut Vec<ExplorerNode>,
         repo: Option<&git2::Repository>,
+        status: &HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
     ) {
         let children = self.read_children(dir, repo);
         // Keep only children that are in the show set.
@@ -360,17 +427,27 @@ impl ExplorerTree {
         let n = visible.len();
         for (i, (path, is_dir)) in visible.into_iter().enumerate() {
             let is_last = i + 1 == n;
+            let git = status.get(&path).copied();
             out.push(ExplorerNode {
                 path: path.clone(),
                 depth,
                 is_dir,
                 is_last,
                 branches: prefix.to_vec(),
+                git,
             });
             if is_dir {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children_filtered(&path, depth + 1, &child_prefix, show, out, repo);
+                self.push_children_filtered(
+                    &path,
+                    depth + 1,
+                    &child_prefix,
+                    show,
+                    out,
+                    repo,
+                    status,
+                );
             }
         }
     }
@@ -417,6 +494,8 @@ impl ExplorerTree {
             match_count: 0,
             total_count: 0,
             best_match_row: None,
+            git_base: HashMap::new(),
+            repo_present: false,
         };
         tree.rebuild();
         tree
@@ -437,6 +516,19 @@ impl ExplorerTree {
         self.match_count = match_count;
         self.total_count = total_count;
         self.best_match_row = best_match_row;
+    }
+
+    /// Re-tag every node's `git` field from `status` without a filesystem walk
+    /// or tree-structure change, then recompute directory rollups.
+    ///
+    /// Used for live refresh on buffer edits: the caller merges the on-disk
+    /// `git_base` with any in-memory overlay (open dirty buffers) and passes
+    /// the result here. Cheap — O(nodes) with no git2 calls.
+    pub(crate) fn retag_git(&mut self, status: &HashMap<PathBuf, hjkl_app::git::ExplorerGit>) {
+        for node in &mut self.nodes {
+            node.git = status.get(&node.path).copied();
+        }
+        roll_up_dir_status(&mut self.nodes);
     }
 
     /// Toggle the expansion of the directory at `path`. Returns `true` if the
@@ -722,6 +814,56 @@ fn explorer_search_worker_loop(
     }
 }
 
+// ── Git status rollup ─────────────────────────────────────────────────────────
+
+/// Precedence order for directory rollup: higher index = higher priority.
+pub(crate) fn git_status_priority(s: hjkl_app::git::ExplorerGit) -> u8 {
+    use hjkl_app::git::ExplorerGit::*;
+    match s {
+        Deleted => 1,
+        Untracked => 2,
+        Staged => 3,
+        Modified => 4,
+    }
+}
+
+/// Roll up git status from descendant files onto ancestor directory nodes.
+///
+/// After `push_children` has populated the flat DFS-ordered list, this pass
+/// sets each dir node's `git` to the highest-priority status among its
+/// descendants. Relies on DFS order: every node at index `i+1..` whose depth
+/// is greater than `nodes[i].depth` belongs to the subtree of `nodes[i]`.
+fn roll_up_dir_status(nodes: &mut [ExplorerNode]) {
+    for i in 0..nodes.len() {
+        if !nodes[i].is_dir {
+            continue;
+        }
+        let dir_depth = nodes[i].depth;
+        let mut best: Option<hjkl_app::git::ExplorerGit> = nodes[i].git;
+        // Split the slice so we can read `tail[j]` while holding a mutable ref
+        // to `head[i]` later. `tail` starts at i+1.
+        let tail = &nodes[i + 1..];
+        for desc in tail {
+            if desc.depth <= dir_depth {
+                break; // left the subtree
+            }
+            if let Some(s) = desc.git {
+                best = Some(match best {
+                    None => s,
+                    Some(b) => {
+                        if git_status_priority(s) > git_status_priority(b) {
+                            s
+                        } else {
+                            b
+                        }
+                    }
+                });
+            }
+        }
+        nodes[i].git = best;
+    }
+}
+
 // ── App methods ────────────────────────────────────────────────────────────────
 
 use hjkl_engine::Host;
@@ -761,16 +903,13 @@ impl super::App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mut tree = ExplorerTree::new(cwd.clone());
 
-        // Reveal the active file's path before rendering, so the initial
-        // cursor lands on it.
-        let reveal_row: Option<usize> = active_file.as_deref().and_then(|p| {
-            // Only reveal when the file is under cwd.
-            if p.starts_with(&cwd) {
-                tree.reveal(p)
-            } else {
-                None
-            }
-        });
+        // Reveal the active file's path before rendering, so the initial cursor
+        // lands on it and its ancestor dirs are expanded. `reveal` is robust to
+        // relative-vs-absolute path forms (it canonicalizes), and returns `None`
+        // when the file isn't under the root — so no `starts_with` pre-gate (that
+        // wrongly rejected files opened with a relative path, since cwd is
+        // absolute).
+        let reveal_row: Option<usize> = active_file.as_deref().and_then(|p| tree.reveal(p));
 
         let text = tree.render_text(self.icon_mode);
         // Nodes are rebuilt by new() above; no extra rebuild needed.
@@ -843,6 +982,7 @@ impl super::App {
             swap_path: None,
             last_swap_dirty_gen: None,
             last_fold_dirty_gen: None,
+            git_repo_present: None,
         };
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;
@@ -881,6 +1021,11 @@ impl super::App {
             win_id: new_win_id,
             tree,
         });
+
+        // Overlay any already-dirty open buffers onto the freshly-built tree
+        // so an edited buffer is immediately colored without waiting for the
+        // next git-sign poll cycle.
+        self.refresh_explorer_git();
 
         // Apply the reveal cursor position if we found the active file.
         if let Some(row) = reveal_row {

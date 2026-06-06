@@ -17,7 +17,126 @@
 
 use std::path::Path;
 
-use git2::{BlameOptions, DiffOptions, ErrorCode, Patch, Repository};
+use git2::{BlameOptions, DiffOptions, ErrorCode, Patch, Repository, StatusOptions};
+
+// ── Explorer git status ────────────────────────────────────────────────────────
+
+/// Coarse git status for a single file in the explorer tree.
+///
+/// Only one status is assigned per path; the precedence (checked in order
+/// when multiple flags are set) is: Modified > Staged > Untracked > Deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorerGit {
+    /// Worktree-modified or type-changed (not yet staged).
+    Modified,
+    /// Staged in the index (new, modified, renamed, or type-changed).
+    Staged,
+    /// New file in the worktree not tracked by git.
+    Untracked,
+    /// File deleted from worktree or index but not yet committed.
+    Deleted,
+}
+
+/// Build a map of **absolute path → [`ExplorerGit`]** for all dirty paths
+/// under `root`.
+///
+/// Returns an empty map when `root` is not inside a git repository (the gate
+/// — no git2 calls are made after `Repository::discover` fails) or the repo
+/// has no workdir (bare repo).
+pub fn explorer_status_map(
+    root: &Path,
+) -> std::collections::HashMap<std::path::PathBuf, ExplorerGit> {
+    try_explorer_status_map(root).unwrap_or_default()
+}
+
+fn try_explorer_status_map(
+    root: &Path,
+) -> Result<std::collections::HashMap<std::path::PathBuf, ExplorerGit>, git2::Error> {
+    let repo = Repository::discover(root)?;
+    let workdir = match repo.workdir() {
+        Some(w) => w.to_path_buf(),
+        None => return Ok(std::collections::HashMap::new()), // bare repo
+    };
+
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+
+    let statuses = repo.statuses(Some(&mut opts))?;
+    let mut map = std::collections::HashMap::new();
+
+    for entry in statuses.iter() {
+        let rel = match entry.path() {
+            Ok(p) => std::path::PathBuf::from(p),
+            Err(_) => continue, // non-UTF-8 path — skip
+        };
+        let abs = workdir.join(&rel);
+        let flags = entry.status();
+
+        let kind = if flags.intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED)
+            && !flags.intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_TYPECHANGE
+                    | git2::Status::WT_NEW
+                    | git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_TYPECHANGE
+                    | git2::Status::INDEX_RENAMED,
+            ) {
+            // Pure deletion with no higher-precedence flag.
+            ExplorerGit::Deleted
+        } else if flags.intersects(git2::Status::WT_MODIFIED | git2::Status::WT_TYPECHANGE) {
+            ExplorerGit::Modified
+        } else if flags.contains(git2::Status::WT_NEW) {
+            ExplorerGit::Untracked
+        } else if flags.intersects(
+            git2::Status::INDEX_NEW
+                | git2::Status::INDEX_MODIFIED
+                | git2::Status::INDEX_TYPECHANGE
+                | git2::Status::INDEX_RENAMED,
+        ) {
+            ExplorerGit::Staged
+        } else if flags.intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED) {
+            // Deletion alongside a higher-priority flag already handled above;
+            // reaching here means deletion is the only flag.
+            ExplorerGit::Deleted
+        } else {
+            continue; // CURRENT / clean — skip
+        };
+
+        map.insert(abs, kind);
+    }
+
+    Ok(map)
+}
+
+/// Return the key form that [`explorer_status_map`] uses for `path`
+/// (`workdir.join(rel)`), or `None` when `path` is not inside a git repo or
+/// resolving fails.
+///
+/// Reuses [`open_repo_for`] so the key form is guaranteed to match the keys
+/// produced by [`explorer_status_map`], letting callers merge overlay entries
+/// into the base map without key-mismatch bugs.
+pub fn explorer_key_for(path: &Path) -> Option<std::path::PathBuf> {
+    let (repo, rel) = open_repo_for(path).ok()?;
+    let workdir = repo.workdir()?;
+    Some(workdir.join(rel))
+}
+
+/// Returns `true` when `path` (or its parent directory) is inside a git
+/// repository. Used to gate per-keystroke git-sign jobs: when `false`, no
+/// `Repository::statuses` / diff calls are made.
+///
+/// The result is cheap enough to compute once and cache on [`BufferSlot`].
+pub fn path_in_repo(path: &Path) -> bool {
+    let canon = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let parent = canon.parent().unwrap_or(Path::new("."));
+    Repository::discover(parent).is_ok()
+}
 
 /// One per-row git-diff change. Hosts convert to their own render
 /// type (e.g. `hjkl_buffer::Sign` for the ratatui TUI).
@@ -682,6 +801,127 @@ mod tests {
     use super::*;
     use std::process::Command;
     use tempfile::TempDir;
+
+    // ── ExplorerGit / path_in_repo ──────────────────────────────────────────
+
+    #[test]
+    fn explorer_key_for_non_repo_returns_none() {
+        // A plain temp directory (no git repo) must yield None.
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        let f = tmp.path().join("loose.txt");
+        std::fs::write(&f, "hello\n").unwrap();
+        assert!(
+            explorer_key_for(&f).is_none(),
+            "expected None for file outside any repo; got {:?}",
+            explorer_key_for(&f)
+        );
+    }
+
+    #[test]
+    fn explorer_key_for_matches_status_map_key() {
+        // In a real git repo, explorer_key_for of a modified file returns
+        // the same key that explorer_status_map uses for that file.
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+
+        let f = tmp.path().join("tracked.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Modify on disk so it appears in explorer_status_map.
+        std::fs::write(&f, "modified\n").unwrap();
+
+        let status_map = explorer_status_map(tmp.path());
+        // The status map must contain the file's key.
+        assert!(
+            !status_map.is_empty(),
+            "status map must be non-empty after edit"
+        );
+
+        let key = explorer_key_for(&f);
+        assert!(
+            key.is_some(),
+            "explorer_key_for must return Some inside a repo"
+        );
+        let key = key.unwrap();
+        assert!(
+            status_map.contains_key(&key),
+            "explorer_key_for key {key:?} must appear in explorer_status_map; map keys: {:?}",
+            status_map.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn explorer_status_map_non_repo_returns_empty() {
+        // A plain temp directory (no git repo) must return an empty map —
+        // this is the no-repo gate.
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        let map = explorer_status_map(tmp.path());
+        assert!(
+            map.is_empty(),
+            "expected empty map for non-repo dir; got {map:?}"
+        );
+    }
+
+    #[test]
+    fn path_in_repo_non_repo_returns_false() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        let f = tmp.path().join("loose.txt");
+        std::fs::write(&f, "hello\n").unwrap();
+        assert!(!path_in_repo(&f), "path outside any repo must return false");
+    }
+
+    #[test]
+    fn explorer_status_map_classifies_files() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+
+        // committed file — will be modified
+        let committed = tmp.path().join("committed.txt");
+        std::fs::write(&committed, "original\n").unwrap();
+        git(tmp.path(), &["add", "committed.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // modify the committed file (worktree change)
+        std::fs::write(&committed, "changed\n").unwrap();
+
+        // untracked file
+        let untracked = tmp.path().join("untracked.txt");
+        std::fs::write(&untracked, "new\n").unwrap();
+
+        // staged new file
+        let staged = tmp.path().join("staged.txt");
+        std::fs::write(&staged, "staged\n").unwrap();
+        git(tmp.path(), &["add", "staged.txt"]);
+
+        let map = explorer_status_map(tmp.path());
+
+        assert_eq!(
+            map.get(&committed),
+            Some(&ExplorerGit::Modified),
+            "worktree-modified file must be Modified"
+        );
+        assert_eq!(
+            map.get(&untracked),
+            Some(&ExplorerGit::Untracked),
+            "new untracked file must be Untracked"
+        );
+        assert_eq!(
+            map.get(&staged),
+            Some(&ExplorerGit::Staged),
+            "index-added file must be Staged"
+        );
+    }
+
+    #[test]
+    fn path_in_repo_returns_true_inside_repo() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("file.txt");
+        std::fs::write(&f, "hello\n").unwrap();
+        assert!(path_in_repo(&f), "file inside a repo must return true");
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
