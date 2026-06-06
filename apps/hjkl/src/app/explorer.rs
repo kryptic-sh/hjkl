@@ -1350,6 +1350,22 @@ impl super::App {
         let (newly_created, applied, errors) =
             super::explorer_reconcile::apply_ops(&ops, &mut trashed);
 
+        // Paths produced by this transaction (created / pasted-moved / renamed
+        // destinations) — used below to land the cursor on the result (the
+        // topmost when several), e.g. moving onto a pasted file.
+        let result_paths: Vec<PathBuf> = {
+            use super::explorer_reconcile::AppliedOp;
+            applied
+                .iter()
+                .filter_map(|op| match op {
+                    AppliedOp::Created(p) => Some(p.clone()),
+                    AppliedOp::Restored { to, .. } => Some(to.clone()),
+                    AppliedOp::Renamed { to, .. } => Some(to.clone()),
+                    AppliedOp::Trashed { .. } => None,
+                })
+                .collect()
+        };
+
         // Put the trashed registry back.
         if let Some(ep) = self.explorer.as_mut() {
             ep.trashed = trashed;
@@ -1378,6 +1394,28 @@ impl super::App {
         self.explorer_rebuild_buffer();
         // Refresh git colors after rebuild.
         self.recompute_explorer_git_base();
+
+        // Land the cursor on the transaction result (topmost created/pasted/
+        // renamed path), overriding the sticky-cursor restore — so after a
+        // paste you're on the pasted file.
+        if !result_paths.is_empty() {
+            let target = self.explorer.as_ref().and_then(|ep| {
+                ep.tree
+                    .nodes
+                    .iter()
+                    .position(|n| result_paths.contains(&n.path))
+                    .map(|row| (ep.win_id, row))
+            });
+            if let Some((win_id, row)) = target {
+                if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                    win.cursor_row = row;
+                    win.cursor_col = 0;
+                }
+                if self.focused_window() == win_id {
+                    self.sync_viewport_to_explorer_editor();
+                }
+            }
+        }
 
         // Spawn a background buffer for each newly-created file WITHOUT focusing
         // it — `open_new_slot` just builds the slot (no window/focus change), so
@@ -2488,6 +2526,62 @@ mod tests {
         assert!(
             focused_explorer,
             "focus must stay in the explorer after creating a file"
+        );
+    }
+
+    #[test]
+    fn paste_moves_cursor_to_pasted_file() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
+        std::fs::write(tmp.path().join("z.txt"), "z").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        // Cursor onto a.txt (line 1), delete it (trash), then paste it back.
+        press(&mut app, KeyCode::Char('j')); // onto a.txt
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d')); // a.txt trashed
+        press(&mut app, KeyCode::Char('p')); // paste -> restore a.txt
+
+        let on_disk = tmp.path().join("a.txt").exists();
+        let cursor_path = {
+            let ep = app.explorer.as_ref().unwrap();
+            let row = app
+                .windows
+                .get(ep.win_id)
+                .and_then(|w| w.as_ref())
+                .map(|w| w.cursor_row)
+                .unwrap();
+            ep.tree.nodes.get(row).map(|n| n.path.clone())
+        };
+        std::env::set_current_dir(prev).unwrap();
+        assert!(on_disk, "a.txt should be restored on disk");
+        assert_eq!(
+            cursor_path.and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())),
+            Some("a.txt".to_string()),
+            "cursor should land on the pasted file"
         );
     }
 
