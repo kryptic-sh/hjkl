@@ -1395,13 +1395,27 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// to the next match of `search_state.pattern` from the cursor's
     /// current position. Returns `true` when a match was found.
     /// `skip_current = true` excludes a match the cursor sits on.
+    /// Opens any fold hiding the match row (vim-correct: search reveals folds).
     pub fn search_advance_forward(&mut self, skip_current: bool) -> bool {
-        crate::search::search_forward(&mut self.buffer, &mut self.search_state, skip_current)
+        let found =
+            crate::search::search_forward(&mut self.buffer, &mut self.search_state, skip_current);
+        if found {
+            let row = crate::types::Cursor::cursor(&self.buffer).line as usize;
+            self.buffer.reveal_row(row);
+        }
+        found
     }
 
     /// Drive `N` — symmetric counterpart of [`Editor::search_advance_forward`].
+    /// Opens any fold hiding the match row (vim-correct: search reveals folds).
     pub fn search_advance_backward(&mut self, skip_current: bool) -> bool {
-        crate::search::search_backward(&mut self.buffer, &mut self.search_state, skip_current)
+        let found =
+            crate::search::search_backward(&mut self.buffer, &mut self.search_state, skip_current);
+        if found {
+            let row = crate::types::Cursor::cursor(&self.buffer).line as usize;
+            self.buffer.reveal_row(row);
+        }
+        found
     }
 
     /// Snapshot of the unnamed register (the default `p` / `P` source).

@@ -1173,12 +1173,37 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // Dim color used for tree guides and connectors.
         let guide_fg = app.theme.ui.indent_guide_fg;
 
-        for vis_row in 0..screen_height {
-            let buf_row = vp_top_ex + vis_row;
-            let screen_row = screen_top + vis_row as u16;
+        // Build the fold list once so we can skip hidden rows. We get the
+        // buffer through the explorer slot index rather than the App borrow.
+        let explorer_folds: Vec<hjkl_buffer::Fold> =
+            if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
+                app.slots()[slot_idx].editor.buffer().folds()
+            } else {
+                Vec::new()
+            };
+
+        // Walk doc rows starting at vp_top, skipping hidden rows, collecting
+        // up to `screen_height` visible rows — mirroring BufferView's render
+        // loop (crates/hjkl-buffer-tui/src/render.rs) which skips
+        // rows where any fold f.hides(row).
+        let total_nodes = pane.tree.nodes.len();
+        let mut doc_row = vp_top_ex;
+        let mut screen_row_idx: usize = 0;
+
+        while doc_row < total_nodes && screen_row_idx < screen_height {
+            // Skip rows hidden by a closed fold.
+            if explorer_folds.iter().any(|f| f.hides(doc_row)) {
+                doc_row += 1;
+                continue;
+            }
+
+            let buf_row = doc_row;
+            let screen_row = screen_top + screen_row_idx as u16;
             if screen_row >= screen_top + area.height {
                 break;
             }
+            screen_row_idx += 1;
+            doc_row += 1;
 
             let Some(node) = pane.tree.nodes.get(buf_row) else {
                 continue;

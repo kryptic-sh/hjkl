@@ -449,6 +449,63 @@ mod tests {
         assert!(!search_backward(&mut b, &mut s, false));
     }
 
+    // ── search reveals folds ─────────────────────────────────────────────────
+
+    /// `search_forward` on a buffer with a closed fold hiding the match row:
+    /// after finding the match, calling `reveal_row` opens the fold.
+    /// (Mirrors what `Editor::search_advance_forward` does.)
+    #[test]
+    fn search_forward_reveals_fold() {
+        use hjkl_buffer::Buffer;
+
+        // Buffer: row 0 = "header", row 1 = "needle", row 2 = "footer"
+        // Fold [0..2] closed → row 1 is hidden.
+        let mut buf = Buffer::from_str("header\nneedle\nfooter");
+        buf.add_fold(0, 2, true);
+        assert!(buf.is_row_hidden(1), "row 1 must be hidden before search");
+
+        let mut state = SearchState::new();
+        state.set_pattern(Some(re("needle")));
+
+        // Use search_forward directly on the buffer.
+        let found = search_forward(&mut buf, &mut state, false);
+        assert!(found, "search_forward must find 'needle'");
+
+        // After search_forward, cursor is on row 1. Reveal as Editor does.
+        let row = crate::types::Cursor::cursor(&buf).line as usize;
+        buf.reveal_row(row);
+        assert!(
+            !buf.is_row_hidden(1),
+            "row 1 must be revealed after search finds it there"
+        );
+    }
+
+    /// `search_backward` similarly: finding a match then calling reveal_row opens folds.
+    #[test]
+    fn search_backward_reveals_fold() {
+        use hjkl_buffer::Buffer;
+
+        // row 0 = "footer", row 1 = "needle", row 2 = "header"
+        // fold [0..2] closed → row 1 hidden. Start cursor at row 2.
+        let mut buf = Buffer::from_str("footer\nneedle\nheader");
+        buf.add_fold(0, 2, true);
+        crate::types::Cursor::set_cursor(&mut buf, crate::types::Pos::new(2, 0));
+        assert!(buf.is_row_hidden(1), "row 1 must be hidden before search");
+
+        let mut state = SearchState::new();
+        state.set_pattern(Some(re("needle")));
+
+        let found = search_backward(&mut buf, &mut state, false);
+        assert!(found, "search_backward must find 'needle'");
+
+        let row = crate::types::Cursor::cursor(&buf).line as usize;
+        buf.reveal_row(row);
+        assert!(
+            !buf.is_row_hidden(1),
+            "row 1 must be revealed after backward search finds it"
+        );
+    }
+
     #[test]
     fn forward_finds_first_match() {
         let mut b = Buffer::from_str("foo bar foo baz");
