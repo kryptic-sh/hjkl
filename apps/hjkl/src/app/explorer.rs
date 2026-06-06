@@ -902,7 +902,7 @@ impl super::App {
             Buffer::new(),
             host,
             Options {
-                readonly: true,
+                modifiable: false,
                 ..Options::default()
             },
         );

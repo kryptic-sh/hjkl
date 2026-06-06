@@ -3833,11 +3833,22 @@ fn backspace_falls_back_to_single_char_when_run_not_aligned() {
 }
 
 #[test]
-fn readonly_blocks_insert_mutation() {
+fn nomodifiable_blocks_insert_mutation() {
+    // `nomodifiable` blocks edits AND entering insert mode.
+    let mut e = editor_with("hello");
+    e.settings_mut().modifiable = false;
+    run_keys(&mut e, "iX<Esc>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
+}
+
+#[test]
+fn readonly_allows_insert_mutation() {
+    // vim `readonly` keeps the buffer editable — it only errors on save. The
+    // edit goes through; saving is gated separately at the app layer (E45).
     let mut e = editor_with("hello");
     e.settings_mut().readonly = true;
     run_keys(&mut e, "iX<Esc>");
-    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xhello");
 }
 
 // Tests for `intern_ratatui_style` and `install_ratatui_syntax_spans` moved to

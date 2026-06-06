@@ -984,3 +984,91 @@ fn matchparen_tag_cells_none_when_not_on_tag() {
     let cells = app.matchparen_tag_cells();
     assert_eq!(cells, None, "cursor on plain text must return None");
 }
+
+// ── modifiable / readonly app-layer tests ─────────────────────────────────────
+
+/// Explorer buffer must have `is_modifiable() == false`.
+#[test]
+fn explorer_buffer_is_not_modifiable() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let explorer_slot = app
+        .slots
+        .iter()
+        .find(|s| s.is_explorer)
+        .expect("explorer slot must exist after toggle");
+    assert!(
+        !explorer_slot.editor.is_modifiable(),
+        "explorer buffer must be nomodifiable"
+    );
+}
+
+/// Pressing `i` in the explorer must NOT enter Insert mode (nomodifiable).
+#[test]
+fn explorer_i_stays_normal() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    // Focus explorer slot.
+    assert!(app.explorer_buf_focused());
+    // Press `i`.
+    app.handle_keypress(key(KeyCode::Char('i')));
+    let explorer_slot = app
+        .slots
+        .iter()
+        .find(|s| s.is_explorer)
+        .expect("explorer slot must exist");
+    assert_eq!(
+        explorer_slot.editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "pressing `i` in explorer must not enter Insert mode"
+    );
+}
+
+/// `readonly` buffer: `:w` (own file) errors E45; `:w othername` succeeds.
+#[test]
+fn readonly_w_own_file_errors_e45() {
+    let td = tempfile::tempdir().unwrap();
+    let file = td.path().join("ro_test.txt");
+    std::fs::write(&file, "content\n").unwrap();
+    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    assert!(app.active().editor.is_readonly());
+    app.dispatch_ex("write");
+    let msgs: Vec<String> = app.bus.history().map(|h| h.body.clone()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("E45")),
+        "`:w` on own readonly file must error E45; got: {msgs:?}"
+    );
+}
+
+/// `readonly` buffer: `:w! own_file` clears the error (force overrides E45).
+#[test]
+fn readonly_w_force_overrides_e45() {
+    let td = tempfile::tempdir().unwrap();
+    let file = td.path().join("ro_force_test.txt");
+    std::fs::write(&file, "content\n").unwrap();
+    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    assert!(app.active().editor.is_readonly());
+    // `:write!` must succeed despite readonly.
+    let saved = app.do_save_force(None, true);
+    assert!(saved, ":w! must succeed on a readonly buffer");
+}
+
+/// `readonly` buffer: `:w othername` (different path) must succeed.
+#[test]
+fn readonly_w_different_path_succeeds() {
+    let td = tempfile::tempdir().unwrap();
+    let file = td.path().join("readonly_orig.txt");
+    let other = td.path().join("readonly_other.txt");
+    std::fs::write(&file, "content\n").unwrap();
+    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    assert!(app.active().editor.is_readonly());
+    // `:w othername` must write without E45.
+    let saved = app.do_save(Some(other.clone()));
+    assert!(
+        saved,
+        ":w to a different path must succeed even on a readonly buffer"
+    );
+    assert!(other.exists(), "output file must have been written");
+}

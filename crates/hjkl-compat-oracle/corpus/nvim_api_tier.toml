@@ -444,3 +444,21 @@ initial_cursor = [1, 4]
 keys = ":set autoindent<CR>ckbar<Esc>"
 expected_buffer = "bar\n    b;\n}\n"
 expected_cursor = [0, 2]
+
+# :set nomodifiable — buffer must be unchanged after ix<Esc>
+[[cases]]
+name = "nomodifiable_blocks_insert_ix"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":set nomodifiable<CR>ix<Esc>"
+expected_buffer = "hello\n"
+expected_cursor = [0, 0]
+
+# :set readonly — buffer IS editable; ix<Esc> inserts 'x' at col 0
+[[cases]]
+name = "readonly_allows_insert_ix"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":set readonly<CR>ix<Esc>"
+expected_buffer = "xhello\n"
+expected_cursor = [0, 0]

@@ -328,7 +328,7 @@ impl App {
                     .error("E13: file has changed on disk (add ! to override)");
                 return;
             }
-            if self.do_save(target) {
+            if self.do_save_force(target, force) {
                 self.active_mut().disk_state = DiskState::Synced;
             }
             return;
@@ -439,7 +439,7 @@ impl App {
                 self.do_save(Some(PathBuf::from(path)));
             }
             ExEffect::Quit { force, save } => {
-                if save && !self.do_save(None) {
+                if save && !self.do_save_force(None, force) {
                     // Save failed (E32 / E45 / IO error). Status_message
                     // already set by do_save; refuse to exit so the user
                     // doesn't lose unsaved content.
@@ -527,9 +527,10 @@ impl App {
             ExEffect::SaveAndRename { path } => {
                 // `:saveas {path}`: write to path AND update the buffer's identity.
                 // save_slot already updates slot.filename when saving to a new path.
+                // Not writing own file → readonly check won't fire; force=false fine.
                 let p = PathBuf::from(&path);
                 let idx = self.focused_slot_idx();
-                self.save_slot(idx, Some(p));
+                self.save_slot(idx, Some(p), false);
             }
             ExEffect::RenameBuffer { name } => {
                 // `:file {name}`: rename buffer in-memory without writing.
@@ -947,20 +948,35 @@ impl App {
     }
 
     /// Write buffer content to `path` (or `self.active().filename` if `path` is `None`).
+    /// `force` corresponds to `:w!` — overrides the readonly E45 guard when writing
+    /// the buffer's own file.
     /// Returns `true` on success, `false` on any failure (E32 / E45 / IO error).
     pub(crate) fn do_save(&mut self, path: Option<PathBuf>) -> bool {
+        self.do_save_force(path, false)
+    }
+
+    /// Like [`do_save`] but with an explicit `force` flag (`:w!`).
+    pub(crate) fn do_save_force(&mut self, path: Option<PathBuf>, force: bool) -> bool {
         let idx = self.focused_slot_idx();
-        self.save_slot(idx, path)
+        self.save_slot(idx, path, force)
     }
 
     /// Write slot `idx`'s buffer to `path` (or the slot's own filename if
     /// `path` is `None`). Pushes a notification on success or failure.
+    /// `force` overrides the readonly E45 guard when writing the buffer's own file.
     /// Does NOT change `self.active`. Returns `true` on success.
-    fn save_slot(&mut self, idx: usize, path: Option<PathBuf>) -> bool {
+    fn save_slot(&mut self, idx: usize, path: Option<PathBuf>, force: bool) -> bool {
+        // Vim semantics: `readonly` only blocks writing the buffer's OWN file,
+        // and only when not forced (`:w!` overrides). Writing to a different path
+        // (`:w other` / `:saveas`) is always allowed regardless of readonly.
         if self.slots[idx].editor.is_readonly() {
-            self.bus
-                .error("E45: 'readonly' option is set (add ! to override)");
-            return false;
+            let writing_own =
+                path.is_none() || path.as_deref() == self.slots[idx].filename.as_deref();
+            if writing_own && !force {
+                self.bus
+                    .error("E45: 'readonly' option is set (add ! to override)");
+                return false;
+            }
         }
         let target = path.or_else(|| self.slots[idx].filename.clone());
         match target {
@@ -1136,7 +1152,7 @@ impl App {
             if !self.slots[i].dirty {
                 continue;
             }
-            self.save_slot(i, None);
+            self.save_slot(i, None, false);
             written += 1;
         }
         self.bus

@@ -279,6 +279,10 @@ pub struct Options {
     pub undo_break_on_motion: bool,
     /// Reject every edit. `:set ro` sets this; `:w!` clears it.
     pub readonly: bool,
+    /// When `false`, block ALL buffer modifications including entering insert/replace
+    /// mode. Used for special buffers (explorer). Matches vim's `:set nomodifiable` /
+    /// `:set noma`. Default `true`.
+    pub modifiable: bool,
     /// Soft-wrap behavior for lines that exceed the viewport width.
     /// Maps directly to `:set wrap` / `:set linebreak` / `:set nowrap`.
     pub wrap: WrapMode,
@@ -513,6 +517,7 @@ impl Default for Options {
             undo_levels: 1000,
             undo_break_on_motion: true,
             readonly: false,
+            modifiable: true,
             wrap: WrapMode::None,
             textwidth: 79,
             number: true,
@@ -643,6 +648,7 @@ impl Options {
             "undolevels" | "ul" => set_u32!(undo_levels),
             "undobreak" => set_bool!(undo_break_on_motion),
             "readonly" | "ro" => set_bool!(readonly),
+            "modifiable" | "ma" => set_bool!(modifiable),
             "wrap" => {
                 let on = match val {
                     OptionValue::Bool(b) => b,
@@ -875,6 +881,7 @@ impl Options {
             "undolevels" | "ul" => OptionValue::Int(self.undo_levels as i64),
             "undobreak" => OptionValue::Bool(self.undo_break_on_motion),
             "readonly" | "ro" => OptionValue::Bool(self.readonly),
+            "modifiable" | "ma" => OptionValue::Bool(self.modifiable),
             "wrap" => OptionValue::Bool(!matches!(self.wrap, WrapMode::None)),
             "linebreak" | "lbr" => OptionValue::Bool(matches!(self.wrap, WrapMode::Word)),
             "number" | "nu" => OptionValue::Bool(self.number),

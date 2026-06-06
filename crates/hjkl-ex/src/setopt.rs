@@ -527,6 +527,7 @@ fn apply_bool_option<H: Host>(
         "smartindent" | "si" => editor.settings_mut().smartindent = value,
         "undobreak" => editor.settings_mut().undo_break_on_motion = value,
         "readonly" | "ro" => editor.settings_mut().readonly = value,
+        "modifiable" | "ma" => editor.settings_mut().modifiable = value,
         "number" | "nu" => editor.settings_mut().number = value,
         "relativenumber" | "rnu" => editor.settings_mut().relativenumber = value,
         "cursorline" | "cul" => editor.settings_mut().cursorline = value,

@@ -768,6 +768,10 @@ pub struct Settings {
     /// buffer — undo, dirty flag, and change log all stay clean.
     /// Matches vim's `:set readonly` / `:set ro`. Default `false`.
     pub readonly: bool,
+    /// When `false`, ALL buffer modifications are blocked, including entering
+    /// insert/replace mode. Matches vim's `:set nomodifiable` / `:set noma`.
+    /// Default `true`.
+    pub modifiable: bool,
     /// When `true`, pressing Enter in insert mode copies the leading
     /// whitespace of the current line onto the new line. Matches vim's
     /// `:set autoindent`. Default `true` (vim parity).
@@ -936,6 +940,7 @@ impl Default for Settings {
             expandtab: true,
             wrap: hjkl_buffer::Wrap::None,
             readonly: false,
+            modifiable: true,
             autoindent: true,
             smartindent: true,
             undo_levels: 1000,
@@ -1015,6 +1020,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
             crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
         },
         readonly: o.readonly,
+        modifiable: o.modifiable,
         autoindent: o.autoindent,
         smartindent: o.smartindent,
         undo_levels: o.undo_levels,
@@ -1353,6 +1359,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// type. Phase 5 binary uses this to gate `:w` writes.
     pub fn is_readonly(&self) -> bool {
         self.settings.readonly
+    }
+
+    /// Returns `true` when the buffer is modifiable (default). When `false`
+    /// (`:set nomodifiable`), ALL edits and insert-mode entry are blocked.
+    pub fn is_modifiable(&self) -> bool {
+        self.settings.modifiable
     }
 
     /// Borrow the engine search state. Hosts inspecting the
@@ -1930,17 +1942,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// route mutations through here so the side effects fire
     /// uniformly.
     pub fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
-        // `:set readonly` short-circuits every mutation funnel: no
-        // buffer change, no dirty flag, no undo entry, no change-log
-        // emission. We swallow the requested `edit` and hand back a
-        // self-inverse no-op (`InsertStr` of an empty string at the
-        // current cursor) so callers that push the return value onto
-        // an undo stack still get a structurally valid round trip.
-        // `:set readonly` OR the BLAME view overlay short-circuits every
-        // mutation funnel. BLAME is an intrinsically read-only view: the engine
-        // blocks edits while it's active, so the host never has to force
-        // `readonly` on/off around it.
-        if self.settings.readonly || self.vim.view == crate::ViewMode::Blame {
+        // `nomodifiable` OR the BLAME view overlay short-circuits every
+        // mutation funnel: no buffer change, no dirty flag, no undo entry,
+        // no change-log emission. We swallow the requested `edit` and hand
+        // back a self-inverse no-op (`InsertStr` of an empty string at the
+        // current cursor) so callers that push the return value onto an undo
+        // stack still get a structurally valid round trip.
+        // Note: `readonly` no longer blocks edits here — it only gates `:w`.
+        if !self.settings.modifiable || self.vim.view == crate::ViewMode::Blame {
             let _ = edit;
             return hjkl_buffer::Edit::InsertStr {
                 at: buf_cursor_pos(&self.buffer),
@@ -2503,6 +2512,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
             },
             readonly: self.settings.readonly,
+            modifiable: self.settings.modifiable,
             autoindent: self.settings.autoindent,
             smartindent: self.settings.smartindent,
             undo_levels: self.settings.undo_levels,
@@ -2532,6 +2542,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
         };
         self.settings.readonly = opts.readonly;
+        self.settings.modifiable = opts.modifiable;
         self.settings.autoindent = opts.autoindent;
         self.settings.smartindent = opts.smartindent;
         self.settings.undo_levels = opts.undo_levels;
@@ -6878,5 +6889,117 @@ mod blame_view_mode_tests {
             matches!(result, hjkl_buffer::Edit::InsertStr { ref text, .. } if text.is_empty()),
             "edit must be swallowed while BLAME is active"
         );
+    }
+}
+
+// ─── modifiable / readonly semantics tests ────────────────────────────────────
+
+#[cfg(test)]
+mod modifiable_readonly_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        Editor::new(buf, DefaultHost::default(), Options::default())
+    }
+
+    // ── nomodifiable ──────────────────────────────────────────────────────────
+
+    /// `nomodifiable` must block insert-mode entry: pressing `i` leaves mode Normal.
+    #[test]
+    fn nomodifiable_blocks_insert_entry() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().modifiable = false;
+        ed.enter_insert_i(1);
+        assert_eq!(
+            ed.vim_mode(),
+            crate::VimMode::Normal,
+            "nomodifiable must keep mode Normal after `i`"
+        );
+    }
+
+    /// `nomodifiable` must block all edits via mutate_edit.
+    #[test]
+    fn nomodifiable_blocks_mutate_edit() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().modifiable = false;
+        let result = ed.mutate_edit(hjkl_buffer::Edit::InsertStr {
+            at: hjkl_buffer::Position::new(0, 0),
+            text: "XXX".to_string(),
+        });
+        assert!(
+            matches!(result, hjkl_buffer::Edit::InsertStr { ref text, .. } if text.is_empty()),
+            "nomodifiable must swallow the edit"
+        );
+        assert_eq!(
+            ed.buffer().content_joined().as_str(),
+            "hello",
+            "buffer must be unchanged"
+        );
+    }
+
+    /// `nomodifiable` blocks Replace-mode entry too.
+    #[test]
+    fn nomodifiable_blocks_replace_mode_entry() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().modifiable = false;
+        ed.enter_replace_mode(1);
+        assert_eq!(
+            ed.vim_mode(),
+            crate::VimMode::Normal,
+            "nomodifiable must keep mode Normal after `R`"
+        );
+    }
+
+    // ── readonly (modifiable=true) ────────────────────────────────────────────
+
+    /// `readonly` does NOT block edits — the buffer is fully editable.
+    #[test]
+    fn readonly_allows_edits_via_mutate_edit() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().readonly = true;
+        assert!(ed.is_readonly(), "readonly flag must be set");
+        // mutate_edit must proceed normally when readonly is set.
+        ed.mutate_edit(hjkl_buffer::Edit::InsertStr {
+            at: hjkl_buffer::Position::new(0, 0),
+            text: "X".to_string(),
+        });
+        assert_eq!(
+            ed.buffer().content_joined().as_str(),
+            "Xhello",
+            "readonly must not block edits"
+        );
+    }
+
+    /// `readonly` does NOT block insert-mode entry.
+    #[test]
+    fn readonly_allows_insert_mode_entry() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().readonly = true;
+        ed.enter_insert_i(1);
+        assert_eq!(
+            ed.vim_mode(),
+            crate::VimMode::Insert,
+            "readonly must allow entering Insert mode"
+        );
+    }
+
+    // ── is_modifiable accessor ────────────────────────────────────────────────
+
+    #[test]
+    fn is_modifiable_default_true() {
+        let ed = make_ed("");
+        assert!(ed.is_modifiable());
+    }
+
+    #[test]
+    fn is_modifiable_reflects_setting() {
+        let mut ed = make_ed("");
+        ed.settings_mut().modifiable = false;
+        assert!(!ed.is_modifiable());
+        ed.settings_mut().modifiable = true;
+        assert!(ed.is_modifiable());
     }
 }

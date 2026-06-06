@@ -1372,6 +1372,15 @@ pub(crate) fn begin_insert<H: crate::types::Host>(
     count: usize,
     reason: InsertReason,
 ) {
+    // `nomodifiable`: silently refuse to enter insert/replace; stay in current mode.
+    if !ed.settings.modifiable {
+        return;
+    }
+    // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
+    if ed.vim.view == crate::ViewMode::Blame {
+        ed.vim.view = crate::ViewMode::Normal;
+        return;
+    }
     let record = !matches!(reason, InsertReason::ReplayOnly);
     if record {
         ed.push_undo();
@@ -2754,6 +2763,7 @@ pub(crate) fn enter_replace_mode_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
+    // Guard delegated to begin_insert which already checks modifiable/Blame.
     begin_insert(ed, count.max(1), InsertReason::Replace);
 }
 

@@ -566,6 +566,20 @@ pub(crate) use prompt::prompt_cursor_shape;
 ///
 /// Both original call sites used `wait_for_initial_result(150ms)`; that
 /// method is kept here as the single canonical timeout.
+/// Probe whether `path` is writable by the current process without modifying it.
+///
+/// Uses `OpenOptions::append` which does not truncate. Returns `true` when the
+/// file can be opened for appending (writable), `false` only on
+/// `PermissionDenied`, and `true` for all other errors (don't over-block on
+/// non-permission failures). Returns `true` for paths that don't exist yet.
+fn is_path_writable(path: &std::path::Path) -> bool {
+    match std::fs::OpenOptions::new().append(true).open(path) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => false,
+        Err(_) => true,
+    }
+}
+
 pub(super) fn build_slot(
     syntax: &mut SyntaxLayer,
     buffer_id: BufferId,
@@ -702,6 +716,13 @@ pub(super) fn build_slot(
         commit_ctx: None,
     };
     slot.snapshot_saved();
+    // Auto-readonly for files that exist but aren't writable by the current user.
+    if let Some(ref p) = slot.filename
+        && !slot.is_new_file
+        && !is_path_writable(p)
+    {
+        slot.editor.settings_mut().readonly = true;
+    }
     Ok(slot)
 }
 
