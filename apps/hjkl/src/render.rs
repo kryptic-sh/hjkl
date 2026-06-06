@@ -1090,7 +1090,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 .and_then(|w| w.as_ref())
                 .map(|w| w.cursor_row)
         },
-        fold_line_bg: Style::default().bg(app.theme.ui.fold_line_bg),
+        // The explorer is a tree, not code — don't tint folded directory rows.
+        fold_line_bg: if is_explorer_slot {
+            Style::default()
+        } else {
+            Style::default().bg(app.theme.ui.fold_line_bg)
+        },
         // Unfocused windows render their OWN fold snapshot (window-level folds);
         // the shared buffer holds only the focused window's set. Focused window:
         // `None` reads the live `buffer.folds()`.
@@ -1213,7 +1218,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
             // ── Glyph painting ────────────────────────────────────────────
 
-            let is_expanded = pane.tree.is_expanded(&node.path);
+            // Drive the dir open/closed icon from the ACTUAL fold state (not the
+            // `expanded` set) so a directory whose fold was opened by a search
+            // reveal shows the open-folder glyph.
+            let is_expanded = !explorer_folds
+                .iter()
+                .any(|f| f.start_row == buf_row && f.closed);
 
             // Icon character for this node.
             let icon_ch = if node.is_dir {

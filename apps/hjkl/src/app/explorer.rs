@@ -280,10 +280,10 @@ impl ExplorerTree {
         roll_up_dir_status(&mut self.nodes);
     }
 
-    /// Toggle the expansion of the directory at `path`. Returns `true` when the
-    /// state changed. Does NOT rebuild the node list or FS walk — only the
-    /// `expanded` set changes. The caller must re-apply `compute_folds` to the
-    /// buffer (or call `explorer_rebuild_buffer` for a full rebuild).
+    /// Toggle the expansion of the directory at `path` in the `expanded` set.
+    /// Test-only helper — runtime toggling flips the buffer fold directly via
+    /// `toggle_fold_at` and syncs `expanded` with `set_expanded`.
+    #[cfg(test)]
     pub(crate) fn toggle(&mut self, path: &Path) -> bool {
         if self.expanded.contains(path) {
             self.expanded.remove(path);
@@ -293,8 +293,19 @@ impl ExplorerTree {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn is_expanded(&self, path: &Path) -> bool {
         self.expanded.contains(path)
+    }
+
+    /// Set a directory's expanded (fold-open) state explicitly. Used to keep
+    /// `expanded` in sync with the buffer's actual fold state after a toggle.
+    pub(crate) fn set_expanded(&mut self, path: &Path, expanded: bool) {
+        if expanded {
+            self.expanded.insert(path.to_path_buf());
+        } else {
+            self.expanded.remove(path);
+        }
     }
 
     /// Flip `show_hidden` and rebuild.
@@ -1314,20 +1325,23 @@ impl super::App {
         let Some(node) = node else { return };
 
         if node.is_dir {
-            // Toggle dir expansion: flip `expanded`, then re-apply folds only
-            // (no fs walk, no set_content — the full tree is already in the buffer).
+            // Toggle just THIS directory's fold based on its ACTUAL state — a
+            // search reveal can open a fold without updating `expanded`, so
+            // <CR> must flip what you see. Toggling the single fold (rather than
+            // recomputing all folds from `expanded`) also avoids re-closing
+            // other reveal-opened dirs. Sync `expanded` for this path so a later
+            // rebuild preserves it.
             let path = node.path.clone();
-            if let Some(ref mut ep) = self.explorer {
-                ep.tree.toggle(&path);
-            }
-            // Re-apply folds from the updated `expanded` set.
-            let folds = self
-                .explorer
-                .as_ref()
-                .map(|ep| ep.tree.compute_folds())
-                .unwrap_or_default();
             if let Some(slot_idx) = self.explorer_slot_idx() {
-                self.slots[slot_idx].editor.buffer_mut().set_folds(&folds);
+                let buf = self.slots[slot_idx].editor.buffer_mut();
+                buf.toggle_fold_at(cursor_row);
+                let now_closed = buf
+                    .folds()
+                    .iter()
+                    .any(|f| f.start_row == cursor_row && f.closed);
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.set_expanded(&path, !now_closed);
+                }
             }
         } else {
             // File: open in the nearest non-explorer window.
