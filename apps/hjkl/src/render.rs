@@ -869,8 +869,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.filter_field.is_some()
         || app.search_field.is_some()
         || app.picker.is_some()
-        || app.explorer_prompt.is_some()
-        || app.explorer_confirm.is_some()
         || app.explorer_git_discard_confirm.is_some()
         || app.explorer_search.is_some();
 
@@ -1322,6 +1320,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // Name span width in display cells (filename; root uses the full
             // path when it has no file_name). Bound the painted region to the
             // actual name so the git bg is a tight highlight, not a full bar.
+            // For non-root dirs, render_text appended a trailing `/` — extend the
+            // span by 1 so the slash receives the same git-bg/clean color.
             let name_str = node
                 .path
                 .file_name()
@@ -1333,7 +1333,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                         String::new()
                     }
                 });
-            let name_len = name_str.chars().count() as u16;
+            let trailing_slash = if node.is_dir && node.depth > 0 {
+                1u16
+            } else {
+                0u16
+            };
+            let name_len = name_str.chars().count() as u16 + trailing_slash;
             let name_end = name_col.saturating_add(name_len).min(right);
 
             // Repaint name cells.
@@ -2204,46 +2209,6 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // NOTE: the explorer fuzzy-search field is NOT rendered here — it draws in a
     // bar at the TOP of the explorer pane (see `render_explorer_search_bar`),
     // leaving the bottom status line as the normal one for ordinary buffers.
-
-    // ── Explorer text prompt (create / rename) ─────────────────────────────
-    if let Some(ref ep) = app.explorer_prompt {
-        use crate::app::explorer::ExplorerPromptKind;
-        let label = match &ep.kind {
-            ExplorerPromptKind::Create => "Create: ",
-            ExplorerPromptKind::Rename { .. } => "Rename: ",
-        };
-        let text = ep.field.text();
-        let display: String = text.lines().next().unwrap_or("").to_string();
-        let content = format!("{label}{display}");
-        let (_, ccol) = ep.field.cursor();
-        let cursor_col = label.len() as u16 + ccol as u16;
-        let theme = prompt_theme(&app.theme.ui);
-        return (
-            build_prompt_line(&content, ep.field.vim_mode(), &theme, width),
-            Some(cursor_col),
-        );
-    }
-
-    // ── Explorer delete confirm ─────────────────────────────────────────────
-    if let Some(ref ec) = app.explorer_confirm {
-        let name = ec
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ec.path.to_string_lossy().into_owned());
-        let content = format!("Delete '{name}'? [y/N]");
-        let padded = format!("{content:<width$}", width = width as usize);
-        return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default()
-                    .bg(app.theme.ui.search_bg)
-                    .fg(app.theme.ui.search_fg)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            None,
-        );
-    }
 
     // ── Explorer git-discard confirm ────────────────────────────────────────
     if let Some(ref path) = app.explorer_git_discard_confirm {

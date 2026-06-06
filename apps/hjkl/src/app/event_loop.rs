@@ -436,18 +436,6 @@ impl App {
             return KeyOutcome::Continue;
         }
 
-        // ── Explorer text prompt (create / rename) ────────────────
-        if self.explorer_prompt.is_some() {
-            self.handle_explorer_prompt_key(key);
-            return KeyOutcome::Continue;
-        }
-
-        // ── Explorer delete confirm ───────────────────────────────
-        if self.explorer_confirm.is_some() {
-            self.handle_explorer_confirm_key(key);
-            return KeyOutcome::Continue;
-        }
-
         // ── Explorer git-discard confirm ──────────────────────────
         if self.explorer_git_discard_confirm.is_some() {
             self.handle_explorer_git_discard_confirm_key(key);
@@ -1847,6 +1835,12 @@ impl App {
                 }
                 _ => {}
             }
+
+            // After every key tick (both consumed-inline and fall-through
+            // paths), check whether the explorer buffer changed and apply any
+            // pending filesystem ops. The dirty_gen guard and Normal-mode
+            // check make this a no-op on most ticks.
+            self.maybe_reconcile_explorer();
 
             // Drain any additional events currently ready (e.g. a burst
             // of mouse-wheel scrolls) before running the deferred sync

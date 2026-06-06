@@ -1,10 +1,5 @@
 //! Pure reconcile engine for the oil.nvim-style editable file explorer.
 //!
-// Not yet wired into the app — all items are used exclusively from tests in
-// this phase.  Suppress dead-code lints; they will be removed in the wiring
-// phase when callers are added.
-#![allow(dead_code)]
-//!
 //! [`reconcile`] diffs an edited explorer buffer against a baseline snapshot
 //! and returns an ordered [`Vec<FsOp>`] that, when applied in order, makes the
 //! filesystem match the buffer.  **No filesystem access occurs here** — this is
@@ -319,6 +314,175 @@ pub(crate) fn reconcile(baseline: &[(PathBuf, bool)], buffer: &str, root: &Path)
     ops.extend(trashes);
     ops.extend(creates);
     ops
+}
+
+// ── Filesystem application ────────────────────────────────────────────────────
+
+/// Move a file across device boundaries: `fs::rename` first; on `CrossesDevices`
+/// fall back to `fs::copy` + `fs::remove_file`.
+fn move_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Move a directory tree across filesystem boundaries: `fs::rename` first; on
+/// `CrossesDevices` fall back to a recursive copy followed by `remove_dir_all`.
+fn move_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            let mut stack = vec![src.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                let rel = dir
+                    .strip_prefix(src)
+                    .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
+                let dst_dir = dst.join(rel);
+                std::fs::create_dir_all(&dst_dir)?;
+                for entry in std::fs::read_dir(&dir)?.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        let rel_file = path
+                            .strip_prefix(src)
+                            .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
+                        std::fs::copy(&path, dst.join(rel_file))?;
+                    }
+                }
+            }
+            std::fs::remove_dir_all(src)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Apply reconcile ops to disk. Deletions go to the trash (recoverable);
+/// a `CreateFile` whose basename matches a pending trashed entry is **restored**
+/// from trash instead of created empty (this is how `dd` then `p` becomes a
+/// move). Returns the paths of genuinely newly-created FILES (to open) and a
+/// list of error strings from non-fatal op failures (best-effort).
+///
+/// # Arguments
+/// - `ops`: output of [`reconcile`], already in renames→trashes→creates order.
+/// - `trashed`: mutable registry of `(original_file_name, trash_dest)` pairs
+///   built up by this call and carried across reconcile cycles so that a
+///   `Trash` on tick N and a `CreateFile` on tick N+1 correctly restores.
+pub(crate) fn apply_ops(
+    ops: &[FsOp],
+    trashed: &mut Vec<(String, PathBuf)>,
+) -> (Vec<PathBuf>, Vec<String>) {
+    let mut created: Vec<PathBuf> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for op in ops {
+        match op {
+            FsOp::Rename { from, to } => {
+                // Skip if the source is already gone AND the dest already
+                // exists — an ancestor directory rename already moved it.
+                if !from.exists() && to.exists() {
+                    continue;
+                }
+                if let Some(parent) = to.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("rename: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+                let result = if from.is_dir() {
+                    move_dir(from, to)
+                } else {
+                    move_file(from, to)
+                };
+                if let Err(e) = result {
+                    errors.push(format!("rename {from:?} → {to:?}: {e}"));
+                }
+            }
+
+            FsOp::Trash(path) => {
+                let dest = match hjkl_app::trash::trash_path(path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        errors.push(format!("trash_path({path:?}): {e}"));
+                        continue;
+                    }
+                };
+                let result = if path.is_dir() {
+                    move_dir(path, &dest)
+                } else {
+                    move_file(path, &dest)
+                };
+                match result {
+                    Ok(()) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        trashed.push((name, dest));
+                    }
+                    Err(e) => {
+                        errors.push(format!("trash {path:?}: {e}"));
+                    }
+                }
+            }
+
+            FsOp::CreateDir(path) => {
+                if let Err(e) = std::fs::create_dir_all(path) {
+                    errors.push(format!("create_dir_all({path:?}): {e}"));
+                }
+            }
+
+            FsOp::CreateFile(path) => {
+                // Check whether a trashed entry can be restored here.
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+
+                // Find the most-recent trashed entry whose name matches.
+                let restore_idx = trashed
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, (name, _))| name == &file_name)
+                    .map(|(i, _)| i);
+
+                if let Some(parent) = path.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("create_file: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+
+                if let Some(idx) = restore_idx {
+                    let (_, trash_dest) = trashed.remove(idx);
+                    // Restore from trash.
+                    if let Err(e) = move_file(&trash_dest, path) {
+                        errors.push(format!("restore {trash_dest:?} → {path:?}: {e}"));
+                    }
+                    // Not a new file — do NOT add to `created`.
+                } else {
+                    match std::fs::File::create(path) {
+                        Ok(_) => {
+                            created.push(path.clone());
+                        }
+                        Err(e) => {
+                            errors.push(format!("create_file({path:?}): {e}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (created, errors)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -805,5 +969,129 @@ mod tests {
         let ops = reconcile(&baseline, buffer, &root());
         assert_eq!(ops.len(), 3);
         assert!(ops.iter().all(|op| matches!(op, FsOp::CreateFile(_))));
+    }
+
+    // ── apply_ops integration tests ───────────────────────────────────────────
+
+    /// Override `XDG_CACHE_HOME` to a temp dir for trash isolation.
+    fn isolated_trash(td: &tempfile::TempDir) {
+        // SAFETY: nextest runs each test in its own process so no data-race.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", td.path()) };
+    }
+
+    #[test]
+    fn apply_create_file_makes_empty_file() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let target = td.path().join("new.rs");
+        let ops = vec![FsOp::CreateFile(target.clone())];
+        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(created, vec![target.clone()]);
+        assert!(target.exists(), "file must exist after CreateFile");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().len(),
+            0,
+            "created file must be empty"
+        );
+    }
+
+    #[test]
+    fn apply_create_nested_makes_parents() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let target = td.path().join("a").join("b").join("c.rs");
+        let ops = vec![FsOp::CreateFile(target.clone())];
+        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(created, vec![target.clone()]);
+        assert!(target.exists(), "nested file must exist");
+    }
+
+    #[test]
+    fn apply_trash_moves_into_trash_not_deleted() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        // Create the source file.
+        let src = td.path().join("source.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let ops = vec![FsOp::Trash(src.clone())];
+        let mut trashed = Vec::new();
+        let (created, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(created.is_empty());
+        // Source must be gone.
+        assert!(!src.exists(), "source must be gone after Trash");
+        // A file must exist inside the trash dir.
+        assert_eq!(trashed.len(), 1, "one entry must be in trashed registry");
+        let (name, dest) = &trashed[0];
+        assert_eq!(name, "source.txt");
+        assert!(dest.exists(), "trash destination must exist: {dest:?}");
+        // Verify content survived.
+        assert_eq!(std::fs::read(dest).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn apply_rename_preserves_content() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        let foo = td.path().join("foo.rs");
+        std::fs::write(&foo, b"hi").unwrap();
+        let bar = td.path().join("bar.rs");
+        let ops = vec![FsOp::Rename {
+            from: foo.clone(),
+            to: bar.clone(),
+        }];
+        let (created, errors) = apply_ops(&ops, &mut Vec::new());
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(created.is_empty());
+        assert!(!foo.exists(), "source must be gone after rename");
+        assert!(bar.exists(), "destination must exist after rename");
+        assert_eq!(
+            std::fs::read(&bar).unwrap(),
+            b"hi",
+            "content must be preserved"
+        );
+    }
+
+    #[test]
+    fn apply_move_via_trash_then_create_restores_content() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        // Set up: foo.rs in src_dir with content "x".
+        let src_dir = td.path().join("src_dir");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let foo = src_dir.join("foo.rs");
+        std::fs::write(&foo, b"x").unwrap();
+
+        // Step 1: Trash foo.rs.
+        let mut trashed: Vec<(String, PathBuf)> = Vec::new();
+        let trash_ops = vec![FsOp::Trash(foo.clone())];
+        let (c, e) = apply_ops(&trash_ops, &mut trashed);
+        assert!(e.is_empty(), "trash must succeed: {e:?}");
+        assert!(c.is_empty());
+        assert_eq!(trashed.len(), 1);
+        assert!(!foo.exists());
+
+        // Step 2: CreateFile at dir2/foo.rs — should restore from trash.
+        let dir2 = td.path().join("dir2");
+        let dest = dir2.join("foo.rs");
+        let create_ops = vec![FsOp::CreateFile(dest.clone())];
+        let (created, errors) = apply_ops(&create_ops, &mut trashed);
+        assert!(errors.is_empty(), "restore must succeed: {errors:?}");
+        // Restored from trash → NOT in the "created" list.
+        assert!(
+            created.is_empty(),
+            "restored file must NOT appear in created list"
+        );
+        // trashed registry must be emptied.
+        assert!(trashed.is_empty(), "trashed registry must be drained");
+        // dest must exist with original content.
+        assert!(dest.exists(), "destination must exist after restore");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"x",
+            "content must be preserved through trash-restore cycle"
+        );
     }
 }

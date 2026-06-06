@@ -191,16 +191,10 @@ pub struct App {
     pub picker: Option<crate::picker::Picker>,
     /// Left file-explorer window (#55). `None` when closed; closed on launch.
     pub(crate) explorer: Option<explorer::ExplorerPane>,
-    /// Active explorer text prompt (create / rename). `None` when closed.
-    pub(crate) explorer_prompt: Option<explorer::ExplorerPrompt>,
-    /// Pending explorer delete confirmation. `None` when not confirming.
-    pub(crate) explorer_confirm: Option<explorer::ExplorerConfirm>,
     /// Pending explorer git-discard confirmation. `None` when not confirming.
     /// Carries the absolute path of the node whose worktree changes will be
     /// discarded when the user presses `y`.
     pub(crate) explorer_git_discard_confirm: Option<std::path::PathBuf>,
-    /// Explorer copy/cut clipboard. Persists until overwritten or pasted.
-    pub(crate) explorer_clip: Option<explorer::ExplorerClip>,
     /// Active explorer fuzzy-search field. `None` when closed.
     /// When `Some`, the bottom prompt row shows a `/`-prefixed vim-editable
     /// field and the tree is live-filtered to fuzzy matches.
@@ -1498,10 +1492,7 @@ impl App {
             search_field: None,
             picker: None,
             explorer: None,
-            explorer_prompt: None,
-            explorer_confirm: None,
             explorer_git_discard_confirm: None,
-            explorer_clip: None,
             explorer_search: None,
             explorer_search_worker: explorer::ExplorerSearchWorker::new(),
             explorer_search_gen: 0,

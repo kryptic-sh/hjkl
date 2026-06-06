@@ -14,44 +14,6 @@ use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
 
-// ── Prompt / confirm / clipboard state ────────────────────────────────────────
-
-/// Kind of explorer prompt currently open.
-#[derive(Debug, Clone)]
-pub(crate) enum ExplorerPromptKind {
-    /// `a` — create a new file or directory.
-    Create,
-    /// `r` — rename the node under cursor.
-    Rename {
-        /// The path being renamed.
-        from: PathBuf,
-    },
-}
-
-/// An active explorer text prompt (create / rename).
-pub(crate) struct ExplorerPrompt {
-    pub kind: ExplorerPromptKind,
-    pub field: hjkl_form::TextFieldEditor,
-    /// Directory under which the new name will be placed.
-    pub base: PathBuf,
-}
-
-/// Pending delete confirmation.
-#[derive(Debug, Clone)]
-pub(crate) struct ExplorerConfirm {
-    /// Path to delete.
-    pub path: PathBuf,
-    pub is_dir: bool,
-}
-
-/// Clipboard entry for copy (`y`) / cut (`x`) operations.
-#[derive(Debug, Clone)]
-pub(crate) struct ExplorerClip {
-    pub path: PathBuf,
-    /// `true` → move (cut); `false` → copy.
-    pub cut: bool,
-}
-
 // ── Tree model ─────────────────────────────────────────────────────────────────
 
 /// One visible row in the flattened tree.
@@ -633,10 +595,16 @@ impl ExplorerTree {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| node.path.to_string_lossy().into_owned())
             } else {
-                node.path
+                let base = node
+                    .path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                if node.is_dir {
+                    format!("{base}/")
+                } else {
+                    base
+                }
             };
             out.push_str(&" ".repeat(name_col));
             out.push_str(&name);
@@ -654,6 +622,14 @@ pub(crate) struct ExplorerPane {
     pub win_id: super::window::WindowId,
     /// The tree model.
     pub tree: ExplorerTree,
+    /// The `dirty_gen` of the explorer buffer at the last successful reconcile.
+    /// Prevents re-running the diff on an unchanged buffer.
+    pub last_reconcile_gen: u64,
+    /// Registry of files moved to trash during this pane's lifetime.
+    /// Each entry is `(original_file_name, trash_destination_path)`.
+    /// Used to restore ("un-trash") when a `CreateFile` op targets a name
+    /// matching a trashed entry — making `dd` + `p` a lossless move.
+    pub trashed: Vec<(String, std::path::PathBuf)>,
 }
 
 // ── Explorer search worker ─────────────────────────────────────────────────────
@@ -898,14 +874,7 @@ impl super::App {
         self.next_buffer_id += 1;
 
         let host = TuiHost::new();
-        let mut editor = Editor::new(
-            Buffer::new(),
-            host,
-            Options {
-                modifiable: false,
-                ..Options::default()
-            },
-        );
+        let mut editor = Editor::new(Buffer::new(), host, Options::default());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
             let vp = editor.host_mut().viewport_mut();
@@ -1001,6 +970,8 @@ impl super::App {
         self.explorer = Some(ExplorerPane {
             win_id: new_win_id,
             tree,
+            last_reconcile_gen: 0,
+            trashed: Vec::new(),
         });
 
         // Overlay any already-dirty open buffers onto the freshly-built tree
@@ -1100,6 +1071,111 @@ impl super::App {
         let fw = self.focused_window();
         if fw == win_id {
             self.sync_viewport_to_explorer_editor();
+        }
+    }
+
+    /// When the explorer is open and in Normal mode and the buffer has changed
+    /// since the last reconcile, diff the buffer against the tree baseline and
+    /// apply the resulting filesystem ops. Cheap when nothing changed (guarded
+    /// by the `dirty_gen` check and the Normal-mode check).
+    pub(crate) fn maybe_reconcile_explorer(&mut self) {
+        use hjkl_engine::VimMode;
+
+        // Nothing to do if the explorer is not open.
+        if self.explorer.is_none() {
+            return;
+        }
+
+        // Find the explorer slot index.
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return;
+        };
+
+        // Must be in Normal mode — don't reconcile mid-edit.
+        let vim_mode = self.slots[slot_idx].editor.vim_mode();
+        if vim_mode != VimMode::Normal {
+            return;
+        }
+
+        // Read the buffer's current dirty_gen.
+        let cur_gen = self.slots[slot_idx].editor.buffer().dirty_gen();
+
+        // Guard: nothing changed since last reconcile.
+        let last_gen = self
+            .explorer
+            .as_ref()
+            .map(|ep| ep.last_reconcile_gen)
+            .unwrap_or(0);
+        if cur_gen == last_gen {
+            return;
+        }
+
+        // Clone what we need out of `self.explorer` before borrowing self mutably.
+        let (baseline, text, root) = {
+            let ep = self.explorer.as_ref().unwrap();
+            let baseline: Vec<(PathBuf, bool)> = ep
+                .tree
+                .nodes
+                .iter()
+                .map(|n| (n.path.clone(), n.is_dir))
+                .collect();
+            let text = self.slots[slot_idx].editor.buffer().as_string();
+            let root = ep.tree.root.clone();
+            (baseline, text, root)
+        };
+
+        let ops = super::explorer_reconcile::reconcile(&baseline, &text, &root);
+        if ops.is_empty() {
+            // Nothing to do — update the gen so we don't re-check next tick.
+            if let Some(ep) = self.explorer.as_mut() {
+                ep.last_reconcile_gen = cur_gen;
+            }
+            return;
+        }
+
+        // Take the trashed registry out of the pane so we can mutate it.
+        let mut trashed = self
+            .explorer
+            .as_mut()
+            .map(|ep| std::mem::take(&mut ep.trashed))
+            .unwrap_or_default();
+
+        let (newly_created, errors) = super::explorer_reconcile::apply_ops(&ops, &mut trashed);
+
+        // Put the trashed registry back.
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.trashed = trashed;
+        }
+
+        // Toast any errors.
+        for err in &errors {
+            self.bus.error(format!("explorer: {err}"));
+        }
+
+        // Re-read disk, rebuild tree, reset buffer text + cursor (sticky on path).
+        self.explorer_rebuild_buffer();
+        self.recompute_explorer_git_base();
+
+        // Update last_reconcile_gen to the NEW dirty_gen (after the rebuild
+        // which changes buffer text and thus bumps dirty_gen again).
+        let new_gen = self
+            .explorer_slot_idx()
+            .map(|idx| self.slots[idx].editor.buffer().dirty_gen())
+            .unwrap_or(cur_gen);
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.last_reconcile_gen = new_gen;
+        }
+
+        // Open newly-created files in the nearest non-explorer window.
+        for path in newly_created {
+            let target_win = self.nearest_non_explorer_window();
+            if let Some(win_id) = target_win {
+                self.switch_focus(win_id);
+            }
+            self.suppress_open_notice = true;
+            let s = Self::explorer_open_arg(&path);
+            self.dispatch_ex(&format!("edit {s}"));
+            self.suppress_open_notice = false;
         }
     }
 
@@ -1261,30 +1337,7 @@ impl super::App {
         path.to_string_lossy().into_owned()
     }
 
-    /// Resolve the "target directory" for create / paste from the cursor node:
-    /// - dir node → that directory
-    /// - file node → parent of file
-    /// - root node with no parent → root
-    fn explorer_target_dir(node: &ExplorerNode) -> PathBuf {
-        if node.is_dir {
-            node.path.clone()
-        } else {
-            node.path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| node.path.clone())
-        }
-    }
-
     // ── Refresh / hidden / root ───────────────────────────────────────────────
-
-    /// Re-read the filesystem and rebuild the buffer (preserves cursor path).
-    pub(crate) fn explorer_refresh(&mut self) {
-        if let Some(ref mut ep) = self.explorer {
-            ep.tree.rebuild();
-        }
-        self.explorer_rebuild_buffer();
-    }
 
     /// Toggle dotfile visibility and rebuild.
     pub(crate) fn explorer_toggle_hidden(&mut self) {
@@ -1352,327 +1405,6 @@ impl super::App {
         };
         let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("tabnew {s}"));
-    }
-
-    // ── File operations ───────────────────────────────────────────────────────
-
-    /// `a` — open a create prompt. Name ending with `/` creates a directory.
-    pub(crate) fn explorer_create(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        let base = Self::explorer_target_dir(&node);
-        let mut field = hjkl_form::TextFieldEditor::new(true);
-        field.enter_insert_at_end();
-        self.explorer_prompt = Some(ExplorerPrompt {
-            kind: ExplorerPromptKind::Create,
-            field,
-            base,
-        });
-    }
-
-    /// `r` — open a rename prompt prefilled with the current filename.
-    pub(crate) fn explorer_rename(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        if node.depth == 0 {
-            return; // Don't rename the root.
-        }
-        let from = node.path.clone();
-        let base = from
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| from.clone());
-        let prefill = from
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        let mut field = hjkl_form::TextFieldEditor::new(true);
-        field.enter_insert_at_end();
-        // Seed the field with the current filename.
-        for c in prefill.chars() {
-            let input = hjkl_engine::Input {
-                key: hjkl_engine::Key::Char(c),
-                ctrl: false,
-                alt: false,
-                shift: false,
-            };
-            field.handle_input(input);
-        }
-        self.explorer_prompt = Some(ExplorerPrompt {
-            kind: ExplorerPromptKind::Rename { from },
-            field,
-            base,
-        });
-    }
-
-    /// `d` — open a delete confirmation prompt.
-    pub(crate) fn explorer_delete(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        if node.depth == 0 {
-            return; // Refuse to delete the root.
-        }
-        self.explorer_confirm = Some(ExplorerConfirm {
-            path: node.path,
-            is_dir: node.is_dir,
-        });
-    }
-
-    /// `y` — copy the node under cursor to the clipboard.
-    pub(crate) fn explorer_copy(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        if node.depth == 0 {
-            return;
-        }
-        let name = node
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.bus.info(format!("Copied: {name}"));
-        self.explorer_clip = Some(ExplorerClip {
-            path: node.path,
-            cut: false,
-        });
-    }
-
-    /// `x` — cut the node under cursor (move on paste).
-    pub(crate) fn explorer_cut(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        if node.depth == 0 {
-            return;
-        }
-        let name = node
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.bus.info(format!("Cut: {name}"));
-        self.explorer_clip = Some(ExplorerClip {
-            path: node.path,
-            cut: true,
-        });
-    }
-
-    /// `p` — paste from clipboard into the target directory.
-    pub(crate) fn explorer_paste(&mut self) {
-        let clip = match self.explorer_clip.clone() {
-            Some(c) => c,
-            None => {
-                self.bus.info("Nothing to paste");
-                return;
-            }
-        };
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
-        };
-        let dest_dir = Self::explorer_target_dir(&node);
-        let file_name = match clip.path.file_name() {
-            Some(n) => n,
-            None => {
-                self.bus.error("Cannot paste: source has no filename");
-                return;
-            }
-        };
-        let dest = dest_dir.join(file_name);
-
-        if clip.cut {
-            // Move: try rename first (same device), fall back to copy+remove.
-            if let Err(e) = std::fs::rename(&clip.path, &dest) {
-                // Cross-device: copy then remove.
-                if copy_recursive(&clip.path, &dest).is_err() {
-                    self.bus.error(format!("Paste failed: {e}"));
-                    return;
-                }
-                let _ = if clip.path.is_dir() {
-                    std::fs::remove_dir_all(&clip.path)
-                } else {
-                    std::fs::remove_file(&clip.path)
-                };
-            }
-            // Clear clip after cut-paste.
-            self.explorer_clip = None;
-        } else {
-            // Copy.
-            if let Err(e) = copy_recursive(&clip.path, &dest) {
-                self.bus.error(format!("Copy failed: {e}"));
-                return;
-            }
-        }
-
-        self.explorer_refresh();
-        // Reveal the destination.
-        if let Some(ref mut ep) = self.explorer {
-            let row = ep.tree.reveal(&dest);
-            let win_id = ep.win_id;
-            if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
-                win.cursor_row = row;
-                win.cursor_col = 0;
-            }
-        }
-        self.explorer_rebuild_buffer();
-    }
-
-    // ── Prompt commit helpers ─────────────────────────────────────────────────
-
-    /// Called when the user presses Enter in a Create prompt.
-    pub(crate) fn explorer_commit_create(&mut self, name: String) {
-        let base = match self.explorer_prompt.as_ref() {
-            Some(ep) => ep.base.clone(),
-            None => return,
-        };
-        self.explorer_prompt = None;
-
-        let new_path = base.join(&name);
-        let result = if name.ends_with('/') {
-            std::fs::create_dir_all(&new_path)
-        } else {
-            // Ensure parent dirs exist, then create the file.
-            if let Some(parent) = new_path.parent()
-                && let Err(e) = std::fs::create_dir_all(parent)
-            {
-                self.bus.error(format!("Create failed: {e}"));
-                return;
-            }
-            std::fs::File::create(&new_path).map(|_| ())
-        };
-
-        match result {
-            Ok(()) => {
-                self.explorer_refresh();
-                // Expand the base dir and reveal the new path.
-                if let Some(ref mut ep) = self.explorer {
-                    ep.tree.expanded.insert(base.clone());
-                    let row = ep.tree.reveal(&new_path);
-                    let win_id = ep.win_id;
-                    if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
-                        win.cursor_row = row;
-                        win.cursor_col = 0;
-                    }
-                }
-                self.explorer_rebuild_buffer();
-            }
-            Err(e) => {
-                self.bus.error(format!("Create failed: {e}"));
-            }
-        }
-    }
-
-    /// Called when the user presses Enter in a Rename prompt.
-    pub(crate) fn explorer_commit_rename(&mut self, new_name: String) {
-        let (from, base) = match self.explorer_prompt.as_ref() {
-            Some(ep) => match &ep.kind {
-                ExplorerPromptKind::Rename { from } => (from.clone(), ep.base.clone()),
-                _ => return,
-            },
-            None => return,
-        };
-        self.explorer_prompt = None;
-
-        let dest = base.join(&new_name);
-        match std::fs::rename(&from, &dest) {
-            Ok(()) => {
-                self.explorer_refresh();
-                if let Some(ref mut ep) = self.explorer {
-                    let row = ep.tree.reveal(&dest);
-                    let win_id = ep.win_id;
-                    if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
-                        win.cursor_row = row;
-                        win.cursor_col = 0;
-                    }
-                }
-                self.explorer_rebuild_buffer();
-            }
-            Err(e) => {
-                self.bus.error(format!("Rename failed: {e}"));
-            }
-        }
-    }
-
-    /// Called when the user confirms deletion with `y`.
-    pub(crate) fn explorer_commit_delete(&mut self) {
-        let confirm = match self.explorer_confirm.take() {
-            Some(c) => c,
-            None => return,
-        };
-        let result = if confirm.is_dir {
-            std::fs::remove_dir_all(&confirm.path)
-        } else {
-            std::fs::remove_file(&confirm.path)
-        };
-        match result {
-            Ok(()) => {
-                self.explorer_refresh();
-            }
-            Err(e) => {
-                self.bus.error(format!("Delete failed: {e}"));
-            }
-        }
-    }
-
-    // ── Prompt / confirm key handlers ─────────────────────────────────────────
-
-    /// Route a key when `explorer_prompt` is active.
-    pub(crate) fn handle_explorer_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        match key.code {
-            KeyCode::Esc => {
-                self.explorer_prompt = None;
-            }
-            KeyCode::Enter => {
-                let (kind, name) = match self.explorer_prompt.as_ref() {
-                    Some(ep) => {
-                        let name = ep.field.text();
-                        (ep.kind.clone(), name)
-                    }
-                    None => return,
-                };
-                match kind {
-                    ExplorerPromptKind::Create => {
-                        self.explorer_commit_create(name);
-                    }
-                    ExplorerPromptKind::Rename { .. } => {
-                        self.explorer_commit_rename(name);
-                    }
-                }
-            }
-            _ => {
-                // Forward to the text field.
-                let input = hjkl_engine_tui::crossterm_to_input(key);
-                if let Some(ref mut ep) = self.explorer_prompt {
-                    ep.field.handle_input(input);
-                }
-            }
-        }
-    }
-
-    /// Route a key when `explorer_confirm` (delete) is active.
-    pub(crate) fn handle_explorer_confirm_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        match key.code {
-            // Accept either case regardless of whether SHIFT is reported.
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.explorer_commit_delete();
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                self.explorer_confirm = None;
-            }
-            _ => {} // consume but do nothing
-        }
     }
 
     // ── Explorer search (fuzzy filter) ────────────────────────────────────────
@@ -1849,17 +1581,10 @@ impl super::App {
         use crate::keymap_actions::AppAction;
         match action {
             AppAction::ExplorerActivate => self.explorer_activate(),
-            AppAction::ExplorerCreate => self.explorer_create(),
-            AppAction::ExplorerRename => self.explorer_rename(),
-            AppAction::ExplorerDelete => self.explorer_delete(),
-            AppAction::ExplorerCopy => self.explorer_copy(),
-            AppAction::ExplorerCut => self.explorer_cut(),
-            AppAction::ExplorerPaste => self.explorer_paste(),
             AppAction::ExplorerOpenSplit => self.explorer_open_split(),
             AppAction::ExplorerOpenVsplit => self.explorer_open_vsplit(),
             AppAction::ExplorerOpenTab => self.explorer_open_tab(),
             AppAction::ExplorerRootUp => self.explorer_root_up(),
-            AppAction::ExplorerRefresh => self.explorer_refresh(),
             AppAction::ExplorerToggleHidden => self.explorer_toggle_hidden(),
             AppAction::ExplorerToggleGitignore => self.explorer_toggle_gitignore(),
             AppAction::ExplorerGitStageToggle => self.explorer_git_stage_toggle(),
@@ -2059,26 +1784,6 @@ impl super::App {
 
 /// Width of the explorer window in columns.
 pub(crate) const EXPLORER_WINDOW_WIDTH: u16 = 36;
-
-/// Recursively copy `src` to `dst`. `src` may be a file or directory.
-fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if src.is_dir() {
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            let child_dst = dst.join(entry.file_name());
-            if ty.is_dir() {
-                copy_recursive(&entry.path(), &child_dst)?;
-            } else {
-                std::fs::copy(entry.path(), child_dst)?;
-            }
-        }
-        Ok(())
-    } else {
-        std::fs::copy(src, dst).map(|_| ())
-    }
-}
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
@@ -2500,133 +2205,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn target_dir_resolver_dir_node_returns_itself() {
-        let root = make_tree();
-        let tree = ExplorerTree::new(root.clone());
-        // nodes[1] is a_dir (a directory).
-        let node = tree.nodes[1].clone();
-        assert!(node.is_dir, "test prerequisite: nodes[1] is a_dir");
-        let target = super::super::App::explorer_target_dir(&node);
-        assert_eq!(target, node.path, "dir node → that dir");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn target_dir_resolver_file_node_returns_parent() {
-        let root = make_tree();
-        let tree = ExplorerTree::new(root.clone());
-        // Find m_file.txt (a file node).
-        let node = tree
-            .nodes
-            .iter()
-            .find(|n| {
-                n.path
-                    .file_name()
-                    .map(|f| f == "m_file.txt")
-                    .unwrap_or(false)
-            })
-            .cloned()
-            .expect("m_file.txt should exist");
-        assert!(!node.is_dir, "test prerequisite: m_file.txt is not a dir");
-        let target = super::super::App::explorer_target_dir(&node);
-        assert_eq!(
-            target,
-            node.path.parent().unwrap().to_path_buf(),
-            "file node → parent dir"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn commit_create_file_creates_on_disk() {
-        let root = make_tree();
-        let mut app = super::super::App::new(None, false, None, None).unwrap();
-        // Manually set up explorer_prompt state as if `a` was pressed.
-        let mut field = hjkl_form::TextFieldEditor::new(true);
-        field.enter_insert_at_end();
-        app.explorer_prompt = Some(super::ExplorerPrompt {
-            kind: super::ExplorerPromptKind::Create,
-            field,
-            base: root.clone(),
-        });
-        // Commit creation of a plain file.
-        app.explorer_commit_create("new_file.txt".to_string());
-        assert!(
-            root.join("new_file.txt").exists(),
-            "new_file.txt should be created on disk"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn commit_create_dir_trailing_slash_creates_dir() {
-        let root = make_tree();
-        let mut app = super::super::App::new(None, false, None, None).unwrap();
-        let mut field = hjkl_form::TextFieldEditor::new(true);
-        field.enter_insert_at_end();
-        app.explorer_prompt = Some(super::ExplorerPrompt {
-            kind: super::ExplorerPromptKind::Create,
-            field,
-            base: root.clone(),
-        });
-        app.explorer_commit_create("new_dir/".to_string());
-        assert!(
-            root.join("new_dir").is_dir(),
-            "new_dir/ should create a directory"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn commit_rename_moves_file() {
-        let root = make_tree();
-        let from = root.join("m_file.txt");
-        let expected = root.join("renamed.txt");
-        let mut app = super::super::App::new(None, false, None, None).unwrap();
-        let mut field = hjkl_form::TextFieldEditor::new(true);
-        field.enter_insert_at_end();
-        app.explorer_prompt = Some(super::ExplorerPrompt {
-            kind: super::ExplorerPromptKind::Rename { from: from.clone() },
-            field,
-            base: root.clone(),
-        });
-        app.explorer_commit_rename("renamed.txt".to_string());
-        assert!(!from.exists(), "original file should be gone after rename");
-        assert!(expected.exists(), "renamed file should exist");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn commit_delete_removes_file() {
-        let root = make_tree();
-        let path = root.join("m_file.txt");
-        assert!(path.exists(), "test prerequisite: m_file.txt exists");
-        let mut app = super::super::App::new(None, false, None, None).unwrap();
-        app.explorer_confirm = Some(super::ExplorerConfirm {
-            path: path.clone(),
-            is_dir: false,
-        });
-        app.explorer_commit_delete();
-        assert!(!path.exists(), "m_file.txt should be deleted");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn commit_delete_removes_dir() {
-        let root = make_tree();
-        let path = root.join("b_dir");
-        assert!(path.is_dir(), "test prerequisite: b_dir exists");
-        let mut app = super::super::App::new(None, false, None, None).unwrap();
-        app.explorer_confirm = Some(super::ExplorerConfirm {
-            path: path.clone(),
-            is_dir: true,
-        });
-        app.explorer_commit_delete();
-        assert!(!path.exists(), "b_dir should be deleted");
-        let _ = fs::remove_dir_all(&root);
-    }
-
     // ── Plan Verification: fuzzy filter tests ──────────────────────────────
 
     /// Tree fixture for filter tests:
@@ -2829,6 +2407,120 @@ mod tests {
         assert!(
             !exp.features.hover,
             "explorer slot: hover should be disabled"
+        );
+    }
+
+    /// Explorer slot must be modifiable (oil.nvim-style editing).
+    #[test]
+    fn explorer_slot_is_modifiable() {
+        use crate::keymap_actions::AppAction;
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let explorer_idx = app
+            .slots
+            .iter()
+            .position(|s| s.is_explorer)
+            .expect("explorer slot must exist after ToggleExplorer");
+        let exp = &app.slots[explorer_idx];
+        assert!(
+            exp.editor.is_modifiable(),
+            "explorer slot must be modifiable (oil.nvim-style editing)"
+        );
+    }
+
+    /// `render_text` emits `name/` for non-root directory nodes.
+    #[test]
+    fn render_text_dirs_have_trailing_slash() {
+        let root = make_tree();
+        let tree = ExplorerTree::new(root.clone());
+        let text = tree.render_text();
+        let lines: Vec<&str> = text.lines().collect();
+        // The root line (depth 0) has no trailing slash.
+        let root_name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        assert!(
+            lines[0].trim_start().starts_with(&root_name) && !lines[0].trim_start().ends_with('/'),
+            "root line must not end with '/': {:?}",
+            lines[0]
+        );
+        // Non-root dir nodes (a_dir, b_dir) must end with '/'.
+        for line in &lines[1..] {
+            let trimmed = line.trim_start();
+            // Identify dir lines by the name set known from make_tree.
+            if trimmed.starts_with("a_dir") || trimmed.starts_with("b_dir") {
+                assert!(
+                    trimmed.ends_with('/'),
+                    "dir line must end with '/': {trimmed:?}"
+                );
+            }
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `<C-s>` resolves to ExplorerOpenSplit; `<C-v>` → ExplorerOpenVsplit;
+    /// `<C-t>` → ExplorerOpenTab; `gh` → ExplorerToggleHidden; `gi` →
+    /// ExplorerToggleGitignore in the explorer keymap.
+    #[test]
+    fn explorer_keymap_ctrl_open_and_g_toggles() {
+        use crate::app::keymap::HjklMode;
+        use crate::app::keymap_build::build_explorer_keymap;
+        use crate::keymap_actions::AppAction;
+        use hjkl_keymap::{KeyEvent as KmKeyEvent, KeyResolve};
+
+        let now = std::time::Instant::now();
+
+        // Feed a sequence of key events into a fresh keymap and return the
+        // matched action, if any. A fresh keymap is built per call because
+        // Keymap doesn't implement Clone.
+        let resolve = |events: &[KmKeyEvent]| -> Option<AppAction> {
+            let mut km = build_explorer_keymap(' ');
+            let mut result = None;
+            for &ev in events {
+                match km.feed(HjklMode::Normal, ev, now) {
+                    KeyResolve::Match(b) => {
+                        result = Some(b.action);
+                        break;
+                    }
+                    KeyResolve::Pending => {}
+                    KeyResolve::Ambiguous => {
+                        if let KeyResolve::Match(b) = km.timeout_resolve(HjklMode::Normal) {
+                            result = Some(b.action);
+                        }
+                        break;
+                    }
+                    KeyResolve::Unbound(_) => break,
+                }
+            }
+            result
+        };
+
+        assert_eq!(
+            resolve(&[KmKeyEvent::ctrl('s')]),
+            Some(AppAction::ExplorerOpenSplit),
+            "<C-s> must map to ExplorerOpenSplit"
+        );
+        assert_eq!(
+            resolve(&[KmKeyEvent::ctrl('v')]),
+            Some(AppAction::ExplorerOpenVsplit),
+            "<C-v> must map to ExplorerOpenVsplit"
+        );
+        assert_eq!(
+            resolve(&[KmKeyEvent::ctrl('t')]),
+            Some(AppAction::ExplorerOpenTab),
+            "<C-t> must map to ExplorerOpenTab"
+        );
+        assert_eq!(
+            resolve(&[KmKeyEvent::char('g'), KmKeyEvent::char('h')]),
+            Some(AppAction::ExplorerToggleHidden),
+            "gh must map to ExplorerToggleHidden"
+        );
+        assert_eq!(
+            resolve(&[KmKeyEvent::char('g'), KmKeyEvent::char('i')]),
+            Some(AppAction::ExplorerToggleGitignore),
+            "gi must map to ExplorerToggleGitignore"
         );
     }
 }

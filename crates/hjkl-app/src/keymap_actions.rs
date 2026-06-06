@@ -405,31 +405,17 @@ pub enum AppAction {
     /// `<CR>` — open a file, or toggle (expand/collapse) the directory under
     /// the cursor.
     ExplorerActivate,
-    /// `a` — create a new file or directory.
-    ExplorerCreate,
-    /// `r` — rename the node under the cursor.
-    ExplorerRename,
-    /// `d` — delete the node under the cursor.
-    ExplorerDelete,
-    /// `y` — copy the node under the cursor.
-    ExplorerCopy,
-    /// `x` — cut the node under the cursor.
-    ExplorerCut,
-    /// `p` — paste the previously copied/cut node.
-    ExplorerPaste,
-    /// `s` — open the node in a horizontal split.
+    /// `<C-s>` — open the node in a horizontal split.
     ExplorerOpenSplit,
-    /// `v` — open the node in a vertical split.
+    /// `<C-v>` — open the node in a vertical split.
     ExplorerOpenVsplit,
-    /// `t` — open the node in a new tab.
+    /// `<C-t>` — open the node in a new tab.
     ExplorerOpenTab,
     /// `-` — move the explorer root one directory up.
     ExplorerRootUp,
-    /// `R` — refresh the explorer tree.
-    ExplorerRefresh,
-    /// `H` — toggle display of hidden files.
+    /// `gh` — toggle display of hidden files.
     ExplorerToggleHidden,
-    /// `I` — toggle gitignore filtering.
+    /// `gi` — toggle gitignore filtering.
     ExplorerToggleGitignore,
     /// `ga` — toggle stage / unstage for the node under the cursor.
     ///

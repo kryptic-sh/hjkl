@@ -987,9 +987,9 @@ fn matchparen_tag_cells_none_when_not_on_tag() {
 
 // ── modifiable / readonly app-layer tests ─────────────────────────────────────
 
-/// Explorer buffer must have `is_modifiable() == false`.
+/// Explorer buffer must be modifiable (oil.nvim-style editing).
 #[test]
-fn explorer_buffer_is_not_modifiable() {
+fn explorer_buffer_is_modifiable() {
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -999,14 +999,14 @@ fn explorer_buffer_is_not_modifiable() {
         .find(|s| s.is_explorer)
         .expect("explorer slot must exist after toggle");
     assert!(
-        !explorer_slot.editor.is_modifiable(),
-        "explorer buffer must be nomodifiable"
+        explorer_slot.editor.is_modifiable(),
+        "explorer buffer must be modifiable (oil.nvim-style editing)"
     );
 }
 
-/// Pressing `i` in the explorer must NOT enter Insert mode (nomodifiable).
+/// Pressing `i` in the explorer now enters Insert mode (editable buffer).
 #[test]
-fn explorer_i_stays_normal() {
+fn explorer_i_enters_insert() {
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -1021,8 +1021,8 @@ fn explorer_i_stays_normal() {
         .expect("explorer slot must exist");
     assert_eq!(
         explorer_slot.editor.vim_mode(),
-        hjkl_engine::VimMode::Normal,
-        "pressing `i` in explorer must not enter Insert mode"
+        hjkl_engine::VimMode::Insert,
+        "pressing `i` in explorer must enter Insert mode (editable buffer)"
     );
 }
 

@@ -724,26 +724,20 @@ pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::H
 
     let bindings: &[(&str, AppAction, &str)] = &[
         // ── Navigation / open ─────────────────────────────────────────────
-        // NOTE: h/l and the arrow keys are intentionally NOT bound — they fall
-        // through to the engine as normal cursor motions. <CR> opens a file or
-        // toggles a directory (expand/collapse).
+        // NOTE: h/l, a/r/d/y/x/p/s/v/t/R/H/I and arrow keys fall through to
+        // the vim engine so normal editing works (oil.nvim-style). Only chords
+        // that cannot conflict with editing keys are bound here.
+        // <CR> opens a file or toggles a directory (expand/collapse).
         ("<CR>", AppAction::ExplorerActivate, "open / toggle"),
-        // ── File operations ───────────────────────────────────────────────
-        ("a", AppAction::ExplorerCreate, "create file/dir"),
-        ("r", AppAction::ExplorerRename, "rename"),
-        ("d", AppAction::ExplorerDelete, "delete"),
-        ("y", AppAction::ExplorerCopy, "copy"),
-        ("x", AppAction::ExplorerCut, "cut"),
-        ("p", AppAction::ExplorerPaste, "paste"),
-        // ── Open modes ────────────────────────────────────────────────────
-        ("s", AppAction::ExplorerOpenSplit, "open in split"),
-        ("v", AppAction::ExplorerOpenVsplit, "open in vsplit"),
-        ("t", AppAction::ExplorerOpenTab, "open in tab"),
+        // ── Open modes (Ctrl chords — no conflict with editing) ───────────
+        ("<C-s>", AppAction::ExplorerOpenSplit, "open in split"),
+        ("<C-v>", AppAction::ExplorerOpenVsplit, "open in vsplit"),
+        ("<C-t>", AppAction::ExplorerOpenTab, "open in tab"),
         // ── Root / view ───────────────────────────────────────────────────
         ("-", AppAction::ExplorerRootUp, "root up"),
-        ("R", AppAction::ExplorerRefresh, "refresh"),
-        ("H", AppAction::ExplorerToggleHidden, "toggle hidden"),
-        ("I", AppAction::ExplorerToggleGitignore, "toggle gitignore"),
+        // ── View toggles under the g prefix (no conflict with ga/gr/gc) ──
+        ("gh", AppAction::ExplorerToggleHidden, "toggle hidden"),
+        ("gi", AppAction::ExplorerToggleGitignore, "toggle gitignore"),
         // ── Git operations ────────────────────────────────────────────────
         ("ga", AppAction::ExplorerGitStageToggle, "git stage/unstage"),
         ("gr", AppAction::ExplorerGitDiscard, "git discard changes"),

@@ -113,17 +113,10 @@ impl App {
 
             // ── File-explorer actions ──────────────────────────────────────
             AppAction::ExplorerActivate
-            | AppAction::ExplorerCreate
-            | AppAction::ExplorerRename
-            | AppAction::ExplorerDelete
-            | AppAction::ExplorerCopy
-            | AppAction::ExplorerCut
-            | AppAction::ExplorerPaste
             | AppAction::ExplorerOpenSplit
             | AppAction::ExplorerOpenVsplit
             | AppAction::ExplorerOpenTab
             | AppAction::ExplorerRootUp
-            | AppAction::ExplorerRefresh
             | AppAction::ExplorerToggleHidden
             | AppAction::ExplorerToggleGitignore
             | AppAction::ExplorerGitStageToggle
