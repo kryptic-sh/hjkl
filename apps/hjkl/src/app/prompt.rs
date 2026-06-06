@@ -555,34 +555,11 @@ impl App {
     }
 
     pub(crate) fn open_search_prompt(&mut self, dir: SearchDir) {
-        // Per-buffer search override. A buffer may provide its own `/` search
-        // UI instead of the global incremental search — e.g. the file explorer
-        // opens a fuzzy tree filter. This is the single chokepoint every `/`
-        // path funnels through (keymap, dispatch, tests), and the extension
-        // seam for future plugin-provided buffers to override search.
-        if self.try_buffer_search_override(dir) {
-            return;
-        }
         let mut field = TextFieldEditor::new(true);
         field.enter_insert_at_end();
         self.search_field = Some(field);
         self.search_dir = dir;
         self.active_mut().editor.set_search_pattern(None);
-    }
-
-    /// If the active buffer overrides incremental search, handle it here and
-    /// return `true` (the caller then skips the global search prompt). Returns
-    /// `false` for ordinary buffers.
-    ///
-    /// Today only the file explorer overrides `/` (fuzzy tree filter); the
-    /// match is intentionally a single seam so a plugin/buffer registry can
-    /// slot in later without touching every `/` call site.
-    fn try_buffer_search_override(&mut self, _dir: SearchDir) -> bool {
-        if self.active().is_explorer {
-            self.open_explorer_search(true);
-            return true;
-        }
-        false
     }
 
     pub(crate) fn cancel_search_prompt(&mut self) {

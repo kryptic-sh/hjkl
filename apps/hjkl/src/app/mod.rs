@@ -195,23 +195,6 @@ pub struct App {
     /// Carries the absolute path of the node whose worktree changes will be
     /// discarded when the user presses `y`.
     pub(crate) explorer_git_discard_confirm: Option<std::path::PathBuf>,
-    /// Active explorer fuzzy-search field. `None` when closed.
-    /// When `Some`, the bottom prompt row shows a `/`-prefixed vim-editable
-    /// field and the tree is live-filtered to fuzzy matches.
-    pub(crate) explorer_search: Option<hjkl_form::TextFieldEditor>,
-    /// Background worker that runs the filtered fs walk off the UI thread.
-    pub(crate) explorer_search_worker: explorer::ExplorerSearchWorker,
-    /// Monotonic generation counter for explorer search results. Incremented
-    /// whenever a new search is fired or the search is cancelled/committed so
-    /// stale in-flight results can be discarded.
-    pub(crate) explorer_search_gen: u64,
-    /// When `Some`, the debounce timer is armed: a search was typed at this
-    /// instant. Cleared when the timer fires and the job is submitted, or when
-    /// the search field is cancelled/committed.
-    pub(crate) explorer_search_dirty_at: Option<std::time::Instant>,
-    /// The query string that will be submitted once the debounce elapses.
-    /// `None` when no keystroke is pending.
-    pub(crate) explorer_search_pending_query: Option<String>,
     /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
     /// `icons` config setting.
     pub(crate) icon_mode: hjkl_icons::IconMode,
@@ -529,10 +512,6 @@ pub(crate) struct IndentFlash {
 /// HSplit: each pane must be at least this many rows tall.
 pub(crate) const SPLIT_MIN_SIZE_COLS: u16 = 10;
 pub(crate) const SPLIT_MIN_SIZE_ROWS: u16 = 3;
-
-/// How long to wait after the last keystroke before firing the explorer
-/// fuzzy-filter worker job. Keeps the UI responsive during fast typing.
-pub(crate) const EXPLORER_SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Active split-border drag state (Phase 9). Populated on `Down(Left)` when
 /// the click lands on a border; cleared on `Up(Left)`.
@@ -1493,11 +1472,6 @@ impl App {
             picker: None,
             explorer: None,
             explorer_git_discard_confirm: None,
-            explorer_search: None,
-            explorer_search_worker: explorer::ExplorerSearchWorker::new(),
-            explorer_search_gen: 0,
-            explorer_search_dirty_at: None,
-            explorer_search_pending_query: None,
             icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,

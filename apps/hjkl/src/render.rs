@@ -741,29 +741,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         )
     };
 
-    // Explorer top search box: the explorer pane always shows a rounded 3-row
-    // search box header at the top; the tree renders below it. The box echoes
-    // the live `/query` (when searching) and carries the cursor only while the
-    // search field is active and focused. `last_rect` (recorded above) stays the
-    // full window. Degrades to whatever height is available on tiny panes.
+    // 1-col left/right padding for the file list so it isn't flush against
+    // the pane edges.
     let mut area = area;
-    if app.slots()[slot_idx].is_explorer {
-        let box_h = 3u16.min(area.height);
-        if box_h > 0 {
-            let search_box = Rect {
-                height: box_h,
-                ..area
-            };
-            render_explorer_search_bar(frame, app, search_box, is_focused);
-            area.y = area.y.saturating_add(box_h);
-            area.height = area.height.saturating_sub(box_h);
-        }
-        // 1-col left/right padding for the file list so it isn't flush against
-        // the pane edges (aligns the tree with the search box's inner text).
-        if area.width >= 2 {
-            area.x += 1;
-            area.width -= 2;
-        }
+    if app.slots()[slot_idx].is_explorer && area.width >= 2 {
+        area.x += 1;
+        area.width -= 2;
     }
 
     let s = app.slots()[slot_idx].editor.settings();
@@ -869,8 +852,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.filter_field.is_some()
         || app.search_field.is_some()
         || app.picker.is_some()
-        || app.explorer_git_discard_confirm.is_some()
-        || app.explorer_search.is_some();
+        || app.explorer_git_discard_confirm.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
@@ -1561,76 +1543,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 }
 
-/// Render the explorer's fuzzy-search input as a rounded box at the TOP of the
-/// explorer pane (neo-tree / Snacks.explorer style), not the bottom status line
-/// (which stays the normal one for ordinary buffers). The box is titled
-/// `Explorer`; the inner row shows the live `/query` on the left and a
-/// `matches/total` badge flush-right. Places the terminal cursor in the box.
-fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect, is_focused: bool) {
-    use ratatui::widgets::BorderType;
-
-    let field = app.explorer_search.as_ref();
-    let active = field.is_some();
-
-    // Rounded bordered box with an "Explorer" title in the top border. Always
-    // uses the active border color — the cursor position already signals focus.
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(app.theme.ui.border_active))
-        .title(" Explorer ")
-        .title_style(
-            Style::default()
-                .fg(app.theme.ui.text)
-                .add_modifier(Modifier::BOLD),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    // Inner content row: `/query` left, `matches/total` flush-right. When the
-    // field is closed, fall back to the committed filter so a committed search
-    // stays visible in the box.
-    let display: String = field
-        .map(|f| f.text().lines().next().unwrap_or("").to_string())
-        .or_else(|| app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone()))
-        .unwrap_or_default();
-    let left = format!("/{display}");
-    let badge: String = match app.explorer.as_ref() {
-        Some(ep) if ep.tree.filter.is_some() => {
-            format!("{}/{}", ep.tree.match_count, ep.tree.total_count)
-        }
-        _ => String::new(),
-    };
-    let iw = inner.width as usize;
-    let content = if badge.is_empty() {
-        left
-    } else {
-        let pad = iw.saturating_sub(left.chars().count() + badge.chars().count() + 1);
-        format!("{left}{}{badge} ", " ".repeat(pad))
-    };
-    frame.render_widget(
-        Paragraph::new(content).style(Style::default().fg(app.theme.ui.text)),
-        inner,
-    );
-
-    // Cursor sits after the `/` prefix at the field's caret column — only while
-    // the search field is active and this explorer pane is focused.
-    if let Some(field) = field
-        && active
-        && is_focused
-    {
-        let (_, ccol) = field.cursor();
-        let cx = inner.x + 1 + ccol as u16;
-        if cx < inner.x + inner.width {
-            frame.set_cursor_position((cx, inner.y));
-        }
-    }
-}
-
 /// Render the completion popup, floating below the cursor position.
 ///
 /// Only called when `app.completion.is_some()`.
@@ -2205,10 +2117,6 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
             None,
         );
     }
-
-    // NOTE: the explorer fuzzy-search field is NOT rendered here — it draws in a
-    // bar at the TOP of the explorer pane (see `render_explorer_search_bar`),
-    // leaving the bottom status line as the normal one for ordinary buffers.
 
     // ── Explorer git-discard confirm ────────────────────────────────────────
     if let Some(ref path) = app.explorer_git_discard_confirm {

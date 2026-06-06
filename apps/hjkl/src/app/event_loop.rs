@@ -193,9 +193,6 @@ impl App {
 
         // Poll any in-flight anvil install jobs and surface status toasts.
         let _ = self.poll_anvil_jobs();
-
-        // Fire debounced explorer search jobs + drain worker results.
-        self.poll_explorer_search();
     }
 
     /// Compute how long to wait for the next event.
@@ -234,99 +231,7 @@ impl App {
             let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
             t = t.min(deadline.saturating_duration_since(now));
         }
-        // Wake when the explorer search debounce elapses so the worker job
-        // fires even when the user stops typing without pressing another key.
-        if let Some(at) = self.explorer_search_dirty_at {
-            let deadline = at + crate::app::EXPLORER_SEARCH_DEBOUNCE;
-            t = t.min(deadline.saturating_duration_since(now));
-        }
         t
-    }
-
-    /// Fire debounced explorer search jobs and drain worker results.
-    ///
-    /// Two responsibilities in one call to keep borrow-checker noise low:
-    ///
-    /// **Fire**: if the debounce timer has elapsed and the explorer is open,
-    /// take the pending query, clear the timer, and either:
-    ///   - Submit a worker job (non-empty query), or
-    ///   - Clear the filter synchronously (empty query, cheap — no walk needed).
-    ///
-    /// **Poll**: drain any completed worker results and install them when
-    /// the generation matches (stale results whose gen differs from the current
-    /// `explorer_search_gen` are silently dropped).
-    fn poll_explorer_search(&mut self) {
-        let now = std::time::Instant::now();
-
-        // ── Fire ──────────────────────────────────────────────────────────────
-        if let Some(dirty_at) = self.explorer_search_dirty_at
-            && now.duration_since(dirty_at) >= crate::app::EXPLORER_SEARCH_DEBOUNCE
-            && self.explorer.is_some()
-        {
-            // Take the pending query and clear the timer.
-            let query = self
-                .explorer_search_pending_query
-                .take()
-                .unwrap_or_default();
-            self.explorer_search_dirty_at = None;
-
-            if query.is_empty() {
-                // Empty query → clear synchronously (no worker needed).
-                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
-                if let Some(ref mut ep) = self.explorer {
-                    ep.tree.clear_filter();
-                }
-                self.explorer_rebuild_buffer();
-            } else {
-                // Non-empty query → bump gen and submit to worker.
-                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
-                let generation = self.explorer_search_gen;
-                // Extract root/flags before the mutable borrow of self.
-                let (root, show_hidden, respect_gitignore) = match self.explorer.as_ref() {
-                    Some(ep) => (
-                        ep.tree.root.clone(),
-                        ep.tree.show_hidden,
-                        ep.tree.respect_gitignore,
-                    ),
-                    None => return,
-                };
-                self.explorer_search_worker
-                    .submit(crate::app::explorer::ExplorerSearchJob {
-                        generation,
-                        root,
-                        query,
-                        show_hidden,
-                        respect_gitignore,
-                    });
-            }
-        }
-
-        // ── Poll results ──────────────────────────────────────────────────────
-        while let Some(res) = self.explorer_search_worker.try_recv() {
-            // Drop stale results (cancelled, superseded by a newer query).
-            if res.generation != self.explorer_search_gen {
-                continue;
-            }
-            if self.explorer.is_none() {
-                continue;
-            }
-
-            // Install the result onto the tree.
-            if let Some(ref mut ep) = self.explorer {
-                ep.tree.apply_search_result(
-                    res.query,
-                    res.nodes,
-                    res.match_count,
-                    res.total_count,
-                    res.best_match_row,
-                );
-            }
-            self.explorer_rebuild_buffer();
-            // Focus the highest-scoring match.
-            self.explorer_cursor_to_best_match();
-
-            self.pending_recompute = true;
-        }
     }
 
     /// Handle a single key event. Returns a [`KeyOutcome`] that tells `run()`
@@ -430,12 +335,6 @@ impl App {
             self.context_menu = None;
         }
 
-        // ── Explorer fuzzy-search field ───────────────────────────
-        if self.explorer_search.is_some() {
-            self.handle_explorer_search_key(key);
-            return KeyOutcome::Continue;
-        }
-
         // ── Explorer git-discard confirm ──────────────────────────
         if self.explorer_git_discard_confirm.is_some() {
             self.handle_explorer_git_discard_confirm_key(key);
@@ -476,69 +375,21 @@ impl App {
         }
 
         // ── File-explorer buffer (#55) ────────────────────────────
-        // Explorer keys are now routed through `explorer_keymap` in
+        // Explorer keys are routed through `explorer_keymap` in
         // `route_chord_key_inner` (step 2b) so they surface in the which-key
-        // popup. Only two conditional cases remain here because they are
-        // position-dependent or state-dependent and cannot be expressed as
-        // pure chord bindings:
-        //   - `k`/`<Up>` at the top row → focus the search box.
-        //   - `<Esc>` with an active filter → clear the filter.
+        // popup. `u` (undo) and `<C-r>` (redo) are handled here because
+        // they are position-dependent or state-dependent.
         if self.explorer_buf_focused()
             && self.active().editor.vim_mode() == VimMode::Normal
             && self.pending_state.is_none()
             && key.modifiers == KeyModifiers::NONE
         {
-            match key.code {
-                // `u` — undo the last explorer fs transaction (journal-based,
-                // not vim buffer undo; the buffer is set_content-reset after
-                // each reconcile so vim undo is meaningless here).
-                KeyCode::Char('u') => {
-                    self.explorer_undo();
-                    return KeyOutcome::Continue;
-                }
-                // `k`/Up from the top tree row moves focus up into the search
-                // box. Anywhere else, fall through to the engine for normal
-                // upward movement.
-                KeyCode::Char('k') | KeyCode::Up => {
-                    let at_top = if let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) {
-                        self.windows
-                            .get(win_id)
-                            .and_then(|w| w.as_ref())
-                            .map(|w| w.cursor_row == 0)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    if at_top {
-                        // Focus the search box in NORMAL mode so `j` returns to
-                        // the tree (and `i`/`a` start editing).
-                        self.open_explorer_search(false);
-                        return KeyOutcome::Continue;
-                    }
-                    // not at top: fall through to engine for normal movement.
-                }
-                // `/` is NOT special-cased here — it flows through the keymap to
-                // OpenSearchPrompt → open_search_prompt, which consults the
-                // per-buffer search override (the explorer's fuzzy filter). That
-                // keeps `/` overridable per buffer for future plugins.
-                // Esc while no search field open but a committed filter is active
-                // → clear the filter and restore the full tree.
-                KeyCode::Esc => {
-                    let has_filter = self
-                        .explorer
-                        .as_ref()
-                        .map(|ep| ep.tree.filter.is_some())
-                        .unwrap_or(false);
-                    if has_filter {
-                        if let Some(ref mut ep) = self.explorer {
-                            ep.tree.clear_filter();
-                        }
-                        self.explorer_rebuild_buffer();
-                        return KeyOutcome::Continue;
-                    }
-                    // No filter — fall through to engine (normal Esc behaviour).
-                }
-                _ => {} // fall through to explorer_keymap / engine
+            // `u` — undo the last explorer fs transaction (journal-based,
+            // not vim buffer undo; the buffer is set_content-reset after
+            // each reconcile so vim undo is meaningless here).
+            if let KeyCode::Char('u') = key.code {
+                self.explorer_undo();
+                return KeyOutcome::Continue;
             }
         }
 
@@ -1143,12 +994,10 @@ impl App {
                 self.dismiss_hover_popup_on_click();
 
                 // ── Explorer mouse handling ───────────────────────
-                // - Click the top search box = pressing `/`: focus + insert mode.
-                // - Click a tree row: focus the explorer, move the cursor there,
-                //   and activate it (toggle a dir / open-or-focus a file).
-                // - Any click outside the box cancels an active search (clears a
-                //   typed query — only Enter commits).
-                // - Click entirely outside the explorer pane falls through.
+                // Click a tree row: focus the explorer, move the cursor there,
+                // and activate it (toggle a dir / open-or-focus a file).
+                // The search box is gone — the explorer is now a plain buffer
+                // where `/` opens the normal incremental search.
                 if let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) {
                     let rect = self
                         .windows
@@ -1156,33 +1005,10 @@ impl App {
                         .and_then(|w| w.as_ref())
                         .and_then(|w| w.last_rect);
                     if let Some(rect) = rect {
-                        let box_h = 3u16.min(rect.h);
                         let in_pane = me.column >= rect.x
                             && me.column < rect.x + rect.w
                             && me.row >= rect.y
                             && me.row < rect.y + rect.h;
-                        let in_box = in_pane && me.row < rect.y + box_h;
-
-                        if in_box {
-                            if self.focused_window() != win_id {
-                                self.switch_focus(win_id);
-                            }
-                            if self.explorer_search.is_none() {
-                                self.open_explorer_search(true);
-                            } else if let Some(f) = self.explorer_search.as_mut() {
-                                f.enter_insert_at_end();
-                            }
-                            return MouseOutcome::Continue;
-                        }
-
-                        // Outside the box: cancel any active search first.
-                        if self.explorer_search.is_some() {
-                            self.explorer_search = None;
-                            if let Some(ep) = self.explorer.as_mut() {
-                                ep.tree.clear_filter();
-                            }
-                            self.explorer_rebuild_buffer();
-                        }
 
                         // Tree-row click → move cursor there + activate.
                         if in_pane {
@@ -1195,7 +1021,7 @@ impl App {
                                 .and_then(|w| w.as_ref())
                                 .map(|w| w.top_row)
                                 .unwrap_or(0);
-                            let node_idx = top_row + (me.row - (rect.y + box_h)) as usize;
+                            let node_idx = top_row + (me.row - rect.y) as usize;
                             let node_count = self
                                 .explorer
                                 .as_ref()
