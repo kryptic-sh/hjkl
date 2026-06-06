@@ -798,6 +798,7 @@ impl App {
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
                 git_repo_present: None,
+                commit_ctx: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -884,6 +885,7 @@ impl App {
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
                 git_repo_present: None,
+                commit_ctx: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -1363,6 +1365,7 @@ impl App {
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
                 git_repo_present: None,
+                commit_ctx: None,
             };
             slot.snapshot_saved();
             // Re-mark dirty after snapshot (snapshot_saved clears dirty).
@@ -2161,6 +2164,7 @@ impl App {
                 last_swap_dirty_gen: None,
                 last_fold_dirty_gen: None,
                 git_repo_present: None,
+                commit_ctx: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);

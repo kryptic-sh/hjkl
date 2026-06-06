@@ -284,6 +284,18 @@ impl Default for BufferFeatures {
     }
 }
 
+/// Context carried on a commit-message buffer slot opened by `gc`.
+///
+/// When the buffer's window is closed, the app reads this context to run
+/// `git commit --cleanup=strip -F <msg_file>` and refresh the explorer.
+#[derive(Debug, Clone)]
+pub(crate) struct CommitCtx {
+    /// The git workdir root (`repo_root` output), passed as `-C` to git.
+    pub root: PathBuf,
+    /// Absolute path to `COMMIT_EDITMSG` that was opened for editing.
+    pub msg_file: PathBuf,
+}
+
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 ///
@@ -388,6 +400,10 @@ pub struct BufferSlot {
     /// Wall-clock time of the last successful blame refresh — used
     /// to throttle the libgit2 blame call to ~4 Hz during active typing.
     pub(crate) last_blame_refresh_at: Instant,
+    /// Set when this slot holds a commit message opened by `gc`. On window
+    /// close the app reads this to run `git commit -F <msg_file>` and refresh
+    /// the explorer. `None` for all normal buffers.
+    pub(crate) commit_ctx: Option<CommitCtx>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

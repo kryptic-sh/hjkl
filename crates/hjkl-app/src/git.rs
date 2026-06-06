@@ -619,6 +619,169 @@ fn run_git_apply(cwd: &Path, args: &[&str], patch: &str) -> Result<(), HunkApply
 }
 
 // ---------------------------------------------------------------------------
+// Explorer git path operations (#Phase2a) — stage / unstage / discard / root.
+// ---------------------------------------------------------------------------
+
+/// Return the git workdir root for `path`, or `None` when `path` is not inside
+/// a repository or the repo is bare.
+///
+/// This is the directory that should be passed as the `-C` argument to
+/// `git -C <root> …` commands so they operate in the correct repo context.
+pub fn repo_root(path: &Path) -> Option<std::path::PathBuf> {
+    let (repo, _rel) = open_repo_for(path).ok()?;
+    repo.workdir().map(|w| w.to_path_buf())
+}
+
+/// Run `git -C <root> <args...>` with no stdin.
+///
+/// Returns `Ok(())` on exit-code 0 and `Err(stderr)` otherwise.
+fn run_git_cmd(root: &Path, args: &[&str]) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Stage `path` into the git index (`git -C <root> add -- <path>`).
+///
+/// Works for files, directories (stages all changes recursively), new
+/// (untracked) files, and deletions. `root` should come from [`repo_root`].
+pub fn stage_path(root: &Path, path: &Path) -> Result<(), String> {
+    run_git_cmd(root, &["add", "--", path.to_str().unwrap_or("")])
+}
+
+/// Unstage `path` from the index (`git -C <root> reset -q -- <path>`).
+///
+/// Works with or without a HEAD commit (unborn branch). Does not touch
+/// the worktree — staged changes return to worktree-modified status.
+pub fn unstage_path(root: &Path, path: &Path) -> Result<(), String> {
+    run_git_cmd(root, &["reset", "-q", "--", path.to_str().unwrap_or("")])
+}
+
+/// Discard worktree changes to `path` (`git -C <root> checkout -- <path>`).
+///
+/// Restores the file(s) from the index (or HEAD when the index matches HEAD).
+/// Untracked files are never touched by this operation. For directories the
+/// checkout is recursive over all tracked descendants.
+pub fn discard_path(root: &Path, path: &Path) -> Result<(), String> {
+    run_git_cmd(root, &["checkout", "--", path.to_str().unwrap_or("")])
+}
+
+// ---------------------------------------------------------------------------
+// Commit flow (Phase 2b) — gc keybinding.
+// ---------------------------------------------------------------------------
+
+/// Run `git -C <root> commit --cleanup=strip -F <msg_file>`.
+///
+/// On success returns `Ok(stdout trimmed)` (e.g. `"[main 1a2b3c4] feat: x"`).
+/// On non-zero exit returns `Err(stderr trimmed)`, falling back to stdout when
+/// stderr is empty (git sometimes writes the abort message to stdout).
+pub fn commit_with_file(root: &Path, msg_file: &Path) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("commit")
+        .arg("--cleanup=strip")
+        .arg("-F")
+        .arg(msg_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Err(if !stderr.is_empty() { stderr } else { stdout })
+    }
+}
+
+/// Resolve the absolute path to `COMMIT_EDITMSG` inside the git dir for `root`.
+///
+/// Runs `git -C root rev-parse --absolute-git-dir` to handle `.git`-as-file
+/// worktrees correctly. Returns `None` when not in a repo or the command fails.
+pub fn commit_edit_path(root: &Path) -> Option<std::path::PathBuf> {
+    use std::process::{Command, Stdio};
+
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--absolute-git-dir")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !out.status.success() {
+        return None;
+    }
+
+    let git_dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if git_dir.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(git_dir).join("COMMIT_EDITMSG"))
+}
+
+/// Build the initial commit message template written to `COMMIT_EDITMSG`.
+///
+/// First line is empty (cursor lands here for the commit subject), followed by
+/// a standard comment block, then the output of `git status --short --branch`
+/// with each line prefixed by `# `. If the status command fails the section is
+/// omitted. Trailing newline included.
+pub fn commit_template(root: &Path) -> String {
+    use std::process::{Command, Stdio};
+
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str("# Please enter the commit message for your changes. Lines starting\n");
+    out.push_str("# with '#' will be ignored, and an empty message aborts the commit.\n");
+    out.push_str("#\n");
+
+    if let Ok(status_out) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("status")
+        .arg("--short")
+        .arg("--branch")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        && status_out.status.success()
+    {
+        let text = String::from_utf8_lossy(&status_out.stdout);
+        for line in text.lines() {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Blame (#202) — per-line attribution.
 // ---------------------------------------------------------------------------
 
@@ -1235,6 +1398,213 @@ mod tests {
         assert!(
             blame_line(&f, 0, b"hello\n").is_none(),
             "file outside repo must yield None"
+        );
+    }
+
+    // ── stage_path / unstage_path / discard_path / repo_root ──────────────────
+
+    #[test]
+    fn stage_path_stages_modification() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("tracked.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Worktree modification.
+        std::fs::write(&f, "modified\n").unwrap();
+
+        let root = repo_root(&f).expect("must be in repo");
+        stage_path(&root, &f).expect("stage_path must succeed");
+
+        // After staging, explorer_status_map must classify it as Staged.
+        let map = explorer_status_map(tmp.path());
+        assert_eq!(
+            map.get(&f),
+            Some(&ExplorerGit::Staged),
+            "file must be Staged after stage_path; map: {map:?}"
+        );
+    }
+
+    #[test]
+    fn unstage_path_unstages() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("tracked.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Modify then stage.
+        std::fs::write(&f, "modified\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+
+        let root = repo_root(&f).expect("must be in repo");
+        unstage_path(&root, &f).expect("unstage_path must succeed");
+
+        // After unstaging, file must be worktree-Modified (not Staged).
+        let map = explorer_status_map(tmp.path());
+        assert_eq!(
+            map.get(&f),
+            Some(&ExplorerGit::Modified),
+            "file must be Modified after unstage_path; map: {map:?}"
+        );
+    }
+
+    #[test]
+    fn discard_path_restores_worktree() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("tracked.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "tracked.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Dirty the worktree.
+        std::fs::write(&f, "dirty\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "dirty\n");
+
+        let root = repo_root(&f).expect("must be in repo");
+        discard_path(&root, &f).expect("discard_path must succeed");
+
+        // File content must be restored to the committed version.
+        let content = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(
+            content, "original\n",
+            "discard_path must restore committed content; got {content:?}"
+        );
+    }
+
+    #[test]
+    fn stage_path_outside_repo_errs() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        // Not a git repo — repo_root returns None, but we can still call
+        // stage_path with the tmp dir as a fake root and confirm Err.
+        let fake_root = tmp.path().to_path_buf();
+        let fake_file = tmp.path().join("nope.txt");
+        std::fs::write(&fake_file, "x\n").unwrap();
+        let result = stage_path(&fake_root, &fake_file);
+        assert!(
+            result.is_err(),
+            "stage_path outside a repo must return Err; got Ok(())"
+        );
+    }
+
+    // ── commit_with_file / commit_edit_path / commit_template ────────────────
+
+    #[test]
+    fn commit_with_file_real_message_commits() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        // Need at least one commit so HEAD exists.
+        let f = tmp.path().join("a.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "a.txt"]);
+        git(
+            tmp.path(),
+            &[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+
+        // Stage a change.
+        std::fs::write(&f, "modified\n").unwrap();
+        git(tmp.path(), &["add", "a.txt"]);
+
+        // Write a real commit message to a temp file.
+        let msg_file = tmp.path().join("COMMIT_EDITMSG");
+        std::fs::write(&msg_file, "feat: x\n").unwrap();
+
+        let root = repo_root(&f).expect("must be in repo");
+        let result = commit_with_file(&root, &msg_file);
+        assert!(result.is_ok(), "commit_with_file must succeed: {result:?}");
+
+        // Verify the commit subject.
+        let log_out = Command::new("git")
+            .args(["log", "-1", "--format=%s"])
+            .current_dir(tmp.path())
+            .output()
+            .expect("git log");
+        let subject = String::from_utf8_lossy(&log_out.stdout).trim().to_string();
+        assert_eq!(
+            subject, "feat: x",
+            "commit subject must match; got {subject:?}"
+        );
+    }
+
+    #[test]
+    fn commit_with_file_empty_message_aborts() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("a.txt");
+        std::fs::write(&f, "original\n").unwrap();
+        git(tmp.path(), &["add", "a.txt"]);
+        git(
+            tmp.path(),
+            &[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+
+        // Stage a change.
+        std::fs::write(&f, "changed\n").unwrap();
+        git(tmp.path(), &["add", "a.txt"]);
+
+        // Write only comment / blank lines — git strips these → empty message → abort.
+        let msg_file = tmp.path().join("COMMIT_EDITMSG");
+        std::fs::write(&msg_file, "# this is a comment\n\n# another comment\n").unwrap();
+
+        let root = repo_root(&f).expect("must be in repo");
+        let result = commit_with_file(&root, &msg_file);
+        assert!(
+            result.is_err(),
+            "commit_with_file with blank message must return Err; got Ok({:?})",
+            result.ok()
+        );
+    }
+
+    #[test]
+    fn commit_edit_path_in_repo_returns_some() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let root = tmp.path().to_path_buf();
+        let path = commit_edit_path(&root);
+        assert!(
+            path.is_some(),
+            "commit_edit_path must return Some inside a repo"
+        );
+        let p = path.unwrap();
+        assert!(
+            p.file_name()
+                .map(|n| n == "COMMIT_EDITMSG")
+                .unwrap_or(false),
+            "path must end with COMMIT_EDITMSG; got {p:?}"
+        );
+    }
+
+    #[test]
+    fn commit_edit_path_outside_repo_returns_none() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        // Not a git repo.
+        let path = commit_edit_path(tmp.path());
+        assert!(
+            path.is_none(),
+            "commit_edit_path must return None outside a repo; got {path:?}"
         );
     }
 

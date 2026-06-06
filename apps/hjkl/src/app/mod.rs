@@ -194,6 +194,10 @@ pub struct App {
     pub(crate) explorer_prompt: Option<explorer::ExplorerPrompt>,
     /// Pending explorer delete confirmation. `None` when not confirming.
     pub(crate) explorer_confirm: Option<explorer::ExplorerConfirm>,
+    /// Pending explorer git-discard confirmation. `None` when not confirming.
+    /// Carries the absolute path of the node whose worktree changes will be
+    /// discarded when the user presses `y`.
+    pub(crate) explorer_git_discard_confirm: Option<std::path::PathBuf>,
     /// Explorer copy/cut clipboard. Persists until overwritten or pasted.
     pub(crate) explorer_clip: Option<explorer::ExplorerClip>,
     /// Active explorer fuzzy-search field. `None` when closed.
@@ -352,6 +356,10 @@ pub struct App {
     /// Application-level chord dispatch. Holds Normal-mode bindings for all
     /// leader / g / ] / [ / <C-w> sequences.
     pub(crate) app_keymap: Keymap<AppAction, keymap::HjklMode>,
+    /// Explorer-context chord dispatch. Holds Normal-mode bindings that are
+    /// active only when the file-explorer sidebar window is focused. Consulted
+    /// by `route_chord_key_inner` before `app_keymap` when `explorer_buf_focused()`.
+    pub(crate) explorer_keymap: Keymap<AppAction, keymap::HjklMode>,
     /// Background install worker pool shared across all `:Anvil install` calls.
     pub anvil_pool: hjkl_anvil::InstallPool,
     /// In-flight install handles keyed by tool name.
@@ -682,6 +690,7 @@ pub(super) fn build_slot(
         last_swap_dirty_gen: None,
         last_fold_dirty_gen: None,
         git_repo_present: None,
+        commit_ctx: None,
     };
     slot.snapshot_saved();
     Ok(slot)
@@ -1460,6 +1469,7 @@ impl App {
             explorer: None,
             explorer_prompt: None,
             explorer_confirm: None,
+            explorer_git_discard_confirm: None,
             explorer_clip: None,
             explorer_search: None,
             explorer_search_worker: explorer::ExplorerSearchWorker::new(),
@@ -1516,6 +1526,13 @@ impl App {
                 // canonical default is sourced from EditorConfig::default()
                 // so there is a single source of truth; with_config
                 // overrides this before the event loop starts.
+                km.set_timeout(std::time::Duration::from_millis(
+                    hjkl_app::config::Config::default().editor.chord_timeout_ms,
+                ));
+                km
+            },
+            explorer_keymap: {
+                let mut km = keymap_build::build_explorer_keymap(default_leader);
                 km.set_timeout(std::time::Duration::from_millis(
                     hjkl_app::config::Config::default().editor.chord_timeout_ms,
                 ));
@@ -1624,6 +1641,8 @@ impl App {
         let timeout = Duration::from_millis(config.editor.chord_timeout_ms);
         self.app_keymap = keymap_build::build_app_keymap(leader);
         self.app_keymap.set_timeout(timeout);
+        self.explorer_keymap = keymap_build::build_explorer_keymap(leader);
+        self.explorer_keymap.set_timeout(timeout);
         // Resolve the explorer icon set. Explicit modes apply directly; `auto`
         // (and anything unrecognized) assumes a Nerd Font — terminals can't be
         // probed for font/glyph coverage, so `icons=unicode`/`ascii` is the
@@ -1938,6 +1957,28 @@ impl App {
         self.which_key_active = false;
     }
 
+    /// Return a shared reference to the keymap that owns chord state and
+    /// which-key entries for the current focus context.
+    ///
+    /// When the file-explorer sidebar is focused the explorer-specific keymap
+    /// is returned; otherwise the global `app_keymap`.
+    pub(crate) fn ctx_keymap(&self) -> &Keymap<AppAction, keymap::HjklMode> {
+        if self.explorer_buf_focused() {
+            &self.explorer_keymap
+        } else {
+            &self.app_keymap
+        }
+    }
+
+    /// Mutable version of [`ctx_keymap`](Self::ctx_keymap).
+    pub(crate) fn ctx_keymap_mut(&mut self) -> &mut Keymap<AppAction, keymap::HjklMode> {
+        if self.explorer_buf_focused() {
+            &mut self.explorer_keymap
+        } else {
+            &mut self.app_keymap
+        }
+    }
+
     /// Return the currently-pending chord buffer for Normal mode, or an empty
     /// `Vec` when no prefix is active.
     ///
@@ -1949,12 +1990,14 @@ impl App {
     /// is empty, so callers see an empty `Vec` and suppress the popup.  See
     /// the comment in `render.rs::which_key_popup` for the full rationale.
     pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
-        let trie = self.app_keymap.pending(keymap::HjklMode::Normal);
+        let trie = self.ctx_keymap().pending(keymap::HjklMode::Normal);
         if !trie.is_empty() {
             return trie.to_vec();
         }
         // Engine-FSM chords (g/z/op-pending) don't surface through app_keymap
         // — synthesize a prefix so descriptors::children_for can list entries.
+        // (These are never active when the explorer is focused, so reading
+        // pending_state here is always correct for non-explorer context.)
         if let Some(state) = self.pending_state {
             use hjkl_vim::PendingState;
             let ch = match state {

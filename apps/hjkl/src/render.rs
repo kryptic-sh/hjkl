@@ -871,6 +871,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.picker.is_some()
         || app.explorer_prompt.is_some()
         || app.explorer_confirm.is_some()
+        || app.explorer_git_discard_confirm.is_some()
         || app.explorer_search.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
@@ -2162,6 +2163,26 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── Explorer git-discard confirm ────────────────────────────────────────
+    if let Some(ref path) = app.explorer_git_discard_confirm {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let content = format!("Discard changes to {name}? (y/n)");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.search_bg)
+                    .fg(app.theme.ui.search_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
+        );
+    }
+
     // ── Interactive substitute confirm (:s/pat/rep/c) ──────────────────────
     // While confirming_substitute is Some, show the per-match prompt instead
     // of the normal status bar.
@@ -2472,12 +2493,12 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     // The popup is Normal-mode only by design: `entries_for` is called with a
     // hardcoded `HjklMode::Normal` regardless of the current vim mode.
     // Non-Normal modes (Visual, Insert, etc.) suppress the popup implicitly
-    // because `active_which_key_prefix` (mod.rs:1541) reads the Normal pending
-    // buffer, which is always empty when the mode is not Normal.  If future work
-    // extends the popup to Visual mode, both this hardcoded mode and
-    // `active_which_key_prefix` in `mod.rs` need to be updated together.
+    // because `active_which_key_prefix` reads the Normal pending buffer of the
+    // context keymap, which is always empty when the mode is not Normal.
+    // When the explorer sidebar is focused, `ctx_keymap()` returns
+    // `explorer_keymap` so the popup lists explorer-specific bindings.
     let entries = crate::which_key::entries_for(
-        &app.app_keymap,
+        app.ctx_keymap(),
         crate::app::keymap::HjklMode::Normal,
         &pending,
         leader,

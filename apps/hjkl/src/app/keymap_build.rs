@@ -705,6 +705,61 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
     km
 }
 
+/// Build the Normal-mode keymap for the file-explorer sidebar.
+///
+/// All explorer-specific single-key bindings live here so they surface in the
+/// which-key popup when the sidebar window is focused. The resulting keymap is
+/// stored as `App::explorer_keymap` and consulted by `route_chord_key_inner`
+/// before the global `app_keymap` when `explorer_buf_focused()` is true.
+///
+/// Special cases that remain inline in `event_loop.rs` (conditional, not pure
+/// binds):
+///   - `k` / `<Up>` at the top row → focus the search box.
+///   - `<Esc>` with an active filter → clear the filter.
+pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
+    use crate::keymap_actions::AppAction;
+    use keymap::HjklMode as Mode;
+    let mut km = Keymap::new(leader);
+    km.set_timeout(Duration::from_millis(500));
+
+    let bindings: &[(&str, AppAction, &str)] = &[
+        // ── Navigation / open ─────────────────────────────────────────────
+        ("l", AppAction::ExplorerActivate, "open / expand"),
+        ("<CR>", AppAction::ExplorerActivate, "open / expand"),
+        ("<Right>", AppAction::ExplorerActivate, "open / expand"),
+        ("h", AppAction::ExplorerCollapse, "collapse / parent"),
+        ("<Left>", AppAction::ExplorerCollapse, "collapse / parent"),
+        // ── File operations ───────────────────────────────────────────────
+        ("a", AppAction::ExplorerCreate, "create file/dir"),
+        ("r", AppAction::ExplorerRename, "rename"),
+        ("d", AppAction::ExplorerDelete, "delete"),
+        ("y", AppAction::ExplorerCopy, "copy"),
+        ("x", AppAction::ExplorerCut, "cut"),
+        ("p", AppAction::ExplorerPaste, "paste"),
+        // ── Open modes ────────────────────────────────────────────────────
+        ("s", AppAction::ExplorerOpenSplit, "open in split"),
+        ("v", AppAction::ExplorerOpenVsplit, "open in vsplit"),
+        ("t", AppAction::ExplorerOpenTab, "open in tab"),
+        // ── Root / view ───────────────────────────────────────────────────
+        ("-", AppAction::ExplorerRootUp, "root up"),
+        ("R", AppAction::ExplorerRefresh, "refresh"),
+        ("H", AppAction::ExplorerToggleHidden, "toggle hidden"),
+        ("I", AppAction::ExplorerToggleGitignore, "toggle gitignore"),
+        // ── Git operations ────────────────────────────────────────────────
+        ("ga", AppAction::ExplorerGitStageToggle, "git stage/unstage"),
+        ("gr", AppAction::ExplorerGitDiscard, "git discard changes"),
+        ("gc", AppAction::ExplorerGitCommit, "git commit"),
+    ];
+
+    for (chord_str, action, desc) in bindings {
+        if let Err(e) = km.add(Mode::Normal, chord_str, action.clone(), desc) {
+            eprintln!("hjkl: explorer_keymap.add({chord_str:?}) failed: {e}");
+        }
+    }
+
+    km
+}
+
 /// Translate an `hjkl_engine::Input` back to a `crossterm::event::KeyEvent`
 /// for re-feeding through `route_chord_key` during macro replay.
 ///

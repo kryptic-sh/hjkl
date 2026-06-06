@@ -797,6 +797,7 @@ fn build_scratch_slot(
         last_swap_dirty_gen: None,
         last_fold_dirty_gen: None,
         git_repo_present: None,
+        commit_ctx: None,
     };
     slot.snapshot_saved();
     Ok(slot)

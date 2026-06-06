@@ -59,6 +59,42 @@ impl App {
         }
     }
 
+    /// Replay a set of unbound `KeyEvent`s from the explorer keymap through
+    /// the normal routing path, bypassing the explorer keymap (step 2b).
+    ///
+    /// When `pending_state` is set (e.g. after the first `g` of `gg` fires
+    /// `BeginPendingAfterG`) or the engine already has a chord pending, the
+    /// key goes straight to the engine / pending_state reducer via
+    /// `route_chord_key` — which correctly processes the second `g` of `gg`
+    /// through the `AfterG` reducer and emits GoToFirstLine.
+    ///
+    /// When no state is pending, the key goes through `dispatch_keymap` (the
+    /// global `app_keymap` trie) and falls through to the engine on `Unbound`.
+    /// This handles `<leader>e`, `<C-w>l`, and single-key engine motions
+    /// without re-entering step 2b (the explorer keymap).
+    fn replay_explorer_unbound(&mut self, events: Vec<hjkl_keymap::KeyEvent>) {
+        for ev in events {
+            if self.pending_state.is_some() || self.active().editor.is_chord_pending() {
+                // A chord is in flight — send the key through the full routing
+                // stack which includes the pending_state reducer in step 1.
+                // Step 2b is gated on `pending_state.is_none()` so it is
+                // skipped automatically, preventing re-entry into the explorer
+                // keymap.
+                let ct_ev = Self::km_to_crossterm(&ev);
+                if !self.route_chord_key(ct_ev) {
+                    hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
+                }
+            } else {
+                // No chord in flight — go through the global app_keymap trie
+                // directly (skips step 2b; explorer keymap not consulted again).
+                let mut replay = Vec::new();
+                if !self.dispatch_keymap(ev, self.pending_count.peek().max(1), &mut replay) {
+                    self.replay_to_engine(&replay);
+                }
+            }
+        }
+    }
+
     /// Single canonical chord-routing entry. Called by the event loop's key
     /// handler and by tests. Returns `true` if the key was consumed at any
     /// stage of the chord routing; `false` if it should fall through to the
@@ -662,6 +698,51 @@ impl App {
             // visual commands (e.g. `2J`) still receive it, then fall through.
             if !self.pending_count.is_empty() {
                 self.flush_pending_count_to_engine();
+            }
+        }
+
+        // (2b) Explorer-keymap dispatch — when the sidebar is focused, feed the
+        // explorer keymap BEFORE the global app_keymap so explorer bindings win
+        // over global ones (e.g. `r`, `d`, `y`, `x`, `s`, `v` etc.).
+        // Gated identically to step (3): Normal mode, no pending state, no
+        // engine-pending chord. Additionally gated on app_keymap having no
+        // pending chord: once `<C-w>` or `<leader>` goes pending in app_keymap
+        // the next key must complete that global chord, not fire an explorer bind.
+        if self.pending_state.is_none()
+            && self.explorer_buf_focused()
+            && self.active().editor.vim_mode() == hjkl_engine::VimMode::Normal
+            && !self.active().editor.is_chord_pending()
+            && self
+                .app_keymap
+                .pending(super::keymap::HjklMode::Normal)
+                .is_empty()
+            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+        {
+            use hjkl_keymap::KeyResolve;
+            let mode = super::keymap::HjklMode::Normal;
+            let count = self.pending_count.peek().max(1);
+            let now = std::time::Instant::now();
+            match self.explorer_keymap.feed(mode, km_ev, now) {
+                KeyResolve::Pending | KeyResolve::Ambiguous => {
+                    self.note_prefix_set();
+                    self.sync_after_engine_mutation();
+                    return true;
+                }
+                KeyResolve::Match(binding) => {
+                    self.clear_prefix_state();
+                    self.dispatch_action(binding.action, count);
+                    self.sync_after_engine_mutation();
+                    return true;
+                }
+                KeyResolve::Unbound(events) => {
+                    // Not an explorer chord — replay through the normal
+                    // app_keymap / engine path so that multi-key engine
+                    // chords (gg, ge, …) and global app chords (<leader>e,
+                    // <C-w>l, …) work correctly from the explorer.
+                    self.replay_explorer_unbound(events);
+                    self.sync_after_engine_mutation();
+                    return true;
+                }
             }
         }
 

@@ -111,6 +111,26 @@ impl App {
             // ── Command-line window (issue #37) ────────────────────────────
             AppAction::OpenCmdLineWindow(kind) => self.open_cmdline_window(kind.into(), None),
 
+            // ── File-explorer actions ──────────────────────────────────────
+            AppAction::ExplorerActivate
+            | AppAction::ExplorerCollapse
+            | AppAction::ExplorerCreate
+            | AppAction::ExplorerRename
+            | AppAction::ExplorerDelete
+            | AppAction::ExplorerCopy
+            | AppAction::ExplorerCut
+            | AppAction::ExplorerPaste
+            | AppAction::ExplorerOpenSplit
+            | AppAction::ExplorerOpenVsplit
+            | AppAction::ExplorerOpenTab
+            | AppAction::ExplorerRootUp
+            | AppAction::ExplorerRefresh
+            | AppAction::ExplorerToggleHidden
+            | AppAction::ExplorerToggleGitignore
+            | AppAction::ExplorerGitStageToggle
+            | AppAction::ExplorerGitDiscard
+            | AppAction::ExplorerGitCommit => self.dispatch_explorer_action(action),
+
             // ── Engine-mutating actions ────────────────────────────────────
             _ => self.dispatch_engine_action(action, count),
         }

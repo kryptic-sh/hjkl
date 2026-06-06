@@ -260,6 +260,16 @@ impl App {
             return;
         }
         let focused = self.focused_window();
+
+        // Capture commit context BEFORE the window is torn down so we can
+        // run `git commit` after the close succeeds. `:wq`/`:x` already ran
+        // `do_save` before reaching here (ExEffect::Quit in ex_dispatch.rs:441),
+        // so the file on disk reflects the user's edits at this point.
+        let commit_ctx = self.windows[focused]
+            .as_ref()
+            .and_then(|w| self.slots.get(w.slot))
+            .and_then(|s| s.commit_ctx.clone());
+
         match self.layout_mut().remove_leaf(focused) {
             Err(_) => {
                 self.bus.error("E444: Cannot close last window");
@@ -273,6 +283,24 @@ impl App {
                 self.set_focused_window(new_focus);
                 self.sync_viewport_to_editor();
                 self.bus.info("window closed");
+
+                // Commit-on-close: if this was a gc commit buffer, run git commit.
+                if let Some(ctx) = commit_ctx {
+                    match hjkl_app::git::commit_with_file(&ctx.root, &ctx.msg_file) {
+                        Ok(out) => {
+                            let first = out.lines().next().unwrap_or("committed").to_string();
+                            self.bus.info(first);
+                        }
+                        Err(e) => {
+                            let first = e.lines().next().unwrap_or("commit failed").to_string();
+                            self.bus.warn(first);
+                        }
+                    }
+                    let _ = std::fs::remove_file(&ctx.msg_file);
+                    self.recompute_explorer_git_base();
+                    self.refresh_git_signs_force();
+                    self.explorer_rebuild_buffer();
+                }
             }
         }
     }

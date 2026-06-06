@@ -983,6 +983,7 @@ impl super::App {
             last_swap_dirty_gen: None,
             last_fold_dirty_gen: None,
             git_repo_present: None,
+            commit_ctx: None,
         };
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;
@@ -1907,6 +1908,221 @@ impl super::App {
             self.explorer_search_pending_query = Some(text);
             self.explorer_search_dirty_at = Some(Instant::now());
         }
+    }
+
+    /// Route an explorer [`AppAction`](crate::keymap_actions::AppAction) to the
+    /// corresponding `explorer_*` method. Called from `dispatch_action` when the
+    /// match arm groups all `Explorer*` variants together.
+    pub(crate) fn dispatch_explorer_action(&mut self, action: crate::keymap_actions::AppAction) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            AppAction::ExplorerActivate => self.explorer_activate(),
+            AppAction::ExplorerCollapse => self.explorer_collapse(),
+            AppAction::ExplorerCreate => self.explorer_create(),
+            AppAction::ExplorerRename => self.explorer_rename(),
+            AppAction::ExplorerDelete => self.explorer_delete(),
+            AppAction::ExplorerCopy => self.explorer_copy(),
+            AppAction::ExplorerCut => self.explorer_cut(),
+            AppAction::ExplorerPaste => self.explorer_paste(),
+            AppAction::ExplorerOpenSplit => self.explorer_open_split(),
+            AppAction::ExplorerOpenVsplit => self.explorer_open_vsplit(),
+            AppAction::ExplorerOpenTab => self.explorer_open_tab(),
+            AppAction::ExplorerRootUp => self.explorer_root_up(),
+            AppAction::ExplorerRefresh => self.explorer_refresh(),
+            AppAction::ExplorerToggleHidden => self.explorer_toggle_hidden(),
+            AppAction::ExplorerToggleGitignore => self.explorer_toggle_gitignore(),
+            AppAction::ExplorerGitStageToggle => self.explorer_git_stage_toggle(),
+            AppAction::ExplorerGitDiscard => self.explorer_git_discard(),
+            AppAction::ExplorerGitCommit => self.explorer_git_commit(),
+            _ => {}
+        }
+    }
+
+    // ── Git path operations ───────────────────────────────────────────────────
+
+    /// `ga` — stage or unstage the node under the cursor.
+    ///
+    /// If the node's git status is [`ExplorerGit::Staged`] the path is
+    /// unstaged; otherwise it is staged. After success the explorer git base is
+    /// recomputed and the buffer is rebuilt so the gutter colours update
+    /// immediately.
+    pub(crate) fn explorer_git_stage_toggle(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        let ep = match self.explorer.as_ref() {
+            Some(ep) => ep,
+            None => return,
+        };
+        if !ep.tree.repo_present {
+            return;
+        }
+        let root = match hjkl_app::git::repo_root(&node.path) {
+            Some(r) => r,
+            None => return,
+        };
+        let result = if node.git == Some(hjkl_app::git::ExplorerGit::Staged) {
+            hjkl_app::git::unstage_path(&root, &node.path)
+        } else {
+            hjkl_app::git::stage_path(&root, &node.path)
+        };
+        match result {
+            Err(e) => {
+                self.bus.error(format!("Git stage failed: {e}"));
+            }
+            Ok(()) => {
+                self.recompute_explorer_git_base();
+                self.explorer_rebuild_buffer();
+                self.refresh_git_signs_force();
+            }
+        }
+    }
+
+    /// `gr` — open a confirm overlay to discard worktree changes for the node
+    /// under the cursor.
+    ///
+    /// Only opens the confirm when the node has tracked worktree changes
+    /// (Modified or Deleted). Untracked files are skipped — `git checkout`
+    /// does not affect them and it would be a surprising no-op. The confirm
+    /// prompt reads "Discard changes to <name>? (y/n)".
+    pub(crate) fn explorer_git_discard(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        let ep = match self.explorer.as_ref() {
+            Some(ep) => ep,
+            None => return,
+        };
+        if !ep.tree.repo_present {
+            return;
+        }
+        // Only offer discard for paths that have tracked worktree changes.
+        // Untracked → `git checkout` would fail / be a no-op; Staged → use `ga`
+        // to unstage first. Directories with a rolled-up status (git == None)
+        // also proceed — `git checkout -- <dir>` is recursive over tracked files.
+        let allow = match node.git {
+            Some(hjkl_app::git::ExplorerGit::Modified | hjkl_app::git::ExplorerGit::Deleted) => {
+                true
+            }
+            None if node.is_dir => true,
+            _ => false,
+        };
+        if !allow {
+            return;
+        }
+        self.explorer_git_discard_confirm = Some(node.path.clone());
+    }
+
+    /// Called when the user confirms a git-discard with `y`.
+    pub(crate) fn explorer_commit_git_discard(&mut self) {
+        let path = match self.explorer_git_discard_confirm.take() {
+            Some(p) => p,
+            None => return,
+        };
+        let root = match hjkl_app::git::repo_root(&path) {
+            Some(r) => r,
+            None => {
+                self.bus.error("Git discard failed: path not in a repo");
+                return;
+            }
+        };
+        match hjkl_app::git::discard_path(&root, &path) {
+            Ok(()) => {
+                self.recompute_explorer_git_base();
+                self.explorer_rebuild_buffer();
+                self.refresh_git_signs_force();
+            }
+            Err(e) => {
+                self.bus.error(format!("Git discard failed: {e}"));
+            }
+        }
+    }
+
+    /// `gc` — open COMMIT_EDITMSG in a split for committing staged changes.
+    ///
+    /// Resolves the explorer tree root as the git root. Opens the repo's
+    /// `COMMIT_EDITMSG` file pre-filled with a comment template and
+    /// `git status --short --branch`. On window close the commit hook in
+    /// `close_focused_window` runs `git commit --cleanup=strip -F <msg_file>`.
+    pub(crate) fn explorer_git_commit(&mut self) {
+        // Resolve root from the explorer tree.
+        let root = match self.explorer.as_ref() {
+            Some(ep) => {
+                if !ep.tree.repo_present {
+                    self.bus.warn("not a git repository");
+                    return;
+                }
+                match hjkl_app::git::repo_root(&ep.tree.root) {
+                    Some(r) => r,
+                    None => {
+                        self.bus.warn("not a git repository");
+                        return;
+                    }
+                }
+            }
+            None => {
+                self.bus.warn("not a git repository");
+                return;
+            }
+        };
+
+        let msg_file = match hjkl_app::git::commit_edit_path(&root) {
+            Some(p) => p,
+            None => {
+                self.bus.error("could not resolve COMMIT_EDITMSG path");
+                return;
+            }
+        };
+
+        let template = hjkl_app::git::commit_template(&root);
+        if let Err(e) = std::fs::write(&msg_file, &template) {
+            self.bus
+                .error(format!("could not write commit template: {e}"));
+            return;
+        }
+
+        // Focus a non-explorer window first (same as explorer_open_split).
+        if let Some(win_id) = self.nearest_non_explorer_window() {
+            self.switch_focus(win_id);
+        }
+
+        // Open the COMMIT_EDITMSG in a horizontal split.
+        let s = Self::explorer_open_arg(&msg_file);
+        self.dispatch_ex(&format!("split {s}"));
+
+        // Find the newly focused slot (the split just opened) and attach ctx.
+        let slot_idx = self.focused_slot_idx();
+        self.slots[slot_idx].commit_ctx = Some(super::types::CommitCtx { root, msg_file });
+    }
+
+    /// Route a key when `explorer_git_discard_confirm` is active.
+    pub(crate) fn handle_explorer_git_discard_confirm_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.explorer_commit_git_discard();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.explorer_git_discard_confirm = None;
+            }
+            _ => {} // consume but do nothing
+        }
+    }
+
+    /// Text shown in the confirm bar when a git-discard confirmation is pending.
+    #[allow(dead_code)]
+    pub(crate) fn explorer_git_discard_confirm_prompt(&self) -> Option<String> {
+        let path = self.explorer_git_discard_confirm.as_ref()?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        Some(format!("Discard changes to {name}? (y/n)"))
     }
 }
 

@@ -448,6 +448,12 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── Explorer git-discard confirm ──────────────────────────
+        if self.explorer_git_discard_confirm.is_some() {
+            self.handle_explorer_git_discard_confirm_key(key);
+            return KeyOutcome::Continue;
+        }
+
         // ── Command palette (`:` prompt) ─────────────────────────
         if self.command_field.is_some() {
             self.handle_command_field_key(key);
@@ -482,23 +488,18 @@ impl App {
         }
 
         // ── File-explorer buffer (#55) ────────────────────────────
-        // When the focused window is the explorer buffer and we are in Normal
-        // mode, intercept tree-specific keys (Enter/l/o/Right → activate,
-        // h/Left → collapse). Everything else (j/k/gg/G/`/`/`Ctrl-w`/visual)
-        // falls through to the engine — the explorer is a real window.
+        // Explorer keys are now routed through `explorer_keymap` in
+        // `route_chord_key_inner` (step 2b) so they surface in the which-key
+        // popup. Only two conditional cases remain here because they are
+        // position-dependent or state-dependent and cannot be expressed as
+        // pure chord bindings:
+        //   - `k`/`<Up>` at the top row → focus the search box.
+        //   - `<Esc>` with an active filter → clear the filter.
         if self.explorer_buf_focused()
             && self.active().editor.vim_mode() == VimMode::Normal
             && key.modifiers == KeyModifiers::NONE
         {
             match key.code {
-                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                    self.explorer_activate();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    self.explorer_collapse();
-                    return KeyOutcome::Continue;
-                }
                 // `k`/Up from the top tree row moves focus up into the search
                 // box. Anywhere else, fall through to the engine for normal
                 // upward movement.
@@ -519,49 +520,6 @@ impl App {
                         return KeyOutcome::Continue;
                     }
                     // not at top: fall through to engine for normal movement.
-                }
-                // File ops
-                KeyCode::Char('a') => {
-                    self.explorer_create();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('r') => {
-                    self.explorer_rename();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('d') => {
-                    self.explorer_delete();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('y') => {
-                    self.explorer_copy();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('x') => {
-                    self.explorer_cut();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('p') => {
-                    self.explorer_paste();
-                    return KeyOutcome::Continue;
-                }
-                // Open modes
-                KeyCode::Char('s') => {
-                    self.explorer_open_split();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('v') => {
-                    self.explorer_open_vsplit();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('t') => {
-                    self.explorer_open_tab();
-                    return KeyOutcome::Continue;
-                }
-                // Root up (no modifier)
-                KeyCode::Char('-') => {
-                    self.explorer_root_up();
-                    return KeyOutcome::Continue;
                 }
                 // `/` is NOT special-cased here — it flows through the keymap to
                 // OpenSearchPrompt → open_search_prompt, which consults the
@@ -584,32 +542,7 @@ impl App {
                     }
                     // No filter — fall through to engine (normal Esc behaviour).
                 }
-                _ => {} // fall through to engine
-            }
-        }
-        // Capital R (refresh) / H (toggle hidden): handled separately because
-        // shifted letters may arrive with or without a SHIFT modifier depending
-        // on the terminal's keyboard protocol — accept the key code regardless,
-        // as long as Ctrl/Alt aren't held (those are real engine chords).
-        if self.explorer_buf_focused()
-            && self.active().editor.vim_mode() == VimMode::Normal
-            && !key.modifiers.contains(KeyModifiers::CONTROL)
-            && !key.modifiers.contains(KeyModifiers::ALT)
-        {
-            match key.code {
-                KeyCode::Char('R') => {
-                    self.explorer_refresh();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('H') => {
-                    self.explorer_toggle_hidden();
-                    return KeyOutcome::Continue;
-                }
-                KeyCode::Char('I') => {
-                    self.explorer_toggle_gitignore();
-                    return KeyOutcome::Continue;
-                }
-                _ => {}
+                _ => {} // fall through to explorer_keymap / engine
             }
         }
 
@@ -711,13 +644,35 @@ impl App {
                 }
             }
 
-            // ── Escape: cancel any pending prefix ─────────────────
+            // ── Escape: cancel pending prefix, else toggle top-level which-key ──
             if key.code == KeyCode::Esc {
+                let pending_non_empty = !self
+                    .ctx_keymap()
+                    .pending(crate::app::keymap::HjklMode::Normal)
+                    .is_empty();
+                // Reset both keymaps so stale explorer pending can't linger.
                 self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+                self.explorer_keymap
+                    .reset(crate::app::keymap::HjklMode::Normal);
                 self.pending_count.reset();
                 self.clear_prefix_state();
-                self.which_key_sticky = false;
-                // Fall through to engine so it can exit visual mode etc.
+                if pending_non_empty {
+                    // Was mid-chord → cancel it and hide the popup.
+                    self.which_key_sticky = false;
+                    self.which_key_active = false;
+                    return KeyOutcome::Continue;
+                }
+                // Nothing pending → toggle the top-level which-key display.
+                // Repeated Esc flips it on/off (Normal mode only).
+                if self.which_key_sticky {
+                    self.which_key_sticky = false;
+                    self.which_key_active = false;
+                } else {
+                    self.which_key_sticky = true;
+                    self.which_key_active = true;
+                    self.note_prefix_set();
+                }
+                return KeyOutcome::Continue;
             }
 
             // ── which-key Backspace (chord navigate-up) ─────────────────
@@ -726,15 +681,16 @@ impl App {
                 && self.active().editor.vim_mode() == VimMode::Normal
             {
                 let pending_non_empty = !self
-                    .app_keymap
+                    .ctx_keymap()
                     .pending(crate::app::keymap::HjklMode::Normal)
                     .is_empty();
                 if pending_non_empty {
-                    self.app_keymap.pop(crate::app::keymap::HjklMode::Normal);
+                    self.ctx_keymap_mut()
+                        .pop(crate::app::keymap::HjklMode::Normal);
                     // If pop emptied the buffer, enter sticky so the popup
                     // stays showing root entries until the user types something.
                     if self
-                        .app_keymap
+                        .ctx_keymap()
                         .pending(crate::app::keymap::HjklMode::Normal)
                         .is_empty()
                     {
@@ -745,12 +701,18 @@ impl App {
                     self.which_key_active = true;
                     return KeyOutcome::Continue;
                 }
+                // Nothing pending → toggle the top-level which-key display,
+                // mirroring Esc. Backspace no longer moves left in Normal mode;
+                // it is the which-key navigate-up / toggle key.
                 if self.which_key_sticky {
-                    // At root in sticky mode — noop per spec.
-                    return KeyOutcome::Continue;
+                    self.which_key_sticky = false;
+                    self.which_key_active = false;
+                } else {
+                    self.which_key_sticky = true;
+                    self.which_key_active = true;
+                    self.note_prefix_set();
                 }
-                // No chord, no sticky → fall through to engine
-                // (backspace = move left in vim Normal mode).
+                return KeyOutcome::Continue;
             } else {
                 // Any non-Backspace key clears sticky which-key.
                 self.which_key_sticky = false;
@@ -768,6 +730,8 @@ impl App {
             // digit was dropped (and the count reset every key), so every
             // visual op / motion ran with count 1.
             self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+            self.explorer_keymap
+                .reset(crate::app::keymap::HjklMode::Normal);
             self.clear_prefix_state();
             if key.code == KeyCode::Esc {
                 // Cancel a half-typed count; the engine still receives Esc
@@ -786,6 +750,8 @@ impl App {
         } else {
             // Insert / other modes: reset any pending Normal-mode chord state.
             self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+            self.explorer_keymap
+                .reset(crate::app::keymap::HjklMode::Normal);
             self.pending_count.reset();
             self.clear_prefix_state();
         }

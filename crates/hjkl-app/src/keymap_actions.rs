@@ -400,6 +400,59 @@ pub enum AppAction {
     /// history kind. Splits the current window horizontally (below) and
     /// populates the transient buffer with the relevant history entries.
     OpenCmdLineWindow(CmdLineWindowKind),
+
+    // ── File-explorer actions (sidebar context) ───────────────────────────
+    /// `l` / `<CR>` / `<Right>` — open or expand the node under the cursor.
+    ExplorerActivate,
+    /// `h` / `<Left>` — collapse a directory or jump to its parent.
+    ExplorerCollapse,
+    /// `a` — create a new file or directory.
+    ExplorerCreate,
+    /// `r` — rename the node under the cursor.
+    ExplorerRename,
+    /// `d` — delete the node under the cursor.
+    ExplorerDelete,
+    /// `y` — copy the node under the cursor.
+    ExplorerCopy,
+    /// `x` — cut the node under the cursor.
+    ExplorerCut,
+    /// `p` — paste the previously copied/cut node.
+    ExplorerPaste,
+    /// `s` — open the node in a horizontal split.
+    ExplorerOpenSplit,
+    /// `v` — open the node in a vertical split.
+    ExplorerOpenVsplit,
+    /// `t` — open the node in a new tab.
+    ExplorerOpenTab,
+    /// `-` — move the explorer root one directory up.
+    ExplorerRootUp,
+    /// `R` — refresh the explorer tree.
+    ExplorerRefresh,
+    /// `H` — toggle display of hidden files.
+    ExplorerToggleHidden,
+    /// `I` — toggle gitignore filtering.
+    ExplorerToggleGitignore,
+    /// `ga` — toggle stage / unstage for the node under the cursor.
+    ///
+    /// When the node's git status is [`ExplorerGit::Staged`] the file is
+    /// unstaged (`git reset -- <path>`); for all other statuses (Modified,
+    /// Untracked, Deleted) the file is staged (`git add -- <path>`).
+    ExplorerGitStageToggle,
+    /// `gr` — open a confirm overlay to discard worktree changes for the node
+    /// under the cursor.
+    ///
+    /// After `y` confirmation, runs `git checkout -- <path>` to restore the
+    /// file(s) from the index/HEAD. Untracked files are unaffected. Cancelled
+    /// with `n` / `N` / `Esc`.
+    ExplorerGitDiscard,
+    /// `gc` — open a COMMIT_EDITMSG split for staging and committing changes.
+    ///
+    /// Opens the repo's `COMMIT_EDITMSG` file in a horizontal split, pre-filled
+    /// with a comment template and `git status --short --branch` output.
+    /// On window close, runs `git commit --cleanup=strip -F <msg_file>`:
+    /// a blank/comment-only message causes git to abort (cancel); a real
+    /// message commits staged changes. Explorer git colours refresh after commit.
+    ExplorerGitCommit,
 }
 
 /// Which history ring to show in the command-line window (issue #37).
