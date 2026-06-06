@@ -1379,27 +1379,17 @@ impl super::App {
         // Refresh git colors after rebuild.
         self.recompute_explorer_git_base();
 
-        // Open newly-created files in the nearest non-explorer window, but KEEP
-        // focus in the explorer afterward — convenient for a long restructure
-        // session (creating many files shouldn't yank focus away each time).
-        // Suppress the open-notice toast and explorer-reveal (the rebuild above
-        // already rendered the tree correctly).
-        if !newly_created.is_empty() {
-            let explorer_win = self.explorer.as_ref().map(|ep| ep.win_id);
-            for path in newly_created {
-                if let Some(win_id) = self.nearest_non_explorer_window() {
-                    self.switch_focus(win_id);
-                }
-                self.suppress_open_notice = true;
-                self.suppress_explorer_reveal = true;
-                let s = Self::explorer_open_arg(&path);
-                self.dispatch_ex(&format!("edit {s}"));
-                self.suppress_open_notice = false;
-                self.suppress_explorer_reveal = false;
-            }
-            // Return focus to the explorer window.
-            if let Some(win_id) = explorer_win {
-                self.switch_focus(win_id);
+        // Spawn a background buffer for each newly-created file WITHOUT focusing
+        // it — `open_new_slot` just builds the slot (no window/focus change), so
+        // a long restructure session stays in the explorer. Skip files already
+        // open in a slot.
+        for path in newly_created {
+            let already = self
+                .slots
+                .iter()
+                .any(|s| s.filename.as_deref() == Some(path.as_path()));
+            if !already {
+                let _ = self.open_new_slot(path);
             }
         }
     }
@@ -1529,15 +1519,7 @@ impl super::App {
     /// explorer's selection to it — so the buffer you're editing is the
     /// highlighted row in the tree. Does NOT change window focus. No-op for
     /// scratch buffers or files outside the tree root.
-    ///
-    /// Skipped when `suppress_explorer_reveal` is set (e.g. when
-    /// `maybe_reconcile_explorer` opens a newly-created file — we don't want
-    /// to clobber the explorer buffer and its undo history with a fresh fs walk).
     pub(crate) fn explorer_reveal_active(&mut self) {
-        if self.suppress_explorer_reveal {
-            self.suppress_explorer_reveal = false;
-            return;
-        }
         if self.explorer.is_none() {
             return;
         }
