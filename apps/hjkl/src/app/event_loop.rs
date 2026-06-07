@@ -1017,32 +1017,26 @@ impl App {
                             && me.row >= rect.y
                             && me.row < rect.y + rect.h;
 
-                        // Tree-row click → move cursor there + activate.
+                        // Tree-row click → move cursor there + activate. Resolve
+                        // the doc row with the FOLD-AWARE `cell_to_doc` (a naive
+                        // `top_row + screen_offset` ignores collapsed dirs, so a
+                        // click below a closed fold lands on the wrong node). It
+                        // also uses the window's own scroll origin, correct for
+                        // the (usually unfocused) explorer pane.
                         if in_pane {
-                            if self.focused_window() != win_id {
-                                self.switch_focus(win_id);
-                            }
-                            let top_row = self
-                                .windows
-                                .get(win_id)
-                                .and_then(|w| w.as_ref())
-                                .map(|w| w.top_row)
-                                .unwrap_or(0);
-                            let node_idx = top_row + (me.row - rect.y) as usize;
-                            let node_count = self
-                                .explorer
-                                .as_ref()
-                                .map(|ep| ep.tree.nodes.len())
-                                .unwrap_or(0);
-                            if node_idx < node_count {
+                            if let Some((doc_row, _)) =
+                                mouse::cell_to_doc(self, win_id, me.column, me.row)
+                            {
                                 if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                                    win.cursor_row = node_idx;
+                                    win.cursor_row = doc_row;
                                     win.cursor_col = 0;
                                 }
-                                // explorer_activate reads the window cursor row:
-                                // toggles a dir or opens/focuses a file (`:edit`
-                                // switch-or-create).
+                                // Sync the explorer editor cursor to the clicked
+                                // row, then activate: toggle a dir's fold or
+                                // open/focus a file (`:edit` switch-or-create).
+                                self.sync_viewport_to_explorer_editor();
                                 self.explorer_activate();
+                                self.sync_after_engine_mutation_deferred();
                             }
                             return MouseOutcome::Continue;
                         }
@@ -1211,34 +1205,6 @@ impl App {
                 }
 
                 if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
-                    // ── Explorer pane: neo-tree-style single click ────
-                    // A click on a DIRECTORY toggles its fold; a click on a
-                    // FILE opens it in the editor. Resolve the clicked row
-                    // (fold-aware), point the explorer cursor at it, then run
-                    // the same activate path as `<CR>`. Bypasses the generic
-                    // cursor-move / click-count logic below so a plain click
-                    // acts immediately instead of just moving the cursor.
-                    let is_explorer_win = self
-                        .windows
-                        .get(win_id)
-                        .and_then(|w| w.as_ref())
-                        .map(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer))
-                        .unwrap_or(false);
-                    if is_explorer_win {
-                        if let Some((doc_row, _)) =
-                            mouse::cell_to_doc(self, win_id, me.column, me.row)
-                        {
-                            if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                                win.cursor_row = doc_row;
-                                win.cursor_col = 0;
-                            }
-                            self.sync_viewport_to_explorer_editor();
-                            self.explorer_activate();
-                            self.sync_after_engine_mutation_deferred();
-                        }
-                        return MouseOutcome::Continue;
-                    }
-
                     // Focus the clicked window if it differs.
                     let current_focus = self.focused_window();
                     if win_id != current_focus {
