@@ -1318,13 +1318,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 (text_x + icon_off, text_x + icon_off + 2)
             };
 
-            // Icon color: devicon per-filetype or folder blue.
+            // Icon color: devicon per-filetype or folder blue. Falls back to the
+            // theme text color so the icon ALWAYS gets a definite fg — otherwise
+            // a colorless devicon (e.g. a generic file) would inherit whatever
+            // the cursorline painted underneath, making the icon change color
+            // depending on which row the cursor sits on.
             let icon_color = if node.is_dir {
                 let name = node.path.file_name().and_then(|n| n.to_str());
                 rgb(hjkl_icons::dir_color(name))
             } else {
                 rgb(hjkl_icons::file_color_for_path(&node.path))
-            };
+            }
+            .unwrap_or(app.theme.ui.text);
 
             // Git status → name BACKGROUND (so the filetype/dir foreground stays
             // distinct). Clean nodes keep their devicon/dir foreground and the
@@ -1349,11 +1354,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
             // Repaint the icon cell foreground (icon keeps its filetype/dir color
             // regardless of git state — the icon column never gets a git bg).
+            // Always set a definite fg so the icon never inherits the
+            // cursorline's foreground on the cursor row.
             if icon_col < right
                 && let Some(cell) = buf.cell_mut((icon_col, screen_row))
-                && let Some(ic) = icon_color
             {
-                cell.set_fg(ic);
+                cell.set_fg(icon_color);
             }
 
             // Name span width in display cells (filename; root uses the full
