@@ -1332,19 +1332,62 @@ impl super::App {
         }
 
         // Move the explorer selection to the revealed row and scroll it into
-        // view. The per-window `top_row` is independent of any other window on
-        // the same slot, so this only moves the explorer's own viewport.
+        // view ONLY if it isn't already visible. The check must be FOLD-AWARE:
+        // collapsed dirs above the cursor make the raw row index much larger
+        // than its on-screen position, so a naive `row >= top + height` compare
+        // wrongly scrolled the pane every time a (clearly visible) file was
+        // clicked. Walk visible rows from `top_row` instead.
+        let cur_top = self
+            .windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.top_row)
+            .unwrap_or(0);
+        let height = self
+            .windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .and_then(|w| w.last_rect)
+            .map(|rc| rc.h as usize)
+            .unwrap_or(0);
+        let new_top = if height == 0 {
+            cur_top
+        } else if row < cur_top {
+            row
+        } else {
+            // Is `row` among the `height` visible rows starting at `cur_top`?
+            let buf = self.slots[slot_idx].editor.buffer();
+            let mut r = cur_top;
+            let mut visible = false;
+            for _ in 0..height {
+                if r == row {
+                    visible = true;
+                    break;
+                }
+                match buf.next_visible_row(r) {
+                    Some(n) => r = n,
+                    None => break,
+                }
+            }
+            if visible {
+                cur_top
+            } else {
+                // Off the bottom: make `row` the last visible line by walking
+                // back `height - 1` visible rows from it.
+                let mut t = row;
+                for _ in 0..height.saturating_sub(1) {
+                    match buf.prev_visible_row(t) {
+                        Some(p) => t = p,
+                        None => break,
+                    }
+                }
+                t
+            }
+        };
         if let Some(Some(win)) = self.windows.get_mut(win_id) {
             win.cursor_row = row;
             win.cursor_col = 0;
-            let height = win.last_rect.map(|rc| rc.h as usize).unwrap_or(0);
-            if height > 0 {
-                if row < win.top_row {
-                    win.top_row = row;
-                } else if row >= win.top_row + height {
-                    win.top_row = row + 1 - height;
-                }
-            }
+            win.top_row = new_top;
         }
         // Sync the explorer editor cursor so the (usually unfocused) cursorline
         // highlights the revealed row.
@@ -2805,6 +2848,67 @@ mod tests {
         assert_eq!(
             cur, target_row,
             "explorer selection must move to the opened file"
+        );
+    }
+
+    /// Opening a VISIBLE file must not scroll the explorer. A collapsed dir with
+    /// many children pushes the file's raw buffer-row index past the pane
+    /// height even though the file is on screen — the reveal scroll math must be
+    /// fold-aware and leave `top_row` alone.
+    #[test]
+    fn reveal_active_does_not_scroll_when_file_visible() {
+        use crate::app::window::LayoutRect;
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        // A collapsed dir with 30 children (hidden) sits above a root-level file.
+        std::fs::create_dir(tmp.path().join("aaa")).unwrap();
+        for i in 0..30 {
+            std::fs::write(tmp.path().join("aaa").join(format!("f{i:02}.txt")), b"").unwrap();
+        }
+        std::fs::write(tmp.path().join("target.txt"), b"x").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // Give the explorer window a concrete height so the scroll math runs;
+        // aaa stays collapsed (default), so target.txt is on screen at line ~2
+        // but its raw buffer row is ~32 (> height).
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+        if let Some(Some(w)) = app.windows.get_mut(win_id) {
+            w.last_rect = Some(LayoutRect::new(0, 0, 30, 24));
+            w.top_row = 0;
+        }
+        let target = tmp.path().join("target.txt");
+        let target_row = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == target)
+            .unwrap();
+        assert!(
+            target_row >= 24,
+            "precondition: target's raw row ({target_row}) exceeds pane height"
+        );
+
+        // Open target.txt from the editor window → triggers reveal_active.
+        app.dispatch_action(AppAction::FocusRight, 1);
+        app.dispatch_ex("edit target.txt");
+
+        let top = app
+            .windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.top_row)
+            .unwrap();
+        std::env::set_current_dir(prev).unwrap();
+        assert_eq!(
+            top, 0,
+            "explorer must not scroll when the opened file is already visible"
         );
     }
 
