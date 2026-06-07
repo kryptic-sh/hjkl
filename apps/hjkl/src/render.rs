@@ -1178,20 +1178,40 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // Dim color used for tree guides and connectors.
         let guide_fg = app.theme.ui.indent_guide_fg;
 
-        // Build the fold list once so we can skip hidden rows. We get the
-        // buffer through the explorer slot index rather than the App borrow.
-        let explorer_folds: Vec<hjkl_buffer::Fold> =
+        // Build the fold list + live buffer text once. We read the buffer
+        // through the explorer slot index rather than the App borrow.
+        let (explorer_folds, buf_text): (Vec<hjkl_buffer::Fold>, String) =
             if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
-                app.slots()[slot_idx].editor.buffer().folds()
+                let b = app.slots()[slot_idx].editor.buffer();
+                (b.folds(), b.as_string())
             } else {
-                Vec::new()
+                (Vec::new(), String::new())
             };
+
+        // Layout (icons, guides, depth) is derived from the LIVE buffer text —
+        // NOT the last-reconciled `pane.tree.nodes` — so glyphs stay aligned
+        // while the buffer is being edited (a mid-edit `o`/`O` shifts rows
+        // before the Normal-mode reconcile rebuilds the tree). `None` slots are
+        // blank lines (e.g. a fresh open-line awaiting a name).
+        let overlay_nodes =
+            crate::app::explorer::overlay_nodes_from_buffer(&buf_text, &pane.tree.root);
+
+        // Git status follows the PATH, not the row: resolve each row's color
+        // from the reconciled tree's status map (which carries rollup + the
+        // dirty-buffer overlay). New / renamed paths absent from the map render
+        // clean until the next reconcile.
+        let git_map: std::collections::HashMap<&std::path::Path, hjkl_app::git::ExplorerGit> = pane
+            .tree
+            .nodes
+            .iter()
+            .filter_map(|n| n.git.map(|g| (n.path.as_path(), g)))
+            .collect();
 
         // Walk doc rows starting at vp_top, skipping hidden rows, collecting
         // up to `screen_height` visible rows — mirroring BufferView's render
         // loop (crates/hjkl-buffer-tui/src/render.rs) which skips
         // rows where any fold f.hides(row).
-        let total_nodes = pane.tree.nodes.len();
+        let total_nodes = overlay_nodes.len();
         let mut doc_row = vp_top_ex;
         let mut screen_row_idx: usize = 0;
 
@@ -1210,9 +1230,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             screen_row_idx += 1;
             doc_row += 1;
 
-            let Some(node) = pane.tree.nodes.get(buf_row) else {
+            let Some(node) = overlay_nodes.get(buf_row).and_then(|o| o.as_ref()) else {
                 continue;
             };
+            // Git status by path (overlay parse leaves `node.git` = None).
+            let node_git = git_map.get(node.path.as_path()).copied();
 
             let right = area.x + area.width;
 
@@ -1307,7 +1329,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // Git status → name BACKGROUND (so the filetype/dir foreground stays
             // distinct). Clean nodes keep their devicon/dir foreground and the
             // normal background.
-            let git_bg = match node.git {
+            let git_bg = match node_git {
                 Some(hjkl_app::git::ExplorerGit::Modified) => Some(GIT_MODIFIED),
                 Some(hjkl_app::git::ExplorerGit::Staged) => Some(GIT_STAGED),
                 Some(hjkl_app::git::ExplorerGit::Deleted) => Some(GIT_DELETED),

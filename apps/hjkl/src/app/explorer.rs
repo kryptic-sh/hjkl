@@ -481,29 +481,53 @@ pub(crate) struct ExplorerPane {
 /// ancestor column iff that ancestor still has a following sibling.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
-    // ── Pass 1: parse path / depth / is_dir ─────────────────────────────────
+    overlay_nodes_from_buffer(text, root)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Like [`nodes_from_buffer`], but returns ONE entry per buffer line — `None`
+/// for blank / nameless lines — so the result indexes **1:1 with buffer rows**.
+///
+/// This is what the `render.rs` glyph/color overlay walks: deriving the tree
+/// layout from the LIVE buffer text (rather than the last-reconciled
+/// `ExplorerTree::nodes`) keeps icons, guides, and git colors aligned **while
+/// the buffer is being edited** — before the Normal-mode reconcile rebuilds the
+/// tree. A mid-edit `o`/`O` inserts a blank indented line; mapping the overlay
+/// off the stale node list shifted every glyph below the edit down a row. Here
+/// that blank line is a `None` slot, so everything stays put.
+///
+/// `git` is left `None` on every node — the overlay resolves git status by
+/// path against the reconciled tree's status map (so a row's color follows its
+/// path, not its row index). See `render.rs`.
+pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<ExplorerNode>> {
+    // ── Pass 1: parse path / depth / is_dir, one slot per buffer line ────────
     struct RawNode {
         path: PathBuf,
         depth: usize,
         is_dir: bool,
     }
 
-    let mut raw: Vec<RawNode> = Vec::new();
+    // `split('\n')` (not `lines()`) so a trailing newline yields a final empty
+    // slot, matching the buffer's row count exactly.
+    let mut raw: Vec<Option<RawNode>> = Vec::new();
     let mut dir_stack: Vec<(usize, PathBuf)> = Vec::new(); // (depth, abs_path)
 
-    for (line_idx, line) in text.lines().enumerate() {
+    for (line_idx, line) in text.split('\n').enumerate() {
         let trimmed = line.trim_end();
         if line_idx == 0 {
             // Root line — always depth 0.
-            raw.push(RawNode {
+            raw.push(Some(RawNode {
                 path: root.to_path_buf(),
                 depth: 0,
                 is_dir: true,
-            });
+            }));
             dir_stack.push((0, root.to_path_buf()));
             continue;
         }
         if trimmed.trim_start().is_empty() {
+            raw.push(None);
             continue;
         }
         let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
@@ -512,6 +536,7 @@ pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
         let is_dir = name_part.ends_with('/');
         let name = name_part.trim_end_matches('/');
         if name.is_empty() {
+            raw.push(None);
             continue;
         }
         // Pop dir_stack entries at depth >= current.
@@ -527,11 +552,11 @@ pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
         if is_dir {
             dir_stack.push((depth, path.clone()));
         }
-        raw.push(RawNode {
+        raw.push(Some(RawNode {
             path,
             depth,
             is_dir,
-        });
+        }));
     }
 
     let n = raw.len();
@@ -539,33 +564,35 @@ pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
         return Vec::new();
     }
 
-    // ── Pass 2: compute is_last ──────────────────────────────────────────────
-    let mut is_last_flags: Vec<bool> = vec![false; n];
+    // ── Pass 2: compute is_last (per real node; blanks are transparent) ──────
+    let mut is_last_flags: Vec<bool> = vec![true; n];
     for i in 0..n {
-        let d = raw[i].depth;
-        let mut last = true;
-        for node in raw.iter().skip(i + 1) {
+        let Some(ref cur) = raw[i] else { continue };
+        let d = cur.depth;
+        for slot in raw.iter().skip(i + 1) {
+            let Some(node) = slot else { continue };
             if node.depth < d {
                 break; // left the parent's scope
             }
             if node.depth == d {
-                last = false;
+                is_last_flags[i] = false;
                 break;
             }
         }
-        is_last_flags[i] = last;
     }
 
-    // ── Pass 3: compute branches ─────────────────────────────────────────────
+    // ── Pass 3: compute branches, scattering into a per-line Option vec ──────
     // For each node at depth d (d >= 1), branches[a-1] for a in 1..d is
     // `!is_last` of the most-recent ancestor at depth a.
-    // We maintain a table: ancestor_is_last[depth] = is_last of the last node
-    // seen at that depth.
     let mut ancestor_is_last: Vec<Option<bool>> = vec![None; n + 2];
 
-    let mut nodes: Vec<ExplorerNode> = Vec::with_capacity(n);
+    let mut out: Vec<Option<ExplorerNode>> = Vec::with_capacity(n);
     for i in 0..n {
-        let d = raw[i].depth;
+        let Some(ref cur) = raw[i] else {
+            out.push(None);
+            continue;
+        };
+        let d = cur.depth;
         // Update the ancestor table for this depth.
         if d < ancestor_is_last.len() {
             ancestor_is_last[d] = Some(is_last_flags[i]);
@@ -586,17 +613,17 @@ pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
                 .collect()
         };
 
-        nodes.push(ExplorerNode {
-            path: raw[i].path.clone(),
+        out.push(Some(ExplorerNode {
+            path: cur.path.clone(),
             depth: d,
-            is_dir: raw[i].is_dir,
+            is_dir: cur.is_dir,
             is_last: is_last_flags[i],
             branches,
-            git: None, // git overlay is recomputed separately
-        });
+            git: None, // resolved by path in the render overlay
+        }));
     }
 
-    nodes
+    out
 }
 
 // ── Git status rollup ─────────────────────────────────────────────────────────
@@ -2638,6 +2665,35 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Mid-edit alignment: a blank line (e.g. a fresh `o`/`O` open-line before
+    /// the name is typed) must become a `None` slot so every real node below it
+    /// keeps its buffer-row index — otherwise the render overlay paints icons /
+    /// git colors a row off.
+    #[test]
+    fn overlay_nodes_blank_line_keeps_alignment() {
+        let root = Path::new("/r");
+        //  row0: root           depth 0
+        //  row1: dir/           depth 1
+        //  row2: <blank>        (fresh open-line — no name yet)
+        //  row3: file.txt       depth 1
+        let text = "  r\n    dir/\n      \n    file.txt";
+        let ov = overlay_nodes_from_buffer(text, root);
+
+        assert_eq!(ov.len(), 4, "one slot per buffer line");
+        assert_eq!(ov[0].as_ref().unwrap().depth, 0, "root depth 0");
+        assert!(ov[1].as_ref().unwrap().is_dir, "row1 is the dir");
+        assert_eq!(ov[1].as_ref().unwrap().depth, 1);
+        assert!(ov[2].is_none(), "blank line → None slot (alignment hole)");
+        let f = ov[3].as_ref().expect("row3 present");
+        assert!(!f.is_dir, "row3 is the file");
+        assert_eq!(f.depth, 1, "file stays at depth 1 below the blank");
+        assert_eq!(
+            f.path,
+            Path::new("/r/file.txt"),
+            "path resolved to root child"
+        );
     }
 
     // ── Shared helpers ─────────────────────────────────────────────────────

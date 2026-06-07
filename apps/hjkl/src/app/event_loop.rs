@@ -1211,6 +1211,34 @@ impl App {
                 }
 
                 if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
+                    // ── Explorer pane: neo-tree-style single click ────
+                    // A click on a DIRECTORY toggles its fold; a click on a
+                    // FILE opens it in the editor. Resolve the clicked row
+                    // (fold-aware), point the explorer cursor at it, then run
+                    // the same activate path as `<CR>`. Bypasses the generic
+                    // cursor-move / click-count logic below so a plain click
+                    // acts immediately instead of just moving the cursor.
+                    let is_explorer_win = self
+                        .windows
+                        .get(win_id)
+                        .and_then(|w| w.as_ref())
+                        .map(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer))
+                        .unwrap_or(false);
+                    if is_explorer_win {
+                        if let Some((doc_row, _)) =
+                            mouse::cell_to_doc(self, win_id, me.column, me.row)
+                        {
+                            if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                                win.cursor_row = doc_row;
+                                win.cursor_col = 0;
+                            }
+                            self.sync_viewport_to_explorer_editor();
+                            self.explorer_activate();
+                            self.sync_after_engine_mutation_deferred();
+                        }
+                        return MouseOutcome::Continue;
+                    }
+
                     // Focus the clicked window if it differs.
                     let current_focus = self.focused_window();
                     if win_id != current_focus {
