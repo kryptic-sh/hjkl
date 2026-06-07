@@ -391,6 +391,14 @@ impl App {
                 self.explorer_undo();
                 return KeyOutcome::Continue;
             }
+            // `o`/`O` on a DIRECTORY → create the new entry INSIDE the dir
+            // (child indent), not as a sibling. On a file, fall through to the
+            // normal open-line-below.
+            if matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
+                && self.explorer_open_in_dir()
+            {
+                return KeyOutcome::Continue;
+            }
         }
 
         // <C-r> in the explorer while in Normal mode and no pending: redo.

@@ -1358,6 +1358,50 @@ impl super::App {
         }
     }
 
+    /// `o`/`O` when the cursor is on a DIRECTORY: create the new entry as a
+    /// CHILD of that dir (not a sibling). Opens the dir's fold so the new line
+    /// sits right under it, runs the normal open-line-below, then indents the
+    /// fresh line to child depth so reconcile resolves the parent to this dir.
+    /// Returns `false` (not handled) when the cursor isn't on a directory — the
+    /// caller then lets the normal `o`/`O` create a sibling.
+    pub(crate) fn explorer_open_in_dir(&mut self) -> bool {
+        let node = match self.explorer_cursor_node() {
+            Some(n) if n.is_dir => n,
+            _ => return false,
+        };
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return false;
+        };
+        let cursor_row = self.slots[slot_idx].editor.cursor().0;
+        // Open the dir's fold so the new line lands as its first visible child
+        // (not after a collapsed subtree); keep `expanded` in sync.
+        self.slots[slot_idx]
+            .editor
+            .buffer_mut()
+            .open_fold_at(cursor_row);
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.set_expanded(&node.path, true);
+        }
+        // Open a line below + enter insert (autoindent copies the dir's indent).
+        hjkl_vim_tui::handle_key(
+            &mut self.slots[slot_idx].editor,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('o'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+        // Indent the new line to CHILD depth (dir.depth + 1) so reconcile nests
+        // it under this dir. Pad from the current cursor column (robust whether
+        // or not autoindent already copied the dir's indent).
+        let target_col = (node.depth + 1) * 2 + 2;
+        let col = self.slots[slot_idx].editor.cursor().1;
+        if col < target_col {
+            let pad = " ".repeat(target_col - col);
+            self.slots[slot_idx].editor.insert_str(&pad);
+        }
+        true
+    }
+
     /// Find the nearest non-explorer window in the active tab's layout.
     pub(crate) fn nearest_non_explorer_window(&self) -> Option<super::window::WindowId> {
         let leaves = self.layout().leaves();
@@ -2079,6 +2123,49 @@ mod tests {
             Some("a.txt".to_string()),
             "cursor should land on the pasted file"
         );
+    }
+
+    #[test]
+    fn o_on_dir_creates_child_inside() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        // Cursor onto the `sub/` dir (line 1), then `o` + name + Esc.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('o'));
+        for c in "kid.txt".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        let inside = tmp.path().join("sub").join("kid.txt").exists();
+        let sibling = tmp.path().join("kid.txt").exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(inside, "o on a dir must create the file INSIDE it (sub/kid.txt)");
+        assert!(!sibling, "must NOT create a sibling at root (kid.txt)");
     }
 
     #[test]
