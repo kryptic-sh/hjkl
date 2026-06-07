@@ -280,6 +280,20 @@ pub fn cell_to_doc(
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
+    // Scroll origin MUST match what `render_window` drew with: the FOCUSED
+    // window renders from the editor's live viewport (auto-scroll applied),
+    // but an UNFOCUSED window renders from its own stored `top_row`/`top_col`
+    // (it doesn't chase the focused editor). Using the editor viewport for an
+    // unfocused window (e.g. clicking the explorer while the editor is focused)
+    // maps the click off by the scroll difference — so a fold toggle hits the
+    // wrong row. Mirror the renderer's choice here.
+    let is_focused = win_id == app.focused_window();
+    let (eff_top_row, eff_top_col) = if is_focused {
+        (vp.top_row, vp.top_col)
+    } else {
+        (win.top_row, win.top_col)
+    };
+
     // Boxed-blame view reserves a 1-col left frame and inserts virtual border
     // rows; map clicks through the box plan and account for the frame.
     let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
@@ -301,15 +315,15 @@ pub fn cell_to_doc(
 
     // Visual column inside the text area (already accounting for viewport horizontal scroll).
     let text_rel_x = rel_x - gw; // cells from text-area left edge
-    let visual_col = vp.top_col.saturating_add(text_rel_x as usize);
+    let visual_col = eff_top_col.saturating_add(text_rel_x as usize);
 
     // Doc row. In box mode resolve via the render plan (border rows have no
     // doc row); otherwise fold-aware walk from the viewport top.
     let doc_row = if box_mode {
         // `None` (border row / past the plan) propagates as "not a text click".
-        box_plan_doc_row(slot, vp.top_row, rect.h as usize, rel_y as usize)?
+        box_plan_doc_row(slot, eff_top_row, rect.h as usize, rel_y as usize)?
     } else {
-        doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize)
+        doc_row_at_screen_offset(slot.editor.buffer(), eff_top_row, rel_y as usize)
     };
     if doc_row >= line_count {
         return None; // past EOF
@@ -918,6 +932,14 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
+    // Match the renderer's scroll origin: focused window draws from the editor
+    // viewport, unfocused from its stored `top_row` (see `cell_to_doc`).
+    let eff_top_row = if win_id == app.focused_window() {
+        vp.top_row
+    } else {
+        win.top_row
+    };
+
     // Same rendered gutter width as render_window / cell_to_doc.
     let gw = crate::render::rendered_gutter_width(app, slot_idx);
 
@@ -931,12 +953,12 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     if rel_x < gw {
         // Click is in the gutter (or box frame) — compute doc_row only.
         let doc_row = if box_mode {
-            match box_plan_doc_row(slot, vp.top_row, rect.h as usize, rel_y as usize) {
+            match box_plan_doc_row(slot, eff_top_row, rect.h as usize, rel_y as usize) {
                 Some(d) => d,
                 None => return Zone::None, // border row
             }
         } else {
-            doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize)
+            doc_row_at_screen_offset(slot.editor.buffer(), eff_top_row, rel_y as usize)
         };
         if doc_row < line_count {
             return Zone::Gutter { win_id, doc_row };
@@ -1536,6 +1558,36 @@ mod tests {
             w.last_rect = Some(LayoutRect::new(0, 12, 80, 12));
         }
         app
+    }
+
+    /// Clicking an UNFOCUSED window (e.g. the explorer while the editor is
+    /// focused) must resolve the doc row via that window's own stored scroll
+    /// (`top_row`), NOT the editor's live viewport (which belongs to the
+    /// focused window). Otherwise a fold toggle / file-open lands on the wrong
+    /// row when the panes are scrolled differently.
+    #[test]
+    fn cell_to_doc_unfocused_window_uses_window_scroll() {
+        let mut app = make_vsplit_app();
+        // Shared multi-line buffer (slot 0 is viewed by both windows).
+        app.slots_mut()[0]
+            .editor
+            .set_content("l0\nl1\nl2\nl3\nl4\nl5");
+        // Focus the LEFT window (0); the RIGHT window (1) is unfocused.
+        app.set_focused_window(0);
+        // Focused-origin viewport at the top…
+        app.slots_mut()[0].editor.host_mut().viewport_mut().top_row = 0;
+        // …but the unfocused right pane is scrolled down to row 3.
+        if let Some(Some(w)) = app.windows.get_mut(1) {
+            w.top_row = 3;
+        }
+        // Click the FIRST visible text row of the right pane (rel_y = 0). The
+        // right pane starts at x=40; step past the gutter.
+        let gw = crate::render::rendered_gutter_width(&app, 0);
+        let (doc_row, _) = cell_to_doc(&app, 1, 40 + gw, 0).expect("click resolves");
+        assert_eq!(
+            doc_row, 3,
+            "unfocused click must use the window's top_row, not the editor viewport"
+        );
     }
 
     #[test]
