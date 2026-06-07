@@ -1289,48 +1289,66 @@ impl super::App {
                 .unwrap_or(fname)
         };
 
-        let win_id;
-        let row;
-        {
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return;
+        };
+
+        // Locate the target row, syncing ancestor `expanded` state. `reveal`
+        // rebuilds the tree from disk ONLY when the node is missing (e.g. a
+        // freshly-created file), which changes the node count.
+        let (win_id, row, structural) = {
             let Some(ep) = self.explorer.as_mut() else {
                 return;
             };
             if !abs.starts_with(&ep.tree.root) {
                 return; // file isn't under the explorer's root
             }
-            win_id = ep.win_id;
-            // `reveal` opens ancestor folds in `expanded` and finds the row.
-            // With the full-tree model no rebuild is needed unless the node is
-            // missing (e.g. path created after last walk — `reveal` handles that).
-            row = ep.tree.reveal(&abs);
+            let before = ep.tree.nodes.len();
+            let row = ep.tree.reveal(&abs);
+            let structural = ep.tree.nodes.len() != before;
+            (ep.win_id, row, structural)
+        };
+
+        if structural {
+            // The node list changed (new file appeared): rebuild the buffer so
+            // it matches, applying folds from the now-updated `expanded` set
+            // (ancestors opened by `reveal`). Only paid on the rare new-file
+            // path — NOT on every buffer switch.
+            self.explorer_rebuild_buffer();
+            self.recompute_explorer_git_base();
         }
-        // After reveal the `expanded` set may have changed; rebuild buffer so
-        // the fold state is applied to the buffer. `explorer_rebuild_buffer` also
-        // re-applies `compute_folds` and syncs baseline/gen.
-        self.explorer_rebuild_buffer();
-        if let Some(r) = row {
-            if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                win.cursor_row = r;
-                win.cursor_col = 0;
-                // Scroll the explorer window so the revealed row stays in
-                // view. The window's per-window `top_row` is independent of
-                // any other window on the same buffer, so this only moves
-                // the explorer's viewport — a second window showing the same
-                // slot is unaffected. Without this the cursor can land off
-                // the bottom/top of the pane after a buffer switch.
-                let height = win.last_rect.map(|rc| rc.h as usize).unwrap_or(0);
-                if height > 0 {
-                    if r < win.top_row {
-                        win.top_row = r;
-                    } else if r >= win.top_row + height {
-                        win.top_row = r + 1 - height;
-                    }
+
+        let Some(row) = row else {
+            return;
+        };
+
+        if !structural {
+            // Common case: open ONLY the folds enclosing the target row in the
+            // buffer, leaving every other dir's fold state intact. This avoids
+            // the full `set_content` + fold-recompute reset that collapsed
+            // search-revealed dirs, hid the target row (cursorline landed on
+            // the wrong line), and reshuffled the scroll position.
+            self.slots[slot_idx].editor.buffer_mut().reveal_row(row);
+        }
+
+        // Move the explorer selection to the revealed row and scroll it into
+        // view. The per-window `top_row` is independent of any other window on
+        // the same slot, so this only moves the explorer's own viewport.
+        if let Some(Some(win)) = self.windows.get_mut(win_id) {
+            win.cursor_row = row;
+            win.cursor_col = 0;
+            let height = win.last_rect.map(|rc| rc.h as usize).unwrap_or(0);
+            if height > 0 {
+                if row < win.top_row {
+                    win.top_row = row;
+                } else if row >= win.top_row + height {
+                    win.top_row = row + 1 - height;
                 }
             }
-            // Sync the explorer editor cursor so the (usually unfocused)
-            // cursorline highlights the revealed row.
-            self.sync_viewport_to_explorer_editor();
         }
+        // Sync the explorer editor cursor so the (usually unfocused) cursorline
+        // highlights the revealed row.
+        self.sync_viewport_to_explorer_editor();
     }
 
     /// Enter/l/o on the explorer: toggle dir or open file.
@@ -2693,6 +2711,100 @@ mod tests {
             f.path,
             Path::new("/r/file.txt"),
             "path resolved to root child"
+        );
+    }
+
+    /// Opening a buffer reveals it in the tree WITHOUT collapsing other
+    /// expanded dirs, and moves the selection onto the opened file. Regression
+    /// for the destructive full-rebuild that snapped search/click-opened folds
+    /// shut and landed the cursorline on the wrong row.
+    #[test]
+    fn reveal_active_keeps_other_folds_open_and_selects_file() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("aaa")).unwrap();
+        std::fs::write(tmp.path().join("aaa").join("akid.txt"), b"").unwrap();
+        std::fs::create_dir(tmp.path().join("bbb")).unwrap();
+        std::fs::write(tmp.path().join("bbb").join("target.txt"), b"x").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        // Open `aaa/`'s fold directly in the buffer WITHOUT touching `expanded`
+        // — this mimics a search reveal (`/`+`n`), the exact case the old
+        // rebuild-from-`expanded` path wrongly collapsed on the next buffer
+        // open.
+        let aaa = tmp.path().join("aaa");
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let aaa_row = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == aaa)
+            .unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        app.slots[slot].editor.buffer_mut().open_fold_at(aaa_row);
+        let aaa_open = !app.slots[slot]
+            .editor
+            .buffer()
+            .folds()
+            .iter()
+            .any(|f| f.start_row == aaa_row && f.closed);
+        assert!(aaa_open, "precondition: aaa fold open after activate");
+
+        // Focus the editor window (not the explorer) before opening, so `:edit`
+        // doesn't replace the explorer buffer — mirrors the real file-open path.
+        app.dispatch_action(AppAction::FocusRight, 1);
+        // Open a file under `bbb/` → triggers explorer_reveal_active.
+        app.dispatch_ex("edit bbb/target.txt");
+
+        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let aaa_row2 = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == aaa)
+            .unwrap();
+        let aaa_still_open = !app.slots[slot]
+            .editor
+            .buffer()
+            .folds()
+            .iter()
+            .any(|f| f.start_row == aaa_row2 && f.closed);
+
+        let target = tmp.path().join("bbb").join("target.txt");
+        let target_row = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == target)
+            .unwrap();
+        let cur = app
+            .windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.cursor_row)
+            .unwrap();
+
+        std::env::set_current_dir(prev).unwrap();
+        assert!(
+            aaa_still_open,
+            "opening a file must not collapse other expanded dirs"
+        );
+        assert_eq!(
+            cur, target_row,
+            "explorer selection must move to the opened file"
         );
     }
 
