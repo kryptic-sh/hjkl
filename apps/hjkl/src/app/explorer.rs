@@ -2164,8 +2164,61 @@ mod tests {
         let inside = tmp.path().join("sub").join("kid.txt").exists();
         let sibling = tmp.path().join("kid.txt").exists();
         std::env::set_current_dir(prev).unwrap();
-        assert!(inside, "o on a dir must create the file INSIDE it (sub/kid.txt)");
+        assert!(
+            inside,
+            "o on a dir must create the file INSIDE it (sub/kid.txt)"
+        );
         assert!(!sibling, "must NOT create a sibling at root (kid.txt)");
+    }
+
+    #[test]
+    fn cap_o_on_dir_creates_sibling_above() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        // Cursor onto the `sub/` dir (line 1), then `O` + name + Esc.
+        // `O` = normal open-above; autoindent copies `sub/`'s indent → sibling.
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('O'));
+        for c in "twin.txt".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+
+        let sibling = tmp.path().join("twin.txt").exists();
+        let inside = tmp.path().join("sub").join("twin.txt").exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(
+            sibling,
+            "O on a dir must create a sibling at root (twin.txt)"
+        );
+        assert!(
+            !inside,
+            "must NOT create the file INSIDE the dir (sub/twin.txt)"
+        );
     }
 
     #[test]

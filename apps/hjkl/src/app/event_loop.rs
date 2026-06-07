@@ -391,12 +391,11 @@ impl App {
                 self.explorer_undo();
                 return KeyOutcome::Continue;
             }
-            // `o`/`O` on a DIRECTORY → create the new entry INSIDE the dir
-            // (child indent), not as a sibling. On a file, fall through to the
-            // normal open-line-below.
-            if matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
-                && self.explorer_open_in_dir()
-            {
+            // `o` on a DIRECTORY → create the new entry INSIDE the dir (child
+            // indent, line below). `O` is left as the normal open-line-above,
+            // which autoindents to the current line's depth = a sibling. On a
+            // file, `o` also falls through to the normal open-line-below.
+            if key.code == KeyCode::Char('o') && self.explorer_open_in_dir() {
                 return KeyOutcome::Continue;
             }
         }
