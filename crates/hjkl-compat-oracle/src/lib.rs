@@ -78,6 +78,12 @@ pub struct OracleCase {
     /// both drivers so reflow cases produce identical line breaks.
     #[serde(default)]
     pub textwidth: Option<usize>,
+
+    /// Optional `autoindent` toggle. Applied to both drivers so `o` / `O`
+    /// open-line cases match despite hjkl defaulting `autoindent` on and
+    /// `nvim --clean` defaulting it off.
+    #[serde(default)]
+    pub autoindent: Option<bool>,
 }
 
 /// A collection of [`OracleCase`]s loaded from a single TOML corpus file.

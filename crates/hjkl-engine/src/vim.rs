@@ -2735,15 +2735,13 @@ pub(crate) fn open_line_above_bridge<H: crate::types::Host>(
         let content = cont.clone();
         (format!("{cont}\n"), content)
     } else {
-        let indent = if row > 0 {
-            let above = buf_line(&ed.buffer, row - 1).unwrap_or_default();
-            compute_enter_indent(&ed.settings, &above)
-        } else {
-            let cur = buf_line(&ed.buffer, row).unwrap_or_default();
-            cur.chars()
-                .take_while(|c| *c == ' ' || *c == '\t')
-                .collect::<String>()
-        };
+        // vim `O` autoindent copies the CURRENT line's indent (the line the
+        // cursor sits on, which becomes the line *below* the new one), NOT the
+        // line above. Using the line above wrongly inherits a deeper child's
+        // indent when the cursor is on a shallower line (e.g. explorer tree:
+        // `O` on a dir whose preceding row is its own nested child).
+        let cur = buf_line(&ed.buffer, row).unwrap_or_default();
+        let indent = compute_enter_indent(&ed.settings, &cur);
         let content = indent.clone();
         (format!("{indent}\n"), content)
     };

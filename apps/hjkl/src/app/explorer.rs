@@ -2172,13 +2172,23 @@ mod tests {
     }
 
     #[test]
-    fn cap_o_on_dir_creates_sibling_above() {
+    fn cap_o_on_dir_creates_sibling_not_deeper_neighbor() {
+        // Real bug repro: `O` on a sibling dir whose *preceding buffer row* is
+        // a DEEPER child of the previous dir must copy the cursor line's indent
+        // (sibling level), NOT the deeper neighbour's.
+        //   <root>
+        //     aaa/
+        //       kid.txt   <- deeper row, physically above zzz/
+        //     zzz/        <- cursor here, press O
+        // Expect `twin.txt` at root, NOT inside aaa/.
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::create_dir(tmp.path().join("aaa")).unwrap();
+        std::fs::write(tmp.path().join("aaa").join("kid.txt"), b"").unwrap();
+        std::fs::create_dir(tmp.path().join("zzz")).unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
 
@@ -2199,9 +2209,11 @@ mod tests {
             }
             app.maybe_reconcile_explorer();
         };
-        // Cursor onto the `sub/` dir (line 1), then `O` + name + Esc.
-        // `O` = normal open-above; autoindent copies `sub/`'s indent → sibling.
-        press(&mut app, KeyCode::Char('j'));
+        // root(0) → aaa/(1), expand it (reveals kid.txt), → kid.txt(2) → zzz/(3).
+        press(&mut app, KeyCode::Char('j')); // onto aaa/
+        press(&mut app, KeyCode::Enter); // expand aaa/
+        press(&mut app, KeyCode::Char('j')); // onto kid.txt
+        press(&mut app, KeyCode::Char('j')); // onto zzz/
         press(&mut app, KeyCode::Char('O'));
         for c in "twin.txt".chars() {
             press(&mut app, KeyCode::Char(c));
@@ -2209,15 +2221,15 @@ mod tests {
         press(&mut app, KeyCode::Esc);
 
         let sibling = tmp.path().join("twin.txt").exists();
-        let inside = tmp.path().join("sub").join("twin.txt").exists();
+        let inside = tmp.path().join("aaa").join("twin.txt").exists();
         std::env::set_current_dir(prev).unwrap();
         assert!(
             sibling,
-            "O on a dir must create a sibling at root (twin.txt)"
+            "O on zzz/ must create a sibling at root (twin.txt)"
         );
         assert!(
             !inside,
-            "must NOT create the file INSIDE the dir (sub/twin.txt)"
+            "must NOT inherit the deeper neighbour's indent (aaa/twin.txt)"
         );
     }
 

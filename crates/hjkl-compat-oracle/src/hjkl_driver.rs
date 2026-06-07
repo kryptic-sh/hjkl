@@ -52,6 +52,9 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     if let Some(tw) = case.textwidth {
         editor.settings_mut().textwidth = tw;
     }
+    if let Some(ai) = case.autoindent {
+        editor.settings_mut().autoindent = ai;
+    }
 
     // 3. Set initial cursor.
     let (init_row, init_col) = case.initial_cursor;

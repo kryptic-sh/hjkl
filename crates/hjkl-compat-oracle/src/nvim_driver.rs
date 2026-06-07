@@ -124,6 +124,14 @@ async fn run_case_inner(
     if let Some(tw) = case.textwidth {
         nvim.command(&format!("set textwidth={tw}")).await?;
     }
+    if let Some(ai) = case.autoindent {
+        nvim.command(if ai {
+            "set autoindent"
+        } else {
+            "set noautoindent"
+        })
+        .await?;
+    }
 
     // 4. Apply keystrokes.
     //    `nvim_input` reads `<` as the start of a key-notation token (`<Esc>`,

@@ -1,0 +1,41 @@
+# Tier 2 — `o` / `O` autoindent indent-source.
+#
+# With `autoindent` on, both `o` and `O` copy the indent of the CURRENT line
+# (the line the cursor sits on) onto the new line. The classic bug is for `O`
+# to copy the line *above* the cursor instead — which inherits a deeper
+# neighbour's indent. These cases pin the indent source to the current line.
+#
+# `autoindent` is pinned on both drivers (nvim --clean defaults it off, hjkl
+# defaults it on). Expected buffers captured from `nvim --headless`.
+
+# `O` on a SHALLOW line whose preceding line is DEEPER must copy the shallow
+# (current) line's indent, NOT the deeper line above.
+[[cases]]
+name = "ai_O_copies_current_line_not_above"
+initial_buffer = "  a\n      b\n  c\n"
+initial_cursor = [2, 2]
+keys = "Ox<Esc>"
+autoindent = true
+expected_buffer = "  a\n      b\n  x\n  c\n"
+expected_mode = "normal"
+
+# `o` on a SHALLOW line whose following line is DEEPER copies the current
+# (shallow) line's indent.
+[[cases]]
+name = "ai_o_copies_current_line"
+initial_buffer = "  a\n      b\n"
+initial_cursor = [0, 2]
+keys = "ox<Esc>"
+autoindent = true
+expected_buffer = "  a\n  x\n      b\n"
+expected_mode = "normal"
+
+# `O` on the FIRST line copies that line's own indent (no line above).
+[[cases]]
+name = "ai_O_first_line_copies_self"
+initial_buffer = "    a\nb\n"
+initial_cursor = [0, 4]
+keys = "Ox<Esc>"
+autoindent = true
+expected_buffer = "    x\n    a\nb\n"
+expected_mode = "normal"
