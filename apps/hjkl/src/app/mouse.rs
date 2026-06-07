@@ -1590,6 +1590,53 @@ mod tests {
         );
     }
 
+    /// Clicking into a not-yet-focused pane must land on the row UNDER the
+    /// cursor as drawn, not a row offset by the scroll that `switch_focus`
+    /// applies (it restores the pane's saved cursor + scrolloff, nudging the
+    /// viewport). Regression: the click was resolved AFTER focusing, so it read
+    /// the post-scroll `top_row` and every such click came out offset.
+    #[test]
+    fn click_into_unfocused_pane_not_offset_by_focus_scroll() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut app = make_vsplit_app();
+        // Tall shared buffer (both windows view slot 0).
+        let content = (0..100)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.slots_mut()[0].editor.set_content(&content);
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.height = 24;
+            vp.top_row = 0;
+        }
+        // Focus the LEFT window; the RIGHT pane (win 1) is unfocused, drawn from
+        // the TOP, but its saved cursor is deep — focusing it scrolls down.
+        app.set_focused_window(0);
+        if let Some(Some(w)) = app.windows.get_mut(1) {
+            w.top_row = 0;
+            w.cursor_row = 60;
+            w.cursor_col = 0;
+        }
+        // Click the FIRST text row of the right pane (rect (40,0,40,24)); column
+        // far enough right to clear the line-number gutter.
+        let me = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 60,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = app.handle_mouse(me);
+
+        assert_eq!(app.focused_window(), 1, "click focuses the clicked pane");
+        assert_eq!(
+            app.active().editor.cursor().0,
+            0,
+            "click maps to the rendered row 0, not a focus-scroll-offset row"
+        );
+    }
+
     #[test]
     fn hit_test_border_on_vertical_divider() {
         let app = make_vsplit_app();

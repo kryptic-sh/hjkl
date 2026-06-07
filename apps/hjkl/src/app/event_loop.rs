@@ -1205,14 +1205,19 @@ impl App {
                 }
 
                 if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
+                    // Resolve the clicked doc position AGAINST THE RENDERED FRAME,
+                    // i.e. BEFORE focusing. `switch_focus` installs the window's
+                    // saved cursor and applies scrolloff, which can scroll the
+                    // editor viewport; mapping the click after that would read the
+                    // post-scroll `top_row` and land on the wrong line (every
+                    // click into a not-yet-focused pane came out offset).
+                    let hit = mouse::cell_to_doc(self, win_id, me.column, me.row);
                     // Focus the clicked window if it differs.
                     let current_focus = self.focused_window();
                     if win_id != current_focus {
                         self.switch_focus(win_id);
                     }
-                    if let Some((doc_row, doc_col)) =
-                        mouse::cell_to_doc(self, win_id, me.column, me.row)
-                    {
+                    if let Some((doc_row, doc_col)) = hit {
                         let count = self.mouse_click_tracker.register(win_id, doc_row, doc_col);
                         match count {
                             1 => {
