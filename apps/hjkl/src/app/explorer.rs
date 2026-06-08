@@ -944,6 +944,7 @@ impl super::App {
             .map(|ep| ep.tree.compute_folds())
             .unwrap_or_default();
         self.slots[slot_idx].editor.buffer_mut().set_folds(&folds);
+        self.sync_explorer_window_folds();
 
         // Sync the baseline from the freshly-rendered tree so the next
         // reconcile diffs against the post-toggle state. Also update
@@ -1246,6 +1247,28 @@ impl super::App {
         self.recompute_explorer_git_base();
     }
 
+    /// Copy the explorer buffer's CURRENT fold state into its per-window
+    /// `window_folds` snapshot.
+    ///
+    /// Window-level folds (the multi-split feature) render an UNFOCUSED window
+    /// from `app.window_folds[win]`, NOT from the live buffer — but the explorer
+    /// mutates its buffer folds directly (`toggle_fold_at`, `reveal_row`,
+    /// `set_folds`) while it is usually unfocused. Without this the snapshot
+    /// goes stale: `BufferView` keeps drawing the old fold layout while the
+    /// glyph/color overlay (which reads the live buffer) paints the new one, so
+    /// the two desync and the tree renders garbled. Call after every explorer
+    /// fold mutation.
+    pub(crate) fn sync_explorer_window_folds(&mut self) {
+        let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) else {
+            return;
+        };
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return;
+        };
+        let folds = self.slots[slot_idx].editor.buffer().folds();
+        self.window_folds.insert(win_id, folds);
+    }
+
     /// Sync the explorer editor's cursor from the explorer window's snapshot.
     /// Like `sync_viewport_to_editor` but only for the explorer slot.
     pub(crate) fn sync_viewport_to_explorer_editor(&mut self) {
@@ -1329,6 +1352,7 @@ impl super::App {
             // search-revealed dirs, hid the target row (cursorline landed on
             // the wrong line), and reshuffled the scroll position.
             self.slots[slot_idx].editor.buffer_mut().reveal_row(row);
+            self.sync_explorer_window_folds();
         }
 
         // Move the explorer selection to the revealed row and scroll it into
@@ -1430,6 +1454,9 @@ impl super::App {
                 if let Some(ref mut ep) = self.explorer {
                     ep.tree.set_expanded(&path, !now_closed);
                 }
+                // Keep the per-window fold snapshot in lockstep with the buffer
+                // so the unfocused-render path and the overlay agree.
+                self.sync_explorer_window_folds();
             }
         } else {
             // File: open in the nearest non-explorer window.
@@ -1470,6 +1497,7 @@ impl super::App {
         if let Some(ref mut ep) = self.explorer {
             ep.tree.set_expanded(&node.path, true);
         }
+        self.sync_explorer_window_folds();
         // Open a line below + enter insert (autoindent copies the dir's indent).
         hjkl_vim_tui::handle_key(
             &mut self.slots[slot_idx].editor,
@@ -2909,6 +2937,58 @@ mod tests {
         assert_eq!(
             top, 0,
             "explorer must not scroll when the opened file is already visible"
+        );
+    }
+
+    /// A fold toggle while the explorer is UNFOCUSED must keep its per-window
+    /// `window_folds` snapshot in lockstep with the buffer — otherwise the
+    /// unfocused-render path (which reads the snapshot) and the glyph overlay
+    /// (which reads the buffer) disagree and the tree renders garbled.
+    #[test]
+    fn explorer_fold_toggle_keeps_window_folds_in_sync() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("sub").join("k.txt"), b"").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+        // Focus away → populates window_folds[explorer] (the snapshot the
+        // unfocused render path uses).
+        app.dispatch_action(AppAction::FocusRight, 1);
+        assert!(
+            app.window_folds.contains_key(&win_id),
+            "precondition: per-window fold snapshot present"
+        );
+
+        // Toggle `sub/`'s fold via the activate path (what a mouse click runs).
+        let sub = tmp.path().join("sub");
+        let sub_row = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == sub)
+            .unwrap();
+        if let Some(Some(w)) = app.windows.get_mut(win_id) {
+            w.cursor_row = sub_row;
+            w.cursor_col = 0;
+        }
+        app.sync_viewport_to_explorer_editor();
+        app.explorer_activate();
+
+        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let buf_folds = app.slots[slot].editor.buffer().folds();
+        let snap = app.window_folds.get(&win_id).cloned().unwrap();
+        std::env::set_current_dir(prev).unwrap();
+        assert_eq!(
+            snap, buf_folds,
+            "window_folds snapshot must match buffer folds after a fold toggle"
         );
     }
 

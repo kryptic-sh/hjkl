@@ -1178,12 +1178,23 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // Dim color used for tree guides and connectors.
         let guide_fg = app.theme.ui.indent_guide_fg;
 
-        // Build the fold list + live buffer text once. We read the buffer
-        // through the explorer slot index rather than the App borrow.
+        // Build the fold list + live buffer text once. The fold list MUST match
+        // what `BufferView` rendered with: a FOCUSED window draws from the live
+        // `buffer.folds()`, an UNFOCUSED one from its `window_folds` snapshot
+        // (window-level folds). Reading the wrong source here desyncs the glyph
+        // overlay from the drawn rows and garbles the tree.
         let (explorer_folds, buf_text): (Vec<hjkl_buffer::Fold>, String) =
             if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
                 let b = app.slots()[slot_idx].editor.buffer();
-                (b.folds(), b.as_string())
+                let folds = if is_focused {
+                    b.folds()
+                } else {
+                    app.window_folds
+                        .get(&win_id)
+                        .cloned()
+                        .unwrap_or_else(|| b.folds())
+                };
+                (folds, b.as_string())
             } else {
                 (Vec::new(), String::new())
             };
