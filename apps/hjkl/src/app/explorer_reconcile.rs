@@ -6,17 +6,24 @@
 //! a pure function suitable for exhaustive unit testing before the wiring phase.
 //!
 //! # Buffer format
-//! Each line is `<indent spaces><name>` where `indent = depth * 2 + 2`.
-//! Line 0 is the root directory (not an editable target).  Directories MAY be
-//! written with a trailing `/`.  Names may contain internal slashes for nested
-//! creation (e.g. `a/b.rs`).
+//! Each non-root line is `<indent spaces><name><US><id>` where `US` = U+001F
+//! (Unit Separator) and `id` is the node's decimal index in `tree.nodes` at
+//! render time.  Line 0 is the root directory (no id, not an editable target).
+//! Directories MAY be written with a trailing `/`.  Names may contain internal
+//! slashes for nested creation (e.g. `a/b.rs`).
 //!
 //! # Baseline
-//! An ordered `Vec<(PathBuf, bool)>` — `(absolute path, is_dir)` per line,
-//! index 0 = root.  Produced by [`crate::app::explorer::ExplorerTree`] and
-//! snapshotted when the buffer is built.
+//! An ordered `Vec<(u64, PathBuf, bool)>` — `(id, absolute path, is_dir)` per
+//! line, index 0 = root.  Produced by [`crate::app::explorer::ExplorerTree`]
+//! and snapshotted when the buffer is built.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Unit-separator character used to delimit the name from the id in each
+/// non-root explorer buffer line.  Defined here and re-exported so `explorer.rs`
+/// can import it without duplication.
+pub(crate) const ID_SEP: char = '\u{1F}';
 
 // ── Op model ──────────────────────────────────────────────────────────────────
 
@@ -42,16 +49,22 @@ pub(crate) enum FsOp {
 /// One parsed entry from the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BufEntry {
+    /// The stable id carried in the line (`<US><id>` tail), or `None` when the
+    /// line is new (no id tail) or the id couldn't be parsed.
+    id: Option<u64>,
     path: PathBuf,
     is_dir: bool,
 }
 
-/// Parse `buffer` (the current bare explorer buffer text) into an ordered list
-/// of entries, resolving absolute paths using `root`.  Line 0 (the root dir
-/// line) is skipped.
+/// Parse `buffer` (the current explorer buffer text) into an ordered list of
+/// entries, resolving absolute paths using `root`.  Line 0 (the root dir line)
+/// is skipped.  Each non-root line is expected to be:
+///   `<indent spaces><name><US><id>`
+/// where `US` = `ID_SEP` and `<id>` is a decimal integer.  Lines without a
+/// `US` (new lines typed by the user) have `id = None`.  Blank or name-empty
+/// lines are skipped.
 fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
     // depth → absolute dir path for parent resolution.
-    // We store (depth, path) pairs; the stack grows as we descend into dirs.
     let mut stack: Vec<(usize, PathBuf)> = Vec::new();
     let mut entries: Vec<BufEntry> = Vec::new();
 
@@ -61,28 +74,42 @@ fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
             continue;
         }
 
-        // Skip blank / whitespace-only lines.
-        let trimmed = line.trim_end();
-        if trimmed.trim_start().is_empty() {
+        // Split on the FIRST ID_SEP to separate the name side from the id tail.
+        let (left, id_opt) = if let Some(sep_pos) = line.find(ID_SEP) {
+            let id_str = &line[sep_pos + ID_SEP.len_utf8()..];
+            // Parse leading ASCII digits; ignore trailing garbage.
+            let digits: String = id_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let id: Option<u64> = if digits.is_empty() {
+                None
+            } else {
+                digits.parse().ok()
+            };
+            (&line[..sep_pos], id)
+        } else {
+            (line, None)
+        };
+
+        // Blank / whitespace-only name side → skip.
+        if left.trim().is_empty() {
             continue;
         }
 
         // Count leading ASCII spaces for indent.
-        let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+        let indent = left.len() - left.trim_start_matches(' ').len();
 
         // depth = (indent - 2) / 2, clamped to ≥ 1.
-        // name_col = depth * 2 + 2  ⇒  depth = (indent - 2) / 2
         let depth = ((indent.saturating_sub(2)) / 2).max(1);
 
-        let raw = trimmed[indent..].trim_end();
+        // Name is verbatim between indent and US — do NOT trim_end trailing spaces.
+        let raw = &left[indent..];
         let is_dir = raw.ends_with('/');
-        let name = raw.trim_end_matches('/');
+        // Remove exactly one trailing '/' if it's a dir marker; else name is verbatim.
+        let name = if is_dir { &raw[..raw.len() - 1] } else { raw };
         if name.is_empty() {
             continue;
         }
 
-        // Pop stack entries that are at depth ≥ current depth (they are
-        // siblings or ancestors-once-removed, not parents of this entry).
+        // Pop stack entries that are at depth ≥ current depth.
         while stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
             stack.pop();
         }
@@ -102,117 +129,13 @@ fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
         }
 
         entries.push(BufEntry {
+            id: id_opt,
             path: target,
             is_dir,
         });
     }
 
     entries
-}
-
-// ── LCS alignment ─────────────────────────────────────────────────────────────
-
-/// Standard O(m*n) LCS over (path, is_dir) sequences.  Two entries match only
-/// when both the path AND the is_dir flag are equal — a type change (file → dir
-/// or vice versa) at the same path is treated as a deletion + creation, not an
-/// unchanged entry.
-///
-/// Returns the list of matched index-pairs `(baseline_idx, current_idx)` in
-/// ascending order.
-fn lcs_paths(baseline: &[(PathBuf, bool)], current: &[BufEntry]) -> Vec<(usize, usize)> {
-    let m = baseline.len();
-    let n = current.len();
-
-    if m == 0 || n == 0 {
-        return Vec::new();
-    }
-
-    // dp[i][j] = LCS length for baseline[..i] vs current[..j]
-    let mut dp = vec![0u32; (m + 1) * (n + 1)];
-
-    for i in 1..=m {
-        for j in 1..=n {
-            // Match only when BOTH path and is_dir agree.
-            if baseline[i - 1].0 == current[j - 1].path
-                && baseline[i - 1].1 == current[j - 1].is_dir
-            {
-                dp[i * (n + 1) + j] = dp[(i - 1) * (n + 1) + (j - 1)] + 1;
-            } else {
-                let up = dp[(i - 1) * (n + 1) + j];
-                let left = dp[i * (n + 1) + (j - 1)];
-                dp[i * (n + 1) + j] = up.max(left);
-            }
-        }
-    }
-
-    // Back-trace to recover the matched pairs.
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
-    let mut i = m;
-    let mut j = n;
-    while i > 0 && j > 0 {
-        if baseline[i - 1].0 == current[j - 1].path && baseline[i - 1].1 == current[j - 1].is_dir {
-            pairs.push((i - 1, j - 1));
-            i -= 1;
-            j -= 1;
-        } else if dp[(i - 1) * (n + 1) + j] >= dp[i * (n + 1) + (j - 1)] {
-            i -= 1;
-        } else {
-            j -= 1;
-        }
-    }
-    pairs.reverse();
-    pairs
-}
-
-// ── Gap processor ─────────────────────────────────────────────────────────────
-
-/// Process one alignment gap: `bgap` = baseline-only entries, `cgap` =
-/// current-only entries.  Appends ops to the output collections.
-fn process_gap(
-    bgap: &[(PathBuf, bool)],
-    cgap: &[BufEntry],
-    renames: &mut Vec<FsOp>,
-    trashes: &mut Vec<FsOp>,
-    creates: &mut Vec<FsOp>,
-) {
-    let paired = bgap.len().min(cgap.len());
-
-    for i in 0..paired {
-        let (bpath, b_is_dir) = &bgap[i];
-        let centry = &cgap[i];
-
-        if *b_is_dir == centry.is_dir {
-            // Same type → rename (paths differ; identical paths caught by LCS).
-            if bpath != &centry.path {
-                renames.push(FsOp::Rename {
-                    from: bpath.clone(),
-                    to: centry.path.clone(),
-                });
-            }
-        } else {
-            // Type mismatch → trash + create.
-            trashes.push(FsOp::Trash(bpath.clone()));
-            if centry.is_dir {
-                creates.push(FsOp::CreateDir(centry.path.clone()));
-            } else {
-                creates.push(FsOp::CreateFile(centry.path.clone()));
-            }
-        }
-    }
-
-    // Leftover baseline entries → trash.
-    for (bpath, _) in bgap.iter().skip(paired) {
-        trashes.push(FsOp::Trash(bpath.clone()));
-    }
-
-    // Leftover current entries → create.
-    for centry in cgap.iter().skip(paired) {
-        if centry.is_dir {
-            creates.push(FsOp::CreateDir(centry.path.clone()));
-        } else {
-            creates.push(FsOp::CreateFile(centry.path.clone()));
-        }
-    }
 }
 
 // ── Component count helpers ───────────────────────────────────────────────────
@@ -229,9 +152,18 @@ fn component_count(p: &Path) -> usize {
 /// **Pure** — no filesystem access.  Suitable for testing in isolation.
 ///
 /// # Arguments
-/// - `baseline`: `(abs_path, is_dir)` per line; index 0 = root (ignored by the diff).
-/// - `buffer`:   current bare buffer text (line 0 = root header).
-/// - `root`:     explorer root == `baseline[0].0`.
+/// - `baseline`: `(id, abs_path, is_dir)` per line; index 0 = root (ignored by
+///   the diff).  `id` is the sequence number assigned during `render_text`.
+/// - `buffer`:   current buffer text (line 0 = root header).
+/// - `root`:     explorer root == `baseline[0].1`.
+///
+/// # Algorithm
+/// Walk buffer entries keyed by their embedded id:
+/// - `id` in baseline and not yet seen → match: rename if path changed, else
+///   no-op.  Mark id "seen".
+/// - `id` is `None`, unknown, or already seen (duplicate, e.g. `yy`+`p`) →
+///   CreateDir / CreateFile.
+///   After the walk: every baseline entry not seen → Trash.
 ///
 /// # Ordering
 /// 1. Renames, sorted by `from` component count **ascending** (shallow → deep).
@@ -239,48 +171,61 @@ fn component_count(p: &Path) -> usize {
 ///    children before parents).
 /// 3. Creates, sorted by path component count **ascending** (parents before
 ///    children).
-pub(crate) fn reconcile(baseline: &[(PathBuf, bool)], buffer: &str, root: &Path) -> Vec<FsOp> {
-    // baseline[1..] is the diffable slice (skip root).
-    let b_slice: &[(PathBuf, bool)] = if baseline.is_empty() {
-        &[]
-    } else {
-        &baseline[1..]
-    };
-
+pub(crate) fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &Path) -> Vec<FsOp> {
     let current = parse_buffer(buffer, root);
 
-    // Compute LCS between baseline[1..] and current.
-    let matched_pairs = lcs_paths(b_slice, &current);
+    // Build an id-keyed index of baseline[1..] (skip root at index 0).
+    let mut base_by_id: HashMap<u64, (&PathBuf, bool)> = HashMap::new();
+    for (id, path, is_dir) in baseline.iter().skip(1) {
+        base_by_id.insert(*id, (path, *is_dir));
+    }
 
-    // Walk the alignment, extracting gaps between consecutive matched pairs.
     let mut renames: Vec<FsOp> = Vec::new();
     let mut trashes: Vec<FsOp> = Vec::new();
     let mut creates: Vec<FsOp> = Vec::new();
 
-    let mut prev_b: usize = 0; // exclusive start in b_slice
-    let mut prev_c: usize = 0; // exclusive start in current
+    let mut seen: HashSet<u64> = HashSet::new();
 
-    for &(bi, ci) in matched_pairs.iter() {
-        // Gap: b_slice[prev_b..bi] vs current[prev_c..ci]
-        let bgap: Vec<(PathBuf, bool)> = b_slice[prev_b..bi]
-            .iter()
-            .map(|(p, d)| (p.clone(), *d))
-            .collect();
-        let cgap = &current[prev_c..ci];
-        process_gap(&bgap, cgap, &mut renames, &mut trashes, &mut creates);
-
-        prev_b = bi + 1;
-        prev_c = ci + 1;
+    for entry in &current {
+        match entry.id {
+            Some(id) if base_by_id.contains_key(&id) && !seen.contains(&id) => {
+                seen.insert(id);
+                let (bpath, b_is_dir) = base_by_id[&id];
+                if b_is_dir == entry.is_dir {
+                    // Same type.
+                    if bpath != &entry.path {
+                        renames.push(FsOp::Rename {
+                            from: bpath.clone(),
+                            to: entry.path.clone(),
+                        });
+                    }
+                    // else: unchanged — no op needed
+                } else {
+                    // Type changed (file → dir or dir → file) → trash + create.
+                    trashes.push(FsOp::Trash(bpath.clone()));
+                    if entry.is_dir {
+                        creates.push(FsOp::CreateDir(entry.path.clone()));
+                    } else {
+                        creates.push(FsOp::CreateFile(entry.path.clone()));
+                    }
+                }
+            }
+            // No id, unknown id, or duplicate id (yy+p) → create.
+            _ => {
+                if entry.is_dir {
+                    creates.push(FsOp::CreateDir(entry.path.clone()));
+                } else {
+                    creates.push(FsOp::CreateFile(entry.path.clone()));
+                }
+            }
+        }
     }
 
-    // Trailing gap after last anchor.
-    {
-        let bgap: Vec<(PathBuf, bool)> = b_slice[prev_b..]
-            .iter()
-            .map(|(p, d)| (p.clone(), *d))
-            .collect();
-        let cgap = &current[prev_c..];
-        process_gap(&bgap, cgap, &mut renames, &mut trashes, &mut creates);
+    // Every baseline entry (skip root at index 0) not seen in the buffer → Trash.
+    for (id, path, _is_dir) in baseline.iter().skip(1) {
+        if !seen.contains(id) {
+            trashes.push(FsOp::Trash(path.clone()));
+        }
     }
 
     // ── Sort per ordering rules ───────────────────────────────────────────────
@@ -820,18 +765,41 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Helper: render a baseline (index 0 = root) to the bare buffer text that
-    /// `reconcile` expects.  The root line has depth 0 → indent = 0*2+2 = 2
-    /// spaces.  Dirs are rendered WITH a trailing `/` so the parser pushes them
-    /// onto the directory stack and children resolve under them correctly.
-    fn render_baseline(baseline: &[(PathBuf, bool)]) -> String {
+    // ── Test helpers ──────────────────────────────────────────────────────────
+
+    /// Build a baseline `Vec<(u64, PathBuf, bool)>` from a list of
+    /// (relative_path, is_dir) pairs. Index 0 = root (id=0), first item id=1, …
+    fn make_baseline(items: &[(&str, bool)]) -> Vec<(u64, PathBuf, bool)> {
+        let r = root();
+        let mut v: Vec<(u64, PathBuf, bool)> = Vec::new();
+        v.push((0, r.clone(), true)); // root, id=0
+        for (i, (rel, is_dir)) in items.iter().enumerate() {
+            v.push(((i + 1) as u64, r.join(rel), *is_dir));
+        }
+        v
+    }
+
+    /// Helper to produce a single non-root line with embedded id.
+    /// `depth` is the tree depth (root=0, children=1, grandchildren=2, …).
+    fn idline(depth: usize, name: &str, id: u64) -> String {
+        let indent = depth * 2 + 2;
+        format!("{}{}{}{}", " ".repeat(indent), name, ID_SEP, id)
+    }
+
+    /// Helper for the root header line (no id).
+    fn root_header() -> &'static str {
+        "  project"
+    }
+
+    /// Render a baseline to the bare buffer text that `reconcile` expects.
+    /// Root line (index 0) has no id. All other lines carry `<US><id>`.
+    fn render_baseline(baseline: &[(u64, PathBuf, bool)]) -> String {
         let mut out = String::new();
-        for (i, (path, is_dir)) in baseline.iter().enumerate() {
+        for (i, (id, path, is_dir)) in baseline.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            // Infer depth from path component count relative to root (baseline[0]).
-            let root = &baseline[0].0;
+            let root = &baseline[0].1;
             let depth = match path.strip_prefix(root) {
                 Ok(rel) => rel.components().count(),
                 Err(_) => 0,
@@ -848,10 +816,14 @@ mod tests {
             };
             out.push_str(&" ".repeat(indent));
             out.push_str(&name);
-            // Append `/` for non-root dirs so the parser pushes them onto the
-            // directory stack and children resolve correctly.
+            // Non-root dirs get trailing '/' to push them onto the parent stack.
             if *is_dir && depth > 0 {
                 out.push('/');
+            }
+            // Non-root lines carry the id.
+            if i > 0 {
+                out.push(ID_SEP);
+                out.push_str(&id.to_string());
             }
         }
         out
@@ -862,37 +834,26 @@ mod tests {
         PathBuf::from("/project")
     }
 
-    // Build a baseline from a list of (relative_path, is_dir) pairs.
-    // First entry is always the root.
-    fn make_baseline(items: &[(&str, bool)]) -> Vec<(PathBuf, bool)> {
-        let r = root();
-        let mut v: Vec<(PathBuf, bool)> = Vec::new();
-        v.push((r.clone(), true)); // root
-        for (rel, is_dir) in items {
-            v.push((r.join(rel), *is_dir));
-        }
-        v
-    }
-
     // ── bulk_create ───────────────────────────────────────────────────────────
 
-    /// baseline has root + 1 file; buffer adds 3 new sibling lines ⇒ 3 ops.
-    /// The existing file is at position 0 in baseline and position 0 in the
-    /// buffer.  The 3 new files are appended at positions 1–3; they are all
-    /// cgap entries and become CreateFile ops.
+    /// baseline has root + 1 file (id=1); buffer adds 3 new sibling lines (no id)
+    /// ⇒ 3 CreateFile ops. existing.rs carries id=1 → unchanged.
     #[test]
     fn bulk_create() {
         let baseline = make_baseline(&[("existing.rs", false)]);
-        // Buffer: root line + existing.rs + 3 new files
-        let buffer = "  project\n    existing.rs\n    new_a.rs\n    new_b.rs\n    new_c.rs";
-        let ops = reconcile(&baseline, buffer, &root());
-        // existing.rs is unchanged (LCS match).
+        // existing.rs with id=1; 3 new lines without ids.
+        let buffer = format!(
+            "{}\n{}\n    new_a.rs\n    new_b.rs\n    new_c.rs",
+            root_header(),
+            idline(1, "existing.rs", 1),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
+        // existing.rs is unchanged (id match, same path).
         // new_a, new_b, new_c are creates.
         assert_eq!(ops.len(), 3, "expected 3 creates, got {ops:?}");
         assert!(ops.contains(&FsOp::CreateFile(root().join("new_a.rs"))));
         assert!(ops.contains(&FsOp::CreateFile(root().join("new_b.rs"))));
         assert!(ops.contains(&FsOp::CreateFile(root().join("new_c.rs"))));
-        // No trashes or renames.
         assert!(
             ops.iter().all(|op| matches!(op, FsOp::CreateFile(_))),
             "expected only CreateFile ops, got {ops:?}"
@@ -901,37 +862,35 @@ mod tests {
 
     // ── create_dir_trailing_slash ─────────────────────────────────────────────
 
-    /// New buffer line `newdir/` ⇒ CreateDir.
+    /// New buffer line `newdir/` (no id) ⇒ CreateDir.
     #[test]
     fn create_dir_trailing_slash() {
         let baseline = make_baseline(&[]);
-        // Buffer: root line + one new dir with trailing slash.
-        let buffer = "  project\n    newdir/";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n    newdir/", root_header());
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(ops, vec![FsOp::CreateDir(root().join("newdir"))]);
     }
 
     // ── create_nested ─────────────────────────────────────────────────────────
 
-    /// New line `a/b.rs` at depth-1 indent ⇒ CreateFile(root/a/b.rs).
+    /// New line `a/b.rs` at depth-1 indent (no id) ⇒ CreateFile(root/a/b.rs).
     #[test]
     fn create_nested() {
         let baseline = make_baseline(&[]);
-        // Buffer: root line + nested path via internal slash at depth-1 indent (4 spaces).
-        let buffer = "  project\n    a/b.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n    a/b.rs", root_header());
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(ops, vec![FsOp::CreateFile(root().join("a").join("b.rs"))]);
     }
 
     // ── delete_to_trash ───────────────────────────────────────────────────────
 
-    /// baseline has a file; buffer removes that line ⇒ Trash(path).
+    /// baseline has a file (id=1); buffer removes that line ⇒ Trash(path).
     #[test]
     fn delete_to_trash() {
         let baseline = make_baseline(&[("to_delete.rs", false)]);
-        // Buffer: root line only — file removed.
-        let buffer = "  project";
-        let ops = reconcile(&baseline, buffer, &root());
+        // Buffer: root line only — file line omitted → id=1 not seen → Trash.
+        let buffer = root_header().to_string();
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(
             ops,
             vec![FsOp::Trash(root().join("to_delete.rs"))],
@@ -941,14 +900,14 @@ mod tests {
 
     // ── rename_in_place ───────────────────────────────────────────────────────
 
-    /// `foo.rs` renamed to `bar.rs` at same position/indent ⇒ exactly one Rename,
+    /// `foo.rs` (id=1) renamed to `bar.rs` in the buffer ⇒ exactly one Rename,
     /// NO Trash, NO Create.  This is the data-loss guard.
     #[test]
     fn rename_in_place_is_rename_not_trash_create() {
         let baseline = make_baseline(&[("foo.rs", false)]);
-        // Edit: same position, name changed.
-        let buffer = "  project\n    bar.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        // Same id=1 but name changed to bar.rs.
+        let buffer = format!("{}\n{}", root_header(), idline(1, "bar.rs", 1));
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(
             ops,
             vec![FsOp::Rename {
@@ -957,7 +916,6 @@ mod tests {
             }],
             "in-place rename must produce exactly Rename{{foo.rs → bar.rs}}, got {ops:?}"
         );
-        // Explicitly assert no Trash or Create ops — the data-loss guard.
         for op in &ops {
             assert!(
                 !matches!(op, FsOp::Trash(_)),
@@ -972,14 +930,20 @@ mod tests {
 
     // ── rename_dir ────────────────────────────────────────────────────────────
 
-    /// baseline `olddir/` (dir); buffer `newdir/` ⇒ Rename (dir).
-    /// When children are present, ancestor rename must be ordered before child.
+    /// baseline `olddir/` (id=1, dir); `olddir/child.rs` (id=2, file);
+    /// buffer `newdir/` id=1, `child.rs` id=2 under newdir ⇒ Rename both.
+    /// Ancestor rename must be ordered before child.
     #[test]
     fn rename_dir() {
         let baseline = make_baseline(&[("olddir", true), ("olddir/child.rs", false)]);
-        // Buffer: root line + newdir/ + child under newdir (at depth 2 = 6 spaces).
-        let buffer = "  project\n    newdir/\n      child.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        // newdir/ with id=1; child.rs under newdir with id=2.
+        let buffer = format!(
+            "{}\n{}\n{}",
+            root_header(),
+            idline(1, "newdir/", 1),
+            idline(2, "child.rs", 2),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
 
         // Must contain Rename{olddir → newdir}.
         let rename_dir_op = FsOp::Rename {
@@ -1032,9 +996,14 @@ mod tests {
     fn delete_one_keep_rest() {
         let baseline =
             make_baseline(&[("alpha.rs", false), ("beta.rs", false), ("gamma.rs", false)]);
-        // Remove beta.rs from the middle.
-        let buffer = "  project\n    alpha.rs\n    gamma.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        // alpha id=1, gamma id=3 present; beta id=2 missing → Trash(beta).
+        let buffer = format!(
+            "{}\n{}\n{}",
+            root_header(),
+            idline(1, "alpha.rs", 1),
+            idline(1, "gamma.rs", 3),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(
             ops,
             vec![FsOp::Trash(root().join("beta.rs"))],
@@ -1047,25 +1016,21 @@ mod tests {
     /// A rename + a create + a delete in one buffer ⇒ ordered Vec:
     /// renames first, then trashes, then creates.
     ///
-    /// Scenario:
-    ///   baseline:  old.rs, keep.rs, remove.rs
-    ///   buffer:    new.rs, keep.rs, fresh.rs, added.rs
-    ///
-    /// LCS = [keep.rs].
-    /// Gap before keep.rs: bgap=[old.rs], cgap=[new.rs] → Rename{old→new}.
-    /// Gap after keep.rs:  bgap=[remove.rs], cgap=[fresh.rs, added.rs].
-    ///   - Pair 1: remove.rs ↔ fresh.rs → Rename{remove→fresh}.
-    ///   - Leftover cgap: added.rs → CreateFile.
-    ///
-    /// Final order: Rename(old→new), Rename(remove→fresh), CreateFile(added).
+    /// Scenario (ids=1,2,3):
+    ///   baseline:  old.rs(1), keep.rs(2), remove.rs(3)
+    ///   buffer:    new.rs(id=1), keep.rs(id=2), fresh.rs(id=3), added.rs(no id)
     #[test]
     fn mixed() {
         let baseline =
             make_baseline(&[("old.rs", false), ("keep.rs", false), ("remove.rs", false)]);
-        // Buffer: new.rs (rename of old.rs), keep.rs, fresh.rs (rename of remove.rs),
-        // added.rs (pure create).
-        let buffer = "  project\n    new.rs\n    keep.rs\n    fresh.rs\n    added.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!(
+            "{}\n{}\n{}\n{}\n    added.rs",
+            root_header(),
+            idline(1, "new.rs", 1),
+            idline(1, "keep.rs", 2),
+            idline(1, "fresh.rs", 3),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
 
         let has_rename_old = ops.contains(&FsOp::Rename {
             from: root().join("old.rs"),
@@ -1119,25 +1084,28 @@ mod tests {
 
     // ── mixed with explicit trash ─────────────────────────────────────────────
 
-    /// Verify a pure delete: baseline has A, B, C; buffer has A, C only.
-    /// B is deleted (bgap=[B], cgap=[] → Trash(B)).
+    /// Verify a pure delete: baseline has A(1), B(2), C(3); buffer has A, C only.
     #[test]
     fn mixed_pure_delete_produces_trash_not_rename() {
         let baseline = make_baseline(&[("a.rs", false), ("b.rs", false), ("c.rs", false)]);
-        let buffer = "  project\n    a.rs\n    c.rs";
-        let ops = reconcile(&baseline, buffer, &root());
-        // LCS = [a.rs, c.rs]. Gap in middle: bgap=[b.rs], cgap=[] → Trash.
+        let buffer = format!(
+            "{}\n{}\n{}",
+            root_header(),
+            idline(1, "a.rs", 1),
+            idline(1, "c.rs", 3),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(ops, vec![FsOp::Trash(root().join("b.rs"))]);
     }
 
     // ── rename_dir with no children ───────────────────────────────────────────
 
-    /// Rename an empty dir.
+    /// Rename an empty dir (id=1).
     #[test]
     fn rename_empty_dir() {
         let baseline = make_baseline(&[("emptydir", true)]);
-        let buffer = "  project\n    renamed/";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n{}", root_header(), idline(1, "renamed/", 1));
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(
             ops,
             vec![FsOp::Rename {
@@ -1150,15 +1118,14 @@ mod tests {
     // ── type change: file → dir ───────────────────────────────────────────────
 
     /// When the type changes at the same position (file → dir), emit Trash + CreateDir.
-    /// The LCS keys on (path, is_dir) so a same-path different-type entry is
-    /// NOT treated as unchanged.
+    /// With id-keyed reconcile: if id=1 maps to a file in baseline but appears as
+    /// dir in buffer → Trash(old) + CreateDir(new).
     #[test]
     fn type_change_file_to_dir() {
         let baseline = make_baseline(&[("thing", false)]);
-        // Same name, but now typed as a directory.
-        let buffer = "  project\n    thing/";
-        let ops = reconcile(&baseline, buffer, &root());
-        // bgap=[thing(file)], cgap=[thing/(dir)]: type mismatch → Trash + CreateDir.
+        // Same id=1 but now typed as a directory.
+        let buffer = format!("{}\n{}", root_header(), idline(1, "thing/", 1));
+        let ops = reconcile(&baseline, &buffer, &root());
         assert!(
             ops.contains(&FsOp::Trash(root().join("thing"))),
             "must trash old file, got {ops:?}"
@@ -1172,12 +1139,12 @@ mod tests {
 
     // ── type change: dir → file ───────────────────────────────────────────────
 
-    /// Symmetrical: baseline dir, buffer file at same path → Trash + CreateFile.
+    /// Symmetrical: baseline dir (id=1), buffer file at same path → Trash + CreateFile.
     #[test]
     fn type_change_dir_to_file() {
         let baseline = make_baseline(&[("thing", true)]);
-        let buffer = "  project\n    thing";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n{}", root_header(), idline(1, "thing", 1));
+        let ops = reconcile(&baseline, &buffer, &root());
         assert!(
             ops.contains(&FsOp::Trash(root().join("thing"))),
             "must trash old dir"
@@ -1191,13 +1158,14 @@ mod tests {
 
     // ── ordering: trashes deep before shallow ────────────────────────────────
 
-    /// Removing a dir and its child from baseline: child must be trashed before dir.
+    /// Removing a dir (id=1) and its child (id=2) from baseline: child must be
+    /// trashed before dir.
     #[test]
     fn trash_ordering_deep_before_shallow() {
         let baseline = make_baseline(&[("parent", true), ("parent/child.rs", false)]);
-        // Buffer: both removed.
-        let buffer = "  project";
-        let ops = reconcile(&baseline, buffer, &root());
+        // Buffer: both ids missing → both trashed.
+        let buffer = root_header().to_string();
+        let ops = reconcile(&baseline, &buffer, &root());
 
         let child_pos = ops
             .iter()
@@ -1218,15 +1186,12 @@ mod tests {
 
     // ── ordering: creates shallow before deep ────────────────────────────────
 
-    /// Adding a dir and a child file: dir must come before file in the ops list.
+    /// Adding a dir and a child file (no ids → creates): dir must come before file.
     #[test]
     fn create_ordering_shallow_before_deep() {
         let baseline = make_baseline(&[]);
-        // Two new entries: depth-1 dir and depth-2 file inside it.
-        // Buffer line 1: depth 1 → indent 4 → "    newdir/"
-        // Buffer line 2: depth 2 → indent 6 → "      newfile.rs"
-        let buffer = "  project\n    newdir/\n      newfile.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n    newdir/\n      newfile.rs", root_header());
+        let ops = reconcile(&baseline, &buffer, &root());
 
         let dir_pos = ops
             .iter()
@@ -1269,9 +1234,9 @@ mod tests {
 
     #[test]
     fn empty_baseline_empty_buffer() {
-        let baseline = vec![(root(), true)];
-        let buffer = "  project";
-        let ops = reconcile(&baseline, buffer, &root());
+        let baseline = vec![(0u64, root(), true)];
+        let buffer = root_header().to_string();
+        let ops = reconcile(&baseline, &buffer, &root());
         assert!(ops.is_empty());
     }
 
@@ -1280,23 +1245,137 @@ mod tests {
     #[test]
     fn blank_lines_ignored() {
         let baseline = make_baseline(&[("foo.rs", false)]);
-        // Buffer has blank lines interspersed.
-        let buffer = "  project\n\n    foo.rs\n\n";
-        let ops = reconcile(&baseline, buffer, &root());
+        // Buffer has blank lines interspersed; foo.rs carries its id.
+        let buffer = format!("{}\n\n{}\n\n", root_header(), idline(1, "foo.rs", 1),);
+        let ops = reconcile(&baseline, &buffer, &root());
         assert!(ops.is_empty(), "blank lines must be ignored, got {ops:?}");
     }
 
     // ── multiple creates in order ─────────────────────────────────────────────
 
-    /// Three sibling creates: output CreateFile order must be stable / ascending
-    /// by component count (all equal here, so insertion order is preserved).
+    /// Three sibling creates (no ids): output CreateFile order is stable.
     #[test]
     fn multiple_creates_are_all_present() {
         let baseline = make_baseline(&[]);
-        let buffer = "  project\n    x.rs\n    y.rs\n    z.rs";
-        let ops = reconcile(&baseline, buffer, &root());
+        let buffer = format!("{}\n    x.rs\n    y.rs\n    z.rs", root_header());
+        let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(ops.len(), 3);
         assert!(ops.iter().all(|op| matches!(op, FsOp::CreateFile(_))));
+    }
+
+    // ── duplicate id → copy (yy+p semantics) ─────────────────────────────────
+
+    /// When the same id appears twice in the buffer (yy+p), the second
+    /// occurrence has no match (seen set already contains the id) → CreateFile.
+    #[test]
+    fn duplicate_id_creates_copy() {
+        let baseline = make_baseline(&[("orig.rs", false)]);
+        // id=1 appears twice → first → rename (same path → no-op), second → create.
+        let buffer = format!(
+            "{}\n{}\n{}",
+            root_header(),
+            idline(1, "orig.rs", 1), // same path → no-op
+            idline(1, "orig.rs", 1), // duplicate id → create
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
+        // The duplicate line produces a CreateFile.
+        assert_eq!(
+            ops.len(),
+            1,
+            "duplicate id must yield one CreateFile, got {ops:?}"
+        );
+        assert!(
+            ops.contains(&FsOp::CreateFile(root().join("orig.rs"))),
+            "expected CreateFile(orig.rs), got {ops:?}"
+        );
+    }
+
+    // ── indent corruption is safe ─────────────────────────────────────────────
+
+    /// Mangling an unrelated line's indent but keeping ids intact must NOT
+    /// produce spurious Trash ops: the intended structure is preserved.
+    #[test]
+    fn indent_corruption_safe() {
+        // baseline: mydir/(id=1), mydir/file.rs(id=2), sibling.rs(id=3)
+        let baseline = make_baseline(&[
+            ("mydir", true),
+            ("mydir/file.rs", false),
+            ("sibling.rs", false),
+        ]);
+        // Buffer: mydir/ id=1, sibling.rs id=3; file.rs id=2 moved to wrong indent
+        // (indent mangled from 6 to 4 spaces = depth 1, no longer under mydir).
+        // IDs are intact so: id=1 → mydir (unchanged), id=2 → file.rs under root
+        // (mangled indent = depth 1 = new location → Rename), id=3 → sibling.rs.
+        let buffer = format!(
+            "{}\n{}\n{}\n{}",
+            root_header(),
+            idline(1, "mydir/", 1),
+            idline(1, "file.rs", 2), // depth 1 instead of 2 = reparented
+            idline(1, "sibling.rs", 3),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
+        // No spurious Trash: all 3 ids are present.
+        let has_trash = ops.iter().any(|op| matches!(op, FsOp::Trash(_)));
+        assert!(
+            !has_trash,
+            "no Trash expected when all ids are present, got {ops:?}"
+        );
+        // file.rs is reparented (indent change = move): Rename from mydir/file.rs to root/file.rs.
+        assert!(
+            ops.contains(&FsOp::Rename {
+                from: root().join("mydir").join("file.rs"),
+                to: root().join("file.rs"),
+            }),
+            "mangled indent should produce Rename (reparent), got {ops:?}"
+        );
+    }
+
+    // ── whitespace names ──────────────────────────────────────────────────────
+
+    /// Names with internal spaces and trailing spaces are preserved verbatim.
+    #[test]
+    fn whitespace_names_preserved() {
+        let baseline = make_baseline(&[]);
+        // Two new lines without ids: names with spaces.
+        // "a b.txt" has an internal space; "trailing .txt" has a trailing space
+        // (note: the trailing space precedes the \n, so it's part of the name).
+        let buffer = format!("{}\n    a b.txt\n    trailing .txt", root_header());
+        let ops = reconcile(&baseline, &buffer, &root());
+        assert_eq!(ops.len(), 2, "expected 2 CreateFile ops, got {ops:?}");
+        // Check that names are preserved verbatim.
+        assert!(
+            ops.contains(&FsOp::CreateFile(root().join("a b.txt"))),
+            "must create 'a b.txt', got {ops:?}"
+        );
+        assert!(
+            ops.contains(&FsOp::CreateFile(root().join("trailing .txt"))),
+            "must create 'trailing .txt' with trailing space, got {ops:?}"
+        );
+    }
+
+    // ── conceal byte math ────────────────────────────────────────────────────
+
+    /// Verify that the US byte index + line length are what a Conceal would
+    /// cover, and that the visible text (left of US) is the indent+name.
+    #[test]
+    fn conceal_byte_positions() {
+        let line = format!("  x{}{}", ID_SEP, 5);
+        // Find the US byte position.
+        let us_byte = line.find(ID_SEP).expect("US must be present");
+        // The visible text is everything before US.
+        let visible = &line[..us_byte];
+        assert_eq!(visible, "  x", "visible text must be indent+name");
+        // The conceal covers [us_byte .. line.len()].
+        assert_eq!(us_byte, 3, "US at byte 3 for '  x'");
+        assert_eq!(line.len(), 3 + ID_SEP.len_utf8() + 1, "total line length");
+        // Conceal end = line.len() in bytes.
+        let conceal_end = line.len();
+        // Everything from us_byte to conceal_end is the tail (US + id digits).
+        let tail = &line[us_byte..conceal_end];
+        assert!(
+            tail.starts_with(ID_SEP),
+            "tail must start with ID_SEP, got {tail:?}"
+        );
     }
 
     // ── apply_ops integration tests ───────────────────────────────────────────

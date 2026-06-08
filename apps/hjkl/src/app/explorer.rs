@@ -385,16 +385,16 @@ impl ExplorerTree {
     /// Each line in the returned `String` corresponds to `nodes[i]`, so
     /// `cursor_row` in the editor maps directly to `nodes[cursor_row]`.
     ///
-    /// The buffer contains **only** indentation spaces + the bare name — no
-    /// tree-guide glyphs, no connector, no icon. All glyphs are painted as a
-    /// render overlay in `render.rs` (same approach as the git-color overlay)
-    /// so that the buffer text stays clean for future oil.nvim-style editing.
+    /// The buffer contains indentation spaces + the bare name + a hidden id
+    /// tail (`<US><idx>`) for all non-root lines.  The root line (index 0) has
+    /// no id tail.  All glyphs are painted as a render overlay in `render.rs`.
     ///
     /// Column layout (identical to what was emitted before; the overlay paints
     /// the leading cells):
-    ///   depth 0  : `"  " + name`  (2-space indent for the icon+space slot)
-    ///   depth ≥ 1: `" ".repeat(depth*2 + 2) + name`
+    ///   depth 0  : `"  " + name`               (no id tail)
+    ///   depth ≥ 1: `" ".repeat(depth*2+2) + name[/] + US + idx`
     pub(crate) fn render_text(&self) -> String {
+        use super::explorer_reconcile::ID_SEP;
         let mut out = String::new();
         for (i, node) in self.nodes.iter().enumerate() {
             if i > 0 {
@@ -420,6 +420,11 @@ impl ExplorerTree {
             };
             out.push_str(&" ".repeat(name_col));
             out.push_str(&name);
+            // Non-root lines carry the stable id so reconcile can key on it.
+            if node.depth > 0 {
+                out.push(ID_SEP);
+                out.push_str(&i.to_string());
+            }
         }
         out
     }
@@ -442,11 +447,13 @@ pub(crate) struct ExplorerPane {
     /// Used to restore ("un-trash") when a `CreateFile` op targets a name
     /// matching a trashed entry — making `dd` + `p` a lossless move.
     pub trashed: Vec<(String, std::path::PathBuf)>,
-    /// The last-reconciled buffer state: `(absolute_path, is_dir)` per line,
-    /// index 0 = root. This is the baseline for `reconcile()`. Kept in sync
-    /// with every reconcile cycle and every `explorer_rebuild_buffer` call so
-    /// the diff always starts from the correct "last-known-good" state.
-    pub baseline: Vec<(PathBuf, bool)>,
+    /// The last-reconciled buffer state: `(id, absolute_path, is_dir)` per
+    /// line, index 0 = root (id=0). This is the baseline for `reconcile()`.
+    /// Kept in sync with every reconcile cycle and every
+    /// `explorer_rebuild_buffer` call so the diff always starts from the
+    /// correct "last-known-good" state. The `id` is the node's index in
+    /// `tree.nodes` at the time the buffer was last rendered.
+    pub baseline: Vec<(u64, PathBuf, bool)>,
     /// Undo stack: each entry is one reconcile transaction
     /// (`Vec<AppliedOp>`) that can be reverted by [`App::explorer_undo`].
     pub undo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
@@ -515,9 +522,9 @@ pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<E
     let mut dir_stack: Vec<(usize, PathBuf)> = Vec::new(); // (depth, abs_path)
 
     for (line_idx, line) in text.split('\n').enumerate() {
-        let trimmed = line.trim_end();
+        use super::explorer_reconcile::ID_SEP;
         if line_idx == 0 {
-            // Root line — always depth 0.
+            // Root line — always depth 0, no id tail.
             raw.push(Some(RawNode {
                 path: root.to_path_buf(),
                 depth: 0,
@@ -526,15 +533,28 @@ pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<E
             dir_stack.push((0, root.to_path_buf()));
             continue;
         }
-        if trimmed.trim_start().is_empty() {
+        // Strip the id tail (everything from the first ID_SEP onward) before
+        // parsing indent/name. This leaves the name side verbatim.
+        let left = if let Some(sep_pos) = line.find(ID_SEP) {
+            &line[..sep_pos]
+        } else {
+            line
+        };
+        if left.trim().is_empty() {
             raw.push(None);
             continue;
         }
-        let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+        let indent = left.len() - left.trim_start_matches(' ').len();
         let depth = ((indent.saturating_sub(2)) / 2).max(1);
-        let name_part = trimmed[indent..].trim_end();
+        // Name is verbatim between indent and the stripped id tail.
+        // Do NOT trim_end — whitespace in names must be preserved.
+        let name_part = &left[indent..];
         let is_dir = name_part.ends_with('/');
-        let name = name_part.trim_end_matches('/');
+        let name = if is_dir {
+            &name_part[..name_part.len() - 1]
+        } else {
+            name_part
+        };
         if name.is_empty() {
             raw.push(None);
             continue;
@@ -828,10 +848,12 @@ impl super::App {
         self.sync_viewport_to_editor();
 
         // Build the initial baseline from the freshly-built tree nodes.
-        let initial_baseline: Vec<(PathBuf, bool)> = tree
+        // Each entry gets its sequence id = its index in tree.nodes.
+        let initial_baseline: Vec<(u64, PathBuf, bool)> = tree
             .nodes
             .iter()
-            .map(|n| (n.path.clone(), n.is_dir))
+            .enumerate()
+            .map(|(idx, n)| (idx as u64, n.path.clone(), n.is_dir))
             .collect();
 
         // Record the dirty_gen AFTER set_content so the first reconcile check
@@ -950,14 +972,15 @@ impl super::App {
         // reconcile diffs against the post-toggle state. Also update
         // last_reconcile_gen to the new dirty_gen so the structural reset
         // doesn't trigger a spurious reconcile.
-        let new_baseline: Vec<(PathBuf, bool)> = self
+        let new_baseline: Vec<(u64, PathBuf, bool)> = self
             .explorer
             .as_ref()
             .map(|ep| {
                 ep.tree
                     .nodes
                     .iter()
-                    .map(|n| (n.path.clone(), n.is_dir))
+                    .enumerate()
+                    .map(|(idx, n)| (idx as u64, n.path.clone(), n.is_dir))
                     .collect()
             })
             .unwrap_or_default();
@@ -2636,14 +2659,21 @@ mod tests {
             "root line must not end with '/': {:?}",
             lines[0]
         );
-        // Non-root dir nodes (a_dir, b_dir) must end with '/'.
+        // Non-root dir nodes (a_dir, b_dir) must contain trailing '/' before
+        // the ID_SEP tail. Strip the id tail first.
         for line in &lines[1..] {
             let trimmed = line.trim_start();
-            // Identify dir lines by the name set known from make_tree.
-            if trimmed.starts_with("a_dir") || trimmed.starts_with("b_dir") {
+            // Strip id tail (everything from first ID_SEP onward).
+            let name_part = if let Some(sep) = trimmed.find(crate::app::explorer_reconcile::ID_SEP)
+            {
+                &trimmed[..sep]
+            } else {
+                trimmed
+            };
+            if name_part.starts_with("a_dir") || name_part.starts_with("b_dir") {
                 assert!(
-                    trimmed.ends_with('/'),
-                    "dir line must end with '/': {trimmed:?}"
+                    name_part.ends_with('/'),
+                    "dir line must end with '/' (before id tail): {trimmed:?}"
                 );
             }
         }

@@ -1072,6 +1072,33 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         Vec::new()
     };
 
+    // ── Explorer conceals: hide the <US><id> tail on each non-root line ─────
+    //
+    // When this slot is the explorer and debug_mode is off, build one Conceal
+    // per buffer line that contains a Unit Separator (U+001F). The conceal
+    // covers [byte of US .. end of line] with an empty replacement so the tail
+    // is invisible. The buffer text itself is unchanged; only the rendered cells
+    // differ. In debug_mode the raw ids are shown for diagnostics.
+    let explorer_conceals: Vec<hjkl_buffer_tui::Conceal> = if is_explorer_slot && !app.debug_mode {
+        use crate::app::explorer_reconcile::ID_SEP;
+        let buf_text = app.slots()[slot_idx].editor.buffer().as_string();
+        buf_text
+            .lines()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let us_byte = line.find(ID_SEP)?;
+                Some(hjkl_buffer_tui::Conceal {
+                    row,
+                    start_byte: us_byte,
+                    end_byte: line.len(),
+                    replacement: String::new(),
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
@@ -1110,7 +1137,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         gutter,
         search_bg,
         signs: &visible_signs,
-        conceals: &[],
+        conceals: &explorer_conceals,
         spans: buffer_spans,
         search_pattern,
         non_text_style: Style::default().fg(app.theme.ui.non_text),
