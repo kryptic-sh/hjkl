@@ -1456,17 +1456,26 @@ impl super::App {
             let path = node.path.clone();
             if let Some(slot_idx) = self.explorer_slot_idx() {
                 let buf = self.slots[slot_idx].editor.buffer_mut();
-                buf.toggle_fold_at(cursor_row);
-                let now_closed = buf
-                    .folds()
-                    .iter()
-                    .any(|f| f.start_row == cursor_row && f.closed);
-                if let Some(ref mut ep) = self.explorer {
-                    ep.tree.set_expanded(&path, !now_closed);
+                // Only toggle when a fold actually STARTS at this dir's row. An
+                // EMPTY directory has no fold of its own (compute_folds skips
+                // childless dirs), and `toggle_fold_at` picks the innermost fold
+                // *containing* the row — which would be the PARENT fold, wrongly
+                // collapsing it and breaking the render. No fold here = nothing
+                // to expand/collapse → no-op.
+                let has_own_fold = buf.folds().iter().any(|f| f.start_row == cursor_row);
+                if has_own_fold {
+                    buf.toggle_fold_at(cursor_row);
+                    let now_closed = buf
+                        .folds()
+                        .iter()
+                        .any(|f| f.start_row == cursor_row && f.closed);
+                    if let Some(ref mut ep) = self.explorer {
+                        ep.tree.set_expanded(&path, !now_closed);
+                    }
+                    // Keep the per-window fold snapshot in lockstep with the
+                    // buffer so the unfocused-render path and overlay agree.
+                    self.sync_explorer_window_folds();
                 }
-                // Keep the per-window fold snapshot in lockstep with the buffer
-                // so the unfocused-render path and the overlay agree.
-                self.sync_explorer_window_folds();
             }
         } else {
             // File: open in the nearest non-explorer window.
@@ -2955,6 +2964,72 @@ mod tests {
         assert_eq!(
             top, 0,
             "explorer must not scroll when the opened file is already visible"
+        );
+    }
+
+    /// Activating an EMPTY directory must be a no-op — it has no fold of its
+    /// own, so it must NOT toggle (and collapse) the enclosing parent fold.
+    #[test]
+    fn activate_empty_dir_does_not_collapse_parent() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("parent").join("empty")).unwrap();
+        std::fs::write(tmp.path().join("parent").join("file.txt"), b"").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+
+        let row_of = |app: &super::super::App, p: &std::path::Path| -> usize {
+            app.explorer
+                .as_ref()
+                .unwrap()
+                .tree
+                .nodes
+                .iter()
+                .position(|n| n.path == p)
+                .unwrap()
+        };
+        let fold_open_at = |app: &super::super::App, row: usize| -> bool {
+            let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+            !app.slots[slot]
+                .editor
+                .buffer()
+                .folds()
+                .iter()
+                .any(|f| f.start_row == row && f.closed)
+        };
+        let activate = |app: &mut super::super::App, row: usize| {
+            if let Some(Some(w)) = app.windows.get_mut(win_id) {
+                w.cursor_row = row;
+                w.cursor_col = 0;
+            }
+            app.sync_viewport_to_explorer_editor();
+            app.explorer_activate();
+        };
+
+        let parent = tmp.path().join("parent");
+        let empty = parent.join("empty");
+
+        // Expand `parent/` so its children (incl. the empty dir) are visible.
+        let pr = row_of(&app, &parent);
+        activate(&mut app, pr);
+        let parent_row = row_of(&app, &parent);
+        assert!(
+            fold_open_at(&app, parent_row),
+            "parent fold open after expand"
+        );
+
+        // Activate the EMPTY dir — must be a no-op, parent stays open.
+        let er = row_of(&app, &empty);
+        activate(&mut app, er);
+        let parent_row2 = row_of(&app, &parent);
+        std::env::set_current_dir(prev).unwrap();
+        assert!(
+            fold_open_at(&app, parent_row2),
+            "activating an empty dir must not collapse the parent fold"
         );
     }
 
