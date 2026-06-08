@@ -2852,6 +2852,9 @@ mod tests {
         std::fs::write(tmp.path().join("d").join("b.rs"), b"b").unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
+        // The explorer roots at the canonicalized cwd; build expected paths from
+        // it (tempdirs are symlinked on macOS/CI, so raw `tmp.path()` mismatches).
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2871,7 +2874,7 @@ mod tests {
             }
             app.maybe_reconcile_explorer();
         };
-        let dir = tmp.path().join("d");
+        let dir = base.join("d");
         let dir_row = app
             .explorer
             .as_ref()
@@ -2893,9 +2896,9 @@ mod tests {
         press(&mut app, KeyCode::Char('d'));
         press(&mut app, KeyCode::Char('d'));
 
-        let dir_gone = !tmp.path().join("d").exists();
-        let a_orphan = tmp.path().join("a.rs").exists();
-        let b_orphan = tmp.path().join("b.rs").exists();
+        let dir_gone = !base.join("d").exists();
+        let a_orphan = base.join("a.rs").exists();
+        let b_orphan = base.join("b.rs").exists();
         std::env::set_current_dir(prev).unwrap();
         assert!(dir_gone, "the dir must be deleted (trashed)");
         assert!(
@@ -2919,6 +2922,7 @@ mod tests {
         std::fs::write(tmp.path().join("target").join("keep.txt"), b"k").unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2955,21 +2959,21 @@ mod tests {
             app.sync_viewport_to_explorer_editor();
         };
 
-        let mover = tmp.path().join("mover");
+        let mover = base.join("mover");
         let mr = row_of(&app, &mover).unwrap();
         set_cursor(&mut app, mr);
         press(&mut app, KeyCode::Char('d'));
         press(&mut app, KeyCode::Char('d'));
 
-        let target = tmp.path().join("target");
+        let target = base.join("target");
         let tr = row_of(&app, &target).expect("target row after dd");
         set_cursor(&mut app, tr);
         press(&mut app, KeyCode::Char('p'));
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
         let buf = app.slots[slot].editor.buffer().as_string();
-        let inside = tmp.path().join("target").join("mover").join("inner.txt");
-        let at_root = tmp.path().join("mover").join("inner.txt");
+        let inside = base.join("target").join("mover").join("inner.txt");
+        let at_root = base.join("mover").join("inner.txt");
         let inside_exists = inside.exists();
         let inside_content = std::fs::read(&inside).ok();
         let root_exists = at_root.exists();
@@ -3092,7 +3096,7 @@ mod tests {
         // — this mimics a search reveal (`/`+`n`), the exact case the old
         // rebuild-from-`expanded` path wrongly collapsed on the next buffer
         // open.
-        let aaa = tmp.path().join("aaa");
+        let aaa = std::fs::canonicalize(tmp.path()).unwrap().join("aaa");
         let win_id = app.explorer.as_ref().unwrap().win_id;
         let aaa_row = app
             .explorer
@@ -3136,7 +3140,10 @@ mod tests {
             .iter()
             .any(|f| f.start_row == aaa_row2 && f.closed);
 
-        let target = tmp.path().join("bbb").join("target.txt");
+        let target = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .join("bbb")
+            .join("target.txt");
         let target_row = app
             .explorer
             .as_ref()
@@ -3193,7 +3200,9 @@ mod tests {
             w.last_rect = Some(LayoutRect::new(0, 0, 30, 24));
             w.top_row = 0;
         }
-        let target = tmp.path().join("target.txt");
+        let target = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .join("target.txt");
         let target_row = app
             .explorer
             .as_ref()
@@ -3268,7 +3277,7 @@ mod tests {
             app.explorer_activate();
         };
 
-        let parent = tmp.path().join("parent");
+        let parent = std::fs::canonicalize(tmp.path()).unwrap().join("parent");
         let empty = parent.join("empty");
 
         // Expand `parent/` so its children (incl. the empty dir) are visible.
@@ -3377,7 +3386,7 @@ mod tests {
         );
 
         // Toggle `sub/`'s fold via the activate path (what a mouse click runs).
-        let sub = tmp.path().join("sub");
+        let sub = std::fs::canonicalize(tmp.path()).unwrap().join("sub");
         let sub_row = app
             .explorer
             .as_ref()
