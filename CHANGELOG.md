@@ -8,6 +8,82 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-06-08
+
+### Added
+
+- **Oil-style editable file explorer**: the tree is now a real, editable buffer.
+  Normal vim edits map to filesystem operations applied on return to Normal mode
+  — `i`/`cw` rename, `dd` delete, `o`/`O` create (trailing `/` = directory,
+  `a/b.rs` = nested), `dd`+`p` move. Deletions go to a recoverable trash;
+  `u`/`<C-r>` reverse the filesystem operations (journaled, not buffer-undo).
+  The buffer holds the bare tree; icons, guides, and git colors are painted as a
+  render overlay.
+- **Stable in-text ids**: each explorer line carries a hidden, concealed id, so
+  reconcile keys off identity rather than indentation. Editing indentation can
+  no longer corrupt the tree (worst case is an undoable move), and filenames
+  with internal/trailing whitespace round-trip correctly.
+- **`p` on a directory moves the cut entry into it** — `dd` a dir/file then `p`
+  on another dir is a real move (contents preserved via trash-restore).
+- **Git-aware explorer**: file/dir names carry git-status background colors with
+  live retag; `dd` on a tracked file keeps it red (pending deletion). `ga`
+  stage/unstage, `gr` discard, `gc` commit are bound through the app keymap so
+  which-key works in the sidebar.
+- **Directory folds over a full-tree buffer**: collapse/expand via folds so `/`
+  search + `n`/`N` traverse and reveal the whole tree; `/` is the normal buffer
+  search (the fuzzy filter was removed). `<CR>` is the only expand/collapse/open
+  key; `h`/`l` move the cursor; `<C-s>` opens in a vsplit, `<C-S-s>` in a split,
+  `<C-t>` in a tab (so `<C-v>` is free for visual block).
+- **`:debug` ex command** (and `hjkl +debug` launch flag): a global debug
+  toggle. The explorer renders its raw buffer (no overlay/conceal) while it's
+  on.
+- Insert-mode abbreviations (`:ab`/`:iab`/`:cab` and their `un`/`no` variants).
+- Broad vim-compat additions: `gp`/`gP`, `]p`/`[p`, visual `p`/`P`, `gn`/`gN`,
+  `&`, `:m`/`:t`, visual `Ctrl-a`/`Ctrl-x`; visual `J`/`gJ`, `[count]%`,
+  operator-indent dot-repeat; unmatched-bracket motions, hex increment;
+  operator + search motion (`d`/`c`/`y` with `/` and `?`) and `R` dot-repeat;
+  `[count]u`/`[count]<C-r>`, `g?` ROT13, `<C-r>.`/`<C-r>/` in insert.
+- `:set name=on|off|true|false` accepted for boolean options.
+
+### Changed
+
+- `nomodifiable` (blocks all edits, incl. entering insert) is now distinct from
+  `readonly` (edits allowed, error on save) — vim semantics. Files owned by
+  another user but readable open editable and error on `:w` (so `:saveas`
+  works).
+- Yank/delete registers are global across buffers (`yy` in one buffer, `p` in
+  another).
+- A linewise operator (`dd`/`yy`/`cc`/`>>`/`gUU`/…) on a **closed fold** now
+  acts on the whole fold, and `p`/`P` paste relative to the fold — vim parity.
+
+### Fixed
+
+- `O` autoindent copies the **current** line's indent, not the line above (vim
+  parity); affects all `O` use, fixed an explorer reparent bug.
+- Explorer mouse: clicks are fold-aware and use each window's own scroll origin
+  (no offset on unfocused panes); a click resolves before focus-change so the
+  focus auto-scroll can't shift it; clicking a directory folds/unfolds, a file
+  opens.
+- Explorer reveal-on-open is in-place (no fold collapse, correct row highlight,
+  no spurious scroll when the file is already visible); `dd` on an open
+  directory deletes the whole subtree instead of orphaning its children to the
+  root; activating an empty directory is a no-op; `o`/`O` create a child vs.
+  sibling correctly; `o`/`O`+`<Esc>` leaves no blank line; icon color no longer
+  inherits the cursorline.
+- LSP: char-boundary-safe identifier column (no panic on nerd-icon glyphs);
+  requests gated on server capability + initialized state; stale pending
+  requests time out so the status spinner can't hang; buffer-word completion
+  always shown.
+- Format-on-save: stale-check by content (not `dirty_gen`); external formatter
+  detection is spawn-only; trailing newline stripped (no phantom line); empty
+  project root no longer misreported as "not installed".
+- Render/cursor: software cursor no longer trails or blinks during scroll; the
+  insert bar uses the hardware cursor so the char under it stays visible.
+- ex: `%`/`#` are not expanded inside a range or a substitute/global body.
+- `di{`/`ci{` inner-block exclusive-motion adjustment; `[count]J` count
+  semantics; Backspace/Esc honor the engine's pending chord (pop one level /
+  cancel).
+
 ## [0.30.0] - 2026-06-04
 
 ### Added
@@ -3955,7 +4031,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/kryptic-sh/hjkl/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/kryptic-sh/hjkl/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.28.1
