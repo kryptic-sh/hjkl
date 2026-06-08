@@ -406,6 +406,11 @@ pub struct App {
     /// draw normally. `:redraw` (no `!`) leaves this `false` — ratatui's
     /// diff-based renderer already issues a repaint on the next tick.
     pub(crate) force_clear_screen: bool,
+    /// Global debug mode, toggled by the `:debug` ex command. A catch-all flag
+    /// for diagnostic rendering across features. Currently: when on, the
+    /// explorer renders its raw buffer text with NO glyph/color overlay so the
+    /// actual on-disk buffer contents are visible. Off by default.
+    pub(crate) debug_mode: bool,
     /// Active interactive substitute confirm session (`:s/pat/rep/c`).
     /// While `Some`, keypresses are routed to the confirm-substitute handler
     /// rather than the editor engine. Cleared when the session finishes
@@ -1555,6 +1560,7 @@ impl App {
             border_drag: None,
             indent_flash: None,
             force_clear_screen: false,
+            debug_mode: false,
             confirming_substitute: None,
             pending_recovery: None,
             last_input_at: std::time::Instant::now(),

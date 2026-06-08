@@ -2958,6 +2958,24 @@ mod tests {
         );
     }
 
+    /// `:debug` toggles the global `debug_mode` flag; `:debug on` / `:debug off`
+    /// set it explicitly.
+    #[test]
+    fn debug_ex_command_toggles_debug_mode() {
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        assert!(!app.debug_mode, "default off");
+        app.dispatch_ex("debug");
+        assert!(app.debug_mode, ":debug toggles on");
+        app.dispatch_ex("debug");
+        assert!(!app.debug_mode, ":debug toggles back off");
+        app.dispatch_ex("debug on");
+        assert!(app.debug_mode, ":debug on forces on");
+        app.dispatch_ex("debug on");
+        assert!(app.debug_mode, ":debug on is idempotent");
+        app.dispatch_ex("debug off");
+        assert!(!app.debug_mode, ":debug off forces off");
+    }
+
     /// `o<Esc>` (open-line, no name typed) must not leave a stray blank line in
     /// the tree — the no-op reconcile has to normalize the buffer back to the
     /// canonical render.

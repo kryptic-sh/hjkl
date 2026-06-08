@@ -492,6 +492,16 @@ mod cli_tests {
         assert_eq!(vim, vec!["+42", "+/foo", "+picker"]);
     }
 
+    /// `+debug` is an unrecognised `+cmd` token → queued as the `:debug` ex
+    /// command, run at startup (enables debug mode).
+    #[test]
+    fn apply_vim_tokens_plus_debug_queues_ex_command() {
+        let mut args = blank_args();
+        let warnings = apply_vim_tokens(&mut args, &["+debug".into()]);
+        assert_eq!(args.commands, vec!["debug".to_string()]);
+        assert!(warnings.is_empty());
+    }
+
     #[test]
     fn apply_vim_tokens_sets_line_pattern_picker() {
         let mut args = blank_args();

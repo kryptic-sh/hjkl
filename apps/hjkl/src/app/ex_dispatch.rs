@@ -299,6 +299,27 @@ impl App {
                 self.write_quit_all(true);
                 return;
             }
+            // `:debug` — toggle global debug mode (catch-all diagnostic flag).
+            // `:debug on` / `:debug off` set it explicitly. Currently the
+            // explorer reads it to render its raw buffer (no glyph overlay).
+            "debug" => {
+                self.debug_mode = !self.debug_mode;
+                self.bus.info(format!(
+                    "debug mode {}",
+                    if self.debug_mode { "on" } else { "off" }
+                ));
+                return;
+            }
+            "debug on" => {
+                self.debug_mode = true;
+                self.bus.info("debug mode on");
+                return;
+            }
+            "debug off" => {
+                self.debug_mode = false;
+                self.bus.info("debug mode off");
+                return;
+            }
             _ => {}
         }
 

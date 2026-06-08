@@ -1162,7 +1162,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     //     col depth*2       = icon
     //     col depth*2+1     = space
     //     col depth*2+2..   = name
+    // `:debug` mode renders the explorer as its RAW buffer text (no glyph /
+    // guide / git-color overlay) so the actual on-disk buffer contents are
+    // visible for debugging.
     if is_explorer_slot
+        && !app.debug_mode
         && let Some(ref pane) = app.explorer
         && pane.win_id == win_id
     {
