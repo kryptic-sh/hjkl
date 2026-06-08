@@ -1060,20 +1060,29 @@ mod tests {
 
         let map = explorer_status_map(tmp.path());
 
+        // Look up by file name, not absolute path: `explorer_status_map` keys on
+        // git2's `workdir` form, which is canonicalized (macOS `/var`→`/private`,
+        // Windows separators/UNC) and so won't equal a raw `tmp.path().join(...)`.
+        let _ = (&committed, &untracked, &staged);
+        let by_name = |name: &str| -> Option<ExplorerGit> {
+            map.iter().find_map(|(p, s)| {
+                (p.file_name().and_then(|n| n.to_str()) == Some(name)).then_some(*s)
+            })
+        };
         assert_eq!(
-            map.get(&committed),
-            Some(&ExplorerGit::Modified),
-            "worktree-modified file must be Modified"
+            by_name("committed.txt"),
+            Some(ExplorerGit::Modified),
+            "worktree-modified file must be Modified; map: {map:?}"
         );
         assert_eq!(
-            map.get(&untracked),
-            Some(&ExplorerGit::Untracked),
-            "new untracked file must be Untracked"
+            by_name("untracked.txt"),
+            Some(ExplorerGit::Untracked),
+            "new untracked file must be Untracked; map: {map:?}"
         );
         assert_eq!(
-            map.get(&staged),
-            Some(&ExplorerGit::Staged),
-            "index-added file must be Staged"
+            by_name("staged.txt"),
+            Some(ExplorerGit::Staged),
+            "index-added file must be Staged; map: {map:?}"
         );
     }
 
@@ -1419,10 +1428,14 @@ mod tests {
         stage_path(&root, &f).expect("stage_path must succeed");
 
         // After staging, explorer_status_map must classify it as Staged.
+        // Look up by file name (keys are git2's canonicalized workdir form).
         let map = explorer_status_map(tmp.path());
+        let st = map.iter().find_map(|(p, s)| {
+            (p.file_name().and_then(|n| n.to_str()) == Some("tracked.txt")).then_some(*s)
+        });
         assert_eq!(
-            map.get(&f),
-            Some(&ExplorerGit::Staged),
+            st,
+            Some(ExplorerGit::Staged),
             "file must be Staged after stage_path; map: {map:?}"
         );
     }
@@ -1444,10 +1457,14 @@ mod tests {
         unstage_path(&root, &f).expect("unstage_path must succeed");
 
         // After unstaging, file must be worktree-Modified (not Staged).
+        // Look up by file name (keys are git2's canonicalized workdir form).
         let map = explorer_status_map(tmp.path());
+        let st = map.iter().find_map(|(p, s)| {
+            (p.file_name().and_then(|n| n.to_str()) == Some("tracked.txt")).then_some(*s)
+        });
         assert_eq!(
-            map.get(&f),
-            Some(&ExplorerGit::Modified),
+            st,
+            Some(ExplorerGit::Modified),
             "file must be Modified after unstage_path; map: {map:?}"
         );
     }
@@ -1456,6 +1473,8 @@ mod tests {
     fn discard_path_restores_worktree() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
         git(tmp.path(), &["init", "-q", "-b", "main"]);
+        // Disable autocrlf so Windows checkout doesn't rewrite `\n` → `\r\n`.
+        git(tmp.path(), &["config", "core.autocrlf", "false"]);
         let f = tmp.path().join("tracked.txt");
         std::fs::write(&f, "original\n").unwrap();
         git(tmp.path(), &["add", "tracked.txt"]);
@@ -1497,23 +1516,15 @@ mod tests {
     fn commit_with_file_real_message_commits() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
         git(tmp.path(), &["init", "-q", "-b", "main"]);
+        // Repo-local identity so commit_with_file's plain `git commit` succeeds
+        // on CI runners that have no global git config.
+        git(tmp.path(), &["config", "user.email", "t@t.com"]);
+        git(tmp.path(), &["config", "user.name", "T"]);
         // Need at least one commit so HEAD exists.
         let f = tmp.path().join("a.txt");
         std::fs::write(&f, "original\n").unwrap();
         git(tmp.path(), &["add", "a.txt"]);
-        git(
-            tmp.path(),
-            &[
-                "-c",
-                "user.email=t@t.com",
-                "-c",
-                "user.name=T",
-                "commit",
-                "-q",
-                "-m",
-                "init",
-            ],
-        );
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
 
         // Stage a change.
         std::fs::write(&f, "modified\n").unwrap();
