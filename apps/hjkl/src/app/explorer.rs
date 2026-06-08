@@ -1047,10 +1047,20 @@ impl super::App {
         let ops = super::explorer_reconcile::reconcile(&baseline, &text, &root);
 
         if ops.is_empty() {
-            // No fs changes. Update last_reconcile_gen so this gen is not
-            // re-processed, but do NOT reset the buffer — it's a cosmetic
-            // mid-edit change (cursor on unchanged content).
-            if let Some(ep) = self.explorer.as_mut() {
+            // No fs changes. But the buffer may still hold cosmetic cruft that
+            // parsed to nothing — most commonly a stray blank line left by
+            // `o<Esc>` / `O<Esc>` (open-line with no name typed). If the text no
+            // longer matches the tree's canonical render, rebuild to normalize
+            // it away; otherwise just advance the gen (a pure cursor move on
+            // unchanged content).
+            let canonical = self
+                .explorer
+                .as_ref()
+                .map(|ep| ep.tree.render_text())
+                .unwrap_or_default();
+            if text != canonical {
+                self.explorer_rebuild_buffer(); // also syncs baseline + gen
+            } else if let Some(ep) = self.explorer.as_mut() {
                 ep.last_reconcile_gen = cur_gen;
             }
             return;
@@ -2937,6 +2947,49 @@ mod tests {
         assert_eq!(
             top, 0,
             "explorer must not scroll when the opened file is already visible"
+        );
+    }
+
+    /// `o<Esc>` (open-line, no name typed) must not leave a stray blank line in
+    /// the tree — the no-op reconcile has to normalize the buffer back to the
+    /// canonical render.
+    #[test]
+    fn o_then_esc_leaves_no_blank_line() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Esc);
+
+        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let text = app.slots[slot].editor.buffer().as_string();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(
+            !text.split('\n').any(|l| l.trim().is_empty()),
+            "o<Esc> must not leave a blank line; buffer was {text:?}"
         );
     }
 
