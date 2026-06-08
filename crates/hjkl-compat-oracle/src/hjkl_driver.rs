@@ -55,6 +55,14 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     if let Some(ai) = case.autoindent {
         editor.settings_mut().autoindent = ai;
     }
+    if let Some(ref fdm) = case.foldmethod {
+        use hjkl_engine::types::FoldMethod;
+        editor.settings_mut().foldmethod = match fdm.as_str() {
+            "manual" => FoldMethod::Manual,
+            "marker" => FoldMethod::Marker,
+            _ => FoldMethod::Expr,
+        };
+    }
 
     // 3. Set initial cursor.
     let (init_row, init_col) = case.initial_cursor;

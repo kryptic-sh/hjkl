@@ -226,6 +226,11 @@ async fn tier2_autoindent_open_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_fold_delete_corpus_passes() {
+    run_corpus("corpus/tier2_fold_delete.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_registers_corpus_passes() {
     run_corpus("corpus/tier2_registers.toml").await;
 }

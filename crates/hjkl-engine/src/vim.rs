@@ -6382,6 +6382,43 @@ fn clamp_cursor_to_normal_mode<H: crate::types::Host>(ed: &mut Editor<hjkl_buffe
 
 // ─── dd/cc/yy ──────────────────────────────────────────────────────────────
 
+/// Expand a linewise `[start, end]` row range so it fully covers every CLOSED
+/// fold it overlaps — vim's rule that a linewise operator on a closed fold acts
+/// on the whole fold. Loops until stable so nested closed folds are absorbed.
+fn expand_linewise_over_closed_folds(
+    buf: &hjkl_buffer::Buffer,
+    mut start: usize,
+    mut end: usize,
+) -> (usize, usize) {
+    let folds = buf.folds();
+    if folds.is_empty() {
+        return (start, end);
+    }
+    loop {
+        let mut changed = false;
+        for f in &folds {
+            if !f.closed {
+                continue;
+            }
+            // Does this closed fold overlap the current range?
+            if f.start_row <= end && f.end_row >= start {
+                if f.start_row < start {
+                    start = f.start_row;
+                    changed = true;
+                }
+                if f.end_row > end {
+                    end = f.end_row;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (start, end)
+}
+
 fn execute_line_op<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
@@ -6410,6 +6447,12 @@ fn execute_line_op<H: crate::types::Host>(
         return;
     }
     let end_row = (row + count.saturating_sub(1)).min(total.saturating_sub(1));
+
+    // Vim: a linewise operator (`dd`/`yy`/`cc`/`>>`/…) with the cursor on a
+    // CLOSED fold operates on the ENTIRE fold, not just the cursor line. Expand
+    // the `[row, end_row]` range to cover any closed fold it touches (repeats
+    // until stable so nested folds are absorbed too).
+    let (row, end_row) = expand_linewise_over_closed_folds(&ed.buffer, row, end_row);
 
     match op {
         Operator::Yank => {
@@ -8556,7 +8599,11 @@ fn do_paste<H: crate::types::Host>(
     // Without this snapshot the per-iteration cursor advancement leaves
     // the cursor at `original_row + count` instead.
     let original_row_for_linewise_after = if linewise && !before {
-        Some(buf_cursor_pos(&ed.buffer).row)
+        // Fold-aware: `p` on a closed fold pastes after the fold, so the first
+        // pasted line is `fold_end + 1`, not `cursor_row + 1`.
+        let r = buf_cursor_pos(&ed.buffer).row;
+        let (_, fold_end) = expand_linewise_over_closed_folds(&ed.buffer, r, r);
+        Some(fold_end)
     } else {
         None
     };
@@ -8578,19 +8625,23 @@ fn do_paste<H: crate::types::Host>(
                 let target_w = indent_width(&cur_line, ed.settings.tabstop.max(1));
                 text = reindent_block(&text, target_w, &ed.settings);
             }
+            // Fold-aware: linewise paste lands relative to the whole CLOSED
+            // fold, not just the cursor line — `p` after the fold's last row,
+            // `P` before its first row (vim behaviour). No fold → unchanged.
+            let (fold_start, fold_end) = expand_linewise_over_closed_folds(&ed.buffer, row, row);
             let target_row = if before {
                 ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(row, 0),
+                    at: Position::new(fold_start, 0),
                     text: format!("{text}\n"),
                 });
-                row
+                fold_start
             } else {
-                let line_chars = buf_line_chars(&ed.buffer, row);
+                let line_chars = buf_line_chars(&ed.buffer, fold_end);
                 ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(row, line_chars),
+                    at: Position::new(fold_end, line_chars),
                     text: format!("\n{text}"),
                 });
-                row + 1
+                fold_end + 1
             };
             buf_set_cursor_rc(&mut ed.buffer, target_row, 0);
             crate::motions::move_first_non_blank(&mut ed.buffer);

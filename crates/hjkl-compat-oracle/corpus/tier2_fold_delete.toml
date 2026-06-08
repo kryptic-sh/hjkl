@@ -1,0 +1,94 @@
+# Tier 2 — linewise operators on a CLOSED fold.
+#
+# Vim semantics: a linewise operator (`dd`/`yy`/`cc`/`>>`/`<<`/`gUU`/`guu`/
+# `g~~`/`g??`) applied with the cursor on a CLOSED fold operates on the ENTIRE
+# fold, not just the cursor line.
+#
+# Each case builds a closed 3-line fold over lines 2..4 with `zf2j`, then runs
+# the operator. `foldmethod` is pinned to `manual` on both drivers (nvim
+# defaults manual, hjkl defaults expr) so `zf` behaves identically. Expected
+# buffers captured from `nvim --headless`.
+
+# `dd` deletes all 3 folded lines.
+[[cases]]
+name = "dd_on_closed_fold_deletes_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jdd"
+foldmethod = "manual"
+expected_buffer = "a\ne\n"
+expected_mode = "normal"
+
+# `yy` then `p` yanks all 3 folded lines and pastes them below the fold.
+[[cases]]
+name = "yy_on_closed_fold_yanks_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jyyp"
+foldmethod = "manual"
+expected_buffer = "a\nb\nc\nd\nb\nc\nd\ne\n"
+expected_mode = "normal"
+
+# `cc` changes all 3 folded lines, replacing them with the typed text.
+[[cases]]
+name = "cc_on_closed_fold_changes_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jccX<Esc>"
+foldmethod = "manual"
+expected_buffer = "a\nX\ne\n"
+expected_mode = "normal"
+
+# `>>` indents all 3 folded lines by one shiftwidth.
+[[cases]]
+name = "indent_on_closed_fold_indents_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2j>>"
+foldmethod = "manual"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "a\n  b\n  c\n  d\ne\n"
+expected_mode = "normal"
+
+# `<<` dedents all 3 folded lines by one shiftwidth.
+[[cases]]
+name = "dedent_on_closed_fold_dedents_whole_fold"
+initial_buffer = "a\n  b\n  c\n  d\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2j<<"
+foldmethod = "manual"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_mode = "normal"
+
+# `gUU` uppercases all 3 folded lines.
+[[cases]]
+name = "gUU_on_closed_fold_uppercases_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jgUU"
+foldmethod = "manual"
+expected_buffer = "a\nB\nC\nD\ne\n"
+expected_mode = "normal"
+
+# `g~~` toggles case across all 3 folded lines.
+[[cases]]
+name = "g_tilde_on_closed_fold_toggles_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jg~~"
+foldmethod = "manual"
+expected_buffer = "a\nB\nC\nD\ne\n"
+expected_mode = "normal"
+
+# `g??` ROT13s all 3 folded lines.
+[[cases]]
+name = "g_question_on_closed_fold_rot13s_whole_fold"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [1, 0]
+keys = "zf2jg??"
+foldmethod = "manual"
+expected_buffer = "a\no\np\nq\ne\n"
+expected_mode = "normal"

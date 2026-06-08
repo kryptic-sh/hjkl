@@ -84,6 +84,12 @@ pub struct OracleCase {
     /// `nvim --clean` defaulting it off.
     #[serde(default)]
     pub autoindent: Option<bool>,
+
+    /// Optional `foldmethod` (`"manual"` / `"marker"` / `"expr"` / `"indent"` /
+    /// `"syntax"`). Applied to both drivers so `zf` fold-create cases start from
+    /// the same mode — nvim defaults `manual` while hjkl defaults `expr`.
+    #[serde(default)]
+    pub foldmethod: Option<String>,
 }
 
 /// A collection of [`OracleCase`]s loaded from a single TOML corpus file.

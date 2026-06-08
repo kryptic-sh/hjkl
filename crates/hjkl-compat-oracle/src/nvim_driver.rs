@@ -132,6 +132,9 @@ async fn run_case_inner(
         })
         .await?;
     }
+    if let Some(ref fdm) = case.foldmethod {
+        nvim.command(&format!("set foldmethod={fdm}")).await?;
+    }
 
     // 4. Apply keystrokes.
     //    `nvim_input` reads `<` as the start of a key-notation token (`<Esc>`,
