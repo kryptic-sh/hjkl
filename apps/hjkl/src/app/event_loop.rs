@@ -398,6 +398,13 @@ impl App {
             if key.code == KeyCode::Char('o') && self.explorer_open_in_dir() {
                 return KeyOutcome::Continue;
             }
+            // `p` on a DIRECTORY → paste the cut/yanked entries INSIDE the dir
+            // (re-indented as children), so `dd` a dir then `p` on another dir
+            // MOVES it into that dir. On a file (or empty register) it falls
+            // through to the normal sibling paste.
+            if key.code == KeyCode::Char('p') && self.explorer_paste_in_dir() {
+                return KeyOutcome::Continue;
+            }
         }
 
         // <C-r> in the explorer while in Normal mode and no pending: redo.

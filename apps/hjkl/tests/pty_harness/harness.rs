@@ -83,7 +83,19 @@ impl TerminalSession {
         Self::spawn_inner(None, rows, cols)
     }
 
+    /// Spawn `hjkl` with no file argument but with the working directory set to
+    /// `dir`. Used by explorer tests: the explorer roots at the process cwd, so
+    /// this controls the tree shown by `<leader>e`.
+    #[allow(dead_code)]
+    pub fn spawn_in_dir(dir: &Path) -> Self {
+        Self::spawn_inner_cwd(None, 24, 80, Some(dir))
+    }
+
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
+        Self::spawn_inner_cwd(file, rows, cols, None)
+    }
+
+    fn spawn_inner_cwd(file: Option<&Path>, rows: u16, cols: u16, cwd: Option<&Path>) -> Self {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -112,6 +124,10 @@ impl TerminalSession {
         // surface the recovery prompt. Unique per spawn → fresh + clean.
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
+
+        if let Some(d) = cwd {
+            cmd.cwd(d);
+        }
 
         if let Some(p) = file {
             cmd.arg(p);

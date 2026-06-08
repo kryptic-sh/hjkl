@@ -1560,6 +1560,92 @@ impl super::App {
         true
     }
 
+    /// `p` when the cursor is on a DIRECTORY: paste the cut/yanked tree lines
+    /// INSIDE that dir (re-indented as its children) so `dd` a dir/file then
+    /// `p` on another dir MOVES the entry into it. The pasted lines have their
+    /// `<US><id>` tails stripped, so reconcile treats them as fresh creates —
+    /// files are restored from trash by name (contents preserved), making the
+    /// whole thing a real move.
+    ///
+    /// Returns `false` (not handled) when the cursor isn't on a directory or the
+    /// register isn't a linewise tree block — the caller then runs the normal
+    /// sibling paste.
+    pub(crate) fn explorer_paste_in_dir(&mut self) -> bool {
+        use super::explorer_reconcile::ID_SEP;
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return false;
+        };
+        let cursor_row = self.slots[slot_idx].editor.cursor().0;
+        // Node under the editor cursor must be a directory.
+        let node = match self
+            .explorer
+            .as_ref()
+            .and_then(|ep| ep.tree.nodes.get(cursor_row))
+            .cloned()
+        {
+            Some(n) if n.is_dir => n,
+            _ => return false,
+        };
+
+        // Register must hold a linewise tree block (from `dd`/`yy` of rows).
+        let slot = self.slots[slot_idx].editor.registers().unnamed.clone();
+        if !slot.linewise || slot.text.trim().is_empty() {
+            return false;
+        }
+
+        // Strip the id tail from each line + drop blanks.
+        let lines: Vec<String> = slot
+            .text
+            .trim_end_matches('\n')
+            .split('\n')
+            .map(|l| l.split(ID_SEP).next().unwrap_or(l).to_string())
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            return false;
+        }
+
+        // Re-indent so the block's shallowest line becomes a child of this dir
+        // (depth+1); deeper lines keep their relative offset.
+        let min_indent = lines
+            .iter()
+            .map(|l| l.len() - l.trim_start_matches(' ').len())
+            .min()
+            .unwrap_or(0);
+        let target_indent = (node.depth + 1) * 2 + 2;
+        let delta = target_indent as isize - min_indent as isize;
+        let block: String = lines
+            .iter()
+            .map(|l| {
+                let cur = l.len() - l.trim_start_matches(' ').len();
+                let new_indent = (cur as isize + delta).max(0) as usize;
+                format!("{}{}", " ".repeat(new_indent), &l[cur..])
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Open the dir's fold so the paste lands as visible children right after
+        // the dir line (an OPEN fold means the fold-aware paste targets the line
+        // below the dir, not after a collapsed subtree). Keep `expanded` synced.
+        self.slots[slot_idx]
+            .editor
+            .buffer_mut()
+            .open_fold_at(cursor_row);
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.set_expanded(&node.path, true);
+        }
+        self.sync_explorer_window_folds();
+
+        // Install the re-indented, id-less block as a linewise register and
+        // paste below the dir line.
+        self.slots[slot_idx].editor.registers_mut().unnamed = hjkl_engine::Slot {
+            text: block,
+            linewise: true,
+        };
+        self.slots[slot_idx].editor.paste_after(1);
+        true
+    }
+
     /// Find the nearest non-explorer window in the active tab's layout.
     pub(crate) fn nearest_non_explorer_window(&self) -> Option<super::window::WindowId> {
         let leaves = self.layout().leaves();
@@ -2749,6 +2835,82 @@ mod tests {
             resolve(&[KmKeyEvent::char('g'), KmKeyEvent::char('i')]),
             Some(AppAction::ExplorerToggleGitignore),
             "gi must map to ExplorerToggleGitignore"
+        );
+    }
+
+    /// `dd` a dir, then `p` on another dir → the dir moves INTO the target dir
+    /// with its contents preserved (full keypress → reconcile → filesystem).
+    #[test]
+    fn dd_dir_then_p_on_dir_moves_into_target() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("mover")).unwrap();
+        std::fs::write(tmp.path().join("mover").join("inner.txt"), b"CONTENT").unwrap();
+        std::fs::create_dir(tmp.path().join("target")).unwrap();
+        std::fs::write(tmp.path().join("target").join("keep.txt"), b"k").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        let row_of = |app: &super::super::App, p: &std::path::Path| -> Option<usize> {
+            app.explorer
+                .as_ref()
+                .unwrap()
+                .tree
+                .nodes
+                .iter()
+                .position(|n| n.path == p)
+        };
+        let set_cursor = |app: &mut super::super::App, row: usize| {
+            if let Some(Some(w)) = app.windows.get_mut(win_id) {
+                w.cursor_row = row;
+                w.cursor_col = 0;
+            }
+            app.sync_viewport_to_explorer_editor();
+        };
+
+        let mover = tmp.path().join("mover");
+        let mr = row_of(&app, &mover).unwrap();
+        set_cursor(&mut app, mr);
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let target = tmp.path().join("target");
+        let tr = row_of(&app, &target).expect("target row after dd");
+        set_cursor(&mut app, tr);
+        press(&mut app, KeyCode::Char('p'));
+
+        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let buf = app.slots[slot].editor.buffer().as_string();
+        let inside = tmp.path().join("target").join("mover").join("inner.txt");
+        let at_root = tmp.path().join("mover").join("inner.txt");
+        let inside_exists = inside.exists();
+        let inside_content = std::fs::read(&inside).ok();
+        let root_exists = at_root.exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(
+            inside_exists && inside_content.as_deref() == Some(b"CONTENT".as_slice()),
+            "expected target/mover/inner.txt with CONTENT.\n inside={inside_exists} content={inside_content:?} root_still={root_exists}\n buffer:\n{buf:?}"
         );
     }
 

@@ -6,6 +6,10 @@
 // file to linux until the flake is root-caused.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod at_colon;
+// Explorer e2e drives `<leader>e` + `/search<CR>` + `dd`/`p`; restrict to linux
+// for the same macOS pty `:cmd\r`/`/pat\r` timing reasons as the other suites.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod explorer;
 pub mod harness;
 // Uses `:set`/`:w` ex commands; macOS pty timing mangles `:cmd\r` into literal
 // insert text (see `at_colon` note above), so restrict to linux.
