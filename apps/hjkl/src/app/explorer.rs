@@ -2641,9 +2641,9 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// `<C-s>` resolves to ExplorerOpenSplit; `<C-v>` → ExplorerOpenVsplit;
-    /// `<C-t>` → ExplorerOpenTab; `gh` → ExplorerToggleHidden; `gi` →
-    /// ExplorerToggleGitignore in the explorer keymap.
+    /// `<C-s>` → ExplorerOpenVsplit; `<C-S-s>` → ExplorerOpenSplit; `<C-v>` is
+    /// UNBOUND (falls through to visual-block); `<C-t>` → ExplorerOpenTab;
+    /// `gh` → ExplorerToggleHidden; `gi` → ExplorerToggleGitignore.
     #[test]
     fn explorer_keymap_ctrl_open_and_g_toggles() {
         use crate::app::keymap::HjklMode;
@@ -2680,13 +2680,21 @@ mod tests {
 
         assert_eq!(
             resolve(&[KmKeyEvent::ctrl('s')]),
+            Some(AppAction::ExplorerOpenVsplit),
+            "<C-s> must map to ExplorerOpenVsplit"
+        );
+        assert_eq!(
+            resolve(&[KmKeyEvent::new(
+                hjkl_keymap::KeyCode::Char('s'),
+                hjkl_keymap::KeyModifiers::CTRL | hjkl_keymap::KeyModifiers::SHIFT,
+            )]),
             Some(AppAction::ExplorerOpenSplit),
-            "<C-s> must map to ExplorerOpenSplit"
+            "<C-S-s> must map to ExplorerOpenSplit"
         );
         assert_eq!(
             resolve(&[KmKeyEvent::ctrl('v')]),
-            Some(AppAction::ExplorerOpenVsplit),
-            "<C-v> must map to ExplorerOpenVsplit"
+            None,
+            "<C-v> must be unbound in the explorer (falls through to visual-block)"
         );
         assert_eq!(
             resolve(&[KmKeyEvent::ctrl('t')]),

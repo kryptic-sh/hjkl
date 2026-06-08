@@ -730,8 +730,11 @@ pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::H
         // <CR> opens a file or toggles a directory (expand/collapse).
         ("<CR>", AppAction::ExplorerActivate, "open / toggle"),
         // ── Open modes (Ctrl chords — no conflict with editing) ───────────
-        ("<C-s>", AppAction::ExplorerOpenSplit, "open in split"),
-        ("<C-v>", AppAction::ExplorerOpenVsplit, "open in vsplit"),
+        // NOTE: `<C-v>` is intentionally NOT bound here so it falls through to
+        // the engine's visual-block (block edit works in the oil-style buffer).
+        // Vsplit/split live on `<C-s>` / `<C-S-s>` instead.
+        ("<C-s>", AppAction::ExplorerOpenVsplit, "open in vsplit"),
+        ("<C-S-s>", AppAction::ExplorerOpenSplit, "open in split"),
         ("<C-t>", AppAction::ExplorerOpenTab, "open in tab"),
         // ── Root / view ───────────────────────────────────────────────────
         ("-", AppAction::ExplorerRootUp, "root up"),
