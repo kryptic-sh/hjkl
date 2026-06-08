@@ -114,12 +114,21 @@ fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
             stack.pop();
         }
 
-        // Parent: top of stack if its depth == depth - 1, else root.
-        let parent = stack
-            .last()
-            .filter(|(d, _)| *d == depth - 1)
-            .map(|(_, p)| p.as_path())
-            .unwrap_or(root);
+        // Resolve parent. depth-1 lines are children of root. A depth ≥ 2 line
+        // REQUIRES an immediate parent dir (depth-1) on the stack; if it's
+        // missing the line was ORPHANED by a deleted ancestor — e.g. `dd` on an
+        // OPEN directory removes only the dir's own line, leaving its (deeper-
+        // indented) children behind with no parent. Drop such orphans so
+        // reconcile trashes them along with the deleted dir, rather than
+        // reparenting them up to the root.
+        let parent = if depth == 1 {
+            root
+        } else {
+            match stack.last().filter(|(d, _)| *d == depth - 1) {
+                Some((_, p)) => p.as_path(),
+                None => continue, // orphan of a deleted ancestor → drop
+            }
+        };
 
         // `Path::join` handles internal slashes in `name` (e.g. "a/b.rs").
         let target = parent.join(name);
@@ -1287,6 +1296,46 @@ mod tests {
         assert!(
             ops.contains(&FsOp::CreateFile(root().join("orig.rs"))),
             "expected CreateFile(orig.rs), got {ops:?}"
+        );
+    }
+
+    /// `dd` on an OPEN (unfolded) dir removes only the dir's own line, leaving
+    /// its children behind at their deeper indent with no parent. Those orphans
+    /// must be dropped (→ trashed with the dir), NOT reparented to root.
+    #[test]
+    fn dd_open_dir_orphans_are_trashed_not_reparented() {
+        // baseline: mydir/(id1), mydir/a.rs(id2), mydir/b.rs(id3)
+        let baseline = make_baseline(&[
+            ("mydir", true),
+            ("mydir/a.rs", false),
+            ("mydir/b.rs", false),
+        ]);
+        // Buffer AFTER `dd` on the open `mydir/` line: the dir line is gone, but
+        // its two children remain at depth-2 (6-space) indent with their ids.
+        let buffer = format!(
+            "{}\n{}\n{}",
+            root_header(),
+            idline(2, "a.rs", 2),
+            idline(2, "b.rs", 3),
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
+        // All three originals must be trashed; nothing reparented to root.
+        assert!(
+            ops.contains(&FsOp::Trash(root().join("mydir"))),
+            "dir must be trashed, got {ops:?}"
+        );
+        assert!(
+            ops.contains(&FsOp::Trash(root().join("mydir").join("a.rs"))),
+            "child a.rs must be trashed, got {ops:?}"
+        );
+        assert!(
+            ops.contains(&FsOp::Trash(root().join("mydir").join("b.rs"))),
+            "child b.rs must be trashed, got {ops:?}"
+        );
+        // NO rename (would mean a child was orphaned to root) and NO create.
+        assert!(
+            ops.iter().all(|op| matches!(op, FsOp::Trash(_))),
+            "open-dir dd must produce only Trash ops, got {ops:?}"
         );
     }
 

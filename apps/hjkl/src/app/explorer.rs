@@ -2838,6 +2838,72 @@ mod tests {
         );
     }
 
+    /// `dd` on an OPEN (unfolded) dir deletes the WHOLE subtree — the dir and
+    /// its children are trashed together; children must NOT be orphaned to root.
+    #[test]
+    fn dd_open_dir_deletes_subtree_no_orphans() {
+        use crate::app::event_loop::KeyOutcome;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_engine::VimMode;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("d")).unwrap();
+        std::fs::write(tmp.path().join("d").join("a.rs"), b"a").unwrap();
+        std::fs::write(tmp.path().join("d").join("b.rs"), b"b").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let press = |app: &mut super::super::App, code: KeyCode| {
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let consumed = matches!(
+                app.handle_keypress(key),
+                KeyOutcome::Continue | KeyOutcome::Break
+            );
+            if !consumed {
+                if app.active().editor.vim_mode() == VimMode::Insert {
+                    app.dispatch_insert_key(key);
+                } else {
+                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                }
+            }
+            app.maybe_reconcile_explorer();
+        };
+        let dir = tmp.path().join("d");
+        let dir_row = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .position(|n| n.path == dir)
+            .unwrap();
+        if let Some(Some(w)) = app.windows.get_mut(win_id) {
+            w.cursor_row = dir_row;
+            w.cursor_col = 0;
+        }
+        app.sync_viewport_to_explorer_editor();
+        // OPEN (unfold) the dir via Enter (ExplorerActivate), matching the real
+        // keypress path rather than calling the helper directly.
+        press(&mut app, KeyCode::Enter);
+        // dd on the now-open dir.
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        let dir_gone = !tmp.path().join("d").exists();
+        let a_orphan = tmp.path().join("a.rs").exists();
+        let b_orphan = tmp.path().join("b.rs").exists();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(dir_gone, "the dir must be deleted (trashed)");
+        assert!(
+            !a_orphan && !b_orphan,
+            "children must NOT be orphaned to root (a={a_orphan} b={b_orphan})"
+        );
+    }
+
     /// `dd` a dir, then `p` on another dir → the dir moves INTO the target dir
     /// with its contents preserved (full keypress → reconcile → filesystem).
     #[test]
