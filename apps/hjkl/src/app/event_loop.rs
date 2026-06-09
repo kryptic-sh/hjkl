@@ -193,6 +193,13 @@ impl App {
 
         // Poll any in-flight anvil install jobs and surface status toasts.
         let _ = self.poll_anvil_jobs();
+
+        // Event-driven autoreload (#242): reconcile any external file changes
+        // the fs-watch surfaced. Like the git/blame polls above, this runs AFTER
+        // terminal.draw, so request a repaint when a buffer was reloaded.
+        if self.drain_fs_watch_events() {
+            self.pending_recompute = true;
+        }
     }
 
     /// Compute how long to wait for the next event.

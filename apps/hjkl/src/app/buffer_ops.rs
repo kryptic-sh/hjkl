@@ -164,6 +164,8 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
+            // No file open in slot 0 anymore — stop watching it (#242).
+            self.fs_watch_sync();
             self.bus.info("buffer closed (replaced with [No Name])");
             return;
         }
@@ -195,6 +197,8 @@ impl App {
         // Clear alt-buffer pointer after the switch: prev_active may refer
         // to a removed or re-indexed slot. Reset unconditionally.
         self.prev_active = None;
+        // The removed slot's file (if any) may no longer be open — resync (#242).
+        self.fs_watch_sync();
         let name = removed
             .filename
             .as_ref()
@@ -283,6 +287,8 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
+            // No file open in slot 0 anymore — stop watching it (#242).
+            self.fs_watch_sync();
             self.bus.info("buffer wiped (replaced with [No Name])");
             return;
         }
@@ -307,6 +313,8 @@ impl App {
         let target = self.focused_slot_idx();
         self.switch_to(target);
         self.prev_active = None;
+        // The removed slot's file (if any) may no longer be open — resync (#242).
+        self.fs_watch_sync();
         let name = removed
             .filename
             .as_ref()
@@ -356,6 +364,8 @@ impl App {
         self.slots.push(slot);
         let idx = self.slots.len() - 1;
         self.lsp_attach_buffer(idx);
+        // Event-driven autoreload: watch this file's directory (#242).
+        self.fs_watch_sync();
         Ok(idx)
     }
 

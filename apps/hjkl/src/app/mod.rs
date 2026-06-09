@@ -30,6 +30,7 @@ mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
 pub(crate) mod explorer;
 pub(crate) mod explorer_reconcile;
+mod fs_watch;
 pub(crate) mod git_hunks;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
@@ -437,6 +438,11 @@ pub struct App {
     /// `:colorscheme {name}` and `:set background=`; reported by bare
     /// `:colorscheme` / `:colorscheme?`. Default `"dark"`.
     pub(crate) colorscheme: String,
+    /// Event-driven autoreload watcher (#242). `None` until `enable_fs_watch`
+    /// is called (the real binary wires it after config; tests drive
+    /// `apply_fs_events` directly). When `None`, the poll path still autoreloads
+    /// on focus-regain / `:checktime`.
+    fs_watch: Option<fs_watch::FsWatch>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -1567,6 +1573,7 @@ impl App {
             blame_prev_cursor: None,
             blame_cursor_moved_at: std::time::Instant::now(),
             colorscheme: "dark".to_string(),
+            fs_watch: None,
         };
         // Check for crash recovery on the initial file slot (#185).
         // If no recovery prompt is needed, arm the PID-lock swap immediately so

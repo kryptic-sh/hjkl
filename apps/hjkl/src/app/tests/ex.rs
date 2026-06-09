@@ -959,6 +959,278 @@ fn checktime_recovers_after_file_recreated() {
     let _ = std::fs::remove_file(&path);
 }
 
+// ── Event-driven autoreload (fs-watch, #242) ───────────────────────────────
+//
+// These drive `apply_fs_events` directly (the reconcile half of the watcher),
+// so they need no live notify thread and stay hermetic. The watcher wiring
+// (filter set, drain) is exercised end-to-end by the PTY test in
+// tests/pty_harness/autoreload.rs.
+
+/// Read a slot's lines with trailing newlines stripped.
+fn fsw_lines(app: &App, idx: usize) -> Vec<String> {
+    app.slots[idx]
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| s.to_string().trim_end_matches('\n').to_string())
+        .collect()
+}
+
+/// A `Modified` event on a clean+autoreload buffer reloads it in place and
+/// reports the reload via the return value.
+#[test]
+fn fs_event_modified_reloads_clean_buffer() {
+    let path = std::env::temp_dir().join("hjkl_fsw_modify.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    write_and_wait(&path, "fresh\n");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+
+    assert!(reloaded, "a clean buffer must report a reload");
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["fresh"]);
+    assert!(!app.active().dirty);
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A dirty buffer is never clobbered by a watch event — flagged ChangedOnDisk,
+/// content preserved, no reload reported.
+#[test]
+fn fs_event_dirty_buffer_flags_no_reload() {
+    let path = std::env::temp_dir().join("hjkl_fsw_dirty.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.active_mut().dirty = true;
+
+    write_and_wait(&path, "external\n");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+
+    assert!(!reloaded, "dirty buffer must not reload");
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["original"]);
+    assert_eq!(app.active().disk_state, DiskState::ChangedOnDisk);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `:set noautoreload` makes a watch event flag the change without reloading.
+#[test]
+fn fs_event_autoreload_off_no_reload() {
+    let path = std::env::temp_dir().join("hjkl_fsw_noar.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.dispatch_ex("set noautoreload");
+
+    write_and_wait(&path, "external\n");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+
+    assert!(!reloaded);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["original"]);
+    assert_eq!(app.active().disk_state, DiskState::ChangedOnDisk);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A `Removed` event flags the buffer DeletedOnDisk without dropping content.
+#[test]
+fn fs_event_removed_flags_deleted() {
+    let path = std::env::temp_dir().join("hjkl_fsw_removed.txt");
+    std::fs::write(&path, "content\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    std::fs::remove_file(&path).unwrap();
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Removed(path.clone())]);
+
+    assert!(!reloaded);
+    assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["content"]);
+}
+
+/// An event for a path no buffer has open is a no-op.
+#[test]
+fn fs_event_unrelated_path_is_noop() {
+    let path = std::env::temp_dir().join("hjkl_fsw_open.txt");
+    std::fs::write(&path, "open\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let other = std::env::temp_dir().join("hjkl_fsw_unrelated.txt");
+    std::fs::write(&other, "noise\n").unwrap();
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(other.clone())]);
+
+    assert!(!reloaded, "event for an unopened path must do nothing");
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["open"]);
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&other);
+}
+
+/// A `Renamed { to }` whose destination is an open buffer reloads that buffer
+/// (the `to` end is matched, not just `from`).
+#[test]
+fn fs_event_rename_to_open_path_reloads() {
+    let path = std::env::temp_dir().join("hjkl_fsw_rename_to.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    write_and_wait(&path, "renamed-in\n");
+    let from = std::env::temp_dir().join("hjkl_fsw_rename_from.txt");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Renamed {
+        from,
+        to: path.clone(),
+    }]);
+
+    assert!(reloaded);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["renamed-in"]);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Two `Modified` events for the same file in one batch reload exactly once
+/// (canonicalized + deduped), emitting a single reload notice.
+#[test]
+fn fs_event_duplicate_events_reload_once() {
+    let path = std::env::temp_dir().join("hjkl_fsw_dedup.txt");
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    write_and_wait(&path, "deduped\n");
+    let reloaded = app.apply_fs_events(vec![
+        hjkl_fs_watch::FsEvent::Modified(path.clone()),
+        hjkl_fs_watch::FsEvent::Modified(path.clone()),
+    ]);
+
+    assert!(reloaded);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["deduped"]);
+    let reload_notices = app
+        .bus
+        .history()
+        .filter(|h| h.display_body().contains("reloaded from disk"))
+        .count();
+    assert_eq!(reload_notices, 1, "duplicate events must reload only once");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Reloading from a watch event preserves the cursor row + column.
+#[test]
+fn fs_event_reload_preserves_cursor_column() {
+    let path = std::env::temp_dir().join("hjkl_fsw_cursor.txt");
+    std::fs::write(&path, "abcdefgh\nsecond\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.active_mut().editor.jump_cursor(0, 4);
+
+    write_and_wait(&path, "abXXdefgh longer\nsecond\n");
+    app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+
+    assert_eq!(app.active().editor.cursor(), (0, 4));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// With two files open, an event for one reloads only that slot.
+#[test]
+fn fs_event_only_matching_slot_reloads() {
+    let a = std::env::temp_dir().join("hjkl_fsw_multi_a.txt");
+    let b = std::env::temp_dir().join("hjkl_fsw_multi_b.txt");
+    std::fs::write(&a, "a-old\n").unwrap();
+    std::fs::write(&b, "b-old\n").unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    let b_idx = app.open_new_slot(b.clone()).unwrap();
+    let a_idx = app.focused_slot_idx();
+
+    write_and_wait(&a, "a-new\n");
+    write_and_wait(&b, "b-new\n");
+    // Only `a` changed as far as the watcher reports.
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(a.clone())]);
+
+    assert!(reloaded);
+    assert_eq!(fsw_lines(&app, a_idx), vec!["a-new"], "a reloads");
+    assert_eq!(
+        fsw_lines(&app, b_idx),
+        vec!["b-old"],
+        "b must be untouched (no event for it)"
+    );
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+}
+
+/// An empty event batch is a no-op.
+#[test]
+fn fs_event_empty_batch_is_noop() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(!app.apply_fs_events(Vec::new()));
+}
+
+/// The watched-set sync helper is a safe no-op when fs-watch isn't enabled
+/// (the default in tests / `App::new`).
+#[test]
+fn fs_watch_helpers_noop_without_watcher() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Must not panic; fs_watch is None.
+    app.fs_watch_sync();
+}
+
+/// A `Removed` event flags DeletedOnDisk; a later `Created` event for a
+/// recreated file reloads the new content (the delete→reappear branch reached
+/// over the event channel, not just via `:checktime`).
+#[test]
+fn fs_event_recreate_after_delete_reloads() {
+    let path = std::env::temp_dir().join("hjkl_fsw_recreate.txt");
+    std::fs::write(&path, "v1\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    std::fs::remove_file(&path).unwrap();
+    let r1 = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Removed(path.clone())]);
+    assert!(!r1);
+    assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
+
+    write_and_wait(&path, "v2-recreated\n");
+    let r2 = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Created(path.clone())]);
+
+    assert!(r2, "recreated file must reload");
+    assert_eq!(
+        fsw_lines(&app, app.focused_slot_idx()),
+        vec!["v2-recreated"]
+    );
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A `Renamed` whose neither end is an open buffer is a no-op.
+#[test]
+fn fs_event_rename_unrelated_is_noop() {
+    let path = std::env::temp_dir().join("hjkl_fsw_rename_noop_open.txt");
+    std::fs::write(&path, "open\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let from = std::env::temp_dir().join("hjkl_fsw_rn_from.txt");
+    let to = std::env::temp_dir().join("hjkl_fsw_rn_to.txt");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Renamed { from, to }]);
+
+    assert!(!reloaded);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["open"]);
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A mixed batch (events for an open file + unrelated files) reloads only the
+/// open file and ignores the rest.
+#[test]
+fn fs_event_mixed_batch_reloads_only_open() {
+    let open = std::env::temp_dir().join("hjkl_fsw_mixed_open.txt");
+    std::fs::write(&open, "old\n").unwrap();
+    let mut app = App::new(Some(open.clone()), false, None, None).unwrap();
+
+    write_and_wait(&open, "mixed-new\n");
+    let noise_a = std::env::temp_dir().join("hjkl_fsw_mixed_noise_a.txt");
+    let noise_b = std::env::temp_dir().join("hjkl_fsw_mixed_noise_b.txt");
+    let reloaded = app.apply_fs_events(vec![
+        hjkl_fs_watch::FsEvent::Created(noise_a.clone()),
+        hjkl_fs_watch::FsEvent::Modified(open.clone()),
+        hjkl_fs_watch::FsEvent::Removed(noise_b.clone()),
+    ]);
+
+    assert!(reloaded);
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["mixed-new"]);
+    let _ = std::fs::remove_file(&open);
+}
+
 // ── Substitute ex-command tests ──────────────────────────────────────────────
 
 /// `:%s/foo/bar/g` over a multi-line buffer replaces all occurrences.

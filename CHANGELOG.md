@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Event-driven autoreload** (#242): open buffers now reload from disk the
+  moment an external change lands, instead of waiting for `:checktime` or a
+  focus-regain poll. Built on `hjkl-fs-watch`, which watches each open file's
+  directory (non-recursively, so a large repo doesn't register tens of thousands
+  of inotify watches). Honours the existing `autoreload`/`ar` option and the
+  dirty-buffer guard — unsaved edits are never clobbered. `hjkl-fs-watch` gained
+  `Watcher::watch_path` / `unwatch_path` and rootless `WatcherBuilder::build`
+  for per-file watching.
+
 ## [0.31.0] - 2026-06-08
 
 ### Added

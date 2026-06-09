@@ -2247,6 +2247,7 @@ dependencies = [
  "hjkl-engine-tui",
  "hjkl-ex",
  "hjkl-form",
+ "hjkl-fs-watch",
  "hjkl-holler",
  "hjkl-holler-tui",
  "hjkl-hover",

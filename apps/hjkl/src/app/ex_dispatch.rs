@@ -1903,95 +1903,111 @@ impl App {
     pub(crate) fn checktime_all(&mut self) {
         let mut messages: Vec<String> = Vec::new();
         for idx in 0..self.slots.len() {
-            let path = match self.slots[idx].filename.clone() {
-                Some(p) => p,
-                None => continue,
-            };
-            match std::fs::metadata(&path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    let prev = self.slots[idx].disk_state;
-                    self.slots[idx].disk_state = DiskState::DeletedOnDisk;
-                    if prev != DiskState::DeletedOnDisk {
-                        messages.push(format!("W: \"{}\" deleted on disk", path.display()));
-                    }
-                }
-                Err(_) => {
-                    // Non-NotFound I/O error — skip silently.
-                }
-                Ok(meta) => {
-                    let new_mtime = meta.modified().ok();
-                    let new_len = meta.len();
-                    // Compare against stored baseline.
-                    let changed = self.slots[idx].disk_mtime != new_mtime
-                        || self.slots[idx].disk_len != Some(new_len);
-                    if !changed {
-                        if self.slots[idx].disk_state == DiskState::DeletedOnDisk {
-                            // File reappeared. If we were in Deleted state,
-                            // reset to Synced so a follow-up checktime can pick
-                            // it up properly (the next block below handles
-                            // the actual reload when dirty==false).
-                            self.slots[idx].disk_state = DiskState::Synced;
-                        }
-                        continue;
-                    }
-                    // File changed. Warn (don't reload) when the buffer is dirty
-                    // OR `:set noautoreload` is active; otherwise auto-reload.
-                    let autoreload = self.slots[idx].editor.settings().autoreload;
-                    if self.slots[idx].dirty || !autoreload {
-                        let prev = self.slots[idx].disk_state;
-                        self.slots[idx].disk_state = DiskState::ChangedOnDisk;
-                        if prev != DiskState::ChangedOnDisk {
-                            let why = if self.slots[idx].dirty {
-                                "buffer is dirty, use :e! to reload"
-                            } else {
-                                "autoreload off, use :e to reload"
-                            };
-                            messages
-                                .push(format!("W: \"{}\" changed on disk ({why})", path.display()));
-                        }
-                    } else {
-                        // Clean buffer — reload automatically.
-                        let content = match std::fs::read_to_string(&path) {
-                            Ok(c) => c,
-                            Err(_) => continue,
-                        };
-                        let trimmed = content.strip_suffix('\n').unwrap_or(&content);
-                        // Preserve cursor row + column, clamped to the new
-                        // content (vim's autoread keeps the cursor where it was).
-                        let (cur_row, cur_col) = self.slots[idx].editor.cursor();
-                        self.slots[idx].editor.set_content(trimmed);
-                        let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
-                        let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
-                        self.slots[idx].editor.jump_cursor(clamped_row, cur_col);
-                        self.slots[idx].is_new_file = false;
-                        // Update disk metadata baseline.
-                        self.slots[idx].disk_mtime = new_mtime;
-                        self.slots[idx].disk_len = Some(new_len);
-                        self.slots[idx].disk_state = DiskState::Synced;
-                        self.slots[idx].snapshot_saved();
-                        // Refresh syntax + git for the reloaded slot.
-                        let buffer_id = self.slots[idx].buffer_id;
-                        // Non-blocking: Loading case activates via poll_grammar_loads each tick.
-                        let outcome = self.syntax.set_language_for_path(buffer_id, &path);
-                        let _ = outcome.is_known(); // Suppresses unused-result warning.
-                        self.syntax.reset(buffer_id);
-
-                        if idx == self.focused_slot_idx() {
-                            self.slots[idx]
-                                .editor
-                                .install_ratatui_syntax_spans(Vec::new());
-                            // recompute_and_install runs render_viewport sync — no
-                            // preview warm-up needed.
-                            self.recompute_and_install();
-                            self.refresh_git_signs_force();
-                        }
-                        messages.push(format!("\"{}\" reloaded from disk", path.display()));
-                    }
-                }
-            }
+            self.checktime_slot(idx, &mut messages);
         }
         if !messages.is_empty() {
             self.bus.info(messages.join(" | "));
+        }
+    }
+
+    /// Check a single slot for external changes, mirroring [`checktime_all`]'s
+    /// per-slot logic. Reloads a clean+autoreload buffer in place (cursor
+    /// preserved, syntax/git refreshed); a dirty buffer or `noautoreload` only
+    /// flips `disk_state` + pushes a one-shot warning into `messages`; a missing
+    /// file flags `DeletedOnDisk`. Returns `true` when the buffer content was
+    /// reloaded (so the event-driven caller can request a repaint).
+    ///
+    /// Shared by the poll path ([`checktime_all`] on focus-regain / `:checktime`)
+    /// and the event-driven fs-watch path (`drain_fs_watch_events`).
+    pub(crate) fn checktime_slot(&mut self, idx: usize, messages: &mut Vec<String>) -> bool {
+        let path = match self.slots[idx].filename.clone() {
+            Some(p) => p,
+            None => return false,
+        };
+        match std::fs::metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let prev = self.slots[idx].disk_state;
+                self.slots[idx].disk_state = DiskState::DeletedOnDisk;
+                if prev != DiskState::DeletedOnDisk {
+                    messages.push(format!("W: \"{}\" deleted on disk", path.display()));
+                }
+                false
+            }
+            Err(_) => {
+                // Non-NotFound I/O error — skip silently.
+                false
+            }
+            Ok(meta) => {
+                let new_mtime = meta.modified().ok();
+                let new_len = meta.len();
+                // Compare against stored baseline.
+                let changed = self.slots[idx].disk_mtime != new_mtime
+                    || self.slots[idx].disk_len != Some(new_len);
+                if !changed {
+                    if self.slots[idx].disk_state == DiskState::DeletedOnDisk {
+                        // File reappeared. If we were in Deleted state,
+                        // reset to Synced so a follow-up checktime can pick
+                        // it up properly (the next block below handles
+                        // the actual reload when dirty==false).
+                        self.slots[idx].disk_state = DiskState::Synced;
+                    }
+                    return false;
+                }
+                // File changed. Warn (don't reload) when the buffer is dirty
+                // OR `:set noautoreload` is active; otherwise auto-reload.
+                let autoreload = self.slots[idx].editor.settings().autoreload;
+                if self.slots[idx].dirty || !autoreload {
+                    let prev = self.slots[idx].disk_state;
+                    self.slots[idx].disk_state = DiskState::ChangedOnDisk;
+                    if prev != DiskState::ChangedOnDisk {
+                        let why = if self.slots[idx].dirty {
+                            "buffer is dirty, use :e! to reload"
+                        } else {
+                            "autoreload off, use :e to reload"
+                        };
+                        messages.push(format!("W: \"{}\" changed on disk ({why})", path.display()));
+                    }
+                    false
+                } else {
+                    // Clean buffer — reload automatically.
+                    let content = match std::fs::read_to_string(&path) {
+                        Ok(c) => c,
+                        Err(_) => return false,
+                    };
+                    let trimmed = content.strip_suffix('\n').unwrap_or(&content);
+                    // Preserve cursor row + column, clamped to the new
+                    // content (vim's autoread keeps the cursor where it was).
+                    let (cur_row, cur_col) = self.slots[idx].editor.cursor();
+                    self.slots[idx].editor.set_content(trimmed);
+                    let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
+                    let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
+                    self.slots[idx].editor.jump_cursor(clamped_row, cur_col);
+                    self.slots[idx].is_new_file = false;
+                    // Update disk metadata baseline.
+                    self.slots[idx].disk_mtime = new_mtime;
+                    self.slots[idx].disk_len = Some(new_len);
+                    self.slots[idx].disk_state = DiskState::Synced;
+                    self.slots[idx].snapshot_saved();
+                    // Refresh syntax + git for the reloaded slot.
+                    let buffer_id = self.slots[idx].buffer_id;
+                    // Non-blocking: Loading case activates via poll_grammar_loads each tick.
+                    let outcome = self.syntax.set_language_for_path(buffer_id, &path);
+                    let _ = outcome.is_known(); // Suppresses unused-result warning.
+                    self.syntax.reset(buffer_id);
+
+                    if idx == self.focused_slot_idx() {
+                        self.slots[idx]
+                            .editor
+                            .install_ratatui_syntax_spans(Vec::new());
+                        // recompute_and_install runs render_viewport sync — no
+                        // preview warm-up needed.
+                        self.recompute_and_install();
+                        self.refresh_git_signs_force();
+                    }
+                    messages.push(format!("\"{}\" reloaded from disk", path.display()));
+                    true
+                }
+            }
         }
     }
 

@@ -43,6 +43,7 @@ hjkl-splash.workspace = true
 hjkl-splash-tui.workspace = true
 hjkl-engine.workspace = true
 hjkl-engine-tui.workspace = true
+hjkl-fs-watch.workspace = true
 hjkl-editor = { workspace = true, features = ["ratatui"] }
 hjkl-ex.workspace = true
 hjkl-editor-tui.workspace = true

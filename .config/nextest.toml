@@ -43,6 +43,7 @@
 clipboard-display = { max-threads = 1 }
 anvil-env = { max-threads = 1 }
 grammar-cache = { max-threads = 1 }
+pty-e2e = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
@@ -59,3 +60,13 @@ test-group = 'anvil-env'
 # in this group too (it does not match `/rust_fold/`).
 filter = 'package(hjkl-bonsai) & (test(/rust_fold/) | test(/all_bundled_fold/))'
 test-group = 'grammar-cache'
+
+[[profile.default.overrides]]
+# The `e2e` integration test drives the real `hjkl` binary under a real pty and
+# scrapes the rendered screen. Concurrent pty sessions contend on terminal
+# resources and timing (the harness asserts on a settled screen), so under a
+# high core-count `-j` they spuriously fail — e.g. the indent / autoreload (#242)
+# suites. The e2e doc already mandates `--test-threads=1`; this enforces the same
+# under nextest's process-per-test model regardless of host core count.
+filter = 'package(hjkl) & binary(e2e)'
+test-group = 'pty-e2e'

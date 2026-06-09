@@ -372,6 +372,10 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
+    // Start event-driven autoreload (#242). Best-effort: on failure the
+    // poll-based `:checktime` / focus-regain path still autoreloads.
+    app.enable_fs_watch();
+
     let result = app.run(&mut terminal);
 
     // Restore terminal regardless of outcome. The capture command

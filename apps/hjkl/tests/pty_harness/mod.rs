@@ -6,6 +6,11 @@
 // file to linux until the flake is root-caused.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod at_colon;
+// Event-driven autoreload (#242): writes a file externally and waits for the
+// reload with no keypress. macOS tmpdir lives under a `/private` symlink that
+// notify and canonicalize disagree on; restrict to linux like the other suites.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod autoreload;
 // Explorer e2e drives `<leader>e` + `/search<CR>` + `dd`/`p`; restrict to linux
 // for the same macOS pty `:cmd\r`/`/pat\r` timing reasons as the other suites.
 #[cfg(all(unix, not(target_os = "macos")))]

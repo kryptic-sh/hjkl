@@ -91,6 +91,14 @@ impl TerminalSession {
         Self::spawn_inner_cwd(None, 24, 80, Some(dir))
     }
 
+    /// Spawn `hjkl` opening `file` with the working directory set to `dir`.
+    /// Event-driven autoreload (#242) roots its watcher at the process cwd, so
+    /// the watched file must live under `dir` for the watch to fire.
+    #[allow(dead_code)]
+    pub fn spawn_in_dir_with_file(dir: &Path, file: &Path) -> Self {
+        Self::spawn_inner_cwd(Some(file), 24, 80, Some(dir))
+    }
+
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
         Self::spawn_inner_cwd(file, rows, cols, None)
     }
@@ -224,6 +232,22 @@ impl TerminalSession {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("software cursor never rendered within 2s");
+    }
+
+    /// Poll until row `row` contains `expected`, up to `timeout_ms` (20 ms
+    /// granularity). Returns `true` as soon as it appears, `false` on timeout.
+    /// Used by event-driven tests that wait on an async external change with no
+    /// keypress to settle on (the standard `keys()` settle doesn't apply).
+    #[allow(dead_code)]
+    pub fn wait_for_line(&self, row: u16, expected: &str, timeout_ms: u64) -> bool {
+        let steps = (timeout_ms / 20).max(1);
+        for _ in 0..steps {
+            if self.line(row).contains(expected) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.line(row).contains(expected)
     }
 
     /// Rendered text of a 0-based screen row (trailing spaces stripped).

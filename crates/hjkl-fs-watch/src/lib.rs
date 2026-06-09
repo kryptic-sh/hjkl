@@ -284,7 +284,12 @@ impl WatcherBuilder {
     /// # }
     /// ```
     pub fn build(self) -> Result<Watcher> {
-        let root = self.root.ok_or(WatchError::MissingRoot)?;
+        // `root` is optional: when set, it's watched immediately (the
+        // directory-watching use case — explorer, oil). When absent, the
+        // watcher starts empty and the caller adds individual paths via
+        // [`Watcher::watch_path`] (the per-file autoreload use case, where
+        // recursively watching a whole tree would be too expensive).
+        let root = self.root;
         let debounce = self.debounce;
         let recursive = self.recursive;
         let filter = self.filter;
@@ -312,7 +317,9 @@ impl WatcherBuilder {
         } else {
             RecursiveMode::NonRecursive
         };
-        notify_watcher.watch(&root, mode)?;
+        if let Some(root) = &root {
+            notify_watcher.watch(root, mode)?;
+        }
 
         // Spawn the debounce worker.
         std::thread::Builder::new()
@@ -325,7 +332,7 @@ impl WatcherBuilder {
         Ok(Watcher {
             rx: ev_rx,
             paused,
-            _notify: notify_watcher,
+            notify: notify_watcher,
         })
     }
 }
@@ -581,8 +588,9 @@ fn upsert(pending: &mut HashMap<PathBuf, Pending>, path: PathBuf, kind: PendingK
 pub struct Watcher {
     rx: Receiver<FsEvent>,
     paused: Arc<AtomicBool>,
-    /// Keeps the notify watcher alive.
-    _notify: RecommendedWatcher,
+    /// The live notify watcher. Kept alive for the watcher's lifetime and used
+    /// to add / remove individual watched paths after construction.
+    notify: RecommendedWatcher,
 }
 
 impl fmt::Debug for Watcher {
@@ -655,6 +663,30 @@ impl Watcher {
     /// ```
     pub fn events(&mut self) -> impl Iterator<Item = FsEvent> + '_ {
         std::iter::from_fn(move || self.rx.try_recv().ok())
+    }
+
+    /// Start watching `path` after construction. Use `recursive = false` to
+    /// watch a single file or one directory level (the cheap per-file
+    /// autoreload case); `recursive = true` to watch a whole subtree.
+    ///
+    /// Idempotent at the notify layer — re-watching an already-watched path is
+    /// harmless. The builder's `filter` still applies to the resulting events.
+    pub fn watch_path(&mut self, path: &Path, recursive: bool) -> Result<()> {
+        let mode = if recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        self.notify.watch(path, mode)?;
+        Ok(())
+    }
+
+    /// Stop watching `path` (added earlier via [`watch_path`](Self::watch_path)
+    /// or the builder root). Returns the underlying error if `path` was not
+    /// watched.
+    pub fn unwatch_path(&mut self, path: &Path) -> Result<()> {
+        self.notify.unwatch(path)?;
+        Ok(())
     }
 }
 
@@ -733,9 +765,65 @@ mod tests {
     // ── builder / error tests ────────────────────────────────────────────────
 
     #[test]
-    fn missing_root_returns_error() {
-        let err = WatcherBuilder::new().build().unwrap_err();
-        assert!(matches!(err, WatchError::MissingRoot));
+    fn build_without_root_succeeds_empty() {
+        // A rootless watcher is valid: it starts empty and watches nothing
+        // until the caller adds paths via `watch_path` (the per-file autoreload
+        // use case, where recursively watching a tree would be too expensive).
+        let mut watcher = WatcherBuilder::new()
+            .debounce(Duration::from_millis(50))
+            .build()
+            .expect("rootless build must succeed");
+        settle_watcher(&mut watcher);
+        // No watches → no events even when an unrelated file changes.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("untracked.txt"), b"x").unwrap();
+        assert!(
+            poll_event(&mut watcher, Duration::from_millis(400)).is_none(),
+            "rootless watcher must not emit events"
+        );
+    }
+
+    #[test]
+    fn watch_path_after_build_emits_events() {
+        // Build empty, then add a directory watch — events for files in it flow.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut watcher = WatcherBuilder::new()
+            .debounce(Duration::from_millis(50))
+            .build()
+            .expect("build");
+        watcher.watch_path(&root, false).expect("watch_path");
+        settle_watcher(&mut watcher);
+
+        let file = root.join("added.txt");
+        fs::write(&file, b"hi").unwrap();
+        let ev = poll_event(&mut watcher, Duration::from_secs(3))
+            .expect("expected event for a path added via watch_path");
+        assert!(
+            matches!(&ev, FsEvent::Created(p) | FsEvent::Modified(p) if p == &file),
+            "unexpected event: {ev:?}"
+        );
+    }
+
+    #[test]
+    fn unwatch_path_stops_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut watcher = WatcherBuilder::new()
+            .debounce(Duration::from_millis(50))
+            .build()
+            .expect("build");
+        watcher.watch_path(&root, false).expect("watch_path");
+        settle_watcher(&mut watcher);
+
+        watcher.unwatch_path(&root).expect("unwatch_path");
+        settle_watcher(&mut watcher);
+
+        fs::write(root.join("after_unwatch.txt"), b"x").unwrap();
+        assert!(
+            poll_event(&mut watcher, Duration::from_millis(500)).is_none(),
+            "no events should arrive after unwatch_path"
+        );
     }
 
     #[test]
