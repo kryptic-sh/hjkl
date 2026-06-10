@@ -19,6 +19,19 @@ patch bumps.
   `Watcher::watch_path` / `unwatch_path` and rootless `WatcherBuilder::build`
   for per-file watching.
 
+### Changed
+
+- **Explorer is now lazy-loaded (Snacks-style).** A directory's children are
+  read from disk only when you expand it; collapsed dirs aren't walked. Opening
+  the explorer in a huge directory (a home dir) is instant and light — no more
+  whole-tree walk, no node cap, no truncation warning. Buffer folds are gone:
+  the node list _is_ the visible tree, so expand/collapse adds/removes rows.
+  Whole-tree search is provided by the gitignore-aware fuzzy file finder
+  (`<leader>f`, now bound inside the explorer too); selecting a result opens the
+  file and reveals it in the tree, lazily expanding its ancestors. Moving a
+  collapsed directory (`dd` then `p`) is lossless — `CreateDir` now restores the
+  whole trashed subtree by name, not just files.
+
 ### Fixed
 
 - `<Esc>` in BLAME view mode now exits back to Normal. The app-level Esc handler

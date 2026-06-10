@@ -426,7 +426,44 @@ pub(crate) fn apply_ops(
             }
 
             FsOp::CreateDir(path) => {
-                if let Err(e) = std::fs::create_dir_all(path) {
+                // Like CreateFile, restore a trashed entry of the same name —
+                // restoring the WHOLE subtree. This is what makes moving a
+                // *collapsed* directory lossless: with the lazy explorer the
+                // dir's children aren't in the buffer, so `dd` emits only
+                // `Trash(dir)` and `p` only `CreateDir(dir)`; restoring the
+                // trashed dir wholesale brings its contents along.
+                let dir_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let restore_idx = trashed
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, (name, _))| name == &dir_name)
+                    .map(|(i, _)| i);
+
+                if let Some(parent) = path.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    errors.push(format!("create_dir: create_dir_all({parent:?}): {e}"));
+                    continue;
+                }
+
+                if let Some(idx) = restore_idx {
+                    let (_, trash_dest) = trashed.remove(idx);
+                    match move_dir(&trash_dest, path) {
+                        Ok(()) => {
+                            applied.push(AppliedOp::Restored {
+                                from_trash: trash_dest,
+                                to: path.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            errors.push(format!("restore dir {trash_dest:?} → {path:?}: {e}"));
+                        }
+                    }
+                } else if let Err(e) = std::fs::create_dir_all(path) {
                     errors.push(format!("create_dir_all({path:?}): {e}"));
                 } else {
                     applied.push(AppliedOp::Created(path.clone()));
@@ -1572,6 +1609,43 @@ mod tests {
         assert!(
             matches!(&applied[0], AppliedOp::Restored { to, .. } if to == &dest),
             "must record Restored AppliedOp"
+        );
+    }
+
+    /// Moving a *collapsed* directory (`Trash(dir)` then `CreateDir(dir)` with no
+    /// per-child ops, as the lazy explorer emits) restores the WHOLE subtree from
+    /// trash — contents preserved — rather than creating an empty directory.
+    #[test]
+    fn apply_create_dir_restores_trashed_subtree() {
+        let td = tempfile::tempdir().unwrap();
+        isolated_trash(&td);
+        // src/mover/inner.txt — `mover` is the dir being moved while collapsed.
+        let mover = td.path().join("mover");
+        std::fs::create_dir_all(&mover).unwrap();
+        std::fs::write(mover.join("inner.txt"), b"deep").unwrap();
+
+        let mut trashed: Vec<(String, PathBuf)> = Vec::new();
+        // Trash the dir (its contents go to trash with it).
+        let (_, _, e) = apply_ops(&[FsOp::Trash(mover.clone())], &mut trashed);
+        assert!(e.is_empty(), "trash dir: {e:?}");
+        assert!(!mover.exists());
+        assert_eq!(trashed.len(), 1);
+
+        // CreateDir at a new parent — must restore the trashed `mover` wholesale.
+        let dest = td.path().join("target").join("mover");
+        let (created, applied, errors) = apply_ops(&[FsOp::CreateDir(dest.clone())], &mut trashed);
+        assert!(errors.is_empty(), "restore dir: {errors:?}");
+        assert!(created.is_empty(), "restored dir is not a fresh create");
+        assert!(trashed.is_empty(), "trashed registry drained");
+        assert!(dest.is_dir(), "destination dir must exist");
+        assert_eq!(
+            std::fs::read(dest.join("inner.txt")).unwrap(),
+            b"deep",
+            "the dir's contents must survive the move (collapsed-dir move is lossless)"
+        );
+        assert!(
+            matches!(&applied[0], AppliedOp::Restored { to, .. } if to == &dest),
+            "must record Restored AppliedOp for the dir"
         );
     }
 

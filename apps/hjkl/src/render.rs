@@ -1282,12 +1282,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
             // ── Glyph painting ────────────────────────────────────────────
 
-            // Drive the dir open/closed icon from the ACTUAL fold state (not the
-            // `expanded` set) so a directory whose fold was opened by a search
-            // reveal shows the open-folder glyph.
-            let is_expanded = !explorer_folds
-                .iter()
-                .any(|f| f.start_row == buf_row && f.closed);
+            // Drive the dir open/closed icon from the tree's `expanded` set. The
+            // lazy explorer has no buffer folds — a collapsed dir's children are
+            // simply absent — so the icon reads expansion state directly.
+            let is_expanded = app
+                .explorer
+                .as_ref()
+                .map(|ep| ep.tree.is_expanded(node.path.as_path()))
+                .unwrap_or(false);
 
             // Icon character for this node.
             let icon_ch = if node.is_dir {

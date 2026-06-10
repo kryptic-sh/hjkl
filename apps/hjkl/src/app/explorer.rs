@@ -190,10 +190,13 @@ impl ExplorerTree {
                 branches: prefix.to_vec(),
                 git,
             });
-            // Always recurse into every directory — the full tree is always in
-            // the buffer. Fold state (open/closed) is derived from `expanded`
-            // separately via `compute_folds`, not by skipping the walk.
-            if is_dir {
+            // Lazy walk: descend ONLY into directories the user has expanded.
+            // A collapsed dir contributes a single node and its subtree is left
+            // unread — so opening the explorer in a huge tree (a home dir) only
+            // reads the visible levels, never the whole disk. Re-expanding a dir
+            // re-reads its one level (cheap); search reaches the rest via the
+            // fuzzy file finder, not by walking everything up front.
+            if is_dir && self.expanded.contains(&path) {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
                 self.push_children(&path, depth + 1, &child_prefix, out, repo, status);
@@ -227,44 +230,15 @@ impl ExplorerTree {
         self.nodes = out;
     }
 
-    /// Compute the fold list from the current node list and `expanded` set.
-    ///
-    /// For each directory node at row `i`, its subtree is the contiguous run of
-    /// following nodes whose `depth > nodes[i].depth`. If non-empty, a `Fold` is
-    /// emitted with `start_row = i`, `end_row = last index in that run`, and
-    /// `closed = !expanded.contains(path)`. The root (depth 0) is always open.
-    /// Single-child dirs with an empty subtree get no fold (nothing to hide).
+    /// The explorer no longer uses buffer folds: with the lazy walk a collapsed
+    /// directory's children are simply absent from `nodes`, so the buffer text
+    /// already *is* the visible tree (no hidden lines to fold away). Expand /
+    /// collapse adds or removes nodes via `set_expanded` + `rebuild`, and the
+    /// open/closed icon is driven directly by the `expanded` set in the render
+    /// overlay. Kept returning an empty list so the existing `set_folds`
+    /// call-sites (`open_explorer`, `explorer_rebuild_buffer`) stay unchanged.
     pub(crate) fn compute_folds(&self) -> Vec<hjkl_buffer::Fold> {
-        let mut folds = Vec::new();
-        let n = self.nodes.len();
-        for i in 0..n {
-            let node = &self.nodes[i];
-            if !node.is_dir {
-                continue;
-            }
-            // Find the last node whose depth is greater than this dir's depth.
-            let dir_depth = node.depth;
-            let mut last_subtree_row = i;
-            for j in (i + 1)..n {
-                if self.nodes[j].depth > dir_depth {
-                    last_subtree_row = j;
-                } else {
-                    break;
-                }
-            }
-            if last_subtree_row == i {
-                // No children found — no fold needed.
-                continue;
-            }
-            let closed = !self.expanded.contains(&node.path);
-            folds.push(hjkl_buffer::Fold {
-                start_row: i,
-                end_row: last_subtree_row,
-                closed,
-                auto_generated: true,
-            });
-        }
-        folds
+        Vec::new()
     }
 
     /// Re-tag every node's `git` field from `status` without a filesystem walk
@@ -293,7 +267,9 @@ impl ExplorerTree {
         true
     }
 
-    #[cfg(test)]
+    /// `true` when `path` is an expanded directory. Drives the open/closed
+    /// folder icon in the render overlay (the lazy explorer has no buffer folds,
+    /// so the icon reads the `expanded` set directly).
     pub(crate) fn is_expanded(&self, path: &Path) -> bool {
         self.expanded.contains(path)
     }
@@ -1470,36 +1446,17 @@ impl super::App {
         let Some(node) = node else { return };
 
         if node.is_dir {
-            // Toggle just THIS directory's fold based on its ACTUAL state — a
-            // search reveal can open a fold without updating `expanded`, so
-            // <CR> must flip what you see. Toggling the single fold (rather than
-            // recomputing all folds from `expanded`) also avoids re-closing
-            // other reveal-opened dirs. Sync `expanded` for this path so a later
-            // rebuild preserves it.
+            // Lazy expand/collapse: flip the dir's `expanded` state and rebuild.
+            // Expanding reads that dir's one level from disk (instant); collapsing
+            // drops its subtree from `nodes`. `explorer_rebuild_buffer` re-renders
+            // and keeps the cursor on this dir's path.
             let path = node.path.clone();
-            if let Some(slot_idx) = self.explorer_slot_idx() {
-                let buf = self.slots[slot_idx].editor.buffer_mut();
-                // Only toggle when a fold actually STARTS at this dir's row. An
-                // EMPTY directory has no fold of its own (compute_folds skips
-                // childless dirs), and `toggle_fold_at` picks the innermost fold
-                // *containing* the row — which would be the PARENT fold, wrongly
-                // collapsing it and breaking the render. No fold here = nothing
-                // to expand/collapse → no-op.
-                let has_own_fold = buf.folds().iter().any(|f| f.start_row == cursor_row);
-                if has_own_fold {
-                    buf.toggle_fold_at(cursor_row);
-                    let now_closed = buf
-                        .folds()
-                        .iter()
-                        .any(|f| f.start_row == cursor_row && f.closed);
-                    if let Some(ref mut ep) = self.explorer {
-                        ep.tree.set_expanded(&path, !now_closed);
-                    }
-                    // Keep the per-window fold snapshot in lockstep with the
-                    // buffer so the unfocused-render path and overlay agree.
-                    self.sync_explorer_window_folds();
-                }
+            if let Some(ref mut ep) = self.explorer {
+                let now = ep.tree.is_expanded(&path);
+                ep.tree.set_expanded(&path, !now);
+                ep.tree.rebuild();
             }
+            self.explorer_rebuild_buffer();
         } else {
             // File: open in the nearest non-explorer window.
             let target_win = self.nearest_non_explorer_window();
@@ -1529,17 +1486,16 @@ impl super::App {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return false;
         };
-        let cursor_row = self.slots[slot_idx].editor.cursor().0;
-        // Open the dir's fold so the new line lands as its first visible child
-        // (not after a collapsed subtree); keep `expanded` in sync.
-        self.slots[slot_idx]
-            .editor
-            .buffer_mut()
-            .open_fold_at(cursor_row);
-        if let Some(ref mut ep) = self.explorer {
+        // Expand the dir (lazy-load its one level) so the new line lands as its
+        // first child, then re-render. If already expanded this is a cheap
+        // re-read. `explorer_rebuild_buffer` keeps the cursor on the dir row.
+        if let Some(ref mut ep) = self.explorer
+            && !ep.tree.is_expanded(&node.path)
+        {
             ep.tree.set_expanded(&node.path, true);
+            ep.tree.rebuild();
         }
-        self.sync_explorer_window_folds();
+        self.explorer_rebuild_buffer();
         // Open a line below + enter insert (autoindent copies the dir's indent).
         hjkl_vim_tui::handle_key(
             &mut self.slots[slot_idx].editor,
@@ -1624,17 +1580,17 @@ impl super::App {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Open the dir's fold so the paste lands as visible children right after
-        // the dir line (an OPEN fold means the fold-aware paste targets the line
-        // below the dir, not after a collapsed subtree). Keep `expanded` synced.
-        self.slots[slot_idx]
-            .editor
-            .buffer_mut()
-            .open_fold_at(cursor_row);
-        if let Some(ref mut ep) = self.explorer {
+        // Expand the dir (lazy-load its one level) so the paste lands as visible
+        // children right after the dir line, not after a collapsed subtree.
+        if let Some(ref mut ep) = self.explorer
+            && !ep.tree.is_expanded(&node.path)
+        {
             ep.tree.set_expanded(&node.path, true);
+            ep.tree.rebuild();
         }
-        self.sync_explorer_window_folds();
+        // `explorer_rebuild_buffer` keeps the editor cursor on the dir's row, so
+        // `paste_after` below targets the dir's first-child position.
+        self.explorer_rebuild_buffer();
 
         // Install the re-indented, id-less block as a linewise register and
         // paste below the dir line.
@@ -1995,39 +1951,38 @@ mod tests {
     #[test]
     fn root_first_then_dirs_first_then_name() {
         let root = make_tree();
-        let tree = ExplorerTree::new(root.clone());
+        let mut tree = ExplorerTree::new(root.clone());
         assert_eq!(tree.nodes[0].path, root);
         assert!(tree.nodes[0].is_dir && tree.nodes[0].depth == 0);
-        // Full-tree walk: all nodes are present (including a_dir/inner.txt).
-        // Verify DFS order: a_dir, inner.txt (child of a_dir), b_dir, m_file, z_file.
+        // Lazy walk: only the top level is present (a_dir's `inner.txt` absent).
         let names = child_names(&tree);
+        for top in ["a_dir", "b_dir", "m_file.txt", "z_file.txt"] {
+            assert!(names.contains(&top.to_string()), "{top} must be present");
+        }
         assert!(
-            names.contains(&"a_dir".to_string()),
-            "a_dir must be present"
+            !names.contains(&"inner.txt".to_string()),
+            "inner.txt is under a collapsed dir — must NOT be present yet; got {names:?}"
         );
+        // Top-level order: dirs first (a_dir, b_dir), then files (m, z).
+        let a_idx = names.iter().position(|n| n == "a_dir").unwrap();
+        let b_idx = names.iter().position(|n| n == "b_dir").unwrap();
+        let m_idx = names.iter().position(|n| n == "m_file.txt").unwrap();
         assert!(
-            names.contains(&"inner.txt".to_string()),
-            "inner.txt must be present (full-tree walk)"
+            a_idx < b_idx && b_idx < m_idx,
+            "dirs-first order, got {names:?}"
         );
-        assert!(
-            names.contains(&"b_dir".to_string()),
-            "b_dir must be present"
-        );
-        assert!(
-            names.contains(&"m_file.txt".to_string()),
-            "m_file.txt must be present"
-        );
-        assert!(
-            names.contains(&"z_file.txt".to_string()),
-            "z_file.txt must be present"
-        );
-        // DFS order: a_dir comes first, inner.txt immediately after, then b_dir.
+
+        // Expand a_dir → its child appears in DFS order, right after a_dir.
+        let a_path = tree.nodes[1].path.clone();
+        tree.set_expanded(&a_path, true);
+        tree.rebuild();
+        let names = child_names(&tree);
         let a_idx = names.iter().position(|n| n == "a_dir").unwrap();
         let i_idx = names.iter().position(|n| n == "inner.txt").unwrap();
         let b_idx = names.iter().position(|n| n == "b_dir").unwrap();
         assert!(
             a_idx < i_idx && i_idx < b_idx,
-            "DFS: a_dir < inner.txt < b_dir, got {names:?}"
+            "DFS after expand: a_dir < inner.txt < b_dir, got {names:?}"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -2035,10 +1990,14 @@ mod tests {
     #[test]
     fn expand_inserts_children_at_depth_with_guide() {
         let root = make_tree();
-        let tree = ExplorerTree::new(root.clone());
-        // Full-tree walk: inner.txt is always present as a depth-2 node under a_dir.
-        // a_dir = nodes[1], inner.txt = nodes[2], b_dir = nodes[3], ...
-        let inner = &tree.nodes[2]; // root, a_dir, inner.txt
+        let mut tree = ExplorerTree::new(root.clone());
+        // Lazy: inner.txt absent until a_dir is expanded.
+        assert!(!tree.nodes.iter().any(|n| n.path.ends_with("inner.txt")));
+        let a_path = tree.nodes[1].path.clone();
+        tree.set_expanded(&a_path, true);
+        tree.rebuild();
+        // a_dir = nodes[1], inner.txt = nodes[2] at depth 2 with a guide.
+        let inner = &tree.nodes[2];
         assert_eq!(inner.depth, 2);
         assert!(!inner.is_dir);
         assert_eq!(inner.branches, vec![true]);
@@ -2057,38 +2016,31 @@ mod tests {
     }
 
     #[test]
-    fn collapse_changes_fold_not_nodes() {
-        // With the full-tree model, toggle() only changes the `expanded` set.
-        // `nodes` always contains the full tree; folds hide/show subtrees.
+    fn collapse_removes_children_from_nodes() {
+        // Lazy model: expand/collapse adds/removes the dir's children from
+        // `nodes` (no buffer folds — the node list IS the visible tree).
         let root = make_tree();
         let mut tree = ExplorerTree::new(root.clone());
         let a_dir_path = tree.nodes[1].path.clone();
-        let node_count_before = tree.nodes.len();
+        let has_inner = |t: &ExplorerTree| t.nodes.iter().any(|n| n.path.ends_with("inner.txt"));
 
-        // Toggle to close a_dir (it starts open because root is expanded).
-        // Note: a_dir starts CLOSED (not in `expanded`) — only root is.
-        let folds_before = tree.compute_folds();
-        let a_fold_before = folds_before.iter().find(|f| f.start_row == 1);
-        // a_dir fold should be closed (not in expanded).
-        assert!(
-            a_fold_before.map(|f| f.closed).unwrap_or(false),
-            "a_dir fold should be closed initially"
-        );
+        // a_dir starts collapsed → inner.txt absent.
+        assert!(!has_inner(&tree), "child of collapsed dir must be absent");
 
-        // Toggle to open.
+        // Expand → child node appears.
         tree.toggle(&a_dir_path);
-        let folds_after = tree.compute_folds();
-        let a_fold_after = folds_after.iter().find(|f| f.start_row == 1);
-        assert!(
-            a_fold_after.map(|f| !f.closed).unwrap_or(false),
-            "a_dir fold should be open after toggle"
-        );
+        tree.rebuild();
+        assert!(has_inner(&tree), "expand must add the child node");
 
-        // nodes length never changes — only folds change.
-        assert_eq!(
-            tree.nodes.len(),
-            node_count_before,
-            "toggle must not change nodes count"
+        // Collapse → child node removed.
+        tree.toggle(&a_dir_path);
+        tree.rebuild();
+        assert!(!has_inner(&tree), "collapse must remove the child node");
+
+        // The lazy explorer produces no folds.
+        assert!(
+            tree.compute_folds().is_empty(),
+            "lazy explorer has no folds"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -2109,23 +2061,69 @@ mod tests {
 
     #[test]
     fn render_text_line_count_after_toggle() {
-        // Full-tree model: toggle() changes folds but NOT nodes or render text.
+        // Lazy model: render_text always equals nodes.len() (no hidden lines),
+        // and expanding a dir adds its children, growing the line count.
         let root = make_tree();
         let mut tree = ExplorerTree::new(root.clone());
-        let text_before = tree.render_text();
-        let line_count_before = text_before.lines().count();
+        let line_count_before = tree.render_text().lines().count();
+        assert_eq!(line_count_before, tree.nodes.len());
+
         let a_dir_path = tree.nodes[1].path.clone();
-        tree.toggle(&a_dir_path);
-        let text_after = tree.render_text();
-        let line_count_after = text_after.lines().count();
-        // render_text still equals nodes.len() — full tree always in buffer.
+        tree.set_expanded(&a_dir_path, true);
+        tree.rebuild();
+        let line_count_after = tree.render_text().lines().count();
         assert_eq!(line_count_after, tree.nodes.len());
-        // Node count and text are unchanged by toggle.
-        assert_eq!(
-            line_count_before, line_count_after,
-            "toggle must not change render text"
+        assert!(
+            line_count_after > line_count_before,
+            "expanding a_dir must add inner.txt's line"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Whole-tree search integration: a deep file in a collapsed dir is absent
+    /// from the lazy tree, but opening it (what selecting it in the fuzzy finder
+    /// does) reveals it — expanding its ancestors and selecting its row. This is
+    /// the Snacks-style "find file → reveal in tree" path.
+    #[test]
+    fn opening_deep_file_reveals_it_in_lazy_tree() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("a").join("b")).unwrap();
+        std::fs::write(tmp.path().join("a").join("b").join("deep.txt"), b"x").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let has_deep = |app: &super::super::App| {
+            app.explorer
+                .as_ref()
+                .unwrap()
+                .tree
+                .nodes
+                .iter()
+                .any(|n| n.path.file_name().map(|f| f == "deep.txt").unwrap_or(false))
+        };
+        // Lazy: deep.txt is under collapsed dirs → absent.
+        assert!(!has_deep(&app), "deep.txt must be absent before reveal");
+
+        // Open it (the fuzzy finder's select path does exactly this).
+        app.dispatch_action(AppAction::FocusRight, 1);
+        app.dispatch_ex("edit a/b/deep.txt");
+
+        // The explorer followed the active buffer: deep.txt now in the tree, and
+        // its ancestor dirs were lazily expanded to reach it.
+        let revealed = has_deep(&app);
+        let a_expanded = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .is_expanded(&std::env::current_dir().unwrap().join("a"));
+        std::env::set_current_dir(prev).unwrap();
+        assert!(revealed, "opening deep.txt must reveal it in the lazy tree");
+        assert!(a_expanded, "reveal must lazily expand ancestor dir `a`");
     }
 
     #[test]
@@ -3171,16 +3169,16 @@ mod tests {
         );
     }
 
-    /// Opening a VISIBLE file must not scroll the explorer. A collapsed dir with
-    /// many children pushes the file's raw buffer-row index past the pane
-    /// height even though the file is on screen — the reveal scroll math must be
-    /// fold-aware and leave `top_row` alone.
+    /// Opening a VISIBLE file must not scroll the explorer. With the lazy walk a
+    /// collapsed dir's children aren't in the buffer, so the file below it sits
+    /// near the top — reveal must leave `top_row` alone.
     #[test]
     fn reveal_active_does_not_scroll_when_file_visible() {
         use crate::app::window::LayoutRect;
         use crate::keymap_actions::AppAction;
         let tmp = tempfile::tempdir().unwrap();
-        // A collapsed dir with 30 children (hidden) sits above a root-level file.
+        // A collapsed dir with 30 children sits above a root-level file. The
+        // children are NOT loaded (lazy), so target.txt is at a low row.
         std::fs::create_dir(tmp.path().join("aaa")).unwrap();
         for i in 0..30 {
             std::fs::write(tmp.path().join("aaa").join(format!("f{i:02}.txt")), b"").unwrap();
@@ -3192,9 +3190,6 @@ mod tests {
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
 
-        // Give the explorer window a concrete height so the scroll math runs;
-        // aaa stays collapsed (default), so target.txt is on screen at line ~2
-        // but its raw buffer row is ~32 (> height).
         let win_id = app.explorer.as_ref().unwrap().win_id;
         if let Some(Some(w)) = app.windows.get_mut(win_id) {
             w.last_rect = Some(LayoutRect::new(0, 0, 30, 24));
@@ -3211,8 +3206,8 @@ mod tests {
             .position(|n| n.path == target)
             .unwrap();
         assert!(
-            target_row >= 24,
-            "precondition: target's raw row ({target_row}) exceeds pane height"
+            target_row < 24,
+            "lazy: aaa's children unloaded, so target's row ({target_row}) is on screen"
         );
 
         // Open target.txt from the editor window → triggers reveal_active.
@@ -3872,94 +3867,61 @@ mod tests {
         );
     }
 
-    // ── Fold-engine tests ──────────────────────────────────────────────────────
+    // ── Lazy-walk tests ─────────────────────────────────────────────────────────
 
-    /// Full-tree walk: children of a collapsed dir are still in `nodes`.
+    /// Lazy walk: a collapsed dir's children are NOT in `nodes`; expanding adds
+    /// them, collapsing removes them.
     #[test]
-    fn full_tree_includes_collapsed_dir_children() {
-        let root = make_tree();
-        // fresh tree: only root is in `expanded`; a_dir is collapsed.
-        let tree = ExplorerTree::new(root.clone());
-        // a_dir is at nodes[1]; inner.txt (child of a_dir) must also be present.
-        let a_dir_path = tree.nodes[1].path.clone();
-        assert!(!tree.is_expanded(&a_dir_path), "a_dir must start collapsed");
-        let has_inner = tree.nodes.iter().any(|n| {
-            n.path
-                .file_name()
-                .map(|f| f == "inner.txt")
-                .unwrap_or(false)
-        });
-        assert!(
-            has_inner,
-            "inner.txt must be in nodes even when a_dir is collapsed (full-tree walk)"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// `compute_folds`: collapsed dir → closed Fold; expanded dir → open Fold.
-    #[test]
-    fn compute_folds_closes_collapsed_dirs() {
+    fn lazy_collapsed_dir_children_absent() {
         let root = make_tree();
         let mut tree = ExplorerTree::new(root.clone());
-
-        // a_dir (nodes[1]) is NOT in `expanded` → its fold should be closed.
         let a_dir_path = tree.nodes[1].path.clone();
-        let folds = tree.compute_folds();
-        let a_fold = folds.iter().find(|f| f.start_row == 1);
-        assert!(a_fold.is_some(), "a_dir must have a fold (it has children)");
+        assert!(!tree.is_expanded(&a_dir_path), "a_dir must start collapsed");
+        let has_inner = |t: &ExplorerTree| {
+            t.nodes.iter().any(|n| {
+                n.path
+                    .file_name()
+                    .map(|f| f == "inner.txt")
+                    .unwrap_or(false)
+            })
+        };
         assert!(
-            a_fold.unwrap().closed,
-            "a_dir fold must be closed (not in expanded)"
+            !has_inner(&tree),
+            "inner.txt must be absent while a_dir is collapsed (lazy walk)"
         );
-
-        // Toggle a_dir to open it.
-        tree.toggle(&a_dir_path);
-        assert!(tree.is_expanded(&a_dir_path));
-        let folds2 = tree.compute_folds();
-        let a_fold2 = folds2.iter().find(|f| f.start_row == 1);
+        tree.set_expanded(&a_dir_path, true);
+        tree.rebuild();
         assert!(
-            a_fold2.is_some(),
-            "a_dir must still have a fold after opening"
+            has_inner(&tree),
+            "inner.txt must appear once a_dir is expanded"
         );
-        assert!(
-            !a_fold2.unwrap().closed,
-            "a_dir fold must be open after toggle"
-        );
-
-        // Verify fold end_row: inner.txt is the only child of a_dir, so
-        // end_row should be 2 (inner.txt at index 2).
-        assert_eq!(
-            a_fold2.unwrap().start_row,
-            1,
-            "a_dir fold start must be row 1"
-        );
-        assert_eq!(
-            a_fold2.unwrap().end_row,
-            2,
-            "a_dir fold end must be row 2 (inner.txt)"
-        );
-
-        // b_dir (no children) should have NO fold.
-        let b_dir_path = root.join("b_dir");
-        let b_fold = folds2.iter().find(|f| {
-            tree.nodes
-                .get(f.start_row)
-                .map(|n| n.path == b_dir_path)
-                .unwrap_or(false)
-        });
-        assert!(b_fold.is_none(), "empty b_dir must have no fold");
-
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Toggle via `ExplorerActivate` on a dir changes folds but not nodes count.
+    /// The lazy explorer emits no folds (the node list is the visible tree).
     #[test]
-    fn activate_dir_toggles_fold_not_tree() {
+    fn compute_folds_is_empty() {
+        let root = make_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        assert!(tree.compute_folds().is_empty(), "no folds when collapsed");
+        let a_dir_path = tree.nodes[1].path.clone();
+        tree.set_expanded(&a_dir_path, true);
+        tree.rebuild();
+        assert!(
+            tree.compute_folds().is_empty(),
+            "no folds when expanded either"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `explorer_activate` on a dir expands it (adds its children to the tree)
+    /// and collapses it again on a second activation (removes them).
+    #[test]
+    fn activate_dir_expands_and_collapses_tree() {
         use crate::keymap_actions::AppAction;
         use crossterm::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
-        // Create a dir with a child so a fold exists.
         fs::create_dir_all(tmp.path().join("subdir")).unwrap();
         fs::write(tmp.path().join("subdir").join("child.txt"), "x").unwrap();
         let prev = std::env::current_dir().unwrap();
@@ -3968,44 +3930,34 @@ mod tests {
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
 
-        // nodes count stays constant across activations.
-        let idx = app.explorer_slot_idx().unwrap();
         let nodes_before = app.explorer.as_ref().unwrap().tree.nodes.len();
-        let rows_before = app.slots[idx].editor.buffer().row_count();
 
-        // subdir is at row 1; move cursor to it.
+        // Move to subdir (row 1) and activate → expands, child.txt joins the tree.
         press(&mut app, KeyCode::Char('j'));
-
-        // Activate: should open the fold for subdir (it's collapsed initially).
         app.explorer_activate();
 
-        let nodes_after = app.explorer.as_ref().unwrap().tree.nodes.len();
-        let rows_after = app.slots[idx].editor.buffer().row_count();
-
-        // nodes and buffer row count must be unchanged.
-        assert_eq!(
-            nodes_before, nodes_after,
-            "activate must not change nodes count"
-        );
-        assert_eq!(
-            rows_before, rows_after,
-            "activate must not change buffer row count"
-        );
-
-        // After opening, subdir's children should be visible (not hidden).
-        // child.txt is at row 2 (root=0, subdir=1, child.txt=2).
-        let is_hidden = app.slots[idx].editor.buffer().is_row_hidden(2);
+        let nodes_open = app.explorer.as_ref().unwrap().tree.nodes.len();
         assert!(
-            !is_hidden,
-            "child.txt (row 2) must be visible after opening subdir"
+            nodes_open > nodes_before,
+            "activate on a collapsed dir must add its children"
+        );
+        let has_child = app.explorer.as_ref().unwrap().tree.nodes.iter().any(|n| {
+            n.path
+                .file_name()
+                .map(|f| f == "child.txt")
+                .unwrap_or(false)
+        });
+        assert!(
+            has_child,
+            "child.txt must be in the tree after expanding subdir"
         );
 
-        // Activate again: should close the fold.
+        // Activate again → collapses, child.txt drops out.
         app.explorer_activate();
-        let is_hidden2 = app.slots[idx].editor.buffer().is_row_hidden(2);
-        assert!(
-            is_hidden2,
-            "child.txt (row 2) must be hidden after closing subdir"
+        let nodes_closed = app.explorer.as_ref().unwrap().tree.nodes.len();
+        assert_eq!(
+            nodes_closed, nodes_before,
+            "activate again must collapse back to the prior node count"
         );
 
         std::env::set_current_dir(prev).unwrap();
