@@ -200,12 +200,6 @@ impl App {
         if self.drain_fs_watch_events() {
             self.pending_recompute = true;
         }
-
-        // Swap the background full-tree scan in over the explorer's shallow
-        // first-paint tree once the worker finishes.
-        if self.poll_explorer_scan() {
-            self.pending_recompute = true;
-        }
     }
 
     /// Compute how long to wait for the next event.

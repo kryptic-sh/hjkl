@@ -30,7 +30,6 @@ mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
 pub(crate) mod explorer;
 pub(crate) mod explorer_reconcile;
-pub(crate) mod explorer_scan;
 mod fs_watch;
 pub(crate) mod git_hunks;
 pub(crate) mod keymap;
@@ -214,10 +213,6 @@ pub struct App {
     syntax: SyntaxLayer,
     /// Background worker for git diff-sign computation.
     git_worker: GitSignsWorker,
-    /// Background worker for the explorer's full directory walk (#242 follow-up):
-    /// the explorer paints a shallow top-level tree instantly on open, then this
-    /// worker computes the full (capped) tree off-thread and the app swaps it in.
-    explorer_scan: explorer_scan::ExplorerScanWorker,
     /// Background worker for git blame computation.
     pub(crate) blame_worker: BlameWorker,
     /// Background worker for external formatter invocations (`=` / `==`).
@@ -1494,7 +1489,6 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             syntax,
             git_worker: GitSignsWorker::new(),
-            explorer_scan: explorer_scan::ExplorerScanWorker::new(),
             blame_worker: BlameWorker::new(),
             format_worker: hjkl_mangler::FormatWorker::spawn(),
             format_pending: HashSet::new(),
