@@ -746,10 +746,12 @@ pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::H
         ("gr", AppAction::ExplorerGitDiscard, "git discard changes"),
         ("gc", AppAction::ExplorerGitCommit, "git commit"),
         // ── Fuzzy file finder (whole-tree search) ─────────────────────────
-        // The lazy tree only walks what you expand, so `/` searches the visible
-        // rows; this opens the gitignore-aware fuzzy finder over the whole tree.
-        // Selecting a result opens the file, which reveals it in the explorer
-        // (expanding its ancestors on the way).
+        // The lazy tree only walks what you expand, so a plain buffer `/` would
+        // only match the visible rows — useless for finding a deep file. In the
+        // explorer, `/` (and `<leader>f`) open the gitignore-aware fuzzy finder
+        // over the WHOLE tree instead; selecting a result opens the file and
+        // reveals it in the explorer (expanding its ancestors on the way).
+        ("/", AppAction::OpenFilePicker, "find file (fuzzy)"),
         ("<leader>f", AppAction::OpenFilePicker, "find file (fuzzy)"),
     ];
 

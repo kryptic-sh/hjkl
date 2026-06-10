@@ -2126,6 +2126,35 @@ mod tests {
         assert!(a_expanded, "reveal must lazily expand ancestor dir `a`");
     }
 
+    /// `/` in the explorer opens the whole-tree fuzzy finder (not a plain buffer
+    /// search over the visible lazy rows).
+    #[test]
+    fn slash_in_explorer_opens_fuzzy_finder() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        assert!(app.explorer_buf_focused(), "explorer must be focused");
+        assert!(app.picker.is_none() && app.search_field.is_none());
+
+        // Press `/` through the production keypress path.
+        let _ = app.handle_keypress(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+        let picker_open = app.picker.is_some();
+        let search_open = app.search_field.is_some();
+        std::env::set_current_dir(prev).unwrap();
+        assert!(picker_open, "/ in the explorer must open the fuzzy finder");
+        assert!(
+            !search_open,
+            "/ in the explorer must NOT open the plain buffer search prompt"
+        );
+    }
+
     #[test]
     fn toggle_explorer_creates_window_and_is_explorer_slot() {
         use crate::keymap_actions::AppAction;

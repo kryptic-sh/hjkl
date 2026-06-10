@@ -18,7 +18,8 @@ fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
 
 /// `dd` a directory, then `p` on another directory → the directory moves INTO
 /// the target, contents preserved. Drives the real binary: `<leader>e` opens
-/// the explorer, `/name<CR>` navigates deterministically, `dd` cuts, `p` puts.
+/// the explorer; navigation uses `j`/`G` (in the lazy explorer `/` opens the
+/// fuzzy finder, not a buffer search). `dd` cuts, `p` puts.
 #[test]
 fn dd_dir_then_p_on_dir_moves_into_target() {
     let tmp = tempfile::tempdir().unwrap();
@@ -29,13 +30,14 @@ fn dd_dir_then_p_on_dir_moves_into_target() {
 
     let mut session = TerminalSession::spawn_in_dir(tmp.path());
 
-    // Open the explorer (leader = space).
+    // Open the explorer (leader = space). Top level (dirs-first, by name):
+    // row 0 = root, row 1 = mover/, row 2 = target/.
     session.keys(" e");
-    // Land on `mover/` via search, cut it.
-    session.keys("/mover<CR>");
+    // Land on `mover/` (row 1) and cut it.
+    session.keys("j");
     session.keys("dd");
-    // Land on `target/` via search, paste INTO it.
-    session.keys("/target<CR>");
+    // After the move-out, the tree is root + target/; `G` lands on target/.
+    session.keys("G");
     session.keys("p");
 
     let moved = tmp.path().join("target").join("mover").join("inner.txt");
