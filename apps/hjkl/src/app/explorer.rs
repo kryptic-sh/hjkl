@@ -60,26 +60,81 @@ pub(crate) struct ExplorerTree {
     /// rebuild). Gates `retag_git` so no git syscalls occur per keystroke
     /// outside a repo.
     pub(crate) repo_present: bool,
+    /// `true` when the last full walk hit [`EXPLORER_SCAN_NODE_CAP`] and stopped
+    /// early — the tree is partial (e.g. opened in a huge home dir). Surfaced as
+    /// a one-time status so "missing files" reads as "truncated", not a bug.
+    pub(crate) truncated: bool,
+}
+
+/// Upper bound on nodes produced by a single tree walk. Without it, opening the
+/// explorer in a giant directory (a home dir with millions of files under
+/// `.cache`, `node_modules`, …) walks the whole subtree synchronously and hangs
+/// the first paint. The cap bounds every walk — initial open, fold reveal, and
+/// post-edit rebuild — to a fast, finite amount of work. The background scan
+/// (see `explorer_scan`) keeps even this bounded walk off the first frame.
+pub(crate) const EXPLORER_SCAN_NODE_CAP: usize = 50_000;
+
+/// The product of a full tree walk, computed synchronously or on the background
+/// scan thread. Carries everything [`ExplorerTree::install_scan`] needs to swap
+/// the full tree in over the shallow first-paint tree.
+#[derive(Debug, Clone)]
+pub(crate) struct ExplorerScan {
+    /// Root the scan was run for — checked against the live tree before
+    /// installing, so a result from a closed/re-rooted explorer is discarded.
+    pub root: PathBuf,
+    pub nodes: Vec<ExplorerNode>,
+    pub git_base: HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
+    pub repo_present: bool,
+    pub truncated: bool,
+}
+
+/// Walk `root`'s full tree (capped) with the given options. Pure + `Send`-safe
+/// (opens and drops its own `git2::Repository` internally), so the background
+/// scan worker calls it off the UI thread.
+pub(crate) fn scan_explorer_tree(
+    root: PathBuf,
+    show_hidden: bool,
+    respect_gitignore: bool,
+) -> ExplorerScan {
+    let mut tree = ExplorerTree::with_opts(root.clone(), show_hidden, respect_gitignore);
+    tree.rebuild();
+    ExplorerScan {
+        root,
+        nodes: tree.nodes,
+        git_base: tree.git_base,
+        repo_present: tree.repo_present,
+        truncated: tree.truncated,
+    }
 }
 
 impl ExplorerTree {
-    /// Create a fresh tree rooted at `root`. The root starts expanded so its
-    /// children are visible immediately. Dotfiles are shown by default;
-    /// git-ignored entries are hidden by default.
+    /// Create a fresh tree rooted at `root` with a full synchronous walk.
+    /// Test-only convenience — production opens via `with_opts` +
+    /// `rebuild_shallow` (instant first paint) and swaps the full tree in from
+    /// the background scan worker.
+    #[cfg(test)]
     pub(crate) fn new(root: PathBuf) -> Self {
+        let mut tree = Self::with_opts(root, true, true);
+        tree.rebuild();
+        tree
+    }
+
+    /// Construct a tree with explicit options but **without** walking the disk.
+    /// The caller chooses when to populate `nodes` (sync `rebuild` /
+    /// `rebuild_shallow`, or a background scan that calls `rebuild` off-thread).
+    pub(crate) fn with_opts(root: PathBuf, show_hidden: bool, respect_gitignore: bool) -> Self {
         let mut expanded = HashSet::new();
         expanded.insert(root.clone());
-        let mut tree = Self {
+        Self {
             root,
             expanded,
             nodes: Vec::new(),
-            show_hidden: true,
-            respect_gitignore: true,
+            show_hidden,
+            respect_gitignore,
             git_base: HashMap::new(),
             repo_present: false,
-        };
-        tree.rebuild();
-        tree
+            truncated: false,
+        }
     }
 
     /// Read one directory's children, sorted directories-first then by
@@ -140,6 +195,7 @@ impl ExplorerTree {
     /// (present in `status` with `ExplorerGit::Deleted` but absent from the
     /// filesystem) are injected at the end of the directory's child list and
     /// re-sorted so they appear in tree order.
+    #[allow(clippy::too_many_arguments)]
     fn push_children(
         &self,
         dir: &Path,
@@ -148,7 +204,13 @@ impl ExplorerTree {
         out: &mut Vec<ExplorerNode>,
         repo: Option<&git2::Repository>,
         status: &HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
+        max_depth: Option<usize>,
     ) {
+        // Node cap: stop the walk once it produces too many entries (bounds the
+        // hang in a huge tree). Checked before reading each directory.
+        if out.len() >= EXPLORER_SCAN_NODE_CAP {
+            return;
+        }
         let mut children = self.read_children(dir, repo);
 
         // Inject deleted files: paths in the status map whose parent is `dir`
@@ -180,6 +242,9 @@ impl ExplorerTree {
 
         let n = children.len();
         for (i, (path, is_dir)) in children.into_iter().enumerate() {
+            if out.len() >= EXPLORER_SCAN_NODE_CAP {
+                return;
+            }
             let is_last = i + 1 == n;
             let git = status.get(&path).copied();
             out.push(ExplorerNode {
@@ -190,19 +255,54 @@ impl ExplorerTree {
                 branches: prefix.to_vec(),
                 git,
             });
-            // Always recurse into every directory — the full tree is always in
-            // the buffer. Fold state (open/closed) is derived from `expanded`
-            // separately via `compute_folds`, not by skipping the walk.
-            if is_dir {
+            // Recurse into every directory up to `max_depth` (None = unbounded
+            // full walk). The full tree is in the buffer; fold state (open/
+            // closed) is derived from `expanded` via `compute_folds`, not by
+            // skipping the walk. A shallow build (`max_depth = Some(1)`) loads
+            // only the top level for an instant first paint.
+            let may_descend = max_depth.is_none_or(|m| depth < m);
+            if is_dir && may_descend {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children(&path, depth + 1, &child_prefix, out, repo, status);
+                self.push_children(
+                    &path,
+                    depth + 1,
+                    &child_prefix,
+                    out,
+                    repo,
+                    status,
+                    max_depth,
+                );
             }
         }
     }
 
-    /// Rebuild the flattened node list from the current expansion state.
+    /// Rebuild the flattened node list — full recursive walk (capped at
+    /// [`EXPLORER_SCAN_NODE_CAP`]). Safe to call on a background thread.
     pub(crate) fn rebuild(&mut self) {
+        self.rebuild_to_depth(None);
+    }
+
+    /// Rebuild only the top level (root + its immediate children). Instant even
+    /// in a huge directory; used for the explorer's first paint before the
+    /// background full walk swaps in.
+    pub(crate) fn rebuild_shallow(&mut self) {
+        self.rebuild_to_depth(Some(1));
+    }
+
+    /// Replace the walked state (`nodes` + git data) with a background scan's
+    /// result, **keeping** this tree's live `expanded` set, options, and root.
+    /// Used to swap the full tree in over the shallow first-paint tree.
+    pub(crate) fn install_scan(&mut self, scan: ExplorerScan) {
+        self.nodes = scan.nodes;
+        self.git_base = scan.git_base;
+        self.repo_present = scan.repo_present;
+        self.truncated = scan.truncated;
+    }
+
+    /// Shared walk driver. `max_depth = None` is the full tree; `Some(d)` stops
+    /// descending past depth `d`. Sets `truncated` when the node cap is hit.
+    fn rebuild_to_depth(&mut self, max_depth: Option<usize>) {
         // Build the git status map once for the whole walk. Empty when not in a
         // repo — no git2 calls are made inside push_children in that case.
         let status = hjkl_app::git::explorer_status_map(&self.root);
@@ -219,10 +319,9 @@ impl ExplorerTree {
             branches: Vec::new(),
             git: None, // root dir rollup applied below
         });
-        // Always walk the full tree — every node (including children of collapsed
-        // dirs) is added to `nodes`. Fold state is managed via `compute_folds`.
         let repo = self.open_repo();
-        self.push_children(&root, 1, &[], &mut out, repo.as_ref(), &status);
+        self.push_children(&root, 1, &[], &mut out, repo.as_ref(), &status, max_depth);
+        self.truncated = out.len() >= EXPLORER_SCAN_NODE_CAP;
         roll_up_dir_status(&mut out);
         self.nodes = out;
     }
@@ -461,6 +560,18 @@ pub(crate) struct ExplorerPane {
     /// [`super::explorer_reconcile::revert_ops`], ready to be re-applied by
     /// [`App::explorer_redo`].
     pub redo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
+    /// `true` between open and the first background full-tree swap. While
+    /// loading, only the top level is present; deeper dirs can't be expanded
+    /// yet and `/` search only reaches the shallow tree.
+    pub loading: bool,
+    /// File to reveal (expand ancestors + park cursor) once the full tree lands.
+    /// Captured at open from the active buffer; applied in the scan swap-in so a
+    /// deep reveal doesn't force a synchronous full walk on the UI thread.
+    pub reveal_target: Option<PathBuf>,
+    /// A full scan that arrived while the buffer had unreconciled edits. Held
+    /// and applied on the next clean tick so an in-progress rename isn't
+    /// clobbered by the swap.
+    pub pending_scan: Option<ExplorerScan>,
 }
 
 // ── nodes_from_buffer ──────────────────────────────────────────────────────────
@@ -729,24 +840,23 @@ impl super::App {
         use hjkl_engine::{BufferEdit, Editor, Host, Options};
         use std::time::Instant;
 
-        // Capture the file the user was editing so we can reveal it.
+        // Capture the file the user was editing so we can reveal it once the
+        // full tree lands (revealing a deep path now would force a synchronous
+        // full walk — the very hang we're avoiding).
         let active_file = self.active().filename.clone();
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut tree = ExplorerTree::new(cwd.clone());
+        // First paint: walk only the top level so opening in a huge dir (home)
+        // is instant. The full tree arrives via the background scan worker (job
+        // submitted after the pane is set up) and swaps in.
+        let mut tree = ExplorerTree::with_opts(cwd.clone(), true, true);
+        tree.rebuild_shallow();
 
-        // Reveal the active file's path before rendering, so the initial cursor
-        // lands on it and its ancestor dirs are expanded. `reveal` is robust to
-        // relative-vs-absolute path forms (it canonicalizes), and returns `None`
-        // when the file isn't under the root — so no `starts_with` pre-gate (that
-        // wrongly rejected files opened with a relative path, since cwd is
-        // absolute).
-        let reveal_row: Option<usize> = active_file.as_deref().and_then(|p| tree.reveal(p));
+        let reveal_row: Option<usize> = None;
 
         let text = tree.render_text();
         // Compute initial folds from the `expanded` set (only root is open).
         let initial_folds = tree.compute_folds();
-        // Nodes are rebuilt by new() above; no extra rebuild needed.
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -866,6 +976,11 @@ impl super::App {
             .map(|s| s.editor.buffer().dirty_gen())
             .unwrap_or(0);
 
+        let _ = reveal_row; // reveal is deferred to the background swap-in.
+        let scan_root = tree.root.clone();
+        let scan_show_hidden = tree.show_hidden;
+        let scan_respect_gitignore = tree.respect_gitignore;
+
         self.explorer = Some(ExplorerPane {
             win_id: new_win_id,
             tree,
@@ -874,21 +989,122 @@ impl super::App {
             baseline: initial_baseline,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            loading: true,
+            reveal_target: active_file,
+            pending_scan: None,
         });
+
+        // Kick the background full-tree walk. The shallow tree is on screen now;
+        // `poll_explorer_scan` swaps the full tree in when the worker finishes.
+        self.explorer_scan
+            .submit(super::explorer_scan::ExplorerScanJob {
+                root: scan_root,
+                show_hidden: scan_show_hidden,
+                respect_gitignore: scan_respect_gitignore,
+            });
 
         // Overlay any already-dirty open buffers onto the freshly-built tree
         // so an edited buffer is immediately colored without waiting for the
         // next git-sign poll cycle.
         self.refresh_explorer_git();
 
-        // Apply the reveal cursor position if we found the active file.
-        if let Some(row) = reveal_row {
-            if let Some(Some(win)) = self.windows.get_mut(new_win_id) {
-                win.cursor_row = row;
-                win.cursor_col = 0;
+        // In tests there is no event loop to drive `drain_async_polls`, so pump
+        // the background scan to completion synchronously here — every existing
+        // explorer test (and the reconcile/reveal logic) sees the full tree
+        // immediately, exactly as before this became async. Production swaps the
+        // tree in via `poll_explorer_scan` from the event loop.
+        #[cfg(test)]
+        {
+            for _ in 0..2000 {
+                if self.poll_explorer_scan() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            self.sync_viewport_to_explorer_editor();
         }
+    }
+
+    /// Poll the background explorer scan worker and swap the full tree in over
+    /// the shallow first-paint tree once it arrives. Returns `true` when the
+    /// tree was swapped (the caller requests a repaint). Called each tick from
+    /// `drain_async_polls`.
+    pub(crate) fn poll_explorer_scan(&mut self) -> bool {
+        // Fast path: once loaded with nothing pending there's no scan to apply
+        // (refresh re-walks synchronously, not via this worker), so skip.
+        let active = self
+            .explorer
+            .as_ref()
+            .map(|ep| ep.loading || ep.pending_scan.is_some())
+            .unwrap_or(false);
+        if !active {
+            return false;
+        }
+        // Take any freshly-arrived scan; stash it on the pane (it may have to
+        // wait for a clean buffer before it can be applied).
+        if let Some(scan) = self.explorer_scan.try_recv()
+            && let Some(ep) = self.explorer.as_mut()
+            && scan.root == ep.tree.root
+        {
+            ep.pending_scan = Some(scan);
+        }
+
+        // Apply a pending scan only when the explorer buffer is clean (no
+        // unreconciled user edit), so an in-progress rename isn't clobbered by
+        // the structural rebuild.
+        let Some(slot_idx) = self.explorer_slot_idx() else {
+            return false;
+        };
+        let buffer_gen = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let ready = self
+            .explorer
+            .as_ref()
+            .map(|ep| ep.pending_scan.is_some() && ep.last_reconcile_gen == buffer_gen)
+            .unwrap_or(false);
+        if !ready {
+            return false;
+        }
+
+        let (scan, reveal_target) = {
+            let ep = self.explorer.as_mut().expect("checked above");
+            (ep.pending_scan.take(), ep.reveal_target.take())
+        };
+        let Some(scan) = scan else { return false };
+        let truncated = scan.truncated;
+
+        let mut revealed_row = None;
+        let win_id = self.explorer.as_ref().map(|ep| ep.win_id);
+        if let Some(ep) = self.explorer.as_mut() {
+            ep.tree.install_scan(scan);
+            // Reveal the active file now that the full tree is present (no
+            // synchronous walk — the node is already there).
+            if let Some(target) = reveal_target {
+                revealed_row = ep.tree.reveal(&target);
+            }
+            ep.loading = false;
+        }
+        // Re-render from the full tree, preserving cursor-on-path + folds.
+        self.explorer_rebuild_buffer();
+        self.refresh_explorer_git();
+
+        // Park the cursor on the revealed file (rebuild keeps it on the root's
+        // path otherwise, since the shallow tree's cursor sat at row 0).
+        if let (Some(row), Some(win_id)) = (revealed_row, win_id)
+            && let Some(Some(win)) = self.windows.get_mut(win_id)
+        {
+            win.cursor_row = row;
+            win.cursor_col = 0;
+            if self.focused_window() == win_id {
+                self.sync_viewport_to_explorer_editor();
+            }
+        }
+
+        if truncated {
+            self.bus.warn(format!(
+                "explorer: tree truncated at {} entries (expand dirs to see more)",
+                EXPLORER_SCAN_NODE_CAP
+            ));
+        }
+        true
     }
 
     /// Current slot index of the explorer's scratch buffer, found by its
@@ -2126,6 +2342,102 @@ mod tests {
             "toggle must not change render text"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── Background scan: shallow first paint + full swap-in ─────────────────
+
+    /// `rebuild_shallow` loads only the root's immediate children — deeper
+    /// entries (e.g. `a_dir/inner.txt`) are absent until the full walk.
+    #[test]
+    fn rebuild_shallow_loads_only_top_level() {
+        let root = make_tree();
+        let mut tree = ExplorerTree::with_opts(root.clone(), true, true);
+        tree.rebuild_shallow();
+        let names = child_names(&tree);
+        assert!(
+            names.contains(&"a_dir".to_string()),
+            "top-level dir present"
+        );
+        assert!(
+            names.contains(&"m_file.txt".to_string()),
+            "top-level file present"
+        );
+        assert!(
+            !names.contains(&"inner.txt".to_string()),
+            "shallow walk must NOT descend into a_dir; got {names:?}"
+        );
+        assert!(!tree.truncated);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `scan_explorer_tree` (the worker entry point) returns the full tree.
+    #[test]
+    fn scan_explorer_tree_returns_full_tree() {
+        let root = make_tree();
+        let scan = scan_explorer_tree(root.clone(), true, true);
+        assert_eq!(scan.root, root);
+        let names: Vec<String> = scan.nodes[1..]
+            .iter()
+            .map(|n| n.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&"inner.txt".to_string()),
+            "full scan must include nested files; got {names:?}"
+        );
+        assert!(!scan.truncated);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `install_scan` swaps the full tree in while preserving the live
+    /// `expanded` set (so the user's fold state survives the swap).
+    #[test]
+    fn install_scan_keeps_expanded_and_swaps_full() {
+        let root = make_tree();
+        // Shallow tree, then user expands a_dir.
+        let mut tree = ExplorerTree::with_opts(root.clone(), true, true);
+        tree.rebuild_shallow();
+        let a_dir = tree.nodes[1].path.clone();
+        tree.set_expanded(&a_dir, true);
+        assert!(!child_names(&tree).contains(&"inner.txt".to_string()));
+
+        // Full scan arrives and is installed.
+        let scan = scan_explorer_tree(root.clone(), true, true);
+        tree.install_scan(scan);
+
+        assert!(
+            child_names(&tree).contains(&"inner.txt".to_string()),
+            "install_scan must bring in the full tree"
+        );
+        // reveal/expanded survives the swap.
+        let row = tree.reveal(&a_dir);
+        assert!(row.is_some(), "expanded set preserved across install_scan");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Opening the explorer ends with the full tree installed and `loading`
+    /// cleared (the test pump drives the background swap to completion).
+    #[test]
+    fn explorer_open_swaps_in_full_tree() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("sub").join("deep.txt"), "x").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let ep = app.explorer.as_ref().expect("explorer open");
+        let has_deep = ep
+            .tree
+            .nodes
+            .iter()
+            .any(|n| n.path.file_name().map(|f| f == "deep.txt").unwrap_or(false));
+        let loading = ep.loading;
+        std::env::set_current_dir(prev).unwrap();
+        assert!(!loading, "loading must clear after the full-tree swap");
+        assert!(has_deep, "full tree (incl. sub/deep.txt) must be installed");
     }
 
     #[test]

@@ -19,6 +19,16 @@ patch bumps.
   `Watcher::watch_path` / `unwatch_path` and rootless `WatcherBuilder::build`
   for per-file watching.
 
+### Changed
+
+- **Explorer loads in the background**: opening the file explorer (`<leader>e`)
+  now paints the top level instantly and walks the rest of the tree on a
+  background thread, swapping the full tree in when ready — opening in a huge
+  directory (a home dir) no longer hangs the first frame. The walk is also
+  capped (50 000 entries) so no single scan can run away; a truncated tree is
+  reported in the status line. Whole-tree `/` search is preserved once the
+  background scan completes.
+
 ### Fixed
 
 - `<Esc>` in BLAME view mode now exits back to Normal. The app-level Esc handler
