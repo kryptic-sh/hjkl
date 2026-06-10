@@ -19,6 +19,12 @@ patch bumps.
   `Watcher::watch_path` / `unwatch_path` and rootless `WatcherBuilder::build`
   for per-file watching.
 
+### Fixed
+
+- `<Esc>` in BLAME view mode now exits back to Normal. The app-level Esc handler
+  toggled the which-key display and returned before the key reached the engine's
+  `exit_blame`, so BLAME stayed stuck on.
+
 ## [0.31.0] - 2026-06-08
 
 ### Added

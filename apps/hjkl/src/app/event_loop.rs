@@ -525,6 +525,20 @@ impl App {
 
             // ── Escape: cancel any pending chord, else toggle which-key ─────────
             if key.code == KeyCode::Esc {
+                // BLAME is a Normal-only read-only view; Esc must leave it. The
+                // engine's normal-mode Esc handler does exit_blame + force_normal,
+                // but the which-key toggle below returns before Esc ever reaches
+                // the engine — so exit BLAME here explicitly (mirroring the
+                // engine) and clear any pending state, as Esc otherwise would.
+                if self.active().editor.is_blame() {
+                    self.active_mut().editor.exit_blame();
+                    self.active_mut().editor.force_normal();
+                    self.cancel_all_pending();
+                    self.chord_history.clear();
+                    self.which_key_sticky = false;
+                    self.which_key_active = false;
+                    return KeyOutcome::Continue;
+                }
                 let had_pending = self.any_chord_pending() || !self.pending_count.is_empty();
                 // Cancel across all three pending owners (trie, app pending_state,
                 // engine pending) + reset count. This restores Esc-cancels-chord

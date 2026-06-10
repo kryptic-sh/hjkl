@@ -5544,3 +5544,43 @@ fn ctrl_w_nav_moves_between_editor_and_explorer() {
         "explorer should be focused after FocusLeft"
     );
 }
+
+// ── BLAME mode Esc exit (regression) ───────────────────────────────────────
+
+/// Pressing `<Esc>` while in BLAME view mode must return to a plain Normal
+/// view. Regression: the app-level Esc handler toggled which-key and returned
+/// before the key ever reached the engine's `exit_blame`, so BLAME stuck on.
+#[test]
+fn esc_exits_blame_mode_to_normal() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line one\nline two\n");
+    app.active_mut().editor.enter_blame();
+    assert!(
+        app.active().editor.is_blame(),
+        "precondition: in BLAME view"
+    );
+
+    // Drive Esc through the production keypress path.
+    let _ = app.handle_keypress(key(KeyCode::Esc));
+
+    assert!(
+        !app.active().editor.is_blame(),
+        "Esc must exit BLAME mode back to Normal view"
+    );
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+}
+
+/// A second Esc after exiting BLAME behaves like a normal Esc (toggles the
+/// which-key display), i.e. exiting BLAME doesn't wedge later Esc handling.
+#[test]
+fn esc_after_blame_exit_still_normal() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\n");
+    app.active_mut().editor.enter_blame();
+    let _ = app.handle_keypress(key(KeyCode::Esc));
+    assert!(!app.active().editor.is_blame());
+    // Second Esc: still Normal, still not blame, no panic.
+    let _ = app.handle_keypress(key(KeyCode::Esc));
+    assert!(!app.active().editor.is_blame());
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+}
