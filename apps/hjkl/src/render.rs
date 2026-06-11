@@ -1417,7 +1417,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let indent_chars = name_col.saturating_sub(text_x) as usize;
             let name_len = buf_text
                 .lines()
-                .nth(doc_row)
+                .nth(buf_row)
                 .map(|line| {
                     line.chars()
                         .skip(indent_chars)
@@ -2678,5 +2678,70 @@ mod tests {
     #[test]
     fn top_bar_height_is_one() {
         assert_eq!(crate::app::TOP_BAR_HEIGHT, 1);
+    }
+
+    /// A file's name in the explorer must be colored uniformly — every cell of
+    /// the name (including the LAST one) gets the filetype color, not a stray
+    /// default-white cell at the end.
+    #[test]
+    fn explorer_file_name_coloring_is_uniform() {
+        use crate::app::App;
+        use crate::keymap_actions::AppAction;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("a").join("b").join("c")).unwrap();
+        std::fs::write(
+            tmp.path().join("a").join("b").join("c").join("widget.rs"),
+            b"x",
+        )
+        .unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Open the DEEP file so there's no splash and its ancestors are expanded
+        // (the white-last-char artifact only shows on nested rows).
+        let mut app = App::new(Some("a/b/c/widget.rs".into()), false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Draw twice: the first frame settles window rects/viewports.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let text_color = app.theme.ui.text;
+        std::env::set_current_dir(prev).unwrap();
+
+        // Locate the contiguous run of cells spelling "widget.rs".
+        let name: Vec<char> = "widget.rs".chars().collect();
+        let n = name.len() as u16;
+        let cell_sym = |x: u16, y: u16| -> String {
+            buf.cell((x, y))
+                .map(|c| c.symbol().to_string())
+                .unwrap_or_default()
+        };
+        let mut found: Option<(u16, u16)> = None;
+        'scan: for y in 0..24u16 {
+            for x in 0..(80 - n) {
+                if (0..n).all(|i| cell_sym(x + i, y) == name[i as usize].to_string()) {
+                    found = Some((x, y));
+                    break 'scan;
+                }
+            }
+        }
+        let (sx, sy) = found.expect("widget.rs must be rendered in the explorer");
+        let _ = text_color;
+
+        // The icon (two cells before the name) carries the filetype color; the
+        // whole name must share that exact color — no `Reset`/white cells.
+        let icon_fg = buf.cell((sx - 2, sy)).unwrap().fg;
+        assert_ne!(icon_fg, Color::Reset, "icon should be filetype-colored");
+        let fgs: Vec<Color> = (0..n).map(|i| buf.cell((sx + i, sy)).unwrap().fg).collect();
+        assert!(
+            fgs.iter().all(|&f| f == icon_fg),
+            "every cell of the name must share the filetype color (no uncolored/white \
+             cells); icon_fg={icon_fg:?} name fgs={fgs:?}"
+        );
     }
 }
