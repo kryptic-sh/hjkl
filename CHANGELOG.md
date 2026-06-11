@@ -34,6 +34,12 @@ patch bumps.
 
 ### Fixed
 
+- Creating a multi-level entry in the explorer (`o`, type `somedir/test.txt`,
+  `<Esc>`) now auto-expands the new directory so the freshly-created file is
+  visible, instead of leaving `somedir/` collapsed.
+- Explorer name coloring is correct while typing a path with a `/` (e.g.
+  `somedir/test.txt`): the git-bg / filetype highlight now spans the whole
+  displayed name (derived from the live line) instead of just `file_name()`.
 - `<Esc>` in BLAME view mode now exits back to Normal. The app-level Esc handler
   toggled the which-key display and returned before the key reached the engine's
   `exit_blame`, so BLAME stayed stuck on.

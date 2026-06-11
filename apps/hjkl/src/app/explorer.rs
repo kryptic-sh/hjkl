@@ -1109,6 +1109,27 @@ impl super::App {
             ep.redo_stack.clear();
         }
 
+        // Reveal newly-created nested items: expand the ancestor directories of
+        // every result path so a multi-level create (`somedir/test.txt`) shows
+        // the new leaf rather than leaving `somedir` collapsed. Walk each result
+        // path's parents up to (and including) the root.
+        if let Some(ep) = self.explorer.as_mut() {
+            let root = ep.tree.root.clone();
+            for p in &result_paths {
+                if !p.starts_with(&root) {
+                    continue;
+                }
+                let mut dir = p.parent();
+                while let Some(d) = dir {
+                    ep.tree.set_expanded(d, true);
+                    if d == root {
+                        break;
+                    }
+                    dir = d.parent();
+                }
+            }
+        }
+
         // Rebuild the tree from disk + git so that tracked-but-deleted files
         // appear as red nodes (WT_DELETED injection in push_children).
         if let Some(ep) = self.explorer.as_mut() {
@@ -2245,6 +2266,51 @@ mod tests {
         assert!(
             buf.contains("made.rs"),
             "created file must appear in the explorer list; buf=<<<{buf}>>>"
+        );
+    }
+
+    /// Creating a multi-level item (`somedir/test.txt`) must auto-expand the new
+    /// directory so the freshly-created leaf is visible in the lazy tree.
+    #[test]
+    fn create_multilevel_item_expands_new_dir() {
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let idx = app.explorer_slot_idx().unwrap();
+
+        // Append a root-level line for a nested create (2-space indent = depth 1).
+        let cur = app.slots[idx].editor.buffer().as_string();
+        let newtext = format!("{cur}\n  somedir/test.txt");
+        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
+        app.maybe_reconcile_explorer();
+
+        let cwd = std::env::current_dir().unwrap();
+        let dir_exists = cwd.join("somedir").is_dir();
+        let file_exists = cwd.join("somedir").join("test.txt").exists();
+        let ep = app.explorer.as_ref().unwrap();
+        let expanded = ep.tree.is_expanded(&cwd.join("somedir"));
+        let test_visible = ep
+            .tree
+            .nodes
+            .iter()
+            .any(|n| n.path.file_name().map(|f| f == "test.txt").unwrap_or(false));
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(dir_exists, "somedir/ must be created on disk");
+        assert!(file_exists, "somedir/test.txt must be created on disk");
+        assert!(
+            expanded,
+            "the new dir must be expanded after creating a child in it"
+        );
+        assert!(
+            test_visible,
+            "test.txt must be visible in the tree after the multi-level create"
         );
     }
 

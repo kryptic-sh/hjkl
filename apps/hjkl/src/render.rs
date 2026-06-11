@@ -1406,28 +1406,25 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 cell.set_fg(icon_color);
             }
 
-            // Name span width in display cells (filename; root uses the full
-            // path when it has no file_name). Bound the painted region to the
-            // actual name so the git bg is a tight highlight, not a full bar.
-            // For non-root dirs, render_text appended a trailing `/` — extend the
-            // span by 1 so the slash receives the same git-bg/clean color.
-            let name_str = node
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| {
-                    if node.depth == 0 {
-                        node.path.to_string_lossy().into_owned()
-                    } else {
-                        String::new()
-                    }
-                });
-            let trailing_slash = if node.is_dir && node.depth > 0 {
-                1u16
-            } else {
-                0u16
-            };
-            let name_len = name_str.chars().count() as u16 + trailing_slash;
+            // Name span width = the ACTUAL displayed name on this row: the live
+            // line text after the indent, up to the concealed `<US><id>` tail.
+            // Deriving it from the buffer (not `path.file_name()`) keeps the
+            // git-bg / clean-color highlight tight AND correct mid-edit when the
+            // typed name contains a `/` (e.g. `somedir/test.txt`) — there
+            // `file_name()` would be `test.txt` and only cover part of the name,
+            // leaving the rest mis-colored. The trailing `/` on a dir name is
+            // part of the line text, so it's counted naturally.
+            let indent_chars = name_col.saturating_sub(text_x) as usize;
+            let name_len = buf_text
+                .lines()
+                .nth(doc_row)
+                .map(|line| {
+                    line.chars()
+                        .skip(indent_chars)
+                        .take_while(|&c| c != '\u{1F}')
+                        .count() as u16
+                })
+                .unwrap_or(0);
             let name_end = name_col.saturating_add(name_len).min(right);
 
             // Repaint name cells.

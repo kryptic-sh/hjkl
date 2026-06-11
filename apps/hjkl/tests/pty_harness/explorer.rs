@@ -58,3 +58,31 @@ fn dd_dir_then_p_on_dir_moves_into_target() {
         "moved file must preserve its contents"
     );
 }
+
+/// `o` then typing a multi-level name (`somedir/test.txt`) then `<Esc>` creates
+/// the nested file AND expands the new directory so the leaf is visible.
+#[test]
+fn o_create_multilevel_expands_new_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("keep.txt"), b"k").unwrap();
+
+    let mut session = TerminalSession::spawn_in_dir(tmp.path());
+    session.keys(" e");
+    // Open a new line and type a nested path, then leave insert mode.
+    session.keys("o");
+    session.keys("somedir/test.txt");
+    session.keys("<Esc>");
+
+    let created = tmp.path().join("somedir").join("test.txt");
+    let ok = wait_until(|| created.exists());
+
+    // The explorer must show the expanded new dir with its child on some row.
+    let shows_child = wait_until(|| (0..24).any(|r| session.line(r).contains("test.txt")));
+    drop(session);
+
+    assert!(ok, "somedir/test.txt must be created on disk");
+    assert!(
+        shows_child,
+        "the explorer must expand somedir/ and show test.txt"
+    );
+}
