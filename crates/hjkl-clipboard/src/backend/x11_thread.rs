@@ -426,6 +426,13 @@ enum DrainGoal {
     SelectionNotify { our_property: u32 },
     /// Looking for PROPERTY_NOTIFY (new value) on our private get-property.
     PropertyNotify { our_property: u32, our_window: u32 },
+    /// INCR start (self-loop): wait for the PROPERTY_DELETE on our get-property
+    /// (the receiver's hint read), which triggers chunk 1 via
+    /// `advance_incr_sends`, then STOP — so this drain doesn't also consume
+    /// chunk 1's `NEW_VALUE` (which the INCR receive loop needs). Any
+    /// `NEW_VALUE` seen before the delete is the stale hint write and is
+    /// discarded.
+    OwnPropertyDelete { our_property: u32, our_window: u32 },
 }
 
 /// Result from drain_events when a goal is set.
@@ -436,6 +443,9 @@ enum DrainResult {
     SelectionNotifySeen { property: u32 },
     /// Saw PROPERTY_NOTIFY (new value); caller should read the property.
     PropertyNotifySeen,
+    /// Saw the receiver's PROPERTY_DELETE on our get-property (INCR chunk 1 has
+    /// just been written by `advance_incr_sends`).
+    OwnPropertyDeleteSeen,
 }
 
 /// Drain all pending X events, dispatching SELECTION_REQUEST/CLEAR as they
@@ -515,6 +525,20 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
                         // SAFETY: ev was heap-allocated by xcb.
                         unsafe { libc::free(ev.cast()) };
                         return DrainResult::PropertyNotifySeen;
+                    }
+                    DrainGoal::OwnPropertyDelete {
+                        our_property,
+                        our_window,
+                    } if pn.window == *our_window
+                        && pn.atom == *our_property
+                        && pn.state == XCB_PROPERTY_DELETE =>
+                    {
+                        // `advance_incr_sends` above already wrote chunk 1 in
+                        // response to this delete. Stop now so we don't also
+                        // consume chunk 1's NEW_VALUE — the receive loop needs
+                        // it. SAFETY: ev was heap-allocated by xcb.
+                        unsafe { libc::free(ev.cast()) };
+                        return DrainResult::OwnPropertyDeleteSeen;
                     }
                     _ => DrainResult::NotFound,
                 }
@@ -1230,12 +1254,38 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
     //
     // In the self-loop case (we own the selection we are reading), the INCR
     // size-hint write by start_incr_send generated a stale PROPERTY_NEW_VALUE
-    // event that is still queued.  Drain all pending events now so that:
-    //   1. The stale NEW_VALUE is discarded.
-    //   2. The PROPERTY_DELETE from read_property triggers advance_incr_sends
-    //      to write chunk 1, whose NEW_VALUE then drives the receive loop below.
-    // For non-self-loop transfers this drain is a no-op (no pending events).
-    drain_events(state, DrainGoal::AnyEvent);
+    // event that is still queued, and the PROPERTY_DELETE from `read_property`
+    // above must trigger `advance_incr_sends` to write chunk 1.
+    //
+    // We must NOT use `DrainGoal::AnyEvent` here: that drains the WHOLE queue,
+    // and if chunk 1's NEW_VALUE happens to be delivered within the same pass
+    // (a fast host / lucky scheduling), it gets discarded — and the receive
+    // loop below then waits forever for a NEW_VALUE that already came and went
+    // (the intermittent `INCR receive timed out` flake). Instead, wait
+    // specifically for our property-delete: that discards the stale hint
+    // NEW_VALUE on the way, triggers chunk 1, and STOPS immediately, leaving
+    // chunk 1's NEW_VALUE for the receive loop. A late delete is also handled
+    // by the receive loop itself (it advances INCR sends on every delete), so a
+    // timeout here just falls through harmlessly. Non-self-loop transfers have
+    // no pending delete and fall through after the budget.
+    {
+        let init_deadline = Instant::now() + Duration::from_secs(SELECTION_NOTIFY_TIMEOUT_SECS);
+        loop {
+            if let DrainResult::OwnPropertyDeleteSeen = drain_events(
+                state,
+                DrainGoal::OwnPropertyDelete {
+                    our_property,
+                    our_window: window,
+                },
+            ) {
+                break;
+            }
+            if Instant::now() >= init_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     let mut accumulator: Vec<u8> = Vec::new();
     let total_deadline = Instant::now() + Duration::from_secs(INCR_RECV_TOTAL_TIMEOUT_SECS);
