@@ -106,6 +106,36 @@ fn diff_change_navigation_jumps_between_hunks() {
     let _ = std::fs::remove_file(&b);
 }
 
+/// Scroll-bind: scrolling the focused diff window aligns the partner's top row
+/// across an insertion (`ins` exists only in b, so b's lines are offset by one).
+#[test]
+fn diff_scroll_binds_partner_top_row() {
+    let a = std::env::temp_dir().join("hjkl_diffscroll_a.txt");
+    let b = std::env::temp_dir().join("hjkl_diffscroll_b.txt");
+    std::fs::write(&a, "l0\nl1\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
+    std::fs::write(&b, "l0\nl1\nins\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("diffsplit {}", b.display()));
+
+    // Pair: a_win = original (a), b_win = opened (b); focus is on b.
+    let (a_win, b_win) = app.diff_pair().unwrap();
+    assert_eq!(app.focused_window(), b_win);
+
+    // Scroll the focused (b) window so its top line is `l2` (b line index 3).
+    app.windows[b_win].as_mut().unwrap().top_row = 3;
+    app.sync_diff_scroll();
+
+    // `l2` is a line index 2 in buffer a → partner top must align there.
+    assert_eq!(
+        app.windows[a_win].as_ref().unwrap().top_row,
+        2,
+        "partner window must scroll-bind to the aligned line"
+    );
+
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+}
+
 /// Editing a diff buffer refreshes the cached alignment (gen-keyed recompute).
 #[test]
 fn editing_refreshes_alignment_cache() {

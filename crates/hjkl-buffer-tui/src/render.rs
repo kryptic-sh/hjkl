@@ -182,6 +182,51 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// — the engine's cursor/scroll stays the source of truth. `Wrap::None`
     /// only. `None` = normal rendering.
     pub blame_plan: Option<&'a [BlameRow]>,
+    /// Diff-mode filler rows (#250). When `Some`, the renderer paints that many
+    /// blank, tinted "filler" rows immediately ABOVE the keyed buffer row,
+    /// pushing subsequent real rows down so two diff windows stay aligned. The
+    /// cursor never lands on filler (it's display-only). `None` = no filler.
+    pub diff_filler: Option<&'a DiffFiller>,
+}
+
+/// Diff-mode filler plan for one window ([`BufferView::diff_filler`]).
+#[derive(Debug, Clone, Default)]
+pub struct DiffFiller {
+    /// Sorted `(before_doc_row, count)`: paint `count` filler rows immediately
+    /// above `before_doc_row`. An entry keyed at `total_rows` is trailing
+    /// filler painted after the last real line. At most one entry per row.
+    pub before: Vec<(usize, usize)>,
+    /// Background style for filler rows (vim `DiffDelete`).
+    pub style: Style,
+}
+
+impl DiffFiller {
+    /// Filler-row count to paint immediately above `doc_row`.
+    fn count_before(&self, doc_row: usize) -> usize {
+        self.before
+            .binary_search_by_key(&doc_row, |&(b, _)| b)
+            .map(|i| self.before[i].1)
+            .unwrap_or(0)
+    }
+
+    /// Screen-row offset (relative to the viewport top) of real line `doc_row`
+    /// when rendering from `top_row`, accounting for all filler rows painted at
+    /// or above it: `(doc_row - top_row) + Σ count_before(b)` for
+    /// `top_row ≤ b ≤ doc_row`. Mirrors the renderer's accumulation so hosts can
+    /// place the cursor / overlays on the correct screen row. Returns `0` if
+    /// `doc_row < top_row`.
+    pub fn screen_offset(&self, top_row: usize, doc_row: usize) -> usize {
+        if doc_row < top_row {
+            return 0;
+        }
+        let filler: usize = self
+            .before
+            .iter()
+            .filter(|&&(b, _)| b >= top_row && b <= doc_row)
+            .map(|&(_, c)| c)
+            .sum();
+        (doc_row - top_row) + filler
+    }
 }
 
 /// One screen row in a boxed-blame layout ([`BufferView::blame_plan`]).
@@ -435,6 +480,24 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // folds. Emit the start row of a closed fold as a marker
         // line instead of its actual content.
         while doc_row < total_rows && screen_row < area.height {
+            // Diff-mode filler rows (#250): paint blank tinted rows immediately
+            // above this real line so two diff windows stay vertically aligned.
+            if let Some(df) = self.diff_filler {
+                let count = df.count_before(doc_row);
+                for _ in 0..count {
+                    if screen_row >= area.height {
+                        break;
+                    }
+                    self.paint_filler_row(term_buf, area, screen_row, df.style);
+                    // Filler rows have no doc row; keep the per-screen-row
+                    // bookkeeping vecs aligned.
+                    search_hit_at_cursor_col.push(false);
+                    screen_row += 1;
+                }
+                if screen_row >= area.height {
+                    break;
+                }
+            }
             // Skip rows hidden by a closed fold (any row past start
             // of a closed fold).
             if folds.iter().any(|f| f.hides(doc_row)) {
@@ -1006,6 +1069,24 @@ impl<R: StyleResolver> BufferView<'_, R> {
         }
     }
 
+    /// Paint a diff-mode filler row (#250): blank the full row width (gutter +
+    /// text) and tint it with `style`. Display-only — no doc row, no cursor.
+    fn paint_filler_row(
+        &self,
+        term_buf: &mut TermBuffer,
+        area: Rect,
+        screen_row: u16,
+        style: Style,
+    ) {
+        let y = area.y + screen_row;
+        for x in area.x..(area.x + area.width) {
+            if let Some(cell) = term_buf.cell_mut((x, y)) {
+                cell.set_char(' ');
+                cell.set_style(style);
+            }
+        }
+    }
+
     fn paint_gutter(
         &self,
         term_buf: &mut TermBuffer,
@@ -1419,6 +1500,29 @@ mod tests {
     use ratatui::style::{Color, Modifier};
     use ratatui::widgets::Widget;
 
+    #[test]
+    fn diff_filler_screen_offset_accounts_for_inserted_rows() {
+        // Two filler rows: one before line 2, one before line 5.
+        let df = DiffFiller {
+            before: vec![(2, 1), (5, 1)],
+            style: Style::default(),
+        };
+        // From top_row 0: line 0 has no filler above it.
+        assert_eq!(df.screen_offset(0, 0), 0);
+        assert_eq!(df.screen_offset(0, 1), 1);
+        // Line 2 sits below its own leading filler → +1.
+        assert_eq!(df.screen_offset(0, 2), 3);
+        assert_eq!(df.screen_offset(0, 4), 5);
+        // Past the second filler (before line 5) → +2 total.
+        assert_eq!(df.screen_offset(0, 5), 7);
+        // Filler above the viewport top is not counted.
+        assert_eq!(df.screen_offset(3, 4), 1);
+        assert_eq!(df.screen_offset(3, 5), 3);
+        // count_before is the per-line leading filler count.
+        assert_eq!(df.count_before(2), 1);
+        assert_eq!(df.count_before(3), 0);
+    }
+
     fn run_render<R: StyleResolver>(view: BufferView<'_, R>, w: u16, h: u16) -> TermBuffer {
         let area = Rect::new(0, 0, w, h);
         let mut buf = TermBuffer::empty(area);
@@ -1479,6 +1583,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -1524,6 +1629,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1570,6 +1676,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1621,6 +1728,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1667,6 +1775,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1716,6 +1825,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -1779,6 +1889,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -1846,6 +1957,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -1918,6 +2030,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -1979,6 +2092,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -2027,6 +2141,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -2083,6 +2198,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -2144,6 +2260,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -2197,6 +2314,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -2251,6 +2369,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -2306,6 +2425,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -2371,6 +2491,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -2424,6 +2545,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -2475,6 +2597,7 @@ mod tests {
             indent_guide_active_col: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a" — normal line, no fold bg.
@@ -2557,6 +2680,7 @@ mod tests {
             indent_guide_active_col: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 30, 5);
         // Row 1 is the fold header AND the cursor row → blended bg.
@@ -2604,6 +2728,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -2648,6 +2773,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -2692,6 +2818,7 @@ mod tests {
             indent_guide_active_col: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         }
     }
 
@@ -2900,6 +3027,7 @@ mod tests {
             indent_guide_active_col: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         }
     }
 
@@ -3084,6 +3212,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -3152,6 +3281,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 8);
         // Rows 3-7 are past EOF — with show_eob off they must NOT show `~`.
@@ -3211,6 +3341,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -3279,6 +3410,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 2);
 
@@ -3349,6 +3481,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -3416,6 +3549,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -3496,6 +3630,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.
@@ -3556,6 +3691,7 @@ mod tests {
             indent_guide_active_col: active_col,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         }
     }
 
@@ -3596,6 +3732,7 @@ mod tests {
             folds_override: None,
             eol_hints: &[],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 20, 2);
         // No cell should contain '│' anywhere.
@@ -3783,6 +3920,7 @@ mod tests {
             indent_guide_active_col: None,
             eol_hints: &[hint],
             blame_plan: None,
+            diff_filler: None,
         };
         let term = run_render(view, 30, 1);
         // "ab" is at x=0 and x=1; hint starts at x = 2 + 2 (gap) = 4.

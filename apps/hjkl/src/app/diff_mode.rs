@@ -15,6 +15,7 @@ use std::ops::Range;
 use super::{App, DiffCacheEntry};
 use crate::app::window::WindowId;
 use hjkl_app::diff::DiffRowKind;
+use hjkl_engine::Query;
 
 /// Per-line diff classification for one window, consumed by the renderer.
 pub(crate) enum DiffBand {
@@ -192,6 +193,51 @@ impl App {
         out
     }
 
+    /// Build the filler-row plan (#250) for `win` in an active diff pair: a
+    /// sorted `(before_line, count)` list of blank rows to insert so the two
+    /// windows line up. Lines existing only on the *other* side become filler
+    /// here. Returns `None` when `win` isn't in the pair or has no filler.
+    pub(crate) fn diff_filler_plan(
+        &self,
+        win: WindowId,
+    ) -> Option<hjkl_buffer_tui::render::DiffFiller> {
+        let cache = self.diff_cache.as_ref()?;
+        let is_a = win == cache.a_win;
+        if !is_a && win != cache.b_win {
+            return None;
+        }
+        let side = |r: &hjkl_app::diff::AlignedRow| if is_a { r.a } else { r.b };
+        let slot = self.windows[win].as_ref()?.slot;
+        let total = self.slots[slot].editor.buffer().line_count() as usize;
+
+        let mut before: Vec<(usize, usize)> = Vec::new();
+        let mut pending = 0usize; // filler rows awaiting the next real this-side line
+        for row in &cache.diff.rows {
+            match side(row) {
+                Some(line) => {
+                    if pending > 0 {
+                        before.push((line, pending));
+                        pending = 0;
+                    }
+                }
+                None => pending += 1,
+            }
+        }
+        if pending > 0 {
+            // Trailing filler past the last real line (keyed at EOF).
+            before.push((total, pending));
+        }
+        if before.is_empty() {
+            return None;
+        }
+        before.sort_by_key(|&(b, _)| b);
+        Some(hjkl_buffer_tui::render::DiffFiller {
+            before,
+            // vim DiffDelete — muted dark red (hardcoded pending theme promotion).
+            style: ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(60, 32, 32)),
+        })
+    }
+
     /// Buffer-line indices (this side) where each change hunk begins, sorted
     /// ascending. A hunk is a maximal run of non-`Equal` aligned rows; its
     /// representative line is the first real this-side line at or after the run
@@ -261,6 +307,53 @@ impl App {
         self.active_mut().editor.jump_cursor(line, 0);
         self.active_mut().editor.ensure_cursor_in_scrolloff();
         self.sync_after_engine_mutation();
+    }
+
+    /// Scroll-bind the diff pair (#250): align the partner window's `top_row`
+    /// to the focused window's, so corresponding lines stay on the same screen
+    /// row as the user scrolls. No-op unless the focused window is in the pair.
+    pub(crate) fn sync_diff_scroll(&mut self) {
+        let Some((a_win, b_win)) = self.diff_pair() else {
+            return;
+        };
+        let focused = self.focused_window();
+        let focused_is_a = focused == a_win;
+        if !focused_is_a && focused != b_win {
+            return;
+        }
+        let other_win = if focused_is_a { b_win } else { a_win };
+        let this_top = match self.windows[focused].as_ref() {
+            Some(w) => w.top_row,
+            None => return,
+        };
+
+        // Map the focused window's top line → the partner's line at the same
+        // aligned grid position (nearest preceding real partner line for a
+        // filler position).
+        let partner_top = {
+            let Some(cache) = self.diff_cache.as_ref() else {
+                return;
+            };
+            let this_side = |r: &hjkl_app::diff::AlignedRow| if focused_is_a { r.a } else { r.b };
+            let other_side = |r: &hjkl_app::diff::AlignedRow| if focused_is_a { r.b } else { r.a };
+            let Some(g) = cache
+                .diff
+                .rows
+                .iter()
+                .position(|r| this_side(r) == Some(this_top))
+            else {
+                return;
+            };
+            cache.diff.rows[..=g]
+                .iter()
+                .rev()
+                .find_map(other_side)
+                .unwrap_or(0)
+        };
+
+        if let Some(w) = self.windows[other_win].as_mut() {
+            w.top_row = partner_top;
+        }
     }
 
     /// Recompute the cached alignment if the diff pair or either buffer changed.

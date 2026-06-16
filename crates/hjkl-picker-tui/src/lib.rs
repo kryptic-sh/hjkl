@@ -206,6 +206,7 @@ pub fn preview_pane(
         // Picker preview never shows inline blame.
         eol_hints: &[],
         blame_plan: None,
+        diff_filler: None,
     };
     frame.render_widget(view, inner);
 }

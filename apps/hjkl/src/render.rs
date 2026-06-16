@@ -1099,6 +1099,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         Vec::new()
     };
 
+    // Diff-mode filler plan (#250): blank rows that keep the two diff windows
+    // aligned. Built once and reused by the renderer, the cursor placement, and
+    // the diff-band overlay so all three agree on screen rows.
+    let diff_filler_plan = app.diff_filler_plan(win_id);
+
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
@@ -1163,6 +1168,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         } else {
             None
         },
+        diff_filler: diff_filler_plan.as_ref(),
     };
     frame.render_widget(view, area);
 
@@ -1506,7 +1512,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 if line < vp_top {
                     continue;
                 }
-                let off = line - vp_top;
+                // Account for filler rows inserted above this line so the band
+                // lands on the same screen row the renderer painted it.
+                let off = match diff_filler_plan.as_ref() {
+                    Some(p) => p.screen_offset(vp_top, line),
+                    None => line - vp_top,
+                };
                 if off >= screen_height {
                     continue;
                 }
@@ -1683,6 +1694,19 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                         area.y + idx as u16,
                     )
                 })
+        } else if let Some(p) = diff_filler_plan.as_ref() {
+            // Diff filler rows above the cursor shift it down by that many rows.
+            let cur = app.slots()[slot_idx].editor.buffer().cursor().row;
+            if cur >= vp_top {
+                let off = p.screen_offset(vp_top, cur);
+                if (off as u16) < area.height {
+                    Some((cx, area.y + off as u16))
+                } else {
+                    None
+                }
+            } else {
+                Some((cx, cy))
+            }
         } else {
             Some((cx, cy))
         };
@@ -2873,5 +2897,65 @@ mod tests {
         }
         assert!(has_change, "a DiffChange band must be painted");
         assert!(has_text, "a DiffText char highlight must be painted");
+    }
+
+    /// Filler rows (#250) keep both diff windows aligned: a line only present in
+    /// one buffer pushes a blank `DiffDelete`-tinted filler into the other, so a
+    /// shared line below the insertion lands on the SAME screen row in both
+    /// windows.
+    #[test]
+    fn diffsplit_filler_aligns_shared_line() {
+        use crate::app::App;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        // `ins` exists only in b → a gets a filler row before the later lines.
+        // The shared marker `zebra` sits well below the transient top-right
+        // toast so the alignment check isn't occluded by it.
+        std::fs::write(&a, "l0\nl1\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
+        std::fs::write(&b, "l0\nl1\nins\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
+
+        let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("diffsplit {}", b.display()));
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let cell_sym = |x: u16, y: u16| -> String {
+            buf.cell((x, y))
+                .map(|c| c.symbol().to_string())
+                .unwrap_or_default()
+        };
+        // Find both occurrences of the shared marker (one per window).
+        let needle: Vec<char> = "zebra".chars().collect();
+        let n = needle.len() as u16;
+        let mut gamma_rows = Vec::new();
+        for y in 0..24u16 {
+            for x in 0..(80 - n) {
+                if (0..n).all(|i| cell_sym(x + i, y) == needle[i as usize].to_string()) {
+                    gamma_rows.push(y);
+                }
+            }
+        }
+        assert_eq!(
+            gamma_rows.len(),
+            2,
+            "gamma must render once per diff window; got {gamma_rows:?}"
+        );
+        assert_eq!(
+            gamma_rows[0], gamma_rows[1],
+            "filler must align `gamma` on the same screen row in both windows"
+        );
+
+        // A DiffDelete filler row must be painted (muted dark red).
+        let filler_bg = Color::Rgb(60, 32, 32);
+        let has_filler = (0..24u16)
+            .any(|y| (0..80u16).any(|x| buf.cell((x, y)).map(|c| c.bg) == Some(filler_bg)));
+        assert!(has_filler, "a DiffDelete filler row must be painted");
     }
 }

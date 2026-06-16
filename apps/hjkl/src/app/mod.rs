@@ -1196,6 +1196,8 @@ impl App {
         // actually changed.
         if !self.diff_windows.is_empty() {
             self.refresh_diff_alignment();
+            // Scroll-bind the partner window to the focused one.
+            self.sync_diff_scroll();
         }
     }
 
