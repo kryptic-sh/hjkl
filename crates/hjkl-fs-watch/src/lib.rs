@@ -731,6 +731,29 @@ mod tests {
         }
     }
 
+    /// Poll until an event whose single path equals `target` arrives, ignoring
+    /// unrelated events. macOS FSEvents can leak events for sibling temp files
+    /// created concurrently by other tests on the shared `/var/folders/.../T`
+    /// volume, so asserting on the *first* event is flaky — we filter by path.
+    fn poll_event_for(watcher: &mut Watcher, target: &Path, budget: Duration) -> Option<FsEvent> {
+        let deadline = Instant::now() + budget;
+        loop {
+            while let Some(ev) = watcher.try_recv() {
+                let hit = match &ev {
+                    FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p == target,
+                    FsEvent::Renamed { from, to } => from == target || to == target,
+                };
+                if hit {
+                    return Some(ev);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn collect_events(watcher: &mut Watcher, budget: Duration) -> Vec<FsEvent> {
         let mut events = Vec::new();
         let deadline = Instant::now() + budget;
@@ -865,7 +888,8 @@ mod tests {
         let file = root.join("hello.txt");
         fs::write(&file, b"hi").unwrap();
 
-        let ev = poll_event(&mut watcher, Duration::from_secs(3)).expect("expected Created event");
+        let ev = poll_event_for(&mut watcher, &file, Duration::from_secs(3))
+            .expect("expected Created event");
         // Platforms may emit Created or Modified on a new file.
         assert!(
             matches!(&ev, FsEvent::Created(p) | FsEvent::Modified(p) if p == &file),
@@ -887,7 +911,8 @@ mod tests {
 
         fs::write(&file, b"updated").unwrap();
 
-        let ev = poll_event(&mut watcher, Duration::from_secs(3)).expect("expected Modified event");
+        let ev = poll_event_for(&mut watcher, &file, Duration::from_secs(3))
+            .expect("expected Modified event");
         assert!(
             matches!(&ev, FsEvent::Modified(p) | FsEvent::Created(p) if p == &file),
             "unexpected event: {ev:?}"
@@ -908,7 +933,8 @@ mod tests {
 
         fs::remove_file(&file).unwrap();
 
-        let ev = poll_event(&mut watcher, Duration::from_secs(3)).expect("expected Removed event");
+        let ev = poll_event_for(&mut watcher, &file, Duration::from_secs(3))
+            .expect("expected Removed event");
         // macOS FSEvents may report unlink as Modified rather than Removed.
         assert!(
             matches!(&ev, FsEvent::Removed(p) | FsEvent::Modified(p) if p == &file),
