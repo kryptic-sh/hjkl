@@ -2344,6 +2344,7 @@ dependencies = [
  "tempfile",
  "toml",
  "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

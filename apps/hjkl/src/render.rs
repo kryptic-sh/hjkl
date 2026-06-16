@@ -2222,6 +2222,30 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── Dirty-buffer disk-change prompt (issue #241) ────────────────────────
+    // While pending_disk_change is Some, offer keep / reload / diff in place of
+    // the normal status bar (mirrors the recovery-prompt pattern).
+    if let Some(pdc) = app.pending_disk_change.as_ref() {
+        let name = pdc
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| pdc.path.to_string_lossy().into_owned());
+        let content =
+            format!("W12: \"{name}\" changed on disk since editing — [k]eep / [r]eload / [d]iff");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.search_bg)
+                    .fg(app.theme.ui.search_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
+        );
+    }
+
     // ── Explorer git-discard confirm ────────────────────────────────────────
     if let Some(ref path) = app.explorer_git_discard_confirm {
         let name = path

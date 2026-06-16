@@ -995,19 +995,24 @@ fn fs_event_modified_reloads_clean_buffer() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A dirty buffer is never clobbered by a watch event — flagged ChangedOnDisk,
-/// content preserved, no reload reported.
+/// A dirty, focused buffer is never clobbered by a watch event — content
+/// preserved, flagged ChangedOnDisk, and the interactive keep/reload/diff
+/// prompt (#241) is raised (repaint requested).
 #[test]
-fn fs_event_dirty_buffer_flags_no_reload() {
+fn fs_event_dirty_buffer_raises_prompt_no_reload() {
     let path = std::env::temp_dir().join("hjkl_fsw_dirty.txt");
     std::fs::write(&path, "original\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     app.active_mut().dirty = true;
 
     write_and_wait(&path, "external\n");
-    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+    let needs_repaint = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
 
-    assert!(!reloaded, "dirty buffer must not reload");
+    assert!(needs_repaint, "raising the prompt must request a repaint");
+    assert!(
+        app.pending_disk_change.is_some(),
+        "focused dirty buffer must raise the keep/reload/diff prompt"
+    );
     assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["original"]);
     assert_eq!(app.active().disk_state, DiskState::ChangedOnDisk);
     let _ = std::fs::remove_file(&path);
@@ -3477,4 +3482,152 @@ fn diff_orig_leaves_original_buffer_untouched() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+// ── Dirty-buffer disk-change prompt (#241) ────────────────────────────────
+
+/// Set up a focused, dirty buffer whose file then changes on disk, and drive
+/// the fs-watch path so the keep/reload/diff prompt is raised. Returns the app
+/// and the file path (caller removes it).
+fn raise_disk_change_prompt(tag: &str) -> (App, std::path::PathBuf) {
+    let path = std::env::temp_dir().join(format!("hjkl_dc_{tag}.txt"));
+    std::fs::write(&path, "disk one\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    seed_buffer(&mut app, "buffer edit\n");
+    app.active_mut().dirty = true;
+
+    write_and_wait(&path, "disk changed\n");
+    let repaint = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
+    assert!(repaint, "raising the prompt must request a repaint");
+    assert!(
+        app.pending_disk_change.is_some(),
+        "dirty focused buffer must raise the disk-change prompt"
+    );
+    (app, path)
+}
+
+#[test]
+fn disk_change_prompt_raised_and_buffer_intact() {
+    let (app, path) = raise_disk_change_prompt("raise");
+    // Buffer content untouched while the prompt is up.
+    assert_eq!(
+        app.active().editor.buffer().rope().to_string(),
+        "buffer edit\n"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disk_change_prompt_keep_preserves_buffer() {
+    let (mut app, path) = raise_disk_change_prompt("keep");
+    app.handle_disk_change_key(key(KeyCode::Char('k')));
+
+    assert!(
+        app.pending_disk_change.is_none(),
+        "keep dismisses the prompt"
+    );
+    let content = app.active().editor.buffer().rope().to_string();
+    assert!(
+        content.contains("buffer edit"),
+        "keep must preserve buffer: {content}"
+    );
+    // Still flagged changed so the :w guard stays armed.
+    assert_eq!(app.active().disk_state, DiskState::ChangedOnDisk);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disk_change_prompt_reload_discards_changes() {
+    let (mut app, path) = raise_disk_change_prompt("reload");
+    app.handle_disk_change_key(key(KeyCode::Char('r')));
+
+    assert!(
+        app.pending_disk_change.is_none(),
+        "reload dismisses the prompt"
+    );
+    let content = app.active().editor.buffer().rope().to_string();
+    assert!(
+        content.contains("disk changed"),
+        "reload must load disk content: {content}"
+    );
+    assert!(
+        !content.contains("buffer edit"),
+        "reload must discard buffer edits: {content}"
+    );
+    assert!(!app.active().dirty, "reloaded buffer must be clean");
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disk_change_prompt_diff_opens_readonly_split() {
+    let (mut app, path) = raise_disk_change_prompt("diff");
+    let before = app.windows.iter().filter(|w| w.is_some()).count();
+    app.handle_disk_change_key(key(KeyCode::Char('d')));
+
+    assert!(
+        app.pending_disk_change.is_none(),
+        "diff dismisses the prompt"
+    );
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        before + 1,
+        "diff must open a new split"
+    );
+    let win = app.focused_window();
+    let slot = app.windows[win].as_ref().unwrap().slot;
+    assert_eq!(app.slots[slot].editor.settings().filetype, "diff");
+    assert!(!app.slots[slot].editor.is_modifiable());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disk_change_prompt_esc_keeps_buffer() {
+    let (mut app, path) = raise_disk_change_prompt("esc");
+    app.handle_disk_change_key(key(KeyCode::Esc));
+    assert!(
+        app.pending_disk_change.is_none(),
+        "Esc dismisses the prompt"
+    );
+    assert!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .to_string()
+            .contains("buffer edit"),
+        "Esc must keep the buffer"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn disk_change_no_prompt_for_background_dirty_slot() {
+    // Two files: `a` is edited+dirty, then we focus `b`. A disk change to the
+    // background `a` must only warn (no interactive prompt — you can't answer
+    // it for an unfocused buffer).
+    let a = std::env::temp_dir().join("hjkl_dc_bg_a.txt");
+    let b = std::env::temp_dir().join("hjkl_dc_bg_b.txt");
+    std::fs::write(&a, "a one\n").unwrap();
+    std::fs::write(&b, "b one\n").unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    seed_buffer(&mut app, "a edited\n");
+    app.active_mut().dirty = true;
+    // Open + focus b.
+    app.dispatch_ex(&format!("e {}", b.display()));
+    assert_ne!(
+        app.active().filename.as_deref(),
+        Some(a.as_path()),
+        "b must be focused"
+    );
+
+    write_and_wait(&a, "a changed\n");
+    app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(a.clone())]);
+
+    assert!(
+        app.pending_disk_change.is_none(),
+        "a background dirty slot must not raise the interactive prompt"
+    );
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
 }

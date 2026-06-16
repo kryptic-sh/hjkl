@@ -157,6 +157,9 @@ impl App {
         let mut seen: HashSet<PathBuf> = HashSet::new();
         let mut messages: Vec<String> = Vec::new();
         let mut reloaded = false;
+        // A newly-raised dirty-buffer prompt (#241) also needs a repaint even
+        // though no content reloaded.
+        let had_prompt = self.pending_disk_change.is_some();
         for p in paths {
             let canon = canon_for_match(&p);
             if !seen.insert(canon.clone()) {
@@ -174,6 +177,6 @@ impl App {
         if !messages.is_empty() {
             self.bus.info(messages.join(" | "));
         }
-        reloaded
+        reloaded || (!had_prompt && self.pending_disk_change.is_some())
     }
 }

@@ -317,6 +317,13 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── Dirty-buffer disk-change prompt (issue #241) ──────────
+        // Intercept BEFORE engine routing so k/r/d reach the handler.
+        if self.pending_disk_change.is_some() {
+            self.handle_disk_change_key(key);
+            return KeyOutcome::Continue;
+        }
+
         // ── Confirm-substitute prompt (:s/pat/rep/c) ──────────────
         // Intercept BEFORE normal engine routing so y/n/a/q/l reach
         // the confirm handler rather than the vim FSM.

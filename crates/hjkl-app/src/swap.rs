@@ -272,10 +272,15 @@ pub fn now_unix_ms() -> u64 {
 // ── PID liveness ──────────────────────────────────────────────────────────────
 
 /// Is `pid` a currently-live process owned by anyone?  Best-effort,
-/// cross-platform.  Unix uses `kill(pid, 0)` (alive on `Ok` or `EPERM`).
-/// On non-unix we cannot cheaply check, so return `false` (no lock
-/// enforced) — recovery still works; only the multi-instance refusal
-/// is unix-only for now.
+/// cross-platform.
+///
+/// - Unix uses `kill(pid, 0)` (alive on `Ok` or `EPERM`).
+/// - Windows uses `OpenProcess` + `WaitForSingleObject(0)`: a signaled
+///   process object means it has exited; access-denied means it exists but
+///   is owned by another user (alive).
+/// - Other targets cannot cheaply check, so return `false` (no lock
+///   enforced) — recovery still works; only the multi-instance refusal is
+///   skipped.
 pub fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -288,7 +293,37 @@ pub fn pid_is_alive(pid: u32) -> bool {
         // errno EPERM => process exists but we lack permission => alive.
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
+        };
+        const ERROR_ACCESS_DENIED: u32 = 5;
+
+        // SAFETY: plain Win32 FFI. The handle returned by OpenProcess is
+        // checked for null and always closed before returning.
+        unsafe {
+            let handle = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0, // bInheritHandle = FALSE
+                pid,
+            );
+            if handle.is_null() {
+                // No such process => dead; access-denied => exists (alive),
+                // owned by another user.
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            // The process object becomes signaled only once it exits, so a
+            // zero-timeout wait that returns WAIT_OBJECT_0 means dead;
+            // WAIT_TIMEOUT (anything else) means still running.
+            let wait = WaitForSingleObject(handle, 0);
+            CloseHandle(handle);
+            wait != WAIT_OBJECT_0
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false
@@ -399,9 +434,9 @@ mod tests {
 
     // ── PID liveness tests ────────────────────────────────────────────────────
 
-    /// pid_is_alive returns true for the current process on unix.
+    /// pid_is_alive returns true for the current process on unix + windows.
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn pid_is_alive_true_for_self() {
         assert!(
             pid_is_alive(std::process::id()),
@@ -410,8 +445,9 @@ mod tests {
     }
 
     /// A very-high pid that is almost certainly not running returns false.
+    /// (On Windows pids are multiples of 4, so 999_999_999 is also invalid.)
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn pid_is_alive_false_for_unused_pid() {
         assert!(
             !pid_is_alive(999_999_999),
@@ -419,10 +455,11 @@ mod tests {
         );
     }
 
-    /// On non-unix, pid_is_alive always returns false (no enforcement).
+    /// On targets without a liveness probe, pid_is_alive always returns false
+    /// (no multi-instance enforcement).
     #[test]
-    #[cfg(not(unix))]
-    fn pid_is_alive_false_on_non_unix() {
+    #[cfg(not(any(unix, windows)))]
+    fn pid_is_alive_false_without_probe() {
         assert!(!pid_is_alive(std::process::id()));
         assert!(!pid_is_alive(999_999_999));
     }

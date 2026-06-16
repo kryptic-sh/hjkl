@@ -1696,6 +1696,47 @@ impl App {
         true
     }
 
+    /// Handle a keypress while the dirty-buffer disk-change prompt is active (#241).
+    ///
+    /// - `k` / Esc → keep the in-memory buffer; the slot stays `ChangedOnDisk`
+    ///   so the `:w` guard still applies (use `:e!` to reload later).
+    /// - `r` → reload from disk, discarding the buffer's unsaved changes
+    ///   (equivalent to `:e!`).
+    /// - `d` → open a `:DiffOrig` split of buffer vs disk, then dismiss.
+    ///
+    /// Returns `true` once the prompt is dismissed (any handled key), so the
+    /// caller can request a repaint.
+    pub(crate) fn handle_disk_change_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(pdc) = self.pending_disk_change.as_ref() else {
+            return false;
+        };
+        // The prompt only ever targets the focused slot; bail safely if focus
+        // drifted (e.g. a mouse click) so we never reload the wrong buffer.
+        let targets_focused = pdc.slot_idx == self.focused_slot_idx();
+        match key.code {
+            KeyCode::Char('r') | KeyCode::Char('R') if targets_focused => {
+                self.pending_disk_change = None;
+                self.reload_current(true);
+                self.sync_after_engine_mutation();
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') if targets_focused => {
+                self.pending_disk_change = None;
+                self.diff_orig();
+                self.sync_after_engine_mutation();
+            }
+            KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Esc => {
+                self.pending_disk_change = None;
+                self.bus
+                    .info("Kept buffer; disk change ignored (use :e! to reload).");
+            }
+            _ => {
+                // Unknown key (or action key while focus drifted) — stay in prompt.
+            }
+        }
+        true
+    }
+
     /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
     fn quit_all(&mut self, force: bool) {
         // Explorer scratch buffers are programmatic (no file, never user-saved)
@@ -1960,12 +2001,28 @@ impl App {
                     let prev = self.slots[idx].disk_state;
                     self.slots[idx].disk_state = DiskState::ChangedOnDisk;
                     if prev != DiskState::ChangedOnDisk {
-                        let why = if self.slots[idx].dirty {
-                            "buffer is dirty, use :e! to reload"
+                        // A modified, focused buffer raises an interactive
+                        // keep/reload/diff prompt (#241) instead of just a
+                        // warning. Background or clean-but-noautoreload slots
+                        // still get the one-shot status warning.
+                        if self.slots[idx].dirty
+                            && idx == self.focused_slot_idx()
+                            && self.pending_disk_change.is_none()
+                            && self.pending_recovery.is_none()
+                        {
+                            self.pending_disk_change = Some(super::PendingDiskChange {
+                                slot_idx: idx,
+                                path: path.clone(),
+                            });
                         } else {
-                            "autoreload off, use :e to reload"
-                        };
-                        messages.push(format!("W: \"{}\" changed on disk ({why})", path.display()));
+                            let why = if self.slots[idx].dirty {
+                                "buffer is dirty, use :e! to reload"
+                            } else {
+                                "autoreload off, use :e to reload"
+                            };
+                            messages
+                                .push(format!("W: \"{}\" changed on disk ({why})", path.display()));
+                        }
                     }
                     false
                 } else {

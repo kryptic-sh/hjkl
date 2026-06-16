@@ -423,6 +423,11 @@ pub struct App {
     /// While `Some`, keypresses route to [`App::handle_recovery_key`] rather
     /// than the engine.
     pub(crate) pending_recovery: Option<PendingRecovery>,
+    /// Pending dirty-buffer disk-change prompt (issue #241). Set when the
+    /// focused, modified buffer's file changes on disk. While `Some`, keypresses
+    /// route to [`App::handle_disk_change_key`] (keep / reload / diff) rather
+    /// than the engine.
+    pub(crate) pending_disk_change: Option<PendingDiskChange>,
     /// Instant of the last keystroke / input event.  Used together with the
     /// active slot's `dirty_gen` to decide when the `updatetime` idle deadline
     /// has elapsed for swap-file writes.
@@ -468,6 +473,19 @@ pub(crate) struct PendingRecovery {
     pub slot_idx: usize,
     /// Human-readable relative time string for the prompt ("42s ago", "3m ago", …).
     pub written_ago: String,
+}
+
+/// Pending dirty-buffer disk-change prompt state (issue #241).
+///
+/// Set when the focused, modified buffer's on-disk file changes underneath it.
+/// Key presses route to [`App::handle_disk_change_key`] while this is `Some`:
+/// `k` keeps the buffer, `r` reloads from disk (discarding edits), `d` opens a
+/// `:DiffOrig` split of buffer vs disk.
+pub(crate) struct PendingDiskChange {
+    /// Index of the slot whose file changed (always the focused slot).
+    pub slot_idx: usize,
+    /// Path of the file that changed on disk.
+    pub path: std::path::PathBuf,
 }
 
 /// State for an interactive `:s/pat/rep/c` confirm session.
@@ -1570,6 +1588,7 @@ impl App {
             debug_mode: false,
             confirming_substitute: None,
             pending_recovery: None,
+            pending_disk_change: None,
             last_input_at: std::time::Instant::now(),
             blame_prev_cursor: None,
             blame_cursor_moved_at: std::time::Instant::now(),
