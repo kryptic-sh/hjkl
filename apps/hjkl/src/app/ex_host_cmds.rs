@@ -587,6 +587,32 @@ impl HostCmd<App> for ChecktimeCmd {
     }
 }
 
+/// `:DiffOrig` — read-only split with the unified diff of the buffer vs disk (#208).
+pub(crate) struct DiffOrigCmd;
+
+impl HostCmd<App> for DiffOrigCmd {
+    fn name(&self) -> &'static str {
+        "DiffOrig"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        8
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.diff_orig();
+        Some(ExEffect::Ok)
+    }
+}
+
 /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
 pub(crate) struct VnewCmd;
 
@@ -1396,6 +1422,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(BCmd));
     reg.add(Box::new(BpickerCmd));
     reg.add(Box::new(ChecktimeCmd));
+    reg.add(Box::new(DiffOrigCmd));
     reg.add(Box::new(VnewCmd));
     reg.add(Box::new(NewCmd));
     reg.add(Box::new(TabfirstCmd));

@@ -3318,3 +3318,163 @@ fn edit_percent_still_expands_to_filename() {
         "reload must replace the dirty buffer, got: {content:?}"
     );
 }
+
+// ── :DiffOrig (#208) ──────────────────────────────────────────────────────
+
+#[test]
+fn diff_orig_opens_readonly_diff_split_with_hunks() {
+    let path = std::env::temp_dir().join("hjkl_diff_orig_hunks.txt");
+    std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    let original_win = app.focused_window();
+
+    // Edit the buffer in memory only (do not save).
+    seed_buffer(&mut app, "alpha\nBETA\ngamma\n");
+    app.active_mut().dirty = true;
+
+    app.dispatch_ex("DiffOrig");
+
+    // A new split opened and is focused.
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        2,
+        "expected 2 open windows after :DiffOrig"
+    );
+    let new_win = app.focused_window();
+    assert_ne!(new_win, original_win, ":DiffOrig must focus the new split");
+
+    let new_slot = app.windows[new_win].as_ref().unwrap().slot;
+    let slot = &app.slots[new_slot];
+    assert!(
+        slot.filename.is_none(),
+        "diff buffer must be an unnamed scratch slot"
+    );
+    assert_eq!(
+        slot.editor.settings().filetype,
+        "diff",
+        "diff buffer filetype must be `diff`"
+    );
+    assert!(
+        !slot.editor.is_modifiable(),
+        "diff buffer must be read-only"
+    );
+
+    let content = slot.editor.buffer().rope().to_string();
+    assert!(
+        content.contains("@@"),
+        "diff must contain a hunk header: {content}"
+    );
+    assert!(
+        content.contains("-beta"),
+        "diff must show removed line: {content}"
+    );
+    assert!(
+        content.contains("+BETA"),
+        "diff must show added line: {content}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn diff_orig_no_changes_shows_no_difference_message() {
+    let path = std::env::temp_dir().join("hjkl_diff_orig_clean.txt");
+    std::fs::write(&path, "same\ncontent\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    // Buffer matches disk exactly.
+    app.dispatch_ex("DiffOrig");
+
+    let new_win = app.focused_window();
+    let new_slot = app.windows[new_win].as_ref().unwrap().slot;
+    let content = app.slots[new_slot].editor.buffer().rope().to_string();
+    assert!(
+        content.contains("no differences"),
+        "clean buffer must report no differences: {content}"
+    );
+    assert!(
+        !content.contains("@@"),
+        "clean buffer must not produce a hunk: {content}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn diff_orig_without_filename_errors_and_opens_no_split() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.windows.iter().filter(|w| w.is_some()).count();
+
+    app.dispatch_ex("DiffOrig");
+
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(msg.contains("E32"), "expected E32 no-file-name, got: {msg}");
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        before,
+        ":DiffOrig on an unnamed buffer must not open a split"
+    );
+}
+
+#[test]
+fn diff_orig_file_deleted_on_disk_shows_all_additions() {
+    let path = std::env::temp_dir().join("hjkl_diff_orig_deleted.txt");
+    std::fs::write(&path, "placeholder\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    // Buffer has content, but the file vanishes from disk (old side empty).
+    seed_buffer(&mut app, "line one\nline two\n");
+    app.active_mut().dirty = true;
+    std::fs::remove_file(&path).unwrap();
+
+    app.dispatch_ex("DiffOrig");
+
+    let new_win = app.focused_window();
+    let new_slot = app.windows[new_win].as_ref().unwrap().slot;
+    let content = app.slots[new_slot].editor.buffer().rope().to_string();
+    assert!(
+        content.contains("+line one"),
+        "expected added line: {content}"
+    );
+    assert!(
+        content.contains("+line two"),
+        "expected added line: {content}"
+    );
+    assert!(
+        !content.contains("no differences"),
+        "deleted-on-disk buffer must produce a real diff: {content}"
+    );
+}
+
+#[test]
+fn diff_orig_leaves_original_buffer_untouched() {
+    let path = std::env::temp_dir().join("hjkl_diff_orig_untouched.txt");
+    std::fs::write(&path, "disk\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    let original_win = app.focused_window();
+    let original_slot = app.windows[original_win].as_ref().unwrap().slot;
+
+    seed_buffer(&mut app, "edited\n");
+    app.active_mut().dirty = true;
+
+    app.dispatch_ex("DiffOrig");
+
+    // The source buffer keeps its (still-unsaved) content and stays modifiable.
+    let src = &app.slots[original_slot];
+    assert_eq!(
+        src.editor.buffer().rope().to_string(),
+        "edited\n",
+        "source buffer content must be unchanged by :DiffOrig"
+    );
+    assert!(
+        src.editor.is_modifiable(),
+        "source buffer must remain modifiable"
+    );
+    assert_eq!(
+        src.filename.as_deref(),
+        Some(path.as_path()),
+        "source buffer must keep its filename"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

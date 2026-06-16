@@ -310,6 +310,29 @@ fn try_changes_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<GitChange>,
     Ok(changes)
 }
 
+/// Build a unified diff (`@@`-style) between two in-memory byte buffers, with
+/// no git repository required. `old` is the baseline (e.g. on-disk content),
+/// `new` the comparison (e.g. the editor buffer); `old_label`/`new_label`
+/// become the `--- a/<>` / `+++ b/<>` header paths. Returns the full patch
+/// text, or `None` on a git2 error. Identical inputs yield `Some("")` (no diff).
+///
+/// Used by `:DiffOrig` (buffer vs disk) and reusable for the dirty-buffer
+/// reload-diff prompt.
+pub fn unified_diff(old: &[u8], new: &[u8], old_label: &str, new_label: &str) -> Option<String> {
+    let mut opts = DiffOptions::new();
+    opts.context_lines(3);
+    let mut patch = Patch::from_buffers(
+        old,
+        Some(Path::new(old_label)),
+        new,
+        Some(Path::new(new_label)),
+        Some(&mut opts),
+    )
+    .ok()?;
+    let buf = patch.to_buf().ok()?;
+    Some(buf.as_str().unwrap_or_default().to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Hunk model (#115) — group the diff into stage/revert/preview units.
 // ---------------------------------------------------------------------------
@@ -1635,5 +1658,34 @@ mod tests {
             let info = entry.as_ref().expect("entry must be Some");
             assert!(!info.is_uncommitted, "line {i} is committed");
         }
+    }
+
+    // ── unified_diff (#208) ─────────────────────────────────────────────────
+
+    #[test]
+    fn unified_diff_emits_hunk_for_changed_line() {
+        let old = b"alpha\nbeta\ngamma\n";
+        let new = b"alpha\nBETA\ngamma\n";
+        let d = unified_diff(old, new, "a/f.txt", "b/f.txt").expect("diff");
+        assert!(d.contains("@@"), "expected hunk header: {d}");
+        assert!(d.contains("-beta"), "expected removed line: {d}");
+        assert!(d.contains("+BETA"), "expected added line: {d}");
+    }
+
+    #[test]
+    fn unified_diff_empty_for_identical_buffers() {
+        let buf = b"same\ncontent\n";
+        let d = unified_diff(buf, buf, "a/f.txt", "b/f.txt").expect("diff");
+        assert!(
+            d.trim().is_empty(),
+            "identical buffers must produce an empty diff, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn unified_diff_handles_creation_from_empty() {
+        let d = unified_diff(b"", b"new\nfile\n", "a/f.txt", "b/f.txt").expect("diff");
+        assert!(d.contains("+new"), "expected added content: {d}");
+        assert!(d.contains("+file"), "expected added content: {d}");
     }
 }

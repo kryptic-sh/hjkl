@@ -23,6 +23,7 @@ mod buffer_ops;
 pub(crate) mod chord_routing;
 mod confirm_substitute;
 pub(crate) mod count_prefix;
+mod diff;
 mod dispatch;
 mod engine_actions;
 mod event_loop;
