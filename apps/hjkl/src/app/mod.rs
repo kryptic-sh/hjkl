@@ -24,6 +24,7 @@ pub(crate) mod chord_routing;
 mod confirm_substitute;
 pub(crate) mod count_prefix;
 mod diff;
+pub(crate) mod diff_mode;
 mod dispatch;
 mod engine_actions;
 mod event_loop;
@@ -428,6 +429,14 @@ pub struct App {
     /// route to [`App::handle_disk_change_key`] (keep / reload / diff) rather
     /// than the engine.
     pub(crate) pending_disk_change: Option<PendingDiskChange>,
+    /// Window ids currently in diff mode (issue #208 Phase 2). Diff
+    /// highlighting engages when at least two distinct-buffer windows are
+    /// present. Managed by `:diffthis` / `:diffsplit` / `:diffoff`.
+    pub(crate) diff_windows: Vec<window::WindowId>,
+    /// Cached line alignment for the active diff pair, invalidated when either
+    /// buffer's `dirty_gen` or the participating windows change. Recomputed by
+    /// [`App::refresh_diff_alignment`].
+    pub(crate) diff_cache: Option<DiffCacheEntry>,
     /// Instant of the last keystroke / input event.  Used together with the
     /// active slot's `dirty_gen` to decide when the `updatetime` idle deadline
     /// has elapsed for swap-file writes.
@@ -486,6 +495,19 @@ pub(crate) struct PendingDiskChange {
     pub slot_idx: usize,
     /// Path of the file that changed on disk.
     pub path: std::path::PathBuf,
+}
+
+/// Cached side-by-side alignment for the active diff pair (issue #208 Phase 2).
+///
+/// `a_win` / `b_win` are the two participating windows (insertion order); the
+/// alignment's `a` columns map to `a_win`'s buffer, `b` columns to `b_win`'s.
+/// Invalidated when either window changes or either buffer's `dirty_gen` moves.
+pub(crate) struct DiffCacheEntry {
+    pub a_win: window::WindowId,
+    pub b_win: window::WindowId,
+    pub a_gen: u64,
+    pub b_gen: u64,
+    pub diff: hjkl_app::diff::LineDiff,
 }
 
 /// State for an interactive `:s/pat/rep/c` confirm session.
@@ -1169,6 +1191,12 @@ impl App {
                 self.recompute_and_install();
             }
         }
+        // Keep the diff alignment current when a diff-mode buffer is edited.
+        // Gen-keyed: a no-op unless the participating windows or buffer content
+        // actually changed.
+        if !self.diff_windows.is_empty() {
+            self.refresh_diff_alignment();
+        }
     }
 
     /// Return the active auto-indent flash row range `(top, bot)` while
@@ -1589,6 +1617,8 @@ impl App {
             confirming_substitute: None,
             pending_recovery: None,
             pending_disk_change: None,
+            diff_windows: Vec::new(),
+            diff_cache: None,
             last_input_at: std::time::Instant::now(),
             blame_prev_cursor: None,
             blame_cursor_moved_at: std::time::Instant::now(),

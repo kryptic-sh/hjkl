@@ -613,6 +613,84 @@ impl HostCmd<App> for DiffOrigCmd {
     }
 }
 
+/// `:diffthis` — mark the focused window for diff mode (#208 Phase 2).
+pub(crate) struct DiffThisCmd;
+
+impl HostCmd<App> for DiffThisCmd {
+    fn name(&self) -> &'static str {
+        "diffthis"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.diff_this();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:diffsplit {file}` — open `{file}` in a vertical split and diff it (#208).
+pub(crate) struct DiffSplitCmd;
+
+impl HostCmd<App> for DiffSplitCmd {
+    fn name(&self) -> &'static str {
+        "diffsplit"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Path
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        app.diff_split(args.trim());
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:diffoff` — remove the focused window from diff mode (#208 Phase 2).
+pub(crate) struct DiffOffCmd;
+
+impl HostCmd<App> for DiffOffCmd {
+    fn name(&self) -> &'static str {
+        "diffoff"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.diff_off();
+        Some(ExEffect::Ok)
+    }
+}
+
 /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
 pub(crate) struct VnewCmd;
 
@@ -1423,6 +1501,9 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(BpickerCmd));
     reg.add(Box::new(ChecktimeCmd));
     reg.add(Box::new(DiffOrigCmd));
+    reg.add(Box::new(DiffThisCmd));
+    reg.add(Box::new(DiffSplitCmd));
+    reg.add(Box::new(DiffOffCmd));
     reg.add(Box::new(VnewCmd));
     reg.add(Box::new(NewCmd));
     reg.add(Box::new(TabfirstCmd));

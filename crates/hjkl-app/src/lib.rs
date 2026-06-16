@@ -6,6 +6,7 @@
 //! belongs in the host binary.
 
 pub mod config;
+pub mod diff;
 pub mod editorconfig;
 pub mod git;
 pub mod git_worker;

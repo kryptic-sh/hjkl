@@ -77,6 +77,8 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
         ("[d", AppAction::DiagPrev, "prev diagnostic"),
         ("]D", AppAction::DiagNextError, "next error"),
         ("[D", AppAction::DiagPrevError, "prev error"),
+        ("]c", AppAction::DiffNextChange, "next diff change"),
+        ("[c", AppAction::DiffPrevChange, "prev diff change"),
         // ── <C-w> window motions ──────────────────────────────────────────
         ("<C-w>h", AppAction::FocusLeft, "focus left"),
         ("<C-w>j", AppAction::FocusBelow, "focus down"),

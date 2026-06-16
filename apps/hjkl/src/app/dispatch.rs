@@ -53,6 +53,10 @@ impl App {
             | AppAction::DiagNextError
             | AppAction::DiagPrevError => self.dispatch_lsp_action(action),
 
+            // ── Diff-mode change navigation (#208 Phase 2) ─────────────────
+            AppAction::DiffNextChange => self.diff_next_change(),
+            AppAction::DiffPrevChange => self.diff_prev_change(),
+
             // ── Window / layout management ─────────────────────────────────
             AppAction::FocusLeft
             | AppAction::FocusBelow

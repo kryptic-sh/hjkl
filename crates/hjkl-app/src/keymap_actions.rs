@@ -65,6 +65,10 @@ pub enum AppAction {
     DiagNextError,
     DiagPrevError,
 
+    // ── Diff-mode change navigation (#208 Phase 2) ─────────────────────
+    DiffNextChange,
+    DiffPrevChange,
+
     // ── Window focus ───────────────────────────────────────────────────
     FocusLeft,
     FocusBelow,

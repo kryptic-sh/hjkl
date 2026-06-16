@@ -573,6 +573,7 @@ fn shift_tab_key() -> KeyEvent {
 }
 
 pub mod cmdline_window;
+pub mod diff;
 pub mod ex;
 pub mod formatter;
 pub mod keymap;

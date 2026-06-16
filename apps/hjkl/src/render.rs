@@ -1485,6 +1485,67 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── Diff-mode overlay (#208 Phase 2) ──────────────────────────────────
+    // Post-render pass: tint changed/added lines (DiffChange/DiffAdd) and the
+    // changed character ranges within them (DiffText), for both windows of an
+    // active diff pair. Colors are hardcoded (vim-like dark palette) pending a
+    // theme promotion. Filler-line alignment is a separate concern.
+    if app.is_diff_window(win_id) {
+        let classes = app.diff_line_classes(win_id);
+        if !classes.is_empty() {
+            // Vim-like dark diff palette (bg only; syntax fg is preserved).
+            let add_bg = Color::Rgb(32, 51, 32); // DiffAdd
+            let change_bg = Color::Rgb(32, 42, 60); // DiffChange
+            let text_bg = Color::Rgb(48, 78, 110); // DiffText (stronger)
+            let text_x = area.x + sign_w + num_gw + fold_w;
+            let text_right = area.x + area.width;
+            let screen_top = area.y;
+            let screen_height = area.height as usize;
+            let buf = frame.buffer_mut();
+            for (&line, class) in &classes {
+                if line < vp_top {
+                    continue;
+                }
+                let off = line - vp_top;
+                if off >= screen_height {
+                    continue;
+                }
+                let screen_row = screen_top + off as u16;
+                let band_bg = match class.band {
+                    crate::app::diff_mode::DiffBand::Add => add_bg,
+                    crate::app::diff_mode::DiffBand::Change => change_bg,
+                };
+                for col in text_x..text_right {
+                    if let Some(c) = buf.cell_mut((col, screen_row)) {
+                        c.set_style(c.style().patch(Style::default().bg(band_bg)));
+                    }
+                }
+                // Char-level DiffText over the changed byte ranges.
+                if !class.text_ranges.is_empty() {
+                    let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].editor.buffer());
+                    let lt = hjkl_buffer::rope_line_str(&rope, line);
+                    let lt = lt.trim_end_matches('\n');
+                    let len = lt.len();
+                    for r in &class.text_ranges {
+                        let start = r.start.min(len);
+                        let end = r.end.min(len);
+                        let cs = lt[..start].chars().count();
+                        let ce = lt[..end].chars().count();
+                        for ci in cs..ce {
+                            let scol = text_x + ci as u16;
+                            if scol >= text_right {
+                                break;
+                            }
+                            if let Some(c) = buf.cell_mut((scol, screen_row)) {
+                                c.set_style(c.style().patch(Style::default().bg(text_bg)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── Confirm-substitute active-match highlight ─────────────────────────
     // Paint inverse-video (search highlight) over the cell range of the
     // match currently being prompted. Only for the focused window so
@@ -2767,5 +2828,50 @@ mod tests {
             "every cell of the name must share the filetype color (no uncolored/white \
              cells); icon_fg={icon_fg:?} name fgs={fgs:?}"
         );
+    }
+
+    /// `:diffsplit` paints DiffChange line bands and DiffText char highlights
+    /// (#208 Phase 2). One line differs; its changed characters get the stronger
+    /// DiffText bg and the rest of the line gets the DiffChange band bg.
+    #[test]
+    fn diffsplit_paints_change_band_and_difftext() {
+        use crate::app::App;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        std::fs::write(&a, "alpha\nbeta\ngamma\n").unwrap();
+        std::fs::write(&b, "alpha\nBETA\ngamma\n").unwrap();
+
+        let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("diffsplit {}", b.display()));
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Draw twice so window rects/viewports settle before the overlay pass.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let change_bg = Color::Rgb(32, 42, 60);
+        let text_bg = Color::Rgb(48, 78, 110);
+
+        let mut has_change = false;
+        let mut has_text = false;
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if c.bg == change_bg {
+                        has_change = true;
+                    }
+                    if c.bg == text_bg {
+                        has_text = true;
+                    }
+                }
+            }
+        }
+        assert!(has_change, "a DiffChange band must be painted");
+        assert!(has_text, "a DiffText char highlight must be painted");
     }
 }
