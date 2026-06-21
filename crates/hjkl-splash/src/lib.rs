@@ -134,6 +134,19 @@ impl<'a> Splash<'a> {
         self
     }
 
+    /// Override the wall-clock anchor (default `Instant::now()` from
+    /// [`Splash::new`]). No-op when the splash is in fixed-tick mode.
+    ///
+    /// Consumers that rebuild a transient `Splash` on every redraw MUST pass a
+    /// persistent anchor here — otherwise re-anchoring to "now" each frame pins
+    /// the tick at 0 and the animation never advances.
+    pub fn with_anchor(mut self, anchor: Instant) -> Self {
+        if let TimeSource::Wall { period, .. } = self.time {
+            self.time = TimeSource::Wall { anchor, period };
+        }
+        self
+    }
+
     /// Reset the wall-clock anchor to "now". No-op when fixed-tick.
     pub fn reset(&mut self) {
         if let TimeSource::Wall { period, .. } = self.time {
@@ -251,6 +264,35 @@ mod tests {
         let path: &[(u8, u8, char)] = &[(0, 0, 'a'), (0, 1, 'b'), (0, 2, 'c')];
         let splash = Splash::fixed_tick("abc", path, 7);
         assert_eq!(splash.tick(), 7);
+    }
+
+    #[test]
+    fn with_anchor_drives_tick_from_given_instant() {
+        // A persistent anchor in the past yields a non-zero tick immediately —
+        // this is what consumers that rebuild `Splash` per frame must use.
+        // Regression for the frozen-splash bug (#251): re-anchoring to `now`
+        // every frame (the default `new`) keeps the tick pinned at ~0.
+        let path: &[(u8, u8, char)] = &[(0, 0, 'a')];
+        let anchor = Instant::now() - Duration::from_millis(600); // 5 periods @120ms
+        let advanced = Splash::new("a", path).with_anchor(anchor).tick();
+        assert!(
+            advanced >= 4,
+            "anchored-in-past tick should reflect elapsed periods, got {advanced}"
+        );
+        // The buggy pattern (fresh anchor each construction) stays at 0.
+        let frozen = Splash::new("a", path).tick();
+        assert_eq!(
+            frozen, 0,
+            "fresh-anchor tick must be 0 (the bug being fixed)"
+        );
+    }
+
+    #[test]
+    fn with_anchor_noop_on_fixed_tick() {
+        let path: &[(u8, u8, char)] = &[(0, 0, 'a')];
+        let anchor = Instant::now() - Duration::from_secs(10);
+        let splash = Splash::fixed_tick("a", path, 3).with_anchor(anchor);
+        assert_eq!(splash.tick(), 3, "fixed-tick must ignore with_anchor");
     }
 
     #[test]

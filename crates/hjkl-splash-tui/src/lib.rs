@@ -21,7 +21,10 @@ fn rgb_to_color(Rgb(r, g, b): Rgb) -> Color {
 /// Paints the hjkl art animation centred in `area`, followed by a dim version
 /// line and a hint line below it.
 pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen) {
-    let splash = Splash::new(presets::hjkl::ART, presets::hjkl::PATH);
+    // Anchor the animation clock to the screen's persistent anchor (captured
+    // once at build), NOT `Instant::now()` — `render` runs every frame, so a
+    // fresh anchor each call would pin the tick at 0 and freeze the animation.
+    let splash = Splash::new(presets::hjkl::ART, presets::hjkl::PATH).with_anchor(screen.anchor);
     let layout = Layout::centered(
         area.width,
         area.height,
