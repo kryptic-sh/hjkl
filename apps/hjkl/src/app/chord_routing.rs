@@ -55,7 +55,7 @@ impl App {
     pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = Self::km_to_crossterm(km_ev);
-            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
         }
     }
 
@@ -74,7 +74,7 @@ impl App {
     /// without re-entering step 2b (the explorer keymap).
     fn replay_explorer_unbound(&mut self, events: Vec<hjkl_keymap::KeyEvent>) {
         for ev in events {
-            if self.pending_state.is_some() || self.active().editor.is_chord_pending() {
+            if self.pending_state.is_some() || self.active_editor().is_chord_pending() {
                 // A chord is in flight — send the key through the full routing
                 // stack which includes the pending_state reducer in step 1.
                 // Step 2b is gated on `pending_state.is_none()` so it is
@@ -82,7 +82,7 @@ impl App {
                 // keymap.
                 let ct_ev = Self::km_to_crossterm(&ev);
                 if !self.route_chord_key(ct_ev) {
-                    hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
+                    hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
                 }
             } else {
                 // No chord in flight — go through the global app_keymap trie
@@ -134,7 +134,7 @@ impl App {
         // state doesn't change between before/after — BUT recording may be active
         // before the @{reg} key (recording a macro that includes a @a call). In
         // that case we ALSO skip the register name (pending_was_macro_chord logic).
-        let was_recording_before = self.active().editor.is_recording_macro();
+        let was_recording_before = self.active_editor().is_recording_macro();
         let was_play_macro_pending = matches!(
             self.pending_state,
             Some(hjkl_vim::PendingState::PlayMacroTarget { .. })
@@ -149,8 +149,8 @@ impl App {
         //      is the register-name bookkeeping key).
         //   4. When the key was the second half of a @{reg} chord
         //      (was_play_macro_pending) — the register name is bookkeeping.
-        let is_recording_now = self.active().editor.is_recording_macro();
-        let is_replaying_now = self.active().editor.is_replaying_macro();
+        let is_recording_now = self.active_editor().is_recording_macro();
+        let is_replaying_now = self.active_editor().is_replaying_macro();
         let just_started_recording = !was_recording_before && is_recording_now;
         let register_name_of_play = was_play_macro_pending;
         if consumed
@@ -161,7 +161,7 @@ impl App {
         {
             let input = hjkl_engine_tui::crossterm_to_input(key);
             if input.key != hjkl_engine::Key::Null {
-                self.active_mut().editor.record_input(input);
+                self.active_editor_mut().record_input(input);
             }
         }
         consumed
@@ -216,7 +216,7 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar { ch, count }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.replace_char_at(ch, count);
+                        self.active_editor_mut().replace_char_at(ch, count);
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -227,7 +227,7 @@ impl App {
                         count,
                     }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.find_char(ch, forward, till, count);
+                        self.active_editor_mut().find_char(ch, forward, till, count);
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -349,7 +349,7 @@ impl App {
                         };
                         if let Some(op) = case_op_kind {
                             use hjkl_engine::VimMode;
-                            let mode = self.active().editor.vim_mode();
+                            let mode = self.active_editor().vim_mode();
                             if matches!(
                                 mode,
                                 VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
@@ -371,14 +371,14 @@ impl App {
                             return true;
                         }
                         // All other g-chords: delegate to engine.
-                        self.active_mut().editor.after_g(ch, count);
+                        self.active_editor_mut().after_g(ch, count);
                         self.sync_after_engine_mutation();
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
                         self.pending_state = None;
                         // All z-chords delegate directly to the engine.
-                        self.active_mut().editor.after_z(ch, count);
+                        self.active_editor_mut().after_z(ch, count);
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -420,13 +420,13 @@ impl App {
                             self.submit_external_format(range)
                         };
                         if !used_formatter {
-                            self.active_mut().editor.apply_op_motion(
+                            self.active_editor_mut().apply_op_motion(
                                 super::event_loop::op_kind_to_operator(op),
                                 motion_key,
                                 total_count,
                             );
                             if let Some((top, bot)) =
-                                self.active_mut().editor.take_last_indent_range()
+                                self.active_editor_mut().take_last_indent_range()
                             {
                                 self.indent_flash = Some(super::IndentFlash {
                                     top,
@@ -443,7 +443,7 @@ impl App {
                         // Filter (!!): open the filter prompt for the current line range.
                         // `!!` filters `total_count` lines starting at the cursor.
                         if op == hjkl_vim::OperatorKind::Filter {
-                            let cursor_row = self.active().editor.cursor().0;
+                            let cursor_row = self.active_editor().cursor().0;
                             let bot_row = cursor_row
                                 .saturating_add(total_count.max(1))
                                 .saturating_sub(1);
@@ -458,7 +458,7 @@ impl App {
                         // AutoIndent (==): submit async formatter with cursor-row range.
                         // Falls back to dumb algo when no formatter is registered.
                         let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
-                            let cursor_row = self.active().editor.cursor().0;
+                            let cursor_row = self.active_editor().cursor().0;
                             let end_row = cursor_row.saturating_add(total_count).saturating_sub(1);
                             let range = hjkl_mangler::RangeSpec {
                                 start_row: cursor_row,
@@ -467,12 +467,12 @@ impl App {
                             self.submit_external_format(Some(range))
                         };
                         if !used_formatter {
-                            self.active_mut().editor.apply_op_double(
+                            self.active_editor_mut().apply_op_double(
                                 super::event_loop::op_kind_to_operator(op),
                                 total_count,
                             );
                             if let Some((top, bot)) =
-                                self.active_mut().editor.take_last_indent_range()
+                                self.active_editor_mut().take_last_indent_range()
                             {
                                 self.indent_flash = Some(super::IndentFlash {
                                     top,
@@ -508,13 +508,13 @@ impl App {
                             self.sync_after_engine_mutation();
                             return true;
                         }
-                        self.active_mut().editor.apply_op_text_obj(
+                        self.active_editor_mut().apply_op_text_obj(
                             super::event_loop::op_kind_to_operator(op),
                             ch,
                             inner,
                             total_count,
                         );
-                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        if let Some((top, bot)) = self.active_editor_mut().take_last_indent_range()
                         {
                             self.indent_flash = Some(super::IndentFlash {
                                 top,
@@ -548,12 +548,12 @@ impl App {
                             self.sync_after_engine_mutation();
                             return true;
                         }
-                        self.active_mut().editor.apply_op_g(
+                        self.active_editor_mut().apply_op_g(
                             super::event_loop::op_kind_to_operator(op),
                             ch,
                             total_count,
                         );
-                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        if let Some((top, bot)) = self.active_editor_mut().take_last_indent_range()
                         {
                             self.indent_flash = Some(super::IndentFlash {
                                 top,
@@ -572,14 +572,14 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.apply_op_find(
+                        self.active_editor_mut().apply_op_find(
                             super::event_loop::op_kind_to_operator(op),
                             ch,
                             forward,
                             till,
                             total_count,
                         );
-                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        if let Some((top, bot)) = self.active_editor_mut().take_last_indent_range()
                         {
                             self.indent_flash = Some(super::IndentFlash {
                                 top,
@@ -592,24 +592,24 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.set_pending_register(reg);
+                        self.active_editor_mut().set_pending_register(reg);
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::SetMark { ch }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.set_mark_at_cursor(ch);
+                        self.active_editor_mut().set_mark_at_cursor(ch);
                         // No sync needed — set_mark_at_cursor does not move cursor.
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
                         self.pending_state = None;
-                        let jump = self.active_mut().editor.try_goto_mark_line(ch);
+                        let jump = self.active_editor_mut().try_goto_mark_line(ch);
                         self.apply_mark_jump(jump, true);
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
                         self.pending_state = None;
-                        let jump = self.active_mut().editor.try_goto_mark_char(ch);
+                        let jump = self.active_editor_mut().try_goto_mark_char(ch);
                         self.apply_mark_jump(jump, false);
                         return true;
                     }
@@ -622,7 +622,7 @@ impl App {
                         // below must skip it. We set pending_state = None before
                         // returning so the hook sees None and skips naturally.
                         self.pending_state = None;
-                        self.active_mut().editor.start_macro_record(reg);
+                        self.active_editor_mut().start_macro_record(reg);
                         // Do NOT call the recorder hook here — the register char is
                         // bookkeeping, not a recorded keystroke. Return immediately.
                         return true;
@@ -640,7 +640,7 @@ impl App {
                             return true;
                         }
                         // `@{reg}` chord completed — decode and re-feed the macro.
-                        let inputs = self.active_mut().editor.play_macro(reg, count);
+                        let inputs = self.active_editor_mut().play_macro(reg, count);
                         // Re-feed each Input through route_chord_key by converting
                         // it back to a crossterm KeyEvent. During replay,
                         // is_replaying_macro() == true so the recorder hook skips
@@ -654,10 +654,10 @@ impl App {
                                 continue;
                             }
                             if !self.route_chord_key(ct_key) {
-                                hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_key);
+                                hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_key);
                             }
                         }
-                        self.active_mut().editor.end_macro_replay();
+                        self.active_editor_mut().end_macro_replay();
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -678,7 +678,7 @@ impl App {
         // key of a chord (e.g. second `g` of `gg` in VisualLine) must reach
         // the reducer's commit arm above, not re-fire the trie.
         if self.pending_state.is_none()
-            && self.active().editor.vim_mode() != hjkl_engine::VimMode::Normal
+            && self.active_editor().vim_mode() != hjkl_engine::VimMode::Normal
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
             && let Some(km_mode) = super::current_km_mode(self)
         {
@@ -710,8 +710,8 @@ impl App {
         // the next key must complete that global chord, not fire an explorer bind.
         if self.pending_state.is_none()
             && self.explorer_buf_focused()
-            && self.active().editor.vim_mode() == hjkl_engine::VimMode::Normal
-            && !self.active().editor.is_chord_pending()
+            && self.active_editor().vim_mode() == hjkl_engine::VimMode::Normal
+            && !self.active_editor().is_chord_pending()
             && self
                 .app_keymap
                 .pending(super::keymap::HjklMode::Normal)
@@ -750,10 +750,10 @@ impl App {
         // buffering and engine-pending bypass run in event_loop.rs before this
         // call and set up the correct state for dispatch_keymap to read.
         if self.pending_state.is_none()
-            && self.active().editor.vim_mode() == hjkl_engine::VimMode::Normal
+            && self.active_editor().vim_mode() == hjkl_engine::VimMode::Normal
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
         {
-            let engine_pending = self.active().editor.is_chord_pending();
+            let engine_pending = self.active_editor().is_chord_pending();
             if !engine_pending {
                 let count = self.pending_count.peek().max(1);
                 let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();

@@ -307,7 +307,7 @@ impl App {
                 self.do_edit(&s, false);
                 // goto_line is 1-based and clamps to buffer length.
                 if line > 0 {
-                    self.active_mut().editor.goto_line(line as usize);
+                    self.active_editor_mut().goto_line(line as usize);
                     self.sync_after_engine_mutation();
                 }
             }
@@ -319,7 +319,7 @@ impl App {
             AppAction::StashPop(idx) => self.do_stash_pop(idx),
             AppAction::StashDrop(idx) => self.do_stash_drop(idx),
             AppAction::JumpToRowCol(row, col) => {
-                self.active_mut().editor.jump_cursor(row, col);
+                self.active_editor_mut().jump_cursor(row, col);
                 self.sync_after_engine_mutation();
             }
             AppAction::ApplyCodeAction(idx) => {

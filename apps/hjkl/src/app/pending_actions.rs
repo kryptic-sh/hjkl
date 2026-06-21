@@ -101,9 +101,9 @@ impl App {
                 // `q` in Normal mode. Branch: stop recording if active, else
                 // open the RecordMacroTarget chord to wait for the register char.
                 self.pending_count.reset();
-                if self.active().editor.is_recording_macro() {
+                if self.active_editor().is_recording_macro() {
                     // Bare `q` ends the active recording.
-                    self.active_mut().editor.stop_macro_record();
+                    self.active_editor_mut().stop_macro_record();
                 } else {
                     self.pending_state = Some(hjkl_vim::PendingState::RecordMacroTarget);
                 }

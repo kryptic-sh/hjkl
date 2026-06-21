@@ -75,7 +75,7 @@ impl App {
         // the leading `%` to the filename and the command failed to dispatch.
         let cmd_expanded = {
             // Strip the leading range (its text is preserved for re-dispatch).
-            let after_range = match hjkl_ex::parse_range(raw, &self.active().editor) {
+            let after_range = match hjkl_ex::parse_range(raw, self.active_editor()) {
                 Ok((_, rest)) => rest,
                 Err(_) => raw,
             };
@@ -594,11 +594,11 @@ impl App {
                 // Jump cursor to the first match so it is visible.
                 let first_row = matches[0].row as usize;
                 let first_col = {
-                    let rope = hjkl_engine::Query::rope(self.active().editor.buffer());
+                    let rope = hjkl_engine::Query::rope(self.active_editor().buffer());
                     let line = rope_line_str(&rope, first_row);
                     line[..matches[0].byte_start as usize].chars().count()
                 };
-                self.active_mut().editor.jump_cursor(first_row, first_col);
+                self.active_editor_mut().jump_cursor(first_row, first_col);
                 self.sync_after_engine_mutation();
 
                 self.confirming_substitute = Some(crate::app::ConfirmingSubstitute {
@@ -666,7 +666,7 @@ impl App {
             let win = self.windows[focused].as_ref().unwrap();
             (win.top_row, win.top_col)
         };
-        let (cursor_row, cursor_col) = self.active().editor.cursor();
+        let (cursor_row, cursor_col) = self.active_editor().cursor();
 
         let new_slot = if arg.is_empty() {
             // Duplicate — same slot.
@@ -723,7 +723,7 @@ impl App {
             let win = self.windows[focused].as_ref().unwrap();
             (win.top_row, win.top_col)
         };
-        let (cursor_row, cursor_col) = self.active().editor.cursor();
+        let (cursor_row, cursor_col) = self.active_editor().cursor();
 
         let new_slot = if arg.is_empty() {
             // Duplicate — same slot.
@@ -939,7 +939,7 @@ impl App {
     /// Format a one-line summary of the active clipboard backend for the
     /// status line. Used by `:clipboard`.
     pub(crate) fn clipboard_status(&self) -> String {
-        let Some(cb) = self.active().editor.host().clipboard() else {
+        let Some(cb) = self.active_editor().host().clipboard() else {
             return "clipboard: unavailable (probe failed)".into();
         };
         let kind = cb.kind();
@@ -1853,7 +1853,7 @@ impl App {
                     // concurrent second instance sees it before any edit is made.
                     self.arm_swap_on_open(current_slot_idx);
                     if !self.suppress_open_notice {
-                        let line_count = self.active().editor.buffer().line_count() as usize;
+                        let line_count = self.active_editor().buffer().line_count() as usize;
                         let path_display = self
                             .active()
                             .filename
@@ -1902,15 +1902,15 @@ impl App {
         // saved (row, col) to the new buffer size; reload_current is only
         // called for the active slot so the pre-reload cursor is the user's
         // current position.
-        let (prev_row, prev_col) = self.active().editor.cursor();
-        self.active_mut().editor.set_content(trimmed);
-        let new_rows = self.active().editor.buffer().line_count() as usize;
+        let (prev_row, prev_col) = self.active_editor().cursor();
+        self.active_editor_mut().set_content(trimmed);
+        let new_rows = self.active_editor().buffer().line_count() as usize;
         let target_row = prev_row.min(new_rows.saturating_sub(1));
-        self.active_mut().editor.jump_cursor(target_row, prev_col);
+        self.active_editor_mut().jump_cursor(target_row, prev_col);
         // Reposition viewport so the restored cursor is visible (with scrolloff).
         // Without this the viewport stays at its pre-reload top_row and the
         // cursor can land offscreen if the file shrank or grew.
-        self.active_mut().editor.ensure_cursor_in_scrolloff();
+        self.active_editor_mut().ensure_cursor_in_scrolloff();
         self.active_mut().is_new_file = false;
         // Record fresh disk metadata and clear the disk-change flag.
         if let Ok(meta) = std::fs::metadata(&path) {
@@ -2405,7 +2405,7 @@ impl App {
     /// Jump to the next diagnostic (optionally filtered by minimum severity).
     /// `severity` = `Some(Error)` means skip non-Error diags.
     pub(crate) fn lnext_severity(&mut self, severity: Option<super::DiagSeverity>) {
-        let (row, col) = self.active().editor.cursor();
+        let (row, col) = self.active_editor().cursor();
         // Clone data we need before any mutable borrow.
         let candidates: Vec<super::LspDiag> = self
             .active()
@@ -2431,7 +2431,7 @@ impl App {
             self.active_mut()
                 .editor
                 .jump_cursor(d.start_row, d.start_col);
-            self.active_mut().editor.ensure_cursor_in_scrolloff();
+            self.active_editor_mut().ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
             self.bus
@@ -2441,7 +2441,7 @@ impl App {
 
     /// Jump to the previous diagnostic (optionally filtered).
     pub(crate) fn lprev_severity(&mut self, severity: Option<super::DiagSeverity>) {
-        let (row, col) = self.active().editor.cursor();
+        let (row, col) = self.active_editor().cursor();
         let candidates: Vec<super::LspDiag> = self
             .active()
             .lsp_diags
@@ -2467,7 +2467,7 @@ impl App {
             self.active_mut()
                 .editor
                 .jump_cursor(d.start_row, d.start_col);
-            self.active_mut().editor.ensure_cursor_in_scrolloff();
+            self.active_editor_mut().ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
             self.bus
@@ -2486,7 +2486,7 @@ impl App {
                 self.active_mut()
                     .editor
                     .jump_cursor(d.start_row, d.start_col);
-                self.active_mut().editor.ensure_cursor_in_scrolloff();
+                self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
                 self.bus
@@ -2506,7 +2506,7 @@ impl App {
                 self.active_mut()
                     .editor
                     .jump_cursor(d.start_row, d.start_col);
-                self.active_mut().editor.ensure_cursor_in_scrolloff();
+                self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
                 self.bus
@@ -2527,7 +2527,7 @@ impl App {
 
     /// `<leader>d` — show all diagnostics overlapping the cursor in info popup.
     pub(crate) fn show_diag_at_cursor(&mut self) {
-        let (row, col) = self.active().editor.cursor();
+        let (row, col) = self.active_editor().cursor();
         let diags = &self.active().lsp_diags;
         let hits: Vec<_> = diags
             .iter()

@@ -35,7 +35,7 @@ impl App {
             } => {
                 // `.` dot-repeat. Combine pending count prefix with action count.
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.replay_last_change(n.max(1));
+                self.active_editor_mut().replay_last_change(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::Motion {
@@ -44,7 +44,7 @@ impl App {
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.apply_motion(kind, n);
+                self.active_editor_mut().apply_motion(kind, n);
             }
             AppAction::VisualOp {
                 op,
@@ -65,16 +65,16 @@ impl App {
                 //   - VisualBlock: delete_block / yank_block / change_block / indent_block
                 //     now exposed (gap fixed), FSM fallback removed
                 use hjkl_engine::{RangeKind, VimMode};
-                let vim_mode = self.active().editor.vim_mode();
+                let vim_mode = self.active_editor().vim_mode();
                 // Read the user's pending register selection BEFORE the match so all
                 // three mode arms can use it. pending_register() does not clear the
                 // selection — the engine clears it when the next operator fires.
-                let register = self.active().editor.pending_register().unwrap_or('"');
+                let register = self.active_editor().pending_register().unwrap_or('"');
                 match vim_mode {
                     VimMode::VisualBlock => {
                         // Rectangular selection — use block-shape primitives.
                         let Some((top_row, bot_row, left_col, right_col)) =
-                            self.active().editor.block_highlight()
+                            self.active_editor().block_highlight()
                         else {
                             return;
                         };
@@ -103,7 +103,7 @@ impl App {
                                     .indent_block(top_row, bot_row, left_col, right_col, n as i32);
                             }
                             hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut().editor.indent_block(
+                                self.active_editor_mut().indent_block(
                                     top_row,
                                     bot_row,
                                     left_col,
@@ -123,7 +123,7 @@ impl App {
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
                                     if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
+                                        self.active_editor_mut().take_last_indent_range()
                                     {
                                         self.indent_flash = Some(IndentFlash {
                                             top,
@@ -140,7 +140,7 @@ impl App {
                                     KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
                                 };
                                 hjkl_vim_tui::handle_key(
-                                    &mut self.active_mut().editor,
+                                    self.active_editor_mut(),
                                     CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(top_row, bot_row);
@@ -157,13 +157,13 @@ impl App {
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
-                            &mut self.active_mut().editor,
+                            self.active_editor_mut(),
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
                     VimMode::Visual => {
                         // Charwise visual selection — inclusive on both ends.
-                        let Some((start, end)) = self.active().editor.char_highlight() else {
+                        let Some((start, end)) = self.active_editor().char_highlight() else {
                             return;
                         };
                         let kind = RangeKind::Inclusive;
@@ -205,9 +205,9 @@ impl App {
                                     end_row: max_r,
                                 };
                                 if !self.submit_external_format(Some(range)) {
-                                    self.active_mut().editor.auto_indent_range(start, end);
+                                    self.active_editor_mut().auto_indent_range(start, end);
                                     if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
+                                        self.active_editor_mut().take_last_indent_range()
                                     {
                                         self.indent_flash = Some(IndentFlash {
                                             top,
@@ -225,7 +225,7 @@ impl App {
                                     KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
                                 };
                                 hjkl_vim_tui::handle_key(
-                                    &mut self.active_mut().editor,
+                                    self.active_editor_mut(),
                                     CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(min_r, max_r);
@@ -234,7 +234,7 @@ impl App {
                             hjkl_vim::OperatorKind::Comment => {
                                 // Visual-charwise gc: toggle comments on the row range.
                                 let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
-                                self.active_mut().editor.toggle_comment_range(min_r, max_r);
+                                self.active_editor_mut().toggle_comment_range(min_r, max_r);
                             }
                             _ => return,
                         }
@@ -242,7 +242,7 @@ impl App {
                         // transitioned to Insert above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
-                            &mut self.active_mut().editor,
+                            self.active_editor_mut(),
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
@@ -254,13 +254,13 @@ impl App {
                         // snap to full line boundaries regardless of the col values.
                         // The Phase 4e guard fix allows single-row (top==bot) Linewise
                         // ranges, so this path works for both single and multi-line.
-                        let Some((top_row, bot_row)) = self.active().editor.line_highlight() else {
+                        let Some((top_row, bot_row)) = self.active_editor().line_highlight() else {
                             return;
                         };
                         let kind = RangeKind::Linewise;
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut().editor.delete_range(
+                                self.active_editor_mut().delete_range(
                                     (top_row, 0),
                                     (bot_row, usize::MAX),
                                     kind,
@@ -268,7 +268,7 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut().editor.yank_range(
+                                self.active_editor_mut().yank_range(
                                     (top_row, 0),
                                     (bot_row, usize::MAX),
                                     kind,
@@ -276,7 +276,7 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::Change => {
-                                self.active_mut().editor.change_range(
+                                self.active_editor_mut().change_range(
                                     (top_row, 0),
                                     (bot_row, usize::MAX),
                                     kind,
@@ -286,7 +286,7 @@ impl App {
                                 return;
                             }
                             hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut().editor.indent_range(
+                                self.active_editor_mut().indent_range(
                                     (top_row, 0),
                                     (bot_row, 0),
                                     n as i32,
@@ -294,7 +294,7 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut().editor.indent_range(
+                                self.active_editor_mut().indent_range(
                                     (top_row, 0),
                                     (bot_row, 0),
                                     -(n as i32),
@@ -313,7 +313,7 @@ impl App {
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
                                     if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
+                                        self.active_editor_mut().take_last_indent_range()
                                     {
                                         self.indent_flash = Some(IndentFlash {
                                             top,
@@ -330,7 +330,7 @@ impl App {
                                     KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
                                 };
                                 hjkl_vim_tui::handle_key(
-                                    &mut self.active_mut().editor,
+                                    self.active_editor_mut(),
                                     CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(top_row, bot_row);
@@ -347,7 +347,7 @@ impl App {
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
-                            &mut self.active_mut().editor,
+                            self.active_editor_mut(),
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
@@ -363,49 +363,49 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_i(n.max(1));
+                self.active_editor_mut().enter_insert_i(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterInsertShiftI {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_shift_i(n.max(1));
+                self.active_editor_mut().enter_insert_shift_i(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterInsertA {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_a(n.max(1));
+                self.active_editor_mut().enter_insert_a(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterInsertShiftA {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_shift_a(n.max(1));
+                self.active_editor_mut().enter_insert_shift_a(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterInsertO {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.open_line_below(n.max(1));
+                self.active_editor_mut().open_line_below(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterInsertShiftO {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.open_line_above(n.max(1));
+                self.active_editor_mut().open_line_above(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::EnterReplace {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_replace_mode(n.max(1));
+                self.active_editor_mut().enter_replace_mode(n.max(1));
                 self.sync_after_engine_mutation();
             }
 
@@ -414,45 +414,45 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.delete_char_forward(n.max(1));
+                self.active_editor_mut().delete_char_forward(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::DeleteCharBackward {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.delete_char_backward(n.max(1));
+                self.active_editor_mut().delete_char_backward(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::SubstituteChar {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.substitute_char(n.max(1));
+                self.active_editor_mut().substitute_char(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::SubstituteLine {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.substitute_line(n.max(1));
+                self.active_editor_mut().substitute_line(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::DeleteToEol => {
                 self.pending_count.reset();
-                self.active_mut().editor.delete_to_eol();
+                self.active_editor_mut().delete_to_eol();
                 self.sync_after_engine_mutation();
             }
             AppAction::ChangeToEol => {
                 self.pending_count.reset();
-                self.active_mut().editor.change_to_eol();
+                self.active_editor_mut().change_to_eol();
                 self.sync_after_engine_mutation();
             }
             AppAction::YankToEol {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.yank_to_eol(n.max(1));
+                self.active_editor_mut().yank_to_eol(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::JoinLine {
@@ -460,40 +460,40 @@ impl App {
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
                 // Vim join default is 2 (join current + 1 following line).
-                self.active_mut().editor.join_line(n.max(1));
+                self.active_editor_mut().join_line(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::ToggleCase {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.toggle_case_at_cursor(n.max(1));
+                self.active_editor_mut().toggle_case_at_cursor(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::PasteAfter {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.paste_after(n.max(1));
+                self.active_editor_mut().paste_after(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::PasteBefore {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.paste_before(n.max(1));
+                self.active_editor_mut().paste_before(n.max(1));
                 self.sync_after_engine_mutation();
             }
 
             // ── Phase 6.4: undo / redo ────────────────────────────────────
             AppAction::Undo => {
                 self.pending_count.reset();
-                self.active_mut().editor.undo();
+                self.active_editor_mut().undo();
                 self.sync_after_engine_mutation();
             }
             AppAction::Redo => {
                 self.pending_count.reset();
-                self.active_mut().editor.redo();
+                self.active_editor_mut().redo();
                 self.sync_after_engine_mutation();
             }
 
@@ -502,14 +502,14 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.jump_back(n.max(1));
+                self.active_editor_mut().jump_back(n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::JumpForward {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.jump_forward(n.max(1));
+                self.active_editor_mut().jump_forward(n.max(1));
                 self.sync_after_engine_mutation();
             }
 
@@ -519,7 +519,7 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_full_page(dir, n.max(1));
+                self.active_editor_mut().scroll_full_page(dir, n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::ScrollHalfPage {
@@ -527,7 +527,7 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_half_page(dir, n.max(1));
+                self.active_editor_mut().scroll_half_page(dir, n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::ScrollLine {
@@ -535,7 +535,7 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_line(dir, n.max(1));
+                self.active_editor_mut().scroll_line(dir, n.max(1));
                 self.sync_after_engine_mutation();
             }
 
@@ -545,7 +545,7 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.search_repeat(forward, n.max(1));
+                self.active_editor_mut().search_repeat(forward, n.max(1));
                 self.sync_after_engine_mutation();
             }
             AppAction::WordSearch {
@@ -563,24 +563,24 @@ impl App {
             // ── Phase 6.4: visual entry / toggle ──────────────────────────
             AppAction::EnterVisualChar => {
                 self.pending_count.reset();
-                self.active_mut().editor.enter_visual_char();
+                self.active_editor_mut().enter_visual_char();
             }
             AppAction::EnterVisualLine => {
                 self.pending_count.reset();
-                self.active_mut().editor.enter_visual_line();
+                self.active_editor_mut().enter_visual_line();
             }
             AppAction::EnterVisualBlock => {
                 self.pending_count.reset();
-                self.active_mut().editor.enter_visual_block();
+                self.active_editor_mut().enter_visual_block();
             }
             AppAction::ReenterLastVisual => {
                 self.pending_count.reset();
-                self.active_mut().editor.reenter_last_visual();
+                self.active_editor_mut().reenter_last_visual();
                 self.sync_viewport_from_editor();
             }
             AppAction::VisualToggleAnchor => {
                 self.pending_count.reset();
-                self.active_mut().editor.visual_o_toggle();
+                self.active_editor_mut().visual_o_toggle();
                 self.sync_viewport_from_editor();
             }
 

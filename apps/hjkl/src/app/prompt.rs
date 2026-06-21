@@ -88,7 +88,7 @@ fn build_arg_sources_data(app: &App) -> ArgSourcesData {
         })
         .collect();
     let registers: Vec<String> = {
-        let r = app.active().editor.registers();
+        let r = app.active_editor().registers();
         let mut regs: Vec<String> = Vec::new();
         if !r.unnamed.text.is_empty() {
             regs.push("\"\"".into());
@@ -559,21 +559,21 @@ impl App {
         field.enter_insert_at_end();
         self.search_field = Some(field);
         self.search_dir = dir;
-        self.active_mut().editor.set_search_pattern(None);
+        self.active_editor_mut().set_search_pattern(None);
     }
 
     pub(crate) fn cancel_search_prompt(&mut self) {
         self.search_field = None;
-        let last = self.active().editor.last_search().map(str::to_owned);
+        let last = self.active_editor().last_search().map(str::to_owned);
         match last {
             Some(p) if !p.is_empty() => {
                 if let Ok(re) = regex::Regex::new(&p) {
-                    self.active_mut().editor.set_search_pattern(Some(re));
+                    self.active_editor_mut().set_search_pattern(Some(re));
                 } else {
-                    self.active_mut().editor.set_search_pattern(None);
+                    self.active_editor_mut().set_search_pattern(None);
                 }
             }
-            _ => self.active_mut().editor.set_search_pattern(None),
+            _ => self.active_editor_mut().set_search_pattern(None),
         }
     }
 
@@ -628,16 +628,16 @@ impl App {
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
                 // Restore the previous pattern (cancel live-preview side-effect).
-                let last = self.active().editor.last_search().map(str::to_owned);
+                let last = self.active_editor().last_search().map(str::to_owned);
                 match last {
                     Some(p) if !p.is_empty() => {
                         if let Ok(re) = regex::Regex::new(&p) {
-                            self.active_mut().editor.set_search_pattern(Some(re));
+                            self.active_editor_mut().set_search_pattern(Some(re));
                         } else {
-                            self.active_mut().editor.set_search_pattern(None);
+                            self.active_editor_mut().set_search_pattern(None);
                         }
                     }
-                    _ => self.active_mut().editor.set_search_pattern(None),
+                    _ => self.active_editor_mut().set_search_pattern(None),
                 }
                 let win_kind = match self.search_dir {
                     SearchDir::Forward => CmdLineKind::SearchForward,
@@ -707,11 +707,11 @@ impl App {
             None => return,
         };
         if pattern.is_empty() {
-            self.active_mut().editor.set_search_pattern(None);
+            self.active_editor_mut().set_search_pattern(None);
             return;
         }
-        let case_insensitive = self.active().editor.settings().ignore_case
-            && !(self.active().editor.settings().smartcase
+        let case_insensitive = self.active_editor().settings().ignore_case
+            && !(self.active_editor().settings().smartcase
                 && pattern.chars().any(|c| c.is_uppercase()));
         let effective: std::borrow::Cow<'_, str> = if case_insensitive {
             std::borrow::Cow::Owned(format!("(?i){pattern}"))
@@ -719,23 +719,23 @@ impl App {
             std::borrow::Cow::Borrowed(pattern.as_str())
         };
         match regex::Regex::new(&effective) {
-            Ok(re) => self.active_mut().editor.set_search_pattern(Some(re)),
-            Err(_) => self.active_mut().editor.set_search_pattern(None),
+            Ok(re) => self.active_editor_mut().set_search_pattern(Some(re)),
+            Err(_) => self.active_editor_mut().set_search_pattern(None),
         }
     }
 
     pub(crate) fn commit_search(&mut self, pattern: &str) {
         let effective: Option<String> = if pattern.is_empty() {
-            self.active().editor.last_search().map(str::to_owned)
+            self.active_editor().last_search().map(str::to_owned)
         } else {
             Some(pattern.to_owned())
         };
         let Some(p) = effective else {
-            self.active_mut().editor.set_search_pattern(None);
+            self.active_editor_mut().set_search_pattern(None);
             return;
         };
-        let case_insensitive = self.active().editor.settings().ignore_case
-            && !(self.active().editor.settings().smartcase && p.chars().any(|c| c.is_uppercase()));
+        let case_insensitive = self.active_editor().settings().ignore_case
+            && !(self.active_editor().settings().smartcase && p.chars().any(|c| c.is_uppercase()));
         let compile_src: std::borrow::Cow<'_, str> = if case_insensitive {
             std::borrow::Cow::Owned(format!("(?i){p}"))
         } else {
@@ -743,14 +743,14 @@ impl App {
         };
         match regex::Regex::new(&compile_src) {
             Ok(re) => {
-                self.active_mut().editor.set_search_pattern(Some(re));
+                self.active_editor_mut().set_search_pattern(Some(re));
                 let forward = self.search_dir == SearchDir::Forward;
                 if forward {
-                    self.active_mut().editor.search_advance_forward(false);
+                    self.active_editor_mut().search_advance_forward(false);
                 } else {
-                    self.active_mut().editor.search_advance_backward(true);
+                    self.active_editor_mut().search_advance_backward(true);
                 }
-                self.active_mut().editor.ensure_cursor_in_scrolloff();
+                self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 self.active_mut()
                     .editor
@@ -762,7 +762,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.active_mut().editor.set_search_pattern(None);
+                self.active_editor_mut().set_search_pattern(None);
                 self.bus.error(format!("E: bad search pattern: {e}"));
             }
         }

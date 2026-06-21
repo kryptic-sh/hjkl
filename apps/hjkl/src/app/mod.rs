@@ -818,7 +818,7 @@ impl App {
     pub(crate) fn move_cursor_for_right_click(&mut self, col: u16, row: u16) {
         use hjkl_engine::VimMode;
         let has_sel = matches!(
-            self.active().editor.vim_mode(),
+            self.active_editor().vim_mode(),
             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
         );
         if has_sel {
@@ -841,7 +841,7 @@ impl App {
             _ => None,
         };
         if let Some((doc_row, doc_col)) = target {
-            self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+            self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
             self.sync_after_engine_mutation();
         }
     }
@@ -872,7 +872,7 @@ impl App {
     /// `Moved`-handler's row→item math out of sync with what
     /// `bounding_rect` produces at render time.
     pub(crate) fn screen_rect(&self) -> ratatui::layout::Rect {
-        let vp = self.active().editor.host().viewport();
+        let vp = self.active_editor().host().viewport();
         let real_slots = self.slots.iter().filter(|s| !s.is_explorer).count();
         let show_top_bar = self.tabs.len() > 1 || real_slots > 1;
         let top_bar_h = if show_top_bar { TOP_BAR_HEIGHT } else { 0 };
@@ -974,6 +974,22 @@ impl App {
     pub fn active_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();
         &mut self.slots[slot_idx]
+    }
+
+    /// Shared reference to the focused window's editor.
+    ///
+    /// Phase D (#151/#156) indirection point: today this returns the focused
+    /// *slot's* editor (one editor per buffer). When the editor moves onto
+    /// [`AppWindow`], only these two method bodies change — the ~365 call
+    /// sites stay the same.
+    pub fn active_editor(&self) -> &Editor<Buffer, TuiHost> {
+        &self.slots[self.focused_slot_idx()].editor
+    }
+
+    /// Mutable reference to the focused window's editor. See [`active_editor`].
+    pub fn active_editor_mut(&mut self) -> &mut Editor<Buffer, TuiHost> {
+        let slot_idx = self.focused_slot_idx();
+        &mut self.slots[slot_idx].editor
     }
 
     /// Return a shared reference to the active buffer slot.
@@ -1102,14 +1118,14 @@ impl App {
         // never updates — the user sees the cursor disappear. Mirror the FSM
         // behaviour from the app side so the keymap path stays viewport-coherent.
         // Idempotent for non-motion mutations (already-in-bounds = no-op).
-        self.active_mut().editor.ensure_cursor_in_scrolloff();
+        self.active_editor_mut().ensure_cursor_in_scrolloff();
         // Propagate any mode change (e.g. i/I/a/A/o/O enter-insert actions
         // dispatched through the app keymap) to the host cursor-shape so the
         // render loop picks it up on the next frame. Idempotent when mode
         // did not change.
-        self.active_mut().editor.emit_cursor_shape_if_changed();
+        self.active_editor_mut().emit_cursor_shape_if_changed();
         self.sync_viewport_from_editor();
-        if self.active_mut().editor.take_dirty() {
+        if self.active_editor_mut().take_dirty() {
             let elapsed = self.active_mut().refresh_dirty_against_saved();
             self.last_signature_us = elapsed;
             if self.active().dirty {
@@ -1117,11 +1133,11 @@ impl App {
             }
         }
         let buffer_id = self.active().buffer_id;
-        let content_reset = self.active_mut().editor.take_content_reset();
+        let content_reset = self.active_editor_mut().take_content_reset();
         if content_reset {
             self.handle_active_content_reset(buffer_id);
         }
-        let edits = self.active_mut().editor.take_content_edits();
+        let edits = self.active_editor_mut().take_content_edits();
         if !edits.is_empty() {
             self.syntax.apply_edits(buffer_id, &edits);
             self.active_mut()
@@ -1164,7 +1180,7 @@ impl App {
         // Drain pending fold ops so the vec doesn't grow unboundedly.
         // `recompute_and_install` handles the visual refresh; the ops are
         // queued for host observation but this app has no other consumer.
-        let had_fold_ops = !self.active_mut().editor.take_fold_ops().is_empty();
+        let had_fold_ops = !self.active_editor_mut().take_fold_ops().is_empty();
 
         // Only re-run the tree-sitter viewport query when something that
         // affects syntax spans actually changed: buffer content (dirty_gen
@@ -1178,8 +1194,8 @@ impl App {
         // (settings/theme/`:syntax`) are unaffected — they still recompute
         // unconditionally.
         let view_now = {
-            let vp = self.active().editor.host().viewport();
-            let dg = self.active().editor.buffer().dirty_gen();
+            let vp = self.active_editor().host().viewport();
+            let dg = self.active_editor().buffer().dirty_gen();
             (buffer_id, vp.top_row, vp.height, dg)
         };
         if content_reset || had_fold_ops || self.last_synced_syntax_view != Some(view_now) {
@@ -1265,8 +1281,8 @@ impl App {
             return false;
         }
 
-        let source = std::sync::Arc::new(self.active().editor.buffer().as_string());
-        let dirty_gen = self.active().editor.buffer().dirty_gen();
+        let source = std::sync::Arc::new(self.active_editor().buffer().as_string());
+        let dirty_gen = self.active_editor().buffer().dirty_gen();
         let buffer_id = self.active().buffer_id;
 
         // `Path::parent()` of a bare relative filename (`foo.toml`) is
@@ -1303,8 +1319,8 @@ impl App {
         // (possibly multi-second) formatter to complete. Range is the
         // currently-visible viewport rows, so it covers whatever the
         // user is looking at.
-        let vp = self.active().editor.host().viewport();
-        let line_count = self.active().editor.buffer().row_count();
+        let vp = self.active_editor().host().viewport();
+        let line_count = self.active_editor().buffer().row_count();
         let top = vp.top_row;
         let height = vp.height as usize;
         let bot = (top + height.saturating_sub(1)).min(line_count.saturating_sub(1));
@@ -1751,10 +1767,10 @@ impl App {
         }
         // The read-only git blame view is its own mode (engine-owned, masked
         // to Normal by `is_blame`).
-        if self.active().editor.is_blame() {
+        if self.active_editor().is_blame() {
             return "BLAME";
         }
-        match self.active().editor.vim_mode() {
+        match self.active_editor().vim_mode() {
             VimMode::Normal => "NORMAL",
             VimMode::Insert => "INSERT",
             VimMode::Visual => "VISUAL",
@@ -1889,11 +1905,11 @@ impl App {
     /// line (same as `yy` / `Y` line-yank semantics).
     pub(crate) fn menu_copy(&mut self) {
         use hjkl_engine::{RangeKind, VimMode};
-        let vim_mode = self.active().editor.vim_mode();
+        let vim_mode = self.active_editor().vim_mode();
         match vim_mode {
             VimMode::VisualBlock => {
                 if let Some((top_row, bot_row, left_col, right_col)) =
-                    self.active().editor.block_highlight()
+                    self.active_editor().block_highlight()
                 {
                     self.active_mut()
                         .editor
@@ -1901,15 +1917,15 @@ impl App {
                 }
             }
             VimMode::Visual => {
-                if let Some((start, end)) = self.active().editor.char_highlight() {
+                if let Some((start, end)) = self.active_editor().char_highlight() {
                     self.active_mut()
                         .editor
                         .yank_range(start, end, RangeKind::Inclusive, '"');
                 }
             }
             VimMode::VisualLine => {
-                if let Some((top_row, bot_row)) = self.active().editor.line_highlight() {
-                    self.active_mut().editor.yank_range(
+                if let Some((top_row, bot_row)) = self.active_editor().line_highlight() {
+                    self.active_editor_mut().yank_range(
                         (top_row, 0),
                         (bot_row, usize::MAX),
                         RangeKind::Linewise,
@@ -1919,7 +1935,7 @@ impl App {
             }
             _ => {
                 // No selection — yank current line (yy semantics).
-                self.active_mut().editor.yank_to_eol(1);
+                self.active_editor_mut().yank_to_eol(1);
             }
         }
         self.sync_after_engine_mutation();
@@ -1933,11 +1949,11 @@ impl App {
     /// current line (`dd` semantics).
     pub(crate) fn menu_cut(&mut self) {
         use hjkl_engine::{RangeKind, VimMode};
-        let vim_mode = self.active().editor.vim_mode();
+        let vim_mode = self.active_editor().vim_mode();
         match vim_mode {
             VimMode::VisualBlock => {
                 if let Some((top_row, bot_row, left_col, right_col)) =
-                    self.active().editor.block_highlight()
+                    self.active_editor().block_highlight()
                 {
                     self.active_mut()
                         .editor
@@ -1945,26 +1961,26 @@ impl App {
                     // Exit visual mode.
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
-                        &mut self.active_mut().editor,
+                        self.active_editor_mut(),
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
             }
             VimMode::Visual => {
-                if let Some((start, end)) = self.active().editor.char_highlight() {
+                if let Some((start, end)) = self.active_editor().char_highlight() {
                     self.active_mut()
                         .editor
                         .delete_range(start, end, RangeKind::Inclusive, '"');
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
-                        &mut self.active_mut().editor,
+                        self.active_editor_mut(),
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
             }
             VimMode::VisualLine => {
-                if let Some((top_row, bot_row)) = self.active().editor.line_highlight() {
-                    self.active_mut().editor.delete_range(
+                if let Some((top_row, bot_row)) = self.active_editor().line_highlight() {
+                    self.active_editor_mut().delete_range(
                         (top_row, 0),
                         (bot_row, usize::MAX),
                         RangeKind::Linewise,
@@ -1972,7 +1988,7 @@ impl App {
                     );
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
-                        &mut self.active_mut().editor,
+                        self.active_editor_mut(),
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
@@ -1981,8 +1997,8 @@ impl App {
                 // No selection — delete current line (dd semantics):
                 // yank_to_eol then delete_to_eol is not quite right for full-line;
                 // use the engine's delete_range for the full current row.
-                let (row, _) = self.active().editor.cursor();
-                self.active_mut().editor.delete_range(
+                let (row, _) = self.active_editor().cursor();
+                self.active_editor_mut().delete_range(
                     (row, 0),
                     (row, usize::MAX),
                     hjkl_engine::RangeKind::Linewise,
@@ -1999,10 +2015,10 @@ impl App {
     /// `p` command sees fresh content) and then performs a `paste_after`.
     pub(crate) fn menu_paste(&mut self) {
         // Pull from system clipboard → unnamed register so paste_after uses it.
-        if let Some(text) = self.active_mut().editor.host_mut().read_clipboard() {
-            self.active_mut().editor.set_yank(text);
+        if let Some(text) = self.active_editor_mut().host_mut().read_clipboard() {
+            self.active_editor_mut().set_yank(text);
         }
-        self.active_mut().editor.paste_after(1);
+        self.active_editor_mut().paste_after(1);
         self.sync_after_engine_mutation();
     }
 
@@ -2025,7 +2041,7 @@ impl App {
     /// own pending chord.
     pub(crate) fn any_chord_pending(&self) -> bool {
         self.pending_state.is_some()
-            || self.active().editor.is_chord_pending()
+            || self.active_editor().is_chord_pending()
             || !self
                 .ctx_keymap()
                 .pending(crate::app::keymap::HjklMode::Normal)
@@ -2041,7 +2057,7 @@ impl App {
             .reset(crate::app::keymap::HjklMode::Normal);
         self.pending_count.reset();
         self.pending_state = None;
-        let _ = self.active_mut().editor.take_pending();
+        let _ = self.active_editor_mut().take_pending();
         self.clear_prefix_state();
     }
 
@@ -2113,7 +2129,7 @@ impl App {
     pub(crate) fn replay_km_events_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = crate::keymap_translate::to_crossterm(km_ev);
-            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
         }
     }
 }
@@ -2122,5 +2138,5 @@ impl App {
 /// Returns `None` for modes with no keymap equivalent (currently none, but
 /// Terminal mode would be `None` if ever added here).
 pub(crate) fn current_km_mode(app: &App) -> Option<keymap::HjklMode> {
-    keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active().editor.vim_mode())?)
+    keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active_editor().vim_mode())?)
 }

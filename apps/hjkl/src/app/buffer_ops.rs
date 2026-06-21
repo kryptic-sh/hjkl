@@ -46,7 +46,7 @@ impl App {
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;
         if let Ok(size) = crossterm::terminal::size() {
-            let vp = self.active_mut().editor.host_mut().viewport_mut();
+            let vp = self.active_editor_mut().host_mut().viewport_mut();
             vp.width = size.0;
             vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
         }
@@ -440,12 +440,12 @@ impl App {
                     Some(idx) => {
                         self.switch_to(idx);
                         if linewise {
-                            self.active_mut().editor.jump_cursor(row, 0);
+                            self.active_editor_mut().jump_cursor(row, 0);
                             self.active_mut()
                                 .editor
                                 .apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
                         } else {
-                            self.active_mut().editor.jump_cursor(row, col);
+                            self.active_editor_mut().jump_cursor(row, col);
                         }
                         self.sync_after_engine_mutation();
                     }

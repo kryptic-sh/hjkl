@@ -32,7 +32,7 @@ impl App {
         // Buffer bytes (the "new" side), produced exactly as `:w` would write
         // them (trailing newline) so an unmodified buffer yields an empty diff.
         let buf_bytes: Vec<u8> = {
-            let rope = self.active().editor.buffer().rope();
+            let rope = self.active_editor().buffer().rope();
             let mut b = Vec::with_capacity(rope.len_bytes() + 1);
             for chunk in rope.chunks() {
                 b.extend_from_slice(chunk.as_bytes());

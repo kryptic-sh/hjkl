@@ -22,7 +22,7 @@ impl App {
     /// does: rope chunks concatenated, with a single trailing newline for
     /// non-empty content (matching what `:w` writes).
     fn active_buffer_git_bytes(&self) -> Vec<u8> {
-        let rope = self.active().editor.buffer().rope();
+        let rope = self.active_editor().buffer().rope();
         let mut bytes: Vec<u8> = Vec::with_capacity(rope.len_bytes() + 1);
         for chunk in rope.chunks() {
             bytes.extend_from_slice(chunk.as_bytes());
@@ -51,12 +51,12 @@ impl App {
 
     /// The unstaged hunk under the cursor, if any.
     fn unstaged_hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
-        self.unstaged_hunk_at_row(self.active().editor.cursor().0)
+        self.unstaged_hunk_at_row(self.active_editor().cursor().0)
     }
 
     /// The staged hunk under the cursor, if any.
     fn staged_hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
-        self.staged_hunk_at_row(self.active().editor.cursor().0)
+        self.staged_hunk_at_row(self.active_editor().cursor().0)
     }
 
     /// Classify the git change covering `row` for the active buffer. Unstaged
@@ -117,13 +117,13 @@ impl App {
         // tracks it, blocks edits while active, and auto-exits on any mode
         // change (keyboard, mouse drag, Esc). The host only flips it on/off and
         // loads the git data — it never has to police read-only or transitions.
-        let on = !self.active().editor.is_blame();
+        let on = !self.active_editor().is_blame();
         if on {
-            self.active_mut().editor.enter_blame();
+            self.active_editor_mut().enter_blame();
             // Refresh the blame data (normally gated on `blame_inline`).
             self.refresh_blame_force();
         } else {
-            self.active_mut().editor.exit_blame();
+            self.active_editor_mut().exit_blame();
         }
         self.bus.info(if on {
             "BLAME mode (read-only) — gb or Esc to exit"
@@ -139,7 +139,7 @@ impl App {
     /// path) keeps the delay source- and mode-agnostic with no per-path
     /// bookkeeping to maintain.
     pub(crate) fn note_blame_cursor_motion(&mut self) {
-        let cur = (self.focused_slot_idx(), self.active().editor.cursor());
+        let cur = (self.focused_slot_idx(), self.active_editor().cursor());
         if self.blame_prev_cursor != Some(cur) {
             self.blame_prev_cursor = Some(cur);
             self.blame_cursor_moved_at = std::time::Instant::now();

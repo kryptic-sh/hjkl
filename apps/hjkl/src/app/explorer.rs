@@ -2242,10 +2242,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2335,10 +2335,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2379,10 +2379,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2428,10 +2428,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2482,10 +2482,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2538,10 +2538,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -2959,10 +2959,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -3027,10 +3027,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -3429,10 +3429,10 @@ mod tests {
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
             app.maybe_reconcile_explorer();
@@ -3529,10 +3529,10 @@ mod tests {
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
-            if app.active().editor.vim_mode() == VimMode::Insert {
+            if app.active_editor().vim_mode() == VimMode::Insert {
                 app.dispatch_insert_key(key);
             } else {
-                hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key);
+                hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
             }
         }
         app.maybe_reconcile_explorer();
@@ -3849,7 +3849,7 @@ mod tests {
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
-            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ctrl_r);
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
         }
         app.maybe_reconcile_explorer();
 
@@ -3945,7 +3945,7 @@ mod tests {
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
-            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ctrl_r);
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
         }
         app.maybe_reconcile_explorer();
 

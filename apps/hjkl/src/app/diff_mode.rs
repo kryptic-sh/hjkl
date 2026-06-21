@@ -277,7 +277,7 @@ impl App {
             self.bus.info("not in diff mode");
             return;
         }
-        let (row, _) = self.active().editor.cursor();
+        let (row, _) = self.active_editor().cursor();
         let starts = self.diff_change_starts(win);
         if let Some(&target) = starts.iter().find(|&&l| l > row) {
             self.jump_diff_cursor(target);
@@ -293,7 +293,7 @@ impl App {
             self.bus.info("not in diff mode");
             return;
         }
-        let (row, _) = self.active().editor.cursor();
+        let (row, _) = self.active_editor().cursor();
         let starts = self.diff_change_starts(win);
         if let Some(&target) = starts.iter().rev().find(|&&l| l < row) {
             self.jump_diff_cursor(target);
@@ -304,8 +304,8 @@ impl App {
 
     /// Move the active cursor to the start of `line` and keep it on-screen.
     fn jump_diff_cursor(&mut self, line: usize) {
-        self.active_mut().editor.jump_cursor(line, 0);
-        self.active_mut().editor.ensure_cursor_in_scrolloff();
+        self.active_editor_mut().jump_cursor(line, 0);
+        self.active_editor_mut().ensure_cursor_in_scrolloff();
         self.sync_after_engine_mutation();
     }
 

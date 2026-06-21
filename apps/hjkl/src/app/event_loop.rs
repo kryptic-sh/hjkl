@@ -102,14 +102,14 @@ impl App {
         // `Ctrl-R` two-key sequence: the previous key armed the register
         // selector. The next printable char names the register to paste.
         // Any non-printable key cancels (mirrors vim behaviour).
-        if self.active().editor.is_insert_register_pending() {
+        if self.active_editor().is_insert_register_pending() {
             // Clear the flag first (mirrors step_insert which clears before
             // calling insert_paste_register_bridge).
-            self.active_mut().editor.clear_insert_register_pending();
+            self.active_editor_mut().clear_insert_register_pending();
             if let (KeyCode::Char(c), mods) = (key.code, key.modifiers)
                 && !mods.contains(KeyModifiers::CONTROL)
             {
-                self.active_mut().editor.insert_paste_register(c);
+                self.active_editor_mut().insert_paste_register(c);
             }
             // Non-char key: flag already cleared; just drop the key.
             return;
@@ -122,48 +122,48 @@ impl App {
             (KeyCode::Char(c), mods)
                 if mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT =>
             {
-                self.active_mut().editor.insert_char(c);
+                self.active_editor_mut().insert_char(c);
             }
 
             // Navigation / editing keys
-            (KeyCode::Backspace, _) => self.active_mut().editor.insert_backspace(),
-            (KeyCode::Enter, _) => self.active_mut().editor.insert_newline(),
-            (KeyCode::Tab, _) => self.active_mut().editor.insert_tab(),
-            (KeyCode::Esc, _) => self.active_mut().editor.leave_insert_to_normal(),
-            (KeyCode::Delete, _) => self.active_mut().editor.insert_delete(),
-            (KeyCode::Home, _) => self.active_mut().editor.insert_home(),
-            (KeyCode::End, _) => self.active_mut().editor.insert_end(),
+            (KeyCode::Backspace, _) => self.active_editor_mut().insert_backspace(),
+            (KeyCode::Enter, _) => self.active_editor_mut().insert_newline(),
+            (KeyCode::Tab, _) => self.active_editor_mut().insert_tab(),
+            (KeyCode::Esc, _) => self.active_editor_mut().leave_insert_to_normal(),
+            (KeyCode::Delete, _) => self.active_editor_mut().insert_delete(),
+            (KeyCode::Home, _) => self.active_editor_mut().insert_home(),
+            (KeyCode::End, _) => self.active_editor_mut().insert_end(),
 
             // Arrow keys
-            (KeyCode::Left, _) => self.active_mut().editor.insert_arrow(InsertDir::Left),
-            (KeyCode::Right, _) => self.active_mut().editor.insert_arrow(InsertDir::Right),
-            (KeyCode::Up, _) => self.active_mut().editor.insert_arrow(InsertDir::Up),
-            (KeyCode::Down, _) => self.active_mut().editor.insert_arrow(InsertDir::Down),
+            (KeyCode::Left, _) => self.active_editor_mut().insert_arrow(InsertDir::Left),
+            (KeyCode::Right, _) => self.active_editor_mut().insert_arrow(InsertDir::Right),
+            (KeyCode::Up, _) => self.active_editor_mut().insert_arrow(InsertDir::Up),
+            (KeyCode::Down, _) => self.active_editor_mut().insert_arrow(InsertDir::Down),
 
             // Page keys — need the current viewport height.
             (KeyCode::PageUp, _) => {
-                let h = self.active().editor.viewport_height_value();
-                self.active_mut().editor.insert_pageup(h);
+                let h = self.active_editor().viewport_height_value();
+                self.active_editor_mut().insert_pageup(h);
             }
             (KeyCode::PageDown, _) => {
-                let h = self.active().editor.viewport_height_value();
-                self.active_mut().editor.insert_pagedown(h);
+                let h = self.active_editor().viewport_height_value();
+                self.active_editor_mut().insert_pagedown(h);
             }
 
             // Ctrl-prefixed insert shortcuts
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_w(),
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_u(),
-            (KeyCode::Char('h'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_h(),
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.active_editor_mut().insert_ctrl_w(),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.active_editor_mut().insert_ctrl_u(),
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => self.active_editor_mut().insert_ctrl_h(),
             // `Ctrl-O`: flip to one-shot Normal; the next key routes as Normal.
             (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_o_arm()
+                self.active_editor_mut().insert_ctrl_o_arm()
             }
             // `Ctrl-R`: arm register selector; next char calls insert_paste_register.
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_r_arm()
+                self.active_editor_mut().insert_ctrl_r_arm()
             }
-            (KeyCode::Char('t'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_t(),
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_d(),
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => self.active_editor_mut().insert_ctrl_t(),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.active_editor_mut().insert_ctrl_d(),
 
             // Silently drop unrecognised keys (function keys, Alt combos, etc.).
             _ => {}
@@ -234,7 +234,7 @@ impl App {
         // NOT bare `dirty` — otherwise the deadline stays in the past after the
         // swap is written and the poll timeout collapses to 0 (busy loop).
         if self.active_swap_pending() {
-            let ut_ms = self.active().editor.settings().updatetime;
+            let ut_ms = self.active_editor().settings().updatetime;
             let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
             t = t.min(deadline.saturating_duration_since(now));
         }
@@ -394,7 +394,7 @@ impl App {
         // popup. `u` (undo) and `<C-r>` (redo) are handled here because
         // they are position-dependent or state-dependent.
         if self.explorer_buf_focused()
-            && self.active().editor.vim_mode() == VimMode::Normal
+            && self.active_editor().vim_mode() == VimMode::Normal
             && self.pending_state.is_none()
             && key.modifiers == KeyModifiers::NONE
         {
@@ -423,7 +423,7 @@ impl App {
 
         // <C-r> in the explorer while in Normal mode and no pending: redo.
         if self.explorer_buf_focused()
-            && self.active().editor.vim_mode() == VimMode::Normal
+            && self.active_editor().vim_mode() == VimMode::Normal
             && self.pending_state.is_none()
             && key.code == KeyCode::Char('r')
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -439,7 +439,7 @@ impl App {
         if key.code == KeyCode::Char(':')
             && key.modifiers == KeyModifiers::NONE
             && matches!(
-                self.active().editor.vim_mode(),
+                self.active_editor().vim_mode(),
                 VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
             )
         {
@@ -447,7 +447,7 @@ impl App {
             // visual-exit hook in hjkl-engine sets the `<` / `>`
             // marks so :'<,'> resolves.
             hjkl_vim_tui::handle_key(
-                &mut self.active_mut().editor,
+                self.active_editor_mut(),
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             );
             self.open_command_prompt_with("'<,'>");
@@ -462,7 +462,7 @@ impl App {
         //   Phase 2: Ctrl-^, K, `:`, `/`, `?`
         //   Phase 3: H/L buffer cycle (BufferCycleH/L),
         //            Ctrl-h/j/k/l window focus + tmux (TmuxNavigate)
-        if self.active().editor.vim_mode() == VimMode::Normal {
+        if self.active_editor().vim_mode() == VimMode::Normal {
             // ── App-level count prefix buffering ─────────────────
             // Buffer digit keys so that count-aware chords (Ngt,
             // N<C-w>+) can consume the count. When the non-digit key
@@ -537,9 +537,9 @@ impl App {
                 // but the which-key toggle below returns before Esc ever reaches
                 // the engine — so exit BLAME here explicitly (mirroring the
                 // engine) and clear any pending state, as Esc otherwise would.
-                if self.active().editor.is_blame() {
-                    self.active_mut().editor.exit_blame();
-                    self.active_mut().editor.force_normal();
+                if self.active_editor().is_blame() {
+                    self.active_editor_mut().exit_blame();
+                    self.active_editor_mut().force_normal();
                     self.cancel_all_pending();
                     self.chord_history.clear();
                     self.which_key_sticky = false;
@@ -573,7 +573,7 @@ impl App {
             // ── Backspace: pop one chord level, else toggle which-key ───────────
             if key.code == KeyCode::Backspace
                 && key.modifiers == KeyModifiers::NONE
-                && self.active().editor.vim_mode() == VimMode::Normal
+                && self.active_editor().vim_mode() == VimMode::Normal
             {
                 if self.any_chord_pending() {
                     // Pop one level across ALL pending owners (trie, app
@@ -614,7 +614,7 @@ impl App {
 
             // Fall through to route_chord_key below.
         } else if matches!(
-            self.active().editor.vim_mode(),
+            self.active_editor().vim_mode(),
             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
         ) {
             // ── Visual-mode count prefix ─────────────────────────
@@ -662,7 +662,7 @@ impl App {
         // chord level. Push before routing, then reconcile: keep the key only
         // while a chord is still pending afterwards, otherwise the chord
         // committed/cancelled and the history resets.
-        let track_chord = self.active().editor.vim_mode() == VimMode::Normal
+        let track_chord = self.active_editor().vim_mode() == VimMode::Normal
             && !matches!(key.code, KeyCode::Backspace | KeyCode::Esc);
         if track_chord {
             self.chord_history.push(key);
@@ -683,7 +683,7 @@ impl App {
         // ── Insert-mode completion key handling ──────────────────
         // This block intercepts specific keys in insert mode to
         // manage the completion popup, before forwarding to the engine.
-        if self.active().editor.vim_mode() == VimMode::Insert {
+        if self.active_editor().vim_mode() == VimMode::Insert {
             // Recorder hook for Insert-mode keys that this block consumes
             // (printable chars routed to insert_char, popup-open Backspace
             // routed to insert_backspace, etc). Those paths return
@@ -693,12 +693,12 @@ impl App {
             // inputs don't append to the active recording. Keys that
             // fall through this block to dispatch_insert_key get their
             // recording from dispatch_insert_key's own hook.
-            if self.active().editor.is_recording_macro()
-                && !self.active().editor.is_replaying_macro()
+            if self.active_editor().is_recording_macro()
+                && !self.active_editor().is_replaying_macro()
             {
                 let input = hjkl_engine_tui::crossterm_to_input(key);
                 if input.key != hjkl_engine::Key::Null {
-                    self.active_mut().editor.record_input(input);
+                    self.active_editor_mut().record_input(input);
                 }
             }
 
@@ -776,9 +776,9 @@ impl App {
                     // Printable char or backspace: update prefix, maybe dismiss.
                     KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
                         // Phase 6.5: call insert primitive directly.
-                        self.active_mut().editor.insert_char(c);
+                        self.active_editor_mut().insert_char(c);
                         self.sync_viewport_from_editor();
-                        if self.active_mut().editor.take_dirty() {
+                        if self.active_editor_mut().take_dirty() {
                             let elapsed = self.active_mut().refresh_dirty_against_saved();
                             self.last_signature_us = elapsed;
                             if self.active().dirty {
@@ -786,10 +786,10 @@ impl App {
                             }
                         }
                         let buffer_id = self.active().buffer_id;
-                        if self.active_mut().editor.take_content_reset() {
+                        if self.active_editor_mut().take_content_reset() {
                             self.handle_active_content_reset(buffer_id);
                         }
-                        let edits = self.active_mut().editor.take_content_edits();
+                        let edits = self.active_editor_mut().take_content_edits();
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
@@ -802,8 +802,8 @@ impl App {
                         // Update popup prefix.
                         let anchor_col =
                             self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
-                        let cur_col = self.active().editor.buffer().cursor().col;
-                        let cur_row = self.active().editor.buffer().cursor().row;
+                        let cur_col = self.active_editor().buffer().cursor().col;
+                        let cur_row = self.active_editor().buffer().cursor().row;
                         let anchor_row = self
                             .completion
                             .as_ref()
@@ -816,7 +816,7 @@ impl App {
                             let new_prefix = {
                                 // `.line(cur_row)` is O(log N) on rope storage
                                 // and clones a single row, not the whole doc.
-                                let rope = self.active().editor.buffer().rope();
+                                let rope = self.active_editor().buffer().rope();
                                 let line = if cur_row < rope.len_lines() {
                                     hjkl_buffer::rope_line_str(&rope, cur_row)
                                 } else {
@@ -840,9 +840,9 @@ impl App {
                     }
                     KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => {
                         // Phase 6.5: call insert primitive directly.
-                        self.active_mut().editor.insert_backspace();
+                        self.active_editor_mut().insert_backspace();
                         self.sync_viewport_from_editor();
-                        if self.active_mut().editor.take_dirty() {
+                        if self.active_editor_mut().take_dirty() {
                             let elapsed = self.active_mut().refresh_dirty_against_saved();
                             self.last_signature_us = elapsed;
                             if self.active().dirty {
@@ -850,10 +850,10 @@ impl App {
                             }
                         }
                         let buffer_id = self.active().buffer_id;
-                        if self.active_mut().editor.take_content_reset() {
+                        if self.active_editor_mut().take_content_reset() {
                             self.handle_active_content_reset(buffer_id);
                         }
-                        let edits = self.active_mut().editor.take_content_edits();
+                        let edits = self.active_editor_mut().take_content_edits();
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
@@ -865,8 +865,8 @@ impl App {
 
                         let anchor_col =
                             self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
-                        let cur_col = self.active().editor.buffer().cursor().col;
-                        let cur_row = self.active().editor.buffer().cursor().row;
+                        let cur_col = self.active_editor().buffer().cursor().col;
+                        let cur_row = self.active_editor().buffer().cursor().row;
                         let anchor_row = self
                             .completion
                             .as_ref()
@@ -876,7 +876,7 @@ impl App {
                             self.dismiss_completion();
                         } else {
                             let new_prefix = {
-                                let rope = self.active().editor.buffer().rope();
+                                let rope = self.active_editor().buffer().rope();
                                 let line = if cur_row < rope.len_lines() {
                                     hjkl_buffer::rope_line_str(&rope, cur_row)
                                 } else {
@@ -912,9 +912,9 @@ impl App {
                     && let KeyCode::Char(c) = key.code
                 {
                     // Phase 6.5: call insert primitive directly.
-                    self.active_mut().editor.insert_char(c);
+                    self.active_editor_mut().insert_char(c);
                     self.sync_viewport_from_editor();
-                    if self.active_mut().editor.take_dirty() {
+                    if self.active_editor_mut().take_dirty() {
                         let elapsed = self.active_mut().refresh_dirty_against_saved();
                         self.last_signature_us = elapsed;
                         if self.active().dirty {
@@ -922,10 +922,10 @@ impl App {
                         }
                     }
                     let buffer_id = self.active().buffer_id;
-                    if self.active_mut().editor.take_content_reset() {
+                    if self.active_editor_mut().take_content_reset() {
                         self.handle_active_content_reset(buffer_id);
                     }
-                    let edits = self.active_mut().editor.take_content_edits();
+                    let edits = self.active_editor_mut().take_content_edits();
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
@@ -962,7 +962,7 @@ impl App {
         // Command-field overlay already handled above; here we gate
         // on the editor's vim mode for the remaining events.
         {
-            let mode = self.active().editor.vim_mode();
+            let mode = self.active_editor().vim_mode();
             if !crate::app::mouse_enabled_for(mode, &self.mouse_flags) {
                 return MouseOutcome::Continue;
             }
@@ -997,12 +997,12 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if me.modifiers.contains(KeyModifiers::SHIFT) {
                     if focus_window_under_cursor(self, me.column, me.row) {
-                        self.active_mut().editor.scroll_right(WHEEL_TICKS);
+                        self.active_editor_mut().scroll_right(WHEEL_TICKS);
                         self.sync_viewport_from_editor();
                         self.pending_recompute = true;
                     }
                 } else if focus_window_under_cursor(self, me.column, me.row) {
-                    self.active_mut().editor.scroll_down(WHEEL_TICKS);
+                    self.active_editor_mut().scroll_down(WHEEL_TICKS);
                     self.sync_viewport_from_editor();
                     self.pending_recompute = true;
                 }
@@ -1010,23 +1010,23 @@ impl App {
             MouseEventKind::ScrollUp => {
                 if me.modifiers.contains(KeyModifiers::SHIFT) {
                     if focus_window_under_cursor(self, me.column, me.row) {
-                        self.active_mut().editor.scroll_left(WHEEL_TICKS);
+                        self.active_editor_mut().scroll_left(WHEEL_TICKS);
                         self.sync_viewport_from_editor();
                         self.pending_recompute = true;
                     }
                 } else if focus_window_under_cursor(self, me.column, me.row) {
-                    self.active_mut().editor.scroll_up(WHEEL_TICKS);
+                    self.active_editor_mut().scroll_up(WHEEL_TICKS);
                     self.sync_viewport_from_editor();
                     self.pending_recompute = true;
                 }
             }
             MouseEventKind::ScrollLeft if focus_window_under_cursor(self, me.column, me.row) => {
-                self.active_mut().editor.scroll_left(WHEEL_TICKS);
+                self.active_editor_mut().scroll_left(WHEEL_TICKS);
                 self.sync_viewport_from_editor();
                 self.pending_recompute = true;
             }
             MouseEventKind::ScrollRight if focus_window_under_cursor(self, me.column, me.row) => {
-                self.active_mut().editor.scroll_right(WHEEL_TICKS);
+                self.active_editor_mut().scroll_right(WHEEL_TICKS);
                 self.sync_viewport_from_editor();
                 self.pending_recompute = true;
             }
@@ -1154,7 +1154,7 @@ impl App {
                         if win_id != current_focus {
                             self.switch_focus(win_id);
                         }
-                        self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+                        self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
                         self.sync_after_engine_mutation_deferred();
                         self.lsp_goto_definition();
                     }
@@ -1176,8 +1176,8 @@ impl App {
                             self.switch_focus(win_id);
                         }
                         // Anchor at current cursor if not already visual.
-                        if self.active().editor.vim_mode() != VimMode::Visual {
-                            self.active_mut().editor.mouse_begin_drag();
+                        if self.active_editor().vim_mode() != VimMode::Visual {
+                            self.active_editor_mut().mouse_begin_drag();
                         }
                         self.active_mut()
                             .editor
@@ -1224,7 +1224,7 @@ impl App {
                         if win_id != current_focus {
                             self.switch_focus(win_id);
                         }
-                        if self.active().editor.buffer().fold_at_row(doc_row).is_some() {
+                        if self.active_editor().buffer().fold_at_row(doc_row).is_some() {
                             self.active_mut()
                                 .editor
                                 .apply_fold_op(hjkl_engine::FoldOp::ToggleAt(doc_row));
@@ -1256,13 +1256,13 @@ impl App {
                         let count = self.mouse_click_tracker.register(win_id, doc_row, doc_col);
                         match count {
                             1 => {
-                                self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+                                self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
                             }
                             2 => {
                                 // Double-click: select word.
-                                self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+                                self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
                                 let line = {
-                                    let rope = self.active().editor.buffer().rope();
+                                    let rope = self.active_editor().buffer().rope();
                                     if doc_row < rope.len_lines() {
                                         hjkl_buffer::rope_line_str(&rope, doc_row)
                                     } else {
@@ -1271,9 +1271,9 @@ impl App {
                                 };
                                 let (ws, we) = mouse::word_bounds(&line, doc_col);
                                 // Anchor at word start, cursor at word end - 1.
-                                self.active_mut().editor.enter_visual_char();
-                                self.active_mut().editor.set_cursor_doc(doc_row, ws);
-                                self.active_mut().editor.mouse_begin_drag();
+                                self.active_editor_mut().enter_visual_char();
+                                self.active_editor_mut().set_cursor_doc(doc_row, ws);
+                                self.active_editor_mut().mouse_begin_drag();
                                 self.active_mut()
                                     .editor
                                     .set_cursor_doc(doc_row, we.saturating_sub(1).max(ws));
@@ -1281,8 +1281,8 @@ impl App {
                             _ => {
                                 // Triple-click (and count≥4 wraps to 1 in tracker,
                                 // so this branch only fires at count==3).
-                                self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
-                                self.active_mut().editor.enter_visual_line();
+                                self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
+                                self.active_editor_mut().enter_visual_line();
                             }
                         }
                         self.sync_after_engine_mutation_deferred();
@@ -1317,8 +1317,8 @@ impl App {
                 {
                     // Begin drag on first drag event if not already in
                     // visual mode.
-                    if self.active().editor.vim_mode() != VimMode::Visual {
-                        self.active_mut().editor.mouse_begin_drag();
+                    if self.active_editor().vim_mode() != VimMode::Visual {
+                        self.active_editor_mut().mouse_begin_drag();
                     }
                     self.active_mut()
                         .editor
@@ -1361,7 +1361,7 @@ impl App {
                     mouse::Zone::Code { .. } => {
                         self.move_cursor_for_right_click(me.column, me.row);
                         let has_sel = matches!(
-                            self.active().editor.vim_mode(),
+                            self.active_editor().vim_mode(),
                             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
                         );
                         build_code_menu(has_sel, self.active_has_lsp())
@@ -1374,7 +1374,7 @@ impl App {
                     mouse::Zone::Gutter { doc_row, .. } => {
                         self.move_cursor_for_right_click(me.column, me.row);
                         let has_sel = matches!(
-                            self.active().editor.vim_mode(),
+                            self.active_editor().vim_mode(),
                             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
                         );
                         let has_diag = self.diagnostic_on_row(doc_row);
@@ -1530,7 +1530,7 @@ impl App {
             self.drain_lsp_events();
             {
                 let size = terminal.size()?;
-                let vp = self.active_mut().editor.host_mut().viewport_mut();
+                let vp = self.active_editor_mut().host_mut().viewport_mut();
                 vp.width = size.width;
                 vp.height = size.height.saturating_sub(STATUS_LINE_HEIGHT);
             }
@@ -1541,7 +1541,7 @@ impl App {
             } else if let Some(ref f) = self.search_field {
                 prompt_cursor_shape(f)
             } else {
-                self.active().editor.host().cursor_shape()
+                self.active_editor().host().cursor_shape()
             };
             if current_shape != self.last_cursor_shape {
                 match current_shape {
@@ -1632,7 +1632,7 @@ impl App {
                 // Write the swap for the active slot when the buffer is dirty
                 // and `updatetime` ms have elapsed since the last keystroke.
                 {
-                    let ut_ms = self.active().editor.settings().updatetime;
+                    let ut_ms = self.active_editor().settings().updatetime;
                     let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
                     if self.active_swap_pending() && now >= deadline {
                         let idx = self.focused_slot_idx();
@@ -1673,16 +1673,16 @@ impl App {
                         // Insert mode uses the inline dispatcher which calls
                         // Editor::insert_* primitives directly. Normal / Visual
                         // modes route through the FSM via hjkl_vim_tui::handle_key.
-                        let mode_was_insert = self.active().editor.vim_mode() == VimMode::Insert;
+                        let mode_was_insert = self.active_editor().vim_mode() == VimMode::Insert;
                         if mode_was_insert {
                             self.dispatch_insert_key(key);
-                            self.active_mut().editor.emit_cursor_shape_if_changed();
+                            self.active_editor_mut().emit_cursor_shape_if_changed();
                         } else {
-                            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
+                            hjkl_vim_tui::handle_key(self.active_editor_mut(), key);
                         }
 
                         self.sync_viewport_from_editor();
-                        if self.active_mut().editor.take_dirty() {
+                        if self.active_editor_mut().take_dirty() {
                             let elapsed = self.active_mut().refresh_dirty_against_saved();
                             self.last_signature_us = elapsed;
                             if self.active().dirty {
@@ -1690,10 +1690,10 @@ impl App {
                             }
                         }
                         let buffer_id = self.active().buffer_id;
-                        if self.active_mut().editor.take_content_reset() {
+                        if self.active_editor_mut().take_content_reset() {
                             self.handle_active_content_reset(buffer_id);
                         }
-                        let edits = self.active_mut().editor.take_content_edits();
+                        let edits = self.active_editor_mut().take_content_edits();
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
                             self.active_mut()
@@ -1704,7 +1704,7 @@ impl App {
                         // Drain pending fold ops to prevent unbounded growth;
                         // `recompute_and_install` (via `pending_recompute`)
                         // handles the visual refresh.
-                        let _ = self.active_mut().editor.take_fold_ops();
+                        let _ = self.active_editor_mut().take_fold_ops();
                         self.pending_recompute = true;
                     }
                 }
@@ -1712,7 +1712,7 @@ impl App {
                     let _ = self.handle_mouse(me);
                 }
                 Event::Resize(w, h) => {
-                    let vp = self.active_mut().editor.host_mut().viewport_mut();
+                    let vp = self.active_editor_mut().host_mut().viewport_mut();
                     vp.width = w;
                     vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
                 }
@@ -1747,15 +1747,15 @@ impl App {
                             KeyOutcome::Continue => continue,
                             KeyOutcome::FallThrough => {
                                 let mode_was_insert =
-                                    self.active().editor.vim_mode() == VimMode::Insert;
+                                    self.active_editor().vim_mode() == VimMode::Insert;
                                 if mode_was_insert {
                                     self.dispatch_insert_key(k);
-                                    self.active_mut().editor.emit_cursor_shape_if_changed();
+                                    self.active_editor_mut().emit_cursor_shape_if_changed();
                                 } else {
-                                    hjkl_vim_tui::handle_key(&mut self.active_mut().editor, k);
+                                    hjkl_vim_tui::handle_key(self.active_editor_mut(), k);
                                 }
                                 self.sync_viewport_from_editor();
-                                if self.active_mut().editor.take_dirty() {
+                                if self.active_editor_mut().take_dirty() {
                                     let elapsed = self.active_mut().refresh_dirty_against_saved();
                                     self.last_signature_us = elapsed;
                                     if self.active().dirty {
@@ -1763,10 +1763,10 @@ impl App {
                                     }
                                 }
                                 let bid = self.active().buffer_id;
-                                if self.active_mut().editor.take_content_reset() {
+                                if self.active_editor_mut().take_content_reset() {
                                     self.handle_active_content_reset(bid);
                                 }
-                                let edits = self.active_mut().editor.take_content_edits();
+                                let edits = self.active_editor_mut().take_content_edits();
                                 if !edits.is_empty() {
                                     self.syntax.apply_edits(bid, &edits);
                                     self.active_mut()
@@ -1776,7 +1776,7 @@ impl App {
                                 self.lsp_notify_change_active(&edits);
                                 // Drain pending fold ops (drain-loop mirror of
                                 // the primary key arm above).
-                                let _ = self.active_mut().editor.take_fold_ops();
+                                let _ = self.active_editor_mut().take_fold_ops();
                                 self.pending_recompute = true;
                             }
                         },
@@ -1784,7 +1784,7 @@ impl App {
                             let _ = self.handle_mouse(me2);
                         }
                         Event::Resize(w, h) => {
-                            let vp = self.active_mut().editor.host_mut().viewport_mut();
+                            let vp = self.active_editor_mut().host_mut().viewport_mut();
                             vp.width = w;
                             vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
                         }
@@ -1854,7 +1854,7 @@ impl App {
         // border — shows the full commit message in the markdown popup. Resolve
         // the commit's doc row via the box-plan-aware helper (hit_test_zone
         // returns None on border rows, so it can't be used here).
-        if self.active().editor.is_blame() {
+        if self.active_editor().is_blame() {
             if let Some(doc_row) = crate::app::mouse::blame_hover_doc_row(self, cell.0, cell.1) {
                 self.show_blame_commit_hover(doc_row, cell);
                 if let Some(h) = self.hover_timer.as_mut() {

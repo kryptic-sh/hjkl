@@ -45,7 +45,7 @@ impl App {
         let (cursor_row, cursor_col) = (win.cursor_row, win.cursor_col);
         let maybe_rect = win.last_rect;
         if let Some(rect) = maybe_rect {
-            let vp = self.active_mut().editor.host_mut().viewport_mut();
+            let vp = self.active_editor_mut().host_mut().viewport_mut();
             vp.top_row = top_row;
             vp.top_col = top_col;
             vp.width = rect.w;
@@ -62,10 +62,10 @@ impl App {
         match self.window_folds.get(&fw) {
             Some(folds) => {
                 let folds = folds.clone();
-                self.active_mut().editor.buffer_mut().set_folds(&folds);
+                self.active_editor_mut().buffer_mut().set_folds(&folds);
             }
             None => {
-                let folds = self.active().editor.buffer().folds();
+                let folds = self.active_editor().buffer().folds();
                 self.window_folds.insert(fw, folds);
             }
         }
@@ -80,12 +80,12 @@ impl App {
         // height the engine doesn't know about; nudge the scroll so the cursor
         // stays visible. Render-level only — the engine still owns cursor row/col.
         self.adjust_blame_box_viewport();
-        let vp = self.active().editor.host().viewport();
+        let vp = self.active_editor().host().viewport();
         let (top_row, top_col) = (vp.top_row, vp.top_col);
-        let (cursor_row, cursor_col) = self.active().editor.cursor();
+        let (cursor_row, cursor_col) = self.active_editor().cursor();
         // Persist the focused window's fold state (captures `z`-command toggles
         // from this dispatch and auto-folds seeded during the prior render).
-        let folds = self.active().editor.buffer().folds();
+        let folds = self.active_editor().buffer().folds();
         let fw = self.focused_window();
         self.window_folds.insert(fw, folds);
         let win = self.windows[fw].as_mut().expect("focused_window open");
@@ -162,7 +162,7 @@ impl App {
             if new_top == top {
                 break;
             }
-            self.active_mut().editor.host_mut().viewport_mut().top_row = new_top;
+            self.active_editor_mut().host_mut().viewport_mut().top_row = new_top;
         }
     }
 

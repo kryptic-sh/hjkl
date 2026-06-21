@@ -110,8 +110,8 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     bar.left.push(mode_segment(mode, &theme));
 
     {
-        let pc = app.active().editor.pending_count();
-        let po = app.active().editor.pending_op();
+        let pc = app.active_editor().pending_count();
+        let po = app.active_editor().pending_op();
         let po_str = po.map(|s| s.to_string());
         if let Some(seg) = pending_segment(pc.map(|n| n as u64), po_str.as_deref(), &theme) {
             bar.left.push(seg);
@@ -119,7 +119,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     }
 
     // Filename with tags.
-    let ro_tag = if app.active().editor.is_readonly() {
+    let ro_tag = if app.active_editor().is_readonly() {
         " [RO]"
     } else {
         ""
@@ -151,8 +151,8 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     // Reserve space for all right-side blocks + filename padding + suffix
     // to determine how many chars the filename itself can occupy.
     // We use char counts to stay consistent with Bar::layout.
-    let (row, col) = app.active().editor.cursor();
-    let line_count = app.active().editor.buffer().line_count() as usize;
+    let (row, col) = app.active_editor().cursor();
+    let line_count = app.active_editor().buffer().line_count() as usize;
 
     let pos_content = format!(" {}:{} ", row + 1, col + 1);
     let pct_content = {
@@ -252,8 +252,8 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     let w = width as usize;
     let mode_chars = mode.chars().count() + 2; // " MODE "
     let pending_chars = {
-        let pc = app.active().editor.pending_count();
-        let po = app.active().editor.pending_op();
+        let pc = app.active_editor().pending_count();
+        let po = app.active_editor().pending_op();
         match (pc, po) {
             (Some(n), Some(op)) => format!(" {n}{op} ").chars().count(),
             (Some(n), None) => format!(" {n} ").chars().count(),
@@ -2153,14 +2153,14 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// `Vec<String>`s.
 pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     const MATCH_CAP: usize = 10_000;
-    let st = app.active().editor.search_state();
+    let st = app.active_editor().search_state();
     let pat = st.pattern.as_ref()?;
     let pattern_str = pat.as_str();
 
-    let buf = app.active().editor.buffer();
+    let buf = app.active_editor().buffer();
     let buffer_id = app.active().buffer_id;
     let dirty_gen = buf.dirty_gen();
-    let cursor = app.active().editor.cursor();
+    let cursor = app.active_editor().cursor();
 
     // Cache hit — return immediately.
     if let Some(cached) = app.search_count_cache.borrow().as_ref()
@@ -2378,7 +2378,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // Vim shows "recording @r" while `q{reg}` is active. Render it as a
     // status-message-equivalent so it visually pre-empts the lualine row,
     // matching vim's bottom-line takeover.
-    if let Some(reg) = app.active().editor.recording_register() {
+    if let Some(reg) = app.active_editor().recording_register() {
         let content = format!(" recording @{reg}");
         let padded = format!("{content:<width$}", width = width as usize);
         return (

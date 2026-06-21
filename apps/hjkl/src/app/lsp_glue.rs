@@ -814,8 +814,8 @@ impl App {
         // In BLAME mode `K` shows the cursor line's commit message (the same
         // markdown popup), not an LSP symbol hover — the buffer is a read-only
         // blame view.
-        if self.active().editor.is_blame() {
-            let (row, col) = self.active().editor.cursor();
+        if self.active_editor().is_blame() {
+            let (row, col) = self.active_editor().cursor();
             let win_id = self.focused_window();
             let cell = crate::app::mouse::doc_to_cell(self, win_id, row, col).unwrap_or((0, 0));
             self.show_blame_commit_hover(row, cell);
@@ -1011,11 +1011,11 @@ impl App {
             return;
         }
 
-        self.active_mut().editor.jump_cursor(row, col);
+        self.active_editor_mut().jump_cursor(row, col);
         // jump_cursor only sets cursor; the engine doesn't auto-scroll on
         // host-side jumps. Reveal the cursor before syncing the focused
         // window's stored top_row/top_col back from the editor viewport.
-        self.active_mut().editor.ensure_cursor_in_scrolloff();
+        self.active_editor_mut().ensure_cursor_in_scrolloff();
         self.sync_viewport_from_editor();
     }
 
@@ -1209,7 +1209,7 @@ impl App {
     /// found across all open buffers (vim's keyword completion, `<C-n>`). Used
     /// when no LSP server is attached so word completion still works.
     pub(crate) fn open_buffer_word_completion(&mut self) {
-        let cursor = self.active().editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let (row, col) = (cursor.row, cursor.col);
         let anchor_col = self.identifier_start_col(row, col);
         let token = self.token_between(row, anchor_col, col);
@@ -1230,7 +1230,7 @@ impl App {
     /// The text between byte columns `[lo, hi)` on `row` (the partial word
     /// under the cursor). Empty when out of range.
     fn token_between(&self, row: usize, lo: usize, hi: usize) -> String {
-        let rope = self.active().editor.buffer().rope();
+        let rope = self.active_editor().buffer().rope();
         if row >= rope.len_lines() {
             return String::new();
         }
@@ -1384,7 +1384,7 @@ impl App {
     /// Byte-based to match the cursor column (UTF-8 `positionEncoding`) and the
     /// byte-slice prefix tracking in the insert-mode key handler.
     pub(crate) fn identifier_start_col(&self, row: usize, col: usize) -> usize {
-        let rope = self.active().editor.buffer().rope();
+        let rope = self.active_editor().buffer().rope();
         if row >= rope.len_lines() {
             return col;
         }
@@ -1981,7 +1981,7 @@ impl App {
 
         // Guard: discard if user left insert mode or switched buffer.
         use hjkl_engine::VimMode;
-        if self.active().editor.vim_mode() != VimMode::Insert {
+        if self.active_editor().vim_mode() != VimMode::Insert {
             return;
         }
         if (self.active().buffer_id as hjkl_lsp::BufferId) != buffer_id {
@@ -1999,7 +1999,7 @@ impl App {
 
         // The partial word currently under the cursor — used both to filter the
         // popup and as the `exclude` token for buffer-word harvesting.
-        let cursor = self.active().editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let prefix = if cursor.row == anchor_row && cursor.col >= anchor_col {
             self.token_between(anchor_row, anchor_col, cursor.col)
         } else {
@@ -2060,7 +2060,7 @@ impl App {
             None => return,
         };
 
-        let cursor = self.active().editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let row = cursor.row;
         let cur_col = cursor.col;
         let anchor_col = popup.anchor_col.min(cur_col);
@@ -2106,7 +2106,7 @@ impl App {
         // server with stale text — diagnostics / parse-error gutter signs for
         // the now-fixed line lingered until the next manual edit (#143).
         use hjkl_buffer::{Edit, Position};
-        self.active_mut().editor.mutate_edit(Edit::Replace {
+        self.active_editor_mut().mutate_edit(Edit::Replace {
             start: Position::new(row, anchor_col),
             end: Position::new(row, cur_col),
             with: actual_text,
@@ -2114,7 +2114,7 @@ impl App {
 
         // Move cursor to computed offset within the inserted text.
         let new_col = anchor_col + cursor_offset;
-        self.active_mut().editor.jump_cursor(row, new_col);
+        self.active_editor_mut().jump_cursor(row, new_col);
         // completion was already taken via `take()` above, so it's already None.
     }
 

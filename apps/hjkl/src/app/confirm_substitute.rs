@@ -135,7 +135,7 @@ impl App {
                 let m = &cs.matches[cs.idx];
                 let r = m.row as usize;
                 let col = {
-                    let rope = Query::rope(self.active().editor.buffer());
+                    let rope = Query::rope(self.active_editor().buffer());
                     let line = hjkl_buffer::rope_line_str(&rope, r);
                     line[..m.byte_start as usize].chars().count()
                 };
@@ -143,7 +143,7 @@ impl App {
             }
             _ => return,
         };
-        self.active_mut().editor.jump_cursor(row, col);
+        self.active_editor_mut().jump_cursor(row, col);
         self.sync_after_engine_mutation();
     }
 }

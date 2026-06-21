@@ -88,7 +88,7 @@ impl App {
             return; // gate: no-repo → skip all git work
         }
 
-        let dg = self.active().editor.buffer().dirty_gen();
+        let dg = self.active_editor().buffer().dirty_gen();
         if !force && self.active().last_git_dirty_gen == Some(dg) {
             return;
         }
@@ -99,7 +99,7 @@ impl App {
 
         // O(1) rope clone — Arc-clone of the root node. Worker thread
         // materializes the byte buffer; main thread pays nothing here.
-        let rope = self.active().editor.buffer().rope();
+        let rope = self.active_editor().buffer().rope();
         let buffer_id = self.active().buffer_id;
         self.active_mut().last_git_refresh_at = now;
 
@@ -224,8 +224,8 @@ impl App {
         const BLAME_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
         // When neither inline nor blame-view is on, clear stale data and bail.
-        let blame_inline = self.active().editor.settings().blame_inline;
-        let blame_view = self.active().editor.is_blame();
+        let blame_inline = self.active_editor().settings().blame_inline;
+        let blame_view = self.active_editor().is_blame();
         if !blame_inline && !blame_view {
             let slot = self.active_mut();
             slot.blame.clear();
@@ -243,7 +243,7 @@ impl App {
             }
         };
 
-        let dg = self.active().editor.buffer().dirty_gen();
+        let dg = self.active_editor().buffer().dirty_gen();
         if !force && self.active().last_blame_dirty_gen == Some(dg) {
             return;
         }
@@ -253,7 +253,7 @@ impl App {
             return;
         }
 
-        let rope = self.active().editor.buffer().rope();
+        let rope = self.active_editor().buffer().rope();
         let buffer_id = self.active().buffer_id;
         self.active_mut().last_blame_refresh_at = now;
 
@@ -398,7 +398,7 @@ impl App {
             // Compute union viewport across all windows showing the same slot.
             let focused_slot = self.focused_slot_idx();
             let (focused_top, focused_height) = {
-                let vp = self.active().editor.host().viewport();
+                let vp = self.active_editor().host().viewport();
                 (vp.top_row, vp.height as usize)
             };
             let mut union_top = focused_top;

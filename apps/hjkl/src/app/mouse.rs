@@ -719,7 +719,7 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
 /// initialised yet.
 pub fn picker_overlay_rect(app: &App) -> Option<Rect> {
     app.picker.as_ref()?;
-    let vp = app.active().editor.host().viewport();
+    let vp = app.active_editor().host().viewport();
     let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
     let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
     let top_bar_h = if show_top_bar {
@@ -997,7 +997,7 @@ impl App {
 
         // Read primary selection BEFORE any mut borrows of self.
         let primary_text: Option<String> = {
-            let cb = self.active().editor.host().clipboard();
+            let cb = self.active_editor().host().clipboard();
             cb.filter(|cb| {
                 cb.capabilities().contains(Capabilities::PRIMARY)
                     && cb.capabilities().contains(Capabilities::READ)
@@ -1014,12 +1014,12 @@ impl App {
             self.switch_focus(win_id);
         }
 
-        self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+        self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
         self.sync_after_engine_mutation();
 
         if let Some(text) = primary_text {
-            self.active_mut().editor.set_yank(text);
-            self.active_mut().editor.paste_after(1);
+            self.active_editor_mut().set_yank(text);
+            self.active_editor_mut().paste_after(1);
             self.sync_after_engine_mutation();
         }
     }
@@ -1631,7 +1631,7 @@ mod tests {
 
         assert_eq!(app.focused_window(), 1, "click focuses the clicked pane");
         assert_eq!(
-            app.active().editor.cursor().0,
+            app.active_editor().cursor().0,
             0,
             "click maps to the rendered row 0, not a focus-scroll-offset row"
         );

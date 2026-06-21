@@ -19,7 +19,7 @@ impl App {
         let digits = self.pending_count.drain_as_digits();
         for d in digits.chars() {
             hjkl_vim_tui::handle_key(
-                &mut self.active_mut().editor,
+                self.active_editor_mut(),
                 KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE),
             );
         }
