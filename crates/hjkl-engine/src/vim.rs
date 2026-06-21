@@ -8908,9 +8908,9 @@ pub(crate) fn adjust_number_visual<H: crate::types::Host>(
 }
 
 pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some(entry) = ed.undo_stack.pop() {
+    if let Some(entry) = ed.buffer.pop_undo_entry() {
         let (cur_rope, cur_cursor) = ed.snapshot();
-        ed.redo_stack.push(crate::editor::UndoEntry {
+        ed.buffer.push_redo_entry(hjkl_buffer::UndoEntry {
             rope: cur_rope,
             cursor: cur_cursor,
             timestamp: entry.timestamp,
@@ -8925,10 +8925,10 @@ pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer
 }
 
 pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some(entry) = ed.redo_stack.pop() {
+    if let Some(entry) = ed.buffer.pop_redo_entry() {
         let (cur_rope, cur_cursor) = ed.snapshot();
         let before = cur_rope.clone();
-        ed.undo_stack.push(crate::editor::UndoEntry {
+        ed.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
             rope: cur_rope,
             cursor: cur_cursor,
             timestamp: entry.timestamp,

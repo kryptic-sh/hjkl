@@ -2373,7 +2373,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -2495,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "bitflags 2.13.0",
  "hjkl-buffer",

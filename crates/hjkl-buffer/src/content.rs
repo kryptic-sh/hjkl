@@ -64,6 +64,32 @@ pub struct Content {
     /// `Rope::len_bytes()` is O(1) but holding the cache avoids even that
     /// small overhead on repeated callers within the same tick.
     pub(crate) cached_byte_len: Option<(u64, usize)>,
+
+    // ── Per-buffer engine state (relocated from hjkl-engine::Editor) ──────
+    /// Undo history: O(1)-clone rope snapshots before each edit group.
+    pub(crate) undo_stack: Vec<crate::UndoEntry>,
+    /// Redo history: entries pushed when the user undoes.
+    pub(crate) redo_stack: Vec<crate::UndoEntry>,
+    /// Set whenever the buffer content changes; cleared by the engine's
+    /// `take_dirty` accessor.
+    pub(crate) content_dirty: bool,
+    /// Cached `Arc<String>` of the joined document for the engine's
+    /// `content_arc` fast path. Invalidated by `mark_content_dirty`.
+    pub(crate) cached_editor_content: Option<std::sync::Arc<String>>,
+    /// Pending [`crate::FoldOp`]s raised by `z…` keystrokes, `:fold*` ex
+    /// commands, and the edit-pipeline's fold invalidation. Drained by
+    /// hosts via `Editor::take_fold_ops`.
+    pub(crate) pending_fold_ops: Vec<crate::FoldOp>,
+    /// Pending edit log drained by `Editor::take_changes`. Each entry is
+    /// a [`crate::EngineEdit`] mapped from the underlying buffer edit.
+    pub(crate) change_log: Vec<crate::EngineEdit>,
+    /// Pending `ContentEdit` records emitted by `mutate_edit`. Drained by
+    /// hosts via `Editor::take_content_edits` for fan-in to a syntax tree.
+    pub(crate) pending_content_edits: Vec<crate::ContentEdit>,
+    /// Pending "reset" flag set when the entire buffer is replaced
+    /// (e.g. `set_content` / `restore`). Supersedes any queued
+    /// `pending_content_edits` on the same frame.
+    pub(crate) pending_content_reset: bool,
 }
 
 impl Default for Content {
@@ -81,6 +107,14 @@ impl Content {
             folds: Vec::new(),
             cached_joined: None,
             cached_byte_len: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            content_dirty: false,
+            cached_editor_content: None,
+            pending_fold_ops: Vec::new(),
+            change_log: Vec::new(),
+            pending_content_edits: Vec::new(),
+            pending_content_reset: false,
         }
     }
 
@@ -94,6 +128,14 @@ impl Content {
             folds: Vec::new(),
             cached_joined: None,
             cached_byte_len: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            content_dirty: false,
+            cached_editor_content: None,
+            pending_fold_ops: Vec::new(),
+            change_log: Vec::new(),
+            pending_content_edits: Vec::new(),
+            pending_content_reset: false,
         }
     }
 }

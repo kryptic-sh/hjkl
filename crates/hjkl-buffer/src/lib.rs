@@ -44,6 +44,7 @@
 mod buffer;
 pub mod content;
 mod edit;
+mod engine_types;
 mod folds;
 pub mod geom;
 pub mod listchars;
@@ -51,6 +52,7 @@ mod motion;
 mod position;
 mod selection;
 mod span;
+mod undo;
 mod viewport;
 pub mod wrap;
 
@@ -58,6 +60,7 @@ pub use buffer::Buffer;
 pub use buffer::{rope_line_bytes, rope_line_str};
 pub use content::Content;
 pub use edit::{Edit, MotionKind};
+pub use engine_types::{ContentEdit, EngineEdit, FoldOp, Pos};
 pub use folds::{Fold, invalidate_folds};
 pub use geom::{char_col_to_visual_col, visual_col_to_char_col};
 pub use listchars::{ListChars, apply_listchars};
@@ -65,6 +68,7 @@ pub use motion::is_keyword_char;
 pub use position::Position;
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
+pub use undo::UndoEntry;
 pub use viewport::{Viewport, is_big_viewport_jump};
 pub use wrap::Wrap;
 

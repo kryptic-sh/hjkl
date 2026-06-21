@@ -12,18 +12,6 @@ use crate::{KeybindingMode, VimMode};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::SystemTime;
 
-/// A single entry in the undo or redo stack.
-///
-/// The `timestamp` records the wall-clock time at which the snapshot was
-/// taken (i.e. when `push_undo` was called), enabling the `:earlier` /
-/// `:later` time-travel ex commands to walk the stack by duration rather
-/// than by step count.
-pub(crate) struct UndoEntry {
-    pub(crate) rope: ropey::Rope,
-    pub(crate) cursor: (usize, usize),
-    pub(crate) timestamp: SystemTime,
-}
-
 /// Map a [`hjkl_buffer::Edit`] to one or more SPEC
 /// [`crate::types::Edit`] (`EditOp`) records.
 ///
@@ -577,16 +565,10 @@ pub struct Editor<
     /// builds the entire document `String` via `rope.to_string()` — that
     /// turned every `i` / `o` keystroke into a ~3 MB allocation on a
     /// 1.86 M-line file.
-    pub(crate) undo_stack: Vec<UndoEntry>,
-    /// Redo history: entries pushed when undoing.
-    pub(super) redo_stack: Vec<UndoEntry>,
-    /// Set whenever the buffer content changes; cleared by `take_dirty`.
-    pub(super) content_dirty: bool,
-    /// Cached snapshot of `lines().join("\n") + "\n"` wrapped in an Arc
-    /// so repeated `content_arc()` calls within the same un-mutated
-    /// window are free (ref-count bump instead of a full-buffer join).
-    /// Invalidated by every [`mark_content_dirty`] call.
-    pub(super) cached_content: Option<std::sync::Arc<String>>,
+    // undo_stack, redo_stack, content_dirty, cached_content (as
+    // cached_editor_content), pending_fold_ops, change_log,
+    // pending_content_edits, pending_content_reset are now stored on
+    // Content (inside self.buffer) and accessed via Buffer accessor methods.
     /// Last rendered viewport height (text rows only, no chrome). Written
     /// by the draw path via [`set_viewport_height`] so the scroll helpers
     /// can clamp the cursor to stay visible without plumbing the height
@@ -596,14 +578,6 @@ pub struct Editor<
     /// goto-definition). The host app drains this each step and fires
     /// the matching request against its own LSP client.
     pub(super) pending_lsp: Option<LspIntent>,
-    /// Pending [`crate::types::FoldOp`]s raised by `z…` keystrokes,
-    /// the `:fold*` Ex commands, or the edit pipeline's
-    /// "edits-inside-a-fold open it" invalidation. Drained by hosts
-    /// via [`Editor::take_fold_ops`]; the engine also applies each op
-    /// locally through [`crate::buffer_impl::BufferFoldProviderMut`]
-    /// so the in-tree buffer fold storage stays in sync without host
-    /// cooperation. Introduced in 0.0.38 (Patch C-δ.4).
-    pub(super) pending_fold_ops: Vec<crate::types::FoldOp>,
     /// Buffer storage.
     ///
     /// 0.1.0 (Patch C-δ): generic over `B: Buffer` per SPEC §"Editor
@@ -661,15 +635,7 @@ pub struct Editor<
     /// [`Editor::set_syntax_fold_ranges`]; ex commands read them via
     /// [`Editor::syntax_fold_ranges`].
     pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
-    /// Pending edit log drained by [`Editor::take_changes`]. Each entry
-    /// is a SPEC [`crate::types::Edit`] mapped from the underlying
-    /// `hjkl_buffer::Edit` operation. Compound ops (JoinLines,
-    /// SplitLines, InsertBlock, DeleteBlockChunks) emit a single
-    /// best-effort EditOp covering the touched range; hosts wanting
-    /// per-cell deltas should diff their own snapshot of `lines()`.
-    /// Sealed at 0.1.0 trait extraction.
-    /// Drained by [`Editor::take_changes`].
-    pub(crate) change_log: Vec<crate::types::Edit>,
+    // change_log moved to Content; accessed via self.buffer.take_change_log() etc.
     /// Vim's "sticky column" (curswant). `None` before the first
     /// motion — the next vertical motion bootstraps from the live
     /// cursor column. Horizontal motions refresh this to the new
@@ -710,16 +676,8 @@ pub struct Editor<
     /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The buffer-side cache +
     /// `Buffer::set_spans` / `Buffer::spans` accessors are gone.
     pub(crate) buffer_spans: Vec<Vec<hjkl_buffer::Span>>,
-    /// Pending `ContentEdit` records emitted by `mutate_edit`. Drained by
-    /// hosts via [`Editor::take_content_edits`] for fan-in to a syntax
-    /// tree (or any other content-change observer that needs byte-level
-    /// position deltas). Edges are byte-indexed and `(row, col_byte)`.
-    pub(crate) pending_content_edits: Vec<crate::types::ContentEdit>,
-    /// Pending "reset" flag set when the entire buffer is replaced
-    /// (e.g. `set_content` / `restore`). Supersedes any queued
-    /// `pending_content_edits` on the same frame: hosts call
-    /// [`Editor::take_content_reset`] before draining edits.
-    pub(crate) pending_content_reset: bool,
+    // pending_content_edits and pending_content_reset moved to Content;
+    // accessed via self.buffer.take_pending_content_edits() etc.
     /// Row range touched by the most recent `auto_indent_rows` call.
     /// `(top_row, bot_row)` inclusive. Set by the engine after every
     /// auto-indent operation; drained (and cleared) by the host via
@@ -1089,13 +1047,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             keybinding_mode: KeybindingMode::Vim,
             last_yank: None,
             vim: VimState::default(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            content_dirty: false,
-            cached_content: None,
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
-            pending_fold_ops: Vec::new(),
             buffer,
             style_table: Vec::new(),
             registers: crate::registers::Registers::default(),
@@ -1105,14 +1058,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             global_marks: std::collections::BTreeMap::new(),
             current_buffer_id: 0,
             syntax_fold_ranges: Vec::new(),
-            change_log: Vec::new(),
             sticky_col: None,
             host,
             last_emitted_mode: crate::VimMode::Normal,
             search_state: crate::search::SearchState::new(),
             buffer_spans: Vec::new(),
-            pending_content_edits: Vec::new(),
-            pending_content_reset: false,
             last_indent_range: None,
         }
     }
@@ -1266,7 +1216,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Returns `true` if an entry was discarded.
     pub fn pop_last_undo(&mut self) -> bool {
-        self.undo_stack.pop().is_some()
+        self.buffer.pop_undo_entry().is_some()
     }
 
     /// Read all named marks set this session — both lowercase
@@ -1874,7 +1824,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Introduced in 0.0.38 (Patch C-δ.4).
     pub fn take_fold_ops(&mut self) -> Vec<crate::types::FoldOp> {
-        std::mem::take(&mut self.pending_fold_ops)
+        self.buffer.take_fold_ops()
     }
 
     /// Dispatch a [`crate::types::FoldOp`] through the canonical fold
@@ -1888,7 +1838,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Introduced in 0.0.38 (Patch C-δ.4).
     pub fn apply_fold_op(&mut self, op: crate::types::FoldOp) {
         use crate::types::FoldProvider;
-        self.pending_fold_ops.push(op);
+        self.buffer.push_fold_op(op);
         let mut provider = crate::buffer_impl::BufferFoldProviderMut::new(&mut self.buffer);
         provider.apply(op);
         // BUG 2 fix: after a close/toggle-that-closes, the cursor may sit on a
@@ -1980,14 +1930,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Map the underlying buffer edit to a SPEC EditOp for
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
-        self.change_log.extend(edit_to_editops(&edit));
+        self.buffer.extend_change_log(edit_to_editops(&edit));
         // Compute ContentEdit fan-out from the pre-edit buffer state.
         // Done before `apply_buffer_edit` consumes `edit` so we can
         // inspect the operation's fields and the buffer's pre-edit row
         // bytes (needed for byte_of_row / col_byte conversion). Edits
-        // are pushed onto `pending_content_edits` for host drain.
+        // are pushed onto pending_content_edits for host drain.
         let content_edits = content_edits_from_buffer_edit(&self.buffer, &edit);
-        self.pending_content_edits.extend(content_edits);
+        self.buffer.extend_pending_content_edits(content_edits);
         // 0.0.42 (Patch C-δ.7): the `apply_edit` reach is centralized
         // in [`crate::buf_helpers::apply_buffer_edit`] (option (c) of
         // the 0.0.42 plan — see that fn's doc comment). The free fn
@@ -2116,15 +2066,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// mutating `textarea` directly (e.g. the TUI's bracketed-paste
     /// path) must invoke this to keep the cache honest.
     pub fn mark_content_dirty(&mut self) {
-        self.content_dirty = true;
-        self.cached_content = None;
+        self.buffer.mark_content_dirty();
     }
 
     /// Returns true if content changed since the last call, then clears the flag.
     pub fn take_dirty(&mut self) -> bool {
-        let dirty = self.content_dirty;
-        self.content_dirty = false;
-        dirty
+        self.buffer.take_dirty()
     }
 
     /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
@@ -2135,7 +2082,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Hosts call this each frame (after [`Editor::take_content_reset`])
     /// to fan edits into a tree-sitter parser via `Tree::edit`.
     pub fn take_content_edits(&mut self) -> Vec<crate::types::ContentEdit> {
-        std::mem::take(&mut self.pending_content_edits)
+        self.buffer.take_pending_content_edits()
     }
 
     /// Returns `true` if a bulk buffer replacement happened since the
@@ -2144,9 +2091,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// any retained syntax tree before consuming
     /// [`Editor::take_content_edits`].
     pub fn take_content_reset(&mut self) -> bool {
-        let r = self.pending_content_reset;
-        self.pending_content_reset = false;
-        r
+        self.buffer.take_pending_content_reset()
     }
 
     /// Pull-model coarse change observation. If content changed since
@@ -2159,11 +2104,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// once every edit path inside the engine is instrumented; this
     /// coarse form covers the pull-model use case in the meantime.
     pub fn take_content_change(&mut self) -> Option<std::sync::Arc<String>> {
-        if !self.content_dirty {
+        if !self.buffer.content_dirty() {
             return None;
         }
         let arc = self.content_arc();
-        self.content_dirty = false;
+        self.buffer.set_content_dirty(false);
         Some(arc)
     }
 
@@ -2428,11 +2373,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// are ref-count bumps instead of multi-MB joins. The cache is
     /// invalidated by every [`mark_content_dirty`] call.
     pub fn content_arc(&mut self) -> std::sync::Arc<String> {
-        if let Some(arc) = &self.cached_content {
-            return std::sync::Arc::clone(arc);
+        if let Some(arc) = self.buffer.cached_editor_content() {
+            return arc;
         }
         let arc = std::sync::Arc::new(self.content());
-        self.cached_content = Some(std::sync::Arc::clone(&arc));
+        self.buffer
+            .set_cached_editor_content(std::sync::Arc::clone(&arc));
         arc
     }
 
@@ -2446,11 +2392,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         let _ = lines;
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.buffer.clear_undo_redo();
         // Whole-buffer replace supersedes any queued ContentEdits.
-        self.pending_content_edits.clear();
-        self.pending_content_reset = true;
+        self.buffer.clear_pending_content_edits();
+        self.buffer.set_pending_content_reset(true);
         self.mark_content_dirty();
     }
 
@@ -2476,8 +2421,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let _ = lines;
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         // Whole-buffer replace supersedes any queued ContentEdits.
-        self.pending_content_edits.clear();
-        self.pending_content_reset = true;
+        self.buffer.clear_pending_content_edits();
+        self.buffer.set_pending_content_reset(true);
         self.mark_content_dirty();
     }
 
@@ -2498,7 +2443,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///   covering the touched range. Hosts wanting per-cell deltas
     ///   should diff their own `lines()` snapshot.
     pub fn take_changes(&mut self) -> Vec<crate::types::Edit> {
-        std::mem::take(&mut self.change_log)
+        self.buffer.take_change_log()
     }
 
     /// Read the engine's current settings as a SPEC
@@ -3342,7 +3287,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn earlier_by_steps(&mut self, n: usize) -> usize {
         let mut count = 0;
         for _ in 0..n {
-            if self.undo_stack.is_empty() {
+            if self.buffer.undo_stack_is_empty() {
                 break;
             }
             crate::vim::do_undo(self);
@@ -3356,7 +3301,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn later_by_steps(&mut self, n: usize) -> usize {
         let mut count = 0;
         for _ in 0..n {
-            if self.redo_stack.is_empty() {
+            if self.buffer.redo_stack_is_empty() {
                 break;
             }
             crate::vim::do_redo(self);
@@ -3373,10 +3318,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn earlier_by_time(&mut self, target: SystemTime) -> usize {
         let mut count = 0;
         loop {
-            match self.undo_stack.last() {
+            match self.buffer.peek_undo_timestamp() {
                 None => break,
-                Some(entry) => {
-                    if entry.timestamp <= target {
+                Some(ts) => {
+                    if ts <= target {
                         break;
                     }
                 }
@@ -3394,10 +3339,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn later_by_time(&mut self, target: SystemTime) -> usize {
         let mut count = 0;
         loop {
-            match self.redo_stack.last() {
+            match self.buffer.peek_redo_timestamp() {
                 None => break,
-                Some(entry) => {
-                    if entry.timestamp > target {
+                Some(ts) => {
+                    if ts > target {
                         break;
                     }
                 }
@@ -3421,13 +3366,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     #[doc(hidden)]
     pub fn push_undo_at(&mut self, timestamp: SystemTime) {
         let (rope, cursor) = self.snapshot();
-        self.undo_stack.push(UndoEntry {
+        self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
             rope,
             cursor,
             timestamp,
         });
         self.cap_undo();
-        self.redo_stack.clear();
+        self.buffer.clear_redo();
     }
 
     /// Trim the undo stack down to `settings.undo_levels`, dropping
@@ -3437,16 +3382,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// the cap path with an explicit zero-check above the call site).
     pub(crate) fn cap_undo(&mut self) {
         let cap = self.settings.undo_levels as usize;
-        if cap > 0 && self.undo_stack.len() > cap {
-            let diff = self.undo_stack.len() - cap;
-            self.undo_stack.drain(..diff);
-        }
+        self.buffer.cap_undo(cap);
     }
 
     /// Test-only accessor for the undo stack length.
     #[doc(hidden)]
     pub fn undo_stack_len(&self) -> usize {
-        self.undo_stack.len()
+        self.buffer.undo_stack_len()
     }
 
     /// Replace the buffer with `lines` joined by `\n` and set the
@@ -3493,8 +3435,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
 
         // Bulk replace supersedes any prior queued edits.
-        self.pending_content_edits.clear();
-        self.pending_content_edits.push(edit);
+        self.buffer.clear_pending_content_edits();
+        self.buffer.push_pending_content_edit(edit);
         self.mark_content_dirty();
     }
 

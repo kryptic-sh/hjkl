@@ -382,6 +382,161 @@ impl Buffer {
         }
         None
     }
+
+    // ── Per-buffer engine state accessors ─────────────────────────────────
+
+    pub fn undo_stack_is_empty(&self) -> bool {
+        self.content.lock().unwrap().undo_stack.is_empty()
+    }
+
+    pub fn redo_stack_is_empty(&self) -> bool {
+        self.content.lock().unwrap().redo_stack.is_empty()
+    }
+
+    pub fn undo_stack_len(&self) -> usize {
+        self.content.lock().unwrap().undo_stack.len()
+    }
+
+    pub fn push_undo_entry(&self, entry: crate::UndoEntry) {
+        self.content.lock().unwrap().undo_stack.push(entry);
+    }
+
+    pub fn push_redo_entry(&self, entry: crate::UndoEntry) {
+        self.content.lock().unwrap().redo_stack.push(entry);
+    }
+
+    pub fn pop_undo_entry(&self) -> Option<crate::UndoEntry> {
+        self.content.lock().unwrap().undo_stack.pop()
+    }
+
+    pub fn pop_redo_entry(&self) -> Option<crate::UndoEntry> {
+        self.content.lock().unwrap().redo_stack.pop()
+    }
+
+    pub fn peek_undo_timestamp(&self) -> Option<std::time::SystemTime> {
+        self.content
+            .lock()
+            .unwrap()
+            .undo_stack
+            .last()
+            .map(|e| e.timestamp)
+    }
+
+    pub fn peek_redo_timestamp(&self) -> Option<std::time::SystemTime> {
+        self.content
+            .lock()
+            .unwrap()
+            .redo_stack
+            .last()
+            .map(|e| e.timestamp)
+    }
+
+    pub fn clear_undo_redo(&self) {
+        let mut c = self.content.lock().unwrap();
+        c.undo_stack.clear();
+        c.redo_stack.clear();
+    }
+
+    pub fn clear_redo(&self) {
+        self.content.lock().unwrap().redo_stack.clear();
+    }
+
+    pub fn cap_undo(&self, cap: usize) {
+        if cap > 0 {
+            let mut c = self.content.lock().unwrap();
+            let len = c.undo_stack.len();
+            if len > cap {
+                c.undo_stack.drain(..len - cap);
+            }
+        }
+    }
+
+    pub fn content_dirty(&self) -> bool {
+        self.content.lock().unwrap().content_dirty
+    }
+
+    pub fn set_content_dirty(&self, v: bool) {
+        self.content.lock().unwrap().content_dirty = v;
+    }
+
+    pub fn mark_content_dirty(&self) {
+        let mut c = self.content.lock().unwrap();
+        c.content_dirty = true;
+        c.cached_editor_content = None;
+    }
+
+    pub fn take_dirty(&self) -> bool {
+        let mut c = self.content.lock().unwrap();
+        let v = c.content_dirty;
+        c.content_dirty = false;
+        v
+    }
+
+    pub fn cached_editor_content(&self) -> Option<std::sync::Arc<String>> {
+        self.content.lock().unwrap().cached_editor_content.clone()
+    }
+
+    pub fn set_cached_editor_content(&self, arc: std::sync::Arc<String>) {
+        self.content.lock().unwrap().cached_editor_content = Some(arc);
+    }
+
+    pub fn push_fold_op(&self, op: crate::FoldOp) {
+        self.content.lock().unwrap().pending_fold_ops.push(op);
+    }
+
+    pub fn take_fold_ops(&self) -> Vec<crate::FoldOp> {
+        std::mem::take(&mut self.content.lock().unwrap().pending_fold_ops)
+    }
+
+    pub fn extend_change_log(&self, edits: impl IntoIterator<Item = crate::EngineEdit>) {
+        self.content.lock().unwrap().change_log.extend(edits);
+    }
+
+    pub fn take_change_log(&self) -> Vec<crate::EngineEdit> {
+        std::mem::take(&mut self.content.lock().unwrap().change_log)
+    }
+
+    pub fn extend_pending_content_edits(
+        &self,
+        edits: impl IntoIterator<Item = crate::ContentEdit>,
+    ) {
+        self.content
+            .lock()
+            .unwrap()
+            .pending_content_edits
+            .extend(edits);
+    }
+
+    pub fn push_pending_content_edit(&self, edit: crate::ContentEdit) {
+        self.content
+            .lock()
+            .unwrap()
+            .pending_content_edits
+            .push(edit);
+    }
+
+    pub fn take_pending_content_edits(&self) -> Vec<crate::ContentEdit> {
+        std::mem::take(&mut self.content.lock().unwrap().pending_content_edits)
+    }
+
+    pub fn clear_pending_content_edits(&self) {
+        self.content.lock().unwrap().pending_content_edits.clear();
+    }
+
+    pub fn pending_content_reset(&self) -> bool {
+        self.content.lock().unwrap().pending_content_reset
+    }
+
+    pub fn set_pending_content_reset(&self, v: bool) {
+        self.content.lock().unwrap().pending_content_reset = v;
+    }
+
+    pub fn take_pending_content_reset(&self) -> bool {
+        let mut c = self.content.lock().unwrap();
+        let v = c.pending_content_reset;
+        c.pending_content_reset = false;
+        v
+    }
 }
 
 // ── Rope line helpers (free functions over &ropey::Rope) ─────────────
@@ -570,6 +725,146 @@ mod tests {
         b.set_cursor(Position::new(4, 0));
         b.ensure_cursor_visible(&mut v);
         assert_eq!(v.top_row, 3);
+    }
+
+    // ── Per-buffer engine state tests (new in 0.33.0 / Phase B) ──────
+
+    /// Undo entries pushed via one `Buffer` view are visible via
+    /// another view sharing the same `Content` — proving that the
+    /// undo stack lives on `Content`, not on the per-window `Buffer`.
+    #[test]
+    fn undo_stack_shared_across_views() {
+        use crate::UndoEntry;
+        use std::time::SystemTime;
+
+        let a = Buffer::from_str("hello");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        assert!(view_a.undo_stack_is_empty());
+        assert_eq!(view_a.undo_stack_len(), 0);
+
+        view_a.push_undo_entry(UndoEntry {
+            rope: view_a.rope(),
+            cursor: (0, 0),
+            timestamp: SystemTime::UNIX_EPOCH,
+        });
+
+        // Push via view_a is visible via view_b.
+        assert_eq!(view_b.undo_stack_len(), 1);
+        assert!(!view_b.undo_stack_is_empty());
+    }
+
+    /// Redo entries pushed via one view are visible via another.
+    #[test]
+    fn redo_stack_shared_across_views() {
+        use crate::UndoEntry;
+        use std::time::SystemTime;
+
+        let a = Buffer::from_str("world");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        assert!(view_a.redo_stack_is_empty());
+
+        view_b.push_redo_entry(UndoEntry {
+            rope: view_b.rope(),
+            cursor: (0, 2),
+            timestamp: SystemTime::UNIX_EPOCH,
+        });
+
+        let entry = view_a.pop_redo_entry();
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().cursor, (0, 2));
+    }
+
+    /// `clear_undo_redo` clears both stacks and the effect is shared.
+    #[test]
+    fn clear_undo_redo_shared_across_views() {
+        use crate::UndoEntry;
+        use std::time::SystemTime;
+
+        let a = Buffer::from_str("abc");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        view_a.push_undo_entry(UndoEntry {
+            rope: view_a.rope(),
+            cursor: (0, 0),
+            timestamp: SystemTime::UNIX_EPOCH,
+        });
+        view_a.push_redo_entry(UndoEntry {
+            rope: view_a.rope(),
+            cursor: (0, 1),
+            timestamp: SystemTime::UNIX_EPOCH,
+        });
+
+        view_b.clear_undo_redo();
+        assert!(view_a.undo_stack_is_empty());
+        assert!(view_a.redo_stack_is_empty());
+    }
+
+    /// `content_dirty` flag is shared across views.
+    #[test]
+    fn content_dirty_shared_across_views() {
+        let a = Buffer::from_str("test");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        assert!(!view_a.content_dirty());
+
+        view_b.mark_content_dirty();
+        assert!(view_a.content_dirty());
+
+        let taken = view_a.take_dirty();
+        assert!(taken);
+        assert!(!view_b.content_dirty());
+    }
+
+    /// `pending_fold_ops` push and take are shared across views.
+    #[test]
+    fn pending_fold_ops_shared_across_views() {
+        let a = Buffer::from_str("a\nb\nc");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        view_a.push_fold_op(crate::FoldOp::Add {
+            start_row: 0,
+            end_row: 1,
+            closed: true,
+        });
+
+        let ops = view_b.take_fold_ops();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            ops[0],
+            crate::FoldOp::Add {
+                start_row: 0,
+                end_row: 1,
+                closed: true
+            }
+        ));
+    }
+
+    /// `pending_content_reset` flag is shared across views.
+    #[test]
+    fn pending_content_reset_shared_across_views() {
+        let a = Buffer::from_str("x");
+        let arc = a.content_arc();
+        let view_a = Buffer::new_view(Arc::clone(&arc));
+        let view_b = Buffer::new_view(Arc::clone(&arc));
+
+        assert!(!view_a.pending_content_reset());
+        view_b.set_pending_content_reset(true);
+        assert!(view_a.pending_content_reset());
+        let taken = view_a.take_pending_content_reset();
+        assert!(taken);
+        assert!(!view_b.pending_content_reset());
     }
 
     // ── View-split tests (new in 0.8.0) ──────────────────────────

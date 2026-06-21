@@ -506,6 +506,9 @@ impl FoldProvider for BufferFoldProviderMut<'_> {
             FoldOp::Invalidate { start_row, end_row } => {
                 self.buffer.invalidate_folds_in_range(start_row, end_row);
             }
+            // FoldOp is #[non_exhaustive] — new variants added in hjkl-buffer
+            // are silently ignored here until buffer_impl is updated.
+            _ => {}
         }
     }
 
