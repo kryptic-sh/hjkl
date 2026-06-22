@@ -997,6 +997,49 @@ impl App {
     /// Phase D — the single source of truth). Falls back to the legacy
     /// `layout::Window` mirror if the window editor is somehow absent, then
     /// `(0, 0)`.
+    /// The editor for window `win_id` (the View — single source of per-window
+    /// cursor/viewport/is_blame, #151). Falls back to the slot bridge editor
+    /// when no window editor exists yet (pre-reconcile / headless paths).
+    pub(crate) fn window_editor(&self, win_id: window::WindowId) -> &Editor<Buffer, TuiHost> {
+        self.window_editors.get(&win_id).unwrap_or_else(|| {
+            let slot = self
+                .windows
+                .get(win_id)
+                .and_then(|w| w.as_ref())
+                .map(|w| w.slot)
+                .unwrap_or_else(|| self.focused_slot_idx());
+            &self.slots[slot].editor
+        })
+    }
+
+    /// Cursor `(row, col)` for slot `idx`, read from a window editor showing it
+    /// (#151 single source of truth) — the focused window if it shows the slot,
+    /// else any window on the slot, else the slot bridge editor. For per-slot
+    /// machinery (swap metadata, autoreload) that must pick one view's cursor.
+    pub(crate) fn slot_cursor(&self, idx: usize) -> (usize, usize) {
+        let win_id = if self
+            .windows
+            .get(self.focused_window())
+            .and_then(|w| w.as_ref())
+            .map(|w| w.slot)
+            == Some(idx)
+        {
+            Some(self.focused_window())
+        } else {
+            self.windows
+                .iter()
+                .enumerate()
+                .find_map(|(id, w)| w.as_ref().filter(|w| w.slot == idx).map(|_| id))
+        };
+        match win_id.and_then(|id| self.window_editors.get(&id)) {
+            Some(e) => {
+                let c = e.buffer().cursor();
+                (c.row, c.col)
+            }
+            None => self.slots[idx].editor.cursor(),
+        }
+    }
+
     pub(crate) fn window_cursor(&self, win_id: window::WindowId) -> (usize, usize) {
         self.window_editors
             .get(&win_id)

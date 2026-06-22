@@ -974,7 +974,14 @@ impl App {
         // Vim semantics: `readonly` only blocks writing the buffer's OWN file,
         // and only when not forced (`:w!` overrides). Writing to a different path
         // (`:w other` / `:saveas`) is always allowed regardless of readonly.
-        if self.slots[idx].editor.is_readonly() {
+        // `readonly` is per-window (#151): read the focused window editor when
+        // saving the focused slot, else the slot bridge (background save).
+        let readonly = if idx == self.focused_slot_idx() {
+            self.active_editor().is_readonly()
+        } else {
+            self.slots[idx].editor.is_readonly()
+        };
+        if readonly {
             let writing_own =
                 path.is_none() || path.as_deref() == self.slots[idx].filename.as_deref();
             if writing_own && !force {
@@ -1230,7 +1237,8 @@ impl App {
             return; // Nothing changed since last swap.
         }
 
-        let (cursor_row, cursor_col) = self.slots[idx].editor.cursor();
+        // Cursor lives on the window editor (#151); record the view showing it.
+        let (cursor_row, cursor_col) = self.slot_cursor(idx);
 
         let (canonical_path, file_mtime_unix_ms) = if is_scratch {
             // Scratch swap: empty canonical_path marks it as scratch.
@@ -1636,6 +1644,19 @@ impl App {
         let stripped = body.strip_suffix('\n').unwrap_or(body);
         self.slots[slot_idx].editor.set_content(stripped);
         self.slots[slot_idx].editor.jump_cursor(row, col);
+        // Land the recovered cursor on every window editor showing the slot
+        // (#151 View) — the shared-content swap doesn't move their cursors.
+        let recover_wins: Vec<usize> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(id, w)| w.as_ref().filter(|w| w.slot == slot_idx).map(|_| id))
+            .collect();
+        for id in recover_wins {
+            if let Some(e) = self.window_editors.get_mut(&id) {
+                e.jump_cursor(row, col);
+            }
+        }
         self.slots[slot_idx].dirty = true;
     }
 
@@ -2044,6 +2065,20 @@ impl App {
                     let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
                     let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
                     self.slots[idx].editor.jump_cursor(clamped_row, cur_col);
+                    // Each window editor (#151 View) keeps its own cursor; the
+                    // shared-content swap can leave it past EOF — clamp per view.
+                    let reload_wins: Vec<usize> = self
+                        .windows
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(id, w)| w.as_ref().filter(|w| w.slot == idx).map(|_| id))
+                        .collect();
+                    for id in reload_wins {
+                        if let Some(e) = self.window_editors.get_mut(&id) {
+                            let c = e.buffer().cursor();
+                            e.jump_cursor(c.row.min(new_line_count.saturating_sub(1)), c.col);
+                        }
+                    }
                     self.slots[idx].is_new_file = false;
                     // Update disk metadata baseline.
                     self.slots[idx].disk_mtime = new_mtime;

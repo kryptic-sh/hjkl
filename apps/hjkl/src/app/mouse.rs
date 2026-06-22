@@ -228,9 +228,12 @@ pub(crate) fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize
     let win = app.windows.get(win_id)?.as_ref()?;
     let rect = win.last_rect?;
     let slot = app.slots().get(win.slot)?;
-    let vp = slot.editor.host().viewport();
+    // Per-window viewport/is_blame read from the window editor (#151); blame
+    // data is per-slot Document metadata.
+    let ed = app.window_editor(win_id);
+    let vp = ed.host().viewport();
     let rel_y = row.saturating_sub(rect.y) as usize;
-    let buf = slot.editor.buffer();
+    let buf = ed.buffer();
     let line_count = buf.line_count() as usize;
 
     // Non-box BLAME (soft-wrap): no virtual rows — use the plain content row.
@@ -277,8 +280,11 @@ pub fn cell_to_doc(
 
     let slot_idx = win.slot;
     let slot = app.slots().get(slot_idx)?;
+    // Per-window viewport/is_blame from the window editor (#151); buffer content
+    // is shared, blame is per-slot.
+    let ed = app.window_editor(win_id);
     let line_count = slot.editor.buffer().line_count() as usize;
-    let vp = slot.editor.host().viewport();
+    let vp = ed.host().viewport();
 
     // Scroll origin MUST match what `render_window` drew with: the FOCUSED
     // window renders from the editor's live viewport (auto-scroll applied),
@@ -293,7 +299,7 @@ pub fn cell_to_doc(
 
     // Boxed-blame view reserves a 1-col left frame and inserts virtual border
     // rows; map clicks through the box plan and account for the frame.
-    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let box_mode = ed.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
     let frame = u16::from(box_mode);
 
     // Use the SAME rendered gutter width as `render_window` (stable cross-buffer
@@ -360,7 +366,9 @@ pub fn doc_to_cell(
 
     let slot_idx = win.slot;
     let slot = app.slots().get(slot_idx)?;
-    let vp = slot.editor.host().viewport();
+    // Per-window viewport/is_blame from the window editor (#151).
+    let ed = app.window_editor(win_id);
+    let vp = ed.host().viewport();
 
     // Row must be within the visible viewport.
     let vp_top = vp.top_row;
@@ -375,7 +383,7 @@ pub fn doc_to_cell(
     // Box mode (BLAME, no soft-wrap) inserts virtual border rows and reserves a
     // 1-col left frame, so the screen row is the doc row's index in the render
     // plan (not `doc_row - vp_top`) and the text shifts right by the frame.
-    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let box_mode = ed.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
     let cell_y = if box_mode {
         use hjkl_buffer_tui::render::BlameRow;
         let buf = slot.editor.buffer();

@@ -1,31 +1,23 @@
-//! Viewport synchronisation helpers — maintain cursor/scroll coherence
-//! between per-window snapshots and the slot editor.
+//! Viewport synchronisation helpers — per-window fold swap + blame-box nudge.
 //!
-//! ## v0.22.0 design
+//! ## #151 design (per-window Editor)
 //!
-//! Each [`AppWindow`] stores per-window cursor and scroll as plain fields
-//! (`cursor_row`, `cursor_col`, `top_row`, `top_col`).  The slot editor is
-//! the *active* state while a window is focused and the last `dispatch` path
-//! ran through it — its cursor is always up-to-date after a dispatch.
+//! Cursor and scroll are NOT mirrored anywhere: each window owns its own
+//! `Editor` (a `Buffer::new_view` of the slot's shared `Content`), and that
+//! window editor's `Buffer::cursor()` + `host().viewport()` are the *single
+//! source of truth*. `layout::Window` is geometry-only (slot + last_rect).
 //!
-//! **`sync_viewport_from_editor`** — called *after* every dispatch to write
-//! the editor's current cursor/scroll back into the focused window's snapshot
-//! fields.  Keeps the snapshot current so that:
-//!  - Switching to another window can save/restore independently.
-//!  - Non-focused rendering of this window sees the correct scroll.
+//! What remains here is the residual per-window state that does NOT live on the
+//! window editor:
+//!  - **Folds** — held in `App.window_folds` (a parallel store keyed by window).
+//!    `sync_viewport_to_editor` installs the focused window's folds into the
+//!    shared buffer before a dispatch; `sync_viewport_from_editor` snapshots
+//!    them back after.
+//!  - **Blame box** — `adjust_blame_box_viewport` nudges the focused window
+//!    editor's scroll so the cursor stays visible past the virtual border rows.
 //!
-//! **`sync_viewport_to_editor`** — called *only on focus change* (when a
-//! different window gains focus).  It restores the newly-focused window's
-//! saved cursor/scroll into the slot editor so the next dispatch starts from
-//! the right position.  It is NOT called before every keypress — this was
-//! the root cause of the sticky-column regression (issue #151) because
-//! restoring the cursor also reset `sticky_col` on every frame.
-//!
-//! Call sites that previously called `sync_viewport_to_editor` before input
-//! dispatch have been removed.  The only remaining call is in the focus-change
-//! helpers (`focus_below`, `focus_above`, `focus_left`, `focus_right`,
-//! `focus_next`, `focus_previous`, `move_window_to_new_tab`,
-//! `close_focused_window`) via `switch_focus`.
+//! `sync_viewport_to_editor` runs on focus change (via `switch_focus`);
+//! `sync_viewport_from_editor` runs after dispatch.
 
 use hjkl_engine::Host;
 
@@ -78,30 +70,30 @@ impl App {
     /// cursor's plan row sits within scrolloff of the top/bottom. No-op unless
     /// the blame box is active. Bounded so it always terminates.
     pub(crate) fn adjust_blame_box_viewport(&mut self) {
-        let slot = self.active();
-        let box_mode = slot.editor.is_blame()
-            && matches!(slot.editor.host().viewport().wrap, hjkl_buffer::Wrap::None);
+        // Per-window state (is_blame/viewport/cursor/settings) reads from the
+        // focused window editor — the single source of truth (#151). Blame data
+        // is per-slot Document metadata, read via `self.active()` in the loop.
+        let ed = self.active_editor();
+        let box_mode =
+            ed.is_blame() && matches!(ed.host().viewport().wrap, hjkl_buffer::Wrap::None);
         if !box_mode {
             return;
         }
-        let height = slot.editor.host().viewport().height as usize;
+        let height = ed.host().viewport().height as usize;
         if height < 3 {
             return;
         }
-        let cursor_row = slot.editor.buffer().cursor().row;
-        let line_count = slot.editor.buffer().row_count();
-        let scrolloff = slot
-            .editor
-            .settings()
-            .scrolloff
-            .min(height.saturating_sub(1) / 2);
+        let cursor_row = ed.buffer().cursor().row;
+        let line_count = ed.buffer().row_count();
+        let scrolloff = ed.settings().scrolloff.min(height.saturating_sub(1) / 2);
 
         for _ in 0..(height * 2 + 4) {
             // Rebuild the plan at the current top and locate the cursor's row.
             let (top, idx) = {
                 let slot = self.active();
-                let top = slot.editor.host().viewport().top_row;
-                let buf = slot.editor.buffer();
+                let ed = self.active_editor();
+                let top = ed.host().viewport().top_row;
+                let buf = ed.buffer();
                 let plan = crate::app::git_hunks::build_blame_box_plan(
                     &slot.blame,
                     line_count,

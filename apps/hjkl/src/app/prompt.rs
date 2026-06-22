@@ -1040,15 +1040,14 @@ impl App {
             return;
         };
         let line_text = {
-            let slot = &self.slots[cw.slot_idx];
-            let (row, _) = slot.editor.cursor();
-            {
-                let rope = slot.editor.buffer().rope();
-                if row < rope.len_lines() {
-                    hjkl_buffer::rope_line_str(&rope, row)
-                } else {
-                    String::new()
-                }
+            // Cursor lives on the cmdline window's own editor (#151).
+            let (row, _) = self.window_cursor(cw.win_id);
+            let ed = self.window_editor(cw.win_id);
+            let rope = ed.buffer().rope();
+            if row < rope.len_lines() {
+                hjkl_buffer::rope_line_str(&rope, row)
+            } else {
+                String::new()
             }
         };
         self.close_cmdline_window();
