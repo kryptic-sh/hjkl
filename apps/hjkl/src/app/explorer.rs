@@ -916,12 +916,7 @@ impl super::App {
             None => return,
         };
         // Stash the path currently under cursor before we rebuild.
-        let prev_row = self
-            .windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| w.cursor_row)
-            .unwrap_or(0);
+        let prev_row = self.window_cursor(win_id).0;
         let prev_path = self
             .explorer
             .as_ref()
@@ -1407,12 +1402,7 @@ impl super::App {
         // than its on-screen position, so a naive `row >= top + height` compare
         // wrongly scrolled the pane every time a (clearly visible) file was
         // clicked. Walk visible rows from `top_row` instead.
-        let cur_top = self
-            .windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| w.top_row)
-            .unwrap_or(0);
+        let cur_top = self.window_scroll(win_id).0;
         let height = self
             .windows
             .get(win_id)
@@ -1466,11 +1456,10 @@ impl super::App {
 
     /// Enter/l/o on the explorer: toggle dir or open file.
     pub(crate) fn explorer_activate(&mut self) {
-        // Determine the cursor row in the explorer window.
+        // Determine the cursor row in the explorer window (its own editor).
         let cursor_row = {
-            let ep = self.explorer.as_ref().unwrap();
-            let win = self.windows.get(ep.win_id).and_then(|w| w.as_ref());
-            win.map(|w| w.cursor_row).unwrap_or(0)
+            let wid = self.explorer.as_ref().unwrap().win_id;
+            self.window_cursor(wid).0
         };
 
         // Get the node at cursor.
@@ -1665,8 +1654,8 @@ impl super::App {
     /// Return the node currently under the explorer cursor.
     fn explorer_cursor_node(&self) -> Option<ExplorerNode> {
         let ep = self.explorer.as_ref()?;
-        let win = self.windows.get(ep.win_id)?.as_ref()?;
-        ep.tree.nodes.get(win.cursor_row).cloned()
+        let row = self.window_cursor(ep.win_id).0;
+        ep.tree.nodes.get(row).cloned()
     }
 
     /// Path string for an `:edit`/`:split`/… open command. Relative to the cwd
@@ -2473,12 +2462,7 @@ mod tests {
         let on_disk = tmp.path().join("a.txt").exists();
         let cursor_path = {
             let ep = app.explorer.as_ref().unwrap();
-            let row = app
-                .windows
-                .get(ep.win_id)
-                .and_then(|w| w.as_ref())
-                .map(|w| w.cursor_row)
-                .unwrap();
+            let row = app.window_cursor(ep.win_id).0;
             ep.tree.nodes.get(row).map(|n| n.path.clone())
         };
         std::env::set_current_dir(prev).unwrap();
@@ -3278,12 +3262,7 @@ mod tests {
             .iter()
             .position(|n| n.path == target)
             .unwrap();
-        let cur = app
-            .windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| w.cursor_row)
-            .unwrap();
+        let cur = app.window_cursor(win_id).0;
 
         std::env::set_current_dir(prev).unwrap();
         assert!(
@@ -3341,12 +3320,7 @@ mod tests {
         app.dispatch_action(AppAction::FocusRight, 1);
         app.dispatch_ex("edit target.txt");
 
-        let top = app
-            .windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| w.top_row)
-            .unwrap();
+        let top = app.window_scroll(win_id).0;
         std::env::set_current_dir(prev).unwrap();
         assert_eq!(
             top, 0,

@@ -1135,10 +1135,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         cursor_line_row: if is_focused {
             None
         } else {
-            app.windows
-                .get(win_id)
-                .and_then(|w| w.as_ref())
-                .map(|w| w.cursor_row)
+            Some(app.window_cursor(win_id).0)
         },
         // The explorer is a tree, not code — don't tint folded directory rows.
         fold_line_bg: if is_explorer_slot {

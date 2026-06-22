@@ -63,10 +63,8 @@ impl App {
 
         // Build a read-only scratch slot holding the diff (mirrors `do_vnew`).
         let focused = self.focused_window();
-        let (top_row, top_col) = {
-            let win = self.windows[focused].as_ref().expect("focused_window open");
-            (win.top_row, win.top_col)
-        };
+        // Inherit the focused window's scroll from its own editor (#151 Phase D).
+        let (top_row, top_col) = self.window_scroll(focused);
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;

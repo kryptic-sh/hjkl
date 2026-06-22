@@ -978,6 +978,36 @@ impl App {
         has_target && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
     }
 
+    /// Cursor `(row, col)` of window `win_id`, read from its own editor (#151
+    /// Phase D — the single source of truth). Falls back to the legacy
+    /// `layout::Window` mirror if the window editor is somehow absent, then
+    /// `(0, 0)`.
+    pub(crate) fn window_cursor(&self, win_id: window::WindowId) -> (usize, usize) {
+        if let Some(e) = self.window_editors.get(&win_id) {
+            let c = e.buffer().cursor();
+            return (c.row, c.col);
+        }
+        self.windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| (w.cursor_row, w.cursor_col))
+            .unwrap_or((0, 0))
+    }
+
+    /// Scroll origin `(top_row, top_col)` of window `win_id`, read from its own
+    /// editor's viewport (#151 Phase D). See [`window_cursor`] for the fallback.
+    pub(crate) fn window_scroll(&self, win_id: window::WindowId) -> (usize, usize) {
+        if let Some(e) = self.window_editors.get(&win_id) {
+            let vp = e.host().viewport();
+            return (vp.top_row, vp.top_col);
+        }
+        self.windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| (w.top_row, w.top_col))
+            .unwrap_or((0, 0))
+    }
+
     /// Return a mutable reference to the active buffer slot.
     pub fn active_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();

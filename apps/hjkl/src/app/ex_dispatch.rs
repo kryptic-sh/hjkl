@@ -662,10 +662,8 @@ impl App {
             .as_ref()
             .expect("focused_window open")
             .slot;
-        let (top_row, top_col) = {
-            let win = self.windows[focused].as_ref().unwrap();
-            (win.top_row, win.top_col)
-        };
+        // Inherit the source window's scroll from its own editor (#151 Phase D).
+        let (top_row, top_col) = self.window_scroll(focused);
         let (cursor_row, cursor_col) = self.active_editor().cursor();
 
         let new_slot = if arg.is_empty() {
@@ -719,10 +717,8 @@ impl App {
             .as_ref()
             .expect("focused_window open")
             .slot;
-        let (top_row, top_col) = {
-            let win = self.windows[focused].as_ref().unwrap();
-            (win.top_row, win.top_col)
-        };
+        // Inherit the source window's scroll from its own editor (#151 Phase D).
+        let (top_row, top_col) = self.window_scroll(focused);
         let (cursor_row, cursor_col) = self.active_editor().cursor();
 
         let new_slot = if arg.is_empty() {
@@ -768,10 +764,8 @@ impl App {
     pub(super) fn do_vnew(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
-        let (top_row, top_col) = {
-            let win = self.windows[focused].as_ref().expect("focused_window open");
-            (win.top_row, win.top_col)
-        };
+        // Inherit the source window's scroll from its own editor (#151 Phase D).
+        let (top_row, top_col) = self.window_scroll(focused);
 
         // Create a fresh empty unnamed slot.
         use crate::app::STATUS_LINE_HEIGHT;
@@ -855,10 +849,8 @@ impl App {
     pub(super) fn do_new(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
-        let (top_row, top_col) = {
-            let win = self.windows[focused].as_ref().expect("focused_window open");
-            (win.top_row, win.top_col)
-        };
+        // Inherit the source window's scroll from its own editor (#151 Phase D).
+        let (top_row, top_col) = self.window_scroll(focused);
 
         // Create a fresh empty unnamed slot.
         use crate::app::STATUS_LINE_HEIGHT;

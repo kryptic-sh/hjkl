@@ -403,13 +403,25 @@ impl App {
             };
             let mut union_top = focused_top;
             let mut union_bot = focused_top + focused_height;
-            for w in self.windows.iter().flatten() {
-                if w.slot == focused_slot
-                    && let Some(rect) = w.last_rect
-                {
-                    union_top = union_top.min(w.top_row);
-                    union_bot = union_bot.max(w.top_row + rect.h as usize);
-                }
+            // Each window's scroll comes from its own editor (#151 Phase D);
+            // collect (win_id, rect) first to avoid borrowing self twice.
+            let wins: Vec<(crate::app::window::WindowId, crate::app::window::LayoutRect)> = self
+                .windows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, w)| {
+                    let w = w.as_ref()?;
+                    if w.slot == focused_slot {
+                        w.last_rect.map(|r| (i, r))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (wid, rect) in wins {
+                let top = self.window_scroll(wid).0;
+                union_top = union_top.min(top);
+                union_bot = union_bot.max(top + rect.h as usize);
             }
             (union_top, union_bot - union_top)
         };

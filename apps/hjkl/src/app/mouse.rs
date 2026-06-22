@@ -287,12 +287,9 @@ pub fn cell_to_doc(
     // unfocused window (e.g. clicking the explorer while the editor is focused)
     // maps the click off by the scroll difference — so a fold toggle hits the
     // wrong row. Mirror the renderer's choice here.
-    let is_focused = win_id == app.focused_window();
-    let (eff_top_row, eff_top_col) = if is_focused {
-        (vp.top_row, vp.top_col)
-    } else {
-        (win.top_row, win.top_col)
-    };
+    // Scroll origin comes from this window's own editor (#151 Phase D), which is
+    // exactly what render_window draws from — focused or not.
+    let (eff_top_row, eff_top_col) = app.window_scroll(win_id);
 
     // Boxed-blame view reserves a 1-col left frame and inserts virtual border
     // rows; map clicks through the box plan and account for the frame.

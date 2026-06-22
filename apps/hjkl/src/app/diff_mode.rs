@@ -322,10 +322,11 @@ impl App {
             return;
         }
         let other_win = if focused_is_a { b_win } else { a_win };
-        let this_top = match self.windows[focused].as_ref() {
-            Some(w) => w.top_row,
-            None => return,
-        };
+        if self.windows.get(focused).and_then(|w| w.as_ref()).is_none() {
+            return;
+        }
+        // Scroll origin from the window's own editor (#151 Phase D).
+        let this_top = self.window_scroll(focused).0;
 
         // Map the focused window's top line → the partner's line at the same
         // aligned grid position (nearest preceding real partner line for a
