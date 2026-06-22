@@ -1004,13 +1004,10 @@ fn explorer_i_enters_insert() {
     assert!(app.explorer_buf_focused());
     // Press `i`.
     app.handle_keypress(key(KeyCode::Char('i')));
-    let explorer_slot = app
-        .slots
-        .iter()
-        .find(|s| s.is_explorer)
-        .expect("explorer slot must exist");
+    // Mode lives on the focused window's editor (#151 Phase D), not the slot
+    // bridge editor (which is never dispatched).
     assert_eq!(
-        explorer_slot.editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Insert,
         "pressing `i` in explorer must enter Insert mode (editable buffer)"
     );

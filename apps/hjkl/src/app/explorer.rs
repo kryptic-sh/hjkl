@@ -821,6 +821,7 @@ impl super::App {
 
         // Focus the new explorer window.
         self.set_focused_window(new_win_id);
+        self.reconcile_window_editors();
         self.sync_viewport_to_editor();
 
         // Build the initial baseline from the freshly-built tree nodes.
@@ -1324,7 +1325,12 @@ impl super::App {
                 None => return,
             }
         };
-        let editor = &mut self.slots[slot_idx].editor;
+        // Target the explorer window's own editor (#151 Phase D / #252) — the one
+        // dispatch + reconcile operate on — falling back to the slot bridge.
+        let editor = match self.window_editors.get_mut(&win_id) {
+            Some(e) => e,
+            None => &mut self.slots[slot_idx].editor,
+        };
         editor.jump_cursor(row, col);
         let vp = editor.host_mut().viewport_mut();
         vp.top_row = top;
@@ -1528,8 +1534,12 @@ impl super::App {
         }
         self.explorer_rebuild_buffer();
         // Open a line below + enter insert (autoindent copies the dir's indent).
+        // Dispatch to the focused window's editor (#151 Phase D / #252) — that's
+        // the one render + reconcile read; the slot editor is just a content
+        // bridge and is never the dispatched editor.
+        let _ = slot_idx;
         hjkl_vim_tui::handle_key(
-            &mut self.slots[slot_idx].editor,
+            self.active_editor_mut(),
             crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Char('o'),
                 crossterm::event::KeyModifiers::NONE,
@@ -1539,10 +1549,10 @@ impl super::App {
         // it under this dir. Pad from the current cursor column (robust whether
         // or not autoindent already copied the dir's indent).
         let target_col = (node.depth + 1) * 2 + 2;
-        let col = self.slots[slot_idx].editor.cursor().1;
+        let col = self.active_editor().cursor().1;
         if col < target_col {
             let pad = " ".repeat(target_col - col);
-            self.slots[slot_idx].editor.insert_str(&pad);
+            self.active_editor_mut().insert_str(&pad);
         }
         true
     }
@@ -1559,10 +1569,12 @@ impl super::App {
     /// sibling paste.
     pub(crate) fn explorer_paste_in_dir(&mut self) -> bool {
         use super::explorer_reconcile::ID_SEP;
-        let Some(slot_idx) = self.explorer_slot_idx() else {
+        // Guard: explorer slot must exist. Editing goes through the focused
+        // window's editor (#151 Phase D / #252), not the slot bridge.
+        if self.explorer_slot_idx().is_none() {
             return false;
-        };
-        let cursor_row = self.slots[slot_idx].editor.cursor().0;
+        }
+        let cursor_row = self.active_editor().cursor().0;
         // Node under the editor cursor must be a directory.
         let node = match self
             .explorer
@@ -1575,7 +1587,7 @@ impl super::App {
         };
 
         // Register must hold a linewise tree block (from `dd`/`yy` of rows).
-        let slot = self.slots[slot_idx].editor.registers().unnamed.clone();
+        let slot = self.active_editor().registers().unnamed.clone();
         if !slot.linewise || slot.text.trim().is_empty() {
             return false;
         }
@@ -1625,11 +1637,11 @@ impl super::App {
 
         // Install the re-indented, id-less block as a linewise register and
         // paste below the dir line.
-        self.slots[slot_idx].editor.registers_mut().unnamed = hjkl_engine::Slot {
+        self.active_editor_mut().registers_mut().unnamed = hjkl_engine::Slot {
             text: block,
             linewise: true,
         };
-        self.slots[slot_idx].editor.paste_after(1);
+        self.active_editor_mut().paste_after(1);
         true
     }
 
@@ -2220,6 +2232,7 @@ mod tests {
         let newtext = format!("{cur}\n  newfile.rs");
         BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
         // Explorer is in Normal mode by default; run the reconcile.
+        app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
         let created = tmp.path().join("newfile.rs");
@@ -2258,6 +2271,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         press(&mut app, KeyCode::Char('o'));
@@ -2298,6 +2312,7 @@ mod tests {
         let cur = app.slots[idx].editor.buffer().as_string();
         let newtext = format!("{cur}\n  somedir/test.txt");
         BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
+        app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
         let cwd = std::env::current_dir().unwrap();
@@ -2351,6 +2366,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         // Move onto the victim.txt line (line 1, below the root) and delete it.
@@ -2395,6 +2411,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         press(&mut app, KeyCode::Char('o'));
@@ -2444,6 +2461,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         // Cursor onto a.txt (line 1), delete it (trash), then paste it back.
@@ -2498,6 +2516,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         // Cursor onto the `sub/` dir (line 1), then `o` + name + Esc.
@@ -2554,6 +2573,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         // root(0) → aaa/(1), expand it (reveals kid.txt), → kid.txt(2) → zzz/(3).
@@ -2975,6 +2995,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         let dir = base.join("d");
@@ -3043,6 +3064,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         let row_of = |app: &super::super::App, p: &std::path::Path| -> Option<usize> {
@@ -3445,6 +3467,7 @@ mod tests {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
                 }
             }
+            app.reconcile_window_editors();
             app.maybe_reconcile_explorer();
         };
         press(&mut app, KeyCode::Char('o'));
@@ -3545,6 +3568,7 @@ mod tests {
                 hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
             }
         }
+        app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
     }
 
@@ -3861,6 +3885,7 @@ mod tests {
         if !consumed {
             hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
         }
+        app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
         let on_disk = tmp.path().join("trashable.txt").exists();
@@ -3957,6 +3982,7 @@ mod tests {
         if !consumed {
             hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
         }
+        app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
         let on_disk = tmp.path().join("victim.txt").exists();
