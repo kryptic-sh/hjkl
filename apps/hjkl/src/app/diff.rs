@@ -123,13 +123,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window::with_scroll(
-            new_slot_idx,
-            top_row,
-            top_col,
-            0,
-            0,
-        )));
+        self.windows.push(Some(Window::new(new_slot_idx)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, 0, 0, top_row, top_col);
         // New diff window on the left (a), original on the right (b).
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {

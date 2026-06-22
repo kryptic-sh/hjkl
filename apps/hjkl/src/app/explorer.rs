@@ -3272,7 +3272,6 @@ mod tests {
         let win_id = app.explorer.as_ref().unwrap().win_id;
         if let Some(Some(w)) = app.windows.get_mut(win_id) {
             w.last_rect = Some(LayoutRect::new(0, 0, 30, 24));
-            w.top_row = 0;
         }
         let target = std::env::current_dir().unwrap().join("target.txt");
         let target_row = app

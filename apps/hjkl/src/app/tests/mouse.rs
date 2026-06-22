@@ -143,8 +143,6 @@ fn shift_click_enters_visual_and_extends_selection() {
     }
     if let Some(Some(win)) = app.windows.get_mut(0) {
         win.last_rect = Some(window::LayoutRect::new(0, 1, 80, 20)); // row 1: below a status bar
-        win.top_row = 0;
-        win.top_col = 0;
     }
     {
         let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
@@ -528,8 +526,6 @@ mod border_drag_tests {
         }
         if let Some(Some(win)) = app.windows.get_mut(0) {
             win.last_rect = Some(window::rect_to_layout(area));
-            win.top_row = 0;
-            win.top_col = 0;
         }
         {
             let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();

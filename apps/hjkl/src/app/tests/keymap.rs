@@ -3186,7 +3186,10 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
     let fw = app.focused_window();
     assert_eq!(app.window_cursor(fw).0, 0, "gg must move cursor to row 0");
     let top = app.window_scroll(fw).0;
-    assert_eq!(top, 0, "gg must scroll viewport top_row to 0; got top_row={top}");
+    assert_eq!(
+        top, 0,
+        "gg must scroll viewport top_row to 0; got top_row={top}"
+    );
     assert_window_synced_to_engine(&app);
 }
 
@@ -3403,7 +3406,8 @@ fn gg_via_pending_state_in_visual_mode() {
 
     let fw = app.focused_window();
     assert_eq!(
-        app.window_cursor(fw).0, 0,
+        app.window_cursor(fw).0,
+        0,
         "gg must move cursor to row 0 from row 20 in Visual mode"
     );
     assert_window_synced_to_engine(&app);
@@ -3440,7 +3444,8 @@ fn gg_via_pending_state_in_visual_line_mode() {
 
     let fw = app.focused_window();
     assert_eq!(
-        app.window_cursor(fw).0, 0,
+        app.window_cursor(fw).0,
+        0,
         "gg must move cursor to row 0 from row 20 in VisualLine mode"
     );
     assert_window_synced_to_engine(&app);
@@ -3477,7 +3482,8 @@ fn gg_via_pending_state_in_visual_block_mode() {
 
     let fw = app.focused_window();
     assert_eq!(
-        app.window_cursor(fw).0, 0,
+        app.window_cursor(fw).0,
+        0,
         "gg must move cursor to row 0 from row 20 in VisualBlock mode"
     );
     assert_window_synced_to_engine(&app);
@@ -5339,7 +5345,9 @@ fn split_then_independent_cursors() {
     // Create a second window (win1) showing the same slot (0).
     let win1 = app.next_window_id;
     app.next_window_id += 1;
-    app.windows.push(Some(Window::with_scroll(0, 0, 0, 0, 0)));
+    app.windows.push(Some(Window::new(0)));
+    app.reconcile_window_editors();
+    app.seed_window_editor(win1, 0, 0, 0, 0);
 
     let split_rect = LayoutRect::new(0, 0, 80, 24);
     app.tabs[0] = Tab::new(
@@ -5389,7 +5397,9 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     // Set up win1 with its cursor at row 1.
     let win1 = app.next_window_id;
     app.next_window_id += 1;
-    app.windows.push(Some(Window::with_scroll(0, 0, 0, 1, 0)));
+    app.windows.push(Some(Window::new(0)));
+    app.reconcile_window_editors();
+    app.seed_window_editor(win1, 1, 0, 0, 0);
 
     let split_rect = LayoutRect::new(0, 0, 80, 24);
     app.tabs[0] = Tab::new(
@@ -5434,7 +5444,9 @@ fn close_window_keeps_buffer_for_other_window() {
     // Create win1 with cursor at row 2.
     let win1 = app.next_window_id;
     app.next_window_id += 1;
-    app.windows.push(Some(Window::with_scroll(0, 0, 0, 2, 0)));
+    app.windows.push(Some(Window::new(0)));
+    app.reconcile_window_editors();
+    app.seed_window_editor(win1, 2, 0, 0, 0);
 
     let split_rect = LayoutRect::new(0, 0, 80, 24);
     app.tabs[0] = Tab::new(

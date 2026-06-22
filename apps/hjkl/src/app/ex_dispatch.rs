@@ -681,9 +681,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window::with_scroll(
-            new_slot, top_row, top_col, cursor_row, cursor_col,
-        )));
+        self.windows.push(Some(Window::new(new_slot)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, cursor_row, cursor_col, top_row, top_col);
         // Inherit the source window's fold state on a same-slot duplicate
         // (vim default). A split onto a different file starts fresh.
         if new_slot == cur_slot
@@ -736,9 +736,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window::with_scroll(
-            new_slot, top_row, top_col, cursor_row, cursor_col,
-        )));
+        self.windows.push(Some(Window::new(new_slot)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, cursor_row, cursor_col, top_row, top_col);
         // Inherit the source window's fold state on a same-slot duplicate
         // (vim default). A split onto a different file starts fresh.
         if new_slot == cur_slot
@@ -823,13 +823,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window::with_scroll(
-            new_slot_idx,
-            top_row,
-            top_col,
-            0,
-            0,
-        )));
+        self.windows.push(Some(Window::new(new_slot_idx)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, 0, 0, top_row, top_col);
         // New window on the left (a), existing on the right (b).
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
@@ -908,13 +904,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window::with_scroll(
-            new_slot_idx,
-            top_row,
-            top_col,
-            0,
-            0,
-        )));
+        self.windows.push(Some(Window::new(new_slot_idx)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, 0, 0, top_row, top_col);
         // New window on top (a), existing window below (b).
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {

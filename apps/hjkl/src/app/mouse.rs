@@ -1162,8 +1162,6 @@ mod tests {
         // tests must supply it manually). Convert from ratatui Rect.
         if let Some(Some(win)) = app.windows.get_mut(0) {
             win.last_rect = Some(window::rect_to_layout(area));
-            win.top_row = 0;
-            win.top_col = 0;
         }
 
         // Set viewport dims to match the area minus a small status-line gap.
@@ -1176,6 +1174,9 @@ mod tests {
             vp.top_col = 0;
             vp.tab_width = 4;
         }
+        // Build window 0's view editor (#151 Phase D) — make_view_editor copies
+        // the slot editor viewport set above, which is what cell_to_doc reads.
+        app.reconcile_window_editors();
 
         app
     }
@@ -1576,9 +1577,11 @@ mod tests {
         app.set_focused_window(0);
         // Focused-origin viewport at the top…
         app.slots_mut()[0].editor.host_mut().viewport_mut().top_row = 0;
-        // …but the unfocused right pane is scrolled down to row 3.
-        if let Some(Some(w)) = app.windows.get_mut(1) {
-            w.top_row = 3;
+        app.reconcile_window_editors();
+        // …but the unfocused right pane is scrolled down to row 3 (#151 Phase D:
+        // scroll lives on the window's own editor).
+        if let Some(e) = app.window_editors.get_mut(&1) {
+            e.host_mut().viewport_mut().top_row = 3;
         }
         // Click the FIRST visible text row of the right pane (rel_y = 0). The
         // right pane starts at x=40; step past the gutter.
@@ -1614,10 +1617,10 @@ mod tests {
         // Focus the LEFT window; the RIGHT pane (win 1) is unfocused, drawn from
         // the TOP, but its saved cursor is deep — focusing it scrolls down.
         app.set_focused_window(0);
-        if let Some(Some(w)) = app.windows.get_mut(1) {
-            w.top_row = 0;
-            w.cursor_row = 60;
-            w.cursor_col = 0;
+        app.reconcile_window_editors();
+        if let Some(e) = app.window_editors.get_mut(&1) {
+            e.jump_cursor(60, 0);
+            e.host_mut().viewport_mut().top_row = 0;
         }
         // Click the FIRST text row of the right pane (rect (40,0,40,24)); column
         // far enough right to clear the line-number gutter.

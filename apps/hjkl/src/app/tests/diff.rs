@@ -122,7 +122,13 @@ fn diff_scroll_binds_partner_top_row() {
     assert_eq!(app.focused_window(), b_win);
 
     // Scroll the focused (b) window so its top line is `l2` (b line index 3).
-    app.windows[b_win].as_mut().unwrap().top_row = 3;
+    // Scroll lives on the window's own editor (#151 Phase D).
+    app.window_editors
+        .get_mut(&b_win)
+        .unwrap()
+        .host_mut()
+        .viewport_mut()
+        .top_row = 3;
     app.sync_diff_scroll();
 
     // `l2` is a line index 2 in buffer a → partner top must align there.

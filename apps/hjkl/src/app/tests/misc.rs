@@ -133,7 +133,8 @@ fn ex_goto_line_100_via_command_field_keys() {
     // engine cursor moves but render shows stale position.
     let fw = app.focused_window();
     assert_eq!(
-        app.window_cursor(fw).0, 99,
+        app.window_cursor(fw).0,
+        99,
         "window cache cursor_row must follow engine cursor after `:100`"
     );
 }

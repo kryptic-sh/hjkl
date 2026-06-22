@@ -635,9 +635,7 @@ fn lsp_jump_reveals_cursor_in_viewport() {
         vp.top_row = 0;
     }
     let fw: WindowId = app.focused_window();
-    if let Some(w) = app.windows[fw].as_mut() {
-        w.top_row = 0;
-    }
+    if let Some(_w) = app.windows[fw].as_mut() {}
 
     // Plant a diagnostic on row 50 and jump to it.
     let params = pub_diags_params(

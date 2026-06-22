@@ -472,9 +472,18 @@ fn assert_window_synced_to_engine(app: &App) {
     let (e_row, e_col) = app.active_editor().cursor();
     let w_top = app.window_scroll(fw).0;
     let e_top = app.active_editor().host().viewport().top_row;
-    assert_eq!(w_row, e_row, "window cursor row out of sync with engine cursor");
-    assert_eq!(w_col, e_col, "window cursor col out of sync with engine cursor");
-    assert_eq!(w_top, e_top, "window top_row out of sync with engine viewport");
+    assert_eq!(
+        w_row, e_row,
+        "window cursor row out of sync with engine cursor"
+    );
+    assert_eq!(
+        w_col, e_col,
+        "window cursor col out of sync with engine cursor"
+    );
+    assert_eq!(
+        w_top, e_top,
+        "window top_row out of sync with engine viewport"
+    );
 }
 
 fn ck(c: char) -> KeyEvent {

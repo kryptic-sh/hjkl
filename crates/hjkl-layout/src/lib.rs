@@ -103,49 +103,20 @@ impl Default for Tab {
 pub struct Window {
     /// Index into the host's slot list for the buffer this window displays.
     pub slot: usize,
-    /// Per-window top scroll row. Synced into the editor host viewport
-    /// before dispatch, and back out after, for the focused window only.
-    pub top_row: usize,
-    /// Per-window top scroll column (char index).
-    pub top_col: usize,
-    /// Per-window cursor row (0-based). Synced alongside scroll so two
-    /// windows on the same slot keep independent cursors.
-    pub cursor_row: usize,
-    /// Per-window cursor column (0-based).
-    pub cursor_col: usize,
     /// The rect this window occupied in the last rendered frame.  Written
-    /// by the renderer every frame; used by direction-navigation in later
-    /// phases.  `None` until the first render.
+    /// by the renderer every frame; used by direction-navigation.
+    /// `None` until the first render.
     pub last_rect: Option<LayoutRect>,
 }
 
 impl Window {
-    /// Create a new window pointing at the given slot index with zero scroll.
+    /// Create a new window pointing at the given slot index.
+    ///
+    /// Per-window cursor + scroll live on the host's per-window `Editor`
+    /// (#151 Phase D) — a `Window` is pure geometry (slot + last rendered rect).
     pub fn new(slot: usize) -> Self {
         Self {
             slot,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }
-    }
-
-    /// Create a window with explicit scroll and cursor position.
-    pub fn with_scroll(
-        slot: usize,
-        top_row: usize,
-        top_col: usize,
-        cursor_row: usize,
-        cursor_col: usize,
-    ) -> Self {
-        Self {
-            slot,
-            top_row,
-            top_col,
-            cursor_row,
-            cursor_col,
             last_rect: None,
         }
     }
@@ -730,10 +701,6 @@ mod tests {
     fn window_new_and_default() {
         let w = Window::new(3);
         assert_eq!(w.slot, 3);
-        assert_eq!(w.top_row, 0);
-        assert_eq!(w.top_col, 0);
-        assert_eq!(w.cursor_row, 0);
-        assert_eq!(w.cursor_col, 0);
         assert!(w.last_rect.is_none());
 
         let d = Window::default();

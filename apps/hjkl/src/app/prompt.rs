@@ -973,13 +973,9 @@ impl App {
         } else {
             (history.len().saturating_sub(1), 0)
         };
-        self.windows.push(Some(Window::with_scroll(
-            slot_idx,
-            0,
-            0,
-            win_cursor_row,
-            win_cursor_col,
-        )));
+        self.windows.push(Some(Window::new(slot_idx)));
+        self.reconcile_window_editors();
+        self.seed_window_editor(new_win_id, win_cursor_row, win_cursor_col, 0, 0);
 
         let total_h = crossterm::terminal::size()
             .map(|(_, h)| h as usize)

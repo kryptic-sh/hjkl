@@ -983,29 +983,45 @@ impl App {
     /// `layout::Window` mirror if the window editor is somehow absent, then
     /// `(0, 0)`.
     pub(crate) fn window_cursor(&self, win_id: window::WindowId) -> (usize, usize) {
-        if let Some(e) = self.window_editors.get(&win_id) {
-            let c = e.buffer().cursor();
-            return (c.row, c.col);
-        }
-        self.windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| (w.cursor_row, w.cursor_col))
+        self.window_editors
+            .get(&win_id)
+            .map(|e| {
+                let c = e.buffer().cursor();
+                (c.row, c.col)
+            })
             .unwrap_or((0, 0))
     }
 
     /// Scroll origin `(top_row, top_col)` of window `win_id`, read from its own
-    /// editor's viewport (#151 Phase D). See [`window_cursor`] for the fallback.
+    /// editor's viewport (#151 Phase D — the single source of truth).
     pub(crate) fn window_scroll(&self, win_id: window::WindowId) -> (usize, usize) {
-        if let Some(e) = self.window_editors.get(&win_id) {
-            let vp = e.host().viewport();
-            return (vp.top_row, vp.top_col);
-        }
-        self.windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| (w.top_row, w.top_col))
+        self.window_editors
+            .get(&win_id)
+            .map(|e| {
+                let vp = e.host().viewport();
+                (vp.top_row, vp.top_col)
+            })
             .unwrap_or((0, 0))
+    }
+
+    /// Seed a freshly-created window's editor with an inherited cursor + scroll
+    /// (#151 Phase D) — used by splits so the new window opens at the source
+    /// window's position. The window editor must already exist (call
+    /// `reconcile_window_editors` first). No-op if absent.
+    pub(crate) fn seed_window_editor(
+        &mut self,
+        win_id: window::WindowId,
+        cursor_row: usize,
+        cursor_col: usize,
+        top_row: usize,
+        top_col: usize,
+    ) {
+        if let Some(e) = self.window_editors.get_mut(&win_id) {
+            e.jump_cursor(cursor_row, cursor_col);
+            let vp = e.host_mut().viewport_mut();
+            vp.top_row = top_row;
+            vp.top_col = top_col;
+        }
     }
 
     /// Return a mutable reference to the active buffer slot.
@@ -1633,15 +1649,11 @@ impl App {
             None
         };
 
-        // Single window pointing at slot 0. Seed top_row / top_col from
-        // the slot's editor viewport so any pre-event-loop scroll (e.g.
-        // +/pat search-on-open) is preserved through the first tick of
-        // sync_viewport_to_editor.
-        let (initial_top_row, initial_top_col) = {
-            let vp = slot.editor.host().viewport();
-            (vp.top_row, vp.top_col)
-        };
-        let initial_window = window::Window::with_scroll(0, initial_top_row, initial_top_col, 0, 0);
+        // Single window pointing at slot 0. Its view editor is built by
+        // `reconcile_window_editors()` (below), which copies the slot editor's
+        // viewport — so any pre-event-loop scroll (e.g. +/pat search-on-open) is
+        // preserved without a separate scroll mirror (#151 Phase D).
+        let initial_window = window::Window::new(0);
 
         let default_leader = hjkl_app::config::Config::default().editor.leader;
         let mut app = Self {

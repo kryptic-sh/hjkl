@@ -133,8 +133,14 @@ fn non_focused_window_keeps_scroll_after_focused_scrolls() {
     // Record top window's scroll before we scroll the bottom one.
     let top_top_row_before = app.window_scroll(top_win).0;
 
-    // Manually advance bottom window's scroll to simulate scrolling.
-    app.windows[bottom_win].as_mut().unwrap().top_row = 20;
+    // Manually advance bottom window's scroll to simulate scrolling (#151
+    // Phase D: scroll lives on the window's own editor).
+    app.window_editors
+        .get_mut(&bottom_win)
+        .unwrap()
+        .host_mut()
+        .viewport_mut()
+        .top_row = 20;
 
     // Top window's scroll must be unaffected.
     let top_top_row_after = app.window_scroll(top_win).0;
