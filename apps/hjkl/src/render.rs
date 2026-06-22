@@ -870,7 +870,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.explorer_git_discard_confirm.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
-    let vp_top = viewport_ref.top_row;
+    let vp_top = app
+        .scroll_anim_render_top(win_id)
+        .unwrap_or(viewport_ref.top_row);
     let vp_bot = vp_top + area.height as usize;
     let mut visible_signs: Vec<hjkl_buffer_tui::Sign> = app.slots()[slot_idx]
         .diag_signs

@@ -567,6 +567,9 @@ pub struct VimState {
     /// pass doesn't override the user's explicit viewport pinning.
     /// Cleared every step.
     pub viewport_pinned: bool,
+    /// Set by the 7 smooth-scrollable motions (C-d/u/f/b, zz/zt/zb) so the
+    /// app can animate the viewport jump. Drained via Editor::take_scroll_anim_hint.
+    pub scroll_anim_hint: bool,
     /// Set while replaying `.` / last-change so we don't re-record it.
     pub replaying: bool,
     /// Entered Normal from Insert via `Ctrl-o`; after the next complete
@@ -2982,6 +2985,7 @@ pub(crate) fn scroll_full_page_bridge<H: crate::types::Host>(
     dir: ScrollDir,
     count: usize,
 ) {
+    ed.vim.scroll_anim_hint = true;
     let rows = viewport_full_rows(ed, count) as isize;
     match dir {
         ScrollDir::Down => scroll_cursor_rows(ed, rows),
@@ -2996,6 +3000,7 @@ pub(crate) fn scroll_half_page_bridge<H: crate::types::Host>(
     dir: ScrollDir,
     count: usize,
 ) {
+    ed.vim.scroll_anim_hint = true;
     let rows = viewport_half_rows(ed, count) as isize;
     match dir {
         ScrollDir::Down => scroll_cursor_rows(ed, rows),
@@ -4816,14 +4821,17 @@ pub(crate) fn apply_after_z<H: crate::types::Host>(
         'z' => {
             ed.scroll_cursor_to(CursorScrollTarget::Center);
             ed.vim.viewport_pinned = true;
+            ed.vim.scroll_anim_hint = true;
         }
         't' => {
             ed.scroll_cursor_to(CursorScrollTarget::Top);
             ed.vim.viewport_pinned = true;
+            ed.vim.scroll_anim_hint = true;
         }
         'b' => {
             ed.scroll_cursor_to(CursorScrollTarget::Bottom);
             ed.vim.viewport_pinned = true;
+            ed.vim.scroll_anim_hint = true;
         }
         // Folds — operate on the fold under the cursor (or the
         // whole buffer for `R` / `M`). Routed through

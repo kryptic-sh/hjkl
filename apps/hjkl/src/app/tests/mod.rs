@@ -584,6 +584,7 @@ pub mod pickers;
 pub mod pre_save_hooks;
 pub mod prompt;
 pub mod render_recording;
+pub mod scroll_anim;
 pub mod splits_windows;
 pub mod syntax;
 pub mod visual;

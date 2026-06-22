@@ -238,6 +238,9 @@ impl App {
             let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
             t = t.min(deadline.saturating_duration_since(now));
         }
+        if self.scroll_anim.is_some() {
+            t = t.min(std::time::Duration::from_millis(16));
+        }
         t
     }
 
@@ -1563,6 +1566,10 @@ impl App {
                 self.recompute_and_install();
             }
 
+            if self.scroll_anim_expired() {
+                self.scroll_anim = None;
+            }
+
             // ── Draw ──────────────────────────────────────────────
             // `:redraw!` sets force_clear_screen; clear before drawing so
             // stale terminal content is wiped. Cleared immediately so only
@@ -1668,6 +1675,8 @@ impl App {
                         // Insert mode uses the inline dispatcher which calls
                         // Editor::insert_* primitives directly. Normal / Visual
                         // modes route through the FSM via hjkl_vim_tui::handle_key.
+                        self.scroll_anim = None; // any new key cancels running animation
+                        let prev_top = self.window_scroll(self.focused_window()).0;
                         let mode_was_insert = self.active_editor().vim_mode() == VimMode::Insert;
                         if mode_was_insert {
                             self.dispatch_insert_key(key);
@@ -1700,6 +1709,23 @@ impl App {
                         // `recompute_and_install` (via `pending_recompute`)
                         // handles the visual refresh.
                         let _ = self.active_editor_mut().take_fold_ops();
+                        {
+                            let hint = self.active_editor_mut().take_scroll_anim_hint();
+                            if hint {
+                                let ms = self.active_editor().settings().scroll_duration_ms;
+                                let win = self.focused_window();
+                                let new_top = self.window_scroll(win).0;
+                                if ms > 0 && new_top != prev_top {
+                                    self.scroll_anim = Some(crate::app::ScrollAnim {
+                                        win_id: win,
+                                        start_top: prev_top,
+                                        target_top: new_top,
+                                        started_at: std::time::Instant::now(),
+                                        duration: std::time::Duration::from_millis(ms as u64),
+                                    });
+                                }
+                            }
+                        }
                         self.pending_recompute = true;
                     }
                 }
@@ -1741,6 +1767,8 @@ impl App {
                             }
                             KeyOutcome::Continue => continue,
                             KeyOutcome::FallThrough => {
+                                self.scroll_anim = None;
+                                let prev_top = self.window_scroll(self.focused_window()).0;
                                 let mode_was_insert =
                                     self.active_editor().vim_mode() == VimMode::Insert;
                                 if mode_was_insert {
@@ -1772,6 +1800,25 @@ impl App {
                                 // Drain pending fold ops (drain-loop mirror of
                                 // the primary key arm above).
                                 let _ = self.active_editor_mut().take_fold_ops();
+                                {
+                                    let hint = self.active_editor_mut().take_scroll_anim_hint();
+                                    if hint {
+                                        let ms = self.active_editor().settings().scroll_duration_ms;
+                                        let win = self.focused_window();
+                                        let new_top = self.window_scroll(win).0;
+                                        if ms > 0 && new_top != prev_top {
+                                            self.scroll_anim = Some(crate::app::ScrollAnim {
+                                                win_id: win,
+                                                start_top: prev_top,
+                                                target_top: new_top,
+                                                started_at: std::time::Instant::now(),
+                                                duration: std::time::Duration::from_millis(
+                                                    ms as u64,
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
                                 self.pending_recompute = true;
                             }
                         },

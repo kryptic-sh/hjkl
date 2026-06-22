@@ -860,6 +860,9 @@ pub struct Settings {
     /// `:set nomatchparen` / `:set mps` to toggle. Only the char-scan path
     /// (C-style brackets) is active; tag-pair matching is pending #240.
     pub matchparen: bool,
+    /// Smooth-scroll animation duration for page/recenter motions, ms.
+    /// `:set scroll_duration_ms`. Default `0` (instant — animation off).
+    pub scroll_duration_ms: u16,
 }
 
 impl Default for Settings {
@@ -928,6 +931,7 @@ impl Default for Settings {
             rainbow_brackets: true,
             updatetime: 4000,
             matchparen: true,
+            scroll_duration_ms: 0,
         }
     }
 }
@@ -996,6 +1000,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         rainbow_brackets: o.rainbow_brackets,
         updatetime: o.updatetime,
         matchparen: o.matchparen,
+        scroll_duration_ms: 0,
     }
 }
 
@@ -2047,6 +2052,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Returns true if content changed since the last call, then clears the flag.
     pub fn take_dirty(&mut self) -> bool {
         self.buffer.take_dirty()
+    }
+
+    /// Drain the one-shot smooth-scroll hint (#195). True if the last step ran
+    /// a page/recenter motion the app may animate.
+    pub fn take_scroll_anim_hint(&mut self) -> bool {
+        let h = self.vim.scroll_anim_hint;
+        self.vim.scroll_anim_hint = false;
+        h
     }
 
     /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
@@ -6963,5 +6976,69 @@ mod shared_registers_tests {
         };
         // Read from editor B — same bank, no copy needed
         assert_eq!(b.registers().unnamed.text, "hello");
+    }
+}
+
+#[cfg(test)]
+mod scroll_anim_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Host, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_editor_with_content(content: &str) -> Editor<Buffer, DefaultHost> {
+        let mut buf = Buffer::new();
+        crate::types::BufferEdit::replace_all(&mut buf, content);
+        let host = DefaultHost::new();
+        Editor::new(buf, host, Options::default())
+    }
+
+    #[test]
+    fn scroll_duration_default_is_zero() {
+        let buf = Buffer::new();
+        let host = DefaultHost::new();
+        let ed = Editor::new(buf, host, Options::default());
+        assert_eq!(ed.settings().scroll_duration_ms, 0);
+    }
+
+    #[test]
+    fn take_scroll_anim_hint_false_initially() {
+        let buf = Buffer::new();
+        let host = DefaultHost::new();
+        let mut ed = Editor::new(buf, host, Options::default());
+        assert!(!ed.take_scroll_anim_hint());
+    }
+
+    #[test]
+    fn take_scroll_anim_hint_one_shot() {
+        // Half-page scroll sets the hint; second drain clears it.
+        let content: String = (0..50).map(|i| format!("line {i}\n")).collect();
+        let mut ed = make_editor_with_content(&content);
+        // Set viewport height so scroll actually moves
+        ed.host_mut().viewport_mut().height = 20;
+        ed.host_mut().viewport_mut().width = 80;
+        ed.host_mut().viewport_mut().text_width = 80;
+        crate::vim::scroll_half_page_bridge(&mut ed, crate::vim::ScrollDir::Down, 1);
+        assert!(
+            ed.take_scroll_anim_hint(),
+            "hint should be set after half-page"
+        );
+        assert!(
+            !ed.take_scroll_anim_hint(),
+            "hint should be cleared on second drain"
+        );
+    }
+
+    #[test]
+    fn line_scroll_does_not_set_hint() {
+        let content: String = (0..50).map(|i| format!("line {i}\n")).collect();
+        let mut ed = make_editor_with_content(&content);
+        ed.host_mut().viewport_mut().height = 20;
+        ed.host_mut().viewport_mut().width = 80;
+        ed.host_mut().viewport_mut().text_width = 80;
+        crate::vim::scroll_line_bridge(&mut ed, crate::vim::ScrollDir::Down, 1);
+        assert!(
+            !ed.take_scroll_anim_hint(),
+            "hint must NOT be set for C-e/C-y"
+        );
     }
 }

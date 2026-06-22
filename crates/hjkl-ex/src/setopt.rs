@@ -35,6 +35,7 @@ pub fn all_setting_names() -> Vec<String> {
         "so".into(),
         "sidescrolloff".into(),
         "siso".into(),
+        "scroll_duration_ms".into(),
         // string (fold-related)
         "foldmethod".into(),
         "fdm".into(),
@@ -137,7 +138,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::FoldMethod::Marker => "marker",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}  scroll_duration_ms={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -185,6 +186,7 @@ pub(crate) fn apply_set<H: Host>(
             if s.rainbow_brackets { "on" } else { "off" },
             if s.matchparen { "on" } else { "off" },
             if s.autoreload { "on" } else { "off" },
+            s.scroll_duration_ms,
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -237,6 +239,7 @@ fn query_option_value<H: Host>(
         "foldlevelstart" | "fls" => s.foldlevelstart.to_string(),
         "scrolloff" | "so" => s.scrolloff.to_string(),
         "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
+        "scroll_duration_ms" => s.scroll_duration_ms.to_string(),
         "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
         "colorcolumn" | "cc" => format!("\"{}\"", s.colorcolumn),
         "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
@@ -462,6 +465,9 @@ fn apply_set_token<H: Host>(
             }
             "sidescrolloff" | "siso" => {
                 editor.settings_mut().sidescrolloff = parsed;
+            }
+            "scroll_duration_ms" => {
+                editor.settings_mut().scroll_duration_ms = parsed.min(u16::MAX as usize) as u16;
             }
             other => return Err(format!("unknown :set option `{other}`")),
         }
@@ -716,6 +722,20 @@ mod tests {
         editor.settings_mut().sidescrolloff = 4;
         match apply_set(&mut editor, "siso?") {
             ExEffect::Info(s) => assert_eq!(s, "siso=4"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_scroll_duration_ms_roundtrip() {
+        let mut editor = make_editor();
+        assert_eq!(
+            apply_set(&mut editor, "scroll_duration_ms=80"),
+            ExEffect::Ok
+        );
+        assert_eq!(editor.settings().scroll_duration_ms, 80);
+        match apply_set(&mut editor, "scroll_duration_ms?") {
+            ExEffect::Info(s) => assert_eq!(s, "scroll_duration_ms=80"),
             other => panic!("expected Info(_), got {other:?}"),
         }
     }

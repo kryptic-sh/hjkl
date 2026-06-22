@@ -141,6 +141,17 @@ fn rebase_row_for_edit(row: usize, start: usize, old_end: usize, new_end: usize)
     }
 }
 
+/// Active smooth-scroll animation (#195). Render-only: the window editor's
+/// real viewport top is already at `target_top`; this interpolates the
+/// RENDERED top from `start_top` over `duration`.
+pub(crate) struct ScrollAnim {
+    pub win_id: window::WindowId,
+    pub start_top: usize,
+    pub target_top: usize,
+    pub started_at: std::time::Instant,
+    pub duration: std::time::Duration,
+}
+
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
@@ -477,6 +488,8 @@ pub struct App {
     /// `apply_fs_events` directly). When `None`, the poll path still autoreloads
     /// on focus-regain / `:checktime`.
     fs_watch: Option<fs_watch::FsWatch>,
+    /// Active smooth-scroll animation (#195). `None` = instant (default).
+    pub(crate) scroll_anim: Option<ScrollAnim>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -1044,6 +1057,31 @@ impl App {
                 (c.row, c.col)
             })
             .unwrap_or((0, 0))
+    }
+
+    /// Interpolated RENDER top for `win_id` if a scroll animation is mid-flight,
+    /// else None (render uses the real viewport top). Ease-out cubic.
+    pub(crate) fn scroll_anim_render_top(&self, win_id: window::WindowId) -> Option<usize> {
+        let a = self.scroll_anim.as_ref()?;
+        if a.win_id != win_id {
+            return None;
+        }
+        let elapsed = a.started_at.elapsed();
+        if elapsed >= a.duration {
+            return None;
+        }
+        let p = (elapsed.as_secs_f32() / a.duration.as_secs_f32()).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - p).powi(3); // ease-out cubic
+        let start = a.start_top as f32;
+        let target = a.target_top as f32;
+        Some((start + (target - start) * eased).round().max(0.0) as usize)
+    }
+
+    /// True once the active animation has run its full duration.
+    pub(crate) fn scroll_anim_expired(&self) -> bool {
+        self.scroll_anim
+            .as_ref()
+            .is_some_and(|a| a.started_at.elapsed() >= a.duration)
     }
 
     /// Scroll origin `(top_row, top_col)` of window `win_id`, read from its own
@@ -1859,6 +1897,7 @@ impl App {
             blame_cursor_moved_at: std::time::Instant::now(),
             colorscheme: "dark".to_string(),
             fs_watch: None,
+            scroll_anim: None,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();
