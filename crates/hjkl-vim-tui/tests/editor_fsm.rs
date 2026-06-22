@@ -510,7 +510,13 @@ fn vim_yy_yanks_line() {
     e.set_content("hello\nworld");
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    assert!(e.last_yank.as_deref().unwrap_or("").starts_with("hello"));
+    assert!(
+        e.host_mut()
+            .read_clipboard()
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("hello")
+    );
 }
 
 #[test]
@@ -540,7 +546,7 @@ fn vim_yw_yanks_word() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('w')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
-    assert!(e.last_yank.is_some());
+    assert!(e.host_mut().read_clipboard().is_some());
 }
 
 #[test]
@@ -669,7 +675,7 @@ fn vim_visual_d_cuts() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
-    assert!(e.last_yank.is_some());
+    assert!(e.host_mut().read_clipboard().is_some());
 }
 
 #[test]
@@ -946,9 +952,7 @@ fn mouse_click_keeps_one_undo_group_when_undobreak_off() {
 
 #[test]
 fn host_records_clipboard_on_yank() {
-    // `yy` on a single-line buffer must drive `Host::write_clipboard`
-    // (the new Patch B side-channel) in addition to the legacy
-    // `last_yank` mirror.
+    // `yy` on a single-line buffer must drive `Host::write_clipboard`.
     let mut e = Editor::new(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::types::DefaultHost::new(),
@@ -963,8 +967,6 @@ fn host_records_clipboard_on_yank() {
         clip.as_deref().unwrap_or("").starts_with("hello"),
         "host clipboard should carry the yank: {clip:?}"
     );
-    // Legacy mirror still populated for 0.0.28-era hosts.
-    assert!(e.last_yank.as_deref().unwrap_or("").starts_with("hello"));
 }
 
 #[test]

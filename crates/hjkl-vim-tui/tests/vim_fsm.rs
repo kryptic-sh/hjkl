@@ -1089,7 +1089,7 @@ fn visual_line_yank_includes_trailing_newline() {
     let mut e = editor_with("aaa\nbbb\nccc");
     run_keys(&mut e, "Vjy");
     // Two lines yanked — must be `aaa\nbbb\n`, trailing newline preserved.
-    assert_eq!(e.last_yank.as_deref(), Some("aaa\nbbb\n"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("aaa\nbbb\n"));
 }
 
 #[test]
@@ -1098,7 +1098,7 @@ fn visual_line_yank_last_line_trailing_newline() {
     // Move to the last line and yank with V (final buffer line).
     run_keys(&mut e, "jj");
     run_keys(&mut e, "Vy");
-    assert_eq!(e.last_yank.as_deref(), Some("ccc\n"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("ccc\n"));
 }
 
 #[test]
@@ -1106,7 +1106,7 @@ fn yy_on_last_line_has_trailing_newline() {
     let mut e = editor_with("aaa\nbbb\nccc");
     run_keys(&mut e, "jj");
     run_keys(&mut e, "yy");
-    assert_eq!(e.last_yank.as_deref(), Some("ccc\n"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("ccc\n"));
 }
 
 #[test]
@@ -1114,7 +1114,7 @@ fn yy_in_middle_has_trailing_newline() {
     let mut e = editor_with("aaa\nbbb\nccc");
     run_keys(&mut e, "j");
     run_keys(&mut e, "yy");
-    assert_eq!(e.last_yank.as_deref(), Some("bbb\n"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("bbb\n"));
 }
 
 #[test]
@@ -1195,7 +1195,7 @@ fn visual_select_inner_word() {
     run_keys(&mut e, "viw");
     assert_eq!(e.vim_mode(), VimMode::Visual);
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("hello"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("hello"));
 }
 
 #[test]
@@ -1204,7 +1204,7 @@ fn visual_select_inner_quote() {
     e.jump_cursor(0, 6);
     run_keys(&mut e, "vi\"");
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("bar"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("bar"));
 }
 
 #[test]
@@ -1213,7 +1213,7 @@ fn visual_select_inner_paren() {
     e.jump_cursor(0, 4);
     run_keys(&mut e, "vi(");
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("a, b"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("a, b"));
 }
 
 #[test]
@@ -1222,7 +1222,7 @@ fn visual_select_outer_brace() {
     e.jump_cursor(0, 1);
     run_keys(&mut e, "va{");
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("{x}"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("{x}"));
 }
 
 #[test]
@@ -1309,7 +1309,7 @@ fn caw_changes_word_with_trailing_space() {
 fn visual_char_yank_preserves_raw_text() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "vllly");
-    assert_eq!(e.last_yank.as_deref(), Some("hell"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("hell"));
 }
 
 #[test]
@@ -1319,7 +1319,10 @@ fn single_line_visual_line_selects_full_line_on_yank() {
     // Yank the selection — should include the full line + trailing
     // newline (linewise yank convention).
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("hello world\n"));
+    assert_eq!(
+        e.host_mut().read_clipboard().as_deref(),
+        Some("hello world\n")
+    );
 }
 
 #[test]
@@ -2238,7 +2241,10 @@ fn visual_block_yank_joins_with_newlines() {
     run_keys(&mut e, "jj");
     run_keys(&mut e, "ll");
     run_keys(&mut e, "y");
-    assert_eq!(e.last_yank.as_deref(), Some("hel\nwor\nhap"));
+    assert_eq!(
+        e.host_mut().read_clipboard().as_deref(),
+        Some("hel\nwor\nhap")
+    );
 }
 
 #[test]
@@ -2342,7 +2348,10 @@ fn visual_block_yank_pads_short_lines_with_empties() {
     run_keys(&mut e, "jjll");
     run_keys(&mut e, "y");
     // Row 0 chars 1-3 = "ell"; row 1 chars 1- (only "i"); row 2 "orl".
-    assert_eq!(e.last_yank.as_deref(), Some("ell\ni\norl"));
+    assert_eq!(
+        e.host_mut().read_clipboard().as_deref(),
+        Some("ell\ni\norl")
+    );
 }
 
 #[test]
@@ -2679,14 +2688,17 @@ fn big_y_yanks_to_end_of_line() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "Y");
-    assert_eq!(e.last_yank.as_deref(), Some("world"));
+    assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("world"));
 }
 
 #[test]
 fn big_y_from_line_start_yanks_full_line() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "Y");
-    assert_eq!(e.last_yank.as_deref(), Some("hello world"));
+    assert_eq!(
+        e.host_mut().read_clipboard().as_deref(),
+        Some("hello world")
+    );
 }
 
 #[test]
@@ -3994,7 +4006,7 @@ fn ctrl_r_multiline_register_pastes_with_newlines() {
 }
 
 #[test]
-fn yank_zero_holds_last_yank_after_delete() {
+fn yank_zero_holds_clipboard_after_delete() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "yw");
     let yanked = e.registers().read('0').unwrap().text.clone();

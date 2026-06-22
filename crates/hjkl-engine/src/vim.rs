@@ -8110,9 +8110,9 @@ fn read_vim_range<H: crate::types::Host>(
 /// (Linewise/Inclusive/Exclusive) into the buffer's
 /// `hjkl_buffer::MotionKind` (Line/Char) and applies the right end-
 /// position adjustment so inclusive motions actually include the bot
-/// cell. Pushes the cut text into both `last_yank` and the textarea
-/// yank buffer (still observed by `p`/`P` until the paste path is
-/// ported), and updates `yank_linewise` for linewise cuts.
+/// cell. Pushes the cut text into the clipboard via `record_yank_to_host`
+/// and the textarea yank buffer (still observed by `p`/`P` until the paste
+/// path is ported), and updates `yank_linewise` for linewise cuts.
 fn cut_vim_range<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
@@ -8166,8 +8166,8 @@ fn cut_vim_range<H: crate::types::Host>(
 }
 
 /// `D` / `C` — delete from cursor to end of line through the edit
-/// funnel. Mirrors the deleted text into both `ed.last_yank` and the
-/// textarea's yank buffer (still observed by `p`/`P` until the paste
+/// funnel. Pushes the deleted text to the clipboard via `record_yank_to_host`
+/// and the textarea's yank buffer (still observed by `p`/`P` until the paste
 /// path is ported). Cursor lands at the deletion start so the caller
 /// can decide whether to step it left (`D`) or open insert mode (`C`).
 fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {

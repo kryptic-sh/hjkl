@@ -550,8 +550,6 @@ pub struct Editor<
     H: crate::types::Host = crate::types::DefaultHost,
 > {
     pub keybinding_mode: KeybindingMode,
-    /// Set when the user yanks/cuts; caller drains this to write to OS clipboard.
-    pub last_yank: Option<String>,
     /// All vim-specific state (mode, pending operator, count, dot-repeat, ...).
     /// Internal — exposed via Editor accessor methods
     /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
@@ -1024,7 +1022,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let settings = settings_from_options(&options);
         Self {
             keybinding_mode: KeybindingMode::Vim,
-            last_yank: None,
             vim: VimState::default(),
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
@@ -1096,15 +1093,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.last_emitted_mode = mode;
     }
 
-    /// Record a yank/cut payload. Writes both the legacy
-    /// [`Editor::last_yank`] field (drained directly by 0.0.28-era
-    /// hosts) and the new [`crate::types::Host::write_clipboard`]
-    /// side-channel (Patch B). Consumers should migrate to a `Host`
-    /// impl whose `write_clipboard` queues the platform-clipboard
-    /// write; the `last_yank` mirror will be removed at 0.1.0.
+    /// Record a yank/cut payload. Forwards the text to
+    /// [`crate::types::Host::write_clipboard`] so the platform-clipboard
+    /// integration can store or transmit it.
     pub(crate) fn record_yank_to_host(&mut self, text: String) {
-        self.host.write_clipboard(text.clone());
-        self.last_yank = Some(text);
+        self.host.write_clipboard(text);
     }
 
     /// Vim's sticky column (curswant). `None` before the first motion;
