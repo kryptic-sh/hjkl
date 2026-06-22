@@ -90,6 +90,12 @@ pub struct Content {
     /// (e.g. `set_content` / `restore`). Supersedes any queued
     /// `pending_content_edits` on the same frame.
     pub(crate) pending_content_reset: bool,
+    /// Named marks (`'a`–`'z`, `'A`–`'Z`) — buffer-scoped cursor positions
+    /// `(row, col)`. Shared across all window views of this buffer (#154).
+    pub(crate) marks: std::collections::BTreeMap<char, (usize, usize)>,
+    /// Cached syntax-derived foldable block ranges that `:foldsyntax`
+    /// consumes; a property of the buffer content, shared across views (#154).
+    pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
 }
 
 impl Default for Content {
@@ -115,6 +121,8 @@ impl Content {
             change_log: Vec::new(),
             pending_content_edits: Vec::new(),
             pending_content_reset: false,
+            marks: std::collections::BTreeMap::new(),
+            syntax_fold_ranges: Vec::new(),
         }
     }
 
@@ -136,6 +144,8 @@ impl Content {
             change_log: Vec::new(),
             pending_content_edits: Vec::new(),
             pending_content_reset: false,
+            marks: std::collections::BTreeMap::new(),
+            syntax_fold_ranges: Vec::new(),
         }
     }
 }

@@ -604,21 +604,6 @@ pub struct Editor<
     /// snapshot taken at startup. Read via [`Editor::settings`];
     /// mutate via [`Editor::settings_mut`].
     pub(crate) settings: Settings,
-    /// Unified named-marks map. Lowercase letters (`'a`–`'z`) are
-    /// per-Editor / "buffer-scope-equivalent" — set by `m{a-z}`, read
-    /// by `'{a-z}` / `` `{a-z} ``. Uppercase letters (`'A`–`'Z`) are
-    /// "file marks" that survive [`Editor::set_content`] calls so
-    /// they persist across tab swaps within the same Editor.
-    ///
-    /// 0.0.36: consolidated from three former storages:
-    /// - `hjkl_buffer::Buffer::marks` (deleted; was unused dead code).
-    /// - `vim::VimState::marks` (lowercase) (deleted).
-    /// - `Editor::file_marks` (uppercase) (replaced by this map).
-    ///
-    /// `BTreeMap` so iteration is deterministic for snapshot tests
-    /// and the `:marks` ex command. Mark-shift on edits is handled
-    /// by [`Editor::shift_marks_after_edit`].
-    pub(crate) marks: std::collections::BTreeMap<char, (usize, usize)>,
     /// Global (uppercase) marks that carry a `buffer_id` so they can jump
     /// across buffers. Keyed by `'A'`–`'Z'`; values are
     /// `(buffer_id, row, col)`. Set by `m{A-Z}`, resolved by
@@ -629,12 +614,6 @@ pub struct Editor<
     /// global-mark writes record the correct id without requiring the app
     /// to pass the id on every keystroke.
     pub(crate) current_buffer_id: u64,
-    /// Block ranges (`(start_row, end_row)` inclusive) the host has
-    /// extracted from a syntax tree. `:foldsyntax` reads these to
-    /// populate folds. The host refreshes them on every re-parse via
-    /// [`Editor::set_syntax_fold_ranges`]; ex commands read them via
-    /// [`Editor::syntax_fold_ranges`].
-    pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
     // change_log moved to Content; accessed via self.buffer.take_change_log() etc.
     /// Vim's "sticky column" (curswant). `None` before the first
     /// motion — the next vertical motion bootstraps from the live
@@ -1054,10 +1033,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             registers: crate::registers::Registers::default(),
             styled_spans: Vec::new(),
             settings,
-            marks: std::collections::BTreeMap::new(),
             global_marks: std::collections::BTreeMap::new(),
             current_buffer_id: 0,
-            syntax_fold_ranges: Vec::new(),
             sticky_col: None,
             host,
             last_emitted_mode: crate::VimMode::Normal,
@@ -1153,18 +1130,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// uppercase (`'A`–`'Z`) marks live in the same unified
     /// [`Editor::marks`] map as of 0.0.36.
     pub fn mark(&self, c: char) -> Option<(usize, usize)> {
-        self.marks.get(&c).copied()
+        self.buffer.mark(c)
     }
 
     /// Set the named mark `c` to `(row, col)`. Used by the FSM's
     /// `m{a-zA-Z}` keystroke and by [`Editor::restore_snapshot`].
     pub fn set_mark(&mut self, c: char, pos: (usize, usize)) {
-        self.marks.insert(c, pos);
+        self.buffer.set_mark(c, pos);
     }
 
     /// Remove the named mark `c` (no-op if unset).
     pub fn clear_mark(&mut self, c: char) {
-        self.marks.remove(&c);
+        self.buffer.clear_mark(c);
     }
 
     /// Look up an uppercase global mark by letter. Returns
@@ -1223,8 +1200,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// (`'a`–`'z`) and uppercase (`'A`–`'Z`). Iteration is
     /// deterministic (BTreeMap-ordered) so snapshot / `:marks`
     /// output is stable.
-    pub fn marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
-        self.marks.iter().map(|(c, p)| (*c, *p))
+    pub fn marks(&self) -> impl Iterator<Item = (char, (usize, usize))> {
+        self.buffer.marks_cloned().into_iter()
     }
 
     /// Read all buffer-local lowercase marks. Kept for source
@@ -1235,11 +1212,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         since = "0.0.36",
         note = "use Editor::marks — lowercase + uppercase marks now live in a single map"
     )]
-    pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
-        self.marks
-            .iter()
+    pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> {
+        self.buffer
+            .marks_cloned()
+            .into_iter()
             .filter(|(c, _)| c.is_ascii_lowercase())
-            .map(|(c, p)| (*c, *p))
     }
 
     /// Position the cursor was at when the user last jumped via
@@ -1264,23 +1241,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// 0.0.36: file marks now live in the unified [`Editor::marks`]
     /// map; this accessor is kept for source compatibility and
     /// filters the unified map to uppercase entries.
-    pub fn file_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
-        self.marks
-            .iter()
+    pub fn file_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> {
+        self.buffer
+            .marks_cloned()
+            .into_iter()
             .filter(|(c, _)| c.is_ascii_uppercase())
-            .map(|(c, p)| (*c, *p))
     }
 
     /// Read-only view of the cached syntax-derived block ranges that
     /// `:foldsyntax` consumes. Returns the slice the host last
     /// installed via [`Editor::set_syntax_fold_ranges`]; empty when
     /// no syntax integration is active.
-    pub fn syntax_fold_ranges(&self) -> &[(usize, usize)] {
-        &self.syntax_fold_ranges
+    pub fn syntax_fold_ranges(&self) -> Vec<(usize, usize)> {
+        self.buffer.syntax_fold_ranges_cloned()
     }
 
     pub fn set_syntax_fold_ranges(&mut self, ranges: Vec<(usize, usize)>) {
-        self.syntax_fold_ranges = ranges;
+        self.buffer.set_syntax_fold_ranges(ranges);
     }
 
     /// Live settings (read-only). `:set` mutates these via
@@ -2008,19 +1985,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         };
         let shift_threshold = drop_end.max(edit_start.saturating_add(1));
 
-        // 0.0.36: lowercase + uppercase marks share the unified
-        // `marks` map; one pass migrates both.
-        let mut to_drop: Vec<char> = Vec::new();
-        for (c, (row, _col)) in self.marks.iter_mut() {
-            if (edit_start..drop_end).contains(row) {
-                to_drop.push(*c);
-            } else if *row >= shift_threshold {
-                *row = ((*row as isize) + delta).max(0) as usize;
-            }
-        }
-        for c in to_drop {
-            self.marks.remove(&c);
-        }
+        self.buffer
+            .rebase_marks(edit_start, drop_end, shift_threshold, delta);
 
         // Shift global marks that belong to the current buffer.
         let cur_bid = self.current_buffer_id;
@@ -2733,9 +2699,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .collect();
         let viewport_top = self.host.viewport().top_row as u32;
         let marks = self
-            .marks
-            .iter()
-            .map(|(c, (r, col))| (*c, (*r as u32, *col as u32)))
+            .buffer
+            .marks_cloned()
+            .into_iter()
+            .map(|(c, (r, col))| (c, (r as u32, col as u32)))
             .collect();
         let global_marks = self
             .global_marks
@@ -2777,11 +2744,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.jump_cursor(snap.cursor.0 as usize, snap.cursor.1 as usize);
         self.host.viewport_mut().top_row = snap.viewport_top as usize;
         self.registers = snap.registers;
-        self.marks = snap
-            .marks
-            .into_iter()
-            .map(|(c, (r, col))| (c, (r as usize, col as usize)))
-            .collect();
+        self.buffer.set_marks(
+            snap.marks
+                .into_iter()
+                .map(|(c, (r, col))| (c, (r as usize, col as usize)))
+                .collect(),
+        );
         self.global_marks = snap
             .global_marks
             .into_iter()

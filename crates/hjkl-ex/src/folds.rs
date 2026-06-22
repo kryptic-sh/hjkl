@@ -84,7 +84,7 @@ pub(crate) fn apply_fold_syntax<H: Host>(
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    let ranges = editor.syntax_fold_ranges().to_vec();
+    let ranges = editor.syntax_fold_ranges();
     if ranges.is_empty() {
         return Some(ExEffect::Info("no syntax block ranges available".into()));
     }

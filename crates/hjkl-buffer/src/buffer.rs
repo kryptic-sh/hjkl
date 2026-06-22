@@ -537,6 +537,51 @@ impl Buffer {
         c.pending_content_reset = false;
         v
     }
+
+    pub fn mark(&self, c: char) -> Option<(usize, usize)> {
+        self.content_lock().marks.get(&c).copied()
+    }
+    pub fn set_mark(&mut self, c: char, pos: (usize, usize)) {
+        self.content_lock_mut().marks.insert(c, pos);
+    }
+    pub fn clear_mark(&mut self, c: char) {
+        self.content_lock_mut().marks.remove(&c);
+    }
+    pub fn marks_cloned(&self) -> std::collections::BTreeMap<char, (usize, usize)> {
+        self.content_lock().marks.clone()
+    }
+    pub fn set_marks(&mut self, marks: std::collections::BTreeMap<char, (usize, usize)>) {
+        self.content_lock_mut().marks = marks;
+    }
+    /// Drop marks inside `[edit_start, drop_end)` and shift marks at/after
+    /// `shift_threshold` by `delta` rows (clamped to 0). Mirrors the engine's
+    /// edit-coherence pass for the per-buffer mark map (#154).
+    pub fn rebase_marks(
+        &mut self,
+        edit_start: usize,
+        drop_end: usize,
+        shift_threshold: usize,
+        delta: isize,
+    ) {
+        let mut c = self.content_lock_mut();
+        let mut to_drop: Vec<char> = Vec::new();
+        for (ch, (row, _col)) in c.marks.iter_mut() {
+            if (edit_start..drop_end).contains(row) {
+                to_drop.push(*ch);
+            } else if *row >= shift_threshold {
+                *row = ((*row as isize) + delta).max(0) as usize;
+            }
+        }
+        for ch in to_drop {
+            c.marks.remove(&ch);
+        }
+    }
+    pub fn syntax_fold_ranges_cloned(&self) -> Vec<(usize, usize)> {
+        self.content_lock().syntax_fold_ranges.clone()
+    }
+    pub fn set_syntax_fold_ranges(&mut self, ranges: Vec<(usize, usize)>) {
+        self.content_lock_mut().syntax_fold_ranges = ranges;
+    }
 }
 
 // ── Rope line helpers (free functions over &ropey::Rope) ─────────────
@@ -904,5 +949,37 @@ mod tests {
 
         assert_eq!(rope_line_str(&view_a.rope(), 0), "foobar");
         assert_eq!(rope_line_str(&view_b.rope(), 0), "foobar");
+    }
+}
+
+#[cfg(test)]
+mod marks_shared_content_tests {
+    use super::*;
+
+    #[test]
+    fn marks_shared_across_views() {
+        // Two Buffer views on the same Content share marks (#154).
+        let a = Buffer::from_str("hello\nworld");
+        let content = a.content_arc();
+        let mut view_a = Buffer::new_view(std::sync::Arc::clone(&content));
+        let view_b = Buffer::new_view(std::sync::Arc::clone(&content));
+
+        // Set mark 'x' on view_a.
+        view_a.set_mark('x', (1, 3));
+
+        // view_b must see the same mark via shared Content.
+        assert_eq!(view_b.mark('x'), Some((1, 3)));
+    }
+
+    #[test]
+    fn syntax_fold_ranges_shared_across_views() {
+        let a = Buffer::from_str("fn foo() {\n  bar();\n}");
+        let content = a.content_arc();
+        let mut view_a = Buffer::new_view(std::sync::Arc::clone(&content));
+        let view_b = Buffer::new_view(std::sync::Arc::clone(&content));
+
+        view_a.set_syntax_fold_ranges(vec![(0, 2)]);
+
+        assert_eq!(view_b.syntax_fold_ranges_cloned(), vec![(0, 2)]);
     }
 }
