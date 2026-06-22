@@ -1127,6 +1127,21 @@ fn identifier_start_col_handles_col_inside_multibyte_char() {
 }
 
 #[test]
+fn token_between_handles_col_inside_multibyte_char() {
+    // A byte column landing inside a multibyte char (e.g. an em-dash in a
+    // comment) must not panic the internal `line[lo..hi]` slice — regression
+    // for the `<C-n>` word-completion crash on UTF-8 content.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "ab — cd"); // em-dash U+2014 is 3 bytes at 3..6
+    // hi inside the em-dash (byte 4) snaps down to the boundary (3) — no panic.
+    assert_eq!(app.token_between(0, 0, 4), "ab ");
+    // lo inside the em-dash also snaps down rather than panicking.
+    let _ = app.token_between(0, 4, 7);
+    // Out-of-range columns clamp safely.
+    let _ = app.token_between(0, 0, 9999);
+}
+
+#[test]
 fn accept_completion_inserts_selected_item() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer with some text and enter insert mode at col 0.

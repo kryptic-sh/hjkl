@@ -1229,14 +1229,24 @@ impl App {
 
     /// The text between byte columns `[lo, hi)` on `row` (the partial word
     /// under the cursor). Empty when out of range.
-    fn token_between(&self, row: usize, lo: usize, hi: usize) -> String {
+    pub(crate) fn token_between(&self, row: usize, lo: usize, hi: usize) -> String {
         let rope = self.active_editor().buffer().rope();
         if row >= rope.len_lines() {
             return String::new();
         }
         let line = hjkl_buffer::rope_line_str(&rope, row);
-        let lo = lo.min(line.len());
-        let hi = hi.min(line.len());
+        // `lo`/`hi` are byte columns but may land inside a multibyte char (e.g.
+        // an em-dash in a comment), which would panic the `line[lo..hi]` slice.
+        // Clamp to len and snap each down to a char boundary, mirroring
+        // `identifier_start_col`.
+        let mut lo = lo.min(line.len());
+        while lo > 0 && !line.is_char_boundary(lo) {
+            lo -= 1;
+        }
+        let mut hi = hi.min(line.len());
+        while hi > 0 && !line.is_char_boundary(hi) {
+            hi -= 1;
+        }
         if lo <= hi {
             line[lo..hi].to_string()
         } else {
