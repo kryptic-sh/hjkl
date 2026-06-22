@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn format_registers_after_yank() {
-        let mut editor = make_editor();
+        let editor = make_editor();
         editor
             .registers_mut()
             .record_yank("hello".into(), false, None);
