@@ -859,12 +859,9 @@ impl super::App {
         self.refresh_explorer_git();
 
         // Apply the reveal cursor position if we found the active file.
+        let _ = new_win_id;
         if let Some(row) = reveal_row {
-            if let Some(Some(win)) = self.windows.get_mut(new_win_id) {
-                win.cursor_row = row;
-                win.cursor_col = 0;
-            }
-            self.sync_viewport_to_explorer_editor();
+            self.set_explorer_window_cursor(row, 0, None);
         }
     }
 
@@ -971,20 +968,14 @@ impl super::App {
         } else {
             prev_row
         };
-        if let Some(Some(win)) = self.windows.get_mut(win_id) {
-            win.cursor_row = new_row.min(
-                self.explorer
-                    .as_ref()
-                    .map(|ep| ep.tree.nodes.len().saturating_sub(1))
-                    .unwrap_or(0),
-            );
-            win.cursor_col = 0;
-        }
-        // Sync the editor cursor to match the window snapshot.
-        let fw = self.focused_window();
-        if fw == win_id {
-            self.sync_viewport_to_explorer_editor();
-        }
+        let clamped = new_row.min(
+            self.explorer
+                .as_ref()
+                .map(|ep| ep.tree.nodes.len().saturating_sub(1))
+                .unwrap_or(0),
+        );
+        let _ = win_id;
+        self.set_explorer_window_cursor(clamped, 0, None);
     }
 
     /// When the explorer is open and in Normal mode and the buffer has changed
@@ -1158,14 +1149,8 @@ impl super::App {
                     .position(|n| result_paths.contains(&n.path))
                     .map(|row| (ep.win_id, row))
             });
-            if let Some((win_id, row)) = target {
-                if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                    win.cursor_row = row;
-                    win.cursor_col = 0;
-                }
-                if self.focused_window() == win_id {
-                    self.sync_viewport_to_explorer_editor();
-                }
+            if let Some((_win_id, row)) = target {
+                self.set_explorer_window_cursor(row, 0, None);
             }
         }
 
@@ -1305,30 +1290,31 @@ impl super::App {
         self.window_folds.insert(win_id, folds);
     }
 
-    /// Sync the explorer editor's cursor from the explorer window's snapshot.
-    /// Like `sync_viewport_to_editor` but only for the explorer slot.
-    pub(crate) fn sync_viewport_to_explorer_editor(&mut self) {
-        let Some(ref ep) = self.explorer else { return };
-        let win_id = ep.win_id;
+    /// Set the explorer window editor's cursor (and optionally scroll top)
+    /// directly (#151 Phase D, B' step 2). The per-window editor is the single
+    /// source of truth — callers pass the target row/col instead of staging it
+    /// in the now-removed `layout::Window` cursor mirror. `top = None` leaves the
+    /// current scroll. Falls back to the slot bridge editor if no window editor.
+    pub(crate) fn set_explorer_window_cursor(
+        &mut self,
+        row: usize,
+        col: usize,
+        top: Option<usize>,
+    ) {
+        let Some(win_id) = self.explorer.as_ref().map(|e| e.win_id) else {
+            return;
+        };
         let Some(slot_idx) = self.slots.iter().position(|s| s.is_explorer) else {
             return;
         };
-        let (row, col, top) = {
-            let win = self.windows.get(win_id).and_then(|w| w.as_ref());
-            match win {
-                Some(w) => (w.cursor_row, w.cursor_col, w.top_row),
-                None => return,
-            }
-        };
-        // Target the explorer window's own editor (#151 Phase D / #252) — the one
-        // dispatch + reconcile operate on — falling back to the slot bridge.
         let editor = match self.window_editors.get_mut(&win_id) {
             Some(e) => e,
             None => &mut self.slots[slot_idx].editor,
         };
         editor.jump_cursor(row, col);
-        let vp = editor.host_mut().viewport_mut();
-        vp.top_row = top;
+        if let Some(t) = top {
+            editor.host_mut().viewport_mut().top_row = t;
+        }
     }
 
     /// "Follow" the active buffer in the explorer: when the explorer is open,
@@ -1444,14 +1430,9 @@ impl super::App {
                 t
             }
         };
-        if let Some(Some(win)) = self.windows.get_mut(win_id) {
-            win.cursor_row = row;
-            win.cursor_col = 0;
-            win.top_row = new_top;
-        }
-        // Sync the explorer editor cursor so the (usually unfocused) cursorline
-        // highlights the revealed row.
-        self.sync_viewport_to_explorer_editor();
+        // Set the explorer window editor cursor + scroll directly (#151 Phase D).
+        let _ = win_id;
+        self.set_explorer_window_cursor(row, 0, Some(new_top));
     }
 
     /// Enter/l/o on the explorer: toggle dir or open file.
@@ -2965,7 +2946,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
@@ -2992,11 +2973,7 @@ mod tests {
             .iter()
             .position(|n| n.path == dir)
             .unwrap();
-        if let Some(Some(w)) = app.windows.get_mut(win_id) {
-            w.cursor_row = dir_row;
-            w.cursor_col = 0;
-        }
-        app.sync_viewport_to_explorer_editor();
+        app.set_explorer_window_cursor(dir_row, 0, None);
         // OPEN (unfold) the dir via Enter (ExplorerActivate), matching the real
         // keypress path rather than calling the helper directly.
         press(&mut app, KeyCode::Enter);
@@ -3034,7 +3011,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
@@ -3061,11 +3038,7 @@ mod tests {
                 .position(|n| n.path == p)
         };
         let set_cursor = |app: &mut super::super::App, row: usize| {
-            if let Some(Some(w)) = app.windows.get_mut(win_id) {
-                w.cursor_row = row;
-                w.cursor_col = 0;
-            }
-            app.sync_viewport_to_explorer_editor();
+            app.set_explorer_window_cursor(row, 0, None);
         };
 
         let mover = base.join("mover");
@@ -3341,7 +3314,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.explorer.as_ref().unwrap().win_id;
 
         let row_of = |app: &super::super::App, p: &std::path::Path| -> usize {
             app.explorer
@@ -3363,11 +3336,7 @@ mod tests {
                 .any(|f| f.start_row == row && f.closed)
         };
         let activate = |app: &mut super::super::App, row: usize| {
-            if let Some(Some(w)) = app.windows.get_mut(win_id) {
-                w.cursor_row = row;
-                w.cursor_col = 0;
-            }
-            app.sync_viewport_to_explorer_editor();
+            app.set_explorer_window_cursor(row, 0, None);
             app.explorer_activate();
         };
 
@@ -3491,11 +3460,7 @@ mod tests {
             .iter()
             .position(|n| n.path == sub)
             .unwrap();
-        if let Some(Some(w)) = app.windows.get_mut(win_id) {
-            w.cursor_row = sub_row;
-            w.cursor_col = 0;
-        }
-        app.sync_viewport_to_explorer_editor();
+        app.set_explorer_window_cursor(sub_row, 0, None);
         app.explorer_activate();
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();

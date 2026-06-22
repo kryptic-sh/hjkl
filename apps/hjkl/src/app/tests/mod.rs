@@ -455,34 +455,26 @@ fn km_char(c: char) -> hjkl_keymap::KeyEvent {
 }
 
 fn win_cursor_row(app: &App) -> usize {
-    let fw = app.focused_window();
-    app.windows[fw].as_ref().unwrap().cursor_row
+    // Per-window cursor lives on the window's own editor (#151 Phase D).
+    app.window_cursor(app.focused_window()).0
 }
 
 fn win_cursor_col(app: &App) -> usize {
-    let fw = app.focused_window();
-    app.windows[fw].as_ref().unwrap().cursor_col
+    app.window_cursor(app.focused_window()).1
 }
 
-/// Window cache must mirror engine state after every dispatch.
-/// Bug class: any sync-missing arm leaves these diverged. Call from
+/// The focused window's editor IS the engine the focused dispatch runs on
+/// (#151 Phase D), so window cursor/scroll reads agree with `active_editor`.
+/// Kept as a smoke check that dispatch left the window editor coherent.
 fn assert_window_synced_to_engine(app: &App) {
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
+    let (w_row, w_col) = app.window_cursor(fw);
     let (e_row, e_col) = app.active_editor().cursor();
+    let w_top = app.window_scroll(fw).0;
     let e_top = app.active_editor().host().viewport().top_row;
-    assert_eq!(
-        win.cursor_row, e_row,
-        "window.cursor_row out of sync with engine cursor"
-    );
-    assert_eq!(
-        win.cursor_col, e_col,
-        "window.cursor_col out of sync with engine cursor"
-    );
-    assert_eq!(
-        win.top_row, e_top,
-        "window.top_row out of sync with engine viewport"
-    );
+    assert_eq!(w_row, e_row, "window cursor row out of sync with engine cursor");
+    assert_eq!(w_col, e_col, "window cursor col out of sync with engine cursor");
+    assert_eq!(w_top, e_top, "window top_row out of sync with engine viewport");
 }
 
 fn ck(c: char) -> KeyEvent {

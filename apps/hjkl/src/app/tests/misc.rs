@@ -132,9 +132,8 @@ fn ex_goto_line_100_via_command_field_keys() {
     // reflect the move. Without sync_viewport_from_editor after ex::run,
     // engine cursor moves but render shows stale position.
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
     assert_eq!(
-        win.cursor_row, 99,
+        app.window_cursor(fw).0, 99,
         "window cache cursor_row must follow engine cursor after `:100`"
     );
 }

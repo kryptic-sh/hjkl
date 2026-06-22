@@ -219,7 +219,7 @@ fn gg_scrolls_window_viewport_to_top() {
     app.active_editor_mut().jump_cursor(70, 0);
     app.sync_viewport_from_editor();
     let fw = app.focused_window();
-    assert_eq!(app.windows[fw].as_ref().unwrap().top_row, 60);
+    assert_eq!(app.window_scroll(fw).0, 60);
 
     // Drive `gg` through the engine. First `g` sets engine-side pending,
     // second `g` triggers the gg motion (cursor → top + auto-scroll).
@@ -237,7 +237,7 @@ fn gg_scrolls_window_viewport_to_top() {
 
     let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 0, "gg must put cursor at row 0");
-    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let stored_top = app.window_scroll(fw).0;
     assert!(
         stored_top < 60,
         "gg must scroll window viewport to top, but stored top_row stayed at {stored_top}"
@@ -322,7 +322,7 @@ fn slash_search_in_editor_scrolls_window_viewport() {
     let fw = app.focused_window();
     // Cursor at (0,0), window.top_row=0. Run /target<CR>.
     app.commit_search("target");
-    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let stored_top = app.window_scroll(fw).0;
     assert!(
         stored_top > 0,
         "/target<CR> should scroll the focused window's stored top_row past 0 to reveal the match"
@@ -340,7 +340,7 @@ fn slash_search_in_editor_scrolls_window_viewport() {
     // viewport top_row should be such that screen row is between
     // [margin, height-1-margin] = [5, 14]. Specifically max_bottom=14
     // → top = 80 - 14 = 66.
-    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let stored_top = app.window_scroll(fw).0;
     let screen_row = 80usize.saturating_sub(stored_top);
     assert!(
         (5..=14).contains(&screen_row),
@@ -660,7 +660,7 @@ fn lsp_jump_reveals_cursor_in_viewport() {
         vp_top > 0,
         "viewport top_row stayed at 0 after jump — ensure_cursor_in_scrolloff not called"
     );
-    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let stored_top = app.window_scroll(fw).0;
     assert!(
         stored_top > 0,
         "focused window's stored top_row stayed at 0 — sync_viewport_from_editor missed the scroll"

@@ -127,7 +127,7 @@ fn diff_scroll_binds_partner_top_row() {
 
     // `l2` is a line index 2 in buffer a → partner top must align there.
     assert_eq!(
-        app.windows[a_win].as_ref().unwrap().top_row,
+        app.window_scroll(a_win).0,
         2,
         "partner window must scroll-bind to the aligned line"
     );

@@ -32,32 +32,16 @@ use hjkl_engine::Host;
 use super::App;
 
 impl App {
-    /// Copy the focused window's stored scroll position and cursor into the
-    /// active editor's host viewport.
+    /// Install the focused window's fold snapshot into the shared buffer so
+    /// motions/render/`z`-ops operate on the focused window's folds
+    /// (window-level folds). If the window has no snapshot yet (freshly created,
+    /// never focused), adopt whatever the buffer currently holds.
     ///
-    /// **Call on focus change only** — NOT before every keypress.
-    /// Setting the cursor before every keypress used to reset `sticky_col`
-    /// (curswant), breaking `j`/`k` column preservation (issue #151).
+    /// (#151 Phase D, B' step 2) — cursor/scroll are no longer mirrored here;
+    /// the per-window editor is the single source of truth for those. This now
+    /// only carries the per-window fold swap.
     pub fn sync_viewport_to_editor(&mut self) {
         let fw = self.focused_window();
-        let win = self.windows[fw].as_ref().expect("focused_window open");
-        let (top_row, top_col) = (win.top_row, win.top_col);
-        let (cursor_row, cursor_col) = (win.cursor_row, win.cursor_col);
-        let maybe_rect = win.last_rect;
-        if let Some(rect) = maybe_rect {
-            let vp = self.active_editor_mut().host_mut().viewport_mut();
-            vp.top_row = top_row;
-            vp.top_col = top_col;
-            vp.width = rect.w;
-            vp.height = rect.h;
-        }
-        self.active_editor_mut()
-            .set_cursor_quiet(cursor_row, cursor_col);
-        // Install this window's fold snapshot into the shared slot buffer so
-        // motions/render/`z`-ops operate on the focused window's folds
-        // (window-level folds). If the window has no snapshot yet (freshly
-        // created, never focused), adopt whatever the buffer currently holds
-        // rather than wiping its folds.
         match self.window_folds.get(&fw) {
             Some(folds) => {
                 let folds = folds.clone();
@@ -70,28 +54,20 @@ impl App {
         }
     }
 
-    /// Copy the active editor's host viewport scroll state and cursor back
-    /// into the focused window's snapshot. Call AFTER input dispatch so the
-    /// engine's auto-scroll and cursor updates are persisted in the window
-    /// snapshot.
+    /// Snapshot the focused window's fold state into `window_folds` (captures
+    /// `z`-command toggles + auto-folds), and nudge the blame-box viewport.
+    /// Call AFTER input dispatch.
+    ///
+    /// (#151 Phase D, B' step 2) — cursor/scroll are no longer mirrored back to
+    /// the `layout::Window`; the per-window editor owns them.
     pub fn sync_viewport_from_editor(&mut self) {
         // Boxed-blame view inserts virtual border rows that consume screen
         // height the engine doesn't know about; nudge the scroll so the cursor
         // stays visible. Render-level only — the engine still owns cursor row/col.
         self.adjust_blame_box_viewport();
-        let vp = self.active_editor().host().viewport();
-        let (top_row, top_col) = (vp.top_row, vp.top_col);
-        let (cursor_row, cursor_col) = self.active_editor().cursor();
-        // Persist the focused window's fold state (captures `z`-command toggles
-        // from this dispatch and auto-folds seeded during the prior render).
         let folds = self.active_editor().buffer().folds();
         let fw = self.focused_window();
         self.window_folds.insert(fw, folds);
-        let win = self.windows[fw].as_mut().expect("focused_window open");
-        win.top_row = top_row;
-        win.top_col = top_col;
-        win.cursor_row = cursor_row;
-        win.cursor_col = cursor_col;
     }
 
     /// Keep the cursor visible in the boxed-blame view by nudging `top_row` to

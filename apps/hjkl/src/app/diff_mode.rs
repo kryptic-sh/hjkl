@@ -15,7 +15,7 @@ use std::ops::Range;
 use super::{App, DiffCacheEntry};
 use crate::app::window::WindowId;
 use hjkl_app::diff::DiffRowKind;
-use hjkl_engine::Query;
+use hjkl_engine::{Host, Query};
 
 /// Per-line diff classification for one window, consumed by the renderer.
 pub(crate) enum DiffBand {
@@ -352,8 +352,10 @@ impl App {
                 .unwrap_or(0)
         };
 
-        if let Some(w) = self.windows[other_win].as_mut() {
-            w.top_row = partner_top;
+        // Scroll the partner window's own editor viewport (#151 Phase D — the
+        // window editor owns scroll, not the layout::Window mirror).
+        if let Some(e) = self.window_editors.get_mut(&other_win) {
+            e.host_mut().viewport_mut().top_row = partner_top;
         }
     }
 

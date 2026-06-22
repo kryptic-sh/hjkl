@@ -1062,14 +1062,10 @@ impl App {
                             if let Some((doc_row, _)) =
                                 mouse::cell_to_doc(self, win_id, me.column, me.row)
                             {
-                                if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                                    win.cursor_row = doc_row;
-                                    win.cursor_col = 0;
-                                }
-                                // Sync the explorer editor cursor to the clicked
-                                // row, then activate: toggle a dir's fold or
-                                // open/focus a file (`:edit` switch-or-create).
-                                self.sync_viewport_to_explorer_editor();
+                                // Move the explorer window editor cursor to the
+                                // clicked row (#151 Phase D), then activate: toggle
+                                // a dir's fold or open/focus a file.
+                                self.set_explorer_window_cursor(doc_row, 0, None);
                                 self.explorer_activate();
                                 self.sync_after_engine_mutation_deferred();
                             }

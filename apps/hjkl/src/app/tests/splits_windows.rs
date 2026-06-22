@@ -131,13 +131,13 @@ fn non_focused_window_keeps_scroll_after_focused_scrolls() {
     assert_ne!(top_win, bottom_win);
 
     // Record top window's scroll before we scroll the bottom one.
-    let top_top_row_before = app.windows[top_win].as_ref().unwrap().top_row;
+    let top_top_row_before = app.window_scroll(top_win).0;
 
     // Manually advance bottom window's scroll to simulate scrolling.
     app.windows[bottom_win].as_mut().unwrap().top_row = 20;
 
     // Top window's scroll must be unaffected.
-    let top_top_row_after = app.windows[top_win].as_ref().unwrap().top_row;
+    let top_top_row_after = app.window_scroll(top_win).0;
     assert_eq!(
         top_top_row_before, top_top_row_after,
         "non-focused window scroll must not change when focused window scrolls"

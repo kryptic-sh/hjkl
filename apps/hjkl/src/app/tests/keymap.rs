@@ -3106,7 +3106,7 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     app.sync_viewport_from_editor();
     let fw = app.focused_window();
     assert_eq!(
-        app.windows[fw].as_ref().unwrap().top_row,
+        app.window_scroll(fw).0,
         0,
         "precondition: window top_row at 0"
     );
@@ -3118,25 +3118,21 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     }
 
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
+    let w_cursor_row = app.window_cursor(fw).0;
+    let w_top_row = app.window_scroll(fw).0;
     assert_eq!(
-        win.cursor_row, 20,
+        w_cursor_row, 20,
         "engine cursor should be at row 20 after 20 j's"
     );
     assert!(
-        win.top_row > 0,
-        "window top_row must advance so cursor stays visible; got top_row={}, cursor_row={}",
-        win.top_row,
-        win.cursor_row
+        w_top_row > 0,
+        "window top_row must advance so cursor stays visible; got top_row={w_top_row}, cursor_row={w_cursor_row}"
     );
     // Cursor must be inside the viewport [top_row, top_row + height).
     let height = 10usize;
     assert!(
-        win.cursor_row >= win.top_row && win.cursor_row < win.top_row + height,
-        "cursor must be inside viewport: top_row={}, height={}, cursor_row={}",
-        win.top_row,
-        height,
-        win.cursor_row
+        w_cursor_row >= w_top_row && w_cursor_row < w_top_row + height,
+        "cursor must be inside viewport: top_row={w_top_row}, height={height}, cursor_row={w_cursor_row}"
     );
     assert_window_synced_to_engine(&app);
 }
@@ -3168,7 +3164,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
     app.sync_viewport_from_editor();
     let fw = app.focused_window();
     assert_eq!(
-        app.windows[fw].as_ref().unwrap().top_row,
+        app.window_scroll(fw).0,
         35,
         "precondition: window top_row at 35"
     );
@@ -3188,13 +3184,9 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
     app.pending_state = None;
 
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
-    assert_eq!(win.cursor_row, 0, "gg must move cursor to row 0");
-    assert_eq!(
-        win.top_row, 0,
-        "gg must scroll viewport top_row to 0; got top_row={}",
-        win.top_row
-    );
+    assert_eq!(app.window_cursor(fw).0, 0, "gg must move cursor to row 0");
+    let top = app.window_scroll(fw).0;
+    assert_eq!(top, 0, "gg must scroll viewport top_row to 0; got top_row={top}");
     assert_window_synced_to_engine(&app);
 }
 
@@ -3410,9 +3402,8 @@ fn gg_via_pending_state_in_visual_mode() {
     app.pending_state = None;
 
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
     assert_eq!(
-        win.cursor_row, 0,
+        app.window_cursor(fw).0, 0,
         "gg must move cursor to row 0 from row 20 in Visual mode"
     );
     assert_window_synced_to_engine(&app);
@@ -3448,9 +3439,8 @@ fn gg_via_pending_state_in_visual_line_mode() {
     app.pending_state = None;
 
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
     assert_eq!(
-        win.cursor_row, 0,
+        app.window_cursor(fw).0, 0,
         "gg must move cursor to row 0 from row 20 in VisualLine mode"
     );
     assert_window_synced_to_engine(&app);
@@ -3486,9 +3476,8 @@ fn gg_via_pending_state_in_visual_block_mode() {
     app.pending_state = None;
 
     let fw = app.focused_window();
-    let win = app.windows[fw].as_ref().unwrap();
     assert_eq!(
-        win.cursor_row, 0,
+        app.window_cursor(fw).0, 0,
         "gg must move cursor to row 0 from row 20 in VisualBlock mode"
     );
     assert_window_synced_to_engine(&app);
@@ -5424,7 +5413,7 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     app.sync_viewport_from_editor();
 
     // Win1's snapshot cursor_row must still be 1 (not clobbered by win0's edit).
-    let win1_snap_row = app.windows[win1].as_ref().unwrap().cursor_row;
+    let win1_snap_row = app.window_cursor(win1).0;
     assert_eq!(
         win1_snap_row, 1,
         "win1 cursor snapshot must not be changed by edits in win0; got row {win1_snap_row}"
