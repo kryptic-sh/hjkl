@@ -729,6 +729,7 @@ impl super::App {
 
         let host = TuiHost::new();
         let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        editor.set_registers_arc(self.registers.clone());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
             let vp = editor.host_mut().viewport_mut();

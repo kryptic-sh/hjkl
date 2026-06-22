@@ -309,14 +309,10 @@ pub struct App {
     /// Lets `drain_lsp_events` drop requests whose server exited / never
     /// answered, so the "LSP:…" spinner can't hang forever.
     pub lsp_pending_seen_at: HashMap<i64, std::time::Instant>,
-    /// Global yank/delete registers, shared across all buffers (vim registers
-    /// are global, but each `Editor` owns its own set). Synced at buffer
-    /// switches by [`App::sync_registers_across_buffers`] so `yy` in one buffer
-    /// pastes with `p` in another.
-    pub registers: hjkl_engine::Registers,
-    /// Slot index the global registers were last synced from — detects buffer
-    /// switches for the register sync.
-    pub last_register_slot: usize,
+    /// Global yank/delete registers (#151). One shared bank: every `Editor`
+    /// (slots + window views) points at this same `Arc<Mutex<_>>`, so `yy` in
+    /// one buffer/window pastes with `p` in any other — no copy-on-switch.
+    pub registers: std::sync::Arc<std::sync::Mutex<hjkl_engine::Registers>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1220,13 +1216,8 @@ impl App {
                 None => true,
             };
             if needs {
-                // Carry the register bank across a rebuild so a buffer switch
-                // (which rebuilds the view onto new Content) doesn't drop yanks.
-                let old_regs = self.window_editors.get(&wid).map(|e| e.registers().clone());
                 let mut ed = self.make_view_editor(slot);
-                if let Some(regs) = old_regs {
-                    *ed.registers_mut() = regs;
-                }
+                ed.set_registers_arc(self.registers.clone());
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1263,26 +1254,6 @@ impl App {
     /// the buffer-line renderer to highlight the active buffer tab).
     pub fn active_index(&self) -> usize {
         self.focused_slot_idx()
-    }
-
-    /// Carry yank/delete registers across a buffer switch so they behave like
-    /// vim's *global* registers (each `Editor` owns its own set). Saves the
-    /// buffer being left into the global set, then installs the global set into
-    /// the buffer being entered. No-op when the focused buffer is unchanged.
-    pub(crate) fn sync_registers_across_buffers(&mut self) {
-        let cur = self.focused_slot_idx();
-        if cur == self.last_register_slot {
-            return;
-        }
-        // The buffer we're leaving holds the most recent yank/delete.
-        if let Some(old) = self.slots.get(self.last_register_slot) {
-            self.registers = old.editor.registers().clone();
-        }
-        let global = self.registers.clone();
-        if let Some(new) = self.slots.get_mut(cur) {
-            *new.editor.registers_mut() = global;
-        }
-        self.last_register_slot = cur;
     }
 
     /// When `matchparen` is on and the cursor sits on a C-style bracket with
@@ -1707,6 +1678,12 @@ impl App {
         let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
             .map_err(|s| anyhow::anyhow!(s))?;
 
+        // Create the app-wide shared register bank and inject it into the
+        // initial slot's editor so all editors share one bank from the start.
+        let shared_registers: std::sync::Arc<std::sync::Mutex<hjkl_engine::Registers>> =
+            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::Registers::default()));
+        slot.editor.set_registers_arc(shared_registers.clone());
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1815,8 +1792,7 @@ impl App {
             lsp_next_request_id: 0,
             lsp_pending: HashMap::new(),
             lsp_pending_seen_at: HashMap::new(),
-            registers: hjkl_engine::Registers::default(),
-            last_register_slot: 0,
+            registers: shared_registers,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

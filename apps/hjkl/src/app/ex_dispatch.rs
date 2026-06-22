@@ -778,6 +778,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -859,6 +860,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -1352,6 +1354,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -2280,6 +2283,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;

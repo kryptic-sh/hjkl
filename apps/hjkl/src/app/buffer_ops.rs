@@ -26,10 +26,6 @@ impl App {
         let current_slot = self.focused_slot_idx();
         if idx != current_slot {
             self.prev_active = Some(current_slot);
-            // Carry the register bank across slots so vim's yank/paste
-            // works cross-buffer (`yy` in slot 0, `p` in slot 1).
-            let regs = self.slots[current_slot].editor.registers().clone();
-            *self.slots[idx].editor.registers_mut() = regs;
         }
         // Update the synthetic `%` register with the new slot's filename so
         // `"%p`, `<C-r>%`, and `:echo @%` reflect the correct path.
@@ -139,6 +135,7 @@ impl App {
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -264,6 +261,7 @@ impl App {
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
+            editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;

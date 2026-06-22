@@ -247,11 +247,6 @@ impl App {
     /// All overlay handling, Normal-mode pre-routing (count prefix, Esc,
     /// which-key Backspace), and keymap chord routing live here.
     pub(crate) fn handle_keypress(&mut self, key: KeyEvent) -> KeyOutcome {
-        // Make yank/delete registers behave globally across buffers: if the
-        // focused buffer changed since the last key, carry the registers over
-        // before processing this key (so `p` after switching buffers pastes the
-        // earlier `yy`).
-        self.sync_registers_across_buffers();
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if self.command_field.is_some() {
                 self.command_field = None;

@@ -592,7 +592,7 @@ pub struct Editor<
     /// every `p` / `P` via the active selector (default unnamed).
     /// Internal — read via [`Editor::registers`]; mutated by yank /
     /// delete / paste FSM paths and by [`Editor::seed_yank`].
-    pub(crate) registers: crate::registers::Registers,
+    pub(crate) registers: std::sync::Arc<std::sync::Mutex<crate::registers::Registers>>,
     /// Per-row syntax styling in engine-native form. Always present —
     /// populated by [`Editor::install_syntax_spans`]. Ratatui hosts use
     /// `hjkl_engine_tui::EditorRatatuiExt::install_ratatui_syntax_spans`.
@@ -1027,7 +1027,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             pending_lsp: None,
             buffer,
             style_table: Vec::new(),
-            registers: crate::registers::Registers::default(),
+            registers: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::registers::Registers::default(),
+            )),
             styled_spans: Vec::new(),
             settings,
             global_marks: std::collections::BTreeMap::new(),
@@ -1339,20 +1341,29 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// Snapshot of the unnamed register (the default `p` / `P` source).
-    pub fn yank(&self) -> &str {
-        &self.registers.unnamed.text
+    pub fn yank(&self) -> String {
+        self.registers.lock().unwrap().unnamed.text.clone()
     }
 
     /// Borrow the full register bank — `"`, `"0`–`"9`, `"a`–`"z`.
-    pub fn registers(&self) -> &crate::registers::Registers {
-        &self.registers
+    pub fn registers(&self) -> std::sync::MutexGuard<'_, crate::registers::Registers> {
+        self.registers.lock().unwrap()
     }
 
-    /// Mutably borrow the full register bank. Hosts that share registers
-    /// across multiple editors (e.g. multi-buffer `yy` / `p`) overwrite
-    /// the slots here on buffer switch.
-    pub fn registers_mut(&mut self) -> &mut crate::registers::Registers {
-        &mut self.registers
+    /// Mutably borrow the full register bank. Returns a guard so callers
+    /// can mutate in place. Signature changed from `&mut self` to `&self`
+    /// because the interior mutability is now via `Arc<Mutex<>>`.
+    pub fn registers_mut(&self) -> std::sync::MutexGuard<'_, crate::registers::Registers> {
+        self.registers.lock().unwrap()
+    }
+
+    /// Point this editor at a shared register bank. All editors in the
+    /// app share one bank so yank/paste work cross-buffer without copying.
+    pub fn set_registers_arc(
+        &mut self,
+        registers: std::sync::Arc<std::sync::Mutex<crate::registers::Registers>>,
+    ) {
+        self.registers = registers;
     }
 
     /// Host hook: load the OS clipboard's contents into the `"+` / `"*`
@@ -1360,7 +1371,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// paste so `"*p` / `"+p` reflect the live clipboard rather than a
     /// stale snapshot from the last yank.
     pub fn sync_clipboard_register(&mut self, text: String, linewise: bool) {
-        self.registers.set_clipboard(text, linewise);
+        self.registers.lock().unwrap().set_clipboard(text, linewise);
     }
 
     /// Return the user's pending register selection (set via `"<reg>` chord
@@ -1457,7 +1468,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn set_yank(&mut self, text: impl Into<String>) {
         let text = text.into();
         let linewise = self.vim.yank_linewise;
-        self.registers.unnamed = crate::registers::Slot { text, linewise };
+        self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
     }
 
     /// Record a yank into `"` and `"0`, plus the named target if the
@@ -1466,7 +1477,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub(crate) fn record_yank(&mut self, text: String, linewise: bool) {
         self.vim.yank_linewise = linewise;
         let target = self.vim.pending_register.take();
-        self.registers.record_yank(text, linewise, target);
+        self.registers
+            .lock()
+            .unwrap()
+            .record_yank(text, linewise, target);
     }
 
     /// Direct write to a named register slot — bypasses the unnamed
@@ -1474,11 +1488,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// macro recorder so finishing a `q{reg}` recording doesn't
     /// pollute the user's last yank.
     pub fn set_named_register_text(&mut self, reg: char, text: String) {
+        let mut regs = self.registers.lock().unwrap();
         if let Some(slot) = match reg {
-            'a'..='z' => Some(&mut self.registers.named[(reg as u8 - b'a') as usize]),
-            'A'..='Z' => {
-                Some(&mut self.registers.named[(reg.to_ascii_lowercase() as u8 - b'a') as usize])
-            }
+            'a'..='z' => Some(&mut regs.named[(reg as u8 - b'a') as usize]),
+            'A'..='Z' => Some(&mut regs.named[(reg.to_ascii_lowercase() as u8 - b'a') as usize]),
             _ => None,
         } {
             slot.text = text;
@@ -1491,7 +1504,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub(crate) fn record_delete(&mut self, text: String, linewise: bool) {
         self.vim.yank_linewise = linewise;
         let target = self.vim.pending_register.take();
-        self.registers.record_delete(text, linewise, target);
+        self.registers
+            .lock()
+            .unwrap()
+            .record_delete(text, linewise, target);
     }
 
     /// Install styled syntax spans using the engine-native
@@ -2708,7 +2724,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             cursor,
             lines,
             viewport_top,
-            registers: self.registers.clone(),
+            registers: self.registers.lock().unwrap().clone(),
             marks,
             global_marks,
         }
@@ -2736,7 +2752,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.set_content(&text);
         self.jump_cursor(snap.cursor.0 as usize, snap.cursor.1 as usize);
         self.host.viewport_mut().top_row = snap.viewport_top as usize;
-        self.registers = snap.registers;
+        *self.registers.lock().unwrap() = snap.registers;
         self.buffer.set_marks(
             snap.marks
                 .into_iter()
@@ -2757,7 +2773,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn seed_yank(&mut self, text: String) {
         let linewise = text.ends_with('\n');
         self.vim.yank_linewise = linewise;
-        self.registers.unnamed = crate::registers::Slot { text, linewise };
+        self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
     }
 
     /// Scroll the viewport down by `rows`. The cursor stays on its
@@ -4545,6 +4561,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             let lower = reg.to_ascii_lowercase();
             let text = self
                 .registers
+                .lock()
+                .unwrap()
                 .read(lower)
                 .map(|s| s.text.clone())
                 .unwrap_or_default();
@@ -4609,9 +4627,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         } else {
             reg.to_ascii_lowercase()
         };
-        let text = match self.registers.read(resolved) {
-            Some(slot) if !slot.text.is_empty() => slot.text.clone(),
-            _ => return vec![],
+        let text = {
+            let regs = self.registers.lock().unwrap();
+            match regs.read(resolved) {
+                Some(slot) if !slot.text.is_empty() => slot.text.clone(),
+                _ => return vec![],
+            }
         };
         let keys = crate::input::decode_macro(&text);
         self.vim.last_macro = Some(resolved);
@@ -6918,5 +6939,29 @@ mod modifiable_readonly_tests {
         assert!(!ed.is_modifiable());
         ed.settings_mut().modifiable = true;
         assert!(ed.is_modifiable());
+    }
+}
+
+#[cfg(test)]
+mod shared_registers_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+
+    #[test]
+    fn shared_register_bank_visible_across_editors() {
+        let shared =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registers::Registers::default()));
+        let mut a = Editor::new(Buffer::new(), DefaultHost::default(), Options::default());
+        a.set_registers_arc(shared.clone());
+        let mut b = Editor::new(Buffer::new(), DefaultHost::default(), Options::default());
+        b.set_registers_arc(shared.clone());
+        // Write to editor A's unnamed register
+        a.registers_mut().unnamed = crate::registers::Slot {
+            text: "hello".to_string(),
+            linewise: false,
+        };
+        // Read from editor B — same bank, no copy needed
+        assert_eq!(b.registers().unnamed.text, "hello");
     }
 }

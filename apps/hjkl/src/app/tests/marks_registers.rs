@@ -17,13 +17,15 @@ fn quote_a_then_dd_deletes_into_register_a() {
     drive_key(&mut app, key(KeyCode::Char('d')));
 
     // Register 'a' must contain the deleted line text.
-    let slot = app.active_editor().registers().read('a');
+    let regs = app.active_editor().registers();
+    let slot = regs.read('a');
     assert!(slot.is_some(), "register 'a' should be set after \"add");
     let text = &slot.unwrap().text;
     assert!(
         text.contains("hello world"),
         "register 'a' should contain 'hello world', got {text:?}"
     );
+    drop(regs);
     // Buffer should only have the second line.
     let lines = app
         .active_editor()
@@ -51,9 +53,11 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     drive_key(&mut app, key(KeyCode::Char('y')));
 
     // Verify register a has the yanked text.
-    let slot = app.active_editor().registers().read('a');
+    let regs = app.active_editor().registers();
+    let slot = regs.read('a');
     assert!(slot.is_some(), "register 'a' must be set after \"ayy");
     let text = slot.unwrap().text.clone();
+    drop(regs);
     assert!(
         text.contains("first line"),
         "register 'a' should contain 'first line', got {text:?}"
@@ -192,8 +196,10 @@ fn quote_invalid_char_no_register_set() {
     );
 
     // No register named '!' exists.
-    let slot = app.active_editor().registers().read('!');
+    let regs = app.active_editor().registers();
+    let slot = regs.read('!');
     assert!(slot.is_none(), "register '!' must not exist");
+    drop(regs);
 
     // Unnamed register unchanged.
     let after = app
