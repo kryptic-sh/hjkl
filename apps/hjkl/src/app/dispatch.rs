@@ -127,6 +127,12 @@ impl App {
             | AppAction::ExplorerGitDiscard
             | AppAction::ExplorerGitCommit => self.dispatch_explorer_action(action),
 
+            // ── Hop / easymotion overlay (#197) ────────────────────────────
+            AppAction::HopWord => self.start_hop(crate::app::hop::HopKind::Word),
+            AppAction::HopWordCap => self.start_hop(crate::app::hop::HopKind::WordCap),
+            AppAction::HopLineBelow => self.start_hop(crate::app::hop::HopKind::LineBelow),
+            AppAction::HopLineAbove => self.start_hop(crate::app::hop::HopKind::LineAbove),
+
             // ── Engine-mutating actions ────────────────────────────────────
             _ => self.dispatch_engine_action(action, count),
         }

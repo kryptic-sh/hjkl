@@ -34,6 +34,7 @@ pub(crate) mod explorer;
 pub(crate) mod explorer_reconcile;
 mod fs_watch;
 pub(crate) mod git_hunks;
+pub(crate) mod hop;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
 pub mod lsp_glue;
@@ -490,6 +491,10 @@ pub struct App {
     fs_watch: Option<fs_watch::FsWatch>,
     /// Active smooth-scroll animation (#195). `None` = instant (default).
     pub(crate) scroll_anim: Option<ScrollAnim>,
+    /// Active hop/easymotion label-jump overlay (#197). `None` when not active.
+    /// While `Some`, all keypresses are routed to the hop handler instead of
+    /// the editor engine.
+    pub(crate) hop: Option<hop::HopState>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -891,6 +896,7 @@ impl App {
             || self.filter_field.is_some()
             || self.search_field.is_some()
             || self.info_popup.is_some()
+            || self.hop.is_some()
     }
 
     /// Full-screen rect for clamping popups / context menus to the
@@ -1898,6 +1904,7 @@ impl App {
             colorscheme: "dark".to_string(),
             fs_watch: None,
             scroll_anim: None,
+            hop: None,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

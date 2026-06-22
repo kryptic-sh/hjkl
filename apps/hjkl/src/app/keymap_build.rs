@@ -704,6 +704,34 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
         }
     }
 
+    // ── Hop / easymotion overlay (#197) ───────────────────────────────────
+    // Bound in Normal AND all Visual modes. Operator-pending hop is handled
+    // naturally because op-pending keeps vim_mode()==Normal (the engine
+    // stays in Normal while waiting for a motion), so the Normal binding
+    // fires during `d`/`c`/`y`<leader>w automatically. `start_hop` captures
+    // `pending_op()` at trigger time.
+    //
+    // NOTE: `<leader>w` conflicts with the `w` motion only if the leader char
+    // itself is `w` — but leader defaults to ` ` (space) so there is no clash.
+    // `<leader>j` and `<leader>k` are safe because leader+j/k are not engine motions.
+    for (chord, action, desc) in [
+        ("<leader>w", AppAction::HopWord, "hop word starts"),
+        ("<leader>W", AppAction::HopWordCap, "hop WORD starts"),
+        ("<leader>j", AppAction::HopLineBelow, "hop line below"),
+        ("<leader>k", AppAction::HopLineAbove, "hop line above"),
+    ] {
+        for mode in [
+            Mode::Normal,
+            Mode::Visual,
+            Mode::VisualLine,
+            Mode::VisualBlock,
+        ] {
+            if let Err(e) = km.add(mode, chord, action.clone(), desc) {
+                eprintln!("hjkl: keymap.add({chord:?} {mode:?}) failed: {e}");
+            }
+        }
+    }
+
     km
 }
 

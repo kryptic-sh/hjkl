@@ -1670,6 +1670,45 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── Hop / easymotion label overlay (#197) ────────────────────────────
+    // Paint each hop target's label string starting at the target's screen cell.
+    // Only rendered for the window that owns the active hop state.
+    if let Some(hop) = app.hop.as_ref()
+        && hop.win_id == win_id
+    {
+        let label_style = Style::default()
+            .fg(app.theme.ui.hop_label_fg)
+            .bg(app.theme.ui.hop_label_bg)
+            .add_modifier(Modifier::BOLD);
+        let right = area.x + area.width;
+        let bottom = area.y + area.height;
+        // Clone the snapshot so we can call frame.buffer_mut() below.
+        let targets: Vec<(usize, usize, String)> = hop
+            .targets
+            .iter()
+            .map(|t| (t.row, t.col, t.label.clone()))
+            .collect();
+        let buf = frame.buffer_mut();
+        for (doc_row, doc_col, label) in &targets {
+            if let Some((screen_col, screen_row)) = map_doc_to_screen(*doc_row, *doc_col)
+                && screen_col < right
+                && screen_row < bottom
+            {
+                // Paint each char of the label into consecutive cells.
+                for (i, ch) in label.chars().enumerate() {
+                    let x = screen_col + i as u16;
+                    if x >= right {
+                        break;
+                    }
+                    if let Some(cell) = buf.cell_mut((x, screen_row)) {
+                        cell.set_char(ch);
+                        cell.set_style(label_style);
+                    }
+                }
+            }
+        }
+    }
+
     // Emit the terminal cursor only for the focused window.
     // extra_gutter_width = sign_w + fold_w + lnum_pad. The engine computes the
     // cursor x from the buffer's OWN line-number width; `lnum_pad` accounts for

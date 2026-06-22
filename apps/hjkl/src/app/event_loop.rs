@@ -267,6 +267,24 @@ impl App {
             return KeyOutcome::Break;
         }
 
+        // ── Hop / easymotion overlay (#197) ──────────────────────
+        // Must run BEFORE all other overlay checks so hop owns every key
+        // while active. Any non-char key cancels (Esc explicitly, others
+        // via the None path in hop_handle_key).
+        if self.hop.is_some() {
+            match key.code {
+                KeyCode::Esc => self.hop_handle_key(None, true),
+                KeyCode::Char(c)
+                    if key.modifiers == KeyModifiers::NONE
+                        || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.hop_handle_key(Some(c), false)
+                }
+                _ => self.hop_handle_key(None, true),
+            }
+            return KeyOutcome::Continue;
+        }
+
         // ── BLAME mode ────────────────────────────────────────────
         // BLAME is now an FSM-owned read-only view (`Editor::view_mode`). The
         // engine handles every transition out of it natively: `Esc` (hjkl-vim

@@ -442,6 +442,16 @@ pub enum AppAction {
     /// a blank/comment-only message causes git to abort (cancel); a real
     /// message commits staged changes. Explorer git colours refresh after commit.
     ExplorerGitCommit,
+
+    // ── Hop / easymotion overlay (#197) ──────────────────────────────────
+    /// `<leader>w` — open hop overlay labelling every word start in viewport.
+    HopWord,
+    /// `<leader>W` — open hop overlay labelling every WORD (whitespace-delimited) start in viewport.
+    HopWordCap,
+    /// `<leader>j` — open hop overlay labelling first-non-blank of every line below cursor.
+    HopLineBelow,
+    /// `<leader>k` — open hop overlay labelling first-non-blank of every line above cursor.
+    HopLineAbove,
 }
 
 /// Which history ring to show in the command-line window (issue #37).

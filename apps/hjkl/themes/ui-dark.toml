@@ -62,3 +62,7 @@ active_fg     = "#787878"  # active (cursor-level) indent guide fg — medium gr
 
 [match_paren]
 bg            = "#45475a"  # matched bracket pair bg — muted slate, distinct from cursor_line
+
+[hop]
+label_fg      = "#0b0d10"  # hop label fg — dark text for contrast on bright bg
+label_bg      = "#ff9e64"  # hop label bg — orange accent, same energy as search highlight

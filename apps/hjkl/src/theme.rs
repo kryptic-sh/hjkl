@@ -129,6 +129,14 @@ pub struct UiTheme {
     /// active. Chosen to be distinct from cursor_line and search without being
     /// jarring — muted slate fits the ui-dark palette.
     pub match_paren_bg: Color,
+
+    // [hop]
+    /// Foreground color for hop/easymotion labels painted over targets (#197).
+    /// High-contrast against the label background.
+    pub hop_label_fg: Color,
+    /// Background color for hop/easymotion labels (#197). Bright accent so
+    /// labels pop against any buffer content.
+    pub hop_label_bg: Color,
 }
 
 impl UiTheme {
@@ -169,6 +177,8 @@ impl UiTheme {
             indent_guide_fg: parse_hex(&raw.indent_guide.fg)?,
             indent_guide_active_fg: parse_hex(&raw.indent_guide.active_fg)?,
             match_paren_bg: parse_hex(&raw.match_paren.bg)?,
+            hop_label_fg: parse_hex(&raw.hop.label_fg)?,
+            hop_label_bg: parse_hex(&raw.hop.label_bg)?,
         })
     }
 }
@@ -187,6 +197,7 @@ struct RawUiTheme {
     indent_flash: RawIndentFlash,
     indent_guide: RawIndentGuide,
     match_paren: RawMatchParen,
+    hop: RawHop,
 }
 
 #[derive(Deserialize)]
@@ -266,6 +277,12 @@ struct RawIndentGuide {
 #[derive(Deserialize)]
 struct RawMatchParen {
     bg: String,
+}
+
+#[derive(Deserialize)]
+struct RawHop {
+    label_fg: String,
+    label_bg: String,
 }
 
 fn parse_hex(s: &str) -> Result<Color> {
