@@ -45,6 +45,9 @@ impl App {
         // Point the focused window at the new slot.
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;
+        // Rebuild the focused window's view editor onto the new slot's Content
+        // (#151 Phase D) so active_editor() below sees the switched buffer.
+        self.reconcile_window_editors();
         if let Ok(size) = crossterm::terminal::size() {
             let vp = self.active_editor_mut().host_mut().viewport_mut();
             vp.width = size.0;
@@ -164,6 +167,8 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
+            // Rebuild window view editors onto the replacement Content (#151 Phase D).
+            self.reconcile_window_editors();
             // No file open in slot 0 anymore — stop watching it (#242).
             self.fs_watch_sync();
             self.bus.info("buffer closed (replaced with [No Name])");
@@ -287,6 +292,8 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
+            // Rebuild window view editors onto the fresh scratch Content (#151 Phase D).
+            self.reconcile_window_editors();
             // No file open in slot 0 anymore — stop watching it (#242).
             self.fs_watch_sync();
             self.bus.info("buffer wiped (replaced with [No Name])");
@@ -401,8 +408,7 @@ impl App {
                 } else {
                     // Single slot: fall back to viewport-top motion.
                     let n = self.pending_count.take_or(1) as usize;
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .apply_motion(hjkl_vim::MotionKind::ViewportTop, n);
                 }
             }
@@ -412,8 +418,7 @@ impl App {
                 } else {
                     // Single slot: fall back to viewport-bottom motion.
                     let n = self.pending_count.take_or(1) as usize;
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .apply_motion(hjkl_vim::MotionKind::ViewportBottom, n);
                 }
             }
@@ -441,8 +446,7 @@ impl App {
                         self.switch_to(idx);
                         if linewise {
                             self.active_editor_mut().jump_cursor(row, 0);
-                            self.active_mut()
-                                .editor
+                            self.active_editor_mut()
                                 .apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
                         } else {
                             self.active_editor_mut().jump_cursor(row, col);

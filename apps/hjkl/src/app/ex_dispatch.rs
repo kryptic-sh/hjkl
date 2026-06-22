@@ -409,31 +409,31 @@ impl App {
             }
         }
 
-        let active_slot = self.focused_slot_idx();
-        // hjkl-ex is the sole dispatcher — no legacy fallback.
+        // hjkl-ex is the sole dispatcher — no legacy fallback. Runs against the
+        // focused window's editor (#151 Phase D) so `:set`, `:42`, `:s`, register
+        // ex commands, etc. mutate the per-window editor that render reads.
         let new_reg = hjkl_ex::default_registry::<TuiHost>();
-        let effect = if let Some(eff) =
-            hjkl_ex::try_dispatch(&new_reg, &mut self.slots[active_slot].editor, cmd)
-        {
-            match eff {
-                ExEffect::EditFile { path, force } => {
-                    self.do_edit(&path, force);
-                    return;
-                }
-                ExEffect::BufferDelete { force, wipe } => {
-                    if wipe {
-                        self.buffer_wipe(force);
-                    } else {
-                        self.buffer_delete(force);
+        let effect =
+            if let Some(eff) = hjkl_ex::try_dispatch(&new_reg, self.active_editor_mut(), cmd) {
+                match eff {
+                    ExEffect::EditFile { path, force } => {
+                        self.do_edit(&path, force);
+                        return;
                     }
-                    return;
+                    ExEffect::BufferDelete { force, wipe } => {
+                        if wipe {
+                            self.buffer_wipe(force);
+                        } else {
+                            self.buffer_delete(force);
+                        }
+                        return;
+                    }
+                    other => other,
                 }
-                other => other,
-            }
-        } else {
-            // No command matched — surface as E492.
-            ExEffect::Unknown(cmd.to_string())
-        };
+            } else {
+                // No command matched — surface as E492.
+                ExEffect::Unknown(cmd.to_string())
+            };
         // ex commands like `:100` (goto-line), `:/pat` (search address),
         // and `:nohl` mutate engine cursor / viewport without flipping
         // the dirty flag — they return ExEffect::Ok. The window cursor
@@ -1017,7 +1017,14 @@ impl App {
                 // Note: `:w!` is not distinguished from `:w` at the ExEffect
                 // level in v1 — both hooks always fire when their option is true.
                 {
-                    let s = self.slots[idx].editor.settings().clone();
+                    // Pre-save hook flags are per-window settings (#151 Phase D):
+                    // read the focused window's editor when saving the focused
+                    // slot, else fall back to the slot's bridge editor.
+                    let s = if idx == self.focused_slot_idx() {
+                        self.active_editor().settings().clone()
+                    } else {
+                        self.slots[idx].editor.settings().clone()
+                    };
                     if s.trim_trailing_whitespace {
                         trim_trailing_whitespace_in_place(&mut self.slots[idx].editor);
                     }
@@ -1584,6 +1591,11 @@ impl App {
             let name = filename.display().to_string();
             let pid = header.writer_pid;
             self.slots[slot_idx].editor.settings_mut().readonly = true;
+            // readonly is a per-window setting (#151 Phase D); also set it on the
+            // focused window's editor so :w guard + status reflect it immediately.
+            if slot_idx == self.focused_slot_idx() {
+                self.active_editor_mut().settings_mut().readonly = true;
+            }
             self.slots[slot_idx].swap_path = None;
             self.bus.error(format!(
                 "E325: \"{name}\" is already open in another hjkl (pid {pid}) — opened read-only"
@@ -1842,6 +1854,10 @@ impl App {
                     self.prev_active = None;
                 }
 
+                // Rebuild the focused window's view editor onto the newly opened
+                // slot's Content (#151 Phase D) before reading active_editor below.
+                self.reconcile_window_editors();
+
                 // Recovery check: if a swap file is newer than the on-disk
                 // content, enter the recovery prompt instead of reporting
                 // normal line count.  The slot is already loaded with the
@@ -1924,8 +1940,7 @@ impl App {
         let _ = outcome.is_known(); // Suppresses unused-result warning.
         self.syntax.reset(buffer_id);
 
-        self.active_mut()
-            .editor
+        self.active_editor_mut()
             .install_ratatui_syntax_spans(Vec::new());
         // recompute_and_install runs render_viewport sync — no preview warm-up needed.
         self.recompute_and_install();
@@ -1996,7 +2011,13 @@ impl App {
                 }
                 // File changed. Warn (don't reload) when the buffer is dirty
                 // OR `:set noautoreload` is active; otherwise auto-reload.
-                let autoreload = self.slots[idx].editor.settings().autoreload;
+                // `autoreload` is a per-window setting (#151 Phase D): read the
+                // focused window's editor when this is the focused slot.
+                let autoreload = if idx == self.focused_slot_idx() {
+                    self.active_editor().settings().autoreload
+                } else {
+                    self.slots[idx].editor.settings().autoreload
+                };
                 if self.slots[idx].dirty || !autoreload {
                     let prev = self.slots[idx].disk_state;
                     self.slots[idx].disk_state = DiskState::ChangedOnDisk;
@@ -2428,8 +2449,7 @@ impl App {
             .cloned();
 
         if let Some(d) = target {
-            self.active_mut()
-                .editor
+            self.active_editor_mut()
                 .jump_cursor(d.start_row, d.start_col);
             self.active_editor_mut().ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
@@ -2464,8 +2484,7 @@ impl App {
             .cloned();
 
         if let Some(d) = target {
-            self.active_mut()
-                .editor
+            self.active_editor_mut()
                 .jump_cursor(d.start_row, d.start_col);
             self.active_editor_mut().ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
@@ -2483,8 +2502,7 @@ impl App {
                 self.bus.warn("no diagnostics");
             }
             Some(d) => {
-                self.active_mut()
-                    .editor
+                self.active_editor_mut()
                     .jump_cursor(d.start_row, d.start_col);
                 self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
@@ -2503,8 +2521,7 @@ impl App {
                 self.bus.warn("no diagnostics");
             }
             Some(d) => {
-                self.active_mut()
-                    .editor
+                self.active_editor_mut()
                     .jump_cursor(d.start_row, d.start_col);
                 self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();

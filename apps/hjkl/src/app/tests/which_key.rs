@@ -150,7 +150,7 @@ fn esc_cancels_engine_g_pending() {
     // Regression: Esc in Normal mode must cancel an in-flight engine/app chord
     // (the which-key toggle must not swallow the cancel).
     let mut app = App::new(None, false, None, None).unwrap();
-    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "abc\ndef");
+    hjkl_engine::BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), "abc\ndef");
     let _ = app.handle_keypress(nkey('g'));
     assert!(app.any_chord_pending(), "after 'g' a chord must be pending");
     let _ = app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -163,7 +163,7 @@ fn esc_cancels_engine_g_pending() {
 #[test]
 fn backspace_pops_chord_to_root() {
     let mut app = App::new(None, false, None, None).unwrap();
-    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "abc\ndef");
+    hjkl_engine::BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), "abc\ndef");
     let _ = app.handle_keypress(nkey('g'));
     assert!(app.any_chord_pending());
     assert_eq!(app.chord_history.len(), 1, "history holds the 'g'");
@@ -184,8 +184,8 @@ fn backspace_pops_one_level_within_g_chord() {
     // `gc` enters the comment operator (engine pending); Backspace pops the `c`
     // back to the `g` level so e.g. `gc<BS>cc` resolves as `gcc`.
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().editor.set_filetype("rust");
-    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), "let x = 1;\n");
+    app.active_editor_mut().set_filetype("rust");
+    hjkl_engine::BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), "let x = 1;\n");
     let _ = app.handle_keypress(nkey('g'));
     let _ = app.handle_keypress(nkey('c'));
     assert!(app.any_chord_pending(), "gc must leave a chord pending");

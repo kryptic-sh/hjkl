@@ -690,7 +690,7 @@ impl App {
         let slot = self.active();
         let path = absolutize(slot.filename.as_ref()?);
         let uri = hjkl_lsp::uri::from_path(&path).ok()?;
-        let cursor = slot.editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let row = cursor.row;
         let col = cursor.col;
         let params = json!({
@@ -1439,7 +1439,7 @@ impl App {
                 return;
             }
         };
-        let cursor = slot.editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let row = cursor.row as u32;
         let col = cursor.col as u32;
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
@@ -1767,7 +1767,7 @@ impl App {
                 return;
             }
         };
-        let cursor = slot.editor.buffer().cursor();
+        let cursor = self.active_editor().buffer().cursor();
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
 
         let params = json!({
@@ -1862,8 +1862,8 @@ impl App {
             }
         };
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        let tab_size = slot.editor.settings().tabstop as u32;
-        let insert_spaces = slot.editor.settings().expandtab;
+        let tab_size = self.active_editor().settings().tabstop as u32;
+        let insert_spaces = self.active_editor().settings().expandtab;
 
         let params = json!({
             "textDocument": { "uri": uri.as_str() },

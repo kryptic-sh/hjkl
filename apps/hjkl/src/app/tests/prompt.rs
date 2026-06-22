@@ -100,7 +100,7 @@ fn search_open_and_type_drives_live_preview() {
     assert!(app.search_field.is_some());
     type_search(&mut app, "foo");
     assert_eq!(app.search_field.as_ref().unwrap().text(), "foo");
-    assert!(app.active().editor.search_state().pattern.is_some());
+    assert!(app.active_editor().search_state().pattern.is_some());
 }
 
 #[test]
@@ -110,8 +110,7 @@ fn search_more_typing_updates_pattern() {
     app.open_search_prompt(SearchDir::Forward);
     type_search(&mut app, "foo");
     let p1 = app
-        .active()
-        .editor
+        .active_editor()
         .search_state()
         .pattern
         .as_ref()
@@ -120,8 +119,7 @@ fn search_more_typing_updates_pattern() {
         .to_string();
     type_search(&mut app, "z");
     let p2 = app
-        .active()
-        .editor
+        .active_editor()
         .search_state()
         .pattern
         .as_ref()
@@ -160,11 +158,11 @@ fn search_enter_commits_and_advances_cursor() {
     type_search(&mut app, "foo");
     app.handle_search_field_key(key(KeyCode::Enter));
     assert!(app.search_field.is_none());
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2);
     assert_eq!(col, 0);
-    assert_eq!(app.active().editor.last_search(), Some("foo"));
-    assert!(app.active().editor.last_search_forward());
+    assert_eq!(app.active_editor().last_search(), Some("foo"));
+    assert!(app.active_editor().last_search_forward());
 }
 
 #[test]
@@ -177,20 +175,20 @@ fn search_esc_twice_cancels_and_clears_when_no_prior_search() {
     assert!(app.search_field.is_some());
     app.handle_search_field_key(key(KeyCode::Esc));
     assert!(app.search_field.is_none());
-    assert!(app.active().editor.search_state().pattern.is_none());
+    assert!(app.active_editor().search_state().pattern.is_none());
 }
 
 #[test]
 fn search_backward_prompt_uses_question_dir() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo here\nbar there\nfoo again");
-    app.active_mut().editor.goto_line(3);
+    app.active_editor_mut().goto_line(3);
     app.open_search_prompt(SearchDir::Backward);
     type_search(&mut app, "foo");
     app.handle_search_field_key(key(KeyCode::Enter));
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 0);
-    assert!(!app.active().editor.last_search_forward());
+    assert!(!app.active_editor().last_search_forward());
 }
 
 // ── :set background= tests ───────────────────────────────────────────────

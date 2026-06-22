@@ -87,20 +87,20 @@ fn diff_change_navigation_jumps_between_hunks() {
     let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("diffsplit {}", b.display()));
     // Focused window is the opened (b) side; start at the top.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // ]c → first change (line 1), then second change (line 4).
     app.dispatch_action(AppAction::DiffNextChange, 1);
-    assert_eq!(app.active().editor.cursor().0, 1);
+    assert_eq!(app.active_editor().cursor().0, 1);
     app.dispatch_action(AppAction::DiffNextChange, 1);
-    assert_eq!(app.active().editor.cursor().0, 4);
+    assert_eq!(app.active_editor().cursor().0, 4);
     // No change below → cursor stays put.
     app.dispatch_action(AppAction::DiffNextChange, 1);
-    assert_eq!(app.active().editor.cursor().0, 4);
+    assert_eq!(app.active_editor().cursor().0, 4);
 
     // [c → back to line 1.
     app.dispatch_action(AppAction::DiffPrevChange, 1);
-    assert_eq!(app.active().editor.cursor().0, 1);
+    assert_eq!(app.active_editor().cursor().0, 1);
 
     let _ = std::fs::remove_file(&a);
     let _ = std::fs::remove_file(&b);

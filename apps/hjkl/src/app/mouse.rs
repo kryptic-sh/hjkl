@@ -302,7 +302,7 @@ pub fn cell_to_doc(
     // Use the SAME rendered gutter width as `render_window` (stable cross-buffer
     // number column + reserved sign/fold) so clicks map to the correct column
     // even when the gutter is widened beyond this buffer's own line-count width.
-    let gw = crate::render::rendered_gutter_width(app, slot_idx) + frame;
+    let gw = crate::render::rendered_gutter_width(app, win_id) + frame;
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -373,7 +373,7 @@ pub fn doc_to_cell(
     }
 
     // Gutter width — same rendered width as render_window / cell_to_doc.
-    let gw = crate::render::rendered_gutter_width(app, slot_idx);
+    let gw = crate::render::rendered_gutter_width(app, win_id);
 
     // Box mode (BLAME, no soft-wrap) inserts virtual border rows and reserves a
     // 1-col left frame, so the screen row is the doc row's index in the render
@@ -930,24 +930,27 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     };
 
     let line_count = slot.editor.buffer().line_count() as usize;
-    let vp = slot.editor.host().viewport();
-
-    // Match the renderer's scroll origin: focused window draws from the editor
-    // viewport, unfocused from its stored `top_row` (see `cell_to_doc`).
-    let eff_top_row = if win_id == app.focused_window() {
-        vp.top_row
-    } else {
-        win.top_row
+    // Per-window viewport + blame view live on the window's own editor (#151
+    // Phase D); fall back to the slot bridge editor if absent.
+    let (eff_top_row, wrap, win_is_blame) = match app.window_editors.get(&win_id) {
+        Some(e) => {
+            let vp = e.host().viewport();
+            (vp.top_row, vp.wrap, e.is_blame())
+        }
+        None => {
+            let vp = slot.editor.host().viewport();
+            (vp.top_row, vp.wrap, slot.editor.is_blame())
+        }
     };
 
     // Same rendered gutter width as render_window / cell_to_doc.
-    let gw = crate::render::rendered_gutter_width(app, slot_idx);
+    let gw = crate::render::rendered_gutter_width(app, win_id);
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
 
     // Box mode reserves a 1-col left frame; widen the gutter hit region by it.
-    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let box_mode = win_is_blame && matches!(wrap, hjkl_buffer::Wrap::None);
     let gw = gw + u16::from(box_mode);
 
     if rel_x < gw {

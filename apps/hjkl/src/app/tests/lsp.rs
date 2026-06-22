@@ -183,12 +183,12 @@ fn lnext_jumps_to_next_diag() {
 
     // Cursor at row 0 — lnext should jump to row 1.
     app.lnext_severity(None);
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 1, "lnext must jump to first diag after cursor");
 
     // Cursor now at row 1 — lnext should jump to row 3.
     app.lnext_severity(None);
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 3);
     assert_eq!(col, 6, "lnext must place cursor at diag start_col");
 }
@@ -208,15 +208,15 @@ fn gg_scrolls_window_viewport_to_top() {
     // atomic must also be set — every vim::step resyncs vp.height from
     // it, so leaving the atomic at 0 would zero the host viewport mid-step
     // and disable scrolloff math.
-    app.active_mut().editor.set_viewport_height(20);
+    app.active_editor_mut().set_viewport_height(20);
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.width = 80;
         vp.height = 20;
         vp.text_width = 80;
         vp.top_row = 60;
     }
-    app.active_mut().editor.jump_cursor(70, 0);
+    app.active_editor_mut().jump_cursor(70, 0);
     app.sync_viewport_from_editor();
     let fw = app.focused_window();
     assert_eq!(app.windows[fw].as_ref().unwrap().top_row, 60);
@@ -224,18 +224,18 @@ fn gg_scrolls_window_viewport_to_top() {
     // Drive `gg` through the engine. First `g` sets engine-side pending,
     // second `g` triggers the gg motion (cursor → top + auto-scroll).
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
     // The Unbound replay path in event_loop.rs syncs the editor's
     // auto-scrolled viewport back to the focused window.
     app.sync_viewport_from_editor();
 
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 0, "gg must put cursor at row 0");
     let stored_top = app.windows[fw].as_ref().unwrap().top_row;
     assert!(
@@ -274,21 +274,21 @@ fn plus_slash_argv_scrolls_window_viewport_to_match() {
     // Easier path: build a small file where the first match is on row 5
     // and assert window.top_row > 0 (proxy for "scrolled").
     let mut app = App::new(Some(path.clone()), false, None, Some("target".into())).unwrap();
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 80, "+/target must move cursor to row 80");
     // The window's stored top_row should reflect the editor's scrolled
     // viewport. With crossterm::terminal::size returning 0 in test
     // contexts the scroll math is a no-op, so set the height atomic
     // and re-run ensure_cursor_in_scrolloff to verify the scroll path.
-    app.active_mut().editor.set_viewport_height(20);
+    app.active_editor_mut().set_viewport_height(20);
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.width = 80;
         vp.height = 20;
         vp.text_width = 80;
     }
-    app.active_mut().editor.ensure_cursor_in_scrolloff();
-    let editor_top = app.active().editor.host().viewport().top_row;
+    app.active_editor_mut().ensure_cursor_in_scrolloff();
+    let editor_top = app.active_editor().host().viewport().top_row;
     assert!(
         editor_top > 0,
         "ensure_cursor_in_scrolloff should scroll editor viewport away from row 0; got top_row={editor_top}"
@@ -312,9 +312,9 @@ fn slash_search_in_editor_scrolls_window_viewport() {
         })
         .collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.set_viewport_height(20);
+    app.active_editor_mut().set_viewport_height(20);
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.width = 80;
         vp.height = 20;
         vp.text_width = 80;
@@ -327,7 +327,7 @@ fn slash_search_in_editor_scrolls_window_viewport() {
         stored_top > 0,
         "/target<CR> should scroll the focused window's stored top_row past 0 to reveal the match"
     );
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 80, "/target<CR> should land cursor on row 80");
     // Counter must show 1/1 (cursor on the only match), not 0/1.
     let count = crate::render::search_count(&app);
@@ -369,7 +369,7 @@ fn plus_slash_argv_with_realistic_rust_source() {
         writeln!(f, "fn main_helper() {{}}").unwrap(); // row 8: 'main_helper'
     }
     let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(
         row, 5,
         "+/main on rust source must land on row 5 (first `fn main`), got row {row}"
@@ -398,7 +398,7 @@ fn plus_slash_argv_search_lands_on_first_forward_match() {
         writeln!(f, "main three").unwrap();
     }
     let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(
         row, 2,
         "+/main must land on the FIRST forward match (row 2), got row {row}"
@@ -428,7 +428,7 @@ fn plus_slash_argv_search_with_goto_line_searches_forward() {
     // +5 goto_line=5 then +/main forward search. Should land on row 6,
     // NOT wrap back to row 0.
     let app = App::new(Some(path.clone()), false, Some(5), Some("main".into())).unwrap();
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(
         row, 6,
         "+5 +/main must search forward from row 4, landing on row 6"
@@ -457,17 +457,17 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
         writeln!(f, "main three").unwrap(); // 5
     }
     let mut app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
-    let (row0, _) = app.active().editor.cursor();
+    let (row0, _) = app.active_editor().cursor();
     assert_eq!(row0, 2, "+/main must land on first match (row 2)");
     // last_search must be persisted so `n` knows the pattern.
-    assert_eq!(app.active().editor.last_search(), Some("main"));
+    assert_eq!(app.active_editor().last_search(), Some("main"));
     // Drive `n` through the engine vim FSM and assert FORWARD jump.
     let n_input = Input {
         key: Key::Char('n'),
         ..Default::default()
     };
-    hjkl_vim::dispatch_input(&mut app.active_mut().editor, n_input);
-    let (row1, _) = app.active().editor.cursor();
+    hjkl_vim::dispatch_input(app.active_editor_mut(), n_input);
+    let (row1, _) = app.active_editor().cursor();
     assert_eq!(
         row1, 4,
         "after +/main, `n` must advance FORWARD to row 4 (got row {row1}); \
@@ -484,7 +484,7 @@ fn search_count_cursor_on_match_stays_on_match() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo X foo X foo");
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 5;
         vp.top_row = 0;
     }
@@ -505,20 +505,20 @@ fn search_count_n_press_increments_by_one() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "X foo X foo X foo");
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 5;
         vp.top_row = 0;
     }
     app.commit_search("foo");
     assert_eq!(crate::render::search_count(&app), Some((1, 3)));
     // Now drive `n` via the engine.
-    app.active_mut().editor.search_advance_forward(true);
+    app.active_editor_mut().search_advance_forward(true);
     assert_eq!(
         crate::render::search_count(&app),
         Some((2, 3)),
         "n must advance counter from 1/3 to 2/3, not skip"
     );
-    app.active_mut().editor.search_advance_forward(true);
+    app.active_editor_mut().search_advance_forward(true);
     assert_eq!(crate::render::search_count(&app), Some((3, 3)));
 }
 
@@ -537,7 +537,7 @@ fn search_count_handles_multibyte_chars_before_match() {
     // Two matches; first sits behind a multi-byte em-dash.
     seed_buffer(&mut app, "alpha\n/// — main one\nbeta\nmain two");
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 10;
         vp.top_row = 0;
     }
@@ -549,7 +549,7 @@ fn search_count_handles_multibyte_chars_before_match() {
         behind a multi-byte char (em-dash) on its line"
     );
     // n -> M2 -> 2/2.
-    app.active_mut().editor.search_advance_forward(true);
+    app.active_editor_mut().search_advance_forward(true);
     assert_eq!(crate::render::search_count(&app), Some((2, 2)));
 }
 
@@ -560,7 +560,7 @@ fn search_count_through_full_key_flow() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "X foo X foo X foo");
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 5;
         vp.top_row = 0;
     }
@@ -595,7 +595,7 @@ fn search_count_after_commit_lands_on_first_match() {
     seed_buffer(&mut app, "X foo X foo X foo");
     // Cursor at (0,0), 'X' — before all matches.
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 5;
         vp.top_row = 0;
     }
@@ -630,7 +630,7 @@ fn lsp_jump_reveals_cursor_in_viewport() {
     // Set the focused window's viewport height + reset scroll so we can
     // observe whether jump scrolls.
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 20;
         vp.top_row = 0;
     }
@@ -653,9 +653,9 @@ fn lsp_jump_reveals_cursor_in_viewport() {
 
     // Cursor must be at row 50 AND the viewport must have scrolled past
     // the original top_row=0 so the cursor is visible.
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 50);
-    let vp_top = app.active().editor.host().viewport().top_row;
+    let vp_top = app.active_editor().host().viewport().top_row;
     assert!(
         vp_top > 0,
         "viewport top_row stayed at 0 after jump — ensure_cursor_in_scrolloff not called"
@@ -693,12 +693,12 @@ fn lprev_jumps_to_prev_diag_with_wrap() {
 
     // Cursor at row 0 col 0 — lprev should wrap to the last diag (row 2).
     app.lprev_severity(None);
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 2, "lprev from first diag must wrap to last");
 
     // Cursor now at row 2 — lprev should jump to row 0.
     app.lprev_severity(None);
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 0, "lprev must jump to previous diag");
 }
 
@@ -729,7 +729,7 @@ fn lnext_severity_skips_lower_severity() {
 
     // Jump to Error-only — must skip Warning on row 1 and land on row 2.
     app.lnext_severity(Some(DiagSeverity::Error));
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 2, "lnext with Error filter must skip Warning diags");
 }
 
@@ -830,7 +830,7 @@ fn notify_change_skipped_when_dirty_gen_unchanged() {
     let mut app = App::new(None, false, None, None).unwrap();
     // No LSP manager attached — lsp_notify_change_active returns early.
     // Manually set last_lsp_dirty_gen to simulate a prior send.
-    let dg = app.active().editor.buffer().dirty_gen();
+    let dg = app.active_editor().buffer().dirty_gen();
     app.active_mut().last_lsp_dirty_gen = Some(dg);
 
     // Call again — must not panic and must not reset the guard.
@@ -859,7 +859,7 @@ fn goto_definition_single_jumps_cursor() {
     app.handle_goto_response(buffer_id, (0, 0), result, "definition");
 
     // Cursor must have moved to row 2.
-    assert_eq!(app.active().editor.buffer().cursor().row, 2);
+    assert_eq!(app.active_editor().buffer().cursor().row, 2);
     assert!(app.picker.is_none(), "single result must not open picker");
 }
 
@@ -1030,7 +1030,7 @@ fn lsp_request_works_with_relative_filename() {
 fn completion_response_opens_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Enter insert mode so the guard passes.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     // Give the buffer a filename so buffer_id matches.
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
@@ -1047,7 +1047,7 @@ fn completion_response_opens_popup() {
 #[test]
 fn completion_response_empty_no_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1069,7 +1069,7 @@ fn completion_response_empty_no_popup() {
 fn completion_request_pending_routes_to_handler() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Simulate a pending completion request.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1133,7 +1133,7 @@ fn accept_completion_inserts_selected_item() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer with some text and enter insert mode at col 0.
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     // Open popup anchored at col 0 row 0 with two items.
     let items = vec![make_completion_item("hello"), make_completion_item("world")];
     app.completion = Some(crate::completion::Completion::new(0, 0, items));
@@ -1146,18 +1146,18 @@ fn accept_completion_inserts_selected_item() {
     // Popup must be gone.
     assert!(app.completion.is_none());
     // Buffer line should start with "world" (inserted at col 0).
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with("world"),
         "buffer line should start with inserted text, got: {line:?}"
     );
     // Sync footer must have drained dirty + content_edits.
     assert!(
-        !app.active_mut().editor.take_dirty(),
+        !app.active_editor_mut().take_dirty(),
         "accept_completion call site must drain dirty via sync_after_engine_mutation"
     );
     assert!(
-        app.active_mut().editor.take_content_edits().is_empty(),
+        app.active_editor_mut().take_content_edits().is_empty(),
         "accept_completion call site must drain content_edits"
     );
 }
@@ -1215,7 +1215,7 @@ fn accept_completion_records_content_edit_for_resync() {
     // stale parse-error / diagnostic gutter signs linger.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     app.completion = Some(crate::completion::Completion::new(
         0,
         0,
@@ -1223,7 +1223,7 @@ fn accept_completion_records_content_edit_for_resync() {
     ));
     app.accept_completion();
     // Before any sync drains them, the edit must be present for fan-out.
-    let edits = app.active_mut().editor.take_content_edits();
+    let edits = app.active_editor_mut().take_content_edits();
     assert!(
         !edits.is_empty(),
         "accept_completion must record a ContentEdit so syntax + LSP resync"
@@ -1235,7 +1235,7 @@ fn accept_function_completion_places_cursor_in_parens() {
     // Bare name "foo" with kind=Function → inserts "foo()" with cursor between parens.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
 
     // Anchor at col 0, row 0; insert_text = "foo", kind = Function.
     let mut item = crate::completion::CompletionItem::new("foo");
@@ -1246,14 +1246,14 @@ fn accept_function_completion_places_cursor_in_parens() {
     app.sync_after_engine_mutation();
 
     assert!(app.completion.is_none(), "popup must be dismissed");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line.trim_end_matches('\n'),
         "foo()",
         "buffer must contain 'foo()' after function completion"
     );
     // Cursor must sit between the parens: anchor_col(0) + len("foo") + 1 = col 4.
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(
         col, 4,
         "cursor must be inside parens at col 4, got col {col}"
@@ -1265,7 +1265,7 @@ fn accept_function_completion_with_existing_parens() {
     // insert_text already contains "bar()" → cursor placed between existing parens.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
 
     let mut item = crate::completion::CompletionItem::new("bar()");
     item.kind = crate::completion::CompletionKind::Method;
@@ -1276,14 +1276,14 @@ fn accept_function_completion_with_existing_parens() {
     app.sync_after_engine_mutation();
 
     assert!(app.completion.is_none(), "popup must be dismissed");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line.trim_end_matches('\n'),
         "bar()",
         "buffer must contain 'bar()' without double-parens"
     );
     // `(` is at byte offset 3 in "bar()" → cursor at anchor_col(0) + 3 + 1 = col 4.
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(
         col, 4,
         "cursor must be inside parens at col 4, got col {col}"
@@ -1295,7 +1295,7 @@ fn accept_variable_completion_cursor_at_end() {
     // kind=Variable → no parens added, cursor at end of inserted text.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
 
     let mut item = crate::completion::CompletionItem::new("x");
     item.kind = crate::completion::CompletionKind::Variable;
@@ -1305,14 +1305,14 @@ fn accept_variable_completion_cursor_at_end() {
     app.sync_after_engine_mutation();
 
     assert!(app.completion.is_none(), "popup must be dismissed");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line.trim_end_matches('\n'),
         "x",
         "buffer must contain 'x' with no parens added"
     );
     // Cursor at end: anchor_col(0) + len("x") = col 1.
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(
         col, 1,
         "cursor must be at end (col 1) for non-function completion"
@@ -1361,8 +1361,7 @@ fn apply_workspace_edit_single_file() {
     assert_eq!(count, 1);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1431,8 +1430,7 @@ fn apply_workspace_edit_sorts_edits_descending() {
     };
     app.apply_workspace_edit(edit).expect("apply failed");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1547,8 +1545,7 @@ fn rename_response_applies_workspace_edit() {
         "rename response must set status, got: {msg}"
     );
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1608,8 +1605,7 @@ fn format_response_applies_text_edits() {
     let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "formatted");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1702,8 +1698,7 @@ fn code_action_response_single_applies_action() {
         "single action apply must set status, got: {msg}"
     );
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1750,7 +1745,7 @@ fn lsp_code_actions_includes_overlapping_diags_in_context() {
     ];
 
     // Position cursor at row=0, col=4 (inside the first diag range).
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
 
     // Test the overlap logic directly.
     let cursor_row = 0usize;
@@ -1807,18 +1802,18 @@ fn lnext_then_j_preserves_diag_col() {
 
     // Cursor starts at (0, 0) — lnext must jump to row 2, col 5.
     app.lnext_severity(None);
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2, "lnext must jump to row 2");
     assert_eq!(col, 5, "lnext must place cursor at diag col 5");
     assert_eq!(
-        app.active().editor.sticky_col(),
+        app.active_editor().sticky_col(),
         Some(5),
         "lnext must reset sticky_col to 5 via jump_cursor"
     );
 
     // Press j — must aim for col 5 on row 3 ("0123456789" has 10 chars).
     hjkl_vim::dispatch_input(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         Input {
             key: Key::Char('j'),
             ctrl: false,
@@ -1826,7 +1821,7 @@ fn lnext_then_j_preserves_diag_col() {
             shift: false,
         },
     );
-    let (row2, col2) = app.active().editor.cursor();
+    let (row2, col2) = app.active_editor().cursor();
     assert_eq!(row2, 3, "j must move to row 3");
     assert_eq!(
         col2, 5,

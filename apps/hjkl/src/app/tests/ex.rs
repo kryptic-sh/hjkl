@@ -64,8 +64,7 @@ fn edit_percent_reloads_current_file() {
     std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
     app.dispatch_ex("e %");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -86,8 +85,7 @@ fn edit_no_arg_reloads_current_file() {
     std::fs::write(&path, "v2\n").unwrap();
     app.dispatch_ex("e");
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -121,8 +119,7 @@ fn edit_force_reloads_dirty_buffer() {
     app.active_mut().dirty = true;
     app.dispatch_ex("e!");
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -143,15 +140,15 @@ fn undo_to_saved_state_clears_dirty() {
     std::fs::write(&path, "alpha\nbravo\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert!(!app.active().dirty);
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
-    if app.active_mut().editor.take_dirty() {
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('X')));
+    if app.active_editor_mut().take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }
     assert!(app.active().dirty, "edit should mark dirty");
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('u')));
-    if app.active_mut().editor.take_dirty() {
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('u')));
+    if app.active_editor_mut().take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }
     assert!(
@@ -174,8 +171,7 @@ fn edit_new_path_appends_slot_and_switches() {
     assert_eq!(app.slots.len(), 2);
     assert_eq!(app.active_index(), 1);
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -287,8 +283,7 @@ fn bdelete_force_removes_dirty_slot() {
     assert_eq!(app.slots.len(), 1);
     assert_eq!(app.active_index(), 0);
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -344,8 +339,7 @@ fn bdelete_on_last_slot_resets_to_no_name() {
     assert_eq!(app.slots.len(), 1);
     assert!(app.active().filename.is_none());
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -369,15 +363,15 @@ fn bwipeout_clears_marks_on_last_slot() {
     std::fs::write(&path, "hello\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Set a mark on the buffer.
-    app.active_mut().editor.set_mark('a', (0, 0));
+    app.active_editor_mut().set_mark('a', (0, 0));
     assert!(
-        app.active().editor.mark('a').is_some(),
+        app.active_editor().mark('a').is_some(),
         "mark should be set before wipe"
     );
     app.dispatch_ex("bw");
     // After wipe the fresh scratch buffer must have no marks.
     assert!(
-        app.active().editor.mark('a').is_none(),
+        app.active_editor().mark('a').is_none(),
         ":bwipeout on last slot must not carry marks into scratch buffer"
     );
     assert_eq!(app.slots.len(), 1);
@@ -391,15 +385,15 @@ fn bwipeout_clears_jumplist_on_last_slot() {
     std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Push an entry into the jumplist.
-    app.active_mut().editor.record_jump((2, 0));
-    let (back, _) = app.active().editor.jump_list();
+    app.active_editor_mut().record_jump((2, 0));
+    let (back, _) = app.active_editor().jump_list();
     assert!(
         !back.is_empty(),
         "jumplist should have an entry before wipe"
     );
     app.dispatch_ex("bw");
     // After wipe the fresh scratch buffer must have an empty jumplist.
-    let (back, fwd) = app.active().editor.jump_list();
+    let (back, fwd) = app.active_editor().jump_list();
     assert!(
         back.is_empty() && fwd.is_empty(),
         ":bwipeout on last slot must not carry jumps into scratch buffer"
@@ -419,13 +413,13 @@ fn bdelete_does_not_explicitly_wipe_marks_path() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     assert_eq!(app.slots.len(), 2);
     // Set a mark on slot 1 (path_b).
-    app.active_mut().editor.set_mark('z', (0, 0));
+    app.active_editor_mut().set_mark('z', (0, 0));
     // :bd removes slot 1; slot 0 (path_a) survives with its own editor.
     app.dispatch_ex("bd");
     assert_eq!(app.slots.len(), 1);
     // The surviving slot (path_a) never had mark 'z'.
     assert!(
-        app.active().editor.mark('z').is_none(),
+        app.active_editor().mark('z').is_none(),
         "mark from removed slot must not survive after :bd"
     );
     let _ = std::fs::remove_file(&path_a);
@@ -780,8 +774,7 @@ fn checktime_reloads_clean_buffer_when_disk_changed() {
     std::fs::write(&path, "line1\nline2\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -797,8 +790,7 @@ fn checktime_reloads_clean_buffer_when_disk_changed() {
     app.checktime_all();
 
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -829,8 +821,7 @@ fn checktime_marks_dirty_buffer_as_changed_on_disk_no_reload() {
 
     // Content must NOT have changed.
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -858,15 +849,14 @@ fn checktime_with_autoreload_off_does_not_reload_clean_buffer() {
 
     // Disable autoreload (default is on).
     app.dispatch_ex("set noautoreload");
-    assert!(!app.active().editor.settings().autoreload);
+    assert!(!app.active_editor().settings().autoreload);
 
     write_and_wait(&path, "changed on disk\n");
     app.checktime_all();
 
     // Clean buffer but autoreload off → must NOT reload; flagged ChangedOnDisk.
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -885,13 +875,13 @@ fn checktime_reload_preserves_cursor_column() {
     std::fs::write(&path, "abcdefgh\nsecond\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Park the cursor mid-line (row 0, col 4).
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
 
     // External change keeps row 0 long enough that col 4 is still valid.
     write_and_wait(&path, "abXXdefgh longer\nsecond\n");
     app.checktime_all();
 
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(
         (row, col),
         (0, 4),
@@ -912,8 +902,7 @@ fn checktime_marks_deleted_when_file_removed() {
     assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
     // Buffer content preserved.
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -942,8 +931,7 @@ fn checktime_recovers_after_file_recreated() {
     app.checktime_all();
 
     assert_eq!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .lines()
@@ -1119,12 +1107,12 @@ fn fs_event_reload_preserves_cursor_column() {
     let path = std::env::temp_dir().join("hjkl_fsw_cursor.txt");
     std::fs::write(&path, "abcdefgh\nsecond\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
 
     write_and_wait(&path, "abXXdefgh longer\nsecond\n");
     app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Modified(path.clone())]);
 
-    assert_eq!(app.active().editor.cursor(), (0, 4));
+    assert_eq!(app.active_editor().cursor(), (0, 4));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -1245,8 +1233,7 @@ fn substitute_percent_global_multi_line() {
     seed_buffer(&mut app, "foo foo\nfoo");
     app.dispatch_ex("%s/foo/bar/g");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1271,8 +1258,7 @@ fn substitute_current_line_first_only() {
     seed_buffer(&mut app, "foo foo\nfoo");
     app.dispatch_ex("s/foo/bar/");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1293,13 +1279,11 @@ fn substitute_empty_pattern_reuses_last_search() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
     // Simulate a prior search by setting last_search directly.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .set_last_search(Some("world".to_string()), true);
     app.dispatch_ex("s//planet/");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1323,8 +1307,7 @@ fn substitute_no_match_shows_pattern_not_found() {
     seed_buffer(&mut app, "hello world");
     app.dispatch_ex("s/xyz/bar/");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1481,8 +1464,7 @@ fn colon_e_path_opens_file_via_hjkl_ex() {
     app.dispatch_ex(&format!("e {}", path.display()));
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1520,8 +1502,7 @@ fn colon_bd_via_hjkl_ex_clears_sole_buffer() {
     app.active_mut().dirty = false;
     app.dispatch_ex("bd");
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2291,7 +2272,7 @@ fn recovery_y_loads_swap_body() {
         app.pending_recovery.is_none(),
         "pending_recovery must be cleared after 'y'"
     );
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert!(
         content.contains("recovered content"),
         "buffer must contain swap body after 'y', got: {content:?}"
@@ -2344,14 +2325,14 @@ fn recovery_y_resets_syntax_spans() {
     // — or the retained tree drifts against the swapped-in bytes and
     // highlighting breaks (#185). Drain build_slot's own reset first, then
     // install the recovered body and assert the reset fired.
-    let _ = app.active_mut().editor.take_content_reset();
+    let _ = app.active_editor_mut().take_content_reset();
     app.recover_install_content(idx, "recovered body line one\nline two\n", 0, 0);
     assert!(
-        app.active_mut().editor.take_content_reset(),
+        app.active_editor_mut().take_content_reset(),
         "recovery content install must signal a full content reset (set_content), \
          not an incremental edit (replace_all) — else the syntax tree drifts"
     );
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert!(
         content.contains("recovered body line one"),
         "buffer must hold the recovered body, got: {content:?}"
@@ -2729,7 +2710,7 @@ fn open_locked_sole_buffer_is_readonly() {
     let recovery = app.check_recovery_on_open(idx);
     assert!(!recovery, "locked sole buffer must not enter recovery");
     assert!(
-        app.active().editor.is_readonly(),
+        app.active_editor().is_readonly(),
         "locked sole buffer must open read-only"
     );
     assert!(
@@ -2990,12 +2971,12 @@ fn set_background_tracks_colorscheme() {
 /// insert-mode `Ctrl-T` / `Ctrl-D`.
 fn indent_app(seed: &str, keys: &[KeyEvent]) -> String {
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().editor.settings_mut().expandtab = true;
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
     seed_buffer(&mut app, seed);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     macro_key_seq(&mut app, keys);
-    (*app.active().editor.buffer().content_joined()).clone()
+    (*app.active_editor().buffer().content_joined()).clone()
 }
 
 #[test]
@@ -3098,7 +3079,7 @@ fn double_equals_keypress_formats_toml() {
     std::fs::write(&path, "[a]\nx=1\n").unwrap();
     let mut app = App::new(Some(path), false, None, None).unwrap();
     seed_buffer(&mut app, "[a]\nx=1\n");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // Press `==` exactly as the live loop would.
     macro_key_seq(&mut app, &[ck('='), ck('=')]);
@@ -3115,7 +3096,7 @@ fn double_equals_keypress_formats_toml() {
         installed,
         "`==` keypress must submit a format job whose result installs"
     );
-    let out = app.active().editor.buffer().content_joined();
+    let out = app.active_editor().buffer().content_joined();
     assert!(
         out.contains("x = 1"),
         "`==` must reformat `x=1` → `x = 1`, got: {out:?}"
@@ -3156,7 +3137,7 @@ fn external_format_toml_installs_worker_result() {
     }
     assert!(installed, "the async format result must install within ~4s");
 
-    let out = app.active().editor.buffer().content_joined();
+    let out = app.active_editor().buffer().content_joined();
     assert!(
         out.contains("x = 1"),
         "taplo must reformat `x=1` → `x = 1`, got: {out:?}"
@@ -3179,7 +3160,7 @@ fn trailing_newline_file_loads_without_phantom_line() {
     std::fs::write(&path, "a\nb\nc\n").unwrap();
     let app = App::new(Some(path), false, None, None).unwrap();
     assert_eq!(
-        app.active().editor.buffer().line_count(),
+        app.active_editor().buffer().line_count(),
         3,
         "a file ending in `\\n` must load as 3 lines, not 4 (no phantom empty line)"
     );
@@ -3208,7 +3189,7 @@ fn save_adds_trailing_newline_when_missing() {
     std::fs::write(&path, "a\nb\nc").unwrap(); // no trailing newline
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Still 3 lines (load strips nothing here — there's no trailing newline).
-    assert_eq!(app.active().editor.buffer().line_count(), 3);
+    assert_eq!(app.active_editor().buffer().line_count(), 3);
     app.active_mut().dirty = true;
     app.dispatch_ex("w");
     let on_disk = std::fs::read_to_string(&path).unwrap();
@@ -3244,7 +3225,7 @@ fn percent_substitute_replaces_all_lines() {
     // range was expanded to the current filename before dispatch.
     let (mut app, _td) = app_with_file("foo foo\nbar\nfoo\n");
     app.dispatch_ex("%s/foo/bar/g");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         &**content, "bar bar\nbar\nbar\n",
         "`:%s/foo/bar/g` must replace every match on every line, got: {content:?}"
@@ -3258,7 +3239,7 @@ fn substitute_literal_percent_in_pattern() {
     let (mut app, _td) = app_with_file("50% done\n");
     // Cursor is on line 0; no range → current line.
     app.dispatch_ex("s/50%/half/");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         &**content, "half done\n",
         "`%` in the substitute pattern must stay literal, got: {content:?}"
@@ -3270,7 +3251,7 @@ fn substitute_literal_hash_in_replacement() {
     // `#` (alternate-file token) must also stay literal in a substitute body.
     let (mut app, _td) = app_with_file("count: N\n");
     app.dispatch_ex(r"s/N/#42/");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         &**content, "count: #42\n",
         "`#` in the replacement must stay literal, got: {content:?}"
@@ -3282,7 +3263,7 @@ fn percent_global_delete_matching_lines() {
     // `:%g/pat/d` — range `%` + global; the leading `%` must not expand.
     let (mut app, _td) = app_with_file("keep\ndrop me\nkeep2\ndrop again\n");
     app.dispatch_ex("%g/drop/d");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         &**content, "keep\nkeep2\n",
         "`:%g/drop/d` must delete every matching line, got: {content:?}"
@@ -3294,7 +3275,7 @@ fn numeric_range_substitute_still_works() {
     // Control: a numeric range (no `%`) was never affected; guard it stays so.
     let (mut app, _td) = app_with_file("a\nx\nx\nx\nb\n");
     app.dispatch_ex("2,3s/x/y/");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         &**content, "a\ny\ny\nx\nb\n",
         "`:2,3s/x/y/` must touch only lines 2-3, got: {content:?}"
@@ -3312,7 +3293,7 @@ fn edit_percent_still_expands_to_filename() {
     seed_buffer(&mut app, "changed\n");
     app.active_mut().dirty = true;
     app.dispatch_ex("e! %");
-    let content = app.active().editor.buffer().content_joined();
+    let content = app.active_editor().buffer().content_joined();
     assert_eq!(
         content.trim_end(),
         "hello",
@@ -3511,7 +3492,7 @@ fn disk_change_prompt_raised_and_buffer_intact() {
     let (app, path) = raise_disk_change_prompt("raise");
     // Buffer content untouched while the prompt is up.
     assert_eq!(
-        app.active().editor.buffer().rope().to_string(),
+        app.active_editor().buffer().rope().to_string(),
         "buffer edit\n"
     );
     let _ = std::fs::remove_file(&path);
@@ -3526,7 +3507,7 @@ fn disk_change_prompt_keep_preserves_buffer() {
         app.pending_disk_change.is_none(),
         "keep dismisses the prompt"
     );
-    let content = app.active().editor.buffer().rope().to_string();
+    let content = app.active_editor().buffer().rope().to_string();
     assert!(
         content.contains("buffer edit"),
         "keep must preserve buffer: {content}"
@@ -3545,7 +3526,7 @@ fn disk_change_prompt_reload_discards_changes() {
         app.pending_disk_change.is_none(),
         "reload dismisses the prompt"
     );
-    let content = app.active().editor.buffer().rope().to_string();
+    let content = app.active_editor().buffer().rope().to_string();
     assert!(
         content.contains("disk changed"),
         "reload must load disk content: {content}"
@@ -3590,8 +3571,7 @@ fn disk_change_prompt_esc_keeps_buffer() {
         "Esc dismisses the prompt"
     );
     assert!(
-        app.active()
-            .editor
+        app.active_editor()
             .buffer()
             .rope()
             .to_string()

@@ -8,13 +8,13 @@ fn app_new_no_file() {
     assert!(!app.active().dirty);
     assert!(!app.active().is_new_file);
     assert!(app.active().filename.is_none());
-    assert!(!app.active().editor.is_readonly());
+    assert!(!app.active_editor().is_readonly());
 }
 
 #[test]
 fn app_new_readonly_flag() {
     let app = App::new(None, true, None, None).unwrap();
-    assert!(app.active().editor.is_readonly());
+    assert!(app.active_editor().is_readonly());
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn app_new_not_found_sets_is_new_file() {
 #[test]
 fn app_new_goto_line_clamps() {
     let app = App::new(None, false, Some(999), None).unwrap();
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 0);
 }
 
@@ -42,13 +42,13 @@ fn ex_goto_line_100_via_dispatch() {
         .collect::<Vec<_>>()
         .join("\n");
     use hjkl_buffer::{Edit, Position};
-    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
         text: buf,
     });
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.dispatch_ex("100");
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 99, "':100' must land on row 99");
 }
 
@@ -58,19 +58,19 @@ fn dot_repeat_replays_last_change() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
         text: "abc".to_string(),
     });
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // Set up a last_change by feeding `x` through the engine (single-char delete).
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     // Buffer now "bc". Dot-repeat should delete one more char.
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
-    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line0 = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line0, "c",
         "`.` after `x` must delete one more char, got {line0:?}"
@@ -83,20 +83,20 @@ fn dot_repeat_with_count_3_replays_three_times() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
         text: "abcdef".to_string(),
     });
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     // Buffer "bcdef". `3.` deletes 3 more. Seed pending_count to simulate
     // the keymap layer's count-prefix accumulation.
     app.pending_count.try_accumulate('3');
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
-    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line0 = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line0, "ef",
         "`3.` after `x` must delete 3 more chars, got {line0:?}"
@@ -112,18 +112,18 @@ fn ex_goto_line_100_via_command_field_keys() {
         .map(|n| format!("line{n}"))
         .collect::<Vec<_>>()
         .join("\n");
-    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
         text: buf,
     });
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // Open command prompt, type "100", press Enter — simulate full user path.
     app.open_command_prompt();
     for c in ['1', '0', '0'] {
         app.handle_command_field_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     app.handle_command_field_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let (row, _col) = app.active().editor.cursor();
+    let (row, _col) = app.active_editor().cursor();
     assert_eq!(
         row, 99,
         "':100<Enter>' via command-field must land on row 99, got {row}"
@@ -225,11 +225,11 @@ fn with_config_preserves_readonly_on_existing_slot() {
     // user-config swap (the re-applied Options must not silently flip
     // the bit back to false).
     let app = App::new(None, true, None, None).unwrap();
-    assert!(app.active().editor.is_readonly());
+    assert!(app.active_editor().is_readonly());
 
     let app = app.with_config(hjkl_app::config::Config::default());
     assert!(
-        app.active().editor.is_readonly(),
+        app.active_editor().is_readonly(),
         "readonly state must survive with_config re-application"
     );
 }
@@ -294,17 +294,17 @@ fn config_load_from_disk_validation_failure_surfaces() {
 fn set_cursorline_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(
-        app.active().editor.settings().cursorline,
+        app.active_editor().settings().cursorline,
         "cursorline must default to true"
     );
     app.dispatch_ex("set nocursorline");
     assert!(
-        !app.active().editor.settings().cursorline,
+        !app.active_editor().settings().cursorline,
         ":set nocursorline must disable cursorline"
     );
     app.dispatch_ex("set cursorline");
     assert!(
-        app.active().editor.settings().cursorline,
+        app.active_editor().settings().cursorline,
         ":set cursorline must enable cursorline"
     );
 }
@@ -314,7 +314,7 @@ fn set_cul_alias_works() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("set cul");
     assert!(
-        app.active().editor.settings().cursorline,
+        app.active_editor().settings().cursorline,
         ":set cul must enable cursorline"
     );
 }
@@ -322,11 +322,11 @@ fn set_cul_alias_works() {
 #[test]
 fn set_cursorcolumn_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert!(!app.active().editor.settings().cursorcolumn);
+    assert!(!app.active_editor().settings().cursorcolumn);
     app.dispatch_ex("set cuc");
-    assert!(app.active().editor.settings().cursorcolumn);
+    assert!(app.active_editor().settings().cursorcolumn);
     app.dispatch_ex("set nocuc");
-    assert!(!app.active().editor.settings().cursorcolumn);
+    assert!(!app.active_editor().settings().cursorcolumn);
 }
 
 #[test]
@@ -334,13 +334,13 @@ fn set_signcolumn_yes() {
     use hjkl_engine::types::SignColumnMode;
     let mut app = App::new(None, false, None, None).unwrap();
     assert_eq!(
-        app.active().editor.settings().signcolumn,
+        app.active_editor().settings().signcolumn,
         SignColumnMode::Auto,
         "signcolumn defaults to auto"
     );
     app.dispatch_ex("set signcolumn=yes");
     assert_eq!(
-        app.active().editor.settings().signcolumn,
+        app.active_editor().settings().signcolumn,
         SignColumnMode::Yes
     );
 }
@@ -351,7 +351,7 @@ fn set_signcolumn_scl_alias() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("set scl=no");
     assert_eq!(
-        app.active().editor.settings().signcolumn,
+        app.active_editor().settings().signcolumn,
         SignColumnMode::No
     );
 }
@@ -359,23 +359,23 @@ fn set_signcolumn_scl_alias() {
 #[test]
 fn set_foldcolumn_stores_value() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert_eq!(app.active().editor.settings().foldcolumn, 0);
+    assert_eq!(app.active_editor().settings().foldcolumn, 0);
     app.dispatch_ex("set foldcolumn=4");
-    assert_eq!(app.active().editor.settings().foldcolumn, 4);
+    assert_eq!(app.active_editor().settings().foldcolumn, 4);
     app.dispatch_ex("set fdc=0");
-    assert_eq!(app.active().editor.settings().foldcolumn, 0);
+    assert_eq!(app.active_editor().settings().foldcolumn, 0);
 }
 
 #[test]
 fn set_colorcolumn_stores_value() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert_eq!(app.active().editor.settings().colorcolumn, "");
+    assert_eq!(app.active_editor().settings().colorcolumn, "");
     app.dispatch_ex("set cc=80");
-    assert_eq!(app.active().editor.settings().colorcolumn, "80");
+    assert_eq!(app.active_editor().settings().colorcolumn, "80");
     app.dispatch_ex("set colorcolumn=80,120");
-    assert_eq!(app.active().editor.settings().colorcolumn, "80,120");
+    assert_eq!(app.active_editor().settings().colorcolumn, "80,120");
     app.dispatch_ex("set cc=");
-    assert_eq!(app.active().editor.settings().colorcolumn, "");
+    assert_eq!(app.active_editor().settings().colorcolumn, "");
 }
 
 // ── issue #120 Phase 2 regression tests ─────────────────────────────────────
@@ -782,8 +782,7 @@ fn matchparen_cells_resolves_pair_on_bracket() {
 
     // Move cursor to col 3 — the `(` opener.
     use hjkl_buffer::Position;
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 3));
 
@@ -795,8 +794,7 @@ fn matchparen_cells_resolves_pair_on_bracket() {
     );
 
     // Move cursor to col 7 — the `)` closer.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 7));
     let cells = app.matchparen_cells();
@@ -807,8 +805,7 @@ fn matchparen_cells_resolves_pair_on_bracket() {
     );
 
     // Move cursor to col 0 — not a bracket.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 0));
     let cells = app.matchparen_cells();
@@ -823,8 +820,7 @@ fn matchparen_off_returns_none() {
 
     // Cursor on `(` — would normally produce a pair.
     use hjkl_buffer::Position;
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 3));
 
@@ -851,8 +847,7 @@ fn matchparen_tag_cells_resolves_on_open_tag() {
 
     use hjkl_buffer::Position;
     // col 2 is inside "div" of the opener.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 2));
 
@@ -883,8 +878,7 @@ fn matchparen_tag_cells_resolves_on_close_tag() {
 
     use hjkl_buffer::Position;
     // col 8 is inside "div" of the closer.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 8));
 
@@ -913,8 +907,7 @@ fn matchparen_tag_cells_nested_pairs_by_depth() {
 
     use hjkl_buffer::Position;
     // col 2 → inside the OUTER opener "div".
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 2));
 
@@ -944,8 +937,7 @@ fn matchparen_tag_cells_off_returns_none() {
     seed_buffer(&mut app, "<div></div>");
 
     use hjkl_buffer::Position;
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 2));
 
@@ -965,8 +957,7 @@ fn matchparen_tag_cells_none_when_not_on_tag() {
     seed_buffer(&mut app, "<div></div>after");
 
     use hjkl_buffer::Position;
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 0));
 
@@ -977,8 +968,7 @@ fn matchparen_tag_cells_none_when_not_on_tag() {
     );
 
     // Also try plain text after the tags.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .buffer_mut()
         .set_cursor(Position::new(0, 12));
     let cells = app.matchparen_tag_cells();
@@ -1033,7 +1023,7 @@ fn readonly_w_own_file_errors_e45() {
     let file = td.path().join("ro_test.txt");
     std::fs::write(&file, "content\n").unwrap();
     let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
-    assert!(app.active().editor.is_readonly());
+    assert!(app.active_editor().is_readonly());
     app.dispatch_ex("write");
     let msgs: Vec<String> = app.bus.history().map(|h| h.body.clone()).collect();
     assert!(
@@ -1049,7 +1039,7 @@ fn readonly_w_force_overrides_e45() {
     let file = td.path().join("ro_force_test.txt");
     std::fs::write(&file, "content\n").unwrap();
     let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
-    assert!(app.active().editor.is_readonly());
+    assert!(app.active_editor().is_readonly());
     // `:write!` must succeed despite readonly.
     let saved = app.do_save_force(None, true);
     assert!(saved, ":w! must succeed on a readonly buffer");
@@ -1063,7 +1053,7 @@ fn readonly_w_different_path_succeeds() {
     let other = td.path().join("readonly_other.txt");
     std::fs::write(&file, "content\n").unwrap();
     let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
-    assert!(app.active().editor.is_readonly());
+    assert!(app.active_editor().is_readonly());
     // `:w othername` must write without E45.
     let saved = app.do_save(Some(other.clone()));
     assert!(

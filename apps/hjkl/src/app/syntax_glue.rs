@@ -492,7 +492,9 @@ impl App {
         // apply them to the buffer. Runs only when dirty_gen has advanced
         // since the last fold pass — once per edit, never per-frame.
         let (fdm, fen, fls) = {
-            let s = self.slots[active_idx].editor.settings();
+            // Settings are per-window (#151 Phase D): read the focused window's
+            // editor, where `:set foldmethod=…` lands.
+            let s = self.active_editor().settings();
             (s.foldmethod, s.foldenable, s.foldlevelstart)
         };
         let dg = self.slots[active_idx].editor.buffer().dirty_gen();
@@ -540,7 +542,7 @@ impl App {
                     // pairs: the configured `:set foldmarker=open,close` (default
                     // vim `{{{` / `}}}`, used when unset or malformed) AND the
                     // universal `#region` / `#endregion` convention.
-                    let fmr = self.slots[active_idx].editor.settings().foldmarker.clone();
+                    let fmr = self.active_editor().settings().foldmarker.clone();
                     let (open, close) = match fmr.split_once(',') {
                         Some((o, c)) if !o.is_empty() && !c.is_empty() => {
                             (o.to_string(), c.to_string())
@@ -656,6 +658,10 @@ impl App {
             for slot in &mut self.slots {
                 slot.editor.install_ratatui_syntax_spans(Vec::new());
                 slot.diag_signs.clear();
+            }
+            // Window editors hold their own span cache (#151 Phase D) — clear too.
+            for ed in self.window_editors.values_mut() {
+                ed.install_ratatui_syntax_spans(Vec::new());
             }
         } else {
             for i in 0..self.slots.len() {

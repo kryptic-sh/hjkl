@@ -469,7 +469,11 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
 /// widths. The explorer pane is gutterless (0). This is the single source of
 /// truth shared with the mouse hit-test so clicks map to the right column even
 /// when the gutter is widened beyond the buffer's own line-count width.
-pub(crate) fn rendered_gutter_width(app: &App, slot_idx: usize) -> u16 {
+pub(crate) fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 {
+    let Some(Some(win)) = app.windows.get(win_id) else {
+        return 0;
+    };
+    let slot_idx = win.slot;
     let Some(slot) = app.slots().get(slot_idx) else {
         return 0;
     };
@@ -477,7 +481,13 @@ pub(crate) fn rendered_gutter_width(app: &App, slot_idx: usize) -> u16 {
         return 0;
     }
     let (sign_w, fold_w) = stable_gutter_extra(app);
-    let own_lnum = slot.editor.lnum_width();
+    // lnum_width depends on per-window `number`/`relativenumber` (#151 Phase D) —
+    // read this window's editor so the mouse gutter matches render_window's.
+    let own_lnum = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.lnum_width())
+        .unwrap_or_else(|| slot.editor.lnum_width());
     let num_gw = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     sign_w + num_gw + fold_w
 }
@@ -728,17 +738,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // Extract window metadata (then drop the borrow so we can access slots).
-    let (slot_idx, top_row, top_col, is_focused) = {
+    let (slot_idx, is_focused) = {
         let win = match app.windows[win_id].as_ref() {
             Some(w) => w,
             None => return, // closed window — skip
         };
-        (
-            win.slot,
-            win.top_row,
-            win.top_col,
-            win_id == app.focused_window(),
-        )
+        (win.slot, win_id == app.focused_window())
     };
 
     // 1-col left/right padding for the file list so it isn't flush against
@@ -749,7 +754,23 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         area.width -= 2;
     }
 
-    let s = app.slots()[slot_idx].editor.settings();
+    // Per-window state (#151 Phase D): settings, cursor, viewport, blame-view
+    // come from THIS window's editor. Content + syntax spans + per-buffer
+    // metadata (blame data, diag/git signs) stay on the slot editor (shared).
+    let win_settings = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.settings().clone())
+        .unwrap_or_else(|| app.slots()[slot_idx].editor.settings().clone());
+    let s = &win_settings;
+    let (w_cursor_row, w_is_blame) = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| (e.buffer().cursor().row, e.is_blame()))
+        .unwrap_or_else(|| {
+            let e = &app.slots()[slot_idx].editor;
+            (e.buffer().cursor().row, e.is_blame())
+        });
     let (nu, rnu) = (s.number, s.relativenumber);
     let (cul, cuc) = (s.cursorline, s.cursorcolumn);
     let colorcolumn = s.colorcolumn.clone();
@@ -773,7 +794,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Stable line-number gutter: when this buffer shows numbers, size the column
     // to the widest needed across ALL open buffers (the biggest file's line
     // count) so switching buffers doesn't shift the text column horizontally.
-    let own_lnum = app.slots()[slot_idx].editor.lnum_width();
+    let own_lnum = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.lnum_width())
+        .unwrap_or_else(|| app.slots()[slot_idx].editor.lnum_width());
     let num_gw_for_text = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     // Extra padding added to the number column beyond the buffer's own width —
     // folded into the cursor's gutter offset below so the caret stays aligned.
@@ -784,30 +809,22 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // For the focused window: publish viewport dims into the engine so
     // scrolloff math and cursor-screen-pos work correctly.
     if is_focused {
-        let tabstop = app.slots()[slot_idx].editor.settings().tabstop as u16;
-        let vp = app.slots_mut()[slot_idx].editor.host_mut().viewport_mut();
-        vp.width = text_width;
-        vp.height = area.height;
-        vp.text_width = text_width;
-        vp.tab_width = tabstop;
-        app.slots_mut()[slot_idx]
-            .editor
-            .set_viewport_height(area.height);
+        let tabstop = s.tabstop as u16;
+        if let Some(e) = app.window_editors.get_mut(&win_id) {
+            let vp = e.host_mut().viewport_mut();
+            vp.width = text_width;
+            vp.height = area.height;
+            vp.text_width = text_width;
+            vp.tab_width = tabstop;
+            e.set_viewport_height(area.height);
+        }
     }
 
     // Relative/hybrid line numbers count from THIS window's cursor row. The
     // focused window's editor cursor is authoritative and matches its saved
     // `cursor_row`; an unfocused window must use its own saved row so its
     // relative numbers don't count from the active window's cursor.
-    let cursor_row = if is_focused {
-        app.slots()[slot_idx].editor.buffer().cursor().row
-    } else {
-        app.windows
-            .get(win_id)
-            .and_then(|w| w.as_ref())
-            .map(|w| w.cursor_row)
-            .unwrap_or_else(|| app.slots()[slot_idx].editor.buffer().cursor().row)
-    };
+    let cursor_row = w_cursor_row;
     let numbers = match (nu, rnu) {
         (false, false) => GutterNumbers::None,
         (true, false) => GutterNumbers::Absolute,
@@ -833,20 +850,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Viewport for this window: focused uses editor's live viewport (with
     // auto-scroll applied); non-focused builds one from the window's own
     // stored scroll position so it doesn't chase the focused editor.
-    let viewport_owned: Viewport;
-    let viewport_ref: &Viewport = if is_focused {
-        app.slots()[slot_idx].editor.host().viewport()
-    } else {
-        viewport_owned = Viewport {
-            top_row,
-            top_col,
-            width: text_width,
-            height: area.height,
-            text_width,
-            ..Viewport::default()
-        };
-        &viewport_owned
-    };
+    // This window's viewport comes from its own editor (#151 Phase D): focused
+    // windows get live auto-scrolled scroll; non-focused windows keep the scroll
+    // they were left at (their editor isn't dispatched while unfocused).
+    let mut viewport_owned = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| *e.host().viewport())
+        .unwrap_or_default();
+    viewport_owned.width = text_width;
+    viewport_owned.height = area.height;
+    viewport_owned.text_width = text_width;
+    let viewport_ref: &Viewport = &viewport_owned;
 
     let in_prompt = app.command_field.is_some()
         || app.filter_field.is_some()
@@ -883,12 +898,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // editor state shared by every window on the same slot, so an unfocused
     // split would otherwise paint the active window's selection too.
     let selection = if is_focused {
-        app.slots()[slot_idx].editor.buffer_selection()
+        app.window_editors
+            .get(&win_id)
+            .and_then(|e| e.buffer_selection())
     } else {
         None
     };
     let buffer_spans = app.slots()[slot_idx].editor.buffer_spans();
-    let search_pattern = app.slots()[slot_idx].editor.search_state().pattern.as_ref();
+    let search_pattern_owned = app
+        .window_editors
+        .get(&win_id)
+        .and_then(|e| e.search_state().pattern.clone());
+    let search_pattern = search_pattern_owned.as_ref();
 
     let search_bg = if search_pattern.is_some() {
         Style::default()
@@ -937,7 +958,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // active window's cursor instead of staying put.
     let indent_guide_active_col: Option<usize> =
         if is_focused && indent_guides_enabled && indent_guide_shiftwidth > 0 {
-            let cursor_row = app.slots()[slot_idx].editor.buffer().cursor().row;
+            let cursor_row = w_cursor_row;
             let rope = app.slots()[slot_idx].editor.buffer().rope();
             let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor_row);
             let tab_width = indent_guide_tabstop.max(1);
@@ -982,8 +1003,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let comment_lead = app.active_comment_lead();
     let eol_hints: Vec<EolHint> = {
         let slot = &app.slots()[slot_idx];
-        let cursor_row = slot.editor.buffer().cursor().row;
-        let diag_mode = slot.editor.settings().diagnostics_inline;
+        let cursor_row = w_cursor_row;
+        let diag_mode = s.diagnostics_inline;
 
         let mut hints: Vec<EolHint> = Vec::new();
 
@@ -1018,8 +1039,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
         // 2. Inline blame on the cursor line, unless a diagnostic already
         //    annotates it (errors take precedence over blame).
-        let blame_show = slot.editor.settings().blame_inline
-            && !slot.editor.is_blame()
+        let blame_show = s.blame_inline
+            && !w_is_blame
             && is_focused
             && app.blame_cursor_moved_at.elapsed() >= BLAME_IDLE_DELAY
             && !hints.iter().any(|h| h.row == cursor_row);
@@ -1047,13 +1068,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // render plan that frames each commit run in a box (titled top border,
     // `│` sides, bottom border). The engine's cursor/scroll stays authoritative
     // — this only changes how the viewport is painted.
-    let box_mode = {
-        let s = &app.slots()[slot_idx];
-        s.editor.is_blame() && matches!(s.editor.host().viewport().wrap, hjkl_buffer::Wrap::None)
-    };
+    let box_mode = w_is_blame && matches!(viewport_owned.wrap, hjkl_buffer::Wrap::None);
     let blame_box_plan: Vec<hjkl_buffer_tui::render::BlameRow> = if box_mode {
         let s = &app.slots()[slot_idx];
-        let vp_top = s.editor.host().viewport().top_row;
+        let vp_top = viewport_owned.top_row;
         let line_count = s.editor.buffer().line_count() as usize;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1670,7 +1688,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // intact. Insert mode has no held-scroll, so the hardware cursor doesn't
     // trail there. The command/search prompt likewise keeps the hardware cursor.
     if show_cursor
-        && let Some((cx, cy)) = app.slots_mut()[slot_idx].editor.cursor_screen_pos(
+        && let Some((cx, cy)) = app.active_editor_mut().cursor_screen_pos(
             area.x,
             area.y,
             area.width,
@@ -1682,7 +1700,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // shift content down); the column shifts right by the box frame.
         // `None` when the cursor row scrolled past the plan's last row.
         let pos = if box_mode {
-            let cur = app.slots()[slot_idx].editor.buffer().cursor().row;
+            let cur = w_cursor_row;
             blame_box_plan
                 .iter()
                 .position(
@@ -1696,7 +1714,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 })
         } else if let Some(p) = diff_filler_plan.as_ref() {
             // Diff filler rows above the cursor shift it down by that many rows.
-            let cur = app.slots()[slot_idx].editor.buffer().cursor().row;
+            let cur = w_cursor_row;
             if cur >= vp_top {
                 let off = p.screen_offset(vp_top, cur);
                 if (off as u16) < area.height {
@@ -1711,7 +1729,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             Some((cx, cy))
         };
         if let Some((cx, cy)) = pos {
-            let shape = app.slots()[slot_idx].editor.host().cursor_shape();
+            let shape = app.active_editor().host().cursor_shape();
             match shape {
                 hjkl_engine::CursorShape::Bar => {
                     // Hardware bar — keeps the char under the cursor visible.

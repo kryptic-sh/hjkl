@@ -80,26 +80,22 @@ impl App {
                         };
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .delete_block(top_row, bot_row, left_col, right_col, register);
                             }
                             hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .yank_block(top_row, bot_row, left_col, right_col, register);
                             }
                             hjkl_vim::OperatorKind::Change => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .change_block(top_row, bot_row, left_col, right_col, register);
                                 // change_block enters Insert (BlockChange reason);
                                 // no Esc needed.
                                 return;
                             }
                             hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .indent_block(top_row, bot_row, left_col, right_col, n as i32);
                             }
                             hjkl_vim::OperatorKind::Outdent => {
@@ -119,8 +115,7 @@ impl App {
                                     end_row: bot_row,
                                 };
                                 if !self.submit_external_format(Some(range)) {
-                                    self.active_mut()
-                                        .editor
+                                    self.active_editor_mut()
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
                                     if let Some((top, bot)) =
                                         self.active_editor_mut().take_last_indent_range()
@@ -148,8 +143,7 @@ impl App {
                             }
                             hjkl_vim::OperatorKind::Comment => {
                                 // Visual-block gc: toggle comments on the row range.
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .toggle_comment_range(top_row, bot_row);
                             }
                             _ => return,
@@ -169,31 +163,26 @@ impl App {
                         let kind = RangeKind::Inclusive;
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .delete_range(start, end, kind, register);
                             }
                             hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .yank_range(start, end, kind, register);
                             }
                             hjkl_vim::OperatorKind::Change => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .change_range(start, end, kind, register);
                                 // change_range transitions to Insert via
                                 // begin_insert_noundo — no explicit mode-set needed.
                                 return;
                             }
                             hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .indent_range(start, end, n as i32, 0);
                             }
                             hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .indent_range(start, end, -(n as i32), 0);
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
@@ -309,8 +298,7 @@ impl App {
                                     end_row: bot_row,
                                 };
                                 if !self.submit_external_format(Some(range)) {
-                                    self.active_mut()
-                                        .editor
+                                    self.active_editor_mut()
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
                                     if let Some((top, bot)) =
                                         self.active_editor_mut().take_last_indent_range()
@@ -338,8 +326,7 @@ impl App {
                             }
                             hjkl_vim::OperatorKind::Comment => {
                                 // Visual-line gc: toggle comments on the row range.
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .toggle_comment_range(top_row, bot_row);
                             }
                             _ => return,
@@ -554,8 +541,7 @@ impl App {
                 count: action_count,
             } => {
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut()
-                    .editor
+                self.active_editor_mut()
                     .word_search(forward, whole_word, n.max(1));
                 self.sync_after_engine_mutation();
             }

@@ -11,10 +11,10 @@ fn equal_equal_in_normal_reindents_current_line() {
     // to shiftwidth=4 spaces (one level deep, inside the opening brace).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\n  body\n}");
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
-    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
     // Move cursor to row 1 ("  body").
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     // Drive `==` through the normal keymap path.
@@ -22,8 +22,7 @@ fn equal_equal_in_normal_reindents_current_line() {
     assert!(app.pending_state.is_none(), "pending must clear after ==");
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -38,7 +37,7 @@ fn equal_equal_in_normal_reindents_current_line() {
         "== must reindent line 1 to 4 spaces; got {lines:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must stay in Normal after =="
     );
@@ -50,10 +49,10 @@ fn eq_g_from_top_reindents_entire_buffer() {
     // Buffer: "{\nbody\n}" where "body" has wrong zero indent.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\nbody\n}");
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
-    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
     // Cursor at row 0.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Drive `=G`: = → BeginPendingAfterOp(AutoIndent), G → ApplyOpMotion.
@@ -61,8 +60,7 @@ fn eq_g_from_top_reindents_entire_buffer() {
     assert!(app.pending_state.is_none(), "pending must clear after =G");
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -77,7 +75,7 @@ fn eq_g_from_top_reindents_entire_buffer() {
         "=G must reindent whole buffer; got {lines:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must stay in Normal after =G"
     );
@@ -89,20 +87,20 @@ fn visual_line_eq_reindents_selected_lines() {
     // Surrounding braces are NOT in the selection.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\nbody\n}");
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
-    app.active_mut().editor.settings_mut().expandtab = true;
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualLine,
         "must be in VisualLine after V"
     );
@@ -112,8 +110,7 @@ fn visual_line_eq_reindents_selected_lines() {
     assert!(consumed, "= in VisualLine must be consumed");
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -129,7 +126,7 @@ fn visual_line_eq_reindents_selected_lines() {
         "V= must reindent the selected line; got {lines:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must exit VisualLine after ="
     );
@@ -175,9 +172,9 @@ fn auto_indent_op_sets_indent_flash() {
     // and assert indent_flash is armed afterwards.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\n  body\n}");
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
-    app.active_mut().editor.settings_mut().expandtab = true;
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     // First `=` arms the pending-state reducer (BeginPendingAfterOp).
@@ -296,7 +293,7 @@ fn auto_indent_gg_eq_g_invokes_rustfmt() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let after = app.active().editor.buffer().as_string();
+    let after = app.active_editor().buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
     assert!(
@@ -370,7 +367,7 @@ fn prettier_md_diagnostic() {
     eprintln!("status after poll: {:?}", app.bus.last_body_or_empty());
     eprintln!(
         "buffer after: {:?}",
-        app.active().editor.buffer().as_string()
+        app.active_editor().buffer().as_string()
     );
 
     let _ = std::fs::remove_file(&path);
@@ -429,7 +426,7 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let after = app.active().editor.buffer().as_string();
+    let after = app.active_editor().buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
     // rustfmt must have been invoked — the buffer must differ from the
@@ -453,10 +450,10 @@ fn auto_indent_falls_back_to_dumb_for_unknown_ext() {
     // No filename set → formatter_for_path never called → dumb algo runs.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\nbody\n}");
-    app.active_mut().editor.settings_mut().shiftwidth = 4;
-    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
     // cursor on row 1
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     app.route_chord_key(key(KeyCode::Char('=')));
@@ -482,7 +479,7 @@ fn auto_indent_falls_back_to_dumb_for_no_registered_formatter() {
     seed_buffer(&mut app, "hello\nworld");
     // Give the slot a filename with an extension hjkl-mangler does not handle.
     app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test_file.xyz"));
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     app.route_chord_key(key(KeyCode::Char('=')));
@@ -509,7 +506,7 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
     seed_buffer(&mut app, ugly);
     // Assign a .rs filename so formatter_for_path picks rustfmt.
     app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/hjkl_mangler_test.rs"));
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     app.route_chord_key(key(KeyCode::Char('=')));
@@ -536,7 +533,7 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
     }
 
     // Formatter replaced the buffer — content must differ from original.
-    let formatted = app.active().editor.buffer().as_string();
+    let formatted = app.active_editor().buffer().as_string();
     assert_ne!(
         formatted, ugly,
         "rustfmt must have changed the buffer content"
@@ -600,7 +597,7 @@ fn auto_indent_format_result_is_undoable() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let formatted = app.active().editor.buffer().as_string();
+    let formatted = app.active_editor().buffer().as_string();
     assert_ne!(
         formatted,
         ugly.trim_end(),
@@ -609,7 +606,7 @@ fn auto_indent_format_result_is_undoable() {
 
     // Press `u` — must restore the pre-format buffer.
     app.route_chord_key(key(KeyCode::Char('u')));
-    let after_undo = app.active().editor.buffer().as_string();
+    let after_undo = app.active_editor().buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(
@@ -669,7 +666,7 @@ fn auto_indent_double_equals_only_touches_current_line() {
     // Move cursor to row 2 (j j from row 0).
     app.route_chord_key(key(KeyCode::Char('j')));
     app.route_chord_key(key(KeyCode::Char('j')));
-    assert_eq!(app.active().editor.cursor().0, 2, "cursor must be on row 2");
+    assert_eq!(app.active_editor().cursor().0, 2, "cursor must be on row 2");
 
     // Drive `==` via the production chord path.
     app.route_chord_key(key(KeyCode::Char('=')));
@@ -688,7 +685,7 @@ fn auto_indent_double_equals_only_touches_current_line() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let after = app.active().editor.buffer().as_string();
+    let after = app.active_editor().buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
     // Prettier with native range flags returns the whole file.
@@ -760,7 +757,7 @@ fn auto_indent_gg_eq_g_still_reformats_whole_file() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let after = app.active().editor.buffer().as_string();
+    let after = app.active_editor().buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
     // rustfmt must have reformatted — spaced assignment must appear.

@@ -21,8 +21,7 @@ fn save_trims_trailing_whitespace_when_option_on() {
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Enable the option.
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .settings_mut()
         .trim_trailing_whitespace = true;
     // Trigger :w
@@ -48,7 +47,7 @@ fn save_trims_trailing_whitespace_when_option_on() {
     );
 
     // Buffer must also reflect the trimmed content.
-    let buf = app.active().editor.buffer().as_string();
+    let buf = app.active_editor().buffer().as_string();
     assert!(
         !buf.contains("   "),
         "buffer must have no trailing spaces after trim; got: {buf:?}"
@@ -78,8 +77,7 @@ fn save_skips_trim_when_option_off() {
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Ensure option is off (default).
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .settings_mut()
         .trim_trailing_whitespace = false;
     app.dispatch_ex("write");
@@ -111,8 +109,7 @@ fn save_trim_noop_when_no_trailing_whitespace() {
     drop(f);
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .settings_mut()
         .trim_trailing_whitespace = true;
     app.dispatch_ex("write");
@@ -146,7 +143,7 @@ fn save_writes_unformatted_when_no_formatter_for_path() {
     drop(f);
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
-    app.active_mut().editor.settings_mut().format_on_save = true;
+    app.active_editor_mut().settings_mut().format_on_save = true;
     // :write must succeed — no formatter for .xyz, no error.
     app.dispatch_ex("write");
 
@@ -173,12 +170,12 @@ fn set_fos_alias_enables_format_on_save_via_ex() {
     // exercised in both directions.
     app.dispatch_ex("set nofos");
     assert!(
-        !app.active().editor.settings().format_on_save,
+        !app.active_editor().settings().format_on_save,
         ":set nofos must disable format_on_save"
     );
     app.dispatch_ex("set fos");
     assert!(
-        app.active().editor.settings().format_on_save,
+        app.active_editor().settings().format_on_save,
         ":set fos must enable format_on_save"
     );
 }
@@ -188,12 +185,12 @@ fn set_fos_alias_enables_format_on_save_via_ex() {
 fn set_tts_alias_enables_trim_trailing_whitespace_via_ex() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(
-        !app.active().editor.settings().trim_trailing_whitespace,
+        !app.active_editor().settings().trim_trailing_whitespace,
         "trim_trailing_whitespace must start false"
     );
     app.dispatch_ex("set tts");
     assert!(
-        app.active().editor.settings().trim_trailing_whitespace,
+        app.active_editor().settings().trim_trailing_whitespace,
         ":set tts must enable trim_trailing_whitespace"
     );
 }
@@ -202,10 +199,10 @@ fn set_tts_alias_enables_trim_trailing_whitespace_via_ex() {
 #[test]
 fn set_nofos_disables_format_on_save_via_ex() {
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().editor.settings_mut().format_on_save = true;
+    app.active_editor_mut().settings_mut().format_on_save = true;
     app.dispatch_ex("set nofos");
     assert!(
-        !app.active().editor.settings().format_on_save,
+        !app.active_editor().settings().format_on_save,
         ":set nofos must disable format_on_save"
     );
 }
@@ -214,13 +211,12 @@ fn set_nofos_disables_format_on_save_via_ex() {
 #[test]
 fn set_notts_disables_trim_trailing_whitespace_via_ex() {
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .settings_mut()
         .trim_trailing_whitespace = true;
     app.dispatch_ex("set notts");
     assert!(
-        !app.active().editor.settings().trim_trailing_whitespace,
+        !app.active_editor().settings().trim_trailing_whitespace,
         ":set notts must disable trim_trailing_whitespace"
     );
 }
@@ -246,7 +242,7 @@ fn save_fos_missing_tool_warns_but_does_not_abort() {
     drop(f);
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
-    app.active_mut().editor.settings_mut().format_on_save = true;
+    app.active_editor_mut().settings_mut().format_on_save = true;
     app.dispatch_ex("write");
 
     // File must have been written (save not aborted).

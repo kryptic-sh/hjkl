@@ -42,7 +42,7 @@ fn type_search(app: &mut App, text: &str) {
 }
 
 fn seed_buffer(app: &mut App, content: &str) {
-    BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), content);
+    BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), content);
 }
 
 /// Helper: bump mtime by writing a file then sleeping briefly so the
@@ -186,7 +186,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar { ch, count }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.replace_char_at(ch, count);
+                    app.active_editor_mut().replace_char_at(ch, count);
                     app.sync_viewport_from_editor();
                     return;
                 }
@@ -197,7 +197,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.find_char(ch, forward, till, count);
+                    app.active_editor_mut().find_char(ch, forward, till, count);
                     app.sync_viewport_from_editor();
                     return;
                 }
@@ -273,13 +273,13 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                         });
                         return;
                     }
-                    app.active_mut().editor.after_g(ch, count);
+                    app.active_editor_mut().after_g(ch, count);
                     app.sync_viewport_from_editor();
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.after_z(ch, count);
+                    app.active_editor_mut().after_z(ch, count);
                     app.sync_viewport_from_editor();
                     return;
                 }
@@ -289,7 +289,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     total_count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.apply_op_motion(
+                    app.active_editor_mut().apply_op_motion(
                         op_kind_to_operator(op),
                         motion_key,
                         total_count,
@@ -299,8 +299,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
                     app.pending_state = None;
-                    app.active_mut()
-                        .editor
+                    app.active_editor_mut()
                         .apply_op_double(op_kind_to_operator(op), total_count);
                     app.sync_viewport_from_editor();
                     return;
@@ -312,7 +311,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     total_count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.apply_op_text_obj(
+                    app.active_editor_mut().apply_op_text_obj(
                         op_kind_to_operator(op),
                         ch,
                         inner,
@@ -327,8 +326,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     total_count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut()
-                        .editor
+                    app.active_editor_mut()
                         .apply_op_g(op_kind_to_operator(op), ch, total_count);
                     app.sync_viewport_from_editor();
                     return;
@@ -341,7 +339,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     total_count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.apply_op_find(
+                    app.active_editor_mut().apply_op_find(
                         op_kind_to_operator(op),
                         ch,
                         forward,
@@ -353,41 +351,41 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.set_pending_register(reg);
+                    app.active_editor_mut().set_pending_register(reg);
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::SetMark { ch }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.set_mark_at_cursor(ch);
+                    app.active_editor_mut().set_mark_at_cursor(ch);
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
                     app.pending_state = None;
-                    let _ = app.active_mut().editor.try_goto_mark_line(ch);
+                    let _ = app.active_editor_mut().try_goto_mark_line(ch);
                     app.sync_viewport_from_editor();
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
                     app.pending_state = None;
-                    let _ = app.active_mut().editor.try_goto_mark_char(ch);
+                    let _ = app.active_editor_mut().try_goto_mark_char(ch);
                     app.sync_viewport_from_editor();
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::StartMacroRecord { reg }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.start_macro_record(reg);
+                    app.active_editor_mut().start_macro_record(reg);
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::PlayMacro { reg, count }) => {
                     app.pending_state = None;
-                    let inputs = app.active_mut().editor.play_macro(reg, count);
+                    let inputs = app.active_editor_mut().play_macro(reg, count);
                     for input in inputs {
                         let ct_key = engine_input_to_key_event(input);
                         if ct_key.code != KeyCode::Null {
                             drive_key(app, ct_key);
                         }
                     }
-                    app.active_mut().editor.end_macro_replay();
+                    app.active_editor_mut().end_macro_replay();
                     app.sync_viewport_from_editor();
                     return;
                 }
@@ -403,15 +401,15 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
         // Unrecognised key variant — fall through.
     }
     // Engine pending bypass: if the engine is mid-chord, skip the trie.
-    if app.active().editor.is_chord_pending() {
-        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
+    if app.active_editor().is_chord_pending() {
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
         app.sync_viewport_from_editor();
         return;
     }
     // Try the keymap trie.
     let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
         // Untranslatable key — forward direct to engine.
-        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
         app.sync_viewport_from_editor();
         return;
     };
@@ -423,7 +421,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     // Unbound: forward all replay keys (including multi-key) to the engine.
     for ev in &replay {
         let back = crate::keymap_translate::to_crossterm(ev);
-        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, back);
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), back);
     }
     app.sync_viewport_from_editor();
 }
@@ -471,8 +469,8 @@ fn win_cursor_col(app: &App) -> usize {
 fn assert_window_synced_to_engine(app: &App) {
     let fw = app.focused_window();
     let win = app.windows[fw].as_ref().unwrap();
-    let (e_row, e_col) = app.active().editor.cursor();
-    let e_top = app.active().editor.host().viewport().top_row;
+    let (e_row, e_col) = app.active_editor().cursor();
+    let e_top = app.active_editor().host().viewport().top_row;
     assert_eq!(
         win.cursor_row, e_row,
         "window.cursor_row out of sync with engine cursor"
@@ -503,10 +501,10 @@ fn macro_key_seq(app: &mut App, keys: &[KeyEvent]) {
         match app.handle_keypress(k) {
             KeyOutcome::Break | KeyOutcome::Continue => {}
             KeyOutcome::FallThrough => {
-                if app.active().editor.vim_mode() == VimMode::Insert {
+                if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(k);
                 } else {
-                    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, k);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), k);
                 }
             }
         }
@@ -520,7 +518,7 @@ fn seed_numbered_lines(app: &mut App, count: usize) {
         .collect::<Vec<_>>()
         .join("\n");
     seed_buffer(app, &content);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 }
 
@@ -528,17 +526,17 @@ fn seed_numbered_lines(app: &mut App, count: usize) {
 fn rck(app: &mut App, keys: &[char]) {
     for &c in keys {
         if !app.route_chord_key(ck(c)) {
-            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck(c));
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), ck(c));
         }
         app.sync_viewport_from_editor();
     }
 }
 
 fn enter_insert(app: &mut App) {
-    app.active_mut().editor.enter_insert_i(1);
+    app.active_editor_mut().enter_insert_i(1);
     app.sync_after_engine_mutation();
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "enter_insert: must be in Insert mode"
     );

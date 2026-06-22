@@ -1015,8 +1015,18 @@ impl super::App {
             return;
         };
 
-        // Must be in Normal mode — don't reconcile mid-edit.
-        let vim_mode = self.slots[slot_idx].editor.vim_mode();
+        // Must be in Normal mode — don't reconcile mid-edit. The mode lives on
+        // the explorer window's editor (#151 Phase D), not the slot bridge
+        // editor (which is never dispatched and would read a stale Normal).
+        let vim_mode = self
+            .explorer
+            .as_ref()
+            .and_then(|e| self.window_editors.get(&e.win_id))
+            .map(|ed| ed.vim_mode())
+            // Fall back to the slot bridge editor (matches active_editor's
+            // fallback) when no window editor exists yet — e.g. unit tests that
+            // drive the explorer without running the reconcile tick.
+            .unwrap_or_else(|| self.slots[slot_idx].editor.vim_mode());
         if vim_mode != VimMode::Normal {
             return;
         }

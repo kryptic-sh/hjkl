@@ -145,6 +145,14 @@ pub struct App {
     /// `WindowId`s are monotonic and never reused, so stale entries can't
     /// collide; closed windows are pruned on the main close paths.
     pub window_folds: std::collections::HashMap<window::WindowId, Vec<hjkl_buffer::Fold>>,
+    /// Per-window editor, keyed by `WindowId` (#151 Phase D). Each is a
+    /// [`Buffer::new_view`] of its slot's shared `Content`, so it owns an
+    /// independent cursor / viewport / vim FSM while editing the same document.
+    /// Invariant: a key exists here iff `windows[id]` is `Some`. The slot's own
+    /// editor is retained as a content bridge during the migration (Stage 2b
+    /// removes it); content reads via either editor agree because they share
+    /// the same `Arc<Mutex<Content>>`.
+    pub(crate) window_editors: std::collections::HashMap<window::WindowId, Editor<Buffer, TuiHost>>,
     /// All open tabs. Each tab owns its own layout tree + focused window.
     /// Never empty — always at least one tab.
     pub tabs: Vec<window::Tab>,
@@ -976,20 +984,98 @@ impl App {
         &mut self.slots[slot_idx]
     }
 
-    /// Shared reference to the focused window's editor.
-    ///
-    /// Phase D (#151/#156) indirection point: today this returns the focused
-    /// *slot's* editor (one editor per buffer). When the editor moves onto
-    /// [`AppWindow`], only these two method bodies change — the ~365 call
-    /// sites stay the same.
+    /// Shared reference to the focused window's editor (#151 Phase D). Each
+    /// window owns its editor in [`window_editors`]; this resolves the focused
+    /// one. Falls back to the focused slot's bridge editor only if the window
+    /// editor is somehow absent (should not happen — the invariant keeps them
+    /// in lockstep).
     pub fn active_editor(&self) -> &Editor<Buffer, TuiHost> {
-        &self.slots[self.focused_slot_idx()].editor
+        let fw = self.focused_window();
+        self.window_editors
+            .get(&fw)
+            .unwrap_or_else(|| &self.slots[self.focused_slot_idx()].editor)
     }
 
     /// Mutable reference to the focused window's editor. See [`active_editor`].
     pub fn active_editor_mut(&mut self) -> &mut Editor<Buffer, TuiHost> {
-        let slot_idx = self.focused_slot_idx();
-        &mut self.slots[slot_idx].editor
+        let fw = self.focused_window();
+        if self.window_editors.contains_key(&fw) {
+            self.window_editors.get_mut(&fw).unwrap()
+        } else {
+            let slot_idx = self.focused_slot_idx();
+            &mut self.slots[slot_idx].editor
+        }
+    }
+
+    /// Build a fresh per-window view editor onto `slot_idx`'s shared `Content`.
+    /// Copies the slot editor's settings + viewport dims so the new view
+    /// renders identically; the cursor starts at the slot editor's cursor.
+    pub(crate) fn make_view_editor(&self, slot_idx: usize) -> Editor<Buffer, TuiHost> {
+        let src = &self.slots[slot_idx].editor;
+        let view = Buffer::new_view(src.buffer().content_arc());
+        let mut ed = Editor::new(view, TuiHost::new(), Options::default());
+        *ed.settings_mut() = src.settings().clone();
+        ed.set_current_buffer_id(self.slots[slot_idx].buffer_id);
+        // Inherit the slot editor's cursor so the first view onto a buffer keeps
+        // any pre-window positioning (startup `+/pat` search, `+N`, a split
+        // inheriting the source cursor).
+        let src_cursor = src.buffer().cursor();
+        ed.set_cursor_quiet(src_cursor.row, src_cursor.col);
+        // Inherit last-search so `n`/`N` work in the new view (e.g. after a
+        // startup `+/pat` search applied to the slot editor pre-window).
+        if let Some(pat) = src.last_search() {
+            ed.set_last_search(Some(pat.to_string()), src.last_search_forward());
+        }
+        let (w, h, top_row, top_col) = {
+            let vp = src.host().viewport();
+            (vp.width, vp.height, vp.top_row, vp.top_col)
+        };
+        {
+            let vp = ed.host_mut().viewport_mut();
+            vp.width = w;
+            vp.height = h;
+            vp.top_row = top_row;
+            vp.top_col = top_col;
+        }
+        ed.set_viewport_height(h);
+        ed
+    }
+
+    /// Reconcile every window's editor with its current slot's `Content`
+    /// (#151 Phase D). Rebuilds a window editor only when its content `Arc` no
+    /// longer matches its slot's — so a pure slot-index reindex (e.g. after
+    /// `:bd`) preserves the window's cursor, while a true buffer switch rebuilds
+    /// the view. Drops editors for windows that are now `None`.
+    pub(crate) fn reconcile_window_editors(&mut self) {
+        let targets: Vec<(window::WindowId, usize)> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| w.as_ref().map(|w| (i, w.slot)))
+            .collect();
+        let live: std::collections::HashSet<window::WindowId> =
+            targets.iter().map(|(id, _)| *id).collect();
+        self.window_editors.retain(|id, _| live.contains(id));
+        for (wid, slot) in targets {
+            if slot >= self.slots.len() {
+                continue;
+            }
+            let slot_content = self.slots[slot].editor.buffer().content_arc();
+            let needs = match self.window_editors.get(&wid) {
+                Some(e) => !std::sync::Arc::ptr_eq(&e.buffer().content_arc(), &slot_content),
+                None => true,
+            };
+            if needs {
+                // Carry the register bank across a rebuild so a buffer switch
+                // (which rebuilds the view onto new Content) doesn't drop yanks.
+                let old_regs = self.window_editors.get(&wid).map(|e| e.registers().clone());
+                let mut ed = self.make_view_editor(slot);
+                if let Some(regs) = old_regs {
+                    *ed.registers_mut() = regs;
+                }
+                self.window_editors.insert(wid, ed);
+            }
+        }
     }
 
     /// Return a shared reference to the active buffer slot.
@@ -1010,8 +1096,11 @@ impl App {
         &self.slots
     }
 
-    /// Return a mutable slice of all buffer slots. Used by the renderer to
-    /// publish viewport dimensions and set cursor positions per-window.
+    /// Return a mutable slice of all buffer slots. Used by tests to set up
+    /// buffer content/viewport directly. (#151 Phase D moved the renderer's
+    /// per-window viewport publish onto the window editors, so this is now
+    /// test-only.)
+    #[allow(dead_code)]
     pub fn slots_mut(&mut self) -> &mut [BufferSlot] {
         &mut self.slots
     }
@@ -1054,8 +1143,7 @@ impl App {
     /// Focused-window only: matchparen highlights the bracket under the live
     /// editor cursor, so it is not rendered for unfocused windows.
     pub fn matchparen_cells(&self) -> Option<[(usize, usize); 2]> {
-        let slot_idx = self.focused_slot_idx();
-        let editor = &self.slots[slot_idx].editor;
+        let editor = self.active_editor();
         if !editor.settings().matchparen {
             return None;
         }
@@ -1070,8 +1158,7 @@ impl App {
     /// names, or `None` when matchparen is off or the cursor is not on a
     /// paired tag name.
     pub fn matchparen_tag_cells(&self) -> Option<Vec<(usize, usize)>> {
-        let slot_idx = self.focused_slot_idx();
-        let editor = &self.slots[slot_idx].editor;
+        let editor = self.active_editor();
         if !editor.settings().matchparen {
             return None;
         }
@@ -1140,8 +1227,7 @@ impl App {
         let edits = self.active_editor_mut().take_content_edits();
         if !edits.is_empty() {
             self.syntax.apply_edits(buffer_id, &edits);
-            self.active_mut()
-                .editor
+            self.active_editor_mut()
                 .shift_syntax_spans_for_edits(&edits);
         }
         self.lsp_notify_change_active(&edits);
@@ -1532,6 +1618,7 @@ impl App {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
             window_folds: std::collections::HashMap::new(),
+            window_editors: std::collections::HashMap::new(),
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,
             next_window_id: 1,
@@ -1643,6 +1730,8 @@ impl App {
             colorscheme: "dark".to_string(),
             fs_watch: None,
         };
+        // Build the per-window view editor for the initial window (#151 Phase D).
+        app.reconcile_window_editors();
         // Check for crash recovery on the initial file slot (#185).
         // If no recovery prompt is needed, arm the PID-lock swap immediately so
         // a concurrent second open of the same file sees it (even on unmodified
@@ -1911,15 +2000,13 @@ impl App {
                 if let Some((top_row, bot_row, left_col, right_col)) =
                     self.active_editor().block_highlight()
                 {
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .yank_block(top_row, bot_row, left_col, right_col, '"');
                 }
             }
             VimMode::Visual => {
                 if let Some((start, end)) = self.active_editor().char_highlight() {
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .yank_range(start, end, RangeKind::Inclusive, '"');
                 }
             }
@@ -1955,8 +2042,7 @@ impl App {
                 if let Some((top_row, bot_row, left_col, right_col)) =
                     self.active_editor().block_highlight()
                 {
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .delete_block(top_row, bot_row, left_col, right_col, '"');
                     // Exit visual mode.
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
@@ -1968,8 +2054,7 @@ impl App {
             }
             VimMode::Visual => {
                 if let Some((start, end)) = self.active_editor().char_highlight() {
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .delete_range(start, end, RangeKind::Inclusive, '"');
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(

@@ -11,13 +11,13 @@ fn visual_d_deletes_selection_via_keymap() {
     // Enter Visual, select 5 chars ("hello"), d → " world" remains.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter Visual mode via engine FSM.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('v'));
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Visual,
         "must be in Visual after v"
     );
@@ -37,8 +37,7 @@ fn visual_d_deletes_selection_via_keymap() {
 
     // Buffer should have " world" (the chars after the deleted selection).
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -55,7 +54,7 @@ fn visual_d_deletes_selection_via_keymap() {
 
     // Must have returned to Normal mode.
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must exit Visual mode after d"
     );
@@ -67,10 +66,10 @@ fn visual_y_yanks_selection_via_keymap() {
     // Enter Visual, select "hello", y → unnamed register has "hello", buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('v'));
 
     // Extend right 4: covers "hello".
     for _ in 0..4 {
@@ -86,8 +85,7 @@ fn visual_y_yanks_selection_via_keymap() {
 
     // Buffer must be unchanged.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -103,7 +101,7 @@ fn visual_y_yanks_selection_via_keymap() {
     );
 
     // Unnamed register must contain the yanked text.
-    let reg = app.active().editor.yank();
+    let reg = app.active_editor().yank();
     assert!(
         reg.contains("hello"),
         "unnamed register must contain 'hello' after vy; got {reg:?}"
@@ -111,7 +109,7 @@ fn visual_y_yanks_selection_via_keymap() {
 
     // Must have returned to Normal mode.
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must exit Visual mode after y"
     );
@@ -123,16 +121,16 @@ fn visual_line_d_deletes_line_via_keymap() {
     // Enter VisualLine (V), d → first line deleted.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "first line\nsecond line");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter VisualLine via engine FSM (Shift-V).
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualLine,
         "must be in VisualLine after V"
     );
@@ -146,8 +144,7 @@ fn visual_line_d_deletes_line_via_keymap() {
 
     // First line should be gone.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -163,7 +160,7 @@ fn visual_line_d_deletes_line_via_keymap() {
     );
 
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must exit VisualLine mode after d"
     );
@@ -175,10 +172,10 @@ fn visual_c_enters_insert_mode_via_keymap() {
     // Enter Visual, select "hello", c → Insert mode, selection deleted.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('v'));
 
     // Extend right 4: covers "hello".
     for _ in 0..4 {
@@ -194,16 +191,15 @@ fn visual_c_enters_insert_mode_via_keymap() {
 
     // Must be in Insert mode.
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Insert,
         "vc must enter Insert mode; got {:?}",
-        app.active().editor.vim_mode()
+        app.active_editor().vim_mode()
     );
 
     // Buffer should have "hello" deleted, leaving " world".
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -228,11 +224,11 @@ fn gg_full_sequence_in_normal_mode_via_keymap() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must be in Normal mode"
     );
@@ -260,7 +256,7 @@ fn gg_full_sequence_in_normal_mode_via_keymap() {
         "after gg the reducer must clear pending_state"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "gg must move engine cursor to row 0 from row 20"
     );
@@ -274,20 +270,20 @@ fn visual_d_with_named_register_writes_to_register() {
     // "ad on a visual selection → register 'a' contains the deleted text.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // "a — set pending register to 'a' via engine FSM.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('"'));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('a'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('"'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('a'));
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         Some('a'),
         "pending_register must be Some('a') after \"a chord"
     );
 
     // Enter Visual mode.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('v'));
     // Extend right 4 to select "hello".
     for _ in 0..4 {
         app.route_chord_key(ck('l'));
@@ -298,8 +294,7 @@ fn visual_d_with_named_register_writes_to_register() {
     assert!(consumed, "d in Visual must be consumed");
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -315,14 +310,14 @@ fn visual_d_with_named_register_writes_to_register() {
     );
 
     // Named register 'a' must contain the deleted text.
-    let reg_a = &app.active().editor.registers().named[0]; // 'a' - 'a' = 0
+    let reg_a = &app.active_editor().registers().named[0]; // 'a' - 'a' = 0
     assert!(
         reg_a.text.contains("hello"),
         "register 'a' must contain 'hello' after \"ad; got {:?}",
         reg_a.text
     );
 
-    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Normal);
     assert_window_synced_to_engine(&app);
 }
 
@@ -333,16 +328,16 @@ fn visual_line_d_deletes_single_line_via_range_mutation() {
     // guard fix it flows through delete_range + MotionKind::Linewise.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "only line\nsecond line");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter VisualLine.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualLine
     );
 
@@ -351,8 +346,7 @@ fn visual_line_d_deletes_single_line_via_range_mutation() {
     assert!(consumed, "d in VisualLine must be consumed");
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -367,7 +361,7 @@ fn visual_line_d_deletes_single_line_via_range_mutation() {
         "Vd on single line must delete it; got {lines:?}"
     );
 
-    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Normal);
     assert_window_synced_to_engine(&app);
 }
 
@@ -377,16 +371,16 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
     // has cols 0..=2 removed.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcde\nfghij\nklmno");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter VisualBlock.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualBlock
     );
 
@@ -402,8 +396,7 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
     assert!(consumed, "d in VisualBlock must be consumed");
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -418,7 +411,7 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
         "VisualBlock d must remove cols 0..=2 on each row; got {lines:?}"
     );
 
-    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Normal);
     assert_window_synced_to_engine(&app);
 }
 
@@ -427,16 +420,16 @@ fn visual_block_y_yanks_rectangle_to_register() {
     // <C-v>lj"ay — yank a 2-col block into register 'a'. Buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcde\nfghij\nklmno");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Set pending register 'a'.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('"'));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('a'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('"'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('a'));
 
     // Enter VisualBlock.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
 
@@ -449,8 +442,7 @@ fn visual_block_y_yanks_rectangle_to_register() {
 
     // Buffer must be unchanged.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -466,7 +458,7 @@ fn visual_block_y_yanks_rectangle_to_register() {
     );
 
     // Register 'a' must contain the yanked block text.
-    let reg_a = &app.active().editor.registers().named[0];
+    let reg_a = &app.active_editor().registers().named[0];
     assert!(
         !reg_a.text.is_empty(),
         "register 'a' must be non-empty after block yank"
@@ -477,6 +469,6 @@ fn visual_block_y_yanks_rectangle_to_register() {
         reg_a.text
     );
 
-    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Normal);
     assert_window_synced_to_engine(&app);
 }

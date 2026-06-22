@@ -392,8 +392,7 @@ impl App {
                         // open the filter prompt so the user can type the shell command.
                         if op == hjkl_vim::OperatorKind::Filter {
                             if let Some((top, bot)) = self
-                                .active_mut()
-                                .editor
+                                .active_editor_mut()
                                 .range_for_op_motion(motion_key, total_count)
                             {
                                 tracing::debug!(
@@ -410,8 +409,7 @@ impl App {
                         // Falls back to dumb algo when no formatter is registered.
                         let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
                             let range = self
-                                .active_mut()
-                                .editor
+                                .active_editor_mut()
                                 .range_for_op_motion(motion_key, total_count)
                                 .map(|(r0, r1)| hjkl_mangler::RangeSpec {
                                     start_row: r0,
@@ -495,8 +493,7 @@ impl App {
                         // range query, then submit the async formatter if applicable.
                         let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
                             let range = self
-                                .active()
-                                .editor
+                                .active_editor()
                                 .range_for_op_text_obj(ch, inner, total_count)
                                 .map(|(r0, r1)| hjkl_mangler::RangeSpec {
                                     start_row: r0,
@@ -535,8 +532,7 @@ impl App {
                         // query, then submit the async formatter if applicable.
                         let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
                             let range = self
-                                .active_mut()
-                                .editor
+                                .active_editor_mut()
                                 .range_for_op_g(ch, total_count)
                                 .map(|(r0, r1)| hjkl_mangler::RangeSpec {
                                     start_row: r0,

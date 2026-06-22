@@ -56,8 +56,8 @@ fn imap_jj_enters_normal_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("imap jj <Esc>");
     // Enter insert mode.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 
     use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
@@ -70,13 +70,13 @@ fn imap_jj_enters_normal_mode() {
         consumed,
         "first j should be pending (chord not yet complete)"
     );
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 
     // Second 'j' — should match and produce Replay{<Esc>}.
     let consumed = app.dispatch_keymap_in_mode(j_ev, 1, &mut replay, Mode::Insert);
     assert!(consumed, "second j should match imap jj");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "imap jj <Esc> should leave Insert mode"
     );
@@ -389,25 +389,25 @@ fn count_engine_motion_5j_moves_cursor_five_rows() {
     // Populate 20 lines so there is room to move.
     let content: String = (0..20).map(|i| format!("line {i}\n")).collect();
     let content = content.trim_end_matches('\n');
-    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), content);
+    hjkl_engine::BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), content);
 
     // Cursor starts at row 0.
-    let (start_row, _) = app.active().editor.cursor();
+    let (start_row, _) = app.active_editor().cursor();
     assert_eq!(start_row, 0);
 
     // Simulate what the event loop does for `5j`:
     // 1. Buffer '5' into pending_count.
     // 2. On 'j', replay '5' then 'j' to the engine.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
     );
 
-    let (end_row, _) = app.active().editor.cursor();
+    let (end_row, _) = app.active_editor().cursor();
     assert_eq!(end_row, 5, "5j must move cursor from row 0 to row 5");
 }
 
@@ -416,26 +416,26 @@ fn count_engine_motion_5j_moves_cursor_five_rows() {
 fn zero_with_empty_count_is_start_of_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     hjkl_engine::BufferEdit::replace_all(
-        app.active_mut().editor.buffer_mut(),
+        app.active_editor_mut().buffer_mut(),
         "hello world\nsecond line",
     );
 
     // Move to end of first line.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE),
     );
-    let (_, col_after_dollar) = app.active().editor.cursor();
+    let (_, col_after_dollar) = app.active_editor().cursor();
     assert!(col_after_dollar > 0, "$ must move to end of line");
 
     // `0` with empty pending_count → goes to col 0.
     // Verify the rule: is_zero && pending_count.is_empty() → fall through.
     assert!(app.pending_count.is_empty());
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE),
     );
-    let (_, col_after_zero) = app.active().editor.cursor();
+    let (_, col_after_zero) = app.active_editor().cursor();
     assert_eq!(
         col_after_zero, 0,
         "0 with no pending count must go to col 0"
@@ -452,14 +452,14 @@ fn gg_via_dispatch_jumps_to_top() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(30, 0);
-    assert_eq!(app.active().editor.cursor().0, 30);
+    app.active_editor_mut().jump_cursor(30, 0);
+    assert_eq!(app.active_editor().cursor().0, 30);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('g')));
 
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "gg through dispatch path must move cursor to top"
     );
@@ -473,7 +473,7 @@ fn r_space_replaces_char_with_space() {
     // (`<space>`) is fed through hjkl_vim::step → Commit → replace_char_at.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
-    app.active_mut().editor.jump_cursor(0, 1); // on 'b'
+    app.active_editor_mut().jump_cursor(0, 1); // on 'b'
 
     drive_key(&mut app, key(KeyCode::Char('r')));
     // App-level pending state is set; engine is NOT chord-pending.
@@ -482,7 +482,7 @@ fn r_space_replaces_char_with_space() {
         "r must set app pending_state to Replace"
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be in chord-pending after app-intercepted r"
     );
     drive_key(&mut app, key(KeyCode::Char(' ')));
@@ -491,7 +491,7 @@ fn r_space_replaces_char_with_space() {
         "pending_state cleared after commit"
     );
 
-    let line = app.active().editor.buffer().as_string();
+    let line = app.active_editor().buffer().as_string();
     assert_eq!(
         line, "a c",
         "r<space> must replace 'b' with ' ', got {line:?}"
@@ -506,7 +506,7 @@ fn f_with_leader_char_finds_it() {
     // the engine is NOT in chord-pending after `f`.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a b c");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('f')));
     // App-level pending state is set; engine is NOT chord-pending.
@@ -515,13 +515,13 @@ fn f_with_leader_char_finds_it() {
         "f must set app pending_state to Find"
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be in chord-pending after app-intercepted f"
     );
     drive_key(&mut app, key(KeyCode::Char(' ')));
 
     // Cursor should now be on the first space (column 1).
-    assert_eq!(app.active().editor.cursor(), (0, 1));
+    assert_eq!(app.active_editor().cursor(), (0, 1));
 }
 
 // ── Phase 2b-i: bare f/F/t/T through hjkl-vim reducer ────────────────────
@@ -531,7 +531,7 @@ fn fx_finds_x_forward() {
     // `fx` in "abc x def" from col 0 → cursor on 'x' (col 4).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc x def");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('f')));
     assert!(
@@ -544,7 +544,7 @@ fn fx_finds_x_forward() {
         "pending_state cleared after commit"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 4),
         "fx must land on 'x' at col 4"
     );
@@ -555,7 +555,7 @@ fn fx_finds_x_backward() {
     // `Fx` in "abc x def" from end → cursor on 'x' (col 4).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc x def");
-    app.active_mut().editor.jump_cursor(0, 8); // on 'f'
+    app.active_editor_mut().jump_cursor(0, 8); // on 'f'
 
     drive_key(&mut app, key(KeyCode::Char('F')));
     assert!(
@@ -568,7 +568,7 @@ fn fx_finds_x_backward() {
         "pending_state cleared after commit"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 4),
         "Fx must land on 'x' at col 4"
     );
@@ -579,12 +579,12 @@ fn tx_lands_before_x() {
     // `tx` in "abc x def" from col 0 → stops one before 'x' (col 3, the space).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc x def");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('t')));
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 3),
         "tx must stop one before 'x' at col 3"
     );
@@ -595,12 +595,12 @@ fn tx_backward_lands_after_x() {
     // `Tx` in "abc x def" from end → stops one after 'x' (col 5, the space).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc x def");
-    app.active_mut().editor.jump_cursor(0, 8); // on 'f'
+    app.active_editor_mut().jump_cursor(0, 8); // on 'f'
 
     drive_key(&mut app, key(KeyCode::Char('T')));
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 5),
         "Tx must stop one after 'x' at col 5"
     );
@@ -611,7 +611,7 @@ fn fx_with_count_3() {
     // `3fx` in "xaxbxc" from col 0 → 3rd 'x' at col 4.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "xaxbxc");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // Buffer count via pending_count (mimicking the event_loop digit path).
     app.pending_count.try_accumulate('3');
@@ -627,7 +627,7 @@ fn fx_with_count_3() {
     );
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 4),
         "3fx must land on 3rd 'x' at col 4"
     );
@@ -638,7 +638,7 @@ fn fx_then_esc_cancels() {
     // `f<Esc>` clears pending without moving cursor.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc x def");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('f')));
     assert!(app.pending_state.is_some());
@@ -648,7 +648,7 @@ fn fx_then_esc_cancels() {
         "Esc must clear find pending_state"
     );
     // Cursor unchanged.
-    assert_eq!(app.active().editor.cursor(), (0, 0));
+    assert_eq!(app.active_editor().cursor(), (0, 0));
 }
 
 #[test]
@@ -656,11 +656,11 @@ fn gj_via_dispatch_moves_down_display_line() {
     // gj is a display-line motion (same as j on non-wrapped lines).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('j')));
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         1,
         "gj must move down one row"
     );
@@ -674,7 +674,7 @@ fn gg_jumps_top() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(30, 0);
+    app.active_editor_mut().jump_cursor(30, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
@@ -687,7 +687,7 @@ fn gg_jumps_top() {
     );
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(app.pending_state.is_none(), "pending cleared after gg");
-    assert_eq!(app.active().editor.cursor().0, 0, "gg must jump to row 0");
+    assert_eq!(app.active_editor().cursor().0, 0, "gg must jump to row 0");
 }
 
 #[test]
@@ -696,7 +696,7 @@ fn gg_with_count_5_jumps_line_5() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     app.pending_count.try_accumulate('5');
     drive_key(&mut app, key(KeyCode::Char('g')));
@@ -709,7 +709,7 @@ fn gg_with_count_5_jumps_line_5() {
         app.pending_state
     );
     drive_key(&mut app, key(KeyCode::Char('g')));
-    assert_eq!(app.active().editor.cursor().0, 4, "5gg must land on row 4");
+    assert_eq!(app.active_editor().cursor().0, 4, "5gg must land on row 4");
 }
 
 #[test]
@@ -718,13 +718,13 @@ fn gv_restores_last_visual() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n");
     // Enter visual and select a few chars.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
     // Exit visual.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Esc));
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "should be Normal after Esc"
     );
@@ -732,7 +732,7 @@ fn gv_restores_last_visual() {
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('v')));
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Visual,
         "gv must re-enter Visual mode"
     );
@@ -743,12 +743,12 @@ fn gj_screen_down() {
     // gj moves cursor down one display row.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\n");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('j')));
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         1,
         "gj must move down to row 1"
     );
@@ -761,7 +761,7 @@ fn gu_then_w_lowercases_word() {
     // (ApplyOpMotion) and calls apply_op_motion on the engine.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "HELLO world\n");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('u')));
@@ -778,13 +778,13 @@ fn gu_then_w_lowercases_word() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after gu (reducer owns it)"
     );
     // Feed 'w' through the event loop (reducer dispatches ApplyOpMotion).
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none(), "pending must clear after guw");
-    let content = app.active().editor.buffer().as_string();
+    let content = app.active_editor().buffer().as_string();
     assert!(
         content.starts_with("hello"),
         "gu+w must lowercase the word; got {content:?}"
@@ -799,7 +799,7 @@ fn diw_deletes_word_via_reducer() {
     // Reducer owns the full sequence; engine is not chord-pending.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('i')));
@@ -816,14 +816,14 @@ fn diw_deletes_word_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after reducer-owned di"
     );
 
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         "diw must delete 'hello', remaining: {line:?}"
@@ -835,7 +835,7 @@ fn daw_deletes_around_word_via_reducer() {
     // `daw` — d → AfterOp, a → Wait(OpTextObj{inner:false}), w → ApplyOpTextObj.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('a')));
@@ -852,14 +852,14 @@ fn daw_deletes_around_word_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after reducer-owned da"
     );
 
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         "daw must delete 'hello' and surrounding space, remaining: {line:?}"
@@ -872,12 +872,12 @@ fn di_quote_deletes_quoted_string() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, r#"say "hello" now"#);
     // Position inside the quotes (on 'h').
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
 
     drive_chars(&mut app, r#"di""#);
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         r#"di" must delete text inside quotes, remaining: {line:?}"#
@@ -894,14 +894,13 @@ fn dap_deletes_paragraph_via_reducer() {
     // `dap` — delete around paragraph (first paragraph including trailing blank).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n\nfoo bar");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "dap");
     assert!(app.pending_state.is_none());
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -925,7 +924,7 @@ fn guiw_uppercases_word_via_reducer() {
     // engine FSM.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
@@ -950,7 +949,7 @@ fn guiw_uppercases_word_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
@@ -969,16 +968,16 @@ fn guiw_uppercases_word_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending (reducer owns text-obj)"
     );
 
     // 'w' → reducer OpTextObj → Commit(ApplyOpTextObj) → apply_op_text_obj.
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none(), "pending must clear after gUiw");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "HELLO world",
         "gUiw must uppercase inner word 'hello', got {line:?}"
@@ -990,7 +989,7 @@ fn g_then_esc_cancels() {
     // g<Esc> clears pending without any cursor movement.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc\n");
-    app.active_mut().editor.jump_cursor(0, 1);
+    app.active_editor_mut().jump_cursor(0, 1);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(app.pending_state.is_some(), "g must set pending_state");
@@ -1000,7 +999,7 @@ fn g_then_esc_cancels() {
         "Esc must clear g pending_state"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 1),
         "cursor must not move on g<Esc>"
     );
@@ -1369,7 +1368,7 @@ fn which_key_visual_mode_suppresses_popup() {
     // Enter Visual mode via `v`.
     drive_key(&mut app, key(KeyCode::Char('v')));
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Visual,
         "must be in Visual mode after pressing v"
     );
@@ -1579,7 +1578,7 @@ fn pending_replace_with_count_replaces_five_chars() {
     // (which reads pending_count → count=5); `X` commits via hjkl_vim::step.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcdefgh");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // Buffer the count digit `5` (simulates the event loop accumulating digits).
     app.pending_count.try_accumulate('5');
@@ -1600,7 +1599,7 @@ fn pending_replace_with_count_replaces_five_chars() {
         "pending_state must clear after commit"
     );
 
-    let content = app.active().editor.buffer().as_string();
+    let content = app.active_editor().buffer().as_string();
     assert_eq!(
         content, "XXXXXfgh",
         "5rX must replace first 5 chars with X, got {content:?}"
@@ -1612,14 +1611,14 @@ fn pending_replace_esc_cancels_without_mutation() {
     // `r` then `Esc`: pending state cancelled, buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('r')));
     assert!(app.pending_state.is_some());
     drive_key(&mut app, key(KeyCode::Esc));
     assert!(app.pending_state.is_none(), "Esc must cancel pending state");
 
-    let content = app.active().editor.buffer().as_string();
+    let content = app.active_editor().buffer().as_string();
     assert_eq!(content, "abc", "buffer must be unchanged after cancel");
 }
 
@@ -1631,7 +1630,7 @@ fn zz_centers_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(10, 0);
+    app.active_editor_mut().jump_cursor(10, 0);
 
     drive_key(&mut app, key(KeyCode::Char('z')));
     assert!(
@@ -1645,7 +1644,7 @@ fn zz_centers_cursor() {
     );
     // Cursor must not have moved (zz scrolls, doesn't jump).
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         10,
         "zz must not move the cursor row"
     );
@@ -1657,7 +1656,7 @@ fn zt_scrolls_top() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(10, 0);
+    app.active_editor_mut().jump_cursor(10, 0);
 
     drive_key(&mut app, key(KeyCode::Char('z')));
     drive_key(&mut app, key(KeyCode::Char('t')));
@@ -1668,7 +1667,7 @@ fn zt_scrolls_top() {
     );
     // Cursor must not have moved (zt scrolls, doesn't jump).
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         10,
         "zt must not move the cursor row"
     );
@@ -1679,8 +1678,8 @@ fn zo_opens_fold() {
     // `zo` opens a closed fold at cursor.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\nc\nd");
-    app.active_mut().editor.buffer_mut().add_fold(1, 2, true);
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().buffer_mut().add_fold(1, 2, true);
+    app.active_editor_mut().jump_cursor(1, 0);
 
     drive_key(&mut app, key(KeyCode::Char('z')));
     drive_key(&mut app, key(KeyCode::Char('o')));
@@ -1689,7 +1688,7 @@ fn zo_opens_fold() {
         app.pending_state.is_none(),
         "pending_state cleared after zo commit"
     );
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert!(!folds[0].closed, "zo must open the fold at cursor");
 }
 
@@ -1698,13 +1697,13 @@ fn zm_closes_all_folds() {
     // `zM` closes all open folds.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\nc\nd\ne\nf");
-    app.active_mut().editor.buffer_mut().add_fold(0, 1, false);
-    app.active_mut().editor.buffer_mut().add_fold(4, 5, false);
+    app.active_editor_mut().buffer_mut().add_fold(0, 1, false);
+    app.active_editor_mut().buffer_mut().add_fold(4, 5, false);
 
     drive_key(&mut app, key(KeyCode::Char('z')));
     drive_key(&mut app, key(KeyCode::Char('M')));
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert!(folds.iter().all(|f| f.closed), "zM must close all folds");
 }
 
@@ -1713,7 +1712,7 @@ fn z_then_esc_cancels() {
     // `z` then Esc: pending state cancelled, no engine mutation.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('z')));
     assert!(
@@ -1727,7 +1726,7 @@ fn z_then_esc_cancels() {
     );
     // Cursor unmoved.
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 0),
         "cursor must not move on cancel"
     );
@@ -1739,7 +1738,7 @@ fn zf_in_visual_creates_fold() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\nc\nd\ne");
     // Enter visual-line mode spanning rows 1..=3 via engine keys.
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     // Feed `V` then `2j` via drive_key to set visual-line selection.
     drive_key(&mut app, key(KeyCode::Char('V')));
     drive_key(&mut app, key(KeyCode::Char('j')));
@@ -1748,7 +1747,7 @@ fn zf_in_visual_creates_fold() {
     drive_key(&mut app, key(KeyCode::Char('z')));
     drive_key(&mut app, key(KeyCode::Char('f')));
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert_eq!(folds.len(), 1, "zf in visual must create exactly one fold");
     assert_eq!(
         folds[0].start_row, 1,
@@ -1769,7 +1768,7 @@ fn foldmethod_marker_generates_folds_from_markers() {
     // Drive the auto-fold pass (normally fired from the event loop).
     app.recompute_and_install();
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert_eq!(
         folds.len(),
         1,
@@ -1788,7 +1787,7 @@ fn foldmethod_manual_ignores_markers() {
     app.recompute_and_install();
 
     assert!(
-        app.active().editor.buffer().folds().is_empty(),
+        app.active_editor().buffer().folds().is_empty(),
         "manual foldmethod must not generate marker folds"
     );
 }
@@ -1806,7 +1805,7 @@ fn foldmethod_marker_recognizes_region_markers() {
     );
     app.recompute_and_install();
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert_eq!(
         folds.len(),
         1,
@@ -1829,7 +1828,7 @@ fn foldmarker_custom_pair_overrides_default() {
     seed_buffer(&mut app, "open [[[\nbody\nclose ]]]\ntail");
     app.recompute_and_install();
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert_eq!(
         folds.len(),
         1,
@@ -1842,7 +1841,7 @@ fn foldmarker_custom_pair_overrides_default() {
     seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
     app.recompute_and_install();
     assert!(
-        app.active().editor.buffer().folds().is_empty(),
+        app.active_editor().buffer().folds().is_empty(),
         "default {{{{{{ must not fold when foldmarker is [[[ / ]]]"
     );
 }
@@ -1857,7 +1856,7 @@ fn foldmarker_malformed_falls_back_to_default() {
     seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
     app.recompute_and_install();
 
-    let folds = app.active().editor.buffer().folds();
+    let folds = app.active_editor().buffer().folds();
     assert_eq!(
         folds.len(),
         1,
@@ -1874,7 +1873,7 @@ fn dw_deletes_word_via_reducer() {
     //                        `w` → ApplyOpMotion(Delete, 'w', 1).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(
@@ -1895,7 +1894,7 @@ fn dw_deletes_word_via_reducer() {
         "pending must clear after commit"
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "world", "dw must delete 'hello ', got {line:?}");
 }
 
@@ -1904,14 +1903,13 @@ fn dd_deletes_line_via_reducer() {
     // `dd` via reducer: `d` → AfterOp, `d` → ApplyOpDouble.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "dd");
     assert!(app.pending_state.is_none());
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1929,7 +1927,7 @@ fn d3w_deletes_three_words_via_reducer() {
     //        ApplyOpMotion(Delete, 'w', total=3).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "one two three four");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('3')));
@@ -1944,7 +1942,7 @@ fn d3w_deletes_three_words_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "four",
         "d3w must delete 'one two three ', got {line:?}"
@@ -1957,7 +1955,7 @@ fn two_dd_deletes_two_lines_via_reducer() {
     //        `d` → ApplyOpDouble(total=2).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.pending_count.try_accumulate('2');
 
     drive_key(&mut app, key(KeyCode::Char('d')));
@@ -1973,8 +1971,7 @@ fn two_dd_deletes_two_lines_via_reducer() {
     assert!(app.pending_state.is_none());
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1997,19 +1994,19 @@ fn cw_changes_to_word_end() {
     // After cw, editor enters Insert mode.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "cw");
     assert!(app.pending_state.is_none());
 
     // Must be in Insert mode (change enters insert).
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Insert,
         "cw must enter Insert mode"
     );
     // The space before "world" should still be present as the first char.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with(' ') || line == " world",
         "cw quirk: trailing space must be preserved, got {line:?}"
@@ -2023,7 +2020,7 @@ fn dip_text_object_via_reducer() {
     // chord-pending at any point after 'i'.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n\nfoo bar");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('i')));
@@ -2041,7 +2038,7 @@ fn dip_text_object_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after reducer-owned di"
     );
 
@@ -2051,12 +2048,11 @@ fn dip_text_object_via_reducer() {
         app.pending_state.is_none(),
         "pending must clear after ApplyOpTextObj commit"
     );
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
     // First paragraph (lines 0..0) should be deleted; remaining: empty line + "foo bar".
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2078,7 +2074,7 @@ fn dgg_deletes_to_top() {
     // PendingState::OpG and dispatches the second 'g' as ApplyOpG.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(2, 0); // start on line3.
+    app.active_editor_mut().jump_cursor(2, 0); // start on line3.
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(
@@ -2107,7 +2103,7 @@ fn dgg_deletes_to_top() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after dg (reducer owns OpG)"
     );
 
@@ -2118,8 +2114,7 @@ fn dgg_deletes_to_top() {
     );
     // dgg should delete lines 0..=2 (all three lines).
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2142,7 +2137,7 @@ fn dfx_deletes_to_x_via_reducer() {
     // chord-pending at any point in this flow.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(
@@ -2172,7 +2167,7 @@ fn dfx_deletes_to_x_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be in chord-pending after reducer-owned df"
     );
 
@@ -2181,10 +2176,10 @@ fn dfx_deletes_to_x_via_reducer() {
         app.pending_state.is_none(),
         "pending must clear after ApplyOpFind commit"
     );
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
     // "hello x" (inclusive) should be deleted.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, " world", "dfx must delete 'hello x', got {line:?}");
 }
 
@@ -2196,12 +2191,12 @@ fn dtx_stops_before_x_via_reducer() {
     // Deletes up to but not including 'x'.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "dtx");
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "x world",
         "dtx must delete 'hello ' leaving 'x world', got {line:?}"
@@ -2215,7 +2210,7 @@ fn two_d_3fx_total_count_6() {
     // dfx with count=6 deletes from col 0 through col 10 inclusive.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "xaxbxcxdxexf");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     app.pending_count.try_accumulate('2');
     drive_key(&mut app, key(KeyCode::Char('d')));
@@ -2256,7 +2251,7 @@ fn two_d_3fx_total_count_6() {
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert!(app.pending_state.is_none());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "f", "2d3fx must delete through 6th 'x', got {line:?}");
 }
 
@@ -2265,7 +2260,7 @@ fn df_then_esc_cancels_via_reducer() {
     // `df<Esc>` — OpFind on Esc → Cancel; buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('f')));
@@ -2285,7 +2280,7 @@ fn df_then_esc_cancels_via_reducer() {
     );
 
     // Buffer unchanged.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello x world",
         "buffer must be unchanged after df<Esc>"
@@ -2299,18 +2294,18 @@ fn cfx_changes_to_x_via_reducer() {
     // After cfx the editor enters Insert mode.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "cfx");
     assert!(app.pending_state.is_none());
 
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Insert,
         "cfx must enter Insert mode"
     );
     // "hello x" was deleted; buffer should have " world" remaining.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, " world", "cfx must delete 'hello x', got {line:?}");
 }
 
@@ -2322,7 +2317,7 @@ fn gufx_uppercases_via_reducer() {
     // Verifies gU + f/F/t/T + target flows fully through the reducer.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
@@ -2347,7 +2342,7 @@ fn gufx_uppercases_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
@@ -2367,16 +2362,16 @@ fn gufx_uppercases_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending (reducer owns find)"
     );
 
     // 'x' → reducer OpFind → Commit(ApplyOpFind) → apply_op_find.
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert!(app.pending_state.is_none(), "pending must clear after gUfx");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "HELLO X world",
         "gUfx must uppercase 'hello x', got {line:?}"
@@ -2388,14 +2383,14 @@ fn d_then_esc_cancels() {
     // `d` + Esc: pending state cancelled, buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(app.pending_state.is_some(), "d must set pending state");
     drive_key(&mut app, key(KeyCode::Esc));
     assert!(app.pending_state.is_none(), "Esc must cancel pending");
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hello", "buffer must be unchanged after cancel");
 }
 
@@ -2404,7 +2399,7 @@ fn y_dollar_yanks_to_eol() {
     // `y$`: yank to end-of-line. Buffer unchanged, cursor stays.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('y')));
     assert!(
@@ -2421,7 +2416,7 @@ fn y_dollar_yanks_to_eol() {
     assert!(app.pending_state.is_none(), "pending must clear after y$");
 
     // Buffer unchanged (yank is non-destructive).
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hello world", "y$ must not modify buffer");
 }
 
@@ -2433,7 +2428,7 @@ fn g_uw_uppercases_word_via_reducer() {
     // Verifies the chord-initiated gUw path now flows fully through the reducer.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
@@ -2458,15 +2453,15 @@ fn g_uw_uppercases_word_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending (reducer owns op-pending)"
     );
     // w → reducer dispatches ApplyOpMotion(Uppercase,'w') → apply_op_motion.
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none(), "pending must clear after gUw");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "HELLO world",
         "gUw must uppercase first word, got {line:?}"
@@ -2481,15 +2476,14 @@ fn dgg_deletes_to_top_via_reducer() {
     // d → AfterOp, g → Wait(OpG), g → Commit(ApplyOpG{'g'}) → delete to top.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "aaa\nbbb\nccc");
-    app.active_mut().editor.jump_cursor(2, 0); // cursor on "ccc".
+    app.active_editor_mut().jump_cursor(2, 0); // cursor on "ccc".
 
     drive_chars(&mut app, "dgg");
     assert!(app.pending_state.is_none(), "pending must clear after dgg");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2511,7 +2505,7 @@ fn dge_deletes_word_end_back_via_reducer() {
     // there's nothing behind, so just verify reducer state machine and no panic.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(app.pending_state.is_some(), "d sets AfterOp");
@@ -2526,7 +2520,7 @@ fn dge_deletes_word_end_back_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('e')));
     // Reducer commits ApplyOpG; engine applies WordEndBack. No panic expected.
     assert!(app.pending_state.is_none(), "pending clears after dge");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 }
 
 #[test]
@@ -2535,14 +2529,13 @@ fn dgj_deletes_screen_down_via_reducer() {
     // engine::apply_op_g with 'j' → Motion::ScreenDown.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0); // cursor on line1.
+    app.active_editor_mut().jump_cursor(0, 0); // cursor on line1.
 
     drive_chars(&mut app, "dgj");
     assert!(app.pending_state.is_none(), "pending clears after dgj");
 
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2564,7 +2557,7 @@ fn dg_then_esc_cancels_via_reducer() {
     // `dg<Esc>` — OpG reducer cancels on Esc; buffer unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "unchanged");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('g')));
@@ -2576,7 +2569,7 @@ fn dg_then_esc_cancels_via_reducer() {
     drive_key(&mut app, key(KeyCode::Esc));
     assert!(app.pending_state.is_none(), "Esc must cancel OpG");
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "unchanged",
         "buffer must be unchanged after cancel, got {line:?}"
@@ -2591,7 +2584,7 @@ fn g_ugg_uppercases_to_top_via_reducer() {
     // Verifies the full gUgg path now flows through the reducer OpG sub-state.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld\nfoo");
-    app.active_mut().editor.jump_cursor(2, 0); // cursor on "foo".
+    app.active_editor_mut().jump_cursor(2, 0); // cursor on "foo".
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
@@ -2616,7 +2609,7 @@ fn g_ugg_uppercases_to_top_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
@@ -2634,7 +2627,7 @@ fn g_ugg_uppercases_to_top_via_reducer() {
         app.pending_state
     );
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine must NOT be chord-pending (reducer owns OpG)"
     );
 
@@ -2642,14 +2635,13 @@ fn g_ugg_uppercases_to_top_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(app.pending_state.is_none(), "pending must clear after gUgg");
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine chord must complete"
     );
 
     // All three lines should be uppercased.
     let lines: Vec<_> = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -2672,14 +2664,14 @@ fn g_uu_uppercases_line_via_reducer() {
     // ApplyOpDouble(Uppercase, 1) → apply_op_double → uppercase current line.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "gUU");
 
     assert!(app.pending_state.is_none(), "pending must clear after gUU");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "HELLO WORLD",
         "gUU must uppercase entire line, got {line:?}"
@@ -2692,14 +2684,14 @@ fn guu_lowercases_line_via_reducer() {
     // ApplyOpDouble(Lowercase, 1) → apply_op_double → lowercase current line.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "HELLO WORLD");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "guu");
 
     assert!(app.pending_state.is_none(), "pending must clear after guu");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello world",
         "guu must lowercase entire line, got {line:?}"
@@ -2712,14 +2704,14 @@ fn g_tilde_tilde_toggles_line_via_reducer() {
     // ApplyOpDouble(ToggleCase, 1) → apply_op_double → toggle case of current line.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "Hello World");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "g~~");
 
     assert!(app.pending_state.is_none(), "pending must clear after g~~");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hELLO wORLD",
         "g~~ must toggle case of entire line, got {line:?}"
@@ -2732,15 +2724,15 @@ fn gqq_reflows_line_via_reducer() {
     // ApplyOpDouble(Reflow, 1) → apply_op_double → reflow current line.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_chars(&mut app, "gqq");
 
     // Reflow with default textwidth (79+) on a short line leaves it as-is.
     assert!(app.pending_state.is_none(), "pending must clear after gqq");
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
     // Line should still exist and not be empty.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         !line.is_empty(),
         "gqq must not delete short line, got {line:?}"
@@ -2752,21 +2744,21 @@ fn gw_reflows_long_line_to_textwidth_cursor_stable() {
     // `gw$` — reflow line to textwidth but cursor stays at (0, 3).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "aaa bbb ccc ddd eee fff\n");
-    app.active_mut().editor.settings_mut().textwidth = 10;
-    app.active_mut().editor.jump_cursor(0, 3);
+    app.active_editor_mut().settings_mut().textwidth = 10;
+    app.active_editor_mut().jump_cursor(0, 3);
 
     drive_chars(&mut app, "gw$");
 
     assert!(app.pending_state.is_none(), "pending must clear after gw$");
     // Line reflowed — should now be multiple lines.
-    let rope = app.active().editor.buffer().rope().clone();
+    let rope = app.active_editor().buffer().rope().clone();
     let line_count = rope.len_lines();
     assert!(
         line_count > 1,
         "gw$ must reflow long line into multiple lines; got {line_count} lines"
     );
     // Cursor must stay at original row 0, col 3.
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 0, "gw$ must keep cursor on row 0; got row {row}");
     assert_eq!(col, 3, "gw$ must keep cursor at col 3; got col {col}");
 }
@@ -2782,18 +2774,18 @@ fn gw_preserves_cursor_when_gq_would_move_it() {
     // --- gq run ---
     let mut app_gq = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app_gq, buf);
-    app_gq.active_mut().editor.settings_mut().textwidth = tw;
-    app_gq.active_mut().editor.jump_cursor(0, initial_col);
+    app_gq.active_editor_mut().settings_mut().textwidth = tw;
+    app_gq.active_editor_mut().jump_cursor(0, initial_col);
     drive_chars(&mut app_gq, "gq$");
-    let (_gq_row, gq_col) = app_gq.active().editor.cursor();
+    let (_gq_row, gq_col) = app_gq.active_editor().cursor();
 
     // --- gw run ---
     let mut app_gw = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app_gw, buf);
-    app_gw.active_mut().editor.settings_mut().textwidth = tw;
-    app_gw.active_mut().editor.jump_cursor(0, initial_col);
+    app_gw.active_editor_mut().settings_mut().textwidth = tw;
+    app_gw.active_editor_mut().jump_cursor(0, initial_col);
     drive_chars(&mut app_gw, "gw$");
-    let (gw_row, gw_col) = app_gw.active().editor.cursor();
+    let (gw_row, gw_col) = app_gw.active_editor().cursor();
 
     // After gq$ reflow_rows restores cursor to (top, 0) — col 0.
     // After gw$ the cursor stays at original col 5.
@@ -2821,12 +2813,12 @@ fn gw_follows_character_when_line_wraps() {
     // gw must move cursor to row 1, col 11 (character-preserving like nvim).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcdefgh ijklmnopqrstuvwxyz\n");
-    app.active_mut().editor.settings_mut().textwidth = 8;
-    app.active_mut().editor.jump_cursor(0, 20);
+    app.active_editor_mut().settings_mut().textwidth = 8;
+    app.active_editor_mut().jump_cursor(0, 20);
 
     drive_chars(&mut app, "gw$");
 
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     // Character 't' moves to row 1, col 11 after the wrap.
     assert_eq!(
         row, 1,
@@ -2843,19 +2835,19 @@ fn gww_reflows_current_line_cursor_stable() {
     // `gww` — doubled form: reflows current line but keeps cursor in place.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "aaa bbb ccc ddd eee fff\n");
-    app.active_mut().editor.settings_mut().textwidth = 10;
-    app.active_mut().editor.jump_cursor(0, 3);
+    app.active_editor_mut().settings_mut().textwidth = 10;
+    app.active_editor_mut().jump_cursor(0, 3);
 
     drive_chars(&mut app, "gww");
 
     assert!(app.pending_state.is_none(), "pending must clear after gww");
-    let rope = app.active().editor.buffer().rope().clone();
+    let rope = app.active_editor().buffer().rope().clone();
     let line_count = rope.len_lines();
     assert!(
         line_count > 1,
         "gww must reflow long line into multiple lines; got {line_count} lines"
     );
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 0, "gww must keep cursor on row 0; got {row}");
     assert_eq!(col, 3, "gww must keep cursor at col 3; got {col}");
 }
@@ -2871,7 +2863,7 @@ fn two_g_uw_uppercases_two_words_via_reducer() {
     // test the count-carry path without plumbing the full event loop.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world foo");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // Directly seed AfterG with count=2 (simulates 2g in the real event loop).
     app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 2 });
@@ -2893,7 +2885,7 @@ fn two_g_uw_uppercases_two_words_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none(), "pending must clear after 2gUw");
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     // 2gUw should uppercase 2 words from cursor: "HELLO WORLD foo".
     assert!(
         line.starts_with("HELLO WORLD"),
@@ -2907,7 +2899,7 @@ fn engine_pending_none_after_g_u_in_reducer_path() {
     // Pending as None (not Pending::Op). This is the key invariant of 2c-v.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('U')));
@@ -2926,7 +2918,7 @@ fn engine_pending_none_after_g_u_in_reducer_path() {
     );
     // Engine must NOT be in any chord-pending state.
     assert!(
-        !app.active().editor.is_chord_pending(),
+        !app.active_editor().is_chord_pending(),
         "engine Pending must be None after 2c-v gU intercept"
     );
 }
@@ -2948,32 +2940,32 @@ fn visual_g_u_uppercases_selection() {
     // and 'U' reaches the engine directly).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
 
     // Enter visual mode and select "hello" (5 chars).
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('v')));
     for _ in 0..4 {
-        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
     }
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Visual,
         "must be in Visual mode"
     );
 
     // In visual mode: 'g' goes through engine FSM (pending_state not in visual path),
     // engine sets Pending::G. Then 'U' → engine Pending::G + 'U' → Uppercase selection.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('g')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('U')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('U')));
 
     // Should be back in Normal mode after visual-mode gU.
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "gU in visual must return to Normal mode"
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with("HELLO"),
         "visual gU must uppercase selection 'hello', got {line:?}"
@@ -3000,7 +2992,7 @@ fn j_motion_via_keymap_updates_window_cursor() {
     // leaving window.cursor_row stale at 0 even though the engine moved to row 1.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // Sync engine cursor → window cache (so window starts at row 0).
     app.sync_viewport_from_editor();
     assert_eq!(
@@ -3025,7 +3017,7 @@ fn j_motion_via_keymap_updates_window_cursor() {
 fn k_motion_via_keymap_updates_window_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2");
-    app.active_mut().editor.jump_cursor(2, 0);
+    app.active_editor_mut().jump_cursor(2, 0);
     app.sync_viewport_from_editor();
     assert_eq!(
         win_cursor_row(&app),
@@ -3048,7 +3040,7 @@ fn k_motion_via_keymap_updates_window_cursor() {
 fn line_start_zero_motion_via_keymap_updates_window_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     app.sync_viewport_from_editor();
     assert_eq!(
         win_cursor_col(&app),
@@ -3072,7 +3064,7 @@ fn line_start_zero_motion_via_keymap_updates_window_cursor() {
 fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
     assert_eq!(
         win_cursor_col(&app),
@@ -3102,12 +3094,12 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..50).map(|i| format!("line{i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // Set engine + host viewport heights so scrolloff math fires the
     // non-zero path (height=0 falls back to bare ensure_cursor_visible).
-    app.active_mut().editor.set_viewport_height(10);
+    app.active_editor_mut().set_viewport_height(10);
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 10;
         vp.top_row = 0;
     }
@@ -3166,10 +3158,10 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
     let lines: Vec<String> = (0..50).map(|i| format!("line{i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
     // Place cursor + viewport deep into the buffer.
-    app.active_mut().editor.jump_cursor(40, 0);
-    app.active_mut().editor.set_viewport_height(10);
+    app.active_editor_mut().jump_cursor(40, 0);
+    app.active_editor_mut().set_viewport_height(10);
     {
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.height = 10;
         vp.top_row = 35;
     }
@@ -3191,7 +3183,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
 
     // Invoke the AfterGChord arm body directly (editor.after_g + canonical sync).
     // This is the exact code path the fixed arm executes for gg.
-    app.active_mut().editor.after_g('g', 1);
+    app.active_editor_mut().after_g('g', 1);
     app.sync_after_engine_mutation();
     app.pending_state = None;
 
@@ -3213,7 +3205,7 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
     assert_eq!(
         win_cursor_row(&app),
@@ -3291,10 +3283,10 @@ fn all_phase3_keymap_motions_keep_window_synced() {
             .map(|i| format!("line{i:02}-some-content-here"))
             .collect();
         seed_buffer(&mut app, &lines.join("\n"));
-        app.active_mut().editor.jump_cursor(20, 5);
-        app.active_mut().editor.set_viewport_height(10);
+        app.active_editor_mut().jump_cursor(20, 5);
+        app.active_editor_mut().set_viewport_height(10);
         {
-            let vp = app.active_mut().editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.height = 10;
             vp.top_row = 15;
         }
@@ -3322,19 +3314,19 @@ fn visual_block_h_l_extend_selection() {
     // while the cursor moved.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "0123456789\nabcdefghij\nklmnopqrst\nuvwxyz1234");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     app.sync_viewport_from_editor();
 
     // Enter VisualBlock mode (Ctrl-V). Engine handles the mode entry.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
-            &mut app.active_mut().editor,
+            app.active_editor_mut(),
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
     }
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualBlock,
         "must be in VisualBlock mode after <C-v>"
     );
@@ -3347,7 +3339,7 @@ fn visual_block_h_l_extend_selection() {
     }
 
     // Cursor should be at col 5 after 3 l's.
-    let (_, e_col) = app.active().editor.cursor();
+    let (_, e_col) = app.active_editor().cursor();
     assert_eq!(e_col, 5, "cursor must advance to col 5 after 3 l's");
 
     // Verify block_vcol followed cursor via block_highlight():
@@ -3356,8 +3348,7 @@ fn visual_block_h_l_extend_selection() {
     // Without the fix, block_vcol stays at 2 → right == 2 (1-col wide
     // selection). With the fix, block_vcol == 5 → right == 5.
     let highlight = app
-        .active()
-        .editor
+        .active_editor()
         .block_highlight()
         .expect("block_highlight must be Some in VisualBlock mode");
     let (_top, _bot, _left, right) = highlight;
@@ -3393,20 +3384,20 @@ fn gg_via_pending_state_in_visual_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
-    app.active_mut().editor.set_viewport_height(10);
+    app.active_editor_mut().jump_cursor(20, 0);
+    app.active_editor_mut().set_viewport_height(10);
     app.sync_viewport_from_editor();
 
     // Enter Visual mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
-            &mut app.active_mut().editor,
+            app.active_editor_mut(),
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
         );
     }
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Visual,
         "must be in Visual mode after v"
     );
@@ -3414,7 +3405,7 @@ fn gg_via_pending_state_in_visual_mode() {
     // Simulate the commit path of the AfterGChord arm (same calls as the
     // fixed event loop arm for `gg`).
     app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
-    app.active_mut().editor.after_g('g', 1);
+    app.active_editor_mut().after_g('g', 1);
     app.sync_after_engine_mutation();
     app.pending_state = None;
 
@@ -3433,26 +3424,26 @@ fn gg_via_pending_state_in_visual_line_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
-    app.active_mut().editor.set_viewport_height(10);
+    app.active_editor_mut().jump_cursor(20, 0);
+    app.active_editor_mut().set_viewport_height(10);
     app.sync_viewport_from_editor();
 
     // Enter VisualLine mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
-            &mut app.active_mut().editor,
+            app.active_editor_mut(),
             CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
         );
     }
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualLine,
         "must be in VisualLine mode after V"
     );
 
     app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
-    app.active_mut().editor.after_g('g', 1);
+    app.active_editor_mut().after_g('g', 1);
     app.sync_after_engine_mutation();
     app.pending_state = None;
 
@@ -3471,26 +3462,26 @@ fn gg_via_pending_state_in_visual_block_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
-    app.active_mut().editor.set_viewport_height(10);
+    app.active_editor_mut().jump_cursor(20, 0);
+    app.active_editor_mut().set_viewport_height(10);
     app.sync_viewport_from_editor();
 
     // Enter VisualBlock mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
-            &mut app.active_mut().editor,
+            app.active_editor_mut(),
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
     }
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualBlock,
         "must be in VisualBlock mode after <C-v>"
     );
 
     app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
-    app.active_mut().editor.after_g('g', 1);
+    app.active_editor_mut().after_g('g', 1);
     app.sync_after_engine_mutation();
     app.pending_state = None;
 
@@ -3523,18 +3514,18 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualLine,
         "must be in VisualLine mode"
     );
@@ -3561,7 +3552,7 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
         "after gg the reducer must clear pending_state"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "gg must move engine cursor to row 0 from row 20"
     );
@@ -3575,18 +3566,18 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter Visual via `v`.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Visual,
         "must be in Visual mode"
     );
@@ -3611,7 +3602,7 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
         "after gg the reducer must clear pending_state"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "gg must move engine cursor to row 0 from row 20"
     );
@@ -3625,18 +3616,18 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
-    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualBlock via Ctrl-V.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::VisualBlock,
         "must be in VisualBlock mode"
     );
@@ -3661,7 +3652,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
         "after gg the reducer must clear pending_state"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "gg must move engine cursor to row 0 from row 20"
     );
@@ -3679,18 +3670,18 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
 fn p64_i_enters_insert_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('i'));
     assert!(consumed, "i must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "i must enter Insert mode"
     );
     assert_eq!(
-        app.active().editor.host().cursor_shape(),
+        app.active_editor().host().cursor_shape(),
         hjkl_engine::CursorShape::Bar,
         "cursor must flip to Bar on entering Insert"
     );
@@ -3700,18 +3691,18 @@ fn p64_i_enters_insert_mode() {
 fn p64_shift_i_enters_insert_at_line_start() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "  hello");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('I'));
     assert!(consumed, "I must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "I must enter Insert mode"
     );
     // Cursor must be at first non-blank col (col 2).
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(
         col, 2,
         "I must place cursor at first non-blank; got col {col}"
@@ -3722,18 +3713,18 @@ fn p64_shift_i_enters_insert_at_line_start() {
 fn p64_a_enters_insert_after_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('a'));
     assert!(consumed, "a must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "a must enter Insert mode"
     );
     // Cursor must have advanced one past position 0.
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(col, 1, "a must advance cursor to col 1; got {col}");
 }
 
@@ -3741,18 +3732,18 @@ fn p64_a_enters_insert_after_cursor() {
 fn p64_shift_a_enters_insert_at_eol() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('A'));
     assert!(consumed, "A must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "A must enter Insert mode"
     );
     // Cursor must be at EOL (col 5, past 'o').
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(col, 5, "A must place cursor at EOL; got col {col}");
 }
 
@@ -3760,18 +3751,18 @@ fn p64_shift_a_enters_insert_at_eol() {
 fn p64_o_opens_line_below_and_enters_insert() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('o'));
     assert!(consumed, "o must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "o must enter Insert mode"
     );
     // After o, cursor must be on row 1 (new blank line).
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 1, "o must move cursor to new row 1; got row {row}");
 }
 
@@ -3779,18 +3770,18 @@ fn p64_o_opens_line_below_and_enters_insert() {
 fn p64_shift_o_opens_line_above_and_enters_insert() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2");
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('O'));
     assert!(consumed, "O must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "O must enter Insert mode"
     );
     // After O from row 1, cursor must be on row 1 (new line inserted above line2).
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(
         row, 1,
         "O must place cursor on new row above; got row {row}"
@@ -3803,12 +3794,12 @@ fn p64_shift_o_opens_line_above_and_enters_insert() {
 fn p64_x_deletes_char_forward() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('x'));
     assert!(consumed, "x must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "ello", "x must delete 'h'; got {line:?}");
 }
 
@@ -3816,13 +3807,13 @@ fn p64_x_deletes_char_forward() {
 fn p64_x_with_count_5_deletes_5_chars() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     app.pending_count.try_accumulate('5');
     let consumed = app.route_chord_key(ck('x'));
     assert!(consumed, "x must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, " world", "5x must delete 5 chars; got {line:?}");
 }
 
@@ -3830,12 +3821,12 @@ fn p64_x_with_count_5_deletes_5_chars() {
 fn p64_big_x_deletes_char_backward() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('X'));
     assert!(consumed, "X must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hllo", "X at col 2 must delete 'e'; got {line:?}");
 }
 
@@ -3843,18 +3834,18 @@ fn p64_big_x_deletes_char_backward() {
 fn p64_s_substitutes_char_enters_insert() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('s'));
     assert!(consumed, "s must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "s must enter Insert mode"
     );
     // 'h' must be deleted.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "ello", "s must delete first char; got {line:?}");
 }
 
@@ -3862,18 +3853,18 @@ fn p64_s_substitutes_char_enters_insert() {
 fn p64_big_s_substitutes_line_enters_insert() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\nline2");
-    app.active_mut().editor.jump_cursor(0, 3);
+    app.active_editor_mut().jump_cursor(0, 3);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('S'));
     assert!(consumed, "S must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "S must enter Insert mode"
     );
     // Line content must be wiped.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "", "S must clear line contents; got {line:?}");
 }
 
@@ -3881,18 +3872,18 @@ fn p64_big_s_substitutes_line_enters_insert() {
 fn p64_big_d_deletes_to_eol() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('D'));
     assert!(consumed, "D must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "D at col 5 must delete ' world'; got {line:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "D must stay in Normal mode"
     );
@@ -3902,18 +3893,18 @@ fn p64_big_d_deletes_to_eol() {
 fn p64_big_c_changes_to_eol() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('C'));
     assert!(consumed, "C must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "C at col 5 must delete ' world'; got {line:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "C must enter Insert mode"
     );
@@ -3923,25 +3914,25 @@ fn p64_big_c_changes_to_eol() {
 fn p64_big_y_yanks_to_eol() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 6);
+    app.active_editor_mut().jump_cursor(0, 6);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('Y'));
     assert!(consumed, "Y must be consumed by keymap");
     // Buffer must be unchanged.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello world",
         "Y must not modify buffer; got {line:?}"
     );
     // Unnamed register must hold "world".
-    let reg = app.active().editor.registers().unnamed.text.clone();
+    let reg = app.active_editor().registers().unnamed.text.clone();
     assert_eq!(
         reg, "world",
         "Y must yank 'world' to unnamed register; got {reg:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "Y must stay in Normal mode"
     );
@@ -3951,12 +3942,12 @@ fn p64_big_y_yanks_to_eol() {
 fn p64_big_j_joins_lines() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('J'));
     assert!(consumed, "J must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.contains("line1") && line.contains("line2"),
         "J must join line1 and line2; got {line:?}"
@@ -3976,8 +3967,7 @@ fn p64_big_j_with_count_10_joins_10_lines() {
     assert!(consumed, "J must be consumed by keymap");
     // 10 lines joined into index 0; second line is now "line11".
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -4012,12 +4002,12 @@ fn p64_big_j_with_count_10_joins_10_lines() {
 fn p64_tilde_toggles_case() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('~'));
     assert!(consumed, "~ must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with('H'),
         "~ must toggle 'h' to 'H'; got {line:?}"
@@ -4028,17 +4018,17 @@ fn p64_tilde_toggles_case() {
 fn p64_p_pastes_after_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Yank 'h' to unnamed register by deleting it.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
     // Buffer now "ello", unnamed reg = "h".
     // Paste after cursor (at col 0, which is 'e').
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "ehllo", "p must paste 'h' after 'e'; got {line:?}");
 }
 
@@ -4046,16 +4036,16 @@ fn p64_p_pastes_after_cursor() {
 fn p64_big_p_pastes_before_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     app.sync_viewport_from_editor();
 
     // Yank 'l' (col 2) to unnamed register by deleting it.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
     // Buffer now "helo", cursor at col 2 ('l'). Paste before cursor.
     let consumed = app.route_chord_key(ck('P'));
     assert!(consumed, "P must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "P must paste 'l' before cursor; got {line:?}"
@@ -4066,17 +4056,17 @@ fn p64_big_p_pastes_before_cursor() {
 fn p64_p_with_count_3_pastes_three_times() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Delete 'a' into unnamed reg.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
     // Buffer "bc". `3p` must paste "aaa" after cursor.
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "baaac", "3p must paste 'a' 3 times; got {line:?}");
 }
 
@@ -4086,18 +4076,18 @@ fn p64_p_with_count_3_pastes_three_times() {
 fn p64_u_undoes_last_change() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Delete 'h' to create an undo-able change.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    let line_after_del = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line_after_del = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line_after_del, "ello");
 
     let consumed = app.route_chord_key(ck('u'));
     assert!(consumed, "u must be consumed by keymap");
-    let line_after_undo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line_after_undo = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line_after_undo, "hello",
         "u must undo the delete; got {line_after_undo:?}"
@@ -4109,22 +4099,22 @@ fn p64_ctrl_r_redoes_after_undo() {
     use crossterm::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Delete 'h', then undo.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    app.active_mut().editor.undo();
+    app.active_editor_mut().undo();
     app.sync_after_engine_mutation();
-    let line_after_undo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line_after_undo = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line_after_undo, "hello");
 
     // Redo via keymap.
     let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_r);
     assert!(consumed, "<C-r> must be consumed by keymap");
-    let line_after_redo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line_after_redo = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line_after_redo, "ello",
         "<C-r> must redo the delete; got {line_after_redo:?}"
@@ -4137,13 +4127,13 @@ fn p64_ctrl_r_redoes_after_undo() {
 fn p64_v_enters_visual_char_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('v'));
     assert!(consumed, "v must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Visual,
         "v must enter Visual mode"
     );
@@ -4153,13 +4143,13 @@ fn p64_v_enters_visual_char_mode() {
 fn p64_big_v_enters_visual_line_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let consumed = app.route_chord_key(ck('V'));
     assert!(consumed, "V must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::VisualLine,
         "V must enter VisualLine mode"
     );
@@ -4170,14 +4160,14 @@ fn p64_ctrl_v_enters_visual_block_mode() {
     use crossterm::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_v);
     assert!(consumed, "<C-v> must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::VisualBlock,
         "<C-v> must enter VisualBlock mode"
     );
@@ -4187,18 +4177,18 @@ fn p64_ctrl_v_enters_visual_block_mode() {
 fn p64_visual_o_toggles_anchor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter visual mode.
-    app.active_mut().editor.enter_visual_char();
+    app.active_editor_mut().enter_visual_char();
     app.sync_viewport_from_editor();
 
     // Move right 4 to extend selection.
     for _ in 0..4 {
         app.route_chord_key(ck('l'));
     }
-    let cursor_before = app.active().editor.cursor();
+    let cursor_before = app.active_editor().cursor();
 
     // `o` in Visual should toggle anchor — cursor and anchor swap.
     let consumed = app.route_chord_key(ck('o'));
@@ -4206,7 +4196,7 @@ fn p64_visual_o_toggles_anchor() {
         consumed,
         "o in Visual must be consumed by keymap (VisualToggleAnchor)"
     );
-    let cursor_after = app.active().editor.cursor();
+    let cursor_after = app.active_editor().cursor();
     // After toggle, cursor should be at old anchor (col 0), not old cursor.
     assert_ne!(cursor_before, cursor_after, "o must swap cursor and anchor");
 }
@@ -4216,14 +4206,14 @@ fn p64_normal_o_opens_line_below_not_visual_toggle() {
     // Confirm Normal `o` goes to EnterInsertO, not VisualToggleAnchor.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
     let consumed = app.route_chord_key(ck('o'));
     assert!(consumed, "o in Normal must be consumed by keymap");
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "o in Normal must enter Insert (open line below), not toggle visual anchor"
     );
@@ -4235,7 +4225,7 @@ fn p64_normal_o_opens_line_below_not_visual_toggle() {
 fn p64_n_repeats_search_forward() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo bar foo baz foo");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Establish search pattern.
@@ -4251,12 +4241,12 @@ fn p64_n_repeats_search_forward() {
         crossterm::event::KeyModifiers::NONE,
     ));
 
-    let (_, col_after_first) = app.active().editor.cursor();
+    let (_, col_after_first) = app.active_editor().cursor();
 
     // `n` must advance to next match.
     let consumed = app.route_chord_key(ck('n'));
     assert!(consumed, "n must be consumed by keymap");
-    let (_, col_after_n) = app.active().editor.cursor();
+    let (_, col_after_n) = app.active_editor().cursor();
     assert!(
         col_after_n > col_after_first || col_after_n == 0,
         "n must advance cursor to next match; before col {col_after_first}, after col {col_after_n}"
@@ -4267,7 +4257,7 @@ fn p64_n_repeats_search_forward() {
 fn p64_star_searches_word_under_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // `*` must search for "hello" forward.
@@ -4275,7 +4265,7 @@ fn p64_star_searches_word_under_cursor() {
     assert!(consumed, "* must be consumed by keymap");
     app.sync_viewport_from_editor();
     // Cursor must have moved to second "hello" (col 12).
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(
         col, 12,
         "* must land on second 'hello' at col 12; got col {col}"
@@ -4295,7 +4285,7 @@ fn p64_ctrl_e_is_consumed_by_keymap() {
         .collect::<Vec<_>>()
         .join("\n");
     seed_buffer(&mut app, &content);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
@@ -4305,7 +4295,7 @@ fn p64_ctrl_e_is_consumed_by_keymap() {
         "<C-e> must be consumed by keymap (ScrollLine Down)"
     );
     // Mode must remain Normal.
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }
 
 #[test]
@@ -4319,14 +4309,14 @@ fn p64_ctrl_y_is_consumed_by_keymap() {
         .collect::<Vec<_>>()
         .join("\n");
     seed_buffer(&mut app, &content);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_y);
     assert!(consumed, "<C-y> must be consumed by keymap (ScrollLine Up)");
     // Mode must remain Normal.
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }
 
 // ── gv — reenter last visual ─────────────────────────────────────────────────
@@ -4335,23 +4325,23 @@ fn p64_ctrl_y_is_consumed_by_keymap() {
 fn p64_gv_reenters_last_visual_selection() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter Visual, extend right 4, then exit.
-    app.active_mut().editor.enter_visual_char();
+    app.active_editor_mut().enter_visual_char();
     for _ in 0..4 {
         app.route_chord_key(ck('l'));
     }
-    app.active_mut().editor.exit_visual_to_normal();
+    app.active_editor_mut().exit_visual_to_normal();
     app.sync_viewport_from_editor();
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 
     // `gv` via AfterG reducer.
     rck(&mut app, &['g', 'v']);
 
     // Must be back in Visual mode.
-    let mode = app.active().editor.vim_mode();
+    let mode = app.active_editor().vim_mode();
     assert!(
         matches!(
             mode,
@@ -4371,14 +4361,14 @@ fn p64_ctrl_o_is_consumed_by_keymap() {
     use crossterm::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 20);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let ctrl_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_o);
     assert!(consumed, "<C-o> must be consumed by keymap (JumpBack)");
     // Mode must remain Normal.
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }
 
 #[test]
@@ -4388,12 +4378,12 @@ fn p64_ctrl_o_jumps_back_with_recorded_jump() {
     seed_numbered_lines(&mut app, 20);
 
     // Position cursor at row 10 and record a jump entry there.
-    app.active_mut().editor.jump_cursor(10, 0);
+    app.active_editor_mut().jump_cursor(10, 0);
     app.sync_viewport_from_editor();
-    app.active_mut().editor.record_jump((10, 0));
+    app.active_editor_mut().record_jump((10, 0));
 
     // Move cursor to row 15.
-    app.active_mut().editor.jump_cursor(15, 0);
+    app.active_editor_mut().jump_cursor(15, 0);
     app.sync_viewport_from_editor();
 
     // <C-o> must jump back to row 10.
@@ -4401,7 +4391,7 @@ fn p64_ctrl_o_jumps_back_with_recorded_jump() {
     let consumed = app.route_chord_key(ctrl_o);
     assert!(consumed, "<C-o> must be consumed by keymap");
     app.sync_viewport_from_editor();
-    let (row_after, _) = app.active().editor.cursor();
+    let (row_after, _) = app.active_editor().cursor();
     assert_eq!(
         row_after, 10,
         "<C-o> must jump back to row 10; got row {row_after}"
@@ -4417,20 +4407,20 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     // paths are captured by macro recording and replayed correctly.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // `q a` — start recording into register 'a'.
     macro_key_seq(&mut app, &[ck('q'), ck('a')]);
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "must be recording after qa"
     );
 
     // `i` via keymap — enter Insert.
     macro_key_seq(&mut app, &[ck('i')]);
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "i must enter Insert"
     );
@@ -4438,7 +4428,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     // Type "Hello" in Insert mode.
     for c in ['H', 'e', 'l', 'l', 'o'] {
         hjkl_vim_tui::handle_key(
-            &mut app.active_mut().editor,
+            app.active_editor_mut(),
             KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE),
         );
     }
@@ -4446,12 +4436,12 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
 
     // `<Esc>` — exit Insert.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "Esc must return to Normal"
     );
@@ -4459,20 +4449,20 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     // `q` — stop recording.
     macro_key_seq(&mut app, &[ck('q')]);
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "must stop recording after q"
     );
 
     // Buffer after record: "Helloworld" (or similar depending on cursor pos).
     // Move cursor back to start and replay.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // `@a` — replay.
     rck(&mut app, &['@', 'a']);
 
     // Buffer must contain "Hello" prepended again.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with("Hello"),
         "@a replay must prepend 'Hello'; got {line:?}"
@@ -4485,17 +4475,17 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
 fn p64_count_3p_pastes_three_times() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Delete 'a' into unnamed reg.
-    app.active_mut().editor.delete_char_forward(1);
+    app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
     // Buffer "bc". `3p` must paste "aaa" after cursor (at 'b').
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed");
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "baaac", "3p must paste 'a' 3 times; got {line:?}");
 }
 
@@ -4509,8 +4499,7 @@ fn p64_count_2dd_still_works_after_64_additions() {
     rck(&mut app, &['d', 'd']);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -4546,30 +4535,30 @@ fn p65_insert_char_types_literal() {
     }
 
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "Hello",
         "insert_char must type 'Hello'"
     );
     // Still in Insert mode.
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 }
 
 #[test]
 fn p65_esc_exits_insert_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "Esc must return to Normal"
     );
     assert_eq!(
-        app.active().editor.host().cursor_shape(),
+        app.active_editor().host().cursor_shape(),
         hjkl_engine::CursorShape::Block,
         "cursor must flip back to Block on Esc"
     );
@@ -4579,7 +4568,7 @@ fn p65_esc_exits_insert_mode() {
 fn p65_backspace_deletes_previous_char() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     enter_insert(&mut app);
 
     dik(
@@ -4587,7 +4576,7 @@ fn p65_backspace_deletes_previous_char() {
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hell", "Backspace must delete 'o'; got {line:?}");
 }
 
@@ -4596,7 +4585,7 @@ fn p65_backspace_at_col0_joins_lines() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
     // Position cursor at start of second line.
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     enter_insert(&mut app);
 
     dik(
@@ -4605,8 +4594,7 @@ fn p65_backspace_at_col0_joins_lines() {
     );
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -4627,14 +4615,13 @@ fn p65_backspace_at_col0_joins_lines() {
 fn p65_enter_inserts_newline() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -4652,12 +4639,12 @@ fn p65_enter_inserts_newline() {
 fn p65_delete_removes_char_under_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 1);
+    app.active_editor_mut().jump_cursor(0, 1);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hllo", "Delete must remove 'e'; got {line:?}");
 }
 
@@ -4665,12 +4652,12 @@ fn p65_delete_removes_char_under_cursor() {
 fn p65_arrow_left_moves_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 3);
+    app.active_editor_mut().jump_cursor(0, 3);
     enter_insert(&mut app);
 
-    let (_, col_before) = app.active().editor.cursor();
+    let (_, col_before) = app.active_editor().cursor();
     dik(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    let (_, col_after) = app.active().editor.cursor();
+    let (_, col_after) = app.active_editor().cursor();
 
     assert!(
         col_after < col_before,
@@ -4682,12 +4669,12 @@ fn p65_arrow_left_moves_cursor() {
 fn p65_arrow_right_moves_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 1);
+    app.active_editor_mut().jump_cursor(0, 1);
     enter_insert(&mut app);
 
-    let (_, col_before) = app.active().editor.cursor();
+    let (_, col_before) = app.active_editor().cursor();
     dik(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    let (_, col_after) = app.active().editor.cursor();
+    let (_, col_after) = app.active_editor().cursor();
 
     assert!(
         col_after > col_before,
@@ -4699,12 +4686,12 @@ fn p65_arrow_right_moves_cursor() {
 fn p65_arrow_down_moves_cursor_row() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     enter_insert(&mut app);
 
-    let (row_before, _) = app.active().editor.cursor();
+    let (row_before, _) = app.active_editor().cursor();
     dik(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    let (row_after, _) = app.active().editor.cursor();
+    let (row_after, _) = app.active_editor().cursor();
 
     assert!(
         row_after > row_before,
@@ -4716,12 +4703,12 @@ fn p65_arrow_down_moves_cursor_row() {
 fn p65_arrow_up_moves_cursor_row() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     enter_insert(&mut app);
 
-    let (row_before, _) = app.active().editor.cursor();
+    let (row_before, _) = app.active_editor().cursor();
     dik(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    let (row_after, _) = app.active().editor.cursor();
+    let (row_after, _) = app.active_editor().cursor();
 
     assert!(
         row_after < row_before,
@@ -4733,12 +4720,12 @@ fn p65_arrow_up_moves_cursor_row() {
 fn p65_home_moves_to_line_start() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
 
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     assert_eq!(col, 0, "Home must move cursor to col 0; got col {col}");
 }
 
@@ -4746,12 +4733,12 @@ fn p65_home_moves_to_line_start() {
 fn p65_end_moves_to_line_end() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
 
-    let (_, col) = app.active().editor.cursor();
+    let (_, col) = app.active_editor().cursor();
     // `End` in Insert mode lands on the last character (col = len-1 = 4), not
     // past it. `move_line_end` uses `last_col` which returns `chars - 1`.
     assert_eq!(
@@ -4765,33 +4752,33 @@ fn p65_pageup_does_not_crash() {
     // Viewport height is 0 in unit tests; just verify no panic.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 30);
-    app.active_mut().editor.jump_cursor(15, 0);
+    app.active_editor_mut().jump_cursor(15, 0);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     // Should still be in Insert mode (no crash).
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 }
 
 #[test]
 fn p65_pagedown_does_not_crash() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 30);
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     enter_insert(&mut app);
 
     dik(
         &mut app,
         KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
     );
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 }
 
 #[test]
 fn p65_ctrl_w_deletes_word_backwards() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 11);
+    app.active_editor_mut().jump_cursor(0, 11);
     enter_insert(&mut app);
 
     dik(
@@ -4799,7 +4786,7 @@ fn p65_ctrl_w_deletes_word_backwards() {
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hello ", "Ctrl-W must delete 'world'; got {line:?}");
 }
 
@@ -4807,7 +4794,7 @@ fn p65_ctrl_w_deletes_word_backwards() {
 fn p65_ctrl_u_deletes_to_line_start() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 11);
+    app.active_editor_mut().jump_cursor(0, 11);
     enter_insert(&mut app);
 
     dik(
@@ -4815,7 +4802,7 @@ fn p65_ctrl_u_deletes_to_line_start() {
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "", "Ctrl-U must delete to line start; got {line:?}");
 }
 
@@ -4823,7 +4810,7 @@ fn p65_ctrl_u_deletes_to_line_start() {
 fn p65_ctrl_h_is_alias_for_backspace() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 5);
+    app.active_editor_mut().jump_cursor(0, 5);
     enter_insert(&mut app);
 
     dik(
@@ -4831,7 +4818,7 @@ fn p65_ctrl_h_is_alias_for_backspace() {
         KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hell", "Ctrl-H must delete 'o'; got {line:?}");
 }
 
@@ -4839,7 +4826,7 @@ fn p65_ctrl_h_is_alias_for_backspace() {
 fn p65_ctrl_t_indents_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     enter_insert(&mut app);
 
     dik(
@@ -4847,7 +4834,7 @@ fn p65_ctrl_t_indents_line() {
         KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with(' ') || line.starts_with('\t'),
         "Ctrl-T must indent line; got {line:?}"
@@ -4858,7 +4845,7 @@ fn p65_ctrl_t_indents_line() {
 fn p65_ctrl_d_outdents_indented_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "    hello");
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
     enter_insert(&mut app);
 
     dik(
@@ -4866,7 +4853,7 @@ fn p65_ctrl_d_outdents_indented_line() {
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     // Must have fewer leading spaces than before.
     let leading = line.chars().take_while(|c| *c == ' ').count();
     assert!(
@@ -4890,7 +4877,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
             KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
         );
     }
-    let line_before = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line_before = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line_before, "hello ", "setup: line must be 'hello '");
 
     // <C-o> — should flip mode to Normal.
@@ -4899,7 +4886,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Normal,
         "<C-o> must flip to Normal for one-shot"
     );
@@ -4907,14 +4894,14 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
     // `w` — word-forward motion in Normal; handled by existing engine handle_key
     // path because vim_mode() == Normal after <C-o>.
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
 
     // Engine end-of-step hook should have returned to Insert.
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "after one-shot Normal command, must return to Insert"
     );
@@ -4929,9 +4916,9 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
 
     // Exit insert.
     dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.contains("hello") && line.contains("world"),
         "<C-o>w round-trip: line must contain 'hello' and 'world'; got {line:?}"
@@ -4943,32 +4930,32 @@ fn p65_ctrl_r_register_paste() {
     // Yank "hello" into register 'a', then in Insert mode use <C-r>a to paste.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\n");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Yank line 0 into register 'a' via engine.
     // Set register 'a' directly via the engine's named registers.
     // Simplest: yank the word via engine handle_key ("ayy").
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
 
     // Move to second line (empty), enter Insert.
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     enter_insert(&mut app);
 
     // <C-r> — arm register selector.
@@ -4977,7 +4964,7 @@ fn p65_ctrl_r_register_paste() {
         KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
     );
     assert!(
-        app.active().editor.is_insert_register_pending(),
+        app.active_editor().is_insert_register_pending(),
         "<C-r> must arm register selector"
     );
 
@@ -4987,12 +4974,12 @@ fn p65_ctrl_r_register_paste() {
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
     assert!(
-        !app.active().editor.is_insert_register_pending(),
+        !app.active_editor().is_insert_register_pending(),
         "register selector must clear after char"
     );
 
     // Line 1 should now contain pasted text from register 'a'.
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 1);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 1);
     assert!(
         line.contains("hello"),
         "<C-r>a must paste 'hello'; got {line:?}"
@@ -5004,17 +4991,17 @@ fn p65_unrecognised_key_silently_dropped() {
     // F5 in Insert mode should be silently dropped — no crash, no mode change.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     enter_insert(&mut app);
 
     dik(&mut app, KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
 
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "F5 must be silently dropped; mode must remain Insert"
     );
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hello", "buffer must be unchanged after F5");
 }
 
@@ -5031,7 +5018,7 @@ fn p65_shift_char_types_uppercase() {
         KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "A", "SHIFT+Char('A') must type 'A'; got {line:?}");
 }
 
@@ -5050,8 +5037,8 @@ fn p65_i_hello_esc_types_literal() {
     }
     dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "Hello",
         "iHello<Esc> must leave 'Hello' in buffer; got {line:?}"
@@ -5063,7 +5050,7 @@ fn p65_replace_mode_overstrike() {
     // `R` enters Replace; chars via insert_char overwrite.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Enter Replace via keymap chord 'R'.
@@ -5073,7 +5060,7 @@ fn p65_replace_mode_overstrike() {
         "R must be consumed by keymap (EnterInsertReplace)"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         VimMode::Insert,
         "R must enter Insert (Replace session)"
     );
@@ -5084,7 +5071,7 @@ fn p65_replace_mode_overstrike() {
         KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
     );
 
-    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "Xello world",
         "Replace-mode overstrike must replace 'h' with 'X'; got {line:?}"
@@ -5108,21 +5095,21 @@ fn e_then_jjj_preserves_column_across_empty_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Three-line buffer: long line, empty line, long line.
     seed_buffer(&mut app, "hello world\n\nanother line");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Helper: simulate the event-loop order (sync TO editor, dispatch, sync FROM editor).
     macro_rules! dispatch_with_sync {
         ($app:expr, $key:expr) => {{
             $app.sync_viewport_to_editor();
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     // `e` — move to end of first word "hello" → col 4.
     dispatch_with_sync!(app, key(KeyCode::Char('e')));
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(
         (row, col),
         (0, 4),
@@ -5131,7 +5118,7 @@ fn e_then_jjj_preserves_column_across_empty_line() {
 
     // `j` — move down to empty line (col 0 due to clamp).
     dispatch_with_sync!(app, key(KeyCode::Char('j')));
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 1, "after first j: expected row 1, got {row}");
     assert_eq!(
         col, 0,
@@ -5141,7 +5128,7 @@ fn e_then_jjj_preserves_column_across_empty_line() {
     // `j` — move down to "another line" — sticky_col must survive viewport_sync
     // and restore to col 4, not 0.
     dispatch_with_sync!(app, key(KeyCode::Char('j')));
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2, "after second j: expected row 2, got {row}");
     assert_eq!(
         col, 4,
@@ -5160,23 +5147,23 @@ fn j_through_empty_line_preserves_column_app_level() {
     // "hello world\n\nanother line"
     seed_buffer(&mut app, "hello world\n\nanother line");
     // Position at col 4 (end of "hello").
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
     app.sync_viewport_from_editor();
 
     // Dispatch WITHOUT pre-keypress sync_to — that is the new contract.
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     dk!(app, key(KeyCode::Char('j'))); // row 1 (empty) — clamps to col 0
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 1);
 
     dk!(app, key(KeyCode::Char('j'))); // row 2 — sticky_col must restore col 4
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2, "expected row 2 after second j");
     assert_eq!(
         col, 4,
@@ -5190,22 +5177,22 @@ fn j_through_short_line_preserves_column_app_level() {
     let mut app = App::new(None, false, None, None).unwrap();
     // col 7 on row 0; row 1 is short (3 chars); row 2 is long again.
     seed_buffer(&mut app, "hello world\nhi\nhello world again");
-    app.active_mut().editor.jump_cursor(0, 7);
+    app.active_editor_mut().jump_cursor(0, 7);
     app.sync_viewport_from_editor();
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     dk!(app, key(KeyCode::Char('j'))); // row 1 — clamps to col 1 ("i")
-    let (_, col1) = app.active().editor.cursor();
+    let (_, col1) = app.active_editor().cursor();
     assert!(col1 < 7, "clamped to short line");
 
     dk!(app, key(KeyCode::Char('j'))); // row 2 — sticky_col must restore col 7
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2);
     assert_eq!(
         col, 7,
@@ -5218,24 +5205,24 @@ fn j_through_short_line_preserves_column_app_level() {
 fn gj_through_empty_line_preserves_column_app_level() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n\nanother line");
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().jump_cursor(0, 4);
     app.sync_viewport_from_editor();
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     dk!(app, key(KeyCode::Char('g')));
     dk!(app, key(KeyCode::Char('j'))); // gj — visual line down (row 1, empty)
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 1, "gj should move to row 1");
 
     dk!(app, key(KeyCode::Char('g')));
     dk!(app, key(KeyCode::Char('j'))); // gj again — row 2
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2, "gj should move to row 2");
     assert_eq!(
         col, 4,
@@ -5249,24 +5236,24 @@ fn gk_through_empty_line_preserves_column_app_level() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n\nanother line");
     // Start at row 2, col 4.
-    app.active_mut().editor.jump_cursor(2, 4);
+    app.active_editor_mut().jump_cursor(2, 4);
     app.sync_viewport_from_editor();
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     dk!(app, key(KeyCode::Char('g')));
     dk!(app, key(KeyCode::Char('k'))); // gk up to row 1 (empty)
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 1, "gk should reach row 1");
 
     dk!(app, key(KeyCode::Char('g')));
     dk!(app, key(KeyCode::Char('k'))); // gk again — row 0
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 0, "gk should reach row 0");
     assert_eq!(
         col, 4,
@@ -5282,19 +5269,19 @@ fn search_n_preserves_column_through_event_loop() {
     // "hello world\nfind me\nhello world" — search for "find" lands at (1,0).
     seed_buffer(&mut app, "hello world\nfind me\nhello world");
     // Start at (0, 6) — col 6.
-    app.active_mut().editor.jump_cursor(0, 6);
+    app.active_editor_mut().jump_cursor(0, 6);
     app.sync_viewport_from_editor();
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
 
     // Navigate down via j — sticky_col should be 6.
     dk!(app, key(KeyCode::Char('j'))); // row 1 — "find me" (7 chars) → col 6
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 1, "j should reach row 1");
     assert_eq!(
         col, 6,
@@ -5302,7 +5289,7 @@ fn search_n_preserves_column_through_event_loop() {
     );
 
     dk!(app, key(KeyCode::Char('j'))); // row 2 — "hello world" → col 6
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2, "second j should reach row 2");
     assert_eq!(col, 6, "sticky_col must survive across rows; got {col}");
 }
@@ -5314,12 +5301,12 @@ fn mark_jump_resets_sticky_through_event_loop() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\nanother line here\nshort");
     // Start at (0, 9).
-    app.active_mut().editor.jump_cursor(0, 9);
+    app.active_editor_mut().jump_cursor(0, 9);
     app.sync_viewport_from_editor();
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5329,13 +5316,13 @@ fn mark_jump_resets_sticky_through_event_loop() {
     dk!(app, key(KeyCode::Char('a')));
 
     // Move to (2, 0) — "short".
-    app.active_mut().editor.jump_cursor(2, 0);
+    app.active_editor_mut().jump_cursor(2, 0);
     app.sync_viewport_from_editor();
 
     // Jump to mark 'a' — should land at (0, 9); sticky_col resets to 9.
     dk!(app, key(KeyCode::Char('\'')));
     dk!(app, key(KeyCode::Char('a')));
-    let (row, col) = app.active().editor.cursor();
+    let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 0, "mark jump should land at row 0");
     // Mark jump goes to start-of-line in linewise `'` mode.
     // (col may be 0 for linewise — that's correct vim behavior)
@@ -5343,7 +5330,7 @@ fn mark_jump_resets_sticky_through_event_loop() {
 
     // `j` from the mark position should use the post-jump sticky_col.
     dk!(app, key(KeyCode::Char('j')));
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(row, 1, "j after mark jump should reach row 1");
 }
 
@@ -5357,7 +5344,7 @@ fn split_then_independent_cursors() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line one\nline two\nline three");
     // Start at row 0.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Create a second window (win1) showing the same slot (0).
@@ -5384,10 +5371,10 @@ fn split_then_independent_cursors() {
     }
 
     // Win 0 is focused. Move cursor down to row 2.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('j')));
     app.sync_viewport_from_editor();
-    let (row0, _) = app.active().editor.cursor();
+    let (row0, _) = app.active_editor().cursor();
     assert_eq!(row0, 2, "win0 cursor should be at row 2");
     assert_eq!(win_cursor_row(&app), 2, "win0 snapshot should match");
 
@@ -5407,7 +5394,7 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
 
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line one\nline two\nline three");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Set up win1 with its cursor at row 1.
@@ -5428,10 +5415,10 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     );
 
     // Win0 focused — make an edit (insert a char).
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('X')));
     hjkl_vim_tui::handle_key(
-        &mut app.active_mut().editor,
+        app.active_editor_mut(),
         KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
     );
     app.sync_viewport_from_editor();
@@ -5452,7 +5439,7 @@ fn close_window_keeps_buffer_for_other_window() {
 
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line one\nline two\nline three");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Create win1 with cursor at row 2.
@@ -5490,7 +5477,7 @@ fn close_window_keeps_buffer_for_other_window() {
         "win0 should regain focus after win1 closed"
     );
 
-    let (row, _) = app.active().editor.cursor();
+    let (row, _) = app.active_editor().cursor();
     assert_eq!(
         row, 0,
         "win0's cursor (row 0) should be restored into editor after win1 closed; got {row}"
@@ -5554,9 +5541,9 @@ fn ctrl_w_nav_moves_between_editor_and_explorer() {
 fn esc_exits_blame_mode_to_normal() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line one\nline two\n");
-    app.active_mut().editor.enter_blame();
+    app.active_editor_mut().enter_blame();
     assert!(
-        app.active().editor.is_blame(),
+        app.active_editor().is_blame(),
         "precondition: in BLAME view"
     );
 
@@ -5564,10 +5551,10 @@ fn esc_exits_blame_mode_to_normal() {
     let _ = app.handle_keypress(key(KeyCode::Esc));
 
     assert!(
-        !app.active().editor.is_blame(),
+        !app.active_editor().is_blame(),
         "Esc must exit BLAME mode back to Normal view"
     );
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }
 
 /// A second Esc after exiting BLAME behaves like a normal Esc (toggles the
@@ -5576,11 +5563,11 @@ fn esc_exits_blame_mode_to_normal() {
 fn esc_after_blame_exit_still_normal() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\n");
-    app.active_mut().editor.enter_blame();
+    app.active_editor_mut().enter_blame();
     let _ = app.handle_keypress(key(KeyCode::Esc));
-    assert!(!app.active().editor.is_blame());
+    assert!(!app.active_editor().is_blame());
     // Second Esc: still Normal, still not blame, no panic.
     let _ = app.handle_keypress(key(KeyCode::Esc));
-    assert!(!app.active().editor.is_blame());
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert!(!app.active_editor().is_blame());
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }

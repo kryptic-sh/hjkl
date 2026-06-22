@@ -1179,8 +1179,7 @@ impl App {
                         if self.active_editor().vim_mode() != VimMode::Visual {
                             self.active_editor_mut().mouse_begin_drag();
                         }
-                        self.active_mut()
-                            .editor
+                        self.active_editor_mut()
                             .mouse_extend_drag_doc(doc_row, doc_col);
                         self.sync_after_engine_mutation_deferred();
                     }
@@ -1225,8 +1224,7 @@ impl App {
                             self.switch_focus(win_id);
                         }
                         if self.active_editor().buffer().fold_at_row(doc_row).is_some() {
-                            self.active_mut()
-                                .editor
+                            self.active_editor_mut()
                                 .apply_fold_op(hjkl_engine::FoldOp::ToggleAt(doc_row));
                             self.sync_after_engine_mutation_deferred();
                         } else if self.active().git_signs.iter().any(|s| s.row == doc_row) {
@@ -1274,8 +1272,7 @@ impl App {
                                 self.active_editor_mut().enter_visual_char();
                                 self.active_editor_mut().set_cursor_doc(doc_row, ws);
                                 self.active_editor_mut().mouse_begin_drag();
-                                self.active_mut()
-                                    .editor
+                                self.active_editor_mut()
                                     .set_cursor_doc(doc_row, we.saturating_sub(1).max(ws));
                             }
                             _ => {
@@ -1320,8 +1317,7 @@ impl App {
                     if self.active_editor().vim_mode() != VimMode::Visual {
                         self.active_editor_mut().mouse_begin_drag();
                     }
-                    self.active_mut()
-                        .editor
+                    self.active_editor_mut()
                         .mouse_extend_drag_doc(doc_row, doc_col);
                     self.sync_after_engine_mutation_deferred();
                 }
@@ -1528,6 +1524,11 @@ impl App {
             // / move_window_to_new_tab).  Calling it before every keypress
             // clobbered sticky_col and broke j/k column preservation (#151).
             self.drain_lsp_events();
+            // Ensure every window has a view editor onto its slot's Content
+            // (#151 Phase D). Splits create a window before its editor exists;
+            // buffer switches change a window's slot. Idempotent — rebuilds a
+            // window editor only on a real content change (Arc::ptr_eq).
+            self.reconcile_window_editors();
             {
                 let size = terminal.size()?;
                 let vp = self.active_editor_mut().host_mut().viewport_mut();
@@ -1696,8 +1697,7 @@ impl App {
                         let edits = self.active_editor_mut().take_content_edits();
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
-                            self.active_mut()
-                                .editor
+                            self.active_editor_mut()
                                 .shift_syntax_spans_for_edits(&edits);
                         }
                         self.lsp_notify_change_active(&edits);
@@ -1769,8 +1769,7 @@ impl App {
                                 let edits = self.active_editor_mut().take_content_edits();
                                 if !edits.is_empty() {
                                     self.syntax.apply_edits(bid, &edits);
-                                    self.active_mut()
-                                        .editor
+                                    self.active_editor_mut()
                                         .shift_syntax_spans_for_edits(&edits);
                                 }
                                 self.lsp_notify_change_active(&edits);

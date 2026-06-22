@@ -13,12 +13,10 @@ fn syntax_off_clears_installed_spans_and_disables_recompute() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer content so row 0 exists, then install spans we can clear.
     seed_buffer(&mut app, "fn main() {}\n");
-    app.active_mut()
-        .editor
+    app.active_editor_mut()
         .install_ratatui_syntax_spans(vec![vec![(0, 1, ratatui::style::Style::default())]]);
     let has_spans_before = app
-        .active()
-        .editor
+        .active_editor()
         .buffer_spans()
         .iter()
         .any(|row| !row.is_empty());
@@ -28,15 +26,14 @@ fn syntax_off_clears_installed_spans_and_disables_recompute() {
 
     assert!(!app.syntax_enabled, ":syntax off must flip the flag");
     let has_spans_after = app
-        .active()
-        .editor
+        .active_editor()
         .buffer_spans()
         .iter()
         .any(|row| !row.is_empty());
     assert!(
         !has_spans_after,
         ":syntax off must drop installed spans (got: {:?})",
-        app.active().editor.buffer_spans()
+        app.active_editor().buffer_spans()
     );
 }
 

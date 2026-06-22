@@ -51,8 +51,7 @@ impl App {
             vp.width = rect.w;
             vp.height = rect.h;
         }
-        self.active_mut()
-            .editor
+        self.active_editor_mut()
             .set_cursor_quiet(cursor_row, cursor_col);
         // Install this window's fold snapshot into the shared slot buffer so
         // motions/render/`z`-ops operate on the focused window's folds
@@ -173,9 +172,36 @@ impl App {
     /// Use this in all focus-change helpers instead of the old pattern of
     /// `sync_from` + `set_focused` + `sync_to`.
     pub(crate) fn switch_focus(&mut self, target_id: super::window::WindowId) {
+        let old = self.focused_window();
         self.sync_viewport_from_editor();
         self.set_focused_window(target_id);
+        // Each window owns its editor (#151 Phase D); ensure the target's view
+        // editor exists, then carry the (semantically global) register bank
+        // from the window we left into it.
+        self.reconcile_window_editors();
+        self.copy_window_registers(old, target_id);
         self.sync_viewport_to_editor();
+    }
+
+    /// Copy the register bank from one window's editor into another's.
+    /// Vim registers are process-global; per-window editors hold their own bank,
+    /// so we propagate on focus change to keep yank/paste working across windows.
+    pub(crate) fn copy_window_registers(
+        &mut self,
+        from: super::window::WindowId,
+        to: super::window::WindowId,
+    ) {
+        if from == to {
+            return;
+        }
+        if let Some(regs) = self
+            .window_editors
+            .get(&from)
+            .map(|e| e.registers().clone())
+            && let Some(e) = self.window_editors.get_mut(&to)
+        {
+            *e.registers_mut() = regs;
+        }
     }
 
     /// Switch to `tab_idx`, saving the current window's cursor/scroll and
@@ -184,8 +210,12 @@ impl App {
     /// Use this for all tab-switch operations instead of the old pattern of
     /// `sync_from` + `active_tab = idx` + `sync_to`.
     pub(crate) fn switch_tab(&mut self, tab_idx: usize) {
+        let old = self.focused_window();
         self.sync_viewport_from_editor();
         self.active_tab = tab_idx;
+        self.reconcile_window_editors();
+        let new = self.focused_window();
+        self.copy_window_registers(old, new);
         self.sync_viewport_to_editor();
     }
 }

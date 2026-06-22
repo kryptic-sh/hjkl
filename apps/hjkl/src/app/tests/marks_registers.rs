@@ -8,7 +8,7 @@ fn quote_a_then_dd_deletes_into_register_a() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\nline two");
     // Move cursor to first line (already there after seed).
-    assert_eq!(app.active().editor.cursor().0, 0);
+    assert_eq!(app.active_editor().cursor().0, 0);
 
     // `"a` sets pending register to 'a' via reducer, then `dd` deletes the line.
     drive_key(&mut app, key(KeyCode::Char('"')));
@@ -17,7 +17,7 @@ fn quote_a_then_dd_deletes_into_register_a() {
     drive_key(&mut app, key(KeyCode::Char('d')));
 
     // Register 'a' must contain the deleted line text.
-    let slot = app.active().editor.registers().read('a');
+    let slot = app.active_editor().registers().read('a');
     assert!(slot.is_some(), "register 'a' should be set after \"add");
     let text = &slot.unwrap().text;
     assert!(
@@ -26,8 +26,7 @@ fn quote_a_then_dd_deletes_into_register_a() {
     );
     // Buffer should only have the second line.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -52,7 +51,7 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     drive_key(&mut app, key(KeyCode::Char('y')));
 
     // Verify register a has the yanked text.
-    let slot = app.active().editor.registers().read('a');
+    let slot = app.active_editor().registers().read('a');
     assert!(slot.is_some(), "register 'a' must be set after \"ayy");
     let text = slot.unwrap().text.clone();
     assert!(
@@ -63,7 +62,7 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     // Move down one line.
     drive_key(&mut app, key(KeyCode::Char('j')));
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         1,
         "cursor must be on line 1"
     );
@@ -75,8 +74,7 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
 
     // Buffer should now have "first line" duplicated after line two.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -102,8 +100,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
     drive_key(&mut app, key(KeyCode::Char('y')));
     drive_key(&mut app, key(KeyCode::Char('y')));
     let baseline = app
-        .active()
-        .editor
+        .active_editor()
         .registers()
         .read('"')
         .map(|s| s.text.clone())
@@ -120,8 +117,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
 
     // Unnamed register must still match the baseline yank.
     let after = app
-        .active()
-        .editor
+        .active_editor()
         .registers()
         .read('"')
         .map(|s| s.text.clone())
@@ -132,8 +128,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
     );
     // Line was deleted from the buffer.
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -180,8 +175,7 @@ fn quote_invalid_char_no_register_set() {
     drive_key(&mut app, key(KeyCode::Char('y')));
     drive_key(&mut app, key(KeyCode::Char('y')));
     let baseline_unnamed = app
-        .active()
-        .editor
+        .active_editor()
         .registers()
         .read('"')
         .map(|s| s.text.clone())
@@ -198,13 +192,12 @@ fn quote_invalid_char_no_register_set() {
     );
 
     // No register named '!' exists.
-    let slot = app.active().editor.registers().read('!');
+    let slot = app.active_editor().registers().read('!');
     assert!(slot.is_none(), "register '!' must not exist");
 
     // Unnamed register unchanged.
     let after = app
-        .active()
-        .editor
+        .active_editor()
         .registers()
         .read('"')
         .map(|s| s.text.clone())
@@ -223,7 +216,7 @@ fn m_a_then_apostrophe_a_jumps_back_to_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "first line\n  second line\nthird line");
     // Jump to row 2, col 3 and set mark 'a'.
-    app.active_mut().editor.jump_cursor(2, 3);
+    app.active_editor_mut().jump_cursor(2, 3);
     drive_key(&mut app, key(KeyCode::Char('m')));
     drive_key(&mut app, key(KeyCode::Char('a')));
     assert!(
@@ -231,7 +224,7 @@ fn m_a_then_apostrophe_a_jumps_back_to_line() {
         "pending_state must clear after ma"
     );
     // Move away to row 0.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // `'a` — linewise jump back to row 2, first non-blank.
     drive_key(&mut app, key(KeyCode::Char('\'')));
     drive_key(&mut app, key(KeyCode::Char('a')));
@@ -240,7 +233,7 @@ fn m_a_then_apostrophe_a_jumps_back_to_line() {
         "pending_state must clear after 'a"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         "'a must jump back to mark row"
     );
@@ -253,11 +246,11 @@ fn m_a_then_backtick_a_jumps_back_to_pos() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "first line\nsecond line\nthird line");
     // Jump to exact pos (1, 4) and set mark 'a'.
-    app.active_mut().editor.jump_cursor(1, 4);
+    app.active_editor_mut().jump_cursor(1, 4);
     drive_key(&mut app, key(KeyCode::Char('m')));
     drive_key(&mut app, key(KeyCode::Char('a')));
     // Move away.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     // `` `a `` — charwise jump back.
     drive_key(&mut app, key(KeyCode::Char('`')));
     drive_key(&mut app, key(KeyCode::Char('a')));
@@ -266,7 +259,7 @@ fn m_a_then_backtick_a_jumps_back_to_pos() {
         "pending_state must clear after `a"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (1, 4),
         "`a must jump to exact mark position"
     );
@@ -278,7 +271,7 @@ fn m_a_then_backtick_a_jumps_back_to_pos() {
 fn m_then_esc_cancels() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 3);
+    app.active_editor_mut().jump_cursor(0, 3);
     drive_key(&mut app, key(KeyCode::Char('m')));
     assert!(
         app.pending_state.is_some(),
@@ -290,7 +283,7 @@ fn m_then_esc_cancels() {
         "Esc must cancel SetMark pending state"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 3),
         "cursor must not move after m<Esc>"
     );
@@ -301,7 +294,7 @@ fn m_then_esc_cancels() {
 fn apostrophe_then_esc_cancels() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 2);
+    app.active_editor_mut().jump_cursor(0, 2);
     drive_key(&mut app, key(KeyCode::Char('\'')));
     assert!(
         app.pending_state.is_some(),
@@ -313,7 +306,7 @@ fn apostrophe_then_esc_cancels() {
         "Esc must cancel GotoMarkLine pending state"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (0, 2),
         "cursor must not move after '<Esc>"
     );
@@ -325,13 +318,13 @@ fn backtick_in_visual_jumps_pos() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "first line\nsecond line\nthird line");
     // Set mark 'b' at (2, 2) in Normal mode.
-    app.active_mut().editor.jump_cursor(2, 2);
+    app.active_editor_mut().jump_cursor(2, 2);
     drive_key(&mut app, key(KeyCode::Char('m')));
     drive_key(&mut app, key(KeyCode::Char('b')));
     // Enter Visual mode at (0, 0).
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     drive_key(&mut app, key(KeyCode::Char('v')));
-    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Visual);
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Visual);
     // `` `b `` in Visual mode — must jump to (2, 2) via BeginPendingGotoMarkChar.
     // In Visual mode, route_chord_key dispatches non-Normal trie, which has
     // the `` ` `` binding from build_app_keymap.
@@ -342,7 +335,7 @@ fn backtick_in_visual_jumps_pos() {
         "pending_state must clear after `b in Visual mode"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         "`b in Visual mode must jump to mark row"
     );
@@ -372,7 +365,7 @@ fn q_then_esc_cancels_no_recording_started() {
         "Esc after q must clear pending_state"
     );
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "Esc cancel must not start recording"
     );
 }
@@ -387,15 +380,15 @@ fn bare_q_during_record_stops() {
     drive_key(&mut app, ck('q'));
     drive_key(&mut app, ck('a'));
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "q a must start recording"
     );
-    assert_eq!(app.active().editor.recording_register(), Some('a'));
+    assert_eq!(app.active_editor().recording_register(), Some('a'));
 
     // Bare `q` must stop the recording (QChord branches to stop_macro_record).
     drive_key(&mut app, ck('q'));
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "bare q must stop recording"
     );
     assert!(
@@ -409,7 +402,7 @@ fn record_macro_a_j_motion_replay_plays() {
     // Record `qa j q` (move down one line), then `@a` replays it.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Record: qa j q.
@@ -423,20 +416,20 @@ fn record_macro_a_j_motion_replay_plays() {
         ],
     );
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "recording must stop after second q"
     );
     // Should be on row 1 from the j motion during recording.
-    assert_eq!(app.active().editor.cursor().0, 1);
+    assert_eq!(app.active_editor().cursor().0, 1);
 
     // Play: @a — should move down one more row.
     macro_key_seq(&mut app, &[ck('@'), ck('a')]);
     assert!(
-        !app.active().editor.is_replaying_macro(),
+        !app.active_editor().is_replaying_macro(),
         "replaying_macro must be false after replay finishes"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         "@a must replay j motion (move to row 2)"
     );
@@ -449,7 +442,7 @@ fn record_macro_a_insert_text_esc_motion_replays_full() {
     // mode at EOL and stops (text + esc + motion not replayed).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(
@@ -468,27 +461,27 @@ fn record_macro_a_insert_text_esc_motion_replays_full() {
             ck('q'),           // stop recording
         ],
     );
-    assert!(!app.active().editor.is_recording_macro());
+    assert!(!app.active_editor().is_recording_macro());
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "line0test",
         "recording itself must append 'test' to line0"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (1, 0),
         "after recording, cursor must be at row 1, col 0"
     );
 
     macro_key_seq(&mut app, &[ck('@'), ck('a')]);
-    assert!(!app.active().editor.is_replaying_macro());
+    assert!(!app.active_editor().is_replaying_macro());
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 1),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 1),
         "line1test",
         "@a must re-execute A+test on line1"
     );
     assert_eq!(
-        app.active().editor.cursor(),
+        app.active_editor().cursor(),
         (2, 0),
         "@a must end with cursor at row 2, col 0 (0 then j)"
     );
@@ -501,7 +494,7 @@ fn record_macro_a_comma_text_esc_j0_replays() {
     // Actual bug report: replay went into insert at EOL then literally typed "j0".
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(
@@ -532,16 +525,16 @@ fn record_macro_a_comma_text_esc_j0_replays() {
             ck('q'),
         ],
     );
-    assert!(!app.active().editor.is_recording_macro());
+    assert!(!app.active_editor().is_recording_macro());
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "line0, this is a test",
         "recording itself must append the text"
     );
 
     macro_key_seq(&mut app, &[ck('@'), ck('a')]);
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 1),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 1),
         "line1, this is a test",
         "@a must re-append the text on line1"
     );
@@ -554,13 +547,13 @@ fn gcc_toggles_comment_on_current_line_via_app_layer() {
     // route_chord_key → engine via FallThrough).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "// let x = 1;",
         "gcc must toggle a comment marker onto line 0"
     );
@@ -574,12 +567,12 @@ fn gcc_on_doc_comment_uncomments_via_app_layer() {
     // "//" + one optional space — turning `/// foo` → `/ foo`.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "/// doc line\nfn foo() {}");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
-    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line0 = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_ne!(
         line0, "/// doc line",
         "gcc must mutate the doc-comment line; got {line0:?} (no-op == bug)"
@@ -594,15 +587,14 @@ fn gc_in_visual_line_toggles_selection_via_app_layer() {
     // and stalled waiting for a motion that visual mode never delivers.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "let x = 1;\nlet y = 2;\nlet z = 3;");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // V → visual-line, j → extend down, gc → toggle.
     macro_key_seq(&mut app, &[ck('V'), ck('j'), ck('g'), ck('c')]);
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -629,14 +621,13 @@ fn gc_in_visual_line_toggles_selection_via_app_layer() {
 fn gc_in_visual_charwise_toggles_selection_via_app_layer() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('v'), ck('j'), ck('g'), ck('c')]);
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -658,26 +649,26 @@ fn gcc_then_gcc_round_trips_after_routing_fix() {
     // bare-`c` Change operator path.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "// let x = 1;"
     );
     // Critical: no engine pending leak between invocations.
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
     assert!(app.pending_state.is_none());
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "let x = 1;",
         "second gcc must uncomment after the routing fix"
     );
-    assert!(!app.active().editor.is_chord_pending());
+    assert!(!app.active_editor().is_chord_pending());
 }
 
 #[test]
@@ -685,14 +676,13 @@ fn gcc_with_count_3_toggles_3_lines_via_app_layer() {
     // `3gcc` — comment 3 lines starting at cursor.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\nc\nd\ne");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('3'), ck('g'), ck('c'), ck('c')]);
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -713,14 +703,13 @@ fn gc_with_motion_j_toggles_2_lines_via_app_layer() {
     // `gcj` — comment current line plus one line down (motion j).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a\nb\nc");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('j')]);
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -738,12 +727,12 @@ fn gc_with_motion_j_toggles_2_lines_via_app_layer() {
 fn gcc_on_indented_doc_comment_via_app_layer() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "    /// indented doc\nfn foo() {}");
-    app.active_mut().editor.set_filetype("rust");
-    app.active_mut().editor.jump_cursor(0, 4);
+    app.active_editor_mut().set_filetype("rust");
+    app.active_editor_mut().jump_cursor(0, 4);
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
-    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let line0 = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_ne!(
         line0, "    /// indented doc",
         "gcc on indented doc-comment must mutate; got {line0:?}"
@@ -762,18 +751,18 @@ fn opening_rust_file_auto_sets_filetype_so_gcc_works() {
     std::fs::write(&file_path, "let x = 1;\nlet y = 2;\n").unwrap();
 
     let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     assert_eq!(
-        app.active().editor.settings().filetype,
+        app.active_editor().settings().filetype,
         "rust",
         "opening a .rs file must seed the editor's filetype to \"rust\""
     );
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
     assert_eq!(
-        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
+        hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0),
         "// let x = 1;",
         "gcc on a freshly-opened .rs file must toggle a comment marker"
     );
@@ -786,21 +775,21 @@ fn at_at_repeats_last_macro() {
     // Record `qa j q`, play `@a`, then `@@` re-plays same macro.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Record qa j q.
     macro_key_seq(&mut app, &[ck('q'), ck('a'), ck('j'), ck('q')]);
-    assert_eq!(app.active().editor.cursor().0, 1);
+    assert_eq!(app.active_editor().cursor().0, 1);
 
     // @a — plays, moves to row 2, sets last_macro = 'a'.
     macro_key_seq(&mut app, &[ck('@'), ck('a')]);
-    assert_eq!(app.active().editor.cursor().0, 2);
+    assert_eq!(app.active_editor().cursor().0, 2);
 
     // @@ — repeats last macro ('a'), moves to row 3.
     macro_key_seq(&mut app, &[ck('@'), ck('@')]);
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         3,
         "@@ must replay the last macro"
     );
@@ -814,20 +803,20 @@ fn play_macro_with_count_3() {
     // route_chord_key, and cannot be easily injected in unit-test context.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4\nline5\nline6");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Record a simple macro into register 'a' via the public API.
-    app.active_mut().editor.start_macro_record('a');
-    app.active_mut().editor.record_input(hjkl_engine::Input {
+    app.active_editor_mut().start_macro_record('a');
+    app.active_editor_mut().record_input(hjkl_engine::Input {
         key: hjkl_engine::Key::Char('j'),
         ..Default::default()
     });
-    app.active_mut().editor.stop_macro_record();
+    app.active_editor_mut().stop_macro_record();
 
     // play_macro('a', 3) must return 3 inputs.
-    let inputs = app.active_mut().editor.play_macro('a', 3);
-    app.active_mut().editor.end_macro_replay();
+    let inputs = app.active_editor_mut().play_macro('a', 3);
+    app.active_editor_mut().end_macro_replay();
     assert_eq!(
         inputs.len(),
         3,
@@ -840,13 +829,13 @@ fn play_macro_with_count_3() {
         if ct_key.code != KeyCode::Null {
             let consumed = app.route_chord_key(ct_key);
             if !consumed {
-                hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
+                hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
             }
             app.sync_viewport_from_editor();
         }
     }
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         3,
         "3× j motions must move cursor to row 3"
     );
@@ -858,24 +847,24 @@ fn record_capital_appends_to_lowercase() {
     // `@a` should replay both (j then k — net zero movement).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3");
-    app.active_mut().editor.jump_cursor(1, 0);
+    app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
     // Record qa j q.
     macro_key_seq(&mut app, &[ck('q'), ck('a'), ck('j'), ck('q')]);
-    assert_eq!(app.active().editor.cursor().0, 2);
+    assert_eq!(app.active_editor().cursor().0, 2);
 
     // Record qA k q (append: moves back up from row 2 to row 1).
     macro_key_seq(&mut app, &[ck('q'), ck('A'), ck('k'), ck('q')]);
     // Cursor moved k (up) from row 2 → row 1.
-    assert_eq!(app.active().editor.cursor().0, 1);
+    assert_eq!(app.active_editor().cursor().0, 1);
 
     // Now @a should replay the combined macro (j then k) — net zero move.
     // Start at row 1 after qA k q. j moves to 2, k moves back to 1.
-    let start_row = app.active().editor.cursor().0; // should be 1
+    let start_row = app.active_editor().cursor().0; // should be 1
     macro_key_seq(&mut app, &[ck('@'), ck('a')]);
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         start_row,
         "@a with capital append must replay j+k (net zero from row {start_row})"
     );
@@ -889,26 +878,26 @@ fn at_colon_replays_last_ex() {
     // replay_last_ex() called directly must re-run `:3` and land there again.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Run :3 — cursor goes to row 2 (0-based).
     app.dispatch_ex("3");
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         ":3 must move cursor to row 2"
     );
 
     // Move cursor away.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
-    assert_eq!(app.active().editor.cursor().0, 0);
+    assert_eq!(app.active_editor().cursor().0, 0);
 
     // Direct replay must bring cursor back to row 2.
     app.replay_last_ex();
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         "replay_last_ex must re-run :3 and land on row 2"
     );
@@ -920,15 +909,15 @@ fn at_colon_via_play_macro_arm_replays() {
     // with reg==':' is exercised.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Establish last_ex_command via :3.
     app.dispatch_ex("3");
-    assert_eq!(app.active().editor.cursor().0, 2);
+    assert_eq!(app.active_editor().cursor().0, 2);
 
     // Move away.
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Set up BeginPendingPlayMacro state then drive ':'.
@@ -950,7 +939,7 @@ fn at_colon_via_play_macro_arm_replays() {
         "pending_state must be cleared after @: commit"
     );
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         2,
         "@: chord must replay :3 and land on row 2"
     );
@@ -969,15 +958,15 @@ fn at_colon_with_count_3_replays_three_times() {
     // (unchanged) and cursor is on row 0.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
-    app.active_mut().editor.jump_cursor(2, 0);
+    app.active_editor_mut().jump_cursor(2, 0);
     app.sync_viewport_from_editor();
 
     // Establish last_ex_command as "1" (goto line 1).
     app.dispatch_ex("1");
-    assert_eq!(app.active().editor.cursor().0, 0, ":1 must go to row 0");
+    assert_eq!(app.active_editor().cursor().0, 0, ":1 must go to row 0");
 
     // Move away so we can verify the replays actually run.
-    app.active_mut().editor.jump_cursor(4, 0);
+    app.active_editor_mut().jump_cursor(4, 0);
     app.sync_viewport_from_editor();
 
     // Set up BeginPendingPlayMacro with count=3, then drive ':'.
@@ -989,7 +978,7 @@ fn at_colon_with_count_3_replays_three_times() {
     assert!(consumed, "3@: must be consumed");
     // After 3 replays of :1, cursor must be at row 0 (last replay wins).
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "3@: of :1 must end with cursor at row 0"
     );
@@ -1006,7 +995,7 @@ fn at_colon_no_prior_ex_is_noop() {
     // Fresh app with no prior :cmd — replay_last_ex must be a silent no-op.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     assert!(
@@ -1019,7 +1008,7 @@ fn at_colon_no_prior_ex_is_noop() {
 
     // Nothing changed.
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "cursor must be unchanged"
     );
@@ -1048,22 +1037,22 @@ fn at_colon_within_macro_does_not_recurse() {
     //      corruption from the inner dispatch_ex call).
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // Establish last_ex_command as "1".
     app.dispatch_ex("1");
-    assert_eq!(app.active().editor.cursor().0, 0, ":1 must go to row 0");
+    assert_eq!(app.active_editor().cursor().0, 0, ":1 must go to row 0");
     assert_eq!(app.last_ex_command.as_deref(), Some("1"));
 
     // Move to row 2.
-    app.active_mut().editor.jump_cursor(2, 0);
+    app.active_editor_mut().jump_cursor(2, 0);
     app.sync_viewport_from_editor();
 
     // Start recording register 'a'.
     macro_key_seq(&mut app, &[ck('q'), ck('a')]);
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "must be recording"
     );
 
@@ -1074,14 +1063,14 @@ fn at_colon_within_macro_does_not_recurse() {
 
     // Cursor must be at row 0 — :1 was replayed.
     assert_eq!(
-        app.active().editor.cursor().0,
+        app.active_editor().cursor().0,
         0,
         "replay_last_ex during recording must move cursor to row 0"
     );
 
     // Recording must still be active — replay_last_ex did NOT stop it.
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "replay_last_ex must not stop macro recording"
     );
 
@@ -1094,7 +1083,7 @@ fn at_colon_within_macro_does_not_recurse() {
 
     // Stop recording.
     macro_key_seq(&mut app, &[ck('q')]);
-    assert!(!app.active().editor.is_recording_macro());
+    assert!(!app.active_editor().is_recording_macro());
 }
 
 // ── Phase 5e: count + register audit tests ───────────────────────────────────
@@ -1115,8 +1104,7 @@ fn count_before_op_5dd_deletes_5_lines() {
     rck(&mut app, &['d', 'd']);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1131,7 +1119,7 @@ fn count_before_op_5dd_deletes_5_lines() {
         "5dd must delete lines 1-5; first line must now be 'line6', got {lines:?}"
     );
     assert_eq!(
-        app.active().editor.vim_mode(),
+        app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
         "must be in Normal after 5dd"
     );
@@ -1148,7 +1136,7 @@ fn register_then_count_a5dd_targets_register_a() {
     // `"a` via route_chord_key (the canonical path for SelectRegister).
     rck(&mut app, &['"', 'a']);
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         Some('a'),
         "pending_register must be 'a' after \"a"
     );
@@ -1160,8 +1148,7 @@ fn register_then_count_a5dd_targets_register_a() {
     rck(&mut app, &['d', 'd']);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1177,7 +1164,7 @@ fn register_then_count_a5dd_targets_register_a() {
     );
 
     // Register 'a' must hold deleted content.
-    let reg_a = &app.active().editor.registers().named[0];
+    let reg_a = &app.active_editor().registers().named[0];
     assert!(
         reg_a.text.contains("line1"),
         "register 'a' must contain deleted text; got {:?}",
@@ -1186,7 +1173,7 @@ fn register_then_count_a5dd_targets_register_a() {
 
     // pending_register must be cleared after one-shot use.
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         None,
         "pending_register must be cleared after op"
     );
@@ -1206,7 +1193,7 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
     // `"a` — register selection. pending_count must NOT be reset.
     rck(&mut app, &['"', 'a']);
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         Some('a'),
         "pending_register must be 'a' after \"a"
     );
@@ -1220,8 +1207,7 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
     rck(&mut app, &['d', 'd']);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1237,7 +1223,7 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
     );
 
     // Register 'a' must hold the deleted content.
-    let reg_a = &app.active().editor.registers().named[0];
+    let reg_a = &app.active_editor().registers().named[0];
     assert!(
         reg_a.text.contains("line1"),
         "register 'a' must contain deleted text; got {:?}",
@@ -1283,8 +1269,7 @@ fn outer_count_inner_count_2_quote_a_5dd_total_10() {
     rck(&mut app, &['d', 'd']);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1299,7 +1284,7 @@ fn outer_count_inner_count_2_quote_a_5dd_total_10() {
         Some("line26"),
         "2\"a5dd with digit-accumulation semantics must delete 25 lines; got {lines:?}"
     );
-    let reg_a = &app.active().editor.registers().named[0];
+    let reg_a = &app.active_editor().registers().named[0];
     assert!(
         !reg_a.text.is_empty(),
         "register 'a' must be non-empty after op"
@@ -1311,24 +1296,23 @@ fn register_prefix_then_x_targets_register() {
     // `"ax` — delete current char into register 'a'.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // `"a` via route_chord_key.
     rck(&mut app, &['"', 'a']);
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         Some('a'),
         "pending_register must be 'a' after \"a"
     );
 
     // `x` — engine-handled delete-char. Feed via engine (x is not in app keymap).
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('x'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
     app.sync_viewport_from_editor();
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1344,7 +1328,7 @@ fn register_prefix_then_x_targets_register() {
     );
 
     // Register 'a' must hold 'h'.
-    let reg_a = &app.active().editor.registers().named[0];
+    let reg_a = &app.active_editor().registers().named[0];
     assert_eq!(
         reg_a.text, "h",
         "register 'a' must contain 'h' after \"ax; got {:?}",
@@ -1362,7 +1346,7 @@ fn register_prefix_single_use_then_next_op_unnamed() {
     // `"add` — delete line1 into reg 'a'.
     rck(&mut app, &['"', 'a', 'd', 'd']);
 
-    let reg_a_text = app.active().editor.registers().named[0].text.clone();
+    let reg_a_text = app.active_editor().registers().named[0].text.clone();
     assert!(
         reg_a_text.contains("line1"),
         "first dd must land in reg 'a'; got {:?}",
@@ -1371,25 +1355,25 @@ fn register_prefix_single_use_then_next_op_unnamed() {
 
     // pending_register must be None now.
     assert_eq!(
-        app.active().editor.pending_register(),
+        app.active_editor().pending_register(),
         None,
         "pending_register must be cleared after first op"
     );
 
     // Snapshot unnamed register state before second dd.
-    let unnamed_before = app.active().editor.registers().unnamed.text.clone();
+    let unnamed_before = app.active_editor().registers().unnamed.text.clone();
 
     // `dd` — delete line2 (now line1) to unnamed register.
     rck(&mut app, &['d', 'd']);
 
-    let unnamed_after = app.active().editor.registers().unnamed.text.clone();
+    let unnamed_after = app.active_editor().registers().unnamed.text.clone();
     assert_ne!(
         unnamed_after, unnamed_before,
         "second dd must update unnamed register"
     );
 
     // Register 'a' must be unchanged — still has line1.
-    let reg_a_text2 = app.active().editor.registers().named[0].text.clone();
+    let reg_a_text2 = app.active_editor().registers().named[0].text.clone();
     assert_eq!(
         reg_a_text, reg_a_text2,
         "register 'a' must not be overwritten by second dd; got {:?}",
@@ -1407,17 +1391,17 @@ fn count_then_play_macro_3at_a_plays_three_times() {
     // Record macro 'a': move down one line.
     macro_key_seq(&mut app, &[ck('q'), ck('a')]);
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "must be recording"
     );
     macro_key_seq(&mut app, &[ck('j')]);
     macro_key_seq(&mut app, &[ck('q')]);
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "recording stopped"
     );
 
-    let row_after_record = app.active().editor.cursor().0;
+    let row_after_record = app.active_editor().cursor().0;
     assert_eq!(row_after_record, 1, "recording 'j' moves cursor to row 1");
 
     // Accumulate count 3 in pending_count, then `@a`.
@@ -1425,7 +1409,7 @@ fn count_then_play_macro_3at_a_plays_three_times() {
     // `@` → BeginPendingPlayMacro, takes pending_count.
     rck(&mut app, &['@', 'a']);
 
-    let row_after_play = app.active().editor.cursor().0;
+    let row_after_play = app.active_editor().cursor().0;
     assert_eq!(
         row_after_play, 4,
         "3@a must play macro 3 times → cursor moves from row 1 to row 4; got {row_after_play}"
@@ -1438,16 +1422,15 @@ fn count_then_dot_5_dot_repeats_five_times() {
     // Setup: `x` deletes first char of "hello world", then `5.` deletes 5 more.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // `x` — delete 'h', establishes last_change.
-    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('x'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
     app.sync_viewport_from_editor();
 
     let lines_after_x = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1470,8 +1453,7 @@ fn count_then_dot_5_dot_repeats_five_times() {
     app.sync_viewport_from_editor();
 
     let lines_after_dot = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1498,15 +1480,14 @@ fn count_then_dot_5_dot_repeats_five_times() {
 fn count_p_pastes_register_count_times() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "x");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // yy5p — linewise yank, then 5p.
     macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('5'), ck('p')]);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1532,15 +1513,14 @@ fn count_p_pastes_register_count_times() {
 fn count_with_zero_digits_pastes_correctly() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "x");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // yy10p — linewise yank, then 10p.
     macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('1'), ck('0'), ck('p')]);
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1562,13 +1542,13 @@ fn count_with_zero_digits_pastes_correctly() {
 fn count_p_charwise_yank_pastes_count_times() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     // yl5p — charwise yank one char, then 5p.
     macro_key_seq(&mut app, &[ck('y'), ck('l'), ck('5'), ck('p')]);
 
-    let first_line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    let first_line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     // Started with "abc", yanked 'a', `5p` pastes 'a' 5 times after cursor (col 0):
     // "a" + "aaaaa" + "bc" = "aaaaaabc".
     assert_eq!(
@@ -1582,7 +1562,7 @@ fn count_p_charwise_yank_pastes_count_times() {
 fn count_100p_pastes_100_times() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "x");
-    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     macro_key_seq(
@@ -1591,8 +1571,7 @@ fn count_100p_pastes_100_times() {
     );
 
     let lines = app
-        .active()
-        .editor
+        .active_editor()
         .buffer()
         .rope()
         .lines()
@@ -1628,7 +1607,7 @@ fn registers_are_global_across_buffers() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     macro_key_seq(&mut app, &[ck('p')]);
 
-    let content = (*app.active().editor.buffer().content_joined()).clone();
+    let content = (*app.active_editor().buffer().content_joined()).clone();
     assert!(
         content.contains("alpha"),
         "yank in buffer A must paste in buffer B (global registers); got {content:?}"

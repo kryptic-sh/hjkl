@@ -109,8 +109,7 @@ fn build_arg_sources_data(app: &App) -> ArgSourcesData {
         regs
     };
     let marks: Vec<String> = app
-        .active()
-        .editor
+        .active_editor()
         .marks()
         .map(|(c, _)| c.to_string())
         .collect();
@@ -752,8 +751,7 @@ impl App {
                 }
                 self.active_editor_mut().ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
-                self.active_mut()
-                    .editor
+                self.active_editor_mut()
                     .set_last_search(Some(p.clone()), forward);
                 if forward {
                     push_history(&mut self.search_history_forward, &p);
@@ -791,8 +789,7 @@ impl App {
             self.filter_field = None;
             if let Some((top, bot)) = range {
                 let result = self
-                    .active_mut()
-                    .editor
+                    .active_editor_mut()
                     .filter_range(top, bot, command.trim(), None);
                 match result {
                     Ok(()) => {

@@ -256,8 +256,7 @@ impl App {
             }
         };
         let s = path.to_string_lossy().to_string();
-        self.active_mut()
-            .editor
+        self.active_editor_mut()
             .host_mut()
             .write_clipboard(s.clone());
         self.bus.info(format!("copied: {s}"));

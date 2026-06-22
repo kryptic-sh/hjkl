@@ -157,7 +157,7 @@ fn shift_click_enters_visual_and_extends_selection() {
     }
 
     // Editor starts in Normal mode; cursor at (0,0).
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 
     // Synthesise a Shift+Left-click at row=1 (screen), col=4 (text area).
     // With no line numbers, gutter_width = 0; text starts at col 0.
@@ -168,7 +168,7 @@ fn shift_click_enters_visual_and_extends_selection() {
             relativenumber: false,
             ..hjkl_engine::Options::default()
         };
-        app.active_mut().editor.apply_options(&opts);
+        app.active_editor_mut().apply_options(&opts);
     }
 
     let click_screen_row: u16 = 2; // window starts at screen row 1, so doc_row = 1
@@ -198,17 +198,16 @@ fn shift_click_enters_visual_and_extends_selection() {
                 app.set_focused_window(win_id);
                 app.sync_viewport_to_editor();
             }
-            if app.active().editor.vim_mode() != VimMode::Visual {
-                app.active_mut().editor.mouse_begin_drag();
+            if app.active_editor().vim_mode() != VimMode::Visual {
+                app.active_editor_mut().mouse_begin_drag();
             }
-            app.active_mut()
-                .editor
+            app.active_editor_mut()
                 .mouse_extend_drag_doc(doc_row, doc_col);
             app.sync_after_engine_mutation();
 
             // After Shift+click the editor must be in Visual mode.
             assert_eq!(
-                app.active().editor.vim_mode(),
+                app.active_editor().vim_mode(),
                 VimMode::Visual,
                 "Shift+click must enter Visual mode"
             );
@@ -483,7 +482,7 @@ mod border_drag_tests {
         let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
         // Set viewport to a known size so the math is predictable.
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = 80;
             vp.height = 22; // 24-row terminal minus top + status
         }
@@ -497,9 +496,8 @@ mod border_drag_tests {
 
         // Open a second slot → top bar becomes visible.
         app.dispatch_ex(&format!("e {}", path_b.display()));
-        let active = app.focused_slot_idx();
         {
-            let vp = app.slots_mut()[active].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = 80;
             vp.height = 22;
         }
@@ -559,15 +557,15 @@ mod border_drag_tests {
         );
 
         // Park the cursor at (0, 0) via keyboard motion semantics.
-        app.active_mut().editor.set_cursor_doc(0, 0);
-        assert_eq!(app.active().editor.cursor(), (0, 0));
+        app.active_editor_mut().set_cursor_doc(0, 0);
+        assert_eq!(app.active_editor().cursor(), (0, 0));
 
         // Right-click on row 2, text column 8 (cell col = gutter 4 + text 8 = 12).
         // Doc col after tab-expansion inverse on a tab-free line = visual col 8.
         app.move_cursor_for_right_click(12, 2);
 
         assert_eq!(
-            app.active().editor.cursor(),
+            app.active_editor().cursor(),
             (2, 8),
             "right-click must move cursor to clicked doc position"
         );
@@ -583,23 +581,23 @@ mod border_drag_tests {
             "line one\nline two\nline three\nline four\nline five",
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
-        app.active_mut().editor.set_cursor_doc(0, 0);
-        app.active_mut().editor.enter_visual_char();
+        app.active_editor_mut().set_cursor_doc(0, 0);
+        app.active_editor_mut().enter_visual_char();
         // Extend selection a bit so something is actually selected.
-        app.active_mut().editor.set_cursor_doc(0, 4);
-        let before = app.active().editor.cursor();
-        assert_eq!(app.active().editor.vim_mode(), VimMode::Visual);
+        app.active_editor_mut().set_cursor_doc(0, 4);
+        let before = app.active_editor().cursor();
+        assert_eq!(app.active_editor().vim_mode(), VimMode::Visual);
 
         // Right-click somewhere far from the selection.
         app.move_cursor_for_right_click(12, 3);
 
         assert_eq!(
-            app.active().editor.cursor(),
+            app.active_editor().cursor(),
             before,
             "right-click with active visual selection must not move cursor"
         );
         assert_eq!(
-            app.active().editor.vim_mode(),
+            app.active_editor().vim_mode(),
             VimMode::Visual,
             "visual mode must survive the right-click"
         );
@@ -613,13 +611,13 @@ mod border_drag_tests {
             "first\nsecond\nthird\nfourth\nfifth",
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
-        app.active_mut().editor.set_cursor_doc(0, 2);
+        app.active_editor_mut().set_cursor_doc(0, 2);
 
         // Cell col 0 is inside the gutter (gutter_width = 4 by default).
         app.move_cursor_for_right_click(0, 2);
 
         assert_eq!(
-            app.active().editor.cursor(),
+            app.active_editor().cursor(),
             (2, 0),
             "gutter right-click moves cursor to (clicked_row, 0)"
         );
@@ -632,14 +630,14 @@ mod border_drag_tests {
             "first\nsecond\nthird",
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
-        app.active_mut().editor.set_cursor_doc(1, 3);
-        let before = app.active().editor.cursor();
+        app.active_editor_mut().set_cursor_doc(1, 3);
+        let before = app.active_editor().cursor();
 
         // Row 30 is outside the 24-row area entirely.
         app.move_cursor_for_right_click(10, 30);
 
         assert_eq!(
-            app.active().editor.cursor(),
+            app.active_editor().cursor(),
             before,
             "right-click outside any window must not move the cursor"
         );
@@ -928,10 +926,9 @@ mod border_drag_tests {
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
         // Open fold spanning rows 1..=3; header row is doc row 1.
-        app.active_mut().editor.buffer_mut().add_fold(1, 3, false);
+        app.active_editor_mut().buffer_mut().add_fold(1, 3, false);
         assert_eq!(
-            app.active()
-                .editor
+            app.active_editor()
                 .buffer()
                 .fold_at_row(1)
                 .map(|f| f.closed),
@@ -944,8 +941,7 @@ mod border_drag_tests {
         // so col 0 is inside the gutter. Window area.y == 0, so screen row 1 = doc row 1.
         app.handle_mouse(left_down(0, 1));
         assert_eq!(
-            app.active()
-                .editor
+            app.active_editor()
                 .buffer()
                 .fold_at_row(1)
                 .map(|f| f.closed),
@@ -956,8 +952,7 @@ mod border_drag_tests {
         // Click again → re-opens.
         app.handle_mouse(left_down(0, 1));
         assert_eq!(
-            app.active()
-                .editor
+            app.active_editor()
                 .buffer()
                 .fold_at_row(1)
                 .map(|f| f.closed),
@@ -1194,7 +1189,7 @@ mod border_drag_tests {
         );
         app.handle_mouse(left_down(0, 0));
         assert!(
-            app.active().editor.buffer().folds().is_empty(),
+            app.active_editor().buffer().folds().is_empty(),
             "gutter click on a non-fold row must not create a fold"
         );
     }
@@ -1229,7 +1224,7 @@ mod border_drag_tests {
             "left-click git sign with no repo must not open a hunk popup"
         );
         assert!(
-            app.active().editor.buffer().folds().is_empty(),
+            app.active_editor().buffer().folds().is_empty(),
             "left-click git sign must not create a fold"
         );
     }
@@ -1303,22 +1298,21 @@ mod border_drag_tests {
         let mut app = make_app_with_window(&content, ratatui::layout::Rect::new(0, 0, 80, 24));
 
         // Add a CLOSED fold over doc rows 1..=3.
-        app.active_mut()
-            .editor
+        app.active_editor_mut()
             .buffer_mut()
             .add_fold(1, 3, true /* closed */);
 
         // Sanity: fold start row (1) is visible, rows 2-3 are hidden, row 4 is visible.
         assert!(
-            !app.active().editor.buffer().is_row_hidden(1),
+            !app.active_editor().buffer().is_row_hidden(1),
             "fold start row 1 must remain visible as the marker"
         );
         assert!(
-            app.active().editor.buffer().is_row_hidden(2),
+            app.active_editor().buffer().is_row_hidden(2),
             "row 2 must be hidden by the closed fold"
         );
         assert!(
-            !app.active().editor.buffer().is_row_hidden(4),
+            !app.active_editor().buffer().is_row_hidden(4),
             "row 4 must be visible (first row after the fold)"
         );
 
@@ -1359,8 +1353,7 @@ mod border_drag_tests {
         let mut app = make_app_with_window(&content, ratatui::layout::Rect::new(0, 0, 80, 24));
 
         // Add a CLOSED fold over doc rows 1..=3.
-        app.active_mut()
-            .editor
+        app.active_editor_mut()
             .buffer_mut()
             .add_fold(1, 3, true /* closed */);
 

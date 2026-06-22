@@ -19,10 +19,10 @@ fn recording_active_produces_full_line_banner() {
     drive_key(&mut app, ck('q'));
     drive_key(&mut app, ck('a'));
     assert!(
-        app.active().editor.is_recording_macro(),
+        app.active_editor().is_recording_macro(),
         "prerequisite: qa must start macro recording"
     );
-    assert_eq!(app.active().editor.recording_register(), Some('a'));
+    assert_eq!(app.active_editor().recording_register(), Some('a'));
 
     let width: u16 = 60;
     let text = crate::render::status_line_text(&app, width);
@@ -59,7 +59,7 @@ fn recording_stopped_falls_through_to_normal_bar() {
     drive_key(&mut app, ck('a'));
     drive_key(&mut app, ck('q')); // bare q stops recording
     assert!(
-        !app.active().editor.is_recording_macro(),
+        !app.active_editor().is_recording_macro(),
         "prerequisite: bare q must stop recording"
     );
 
