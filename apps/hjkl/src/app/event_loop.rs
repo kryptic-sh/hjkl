@@ -794,6 +794,7 @@ impl App {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
                         self.lsp_notify_change_active(&edits);
+                        self.rebase_sibling_cursors(&edits);
                         // Defer TS reparse to the end-of-drain flush so a
                         // burst of insert-mode keys folds into one parse
                         // instead of paying per-keystroke sync cost.
@@ -858,6 +859,7 @@ impl App {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
                         self.lsp_notify_change_active(&edits);
+                        self.rebase_sibling_cursors(&edits);
                         // Defer TS reparse to the end-of-drain flush so a
                         // burst of insert-mode keys folds into one parse
                         // instead of paying per-keystroke sync cost.
@@ -930,6 +932,7 @@ impl App {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
                     self.lsp_notify_change_active(&edits);
+                    self.rebase_sibling_cursors(&edits);
                     self.pending_recompute = true;
                     self.maybe_auto_trigger_completion(c);
                     return KeyOutcome::Continue;
@@ -1697,6 +1700,7 @@ impl App {
                                 .shift_syntax_spans_for_edits(&edits);
                         }
                         self.lsp_notify_change_active(&edits);
+                        self.rebase_sibling_cursors(&edits);
                         // Drain pending fold ops to prevent unbounded growth;
                         // `recompute_and_install` (via `pending_recompute`)
                         // handles the visual refresh.
@@ -1769,6 +1773,7 @@ impl App {
                                         .shift_syntax_spans_for_edits(&edits);
                                 }
                                 self.lsp_notify_change_active(&edits);
+                                self.rebase_sibling_cursors(&edits);
                                 // Drain pending fold ops (drain-loop mirror of
                                 // the primary key arm above).
                                 let _ = self.active_editor_mut().take_fold_ops();

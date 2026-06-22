@@ -126,6 +126,21 @@ pub use hjkl_app::keymap_actions::NavDir;
 /// Re-exported from `hjkl_app::keymap_actions` — source of truth moved there.
 pub use hjkl_app::keymap_actions::SearchDir;
 
+/// Rebase a document row against one `ContentEdit` (#151 Phase E). The edit
+/// replaced rows `[start, old_end]` with `[start, new_end]`:
+/// - above the change (`row <= start`) → unchanged;
+/// - inside it (`start < row <= old_end`) → clamp to the new end;
+/// - below it (`row > old_end`) → shift by the net row delta.
+fn rebase_row_for_edit(row: usize, start: usize, old_end: usize, new_end: usize) -> usize {
+    if row <= start {
+        row
+    } else if row <= old_end {
+        row.min(new_end)
+    } else {
+        (row as isize + (new_end as isize - old_end as isize)).max(0) as usize
+    }
+}
+
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
@@ -1024,6 +1039,56 @@ impl App {
         }
     }
 
+    /// Rebase the cursor + scroll of every *sibling* window (one showing the
+    /// same buffer as the focused window) against `edits` produced by the
+    /// focused window's editor (#151 Phase E — multi-window same-buffer cursor
+    /// rebase). Each `ContentEdit` replaces document rows `[start, old_end]`
+    /// with `[start, new_end]`: a sibling position below the change shifts by the
+    /// net row delta, one inside the change clamps to the new end, one above is
+    /// untouched. Row-level only (the impactful case); the focused window's own
+    /// cursor is owned by the engine and not touched here.
+    pub(crate) fn rebase_sibling_cursors(&mut self, edits: &[hjkl_engine::types::ContentEdit]) {
+        if edits.is_empty() {
+            return;
+        }
+        let fw = self.focused_window();
+        let Some(slot) = self
+            .windows
+            .get(fw)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.slot)
+        else {
+            return;
+        };
+        let siblings: Vec<window::WindowId> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(id, w)| w.as_ref().map(|w| (id, w.slot)))
+            .filter(|&(id, s)| s == slot && id != fw)
+            .map(|(id, _)| id)
+            .collect();
+        for sid in siblings {
+            let Some(e) = self.window_editors.get_mut(&sid) else {
+                continue;
+            };
+            let cur = e.buffer().cursor();
+            let mut row = cur.row;
+            let mut top = e.host().viewport().top_row;
+            for ed in edits {
+                let start = ed.start_position.0 as usize;
+                let old_end = ed.old_end_position.0 as usize;
+                let new_end = ed.new_end_position.0 as usize;
+                row = rebase_row_for_edit(row, start, old_end, new_end);
+                top = rebase_row_for_edit(top, start, old_end, new_end);
+            }
+            if row != cur.row {
+                e.set_cursor_quiet(row, cur.col);
+            }
+            e.host_mut().viewport_mut().top_row = top;
+        }
+    }
+
     /// Return a mutable reference to the active buffer slot.
     pub fn active_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();
@@ -1309,6 +1374,10 @@ impl App {
                 }
             }
         }
+        // Rebase sibling windows' cursor + scroll against this edit (#151 Phase
+        // E) so a window showing the same buffer keeps pointing at the same
+        // logical line when another window inserts/deletes lines above it.
+        self.rebase_sibling_cursors(&edits);
         // Drain pending fold ops so the vec doesn't grow unboundedly.
         // `recompute_and_install` handles the visual refresh; the ops are
         // queued for host observation but this app has no other consumer.

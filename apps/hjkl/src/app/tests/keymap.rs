@@ -5430,6 +5430,53 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     );
 }
 
+/// #151 Phase E: inserting a line in one window rebases a sibling window's
+/// cursor (showing the same buffer) so it keeps pointing at the same logical
+/// line.
+#[test]
+fn edit_in_one_window_rebases_sibling_cursor_below() {
+    use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "l0\nl1\nl2\nl3");
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // win1 shows the same buffer with its cursor on the last line (row 3).
+    let win1 = app.next_window_id;
+    app.next_window_id += 1;
+    app.windows.push(Some(Window::new(0)));
+    app.reconcile_window_editors();
+    app.seed_window_editor(win1, 3, 0, 0, 0);
+    let split_rect = LayoutRect::new(0, 0, 80, 24);
+    app.tabs[0] = Tab::new(
+        LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(win1)),
+            last_rect: Some(split_rect),
+        },
+        0,
+    );
+    assert_eq!(app.window_cursor(win1).0, 3, "precondition: win1 at row 3");
+
+    // Win0 (focused, row 0): `O` opens a line above, inserting a row at the top
+    // and pushing every existing row — including win1's cursor — down by one.
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('O')));
+    hjkl_vim_tui::handle_key(
+        app.active_editor_mut(),
+        KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+    );
+    app.sync_after_engine_mutation();
+
+    assert_eq!(
+        app.window_cursor(win1).0,
+        4,
+        "sibling cursor must rebase 3 -> 4 when a line is inserted above it"
+    );
+}
+
 /// After close_focused_window, the surviving window's cursor snapshot is
 /// loaded into the editor.
 #[test]
