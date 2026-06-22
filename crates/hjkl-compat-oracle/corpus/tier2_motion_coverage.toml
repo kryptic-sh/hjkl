@@ -1,0 +1,104 @@
+# Motion coverage audit (#254) — motions that exist in the engine but lacked
+# dedicated oracle cases. Validated against neovim. Oracle host is 80x24, no
+# soft-wrap, so `gj`/`gk` behave like `j`/`k` and `gm` clamps to the line end
+# on lines shorter than half the screen width.
+
+# ─── g_ : last non-blank of line ─────────────────────────────────────────────
+[[cases]]
+name = "g_underscore_last_non_blank"
+initial_buffer = "hello   \nworld\n"
+keys = "g_"
+expected_buffer = "hello   \nworld\n"
+expected_cursor = [0, 4]
+
+[[cases]]
+name = "g_underscore_skips_trailing_ws"
+initial_buffer = "  hi  \n"
+keys = "g_"
+expected_buffer = "  hi  \n"
+expected_cursor = [0, 3]
+
+# ─── gj / gk : display-line down/up (== j/k with no wrap) ─────────────────────
+[[cases]]
+name = "gj_down_no_wrap"
+initial_buffer = "aaa\nbbb\nccc\n"
+keys = "lgj"
+expected_buffer = "aaa\nbbb\nccc\n"
+expected_cursor = [1, 1]
+
+[[cases]]
+name = "gk_up_no_wrap"
+initial_buffer = "aaa\nbbb\nccc\n"
+keys = "Ggk"
+expected_buffer = "aaa\nbbb\nccc\n"
+expected_cursor = [1, 0]
+
+# ─── gM : middle of the TEXT line by char count (floor(chars/2)) ─────────────
+# NOTE: `gm` (middle of the *screen* line) is unimplemented — it needs the
+# viewport width, which the headless oracle harness doesn't set. Tracked for a
+# follow-up; here we cover the char-middle `gM` which the engine implements.
+[[cases]]
+name = "gM_char_middle"
+initial_buffer = "hello\n"
+keys = "gM"
+expected_buffer = "hello\n"
+expected_cursor = [0, 2]
+
+# ─── | : go to column (1-indexed), count-driven ──────────────────────────────
+[[cases]]
+name = "bar_goto_column_3"
+initial_buffer = "hello world\n"
+keys = "3|"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 2]
+
+[[cases]]
+name = "bar_goto_column_1_default"
+initial_buffer = "hello\n"
+keys = "$|"
+expected_buffer = "hello\n"
+expected_cursor = [0, 0]
+
+# ─── section motions ]] [[ ][ [] (lines starting with { or } in column 0) ─────
+[[cases]]
+name = "section_forward_brace"
+initial_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+keys = "]]"
+expected_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "section_end_forward_brace"
+initial_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+keys = "]["
+expected_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+expected_cursor = [3, 0]
+
+[[cases]]
+name = "section_backward_brace"
+initial_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+keys = "G[["
+expected_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+expected_cursor = [5, 0]
+
+[[cases]]
+name = "section_end_backward_brace"
+initial_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+keys = "G[]"
+expected_buffer = "a\n{\nb\n}\nc\n{\nd\n}\n"
+expected_cursor = [3, 0]
+
+# ─── counts on the new wrapping motions span rows ────────────────────────────
+[[cases]]
+name = "count_space_wraps_rows"
+initial_buffer = "ab\ncd\n"
+keys = "3 "
+expected_buffer = "ab\ncd\n"
+expected_cursor = [1, 1]
+
+[[cases]]
+name = "count_backspace_wraps_rows"
+initial_buffer = "ab\ncd\n"
+keys = "G$3<BS>"
+expected_buffer = "ab\ncd\n"
+expected_cursor = [0, 1]
