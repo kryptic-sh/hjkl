@@ -26,7 +26,7 @@ hjkl-picker.workspace = true
 hjkl-vim.workspace = true
 libc = "0.2"
 postcard = { version = "1", features = ["use-std"] }
-similar = "2"
+similar = "3"
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
