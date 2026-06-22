@@ -1,0 +1,60 @@
+# `<Space>` motion (vim right-motion) — #197 follow-up.
+# `<Space>` moves right and WRAPS to the next line at EOL (nvim default
+# `whichwrap=b,s` includes `s`). Operators (`d<Space>`/`c<Space>`) act on one
+# char mid-line like `dl`/`cl`.
+
+[[cases]]
+name = "space_moves_right"
+initial_buffer = "hello\n"
+keys = " "
+expected_buffer = "hello\n"
+expected_cursor = [0, 1]
+
+[[cases]]
+name = "space_twice"
+initial_buffer = "hello\n"
+keys = "  "
+expected_buffer = "hello\n"
+expected_cursor = [0, 2]
+
+[[cases]]
+name = "space_count"
+initial_buffer = "hello world\n"
+keys = "3 "
+expected_buffer = "hello world\n"
+expected_cursor = [0, 3]
+
+[[cases]]
+name = "space_wraps_at_eol"
+initial_buffer = "ab\ncd\n"
+keys = "l "
+expected_buffer = "ab\ncd\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "delete_space_deletes_char"
+initial_buffer = "hello\n"
+keys = "d "
+expected_buffer = "ello\n"
+expected_cursor = [0, 0]
+
+[[cases]]
+name = "change_space_changes_char"
+initial_buffer = "hello\n"
+keys = "c X<Esc>"
+expected_buffer = "Xello\n"
+expected_cursor = [0, 0]
+
+[[cases]]
+name = "backspace_moves_left"
+initial_buffer = "hello\n"
+keys = "ll<BS>"
+expected_buffer = "hello\n"
+expected_cursor = [0, 1]
+
+[[cases]]
+name = "backspace_wraps_at_bol"
+initial_buffer = "ab\ncd\n"
+keys = "j<BS>"
+expected_buffer = "ab\ncd\n"
+expected_cursor = [0, 1]

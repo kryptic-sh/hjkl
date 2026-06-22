@@ -256,6 +256,12 @@ pub(crate) fn rot13_str(s: &str) -> String {
 pub enum Motion {
     Left,
     Right,
+    /// `<Space>` — right-motion that wraps to the next line at EOL (vim's
+    /// default `whichwrap=b,s`). Distinct from `Right`/`l` which never wrap.
+    SpaceFwd,
+    /// `<BS>` — left-motion that wraps to the previous line's last char at BOL
+    /// (`whichwrap=b`). Distinct from `Left`/`h` which never wrap.
+    BackspaceBack,
     Up,
     Down,
     WordFwd,
@@ -3568,8 +3574,13 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
         return None;
     }
     match input.key {
-        Key::Char('h') | Key::Backspace | Key::Left => Some(Motion::Left),
+        Key::Char('h') | Key::Left => Some(Motion::Left),
         Key::Char('l') | Key::Right => Some(Motion::Right),
+        // `<Space>`/`<BS>` are vim's right/left motions that WRAP at line ends
+        // (default `whichwrap=b,s`), unlike `l`/`h`/arrows which never wrap.
+        // Operators (`d<Space>`/`d<BS>`) act on one char mid-line like `dl`/`dh`.
+        Key::Char(' ') => Some(Motion::SpaceFwd),
+        Key::Backspace => Some(Motion::BackspaceBack),
         Key::Char('j') | Key::Down => Some(Motion::Down),
         // `+` / `<CR>` — first non-blank of next line (linewise, count-aware).
         Key::Char('+') | Key::Enter => Some(Motion::FirstNonBlankNextLine),
@@ -3937,6 +3948,26 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
                 crate::motions::move_right_to_end(&mut ed.buffer, count);
             } else {
                 crate::motions::move_right_in_line(&mut ed.buffer, count);
+            }
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::SpaceFwd => {
+            // `<Space>` — wraps to next line at EOL in cursor context; mid-line
+            // char delete like `l` under an operator (`d<Space>`).
+            if as_operator {
+                crate::motions::move_right_to_end(&mut ed.buffer, count);
+            } else {
+                crate::motions::move_space_fwd(&mut ed.buffer, count);
+            }
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::BackspaceBack => {
+            // `<BS>` — wraps to prev line's last char at BOL in cursor context;
+            // mid-line char move like `h` under an operator (`d<BS>`).
+            if as_operator {
+                crate::motions::move_left(&mut ed.buffer, count);
+            } else {
+                crate::motions::move_backspace_back(&mut ed.buffer, count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -6795,6 +6826,8 @@ pub(crate) fn update_block_vcol<H: crate::types::Host>(
     match motion {
         Motion::Left
         | Motion::Right
+        | Motion::SpaceFwd
+        | Motion::BackspaceBack
         | Motion::WordFwd
         | Motion::BigWordFwd
         | Motion::WordBack

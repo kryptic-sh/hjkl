@@ -164,6 +164,56 @@ fn percent_jumps_to_matching_bracket() {
 }
 
 #[test]
+fn space_moves_right_like_l() {
+    // `<Space>` is vim's right-motion (#197 follow-up: missing vim-compat motion).
+    let mut e = editor_with("hello");
+    run_keys(&mut e, " ");
+    assert_eq!(e.cursor().1, 1, "<Space> should move right one column");
+    run_keys(&mut e, "  ");
+    assert_eq!(e.cursor().1, 3, "repeated <Space> advances");
+}
+
+#[test]
+fn space_count_moves_right() {
+    let mut e = editor_with("hello world");
+    run_keys(&mut e, "3 ");
+    assert_eq!(e.cursor().1, 3, "[count]<Space> moves right count cols");
+}
+
+#[test]
+fn space_wraps_at_eol() {
+    // nvim default `whichwrap=b,s` → `<Space>` wraps to the next line at EOL.
+    let mut e = editor_with("ab\ncd");
+    run_keys(&mut e, "l "); // at 'b' (col 1, last char), space wraps to row 1
+    assert_eq!(e.cursor(), (1, 0), "<Space> wraps to next line at EOL");
+}
+
+#[test]
+fn backspace_wraps_at_bol() {
+    // nvim default `whichwrap=b,s` → `<BS>` wraps to the prev line's last char.
+    let mut e = editor_with("ab\ncd");
+    run_keys(&mut e, "j"); // row 1, col 0 ('c')
+    run_keys(&mut e, "<BS>");
+    assert_eq!(
+        e.cursor(),
+        (0, 1),
+        "<BS> wraps to prev line's last char at BOL"
+    );
+}
+
+#[test]
+fn delete_space_deletes_char_right() {
+    // `d<Space>` deletes the char under the cursor (charwise, like `dl`/`x`).
+    let mut e = editor_with("hello");
+    run_keys(&mut e, "d ");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "ello",
+        "d<Space> should delete one char right"
+    );
+}
+
+#[test]
 fn dot_repeats_last_change() {
     let mut e = editor_with("aaa bbb ccc");
     run_keys(&mut e, "dw");

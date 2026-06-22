@@ -130,6 +130,43 @@ pub fn move_right_to_end<B: Cursor + Query>(buf: &mut B, count: usize) {
     write_cursor(buf, Position::new(cursor.row, new_col));
 }
 
+/// `<Space>` — vim's right-motion with line wrap (default `whichwrap=b,s`
+/// includes `s`): moves right `count` chars, wrapping to the first column of
+/// the next line at end-of-line, stopping at the last line. Cursor context
+/// only; operator context (`d<Space>`) uses [`move_right_to_end`] so a
+/// mid-line `d<Space>` deletes one char like `dl`.
+pub fn move_space_fwd<B: Cursor + Query>(buf: &mut B, count: usize) {
+    for _ in 0..count.max(1) {
+        let cur = read_cursor(buf);
+        let line = read_line(buf, cur.row);
+        if cur.col < last_col(&line) {
+            write_cursor(buf, Position::new(cur.row, cur.col + 1));
+        } else if read_line_opt(buf, cur.row + 1).is_some() {
+            write_cursor(buf, Position::new(cur.row + 1, 0));
+        } else {
+            break;
+        }
+    }
+}
+
+/// `<BS>` — vim's left-motion with line wrap (default `whichwrap=b,s` includes
+/// `b`): moves left `count` chars, wrapping to the last char of the previous
+/// line at beginning-of-line, stopping at the first line. Cursor context only;
+/// operator context (`d<BS>`) uses [`move_left`] (mid-line, no wrap).
+pub fn move_backspace_back<B: Cursor + Query>(buf: &mut B, count: usize) {
+    for _ in 0..count.max(1) {
+        let cur = read_cursor(buf);
+        if cur.col > 0 {
+            write_cursor(buf, Position::new(cur.row, cur.col - 1));
+        } else if cur.row > 0 {
+            let prev = read_line(buf, cur.row - 1);
+            write_cursor(buf, Position::new(cur.row - 1, last_col(&prev)));
+        } else {
+            break;
+        }
+    }
+}
+
 /// `0` — first column of the current row.
 pub fn move_line_start<B: Cursor + Query>(buf: &mut B) {
     let row = read_cursor(buf).row;
