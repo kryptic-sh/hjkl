@@ -567,6 +567,62 @@ mod tests {
                 jump: false,
             }))
         );
+        // :cbuffer / :cgetbuffer / :caddbuffer (#261)
+        assert_eq!(
+            go(&mut editor, "cbuffer"),
+            Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "cgetbuffer"),
+            Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "caddbuffer"),
+            Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+                append: true,
+                jump: false,
+            }))
+        );
+        // :cfile / :cgetfile / :caddfile (#261)
+        assert_eq!(
+            go(&mut editor, "cfile errors.log"),
+            Some(ExEffect::Quickfix(QfCommand::FromFile {
+                path: "errors.log".into(),
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "cgetfile errors.log"),
+            Some(ExEffect::Quickfix(QfCommand::FromFile {
+                path: "errors.log".into(),
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "caddfile errors.log"),
+            Some(ExEffect::Quickfix(QfCommand::FromFile {
+                path: "errors.log".into(),
+                append: true,
+                jump: false,
+            }))
+        );
+        // empty path → kept as empty (app resolves to "errors.err")
+        assert_eq!(
+            go(&mut editor, "cfile"),
+            Some(ExEffect::Quickfix(QfCommand::FromFile {
+                path: String::new(),
+                append: false,
+                jump: true,
+            }))
+        );
     }
 
     #[test]
@@ -626,6 +682,53 @@ mod tests {
             go(&mut editor, r#"laddexpr "3:1:hit""#),
             Some(ExEffect::Location(QfCommand::Expr {
                 text: r#""3:1:hit""#.into(),
+                append: true,
+                jump: false,
+            }))
+        );
+        // :lbuffer / :lgetbuffer / :laddbuffer (#261)
+        assert_eq!(
+            go(&mut editor, "lbuffer"),
+            Some(ExEffect::Location(QfCommand::FromBuffer {
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "lgetbuffer"),
+            Some(ExEffect::Location(QfCommand::FromBuffer {
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "laddbuffer"),
+            Some(ExEffect::Location(QfCommand::FromBuffer {
+                append: true,
+                jump: false,
+            }))
+        );
+        // :lfile / :lgetfile / :laddfile (#261)
+        assert_eq!(
+            go(&mut editor, "lfile errors.log"),
+            Some(ExEffect::Location(QfCommand::FromFile {
+                path: "errors.log".into(),
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "lgetfile errors.log"),
+            Some(ExEffect::Location(QfCommand::FromFile {
+                path: "errors.log".into(),
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "laddfile errors.log"),
+            Some(ExEffect::Location(QfCommand::FromFile {
+                path: "errors.log".into(),
                 append: true,
                 jump: false,
             }))

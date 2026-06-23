@@ -1682,6 +1682,98 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: laddexpr_handler::<H>,
     });
 
+    // :cbuffer / :cgetbuffer / :caddbuffer — populate quickfix from current buffer (#261)
+    reg.add(ExCommand {
+        name: "cbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "cb"
+        run: cbuffer_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cgetbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5, // "cgetb"
+        run: cgetbuffer_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "caddbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5, // "caddb"
+        run: caddbuffer_handler::<H>,
+    });
+
+    // :cfile / :cgetfile / :caddfile — populate quickfix from file on disk (#261)
+    reg.add(ExCommand {
+        name: "cfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 4, // "cfil" — avoids ambiguity with :cfirst (min=2 "cf")
+        run: cfile_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cgetfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 5, // "cgetf"
+        run: cgetfile_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "caddfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 5, // "caddf"
+        run: caddfile_handler::<H>,
+    });
+
+    // :lbuffer / :lgetbuffer / :laddbuffer — populate location list from current buffer (#261)
+    reg.add(ExCommand {
+        name: "lbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "lb"
+        run: lbuffer_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lgetbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5, // "lgetb"
+        run: lgetbuffer_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "laddbuffer",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5, // "laddb"
+        run: laddbuffer_handler::<H>,
+    });
+
+    // :lfile / :lgetfile / :laddfile — populate location list from file on disk (#261)
+    reg.add(ExCommand {
+        name: "lfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 4, // "lfil" — avoids ambiguity with :lfirst (min=3 "lfi")
+        run: lfile_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lgetfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 5, // "lgetf"
+        run: lgetfile_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "laddfile",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 5, // "laddf"
+        run: laddfile_handler::<H>,
+    });
+
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
     reg.add(ExCommand {
@@ -2015,6 +2107,164 @@ fn laddexpr_handler<H: Host>(
 ) -> Option<ExEffect> {
     Some(ExEffect::Location(QfCommand::Expr {
         text: args.trim().to_string(),
+        append: true,
+        jump: false,
+    }))
+}
+
+// ---- :cbuffer / :cgetbuffer / :caddbuffer (#261) ---------------------------
+
+/// `:cbuffer` — parse current buffer via errorformat, replace quickfix list, jump to first.
+fn cbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:cgetbuffer` — parse current buffer via errorformat, replace quickfix list, no jump.
+fn cgetbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:caddbuffer` — parse current buffer via errorformat, append to quickfix list, no jump.
+fn caddbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromBuffer {
+        append: true,
+        jump: false,
+    }))
+}
+
+// ---- :cfile / :cgetfile / :caddfile (#261) ---------------------------------
+
+/// `:cfile [path]` — read file, parse via errorformat, replace quickfix list, jump to first.
+fn cfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromFile {
+        path: args.trim().to_string(),
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:cgetfile [path]` — read file, parse via errorformat, replace quickfix list, no jump.
+fn cgetfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromFile {
+        path: args.trim().to_string(),
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:caddfile [path]` — read file, parse via errorformat, append to quickfix list, no jump.
+fn caddfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::FromFile {
+        path: args.trim().to_string(),
+        append: true,
+        jump: false,
+    }))
+}
+
+// ---- :lbuffer / :lgetbuffer / :laddbuffer (#261) ---------------------------
+
+/// `:lbuffer` — parse current buffer via errorformat, replace location list, jump to first.
+fn lbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromBuffer {
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:lgetbuffer` — parse current buffer via errorformat, replace location list, no jump.
+fn lgetbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromBuffer {
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:laddbuffer` — parse current buffer via errorformat, append to location list, no jump.
+fn laddbuffer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromBuffer {
+        append: true,
+        jump: false,
+    }))
+}
+
+// ---- :lfile / :lgetfile / :laddfile (#261) ---------------------------------
+
+/// `:lfile [path]` — read file, parse via errorformat, replace location list, jump to first.
+fn lfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromFile {
+        path: args.trim().to_string(),
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:lgetfile [path]` — read file, parse via errorformat, replace location list, no jump.
+fn lgetfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromFile {
+        path: args.trim().to_string(),
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:laddfile [path]` — read file, parse via errorformat, append to location list, no jump.
+fn laddfile_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::FromFile {
+        path: args.trim().to_string(),
         append: true,
         jump: false,
     }))

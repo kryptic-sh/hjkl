@@ -4,6 +4,7 @@
 //! as `ExEffect::Quickfix(QfCommand)` (global list) or `ExEffect::Location(...)`
 //! (window-local list). Both lists share this machinery via [`QfWhich`].
 
+use hjkl_buffer::rope_line_str;
 use hjkl_ex::QfCommand;
 use hjkl_quickfix::{QfEntry, QfKind, QfList};
 
@@ -67,6 +68,12 @@ impl crate::app::App {
             QfCommand::Make(extra) => self.qf_run_make(w, &extra),
             QfCommand::Expr { text, append, jump } => {
                 self.qf_run_expr(w, &text, append, jump);
+            }
+            QfCommand::FromBuffer { append, jump } => {
+                self.qf_run_from_buffer(w, append, jump);
+            }
+            QfCommand::FromFile { path, append, jump } => {
+                self.qf_run_from_file(w, &path, append, jump);
             }
             QfCommand::Open => {
                 if self.qf_list(w).is_empty() {
@@ -289,6 +296,78 @@ impl crate::app::App {
                 // set() already put cursor at 0; jump there.
             } else {
                 // For append/jump (not a vim command; kept symmetric) stay at 0.
+                self.qf_list_mut(w).first();
+            }
+            self.qf_jump_to_current(w);
+        }
+    }
+
+    /// `:cbuffer` / `:cgetbuffer` / `:caddbuffer` (and `l*` variants) — parse
+    /// the current buffer's text via `&errorformat` and populate the target list.
+    ///
+    /// The buffer text is materialized by joining all rope lines with newlines.
+    /// If `append` is `true` the new entries are appended; otherwise the list is
+    /// replaced. When `jump` is `true` and the resulting list is non-empty the
+    /// editor cursor is moved to the FIRST entry.
+    fn qf_run_from_buffer(&mut self, w: QfWhich, append: bool, jump: bool) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let efm = self.active_editor().settings().errorformat.clone();
+        // Materialize the buffer text from the rope.
+        let rope = self.active_editor().buffer().rope();
+        let n_lines = rope.len_lines();
+        let mut text = String::with_capacity(rope.len_bytes() + n_lines);
+        for i in 0..n_lines {
+            let line = rope_line_str(&rope, i);
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&line);
+        }
+        drop(rope);
+        let entries = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        if append {
+            self.qf_list_mut(w).extend(entries);
+        } else {
+            self.qf_list_mut(w).set(entries);
+        }
+        if jump && !self.qf_list(w).is_empty() {
+            if append {
+                self.qf_list_mut(w).first();
+            }
+            self.qf_jump_to_current(w);
+        }
+    }
+
+    /// `:cfile` / `:cgetfile` / `:caddfile` (and `l*` variants) — read `path`
+    /// from disk, parse via `&errorformat`, and populate the target list.
+    ///
+    /// An empty `path` falls back to `"errors.err"` (vim's default `'errorfile'`).
+    /// If `append` is `true` the new entries are appended; otherwise the list is
+    /// replaced. When `jump` is `true` and the resulting list is non-empty the
+    /// editor cursor is moved to the FIRST entry.
+    fn qf_run_from_file(&mut self, w: QfWhich, path: &str, append: bool, jump: bool) {
+        let resolved = if path.is_empty() {
+            "errors.err".to_string()
+        } else {
+            path.to_string()
+        };
+        let text = match std::fs::read_to_string(&resolved) {
+            Ok(s) => s,
+            Err(e) => {
+                self.bus.error(format!("cannot read \"{resolved}\": {e}"));
+                return;
+            }
+        };
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let efm = self.active_editor().settings().errorformat.clone();
+        let entries = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        if append {
+            self.qf_list_mut(w).extend(entries);
+        } else {
+            self.qf_list_mut(w).set(entries);
+        }
+        if jump && !self.qf_list(w).is_empty() {
+            if append {
                 self.qf_list_mut(w).first();
             }
             self.qf_jump_to_current(w);

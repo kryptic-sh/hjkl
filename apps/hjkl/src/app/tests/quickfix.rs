@@ -248,3 +248,144 @@ fn caddexpr_appends_to_existing_list() {
     // Cursor stays at 0 (not jumped)
     assert_eq!(app.quickfix.cursor(), 0);
 }
+
+// ── :cbuffer / :cgetbuffer / :caddbuffer in-process tests (#261 Phase 5b) ───
+
+/// Build an App with buffer content set to 3 error-format lines and errorformat
+/// configured to `%l:%c:%m` (no file column) so `:cbuffer` produces empty-path
+/// entries at lines 1/2/3 col 1 each (0-based: row 0/1/2 col 0).
+fn make_app_with_cbuffer_content() -> App {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Three lines matching %l:%c:%m: "1:1:a", "2:1:b", "3:1:c"
+    app.active_editor_mut().set_content("1:1:a\n2:1:b\n3:1:c\n");
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+    app
+}
+
+#[test]
+fn cbuffer_populates_list_and_jumps_to_first() {
+    let mut app = make_app_with_cbuffer_content();
+    app.handle_quickfix_command(QfCommand::FromBuffer {
+        append: false,
+        jump: true,
+    });
+    assert_eq!(app.quickfix.len(), 3, "cbuffer should produce 3 entries");
+    assert_eq!(app.quickfix.cursor(), 0);
+    // First entry: line 1 col 1 → row=0 col=0 (0-based)
+    let e0 = app.quickfix.current().unwrap();
+    assert_eq!(e0.row, 0, "first entry row should be 0");
+    assert_eq!(e0.col, 0, "first entry col should be 0");
+    // Editor jumped to first entry
+    assert_eq!(
+        app.active_editor().cursor().0,
+        0,
+        "editor row should be at first entry (row 0)"
+    );
+}
+
+#[test]
+fn cbuffer_then_cnext_moves_to_second_entry() {
+    let mut app = make_app_with_cbuffer_content();
+    app.handle_quickfix_command(QfCommand::FromBuffer {
+        append: false,
+        jump: true,
+    });
+    // :cnext → second entry (line 2 col 1 → row=1 col=0)
+    app.handle_quickfix_command(QfCommand::Next);
+    assert_eq!(app.quickfix.cursor(), 1);
+    let e1 = app.quickfix.current().unwrap();
+    assert_eq!(e1.row, 1, "second entry row should be 1");
+    assert_eq!(
+        app.active_editor().cursor().0,
+        1,
+        "editor row should be at second entry (row 1)"
+    );
+}
+
+#[test]
+fn cgetbuffer_populates_but_does_not_jump() {
+    let mut app = make_app_with_cbuffer_content();
+    let initial_row = app.active_editor().cursor().0;
+    app.handle_quickfix_command(QfCommand::FromBuffer {
+        append: false,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 3, "cgetbuffer should produce 3 entries");
+    assert_eq!(
+        app.active_editor().cursor().0,
+        initial_row,
+        "cgetbuffer must not move cursor"
+    );
+}
+
+#[test]
+fn caddbuffer_appends_to_existing_list() {
+    let mut app = make_app_with_cbuffer_content();
+    // Populate with one entry first
+    app.handle_quickfix_command(QfCommand::FromBuffer {
+        append: false,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 3);
+    // Change buffer content and caddbuffer — should append
+    app.active_editor_mut().set_content("4:1:d\n5:1:e\n");
+    app.handle_quickfix_command(QfCommand::FromBuffer {
+        append: true,
+        jump: false,
+    });
+    assert_eq!(
+        app.quickfix.len(),
+        5,
+        "caddbuffer should append to existing list"
+    );
+    // Cursor stays at 0 (not jumped)
+    assert_eq!(app.quickfix.cursor(), 0);
+}
+
+// ── :cfile / :cgetfile / :caddfile in-process tests (#261 Phase 5b) ─────────
+
+#[test]
+fn cfile_populates_list_from_disk_and_jumps() {
+    // Write a temp file containing errorformat lines.
+    let dir = std::env::temp_dir().join(format!("hjkl_cfile_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let errfile = dir.join("errors.txt");
+    // Use %f:%l:%c:%m so entries reference themselves; for jump we need a
+    // reachable file — use the errfile itself so no extra files are needed.
+    // Actually, for a simpler test use %l:%c:%m (no %f) so path is empty and
+    // the jump stays in-buffer (no do_edit).
+    let errfile_path = errfile.to_str().unwrap().to_string();
+    std::fs::write(&errfile, "1:1:alpha\n2:1:beta\n3:1:gamma\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+
+    app.handle_quickfix_command(QfCommand::FromFile {
+        path: errfile_path,
+        append: false,
+        jump: true,
+    });
+
+    assert_eq!(app.quickfix.len(), 3, "cfile should produce 3 entries");
+    let e0 = app.quickfix.current().unwrap();
+    assert_eq!(e0.row, 0, "first entry row should be 0");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cfile_missing_path_reports_error() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+    // Non-existent file should produce an error bus message and leave list empty.
+    app.handle_quickfix_command(QfCommand::FromFile {
+        path: "/nonexistent/path/errors.err".to_string(),
+        append: false,
+        jump: false,
+    });
+    assert_eq!(
+        app.quickfix.len(),
+        0,
+        "cfile on missing file leaves list empty"
+    );
+}

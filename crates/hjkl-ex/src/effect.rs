@@ -124,4 +124,30 @@ pub enum QfCommand {
         /// Whether to jump to the first entry after population.
         jump: bool,
     },
+    /// `:cbuffer` / `:cgetbuffer` / `:caddbuffer` (and `l*` variants) — parse
+    /// the CURRENT buffer's text via `&errorformat` and populate the list.
+    ///
+    /// `append = false` replaces the list; `append = true` appends.
+    /// `jump = true` jumps to the first entry after population.
+    FromBuffer {
+        /// Whether to append to the existing list (instead of replacing it).
+        append: bool,
+        /// Whether to jump to the first entry after population.
+        jump: bool,
+    },
+    /// `:cfile` / `:cgetfile` / `:caddfile` (and `l*` variants) — read `path`
+    /// from disk, parse via `&errorformat`, and populate the list.
+    ///
+    /// An empty `path` means use the default errorfile name `"errors.err"`
+    /// (vim's default `'errorfile'`).
+    /// `append = false` replaces the list; `append = true` appends.
+    /// `jump = true` jumps to the first entry after population.
+    FromFile {
+        /// Path to the error file. Empty string → `"errors.err"`.
+        path: String,
+        /// Whether to append to the existing list (instead of replacing it).
+        append: bool,
+        /// Whether to jump to the first entry after population.
+        jump: bool,
+    },
 }

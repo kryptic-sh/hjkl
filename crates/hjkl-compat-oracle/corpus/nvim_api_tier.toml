@@ -518,3 +518,38 @@ initial_cursor = [0, 0]
 keys = ":set errorformat=%l:%c:%m<CR>:cgetexpr \"2:0:two\"<CR>:caddexpr \"4:1:four\"<CR>:cnext<CR>"
 expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
 expected_cursor = [3, 0]
+
+# ── :cbuffer / :caddbuffer (#261 Phase 5b) ────────────────────────────────────
+
+# :cbuffer with %l:%c:%m errorformat parses buffer lines "1:1:a","2:1:b","3:1:c"
+# and jumps to the first entry (line 1 col 1, 0-based: row=0 col=0).
+# nvim probe: buffer={"1:1:a","2:1:b","3:1:c"}, set efm=%l:%c:%m, :cbuffer
+# → cursor row=0 col=0 (verified).
+[[cases]]
+name = "cbuffer_jumps_to_first"
+initial_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cbuffer<CR>"
+expected_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+expected_cursor = [0, 0]
+
+# :cbuffer then :cnext — moves cursor to the second entry (line 2 col 1,
+# 0-based: row=1 col=0).
+# nvim probe: same buffer+cbuffer then :cnext → cursor row=1 col=0 (verified).
+[[cases]]
+name = "cbuffer_then_cnext"
+initial_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cbuffer<CR>:cnext<CR>"
+expected_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+expected_cursor = [1, 0]
+
+# :cgetbuffer — populates without jumping (cursor stays at row 0 col 0).
+# nvim probe: same buffer, cgetbuffer → cursor unchanged at [0,0] (verified).
+[[cases]]
+name = "cgetbuffer_no_jump"
+initial_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cgetbuffer<CR>"
+expected_buffer = "1:1:a\n2:1:b\n3:1:c\n"
+expected_cursor = [0, 0]
