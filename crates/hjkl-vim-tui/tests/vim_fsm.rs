@@ -216,6 +216,18 @@ fn ctrl_h_moves_left_like_bs() {
 }
 
 #[test]
+fn gm_screen_middle() {
+    // `gm` → middle of the screen line (viewport_width/2, clamped to EOL).
+    // editor_with uses the default 80-col host, so gm = min(40, last_col).
+    let mut e = editor_with("hello");
+    run_keys(&mut e, "gm");
+    assert_eq!(e.cursor().1, 4, "gm clamps to last char on a short line");
+    let mut e2 = editor_with("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz");
+    run_keys(&mut e2, "gm");
+    assert_eq!(e2.cursor().1, 40, "gm lands at width/2 on a long line");
+}
+
+#[test]
 fn delete_space_deletes_char_right() {
     // `d<Space>` deletes the char under the cursor (charwise, like `dl`/`x`).
     let mut e = editor_with("hello");

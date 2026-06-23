@@ -33,16 +33,30 @@ keys = "Ggk"
 expected_buffer = "aaa\nbbb\nccc\n"
 expected_cursor = [1, 0]
 
-# ─── gM : middle of the TEXT line by char count (floor(chars/2)) ─────────────
-# NOTE: `gm` (middle of the *screen* line) is unimplemented — it needs the
-# viewport width, which the headless oracle harness doesn't set. Tracked for a
-# follow-up; here we cover the char-middle `gM` which the engine implements.
+# ─── gM (char-middle, floor(chars/2)) and gm (screen-middle, width/2) ────────
+# The oracle host is 80 cols (DefaultHost viewport), matching nvim's default, so
+# gm = min(80/2, last_col): clamps to EOL on short lines, lands at col 40 on
+# lines longer than half the screen.
 [[cases]]
 name = "gM_char_middle"
 initial_buffer = "hello\n"
 keys = "gM"
 expected_buffer = "hello\n"
 expected_cursor = [0, 2]
+
+[[cases]]
+name = "gm_screen_middle_clamps_short"
+initial_buffer = "hello\n"
+keys = "gm"
+expected_buffer = "hello\n"
+expected_cursor = [0, 4]
+
+[[cases]]
+name = "gm_screen_middle_long_line"
+initial_buffer = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz\n"
+keys = "gm"
+expected_buffer = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz\n"
+expected_cursor = [0, 40]
 
 # ─── | : go to column (1-indexed), count-driven ──────────────────────────────
 [[cases]]

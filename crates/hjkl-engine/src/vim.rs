@@ -316,6 +316,9 @@ pub enum Motion {
     /// `gM` — cursor to the middle char column of the current line
     /// (`floor(chars / 2)`). Vim's variant ignoring screen wrap.
     LineMiddle,
+    /// `gm` — cursor to the middle of the *screen* line: column
+    /// `min(viewport_width / 2, last_col)`. Differs from `gM` (char-middle).
+    ScreenLineMiddle,
     /// `{` — previous paragraph (preceding blank line, or top).
     ParagraphPrev,
     /// `}` — next paragraph (following blank line, or bottom).
@@ -4142,6 +4145,15 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
             let target = line_chars / 2;
             ed.jump_cursor(row, target);
         }
+        Motion::ScreenLineMiddle => {
+            // Vim's `gm`: middle of the *screen* line = column
+            // `viewport_width / 2`, clamped to the last char of the line.
+            let row = ed.cursor().0;
+            let width = ed.host().viewport().width as usize;
+            let last = buf_line_chars(&ed.buffer, row).saturating_sub(1);
+            let target = (width / 2).min(last);
+            ed.jump_cursor(row, target);
+        }
         Motion::ParagraphPrev => {
             crate::motions::move_paragraph_prev(&mut ed.buffer, count);
             ed.push_buffer_cursor_to_textarea();
@@ -4684,6 +4696,8 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
         '_' => execute_motion(ed, Motion::LastNonBlank, count),
         // `gM` — middle char column of the current line.
         'M' => execute_motion(ed, Motion::LineMiddle, count),
+        // `gm` — middle of the screen line (viewport_width/2, clamped to EOL).
+        'm' => execute_motion(ed, Motion::ScreenLineMiddle, count),
         // `gv` — re-enter the last visual selection.
         // Phase 6.6a: drive through the public Editor API.
         'v' => ed.reenter_last_visual(),
