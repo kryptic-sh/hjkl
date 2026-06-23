@@ -34,6 +34,7 @@ use crate::host::TuiHost;
 // ── ext-type tags (nvim wire protocol) ────────────────────────────────────────
 const BUFFER_EXT: i8 = 0;
 const WINDOW_EXT: i8 = 1;
+const TABPAGE_EXT: i8 = 2;
 
 /// Encode a u64 id as the minimal msgpack bytes for the ext payload.
 /// nvim uses a fixint 1 (0x01) as the buffer/window id in practice.
@@ -98,6 +99,29 @@ fn param_win(params: &[Value], idx: usize) -> std::result::Result<Option<u64>, S
         }
         Some(other) => Err(format!(
             "params[{idx}] must be window handle, got {other:?}"
+        )),
+    }
+}
+
+fn tab_handle(id: u64) -> Value {
+    Value::Ext(TABPAGE_EXT, encode_id(id))
+}
+
+/// Decode a `Value::Ext(TABPAGE_EXT, bytes)` back to a tabpage index.
+/// Missing or Nil => returns `None` (caller substitutes `app.active_tab`).
+fn param_tabpage(params: &[Value], idx: usize) -> std::result::Result<Option<u64>, String> {
+    match params.get(idx) {
+        None | Some(Value::Nil) => Ok(None),
+        Some(Value::Ext(tag, bytes)) if *tag == TABPAGE_EXT => {
+            let mut cursor = std::io::Cursor::new(bytes.as_slice());
+            match rmpv::decode::read_value(&mut cursor) {
+                Ok(inner) => Ok(Some(inner.as_u64().unwrap_or(0))),
+                Err(e) => Err(format!("invalid tabpage handle encoding: {e}")),
+            }
+        }
+        Some(Value::Integer(n)) => Ok(Some(n.as_u64().unwrap_or(0))),
+        Some(other) => Err(format!(
+            "params[{idx}] must be tabpage handle, got {other:?}"
         )),
     }
 }
@@ -1117,6 +1141,310 @@ fn dispatch(
             }
         }
 
+        // ── tabpage API ───────────────────────────────────────────────────────
+        "nvim_list_tabpages" => {
+            let handles: Vec<Value> = (0..app.tabs.len() as u64).map(tab_handle).collect();
+            ok(stdout, msgid, Value::Array(handles))
+        }
+
+        "nvim_get_current_tabpage" => ok(stdout, msgid, tab_handle(app.active_tab as u64)),
+
+        "nvim_set_current_tabpage" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_tabpage(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.active_tab as u64,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if id as usize >= app.tabs.len() {
+                return err(stdout, msgid, "invalid tabpage");
+            }
+            app.switch_tab(id as usize);
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_tabpage_list_wins" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_tabpage(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.active_tab as u64,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_tab_window_ids(id as usize) {
+                Some(wins) => {
+                    let handles: Vec<Value> = wins.into_iter().map(win_handle).collect();
+                    ok(stdout, msgid, Value::Array(handles))
+                }
+                None => err(stdout, msgid, "invalid tabpage"),
+            }
+        }
+
+        "nvim_tabpage_is_valid" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_tabpage(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.active_tab as u64,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            ok(
+                stdout,
+                msgid,
+                Value::Boolean((id as usize) < app.tabs.len()),
+            )
+        }
+
+        // ── buffer line count / current line / byte-range text ────────────────
+        "nvim_buf_line_count" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let current_id = app.nvim_current_buffer_id();
+            let rope = if buf_id == current_id {
+                app.active_editor().buffer().rope()
+            } else {
+                match app.nvim_slot_editor(buf_id) {
+                    Some(ed) => ed.buffer().rope(),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                }
+            };
+            // Match nvim semantics: an empty buffer has 1 line.
+            // ropey's len_lines() returns 1 for an empty rope, and for
+            // "a\nb" it returns 2, matching nvim_buf_get_lines(0,-1).len().
+            let count = rope.len_lines().max(1) as i64;
+            ok(stdout, msgid, Value::from(count))
+        }
+
+        "nvim_get_current_line" => {
+            let (row, _) = app.active_editor().cursor();
+            let rope = app.active_editor().buffer().rope();
+            let line = if row < rope.len_lines() {
+                hjkl_buffer::rope_line_str(&rope, row)
+            } else {
+                String::new()
+            };
+            ok(stdout, msgid, Value::from(line.as_str()))
+        }
+
+        "nvim_set_current_line" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let new_line = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let (row, _) = app.active_editor().cursor();
+            let rope = app.active_editor().buffer().rope();
+            let line_count = rope.len_lines();
+
+            // Rebuild full content with the current row replaced.
+            let mut result: Vec<String> = Vec::with_capacity(line_count);
+            for i in 0..line_count {
+                if i == row {
+                    result.push(new_line.clone());
+                } else {
+                    result.push(hjkl_buffer::rope_line_str(&rope, i));
+                }
+            }
+            let content = result.join("\n");
+            app.active_editor_mut().set_content(&content);
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_buf_get_text" => {
+            // nvim_buf_get_text(buf, start_row, start_col, end_row, end_col, opts)
+            // Rows 0-based; cols are BYTE offsets within the line.
+            // Returns Array of strings, one per spanned line (first/last clipped).
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let start_row = match param_i64(p, 1) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let start_col = match param_i64(p, 2) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let end_row = match param_i64(p, 3) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let end_col = match param_i64(p, 4) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // params[5] = opts dict — ignored
+
+            let current_id = app.nvim_current_buffer_id();
+            let rope = if buf_id == current_id {
+                app.active_editor().buffer().rope()
+            } else {
+                match app.nvim_slot_editor(buf_id) {
+                    Some(ed) => ed.buffer().rope(),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                }
+            };
+            let line_count = rope.len_lines();
+            let start_row = start_row.min(line_count.saturating_sub(1));
+            let end_row = end_row.min(line_count.saturating_sub(1));
+
+            let mut result: Vec<Value> = Vec::new();
+            for row in start_row..=end_row {
+                let line = hjkl_buffer::rope_line_str(&rope, row);
+                let bytes = line.as_bytes();
+                let (lo, hi) = if start_row == end_row {
+                    // Single-row range: clip both ends
+                    (start_col.min(bytes.len()), end_col.min(bytes.len()))
+                } else if row == start_row {
+                    (start_col.min(bytes.len()), bytes.len())
+                } else if row == end_row {
+                    (0, end_col.min(bytes.len()))
+                } else {
+                    (0, bytes.len())
+                };
+                // Ensure lo/hi are on valid UTF-8 char boundaries.
+                let lo = (0..=lo.min(bytes.len()))
+                    .rev()
+                    .find(|&i| line.is_char_boundary(i))
+                    .unwrap_or(0);
+                let hi = (hi.min(bytes.len())..=bytes.len())
+                    .find(|&i| line.is_char_boundary(i))
+                    .unwrap_or(bytes.len());
+                result.push(Value::from(&line[lo..hi]));
+            }
+            ok(stdout, msgid, Value::Array(result))
+        }
+
+        "nvim_buf_set_text" => {
+            // nvim_buf_set_text(buf, start_row, start_col, end_row, end_col, replacement)
+            // Rows 0-based; cols are BYTE offsets. replacement is String[].
+            //
+            // NOTE: This implementation materialises the whole buffer to a String,
+            // splices the replacement, then writes it back via set_content. This
+            // resets undo history — acceptable for headless API v1.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let start_row = match param_i64(p, 1) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let start_col = match param_i64(p, 2) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let end_row = match param_i64(p, 3) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let end_col = match param_i64(p, 4) {
+                Ok(v) => v.max(0) as usize,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let replacement = match param_string_array(p, 5) {
+                Ok(v) => v,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+
+            let current_id = app.nvim_current_buffer_id();
+            let is_current = buf_id == current_id;
+
+            // Materialise buffer lines.
+            let lines: Vec<String> = {
+                let rope = if is_current {
+                    app.active_editor().buffer().rope()
+                } else {
+                    match app.nvim_slot_editor(buf_id) {
+                        Some(ed) => ed.buffer().rope(),
+                        None => return err(stdout, msgid, "invalid buffer id"),
+                    }
+                };
+                let n = rope.len_lines();
+                (0..n)
+                    .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+                    .collect()
+            };
+
+            // Compute absolute byte positions by walking lines.
+            // Each line contributes its byte length + 1 for the joining '\n'.
+            let line_start_byte = |row: usize| -> usize {
+                lines[..row.min(lines.len())]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum()
+            };
+
+            let full = lines.join("\n");
+            let full_len = full.len();
+
+            let abs_start = {
+                let ls = line_start_byte(start_row);
+                let line_bytes = lines.get(start_row).map(|l| l.len()).unwrap_or(0);
+                let col = start_col.min(line_bytes);
+                // Snap to valid UTF-8 boundary.
+                let s = ls + col;
+                (0..=s.min(full_len))
+                    .rev()
+                    .find(|&i| full.is_char_boundary(i))
+                    .unwrap_or(0)
+            };
+            let abs_end = {
+                let ls = line_start_byte(end_row);
+                let line_bytes = lines.get(end_row).map(|l| l.len()).unwrap_or(0);
+                let col = end_col.min(line_bytes);
+                let s = ls + col;
+                let s = s.min(full_len);
+                (s..=full_len)
+                    .find(|&i| full.is_char_boundary(i))
+                    .unwrap_or(full_len)
+            };
+
+            let new_text = replacement.join("\n");
+            let new_content = format!("{}{}{}", &full[..abs_start], new_text, &full[abs_end..]);
+
+            if is_current {
+                app.active_editor_mut().set_content(&new_content);
+            } else {
+                match app.nvim_slot_editor_mut(buf_id) {
+                    Some(ed) => ed.set_content(&new_content),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                }
+            }
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
         // ── synchronisation barrier ───────────────────────────────────────────
         // The oracle calls `nvim.command("echo 1")` as a barrier. Handle it.
         _ => err(stdout, msgid, &format!("method not implemented: {method}")),
@@ -2120,5 +2448,491 @@ mod tests {
             }
         };
         assert_eq!(line_dollar, 3, "line('$') should be 3 (total line count)");
+    }
+
+    // ── tabpage helpers ───────────────────────────────────────────────────
+
+    fn make_tab_param(id: u64) -> Value {
+        tab_handle(id)
+    }
+
+    fn decode_tab_id(v: &Value) -> u64 {
+        match v {
+            Value::Ext(tag, bytes) => {
+                assert_eq!(*tag, TABPAGE_EXT);
+                let mut c = std::io::Cursor::new(bytes.as_slice());
+                rmpv::decode::read_value(&mut c)
+                    .unwrap()
+                    .as_u64()
+                    .expect("tab id")
+            }
+            other => panic!("expected tabpage Ext handle, got {other:?}"),
+        }
+    }
+
+    // ── tabpage tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_nvim_list_tabpages_starts_with_one() {
+        let mut app = build_app(None).unwrap();
+        let resp = call(&mut app, "nvim_list_tabpages", vec![]);
+        let tabs = match assert_ok(resp) {
+            Value::Array(v) => v,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(tabs.len(), 1, "fresh app should have 1 tab");
+        // Entries must be TABPAGE_EXT handles.
+        for t in &tabs {
+            decode_tab_id(t);
+        }
+    }
+
+    #[test]
+    fn test_nvim_list_tabpages_grows_after_tabnew() {
+        let mut app = build_app(None).unwrap();
+
+        // Before tabnew.
+        let before = {
+            let resp = call(&mut app, "nvim_list_tabpages", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        // Open a second tab.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("tabnew")]);
+            assert_ok(resp);
+        }
+
+        let after = {
+            let resp = call(&mut app, "nvim_list_tabpages", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            after,
+            before + 1,
+            "list_tabpages should grow by 1 after tabnew"
+        );
+        assert_eq!(after, 2, "should have exactly 2 tabs");
+    }
+
+    #[test]
+    fn test_nvim_get_current_tabpage_and_set_switches() {
+        let mut app = build_app(None).unwrap();
+
+        // Open a second tab so we have two.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("tabnew")]);
+            assert_ok(resp);
+        }
+
+        // We should now be on tab 1 (0-indexed).
+        let cur = {
+            let resp = call(&mut app, "nvim_get_current_tabpage", vec![]);
+            assert_ok(resp)
+        };
+        let cur_id = decode_tab_id(&cur);
+        assert_eq!(cur_id, 1, "after tabnew the active tab index should be 1");
+
+        // Switch back to tab 0.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_set_current_tabpage",
+                vec![make_tab_param(0)],
+            );
+            assert_ok(resp);
+        }
+
+        let new_cur = {
+            let resp = call(&mut app, "nvim_get_current_tabpage", vec![]);
+            assert_ok(resp)
+        };
+        assert_eq!(decode_tab_id(&new_cur), 0, "should be back on tab 0");
+    }
+
+    #[test]
+    fn test_nvim_set_current_tabpage_invalid_returns_err() {
+        let mut app = build_app(None).unwrap();
+        // Only 1 tab; index 99 is invalid.
+        let resp = call(
+            &mut app,
+            "nvim_set_current_tabpage",
+            vec![make_tab_param(99)],
+        );
+        assert!(
+            resp[2] != Value::Nil,
+            "invalid tabpage should return an error"
+        );
+    }
+
+    #[test]
+    fn test_nvim_tabpage_list_wins_returns_at_least_one() {
+        let mut app = build_app(None).unwrap();
+
+        // Tab 0 — the initial tab — should have exactly one window.
+        let wins = {
+            let resp = call(&mut app, "nvim_tabpage_list_wins", vec![make_tab_param(0)]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert!(!wins.is_empty(), "tab 0 must have at least 1 window");
+        // Each entry must be a WINDOW_EXT handle.
+        for w in &wins {
+            match w {
+                Value::Ext(tag, _) => assert_eq!(*tag, WINDOW_EXT),
+                other => panic!("expected window Ext handle, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_nvim_tabpage_is_valid() {
+        let mut app = build_app(None).unwrap();
+
+        let valid = {
+            let resp = call(&mut app, "nvim_tabpage_is_valid", vec![make_tab_param(0)]);
+            match assert_ok(resp) {
+                Value::Boolean(b) => b,
+                other => panic!("expected boolean, got {other:?}"),
+            }
+        };
+        assert!(valid, "tab 0 should be valid");
+
+        let invalid = {
+            let resp = call(&mut app, "nvim_tabpage_is_valid", vec![make_tab_param(99)]);
+            match assert_ok(resp) {
+                Value::Boolean(b) => b,
+                other => panic!("expected boolean, got {other:?}"),
+            }
+        };
+        assert!(!invalid, "tab 99 should be invalid");
+    }
+
+    // ── nvim_buf_line_count tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_nvim_buf_line_count_matches_get_lines_len() {
+        let mut app = build_app(None).unwrap();
+
+        // Seed multi-line content.
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf.clone(),
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("alpha"),
+                        Value::from("beta"),
+                        Value::from("gamma"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // line_count via new method.
+        let count = {
+            let resp = call(&mut app, "nvim_buf_line_count", vec![buf.clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+
+        // Line count via get_lines(0,-1).len().
+        let get_lines_len = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_lines",
+                vec![
+                    buf,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v.len() as i64,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        assert_eq!(
+            count, get_lines_len,
+            "nvim_buf_line_count must equal nvim_buf_get_lines(0,-1).len()"
+        );
+        assert_eq!(count, 3, "should be 3 lines");
+    }
+
+    #[test]
+    fn test_nvim_buf_line_count_empty_buffer_is_one() {
+        let mut app = build_app(None).unwrap();
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let count = {
+            let resp = call(&mut app, "nvim_buf_line_count", vec![buf]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(count, 1, "empty buffer has 1 line (nvim compat)");
+    }
+
+    // ── nvim_get_current_line / nvim_set_current_line ─────────────────────
+
+    #[test]
+    fn test_nvim_get_set_current_line_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        // Seed content.
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("line one"),
+                        Value::from("line two"),
+                        Value::from("line three"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Move cursor to row 2 (1-based) via nvim_win_set_cursor.
+        let win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_cursor",
+                vec![
+                    win,
+                    Value::Array(vec![Value::from(2i64), Value::from(0i64)]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // get_current_line should be "line two" (0-based row 1).
+        let line = {
+            let resp = call(&mut app, "nvim_get_current_line", vec![]);
+            match assert_ok(resp) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+        assert_eq!(line, "line two");
+
+        // Replace the current line.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_set_current_line",
+                vec![Value::from("REPLACED")],
+            );
+            assert_ok(resp);
+        }
+
+        // Read it back.
+        let after = {
+            let resp = call(&mut app, "nvim_get_current_line", vec![]);
+            match assert_ok(resp) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+        assert_eq!(after, "REPLACED");
+
+        // Other lines must be untouched.
+        let buf2 = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let all_lines = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_lines",
+                vec![
+                    buf2,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(all_lines[0], Value::from("line one"));
+        assert_eq!(all_lines[1], Value::from("REPLACED"));
+        assert_eq!(all_lines[2], Value::from("line three"));
+    }
+
+    // ── nvim_buf_get_text / nvim_buf_set_text ─────────────────────────────
+
+    #[test]
+    fn test_nvim_buf_get_text_sub_range() {
+        let mut app = build_app(None).unwrap();
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf.clone(),
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("hello world"),
+                        Value::from("rust lang"),
+                        Value::from("done"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // get_text: row 0 col 6 → row 0 col 11 = "world"
+        let text = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_text",
+                vec![
+                    buf.clone(),
+                    Value::from(0i64),  // start_row
+                    Value::from(6i64),  // start_col (byte)
+                    Value::from(0i64),  // end_row
+                    Value::from(11i64), // end_col (byte)
+                    Value::Map(vec![]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(text.len(), 1);
+        assert_eq!(text[0], Value::from("world"));
+
+        // Multi-row: row 0 col 6 → row 1 col 4 = ["world", "rust"]
+        let multi = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_text",
+                vec![
+                    buf,
+                    Value::from(0i64), // start_row
+                    Value::from(6i64), // start_col
+                    Value::from(1i64), // end_row
+                    Value::from(4i64), // end_col
+                    Value::Map(vec![]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(multi.len(), 2);
+        assert_eq!(multi[0], Value::from("world"));
+        assert_eq!(multi[1], Value::from("rust"));
+    }
+
+    #[test]
+    fn test_nvim_buf_set_text_splices_correctly() {
+        let mut app = build_app(None).unwrap();
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf.clone(),
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![Value::from("hello world"), Value::from("rust lang")]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Replace "world" (row 0, bytes 6..11) with "there"
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_text",
+                vec![
+                    buf.clone(),
+                    Value::from(0i64),  // start_row
+                    Value::from(6i64),  // start_col
+                    Value::from(0i64),  // end_row
+                    Value::from(11i64), // end_col
+                    Value::Array(vec![Value::from("there")]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Verify via get_lines.
+        let lines = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_lines",
+                vec![
+                    buf,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(lines[0], Value::from("hello there"));
+        assert_eq!(lines[1], Value::from("rust lang"));
     }
 }

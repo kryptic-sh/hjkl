@@ -448,6 +448,19 @@ impl App {
 
     // ── nvim-api window accessors ─────────────────────────────────────────
 
+    /// Window ids that belong to tab `tab_idx`, in layout-leaf order.
+    /// Returns `None` when `tab_idx` is out of bounds.
+    pub(crate) fn nvim_tab_window_ids(&self, tab_idx: usize) -> Option<Vec<u64>> {
+        let tab = self.tabs.get(tab_idx)?;
+        Some(
+            tab.layout
+                .leaves()
+                .into_iter()
+                .map(|id| id as u64)
+                .collect(),
+        )
+    }
+
     /// All open window ids (index `i` where `windows[i].is_some()`), as `u64`.
     pub(crate) fn nvim_window_ids(&self) -> Vec<u64> {
         self.windows
