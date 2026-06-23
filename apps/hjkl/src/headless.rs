@@ -102,8 +102,8 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             match effect {
                 ExEffect::None => {}
 
-                // Quickfix has no popup in headless mode — no-op.
-                ExEffect::Quickfix(_) => {}
+                // Quickfix / location list have no popup in headless mode — no-op.
+                ExEffect::Quickfix(_) | ExEffect::Location(_) => {}
 
                 ExEffect::Ok => {}
 

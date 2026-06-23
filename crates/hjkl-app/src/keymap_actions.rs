@@ -71,6 +71,9 @@ pub enum AppAction {
     // ── Quickfix navigation (#184) ─────────────────────────────────────
     QuickfixNext,
     QuickfixPrev,
+    // ── Location-list navigation (#184 phase 3) ────────────────────────
+    LoclistNext,
+    LoclistPrev,
 
     // ── Window focus ───────────────────────────────────────────────────
     FocusLeft,

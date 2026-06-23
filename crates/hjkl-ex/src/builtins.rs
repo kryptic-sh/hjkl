@@ -1571,6 +1571,71 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: make_handler::<H>,
     });
 
+    // location-list family (#184 phase 3)
+    reg.add(ExCommand {
+        name: "lopen",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "lop"
+        run: lopen_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lclose",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "lcl"
+        run: lclose_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lnext",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "lne"
+        run: lnext_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lprevious",
+        aliases: &["lprev", "lp"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "lp"
+        run: lprev_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lfirst",
+        aliases: &["lrewind"],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "lfi"
+        run: lfirst_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "llast",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "lla"
+        run: llast_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "ll",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2, // exact "ll"
+        run: ll_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lgrep",
+        aliases: &["lvimgrep"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "lgr"
+        run: lgrep_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lmake",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4, // "lmak"
+        run: lmake_handler::<H>,
+    });
+
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
     reg.add(ExCommand {
@@ -1774,6 +1839,61 @@ fn make_handler<H: Host>(
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quickfix(QfCommand::Make(args.trim().to_string())))
+}
+
+// ---- location list (#184 phase 3) ------------------------------------------
+// The `:l*` family mirrors the `:c*` family but targets the window-local
+// location list via `ExEffect::Location`.
+
+macro_rules! loc_handler {
+    ($name:ident, $cmd:expr) => {
+        fn $name<H: Host>(
+            _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+            _args: &str,
+            _range: Option<LineRange>,
+        ) -> Option<ExEffect> {
+            Some(ExEffect::Location($cmd))
+        }
+    };
+}
+
+loc_handler!(lopen_handler, QfCommand::Open);
+loc_handler!(lclose_handler, QfCommand::Close);
+loc_handler!(lnext_handler, QfCommand::Next);
+loc_handler!(lprev_handler, QfCommand::Prev);
+loc_handler!(lfirst_handler, QfCommand::First);
+loc_handler!(llast_handler, QfCommand::Last);
+
+/// `:ll [N]` — jump to the 1-based location entry `N`; no arg means "current".
+fn ll_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(0);
+    Some(ExEffect::Location(QfCommand::Nth(n)))
+}
+
+/// `:lgrep <pattern>` — run ripgrep, populate the location list, open popup.
+fn lgrep_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let pat = args.trim();
+    if pat.is_empty() {
+        return Some(ExEffect::Error("E471: Argument required: lgrep".into()));
+    }
+    Some(ExEffect::Location(QfCommand::Grep(pat.to_string())))
+}
+
+/// `:lmake [args]` — run `makeprg` into the location list.
+fn lmake_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Make(args.trim().to_string())))
 }
 
 // ---- :syntax ---------------------------------------------------------------

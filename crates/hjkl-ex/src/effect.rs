@@ -81,6 +81,10 @@ pub enum ExEffect {
     /// owns the quickfix list state, popup, and file-open; this just names the
     /// requested action.
     Quickfix(QfCommand),
+    /// Location-list command (`:lopen`, `:lnext`, `:lgrep`, … — #184 phase 3).
+    /// Same actions as [`ExEffect::Quickfix`] but against the window-local
+    /// location list rather than the global quickfix list.
+    Location(QfCommand),
 }
 
 /// A quickfix-list action requested by a `:c*` / `:grep` command (#184).

@@ -588,6 +588,9 @@ impl App {
             ExEffect::Quickfix(cmd) => {
                 self.handle_quickfix_command(cmd);
             }
+            ExEffect::Location(cmd) => {
+                self.handle_loclist_command(cmd);
+            }
             ExEffect::SubstituteConfirm { matches } => {
                 if matches.is_empty() {
                     self.bus.warn("Pattern not found");

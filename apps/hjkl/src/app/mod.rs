@@ -501,6 +501,12 @@ pub struct App {
     pub(crate) quickfix: hjkl_quickfix::QfList,
     /// `:copen` popup visibility.
     pub(crate) quickfix_open: bool,
+    /// Location list (#184 phase 3): the `:l*` analogue of the quickfix list.
+    /// Populated by `:lgrep` / `:lmake` and LSP references; navigated via
+    /// `:lnext`/`:lprev`/`]l`/`[l`; shown by `:lopen`.
+    pub(crate) loclist: hjkl_quickfix::QfList,
+    /// `:lopen` popup visibility.
+    pub(crate) loclist_open: bool,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -904,6 +910,7 @@ impl App {
             || self.info_popup.is_some()
             || self.hop.is_some()
             || self.quickfix_open
+            || self.loclist_open
     }
 
     /// Full-screen rect for clamping popups / context menus to the
@@ -1914,6 +1921,8 @@ impl App {
             hop: None,
             quickfix: hjkl_quickfix::QfList::new(),
             quickfix_open: false,
+            loclist: hjkl_quickfix::QfList::new(),
+            loclist_open: false,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

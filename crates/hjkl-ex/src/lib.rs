@@ -544,6 +544,44 @@ mod tests {
         assert!(matches!(go(&mut editor, "grep"), Some(ExEffect::Error(_))));
     }
 
+    #[test]
+    fn dispatch_location_commands() {
+        use crate::QfCommand;
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let go = |ed: &mut _, s: &str| try_dispatch(&reg, ed, s);
+        assert_eq!(
+            go(&mut editor, "lopen"),
+            Some(ExEffect::Location(QfCommand::Open))
+        );
+        assert_eq!(
+            go(&mut editor, "lcl"),
+            Some(ExEffect::Location(QfCommand::Close))
+        );
+        assert_eq!(
+            go(&mut editor, "lne"),
+            Some(ExEffect::Location(QfCommand::Next))
+        );
+        assert_eq!(
+            go(&mut editor, "lp"),
+            Some(ExEffect::Location(QfCommand::Prev))
+        );
+        assert_eq!(
+            go(&mut editor, "ll 2"),
+            Some(ExEffect::Location(QfCommand::Nth(2)))
+        );
+        assert_eq!(
+            go(&mut editor, "lgrep FIXME"),
+            Some(ExEffect::Location(QfCommand::Grep("FIXME".into())))
+        );
+        assert_eq!(
+            go(&mut editor, "lmake"),
+            Some(ExEffect::Location(QfCommand::Make(String::new())))
+        );
+        // `:lgrep` with no pattern errors.
+        assert!(matches!(go(&mut editor, "lgrep"), Some(ExEffect::Error(_))));
+    }
+
     // ---- Phase 2a: nohlsearch ----------------------------------------------
 
     #[test]

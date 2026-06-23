@@ -302,6 +302,22 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── Location-list popup (#184 phase 3) ────────────────────
+        // Same key handling as the quickfix popup, against the location list.
+        if self.loclist_open {
+            match key.code {
+                KeyCode::Esc => self.loclist_open = false,
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
+                    self.loclist_open = false
+                }
+                KeyCode::Char('j') | KeyCode::Down => self.loclist_popup_down(),
+                KeyCode::Char('k') | KeyCode::Up => self.loclist_popup_up(),
+                KeyCode::Enter => self.loclist_jump_to_current(),
+                _ => {}
+            }
+            return KeyOutcome::Continue;
+        }
+
         // ── BLAME mode ────────────────────────────────────────────
         // BLAME is now an FSM-owned read-only view (`Editor::view_mode`). The
         // engine handles every transition out of it natively: `Esc` (hjkl-vim

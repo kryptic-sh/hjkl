@@ -103,3 +103,45 @@ fn quickfix_next_jumps_to_entry() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn loclist_independent_from_quickfix() {
+    // The location list is a separate list/popup from the quickfix list.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let p = std::path::PathBuf::from("x.rs");
+    app.loclist.set(vec![entry(&p, 0), entry(&p, 1)]);
+
+    // `:lopen` opens the loclist popup, NOT the quickfix popup.
+    app.handle_loclist_command(QfCommand::Open);
+    assert!(app.loclist_open);
+    assert!(!app.quickfix_open);
+
+    app.loclist_popup_down();
+    assert_eq!(app.loclist.cursor(), 1);
+    assert_eq!(app.quickfix.cursor(), 0, "quickfix list untouched");
+
+    app.handle_loclist_command(QfCommand::Close);
+    assert!(!app.loclist_open);
+}
+
+#[test]
+fn loclist_next_jumps_and_dispatch_routes() {
+    let dir = std::env::temp_dir().join(format!("hjkl_ll_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("sample.txt");
+    std::fs::write(&file, "line zero\nline one\nline two\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.loclist.set(vec![entry(&file, 0), entry(&file, 2)]);
+
+    app.handle_loclist_command(QfCommand::Next);
+    assert_eq!(app.loclist.cursor(), 1);
+    assert_eq!(app.active_editor().cursor().0, 2);
+
+    // `[l` routes through the loclist via dispatch.
+    app.dispatch_action(crate::keymap_actions::AppAction::LoclistPrev, 1);
+    assert_eq!(app.loclist.cursor(), 0);
+    assert_eq!(app.active_editor().cursor().0, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

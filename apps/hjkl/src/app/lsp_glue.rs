@@ -1065,7 +1065,29 @@ impl App {
             self.bus.warn("no references found");
             return;
         }
+        // Populate the location list (#184 phase 3) so `:lopen` / `]l` / `[l`
+        // work on the references, in addition to the fuzzy picker below.
+        self.set_loclist_from_locations(&locs);
         self.open_lsp_locations_picker(&locs, "references");
+    }
+
+    /// Convert LSP locations into location-list entries (#184 phase 3).
+    fn set_loclist_from_locations(&mut self, locs: &[lsp_types::Location]) {
+        let entries: Vec<hjkl_quickfix::QfEntry> = locs
+            .iter()
+            .filter_map(|loc| {
+                let url: url::Url = url::Url::parse(loc.uri.as_str()).ok()?;
+                let path = hjkl_lsp::uri::to_path(&url)?;
+                Some(hjkl_quickfix::QfEntry {
+                    path,
+                    row: loc.range.start.line as usize,
+                    col: loc.range.start.character as usize,
+                    kind: hjkl_quickfix::QfKind::Info,
+                    message: "reference".to_string(),
+                })
+            })
+            .collect();
+        self.set_loclist(entries);
     }
 
     /// Open a picker over a set of LSP locations.

@@ -1932,8 +1932,8 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         which_key_popup(frame, app, buf_area);
     }
 
-    // Quickfix popup (`:copen`, #184) — bottom pane listing locations.
-    if app.quickfix_open {
+    // Quickfix / location-list popup (`:copen` / `:lopen`, #184) — bottom pane.
+    if app.quickfix_open || app.loclist_open {
         quickfix_popup_overlay(frame, app, buf_area);
     }
 
@@ -2715,13 +2715,19 @@ fn render_picker_input_and_list(
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
 /// output and the K-key LSP hover info path.
 ///
-/// `:copen` quickfix popup (#184) — a read-only bottom pane listing
+/// `:copen` / `:lopen` popup (#184) — a read-only bottom pane listing
 /// `path:row:col: message`, with the current entry highlighted. Not the fuzzy
 /// picker; navigation is `j`/`k`/`<CR>` (see `event_loop`). The `ListState`
-/// auto-scrolls to keep the selected entry visible.
+/// auto-scrolls to keep the selected entry visible. The quickfix list takes
+/// precedence over the location list when both are open.
 fn quickfix_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
+    let (list_data, title) = if app.quickfix_open {
+        (&app.quickfix, " quickfix ")
+    } else {
+        (&app.loclist, " location list ")
+    };
     let ui = &app.theme.ui;
-    let entries = app.quickfix.entries();
+    let entries = list_data.entries();
     let body_rows = entries.len().clamp(1, 10) as u16;
     let h = body_rows + 2; // +2 for the border.
     if buf_area.height <= h {
@@ -2735,11 +2741,11 @@ fn quickfix_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
     };
     frame.render_widget(Clear, area);
     let block = Block::default()
-        .title(" quickfix ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ui.border));
     if entries.is_empty() {
-        frame.render_widget(Paragraph::new("quickfix list is empty").block(block), area);
+        frame.render_widget(Paragraph::new("list is empty").block(block), area);
         return;
     }
     let items: Vec<ListItem> = entries
@@ -2760,7 +2766,7 @@ fn quickfix_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(Some(app.quickfix.cursor()));
+    state.select(Some(list_data.cursor()));
     frame.render_stateful_widget(list, area, &mut state);
 }
 

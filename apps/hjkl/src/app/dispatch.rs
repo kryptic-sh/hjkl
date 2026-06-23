@@ -58,6 +58,8 @@ impl App {
             AppAction::DiffPrevChange => self.diff_prev_change(),
             AppAction::QuickfixNext => self.handle_quickfix_command(hjkl_ex::QfCommand::Next),
             AppAction::QuickfixPrev => self.handle_quickfix_command(hjkl_ex::QfCommand::Prev),
+            AppAction::LoclistNext => self.handle_loclist_command(hjkl_ex::QfCommand::Next),
+            AppAction::LoclistPrev => self.handle_loclist_command(hjkl_ex::QfCommand::Prev),
 
             // ── Window / layout management ─────────────────────────────────
             AppAction::FocusLeft

@@ -125,7 +125,8 @@ fn dispatch(
                 | ExEffect::Info(_)
                 | ExEffect::InfoTitled { .. }
                 | ExEffect::Substituted { .. }
-                | ExEffect::Quickfix(_) => success(id, Value::Null),
+                | ExEffect::Quickfix(_)
+                | ExEffect::Location(_) => success(id, Value::Null),
                 ExEffect::Error(msg) | ExEffect::Unknown(msg) => {
                     error_resp(id, ERR_EX_COMMAND, &msg)
                 }
