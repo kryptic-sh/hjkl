@@ -553,3 +553,45 @@ initial_cursor = [0, 0]
 keys = ":set errorformat=%l:%c:%m<CR>:cgetbuffer<CR>"
 expected_buffer = "1:1:a\n2:1:b\n3:1:c\n"
 expected_cursor = [0, 0]
+
+# ── :colder / :cnewer list-stack navigation (#261 Phase 5b) ──────────────────
+#
+# nvim probe (run 2026-06-24):
+#   6-line buffer; set efm=%l:%c:%m; cexpr "2:1:a"; cexpr "4:1:b"; colder; cc
+#   → cursor row=1 col=0 (0-based; nvim output: "After colder+cc: row=1 col=0")
+#   then cnewer; cc → cursor row=3 col=0
+#   (nvim output: "After cnewer+cc: row=3 col=0")
+#
+# Probe command used:
+#   nvim --headless -u NONE -c "lua
+#     local buf = vim.api.nvim_get_current_buf()
+#     vim.api.nvim_buf_set_lines(buf,0,-1,false,{'l1','l2','l3','l4','l5','l6'})
+#     vim.o.errorformat='%l:%c:%m'
+#     vim.cmd('cexpr \"2:1:a\"'); vim.cmd('cexpr \"4:1:b\"')
+#     vim.cmd('colder'); vim.cmd('cc')
+#     local r=vim.api.nvim_win_get_cursor(0)
+#     io.write('After colder+cc: row='..(r[1]-1)..' col='..r[2]..'\n')
+#     vim.cmd('cnewer'); vim.cmd('cc')
+#     local r2=vim.api.nvim_win_get_cursor(0)
+#     io.write('After cnewer+cc: row='..(r2[1]-1)..' col='..r2[2]..'\n')
+#     vim.cmd('quit!')" 2>&1
+
+# cexpr "2:1:a", then cexpr "4:1:b", then :colder, then :cc
+# → restores list A; cc jumps to entry at line 2 (0-based row=1 col=0).
+[[cases]]
+name = "colder_restores_list_a_then_cc"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\nline6\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"2:1:a\"<CR>:cexpr \"4:1:b\"<CR>:colder<CR>:cc<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\nline6\n"
+expected_cursor = [1, 0]
+
+# ...then :cnewer, then :cc → restores list B; cc jumps to entry at line 4
+# (0-based row=3 col=0).
+[[cases]]
+name = "cnewer_restores_list_b_then_cc"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\nline6\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"2:1:a\"<CR>:cexpr \"4:1:b\"<CR>:colder<CR>:cnewer<CR>:cc<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\nline6\n"
+expected_cursor = [3, 0]

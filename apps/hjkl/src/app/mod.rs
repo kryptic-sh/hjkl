@@ -507,6 +507,17 @@ pub struct App {
     pub(crate) loclist: hjkl_quickfix::QfList,
     /// `:lopen` popup visibility.
     pub(crate) loclist_open: bool,
+    /// Older quickfix lists for `:colder` (#261 Phase 5b). Index 0 is the oldest
+    /// kept, last element is the most-recently-pushed (popped first by `:colder`).
+    /// Capped at 9 entries (together with the current list → vim's 10-list max).
+    pub(crate) quickfix_older: Vec<hjkl_quickfix::QfList>,
+    /// Newer quickfix lists for `:cnewer`. Populated when `:colder` moves the
+    /// current list back; cleared whenever a fresh population replaces the list.
+    pub(crate) quickfix_newer: Vec<hjkl_quickfix::QfList>,
+    /// Older location lists for `:lolder` (#261 Phase 5b).
+    pub(crate) loclist_older: Vec<hjkl_quickfix::QfList>,
+    /// Newer location lists for `:lnewer`.
+    pub(crate) loclist_newer: Vec<hjkl_quickfix::QfList>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -1923,6 +1934,10 @@ impl App {
             quickfix_open: false,
             loclist: hjkl_quickfix::QfList::new(),
             loclist_open: false,
+            quickfix_older: Vec::new(),
+            quickfix_newer: Vec::new(),
+            loclist_older: Vec::new(),
+            loclist_newer: Vec::new(),
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

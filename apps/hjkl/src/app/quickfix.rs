@@ -50,6 +50,43 @@ impl crate::app::App {
         }
     }
 
+    /// Mutable reference to the `older` stack for `w`.
+    fn qf_older_mut(&mut self, w: QfWhich) -> &mut Vec<QfList> {
+        match w {
+            QfWhich::Quickfix => &mut self.quickfix_older,
+            QfWhich::Location => &mut self.loclist_older,
+        }
+    }
+
+    /// Mutable reference to the `newer` stack for `w`.
+    fn qf_newer_mut(&mut self, w: QfWhich) -> &mut Vec<QfList> {
+        match w {
+            QfWhich::Quickfix => &mut self.quickfix_newer,
+            QfWhich::Location => &mut self.loclist_newer,
+        }
+    }
+
+    /// Snapshot the current list onto `older` before a SET-population
+    /// (non-append) replaces it (#261 Phase 5b).
+    ///
+    /// - If the current list is NON-empty, push a clone onto `older`.
+    /// - Cap `older` at 9 entries (oldest dropped from front) so the total
+    ///   including the live list stays ≤ 10 (vim's max).
+    /// - ALWAYS clear `newer`: a fresh population discards the redo branch.
+    pub(crate) fn qf_push_history(&mut self, w: QfWhich) {
+        // Clear newer unconditionally — fresh population kills the redo branch.
+        self.qf_newer_mut(w).clear();
+        // Only push non-empty lists to avoid cluttering history with no-ops.
+        if !self.qf_list(w).is_empty() {
+            let snapshot = self.qf_list(w).clone();
+            let older = self.qf_older_mut(w);
+            if older.len() >= 9 {
+                older.remove(0); // drop the oldest to stay within the 9-entry cap
+            }
+            older.push(snapshot);
+        }
+    }
+
     // ── command dispatch ────────────────────────────────────────────────────
 
     /// Dispatch a quickfix ex command (`:copen`, `:cnext`, `:grep`, …).
@@ -106,7 +143,66 @@ impl crate::app::App {
                 }
                 self.qf_after_nav(w);
             }
+            QfCommand::Older(n) => self.qf_do_older(w, n),
+            QfCommand::Newer(n) => self.qf_do_newer(w, n),
         }
+    }
+
+    /// `:colder [N]` / `:lolder [N]` — activate an older error list.
+    ///
+    /// Repeats N times (default 1): push current list onto `newer`, pop the
+    /// top of `older` into current. Stops early if `older` empties.
+    /// Does NOT navigate within the restored list — vim `:colder` just makes
+    /// the list active; the user then uses `:cc`/`:cnext` to jump.
+    fn qf_do_older(&mut self, w: QfWhich, count: usize) {
+        let steps = count.max(1);
+        for _ in 0..steps {
+            // Check if there's anything to go back to.
+            if self.qf_older_mut(w).is_empty() {
+                self.bus
+                    .info(format!("{} list is already the oldest", w.label()));
+                break;
+            }
+            // Push current → newer.
+            let current = self.qf_list(w).clone();
+            self.qf_newer_mut(w).push(current);
+            // Pop from older → current.
+            let prev = self.qf_older_mut(w).pop().unwrap();
+            *self.qf_list_mut(w) = prev;
+        }
+        let older_len = self.qf_older_mut(w).len();
+        let newer_len = self.qf_newer_mut(w).len();
+        // List index: current is at position (older_len + 1) out of (older_len + 1 + newer_len).
+        let total = older_len + 1 + newer_len;
+        let current_idx = older_len + 1;
+        self.bus
+            .info(format!("{} list {} of {}", w.label(), current_idx, total));
+    }
+
+    /// `:cnewer [N]` / `:lnewer [N]` — activate a newer error list.
+    ///
+    /// Mirror of [`qf_do_older`]: push current list onto `older`, pop from `newer`.
+    fn qf_do_newer(&mut self, w: QfWhich, count: usize) {
+        let steps = count.max(1);
+        for _ in 0..steps {
+            if self.qf_newer_mut(w).is_empty() {
+                self.bus
+                    .info(format!("{} list is already the newest", w.label()));
+                break;
+            }
+            // Push current → older.
+            let current = self.qf_list(w).clone();
+            self.qf_older_mut(w).push(current);
+            // Pop from newer → current.
+            let next = self.qf_newer_mut(w).pop().unwrap();
+            *self.qf_list_mut(w) = next;
+        }
+        let older_len = self.qf_older_mut(w).len();
+        let newer_len = self.qf_newer_mut(w).len();
+        let total = older_len + 1 + newer_len;
+        let current_idx = older_len + 1;
+        self.bus
+            .info(format!("{} list {} of {}", w.label(), current_idx, total));
     }
 
     /// `]q`/`[q` (and `]l`/`[l`) and the `:cnext`/`:lnext` families route here
@@ -211,6 +307,7 @@ impl crate::app::App {
         }
 
         let n = entries.len();
+        self.qf_push_history(w);
         self.qf_list_mut(w).set(entries);
         if n == 0 {
             self.qf_set_open(w, false);
@@ -257,6 +354,7 @@ impl crate::app::App {
         entries.truncate(MAX_ENTRIES);
 
         let n = entries.len();
+        self.qf_push_history(w);
         self.qf_list_mut(w).set(entries);
         if n == 0 {
             self.qf_set_open(w, false);
@@ -287,6 +385,7 @@ impl crate::app::App {
             let new = entries;
             self.qf_list_mut(w).extend(new);
         } else {
+            self.qf_push_history(w);
             self.qf_list_mut(w).set(entries);
         }
         if jump && !self.qf_list(w).is_empty() {
@@ -328,6 +427,7 @@ impl crate::app::App {
         if append {
             self.qf_list_mut(w).extend(entries);
         } else {
+            self.qf_push_history(w);
             self.qf_list_mut(w).set(entries);
         }
         if jump && !self.qf_list(w).is_empty() {
@@ -364,6 +464,7 @@ impl crate::app::App {
         if append {
             self.qf_list_mut(w).extend(entries);
         } else {
+            self.qf_push_history(w);
             self.qf_list_mut(w).set(entries);
         }
         if jump && !self.qf_list(w).is_empty() {
@@ -377,6 +478,7 @@ impl crate::app::App {
     /// Replace the location list with a set of entries and open the popup.
     /// Used by LSP references (`gr`) to fill the loclist alongside the picker.
     pub(crate) fn set_loclist(&mut self, entries: Vec<QfEntry>) {
+        self.qf_push_history(QfWhich::Location);
         self.loclist.set(entries);
         self.loclist_open = false; // populate silently; user opens via :lopen
     }

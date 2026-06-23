@@ -389,3 +389,142 @@ fn cfile_missing_path_reports_error() {
         "cfile on missing file leaves list empty"
     );
 }
+
+// ── :colder / :cnewer list-stack tests (#261 Phase 5b) ──────────────────────
+
+/// Helper: populate quickfix via Expr (non-append) with a given `%l:%c:%m` line.
+fn populate_expr(app: &mut App, text: &str) {
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: text.to_string(),
+        append: false,
+        jump: false,
+    });
+}
+
+#[test]
+fn colder_restores_previous_list() {
+    let mut app = make_app_with_buffer();
+    // List A: single entry at line 2 (row 1)
+    populate_expr(&mut app, r#""2:1:a""#);
+    let entries_a: Vec<_> = app.quickfix.entries().to_vec();
+    // List B: single entry at line 4 (row 3)
+    populate_expr(&mut app, r#""4:1:b""#);
+    let entries_b: Vec<_> = app.quickfix.entries().to_vec();
+
+    // Sanity: current is B.
+    assert_eq!(app.quickfix.entries(), entries_b.as_slice());
+
+    // :colder → current should be A.
+    app.handle_quickfix_command(QfCommand::Older(1));
+    assert_eq!(
+        app.quickfix.entries(),
+        entries_a.as_slice(),
+        "colder should restore list A"
+    );
+    assert!(
+        app.quickfix_older.is_empty(),
+        "older should be empty after single colder"
+    );
+    assert_eq!(app.quickfix_newer.len(), 1, "newer should hold list B");
+
+    // :cnewer → current should be B again.
+    app.handle_quickfix_command(QfCommand::Newer(1));
+    assert_eq!(
+        app.quickfix.entries(),
+        entries_b.as_slice(),
+        "cnewer should restore list B"
+    );
+    assert!(
+        app.quickfix_newer.is_empty(),
+        "newer should be empty after cnewer"
+    );
+}
+
+#[test]
+fn populate_while_older_discards_newer_branch() {
+    let mut app = make_app_with_buffer();
+    // Populate A, then B, then go colder (back to A).
+    populate_expr(&mut app, r#""2:1:a""#);
+    let entries_a: Vec<_> = app.quickfix.entries().to_vec();
+    populate_expr(&mut app, r#""4:1:b""#);
+    app.handle_quickfix_command(QfCommand::Older(1));
+    // Current = A, newer holds B.
+    assert_eq!(app.quickfix.entries(), entries_a.as_slice());
+    assert_eq!(app.quickfix_newer.len(), 1);
+
+    // Populate C while at A (not at top of newer stack).
+    populate_expr(&mut app, r#""6:1:c""#);
+
+    // newer must be cleared — populating discards the redo branch.
+    assert!(
+        app.quickfix_newer.is_empty(),
+        "newer branch must be cleared on fresh populate"
+    );
+    // :cnewer should now be a no-op (no newer entries).
+    let entries_c: Vec<_> = app.quickfix.entries().to_vec();
+    app.handle_quickfix_command(QfCommand::Newer(1));
+    assert_eq!(
+        app.quickfix.entries(),
+        entries_c.as_slice(),
+        "cnewer should be no-op when newer is empty"
+    );
+}
+
+#[test]
+fn colder_saturates_when_no_older() {
+    let mut app = make_app_with_buffer();
+    populate_expr(&mut app, r#""2:1:a""#);
+    let entries_a: Vec<_> = app.quickfix.entries().to_vec();
+    // No prior list — colder should leave current unchanged.
+    app.handle_quickfix_command(QfCommand::Older(1));
+    assert_eq!(
+        app.quickfix.entries(),
+        entries_a.as_slice(),
+        "colder on oldest list should not change current"
+    );
+}
+
+#[test]
+fn cnewer_saturates_when_no_newer() {
+    let mut app = make_app_with_buffer();
+    populate_expr(&mut app, r#""2:1:a""#);
+    let entries_a: Vec<_> = app.quickfix.entries().to_vec();
+    // No newer list — cnewer should leave current unchanged.
+    app.handle_quickfix_command(QfCommand::Newer(1));
+    assert_eq!(
+        app.quickfix.entries(),
+        entries_a.as_slice(),
+        "cnewer on newest list should not change current"
+    );
+}
+
+#[test]
+fn loclist_colder_cnewer_work_independently() {
+    let mut app = make_app_with_buffer();
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+
+    // Populate loclist A then B.
+    app.handle_loclist_command(QfCommand::Expr {
+        text: r#""2:1:la""#.to_string(),
+        append: false,
+        jump: false,
+    });
+    let loc_a: Vec<_> = app.loclist.entries().to_vec();
+    app.handle_loclist_command(QfCommand::Expr {
+        text: r#""4:1:lb""#.to_string(),
+        append: false,
+        jump: false,
+    });
+    let loc_b: Vec<_> = app.loclist.entries().to_vec();
+
+    // quickfix must be untouched.
+    assert!(app.quickfix.is_empty());
+
+    // lolder → restore A.
+    app.handle_loclist_command(QfCommand::Older(1));
+    assert_eq!(app.loclist.entries(), loc_a.as_slice());
+
+    // lnewer → restore B.
+    app.handle_loclist_command(QfCommand::Newer(1));
+    assert_eq!(app.loclist.entries(), loc_b.as_slice());
+}

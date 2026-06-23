@@ -1774,6 +1774,42 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: laddfile_handler::<H>,
     });
 
+    // :colder / :cnewer / :lolder / :lnewer — list-stack navigation (#261 Phase 5b)
+    // min_prefix for colder: "col" (3) — no clash with :colorscheme (min=5 "color")
+    //   or :copen (min=4 "cope"). "col" is unambiguous.
+    // min_prefix for cnewer: "cnew" (4) — needed to avoid matching :cnext (min=2 "cn"):
+    //   "cn" and "cne" both resolve to cnext; "cnew" is the first prefix exclusive to cnewer.
+    // min_prefix for lolder: "lol" (3) — no conflicts.
+    // min_prefix for lnewer: "lnew" (4) — "lne" resolves to lnext; "lnew" is exclusive.
+    reg.add(ExCommand {
+        name: "colder",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "col"
+        run: colder_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cnewer",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4, // "cnew" — avoids clash with :cnext (min=2 "cn")
+        run: cnewer_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lolder",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "lol"
+        run: lolder_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lnewer",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4, // "lnew" — avoids clash with :lnext (min=3 "lne")
+        run: lnewer_handler::<H>,
+    });
+
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
     reg.add(ExCommand {
@@ -2268,6 +2304,48 @@ fn laddfile_handler<H: Host>(
         append: true,
         jump: false,
     }))
+}
+
+// ---- :colder / :cnewer / :lolder / :lnewer (#261 Phase 5b) ----------------
+
+/// `:colder [N]` — activate an older quickfix list (default 1 step).
+fn colder_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(1).max(1);
+    Some(ExEffect::Quickfix(QfCommand::Older(n)))
+}
+
+/// `:cnewer [N]` — activate a newer quickfix list (default 1 step).
+fn cnewer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(1).max(1);
+    Some(ExEffect::Quickfix(QfCommand::Newer(n)))
+}
+
+/// `:lolder [N]` — activate an older location list (default 1 step).
+fn lolder_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(1).max(1);
+    Some(ExEffect::Location(QfCommand::Older(n)))
+}
+
+/// `:lnewer [N]` — activate a newer location list (default 1 step).
+fn lnewer_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(1).max(1);
+    Some(ExEffect::Location(QfCommand::Newer(n)))
 }
 
 // ---- :syntax ---------------------------------------------------------------

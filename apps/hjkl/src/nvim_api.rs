@@ -980,6 +980,7 @@ fn dispatch(
                 "setqflist" => {
                     // args[0] = list of dicts; optional args[1]=action, args[2]=what ignored
                     let qf_entries = parse_qf_list(fn_args, 0, app);
+                    app.qf_push_history(crate::app::quickfix::QfWhich::Quickfix);
                     app.quickfix.set(qf_entries);
                     ok(stdout, msgid, Value::from(0i64))
                 }
@@ -988,6 +989,7 @@ fn dispatch(
                 "setloclist" => {
                     // args[0] = window (ignored); args[1] = list of dicts
                     let qf_entries = parse_qf_list(fn_args, 1, app);
+                    app.qf_push_history(crate::app::quickfix::QfWhich::Location);
                     app.loclist.set(qf_entries);
                     ok(stdout, msgid, Value::from(0i64))
                 }

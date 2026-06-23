@@ -623,6 +623,40 @@ mod tests {
                 jump: true,
             }))
         );
+        // :colder / :cnewer — list-stack navigation (#261 Phase 5b)
+        assert_eq!(
+            go(&mut editor, "colder"),
+            Some(ExEffect::Quickfix(QfCommand::Older(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "col"),
+            Some(ExEffect::Quickfix(QfCommand::Older(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "colder 3"),
+            Some(ExEffect::Quickfix(QfCommand::Older(3)))
+        );
+        assert_eq!(
+            go(&mut editor, "cnewer"),
+            Some(ExEffect::Quickfix(QfCommand::Newer(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "cnew"),
+            Some(ExEffect::Quickfix(QfCommand::Newer(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "cnewer 2"),
+            Some(ExEffect::Quickfix(QfCommand::Newer(2)))
+        );
+        // :cn and :cne must still resolve to :cnext, NOT :cnewer
+        assert_eq!(
+            go(&mut editor, "cn"),
+            Some(ExEffect::Quickfix(QfCommand::Next))
+        );
+        assert_eq!(
+            go(&mut editor, "cne"),
+            Some(ExEffect::Quickfix(QfCommand::Next))
+        );
     }
 
     #[test]
@@ -732,6 +766,36 @@ mod tests {
                 append: true,
                 jump: false,
             }))
+        );
+        // :lolder / :lnewer — list-stack navigation (#261 Phase 5b)
+        assert_eq!(
+            go(&mut editor, "lolder"),
+            Some(ExEffect::Location(QfCommand::Older(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "lol"),
+            Some(ExEffect::Location(QfCommand::Older(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "lolder 2"),
+            Some(ExEffect::Location(QfCommand::Older(2)))
+        );
+        assert_eq!(
+            go(&mut editor, "lnewer"),
+            Some(ExEffect::Location(QfCommand::Newer(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "lnew"),
+            Some(ExEffect::Location(QfCommand::Newer(1)))
+        );
+        assert_eq!(
+            go(&mut editor, "lnewer 3"),
+            Some(ExEffect::Location(QfCommand::Newer(3)))
+        );
+        // :lne must still resolve to :lnext, NOT :lnewer
+        assert_eq!(
+            go(&mut editor, "lne"),
+            Some(ExEffect::Location(QfCommand::Next))
         );
     }
 

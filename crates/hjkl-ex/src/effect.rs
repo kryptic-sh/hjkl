@@ -150,4 +150,15 @@ pub enum QfCommand {
         /// Whether to jump to the first entry after population.
         jump: bool,
     },
+    /// `:colder [N]` / `:lolder [N]` — activate an older error list.
+    ///
+    /// The current list is pushed onto the newer stack and the N-th previous
+    /// list (default 1) is popped from the older stack and made current.
+    /// Vim keeps up to 10 quickfix lists. Saturates when the older stack is
+    /// exhausted (no error in vim; we just stop moving).
+    Older(usize),
+    /// `:cnewer [N]` / `:lnewer [N]` — activate a newer error list.
+    ///
+    /// Mirror of [`QfCommand::Older`]: pops from the newer stack.
+    Newer(usize),
 }
