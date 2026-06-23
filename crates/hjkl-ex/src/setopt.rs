@@ -220,9 +220,10 @@ pub(crate) fn apply_set<H: Host>(
 
 /// Return a display-form string for `name`'s current value, or `None`
 /// when the option isn't recognised. Used by the `:set <name>?` query
-/// form. Names accepted match those in [`apply_set_token`] (both the
-/// long and short aliases).
-fn query_option_value<H: Host>(
+/// form and by the nvim-api `nvim_get_option_value` handler. Names
+/// accepted match those in [`apply_set_token`] (both the long and short
+/// aliases).
+pub fn query_option_value<H: Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     name: &str,
 ) -> Option<String> {
@@ -302,7 +303,11 @@ fn query_option_value<H: Host>(
 /// Apply a single `:set` token. Supports `name=value`, `name+=flags`,
 /// `name-=flags`, bare `name` (turns booleans on), and `noname`
 /// (turns booleans off).
-fn apply_set_token<H: Host>(
+///
+/// Exposed as `pub` so the nvim-api layer can call it directly with a
+/// pre-constructed token (e.g. `makeprg=cargo build`) without going through
+/// `apply_set`'s whitespace-splitting loop.
+pub fn apply_set_token<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     token: &str,
 ) -> Result<(), String> {

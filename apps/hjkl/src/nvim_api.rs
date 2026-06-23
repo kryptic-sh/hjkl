@@ -491,6 +491,39 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
     }
 }
 
+// ── option coercion ───────────────────────────────────────────────────────────
+
+/// Coerce a `:set`-style display string to the native nvim `Value` type.
+///
+/// Rules:
+/// - `"on"`  → `Value::Boolean(true)`
+/// - `"off"` → `Value::Boolean(false)`
+/// - All-digit string (optionally with a leading `-`) → `Value::Integer`
+/// - Starts and ends with `"` → strip the outer quotes → `Value::String`
+/// - Otherwise → `Value::String` (the string as-is)
+fn coerce_option_display(display: &str) -> Value {
+    match display {
+        "on" => return Value::Boolean(true),
+        "off" => return Value::Boolean(false),
+        _ => {}
+    }
+    // Integer: optional leading '-' then one or more ASCII digits.
+    let digit_part = display.strip_prefix('-').unwrap_or(display);
+    if !digit_part.is_empty()
+        && digit_part.chars().all(|c| c.is_ascii_digit())
+        && let Ok(n) = display.parse::<i64>()
+    {
+        return Value::Integer(rmpv::Integer::from(n));
+    }
+    // Quoted string: `"..."` → strip outer quotes.
+    if display.starts_with('"') && display.ends_with('"') && display.len() >= 2 {
+        let inner = &display[1..display.len() - 1];
+        return Value::from(inner);
+    }
+    // Fallback: raw string value.
+    Value::from(display)
+}
+
 // ── method dispatch ───────────────────────────────────────────────────────────
 
 fn dispatch(
@@ -1611,6 +1644,90 @@ fn dispatch(
                     1.0 - desired / parent_w
                 };
                 *ratio = new_ratio.clamp(0.05, 0.95);
+            }
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        // ── option get / set ──────────────────────────────────────────────────
+        "nvim_get_option_value" => {
+            // nvim_get_option_value(name: string, opts: dict|nil)
+            // opts (scope/buf/win) are ignored in v1 — always operates on the
+            // active editor.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // Reject unknown option names immediately.
+            if !hjkl_ex::all_setting_names().contains(&name) {
+                return err(stdout, msgid, &format!("unknown option: {name}"));
+            }
+            let display = match hjkl_ex::query_option_value(app.active_editor(), &name) {
+                Some(s) => s,
+                None => {
+                    return err(stdout, msgid, &format!("unknown option: {name}"));
+                }
+            };
+            // Coerce the display string to the native nvim type:
+            //   "on"  → Boolean(true)
+            //   "off" → Boolean(false)
+            //   all-digit (optionally leading '-') → Integer
+            //   starts and ends with '"' → strip quotes → String
+            //   otherwise → String (as-is)
+            let value = coerce_option_display(&display);
+            ok(stdout, msgid, value)
+        }
+
+        "nvim_set_option_value" => {
+            // nvim_set_option_value(name: string, value: any, opts: dict|nil)
+            // opts (scope/buf/win) are ignored in v1 — always operates on the
+            // active editor.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // Reject unknown option names.
+            if !hjkl_ex::all_setting_names().contains(&name) {
+                return err(stdout, msgid, &format!("unknown option: {name}"));
+            }
+            let value = match p.get(1) {
+                Some(v) => v.clone(),
+                None => return err(stdout, msgid, "params[1] (value) missing"),
+            };
+            // Build the `:set`-style token and apply it via apply_set_token.
+            // We call apply_set_token directly (rather than routing through
+            // dispatch_ex / apply_set) so that string values containing
+            // whitespace (e.g. `makeprg=cargo build`) are treated as a single
+            // token without being split by apply_set's split_whitespace loop.
+            let set_token = match &value {
+                Value::Boolean(true) => name.clone(),
+                Value::Boolean(false) => format!("no{name}"),
+                Value::Integer(n) => {
+                    let n = n.as_i64().unwrap_or(0);
+                    format!("{name}={n}")
+                }
+                Value::String(s) => {
+                    let s = s.as_str().unwrap_or("");
+                    format!("{name}={s}")
+                }
+                other => {
+                    return err(
+                        stdout,
+                        msgid,
+                        &format!("unsupported value type for nvim_set_option_value: {other:?}"),
+                    );
+                }
+            };
+            if let Err(e) = hjkl_ex::apply_set_token(app.active_editor_mut(), &set_token) {
+                return err(stdout, msgid, &e);
             }
             settle(app);
             ok(stdout, msgid, Value::Nil)
@@ -3347,5 +3464,152 @@ mod tests {
         };
         assert_eq!(lines[0], Value::from("hello there"));
         assert_eq!(lines[1], Value::from("rust lang"));
+    }
+
+    // ── nvim_get_option_value / nvim_set_option_value ─────────────────────────
+
+    /// Helper: call nvim_set_option_value(name, value, nil).
+    fn set_opt(app: &mut crate::app::App, name: &str, value: Value) -> Vec<Value> {
+        call(
+            app,
+            "nvim_set_option_value",
+            vec![Value::from(name), value, Value::Nil],
+        )
+    }
+
+    /// Helper: call nvim_get_option_value(name, nil).
+    fn get_opt(app: &mut crate::app::App, name: &str) -> Vec<Value> {
+        call(
+            app,
+            "nvim_get_option_value",
+            vec![Value::from(name), Value::Nil],
+        )
+    }
+
+    #[test]
+    fn test_set_bool_option_true_then_get_returns_boolean_true() {
+        let mut app = build_app(None).unwrap();
+
+        // Ensure `number` is off first.
+        assert_ok(set_opt(&mut app, "number", Value::Boolean(false)));
+
+        // Set to true.
+        assert_ok(set_opt(&mut app, "number", Value::Boolean(true)));
+
+        let result = assert_ok(get_opt(&mut app, "number"));
+        assert_eq!(
+            result,
+            Value::Boolean(true),
+            "nvim_get_option_value('number') should be Boolean(true)"
+        );
+    }
+
+    #[test]
+    fn test_set_bool_option_false_then_get_returns_boolean_false() {
+        let mut app = build_app(None).unwrap();
+
+        // Set number on first, then off.
+        assert_ok(set_opt(&mut app, "number", Value::Boolean(true)));
+        assert_ok(set_opt(&mut app, "number", Value::Boolean(false)));
+
+        let result = assert_ok(get_opt(&mut app, "number"));
+        assert_eq!(
+            result,
+            Value::Boolean(false),
+            "nvim_get_option_value('number') should be Boolean(false)"
+        );
+    }
+
+    #[test]
+    fn test_set_int_option_then_get_returns_integer() {
+        let mut app = build_app(None).unwrap();
+
+        assert_ok(set_opt(
+            &mut app,
+            "shiftwidth",
+            Value::Integer(rmpv::Integer::from(8i64)),
+        ));
+
+        let result = assert_ok(get_opt(&mut app, "shiftwidth"));
+        assert_eq!(
+            result,
+            Value::Integer(rmpv::Integer::from(8i64)),
+            "nvim_get_option_value('shiftwidth') should be Integer(8)"
+        );
+    }
+
+    #[test]
+    fn test_set_string_option_then_get_returns_unquoted_string() {
+        let mut app = build_app(None).unwrap();
+
+        assert_ok(set_opt(&mut app, "makeprg", Value::from("cargo build")));
+
+        let result = assert_ok(get_opt(&mut app, "makeprg"));
+        assert_eq!(
+            result,
+            Value::from("cargo build"),
+            "nvim_get_option_value('makeprg') should return 'cargo build' (unquoted)"
+        );
+    }
+
+    #[test]
+    fn test_get_unknown_option_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        let resp = get_opt(&mut app, "totally_unknown_option_xyz");
+        // resp[2] must NOT be Nil (it should be an error array).
+        assert_ne!(
+            resp[2],
+            Value::Nil,
+            "nvim_get_option_value of unknown option must return an error"
+        );
+    }
+
+    #[test]
+    fn test_set_unknown_option_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        let resp = set_opt(&mut app, "totally_unknown_option_xyz", Value::Boolean(true));
+        assert_ne!(
+            resp[2],
+            Value::Nil,
+            "nvim_set_option_value of unknown option must return an error"
+        );
+    }
+
+    #[test]
+    fn test_coerce_option_display_on_off() {
+        assert_eq!(coerce_option_display("on"), Value::Boolean(true));
+        assert_eq!(coerce_option_display("off"), Value::Boolean(false));
+    }
+
+    #[test]
+    fn test_coerce_option_display_integer() {
+        assert_eq!(
+            coerce_option_display("8"),
+            Value::Integer(rmpv::Integer::from(8i64))
+        );
+        assert_eq!(
+            coerce_option_display("0"),
+            Value::Integer(rmpv::Integer::from(0i64))
+        );
+    }
+
+    #[test]
+    fn test_coerce_option_display_quoted_string() {
+        // query_option_value returns `"cargo build"` (with outer quotes) for makeprg.
+        assert_eq!(
+            coerce_option_display("\"cargo build\""),
+            Value::from("cargo build")
+        );
+        // Empty quoted string.
+        assert_eq!(coerce_option_display("\"\""), Value::from(""));
+    }
+
+    #[test]
+    fn test_coerce_option_display_unquoted_string_passthrough() {
+        // Non-boolean, non-integer, not quoted → pass through.
+        assert_eq!(coerce_option_display("auto"), Value::from("auto"));
+        assert_eq!(coerce_option_display("manual"), Value::from("manual"));
     }
 }

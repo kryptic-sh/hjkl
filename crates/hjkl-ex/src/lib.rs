@@ -31,7 +31,7 @@ mod registry;
 mod setopt;
 mod shell;
 
-pub use setopt::all_setting_names;
+pub use setopt::{all_setting_names, apply_set_token, query_option_value};
 
 /// Try to dispatch `input` (without the leading `:`) through the registry.
 ///
