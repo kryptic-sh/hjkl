@@ -446,6 +446,90 @@ impl App {
         self.equalize_layout();
     }
 
+    // ── nvim-api window accessors ─────────────────────────────────────────
+
+    /// All open window ids (index `i` where `windows[i].is_some()`), as `u64`.
+    pub(crate) fn nvim_window_ids(&self) -> Vec<u64> {
+        self.windows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| w.as_ref().map(|_| i as u64))
+            .collect()
+    }
+
+    /// The currently focused window id, as `u64`.
+    pub(crate) fn nvim_current_window_id(&self) -> u64 {
+        self.focused_window() as u64
+    }
+
+    /// `true` when `id` refers to an open window.
+    pub(crate) fn nvim_window_is_valid(&self, id: u64) -> bool {
+        self.windows.get(id as usize).is_some_and(Option::is_some)
+    }
+
+    /// Buffer id of the slot backing window `id`, or `None` when `id` is invalid.
+    pub(crate) fn nvim_window_buffer_id(&self, id: u64) -> Option<u64> {
+        let slot = self.windows.get(id as usize)?.as_ref()?.slot;
+        self.slots.get(slot).map(|s| s.buffer_id)
+    }
+
+    /// Focus window `id`. Returns `true` on success, `false` when `id` is invalid.
+    pub(crate) fn nvim_set_focused_window_checked(&mut self, id: u64) -> bool {
+        if !self.nvim_window_is_valid(id) {
+            return false;
+        }
+        self.switch_focus(id as super::window::WindowId);
+        true
+    }
+
+    /// Point window `win` at the slot whose `buffer_id == buffer_id`.
+    /// Returns `true` on success; `false` when the window or buffer is invalid.
+    pub(crate) fn nvim_set_window_buffer(&mut self, win: u64, buffer_id: u64) -> bool {
+        if !self.nvim_window_is_valid(win) {
+            return false;
+        }
+        let slot = match self.nvim_slot_index_for_buffer(buffer_id) {
+            Some(s) => s,
+            None => return false,
+        };
+        if let Some(Some(w)) = self.windows.get_mut(win as usize) {
+            w.slot = slot;
+        } else {
+            return false;
+        }
+        self.reconcile_window_editors();
+        true
+    }
+
+    /// Cursor `(row, col)` for window `id` (0-based char-col), or `None` when invalid.
+    pub(crate) fn nvim_window_cursor(&self, id: u64) -> Option<(usize, usize)> {
+        let win_id = id as super::window::WindowId;
+        if !self.nvim_window_is_valid(id) {
+            return None;
+        }
+        let ed = self.window_editor(win_id);
+        Some(ed.cursor())
+    }
+
+    /// Set cursor for window `id` to `(row, col)` (0-based char-col).
+    /// Returns `true` on success, `false` when `id` is invalid.
+    pub(crate) fn nvim_set_window_cursor(&mut self, id: u64, row: usize, col: usize) -> bool {
+        let win_id = id as super::window::WindowId;
+        if !self.nvim_window_is_valid(id) {
+            return false;
+        }
+        if let Some(ed) = self.window_editors.get_mut(&win_id) {
+            ed.jump_cursor(row, col);
+        } else {
+            let slot = self.windows[win_id]
+                .as_ref()
+                .map(|w| w.slot)
+                .unwrap_or_else(|| self.focused_slot_idx());
+            self.slots[slot].editor.jump_cursor(row, col);
+        }
+        true
+    }
+
     /// Maximize focused window's height — set every enclosing Horizontal
     /// split so the focused branch gets as much height as possible (siblings
     /// collapse to 1 line each).

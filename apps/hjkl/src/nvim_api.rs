@@ -73,8 +73,32 @@ fn param_buf(params: &[Value], idx: usize) -> std::result::Result<Option<u64>, S
     }
 }
 
-fn win_handle() -> Value {
-    Value::Ext(WINDOW_EXT, encode_id(1))
+fn win_handle(id: u64) -> Value {
+    Value::Ext(WINDOW_EXT, encode_id(id))
+}
+
+/// Decode a `Value::Ext(WINDOW_EXT, bytes)` back to a window id.
+/// Missing or Nil => returns `None` (caller substitutes the current window).
+/// Unlike buffers, window id=0 is a valid real window (first window), so we
+/// do NOT remap 0 to None.
+fn param_win(params: &[Value], idx: usize) -> std::result::Result<Option<u64>, String> {
+    match params.get(idx) {
+        None | Some(Value::Nil) => Ok(None),
+        Some(Value::Ext(tag, bytes)) if *tag == WINDOW_EXT => {
+            let mut cursor = std::io::Cursor::new(bytes.as_slice());
+            match rmpv::decode::read_value(&mut cursor) {
+                Ok(inner) => Ok(Some(inner.as_u64().unwrap_or(0))),
+                Err(e) => Err(format!("invalid window handle encoding: {e}")),
+            }
+        }
+        Some(Value::Integer(n)) => {
+            // Raw integer window id (some clients send these).
+            Ok(Some(n.as_u64().unwrap_or(0)))
+        }
+        Some(other) => Err(format!(
+            "params[{idx}] must be window handle, got {other:?}"
+        )),
+    }
 }
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────
@@ -305,7 +329,95 @@ fn dispatch(
             ok(stdout, msgid, Value::Nil)
         }
 
-        "nvim_get_current_win" => ok(stdout, msgid, win_handle()),
+        "nvim_get_current_win" => ok(stdout, msgid, win_handle(app.nvim_current_window_id())),
+
+        "nvim_list_wins" => {
+            let handles: Vec<Value> = app.nvim_window_ids().into_iter().map(win_handle).collect();
+            ok(stdout, msgid, Value::Array(handles))
+        }
+
+        "nvim_set_current_win" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if app.nvim_set_focused_window_checked(id) {
+                settle(app);
+                ok(stdout, msgid, Value::Nil)
+            } else {
+                err(stdout, msgid, "invalid window id")
+            }
+        }
+
+        "nvim_win_get_buf" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_window_buffer_id(id) {
+                Some(buf_id) => ok(stdout, msgid, buf_handle(buf_id)),
+                None => err(stdout, msgid, "invalid window id"),
+            }
+        }
+
+        "nvim_win_set_buf" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf = match param_buf(p, 1) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if app.nvim_set_window_buffer(win, buf) {
+                settle(app);
+                ok(stdout, msgid, Value::Nil)
+            } else {
+                err(stdout, msgid, "invalid window or buffer id")
+            }
+        }
+
+        "nvim_win_close" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // Guard: do not close the last window.
+            if app.nvim_window_ids().len() <= 1 {
+                return ok(stdout, msgid, Value::Nil);
+            }
+            if !app.nvim_window_is_valid(id) {
+                return err(stdout, msgid, "invalid window id");
+            }
+            // Focus the target window first if it isn't already focused.
+            if app.nvim_current_window_id() != id {
+                app.nvim_set_focused_window_checked(id);
+            }
+            app.close_focused_window();
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
 
         // ── buffer line mutations ─────────────────────────────────────────────
         "nvim_buf_set_lines" => {
@@ -451,7 +563,12 @@ fn dispatch(
                 Ok(p) => p,
                 Err(e) => return err(stdout, msgid, &e),
             };
-            // params[0]=win handle (ignored), params[1]=[row, col]
+            // params[0]=win handle, params[1]=[row, col]
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
             let pair = match p.get(1) {
                 Some(Value::Array(arr)) => arr.as_slice(),
                 Some(other) => {
@@ -473,27 +590,94 @@ fn dispatch(
             };
             // Convert 1-based nvim row to 0-based engine row.
             let row = (row_1based - 1).max(0) as usize;
-            // For byte-col → char-col: walk the line's chars (ASCII = identity).
-            let char_col = {
-                let rope = app.active_editor().buffer().rope();
-                if row < rope.len_lines() {
-                    let line = hjkl_buffer::rope_line_str(&rope, row);
-                    let byte_offset = (col as usize).min(line.len());
-                    line[..byte_offset].chars().count()
-                } else {
-                    0
+            let current_win = app.nvim_current_window_id();
+            if win_id == current_win {
+                // Fast path: active editor (oracle-parity path).
+                let char_col = {
+                    let rope = app.active_editor().buffer().rope();
+                    if row < rope.len_lines() {
+                        let line = hjkl_buffer::rope_line_str(&rope, row);
+                        let byte_offset = (col as usize).min(line.len());
+                        line[..byte_offset].chars().count()
+                    } else {
+                        0
+                    }
+                };
+                app.active_editor_mut().jump_cursor(row, char_col);
+            } else {
+                // Non-focused window: get rope from window's buffer for byte→char.
+                let char_col = match app.nvim_window_cursor(win_id) {
+                    Some(_) => {
+                        // Determine rope for this window's buffer.
+                        let buf_id = app.nvim_window_buffer_id(win_id);
+                        let rope = if let Some(bid) = buf_id {
+                            let current_id = app.nvim_current_buffer_id();
+                            if bid == current_id {
+                                app.active_editor().buffer().rope()
+                            } else if let Some(ed) = app.nvim_slot_editor(bid) {
+                                ed.buffer().rope()
+                            } else {
+                                app.active_editor().buffer().rope()
+                            }
+                        } else {
+                            app.active_editor().buffer().rope()
+                        };
+                        if row < rope.len_lines() {
+                            let line = hjkl_buffer::rope_line_str(&rope, row);
+                            let byte_offset = (col as usize).min(line.len());
+                            line[..byte_offset].chars().count()
+                        } else {
+                            0
+                        }
+                    }
+                    None => return err(stdout, msgid, "invalid window id"),
+                };
+                if !app.nvim_set_window_cursor(win_id, row, char_col) {
+                    return err(stdout, msgid, "invalid window id");
                 }
-            };
-            app.active_editor_mut().jump_cursor(row, char_col);
+            }
+            settle(app);
             ok(stdout, msgid, Value::Nil)
         }
 
         "nvim_win_get_cursor" => {
-            // Returns [row (1-based), col (byte-col)].
-            let (row, char_col) = app.active_editor().cursor();
-            // Convert char-col to byte-col.
+            // nvim_win_get_cursor(win) — Returns [row (1-based), col (byte-col)].
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let current_win = app.nvim_current_window_id();
+            let (row, char_col) = if win_id == current_win {
+                // Oracle-parity path: use active editor directly.
+                app.active_editor().cursor()
+            } else {
+                match app.nvim_window_cursor(win_id) {
+                    Some(c) => c,
+                    None => return err(stdout, msgid, "invalid window id"),
+                }
+            };
+            // Convert char-col to byte-col using the window's buffer rope.
             let byte_col = {
-                let rope = app.active_editor().buffer().rope();
+                let buf_id = app.nvim_window_buffer_id(win_id);
+                let rope = if win_id == current_win {
+                    app.active_editor().buffer().rope()
+                } else if let Some(bid) = buf_id {
+                    let current_id = app.nvim_current_buffer_id();
+                    if bid == current_id {
+                        app.active_editor().buffer().rope()
+                    } else if let Some(ed) = app.nvim_slot_editor(bid) {
+                        ed.buffer().rope()
+                    } else {
+                        app.active_editor().buffer().rope()
+                    }
+                } else {
+                    app.active_editor().buffer().rope()
+                };
                 if row < rope.len_lines() {
                     let line = hjkl_buffer::rope_line_str(&rope, row);
                     line.chars()
@@ -753,6 +937,292 @@ mod tests {
     fn assert_ok(resp: Vec<Value>) -> Value {
         assert_eq!(resp[2], Value::Nil, "expected no error, got {:?}", resp[2]);
         resp[3].clone()
+    }
+
+    /// Encode a window handle `Value::Ext(WINDOW_EXT, encode_id(id))` suitable
+    /// for passing as a param to dispatch.
+    fn make_win_param(id: u64) -> Value {
+        win_handle(id)
+    }
+
+    // ── window tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_nvim_list_wins_grows_after_vsplit() {
+        let mut app = build_app(None).unwrap();
+
+        // Before split: exactly 1 window.
+        let before = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(before, 1);
+
+        // Create a second window via vsplit.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        let after = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(after, before + 1, "list_wins should grow by 1 after vsplit");
+    }
+
+    #[test]
+    fn test_nvim_get_current_win_in_list() {
+        let mut app = build_app(None).unwrap();
+
+        // Create a second window.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        assert_eq!(wins.len(), 2);
+        assert!(
+            wins.contains(&cur_win),
+            "current window should be in the list"
+        );
+    }
+
+    #[test]
+    fn test_nvim_set_current_win_switches_focus() {
+        let mut app = build_app(None).unwrap();
+
+        // Create a second window.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(wins.len(), 2);
+
+        // Find the window that is NOT focused.
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        let other_win = wins.iter().find(|w| **w != cur_win).unwrap().clone();
+
+        // Switch to the other window.
+        {
+            let resp = call(&mut app, "nvim_set_current_win", vec![other_win.clone()]);
+            assert_ok(resp);
+        }
+
+        // Current win should now be the other one.
+        let new_cur = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        assert_eq!(
+            new_cur, other_win,
+            "focus should have moved to the other window"
+        );
+        assert_ne!(new_cur, cur_win);
+    }
+
+    #[test]
+    fn test_nvim_win_get_buf_returns_handle() {
+        let mut app = build_app(None).unwrap();
+
+        // Create a second window.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        // Get the current window and its buffer.
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        let buf_from_win = {
+            let resp = call(&mut app, "nvim_win_get_buf", vec![cur_win]);
+            assert_ok(resp)
+        };
+
+        let cur_buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        assert_eq!(
+            buf_from_win, cur_buf,
+            "nvim_win_get_buf for focused win should equal nvim_get_current_buf"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_set_buf_redirects_window() {
+        let mut app = build_app(None).unwrap();
+
+        // Create a new scratch buffer.
+        let new_buf = {
+            let resp = call(
+                &mut app,
+                "nvim_create_buf",
+                vec![Value::Boolean(true), Value::Boolean(false)],
+            );
+            assert_ok(resp)
+        };
+
+        // Create a second window.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        // Pick the non-focused window.
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        let other_win = wins.iter().find(|w| **w != cur_win).unwrap().clone();
+
+        // Point the other window at the new buffer.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_buf",
+                vec![other_win.clone(), new_buf.clone()],
+            );
+            assert_ok(resp);
+        }
+
+        // Verify: nvim_win_get_buf for that window should return new_buf.
+        let win_buf = {
+            let resp = call(&mut app, "nvim_win_get_buf", vec![other_win]);
+            assert_ok(resp)
+        };
+        assert_eq!(
+            win_buf, new_buf,
+            "window should now point at the new buffer"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_cursor_roundtrip_for_specific_window() {
+        let mut app = build_app(None).unwrap();
+
+        // Seed the buffer with some lines so we can set a non-trivial cursor.
+        {
+            let buf_handle = {
+                let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+                assert_ok(resp)
+            };
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf_handle,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("first line"),
+                        Value::from("second line"),
+                        Value::from("third line"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Create a second window.
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        // Set cursor to row 2, col 3 (1-based row, byte-col).
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_cursor",
+                vec![
+                    cur_win.clone(),
+                    Value::Array(vec![Value::from(2i64), Value::from(3i64)]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Get cursor back and verify.
+        let cursor = {
+            let resp = call(&mut app, "nvim_win_get_cursor", vec![cur_win]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            cursor[0],
+            Value::from(2i64),
+            "cursor row should be 2 (1-based)"
+        );
+        assert_eq!(
+            cursor[1],
+            Value::from(3i64),
+            "cursor col should be 3 (byte-col)"
+        );
+    }
+
+    #[test]
+    fn test_make_win_param_is_window_ext() {
+        let handle = make_win_param(42);
+        match &handle {
+            Value::Ext(tag, bytes) => {
+                assert_eq!(*tag, WINDOW_EXT);
+                let mut cur = std::io::Cursor::new(bytes.as_slice());
+                let inner = rmpv::decode::read_value(&mut cur).unwrap();
+                assert_eq!(inner.as_u64(), Some(42));
+            }
+            other => panic!("expected Ext window handle, got {other:?}"),
+        }
     }
 
     #[test]
