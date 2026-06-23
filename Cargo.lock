@@ -2736,6 +2736,9 @@ dependencies = [
 [[package]]
 name = "hjkl-quickfix"
 version = "0.33.0"
+dependencies = [
+ "regex",
+]
 
 [[package]]
 name = "hjkl-splash"

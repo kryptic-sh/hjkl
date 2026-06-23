@@ -10,9 +10,158 @@
 //!
 //! Anything else is ignored. Locations are resolved against `root` so the host
 //! can open them regardless of the cwd.
+//!
+//! [`parse_errorformat`] is the Phase 5a `&errorformat`-driven parser for
+//! `:cexpr` / `:lgetexpr` etc. It translates a comma-separated list of vim
+//! errorformat patterns into regexes and matches them line-by-line.
 
 use crate::{QfEntry, QfKind};
 use std::path::{Path, PathBuf};
+
+// ---- errorformat parser (Phase 5a) ─────────────────────────────────────────
+
+/// Which capture-group index maps to which quickfix field.
+#[derive(Default)]
+struct EfmGroupMap {
+    /// 1-based capture group index for `%f` (file path), or 0 if not present.
+    file: usize,
+    /// 1-based capture group index for `%l` (line number), or 0 if not present.
+    line: usize,
+    /// 1-based capture group index for `%c` (column), or 0 if not present.
+    col: usize,
+    /// 1-based capture group index for `%m` (message), or 0 if not present.
+    msg: usize,
+    /// 1-based capture group index for `%t` (type char), or 0 if not present.
+    kind: usize,
+}
+
+/// Compile one errorformat pattern into a `(Regex, EfmGroupMap)` pair.
+/// Returns `None` if the resulting regex is invalid (silently skip).
+fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
+    let mut re_src = String::from("^");
+    let mut map = EfmGroupMap::default();
+    let mut group = 0usize;
+    let mut chars = efm.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            match chars.next() {
+                Some('f') => {
+                    group += 1;
+                    map.file = group;
+                    re_src.push_str("(.+?)");
+                }
+                Some('l') => {
+                    group += 1;
+                    map.line = group;
+                    re_src.push_str(r"(\d+)");
+                }
+                Some('c') => {
+                    group += 1;
+                    map.col = group;
+                    re_src.push_str(r"(\d+)");
+                }
+                Some('m') => {
+                    group += 1;
+                    map.msg = group;
+                    re_src.push_str("(.*)");
+                }
+                Some('t') => {
+                    group += 1;
+                    map.kind = group;
+                    re_src.push_str("(.)");
+                }
+                Some('%') => {
+                    re_src.push('%');
+                }
+                Some(other) => {
+                    // Unknown specifier: treat literally.
+                    re_src.push_str(&regex::escape(&other.to_string()));
+                }
+                None => {
+                    re_src.push('%');
+                }
+            }
+        } else {
+            re_src.push_str(&regex::escape(&ch.to_string()));
+        }
+    }
+    re_src.push('$');
+    regex::Regex::new(&re_src).ok().map(|r| (r, map))
+}
+
+/// Parse `text` using a vim-style comma-separated `efm` list of errorformat
+/// patterns. Non-empty lines are tried against each pattern in order; the
+/// first match wins and produces one [`QfEntry`]. Lines that match nothing
+/// are silently skipped.
+///
+/// `root` is used to join relative file paths (same as `parse_make_output`).
+pub fn parse_errorformat(text: &str, efm: &str, root: &Path) -> Vec<QfEntry> {
+    // Compile all patterns up front.
+    let compiled: Vec<_> = efm
+        .split(',')
+        .filter(|p| !p.is_empty())
+        .filter_map(compile_efm_pattern)
+        .collect();
+
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        for (re, map) in &compiled {
+            if let Some(caps) = re.captures(line) {
+                let cap = |idx: usize| -> &str {
+                    if idx == 0 {
+                        ""
+                    } else {
+                        caps.get(idx).map(|m| m.as_str()).unwrap_or("")
+                    }
+                };
+                let path_str = cap(map.file);
+                let path = if path_str.is_empty() {
+                    PathBuf::new()
+                } else {
+                    let p = Path::new(path_str);
+                    if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        root.join(p)
+                    }
+                };
+                let row = cap(map.line)
+                    .parse::<usize>()
+                    .unwrap_or(0)
+                    .saturating_sub(1);
+                let col = cap(map.col).parse::<usize>().unwrap_or(0).saturating_sub(1);
+                let message = if map.msg != 0 {
+                    cap(map.msg).to_string()
+                } else {
+                    line.to_string()
+                };
+                let kind = if map.kind != 0 {
+                    match cap(map.kind) {
+                        "e" | "E" => QfKind::Error,
+                        "w" | "W" => QfKind::Warning,
+                        "i" | "I" => QfKind::Info,
+                        "n" | "N" => QfKind::Note,
+                        _ => QfKind::Error,
+                    }
+                } else {
+                    QfKind::Error
+                };
+                out.push(QfEntry {
+                    path,
+                    row,
+                    col,
+                    kind,
+                    message,
+                });
+                break; // first-match-wins
+            }
+        }
+    }
+    out
+}
 
 /// Parse build output into quickfix entries. `root` is the directory the build
 /// ran in (relative paths are joined onto it).
@@ -183,5 +332,100 @@ warning: unused variable: `y`
     #[test]
     fn empty_output_no_entries() {
         assert!(parse_make_output("", Path::new("/")).is_empty());
+    }
+
+    // ---- parse_errorformat tests -----------------------------------------------
+
+    #[test]
+    fn efm_line_col_msg_no_file() {
+        // %l:%c:%m — no %f → empty path, row/col 0-based
+        let e = parse_errorformat("3:2:hello world", "%l:%c:%m", Path::new("/proj"));
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].path, PathBuf::new());
+        assert_eq!((e[0].row, e[0].col), (2, 1)); // 3-1=2, 2-1=1
+        assert_eq!(e[0].message, "hello world");
+        assert_eq!(e[0].kind, QfKind::Error); // default
+    }
+
+    #[test]
+    fn efm_file_line_col_msg() {
+        // %f:%l:%c:%m
+        let e = parse_errorformat(
+            "src/main.rs:10:5:something failed",
+            "%f:%l:%c:%m",
+            Path::new("/proj"),
+        );
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].path, Path::new("/proj/src/main.rs"));
+        assert_eq!((e[0].row, e[0].col), (9, 4));
+        assert_eq!(e[0].message, "something failed");
+    }
+
+    #[test]
+    fn efm_file_line_msg_no_col() {
+        // %f:%l:%m — no col → col 0
+        let e = parse_errorformat("foo.py:7:oops", "%f:%l:%m", Path::new("/root"));
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].path, Path::new("/root/foo.py"));
+        assert_eq!((e[0].row, e[0].col), (6, 0));
+        assert_eq!(e[0].message, "oops");
+    }
+
+    #[test]
+    fn efm_multi_pattern_alternative() {
+        // %f:%l:%c:%m,%f:%l:%m — first pattern has col, second doesn't
+        let efm = "%f:%l:%c:%m,%f:%l:%m";
+        let root = Path::new("/");
+        // Line with col matches first pattern
+        let e1 = parse_errorformat("a.rs:1:3:err", efm, root);
+        assert_eq!(e1.len(), 1);
+        assert_eq!((e1[0].row, e1[0].col), (0, 2));
+
+        // Line without col falls through to second pattern
+        let e2 = parse_errorformat("b.rs:2:msg only", efm, root);
+        assert_eq!(e2.len(), 1);
+        assert_eq!((e2[0].row, e2[0].col), (1, 0));
+        assert_eq!(e2[0].message, "msg only");
+    }
+
+    #[test]
+    fn efm_unmatched_lines_skipped() {
+        let e = parse_errorformat(
+            "this does not match\nnor does this",
+            "%f:%l:%c:%m",
+            Path::new("/"),
+        );
+        assert!(e.is_empty(), "non-matching lines should be skipped");
+    }
+
+    #[test]
+    fn efm_empty_text_no_entries() {
+        let e = parse_errorformat("", "%f:%l:%c:%m", Path::new("/"));
+        assert!(e.is_empty());
+    }
+
+    #[test]
+    fn efm_absolute_path_kept_as_is() {
+        let e = parse_errorformat("/abs/path.rs:1:1:abs", "%f:%l:%c:%m", Path::new("/proj"));
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].path, Path::new("/abs/path.rs"));
+    }
+
+    #[test]
+    fn efm_type_field_maps_kind() {
+        // %t maps e→Error, w→Warning, i→Info, n→Note
+        let efm = "%f:%l:%t:%m";
+        let root = Path::new("/");
+        for (t, expected) in [
+            ("e", QfKind::Error),
+            ("w", QfKind::Warning),
+            ("i", QfKind::Info),
+            ("n", QfKind::Note),
+        ] {
+            let line = format!("x.rs:1:{t}:msg");
+            let e = parse_errorformat(&line, efm, root);
+            assert_eq!(e.len(), 1, "kind {t}");
+            assert_eq!(e[0].kind, expected, "kind {t}");
+        }
     }
 }

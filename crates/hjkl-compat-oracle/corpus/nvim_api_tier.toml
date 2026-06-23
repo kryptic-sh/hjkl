@@ -462,3 +462,59 @@ initial_cursor = [0, 0]
 keys = ":set readonly<CR>ix<Esc>"
 expected_buffer = "xhello\n"
 expected_cursor = [0, 0]
+
+# ── :cexpr / :cgetexpr / :caddexpr (#261 Phase 5a) ───────────────────────────
+
+# :cexpr with %l:%c:%m errorformat and a two-line quoted string — jumps to the
+# first entry (line 3 col 2, 0-based: row=2 col=1).
+# nvim probe: `cexpr "3:2:three\\n5:1:five"` → row=2 col=1 (verified).
+[[cases]]
+name = "cexpr_jumps_to_first"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"3:2:three\\n5:1:five\"<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [2, 1]
+
+# :cexpr then :cnext — moves cursor to the second entry (line 5 col 1,
+# 0-based: row=4 col=0).
+# nvim probe: same cexpr then cnext → row=4 col=0 (verified).
+[[cases]]
+name = "cexpr_then_cnext"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"3:2:three\\n5:1:five\"<CR>:cnext<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [4, 0]
+
+# :cgetexpr — populates without jumping (cursor stays at row 0).
+# nvim probe: cgetexpr "2:0:two" → row=0 col=0 (verified).
+[[cases]]
+name = "cgetexpr_no_jump"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cgetexpr \"2:0:two\"<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [0, 0]
+
+# :cgetexpr then :cfirst — populates via cgetexpr (no jump), then cfirst
+# jumps to entry 0 (line 2, 0-based row=1 col=0).
+# nvim probe: cgetexpr "2:0:two" then cfirst → row=1 col=0 (verified).
+[[cases]]
+name = "cgetexpr_then_cfirst"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cgetexpr \"2:0:two\"<CR>:cfirst<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [1, 0]
+
+# :caddexpr — populates via cgetexpr then appends via caddexpr, then cnext
+# navigates from first (row 1) to second entry (row 3).
+# nvim probe: cgetexpr "2:0:two", caddexpr "4:1:four", cnext → row=3 col=0 (verified).
+[[cases]]
+name = "caddexpr_append_then_cnext"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cgetexpr \"2:0:two\"<CR>:caddexpr \"4:1:four\"<CR>:cnext<CR>"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [3, 0]

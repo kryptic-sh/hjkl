@@ -7,7 +7,7 @@
 //! pure `std`.
 
 mod errorformat;
-pub use errorformat::parse_make_output;
+pub use errorformat::{parse_errorformat, parse_make_output};
 
 use std::path::PathBuf;
 
@@ -57,6 +57,11 @@ impl QfList {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.cursor = 0;
+    }
+
+    /// Append entries to the list without changing the cursor.
+    pub fn extend(&mut self, entries: Vec<QfEntry>) {
+        self.entries.extend(entries);
     }
 
     pub fn is_empty(&self) -> bool {

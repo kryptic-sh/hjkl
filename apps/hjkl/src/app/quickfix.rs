@@ -65,6 +65,9 @@ impl crate::app::App {
         match cmd {
             QfCommand::Grep(pat) => self.qf_run_grep(w, &pat),
             QfCommand::Make(extra) => self.qf_run_make(w, &extra),
+            QfCommand::Expr { text, append, jump } => {
+                self.qf_run_expr(w, &text, append, jump);
+            }
             QfCommand::Open => {
                 if self.qf_list(w).is_empty() {
                     self.bus.info(format!("{} list is empty", w.label()));
@@ -111,13 +114,33 @@ impl crate::app::App {
 
     /// Open the current entry's file and place the cursor on it. No-op when the
     /// list is empty.
+    ///
+    /// When the entry's path is empty (no `%f` in the errorformat pattern) or
+    /// equals the currently-open file, the cursor is moved within the current
+    /// buffer without calling `do_edit` — matching vim's `:cexpr` behaviour for
+    /// current-buffer entries.
     fn qf_jump_to_current(&mut self, w: QfWhich) {
         let Some(entry) = self.qf_list(w).current() else {
             return;
         };
-        let path = entry.path.to_string_lossy().to_string();
+        let entry_path = entry.path.clone();
         let (row, col) = (entry.row, entry.col);
-        self.do_edit(&path, false);
+        // Decide whether we need to open a different file.
+        let needs_edit = if entry_path.as_os_str().is_empty() {
+            // Empty path → current-buffer entry, no file switch.
+            false
+        } else {
+            // Compare against the active buffer's filename.
+            let current = self.active().filename.as_deref();
+            match current {
+                Some(cur) => cur != entry_path,
+                None => true, // scratch buffer → open the entry's file
+            }
+        };
+        if needs_edit {
+            let path_str = entry_path.to_string_lossy().to_string();
+            self.do_edit(&path_str, false);
+        }
         self.active_editor_mut().jump_cursor(row, col);
         self.sync_after_engine_mutation();
     }
@@ -237,6 +260,41 @@ impl crate::app::App {
         }
     }
 
+    /// `:cexpr` / `:cgetexpr` / `:caddexpr` (and `l*` variants) — parse `text`
+    /// via the current `&errorformat` and populate the target list.
+    ///
+    /// If `text` is a double-quoted string (starts and ends with `"`), the
+    /// quotes are stripped and vimscript escape sequences are expanded:
+    /// `\n`→newline, `\t`→tab, `\\`→`\`, `\"`→`"`. Otherwise `text` is used
+    /// verbatim as a single line.
+    ///
+    /// If `append` is `true` the new entries are appended to the existing list;
+    /// otherwise the list is replaced. When `jump` is `true` and the resulting
+    /// list is non-empty the editor cursor is moved to the FIRST entry.
+    fn qf_run_expr(&mut self, w: QfWhich, text: &str, append: bool, jump: bool) {
+        let parsed = parse_expr_text(text);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let efm = self.active_editor().settings().errorformat.clone();
+        let entries = hjkl_quickfix::parse_errorformat(&parsed, &efm, &cwd);
+        if append {
+            let new = entries;
+            self.qf_list_mut(w).extend(new);
+        } else {
+            self.qf_list_mut(w).set(entries);
+        }
+        if jump && !self.qf_list(w).is_empty() {
+            // Jump to the first entry (cursor was reset to 0 by set, or stays wherever
+            // it was for append — vim's :cexpr always goes to the first entry).
+            if !append {
+                // set() already put cursor at 0; jump there.
+            } else {
+                // For append/jump (not a vim command; kept symmetric) stay at 0.
+                self.qf_list_mut(w).first();
+            }
+            self.qf_jump_to_current(w);
+        }
+    }
+
     /// Replace the location list with a set of entries and open the popup.
     /// Used by LSP references (`gr`) to fill the loclist alongside the picker.
     pub(crate) fn set_loclist(&mut self, entries: Vec<QfEntry>) {
@@ -276,5 +334,43 @@ impl crate::app::App {
     /// `:lopen` popup: jump to the highlighted entry.
     pub(crate) fn loclist_jump_to_current(&mut self) {
         self.qf_jump_to_current(QfWhich::Location);
+    }
+}
+
+// ── expression text parser ──────────────────────────────────────────────────
+
+/// Parse the argument to `:cexpr` / `:lexpr` etc.
+///
+/// If `text` (already trimmed by the handler) starts and ends with `"`, the
+/// quotes are stripped and these vimscript escape sequences are expanded:
+/// `\n`→newline, `\t`→tab, `\\`→backslash, `\"`→`"`.  Everything else is
+/// passed through verbatim.
+///
+/// Any other form is returned as-is (a single non-quoted line).
+fn parse_expr_text(text: &str) -> String {
+    if text.starts_with('"') && text.ends_with('"') && text.len() >= 2 {
+        let inner = &text[1..text.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('\\') => out.push('\\'),
+                    Some('"') => out.push('"'),
+                    Some(other) => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                    None => out.push('\\'),
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    } else {
+        text.to_string()
     }
 }

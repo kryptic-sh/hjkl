@@ -542,6 +542,31 @@ mod tests {
         );
         // `:grep` with no pattern errors.
         assert!(matches!(go(&mut editor, "grep"), Some(ExEffect::Error(_))));
+        // :cexpr / :cgetexpr / :caddexpr (#261)
+        assert_eq!(
+            go(&mut editor, r#"cexpr "1:2:msg""#),
+            Some(ExEffect::Quickfix(QfCommand::Expr {
+                text: r#""1:2:msg""#.into(),
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, r#"cgetexpr "1:2:msg""#),
+            Some(ExEffect::Quickfix(QfCommand::Expr {
+                text: r#""1:2:msg""#.into(),
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, r#"caddexpr "1:2:msg""#),
+            Some(ExEffect::Quickfix(QfCommand::Expr {
+                text: r#""1:2:msg""#.into(),
+                append: true,
+                jump: false,
+            }))
+        );
     }
 
     #[test]
@@ -580,6 +605,31 @@ mod tests {
         );
         // `:lgrep` with no pattern errors.
         assert!(matches!(go(&mut editor, "lgrep"), Some(ExEffect::Error(_))));
+        // :lexpr / :lgetexpr / :laddexpr (#261)
+        assert_eq!(
+            go(&mut editor, r#"lexpr "3:1:hit""#),
+            Some(ExEffect::Location(QfCommand::Expr {
+                text: r#""3:1:hit""#.into(),
+                append: false,
+                jump: true,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, r#"lgetexpr "3:1:hit""#),
+            Some(ExEffect::Location(QfCommand::Expr {
+                text: r#""3:1:hit""#.into(),
+                append: false,
+                jump: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, r#"laddexpr "3:1:hit""#),
+            Some(ExEffect::Location(QfCommand::Expr {
+                text: r#""3:1:hit""#.into(),
+                append: true,
+                jump: false,
+            }))
+        );
     }
 
     // ---- Phase 2a: nohlsearch ----------------------------------------------

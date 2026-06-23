@@ -110,4 +110,18 @@ pub enum QfCommand {
     /// `:make [args]` — run `makeprg` (appending `args`), parse the output via
     /// the errorformat, populate the quickfix list, open popup.
     Make(String),
+    /// `:cexpr` / `:cgetexpr` / `:caddexpr` (and `l*` variants) — parse `text`
+    /// via the current `&errorformat` and populate the quickfix / location list.
+    ///
+    /// `append = false` replaces the list (`:cexpr`, `:cgetexpr`);
+    /// `append = true` appends to it (`:caddexpr`).
+    /// `jump = true` jumps to the first entry after population (`:cexpr`, `:lexpr`).
+    Expr {
+        /// The text to parse (may be quoted or raw).
+        text: String,
+        /// Whether to append to the existing list (instead of replacing it).
+        append: bool,
+        /// Whether to jump to the first entry after population.
+        jump: bool,
+    },
 }

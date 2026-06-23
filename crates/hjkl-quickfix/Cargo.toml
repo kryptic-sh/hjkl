@@ -13,6 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
+regex = "1"
 
 [package.metadata.docs.rs]
 all-features = true

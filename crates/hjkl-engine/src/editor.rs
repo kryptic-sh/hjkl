@@ -799,6 +799,10 @@ pub struct Settings {
     /// Program run by `:make` (vim's `makeprg`). Its stdout+stderr are parsed
     /// via the errorformat into the quickfix list. Default `"cargo check"`.
     pub makeprg: String,
+    /// Comma-separated list of errorformat patterns used by `:cexpr` /
+    /// `:lgetexpr` etc. to parse text into quickfix entries. Follows vim's
+    /// `'errorformat'` / `'efm'`. Default: `"%f:%l:%c:%m,%f:%l:%m,%l:%c:%m"`.
+    pub errorformat: String,
     /// When `true`, typing an opening bracket or quote automatically inserts
     /// the matching close character and parks the cursor between them.
     /// Matches vim's `set autopairs` (Neovim) / nvim-autopairs behaviour.
@@ -907,6 +911,7 @@ impl Default for Settings {
             filetype: String::new(),
             commentstring: String::new(),
             makeprg: "cargo check".to_string(),
+            errorformat: "%f:%l:%c:%m,%f:%l:%m,%l:%c:%m".to_string(),
             autopair: true,
             autoclose_tag: true,
             scrolloff: 5,
@@ -990,6 +995,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         filetype: o.filetype.clone(),
         commentstring: String::new(),
         makeprg: "cargo check".to_string(),
+        errorformat: "%f:%l:%c:%m,%f:%l:%m,%l:%c:%m".to_string(),
         autopair: true,
         autoclose_tag: true,
         scrolloff: o.scrolloff,

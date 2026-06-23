@@ -1571,6 +1571,29 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: make_handler::<H>,
     });
 
+    // :cexpr / :cgetexpr / :caddexpr — populate quickfix from expression (#261)
+    reg.add(ExCommand {
+        name: "cexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "cex"
+        run: cexpr_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cgetexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 5, // "cgete"
+        run: cgetexpr_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "caddexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "cad"
+        run: caddexpr_handler::<H>,
+    });
+
     // location-list family (#184 phase 3)
     reg.add(ExCommand {
         name: "lopen",
@@ -1634,6 +1657,29 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 4, // "lmak"
         run: lmake_handler::<H>,
+    });
+
+    // :lexpr / :lgetexpr / :laddexpr — populate location list from expression (#261)
+    reg.add(ExCommand {
+        name: "lexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "lex"
+        run: lexpr_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lgetexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 5, // "lgete"
+        run: lgetexpr_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "laddexpr",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "lad"
+        run: laddexpr_handler::<H>,
     });
 
     // `:preserve` — force-write the swap file immediately (issue #185).
@@ -1841,6 +1887,45 @@ fn make_handler<H: Host>(
     Some(ExEffect::Quickfix(QfCommand::Make(args.trim().to_string())))
 }
 
+/// `:cexpr {expr}` — parse `expr` via errorformat, replace quickfix list, jump to first.
+fn cexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:cgetexpr {expr}` — parse `expr` via errorformat, replace quickfix list, no jump.
+fn cgetexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:caddexpr {expr}` — parse `expr` via errorformat, append to quickfix list, no jump.
+fn caddexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: true,
+        jump: false,
+    }))
+}
+
 // ---- location list (#184 phase 3) ------------------------------------------
 // The `:l*` family mirrors the `:c*` family but targets the window-local
 // location list via `ExEffect::Location`.
@@ -1894,6 +1979,45 @@ fn lmake_handler<H: Host>(
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Location(QfCommand::Make(args.trim().to_string())))
+}
+
+/// `:lexpr {expr}` — parse `expr` via errorformat, replace location list, jump to first.
+fn lexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: false,
+        jump: true,
+    }))
+}
+
+/// `:lgetexpr {expr}` — parse `expr` via errorformat, replace location list, no jump.
+fn lgetexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: false,
+        jump: false,
+    }))
+}
+
+/// `:laddexpr {expr}` — parse `expr` via errorformat, append to location list, no jump.
+fn laddexpr_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Expr {
+        text: args.trim().to_string(),
+        append: true,
+        jump: false,
+    }))
 }
 
 // ---- :syntax ---------------------------------------------------------------

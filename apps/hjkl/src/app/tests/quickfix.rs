@@ -145,3 +145,106 @@ fn loclist_next_jumps_and_dispatch_routes() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── :cexpr / :cgetexpr / :caddexpr in-process tests (#261) ─────────────────
+
+/// Build an App with a 6-line in-memory buffer (no real file) and set
+/// `errorformat` to `%l:%c:%m` so `:cexpr "3:2:three\n5:1:five"` produces
+/// two empty-path entries.
+fn make_app_with_buffer() -> App {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Populate the buffer with 6 lines.
+    let content = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    app.active_editor_mut().set_content(content);
+    // Set errorformat to no-file form.
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+    app
+}
+
+#[test]
+fn cexpr_populates_list_and_jumps_to_first() {
+    let mut app = make_app_with_buffer();
+    // `:cexpr "3:2:three\n5:1:five"` — two entries, jump=true
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""3:2:three\n5:1:five""#.to_string(),
+        append: false,
+        jump: true,
+    });
+    assert_eq!(app.quickfix.len(), 2, "should have 2 entries");
+    // First entry: row=2 (0-based from line 3), col=1
+    assert_eq!(app.quickfix.cursor(), 0);
+    let e0 = app.quickfix.current().unwrap();
+    assert_eq!(e0.row, 2, "entry 0 row should be 2 (0-based)");
+    assert_eq!(e0.col, 1, "entry 0 col should be 1 (0-based)");
+    // Editor cursor must have jumped to row 2
+    assert_eq!(
+        app.active_editor().cursor().0,
+        2,
+        "editor row should be at first entry (row 2)"
+    );
+    assert_eq!(
+        app.active_editor().cursor().1,
+        1,
+        "editor col should be at first entry (col 1)"
+    );
+}
+
+#[test]
+fn cexpr_then_cnext_moves_to_second_entry() {
+    let mut app = make_app_with_buffer();
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""3:2:three\n5:1:five""#.to_string(),
+        append: false,
+        jump: true,
+    });
+    // :cnext should move to the second entry (row 4, col 0)
+    app.handle_quickfix_command(QfCommand::Next);
+    assert_eq!(app.quickfix.cursor(), 1);
+    let e1 = app.quickfix.current().unwrap();
+    assert_eq!(e1.row, 4, "entry 1 row should be 4 (0-based from line 5)");
+    assert_eq!(e1.col, 0, "entry 1 col should be 0 (0-based from col 1)");
+    assert_eq!(
+        app.active_editor().cursor().0,
+        4,
+        "editor row should be at second entry (row 4)"
+    );
+}
+
+#[test]
+fn cgetexpr_populates_but_does_not_jump() {
+    let mut app = make_app_with_buffer();
+    let initial_row = app.active_editor().cursor().0;
+    // :cgetexpr → jump=false, cursor should not move
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""3:2:three""#.to_string(),
+        append: false,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 1, "list should have 1 entry");
+    assert_eq!(
+        app.active_editor().cursor().0,
+        initial_row,
+        "cgetexpr must not move cursor"
+    );
+}
+
+#[test]
+fn caddexpr_appends_to_existing_list() {
+    let mut app = make_app_with_buffer();
+    // First populate with one entry
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""2:0:two""#.to_string(),
+        append: false,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 1);
+    // caddexpr appends
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""4:1:four""#.to_string(),
+        append: true,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 2, "caddexpr should append to list");
+    // Cursor stays at 0 (not jumped)
+    assert_eq!(app.quickfix.cursor(), 0);
+}
