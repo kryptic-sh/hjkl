@@ -159,13 +159,51 @@ fn err(stdout: &mut impl Write, msgid: u32, msg: &str) -> Result<()> {
 // ── App construction ──────────────────────────────────────────────────────────
 
 fn build_app(first_file: Option<PathBuf>) -> anyhow::Result<crate::app::App> {
+    use crate::app::STATUS_LINE_HEIGHT;
+    // Buffer-pane height = total terminal height minus the 1-row status line.
+    const HEADLESS_W: u16 = 80;
+    const HEADLESS_TERMINAL_H: u16 = 24;
+    let buf_h = HEADLESS_TERMINAL_H.saturating_sub(STATUS_LINE_HEIGHT);
+
     let mut app = crate::app::App::new(first_file, false, None, None)?;
     {
-        let vp = app.active_editor_mut().host_mut().viewport_mut();
-        vp.width = 80;
-        vp.height = 24;
+        // Set the SLOT editor so make_view_editor() (called on every split)
+        // copies the correct buffer-pane height to newly created window editors.
+        {
+            let vp = app.active_slot_mut().editor.host_mut().viewport_mut();
+            vp.width = HEADLESS_W;
+            vp.height = buf_h;
+        }
+        // Also propagate to the initial window editor (created by App::new's
+        // reconcile_window_editors() call before we set the slot above).
+        {
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
+            vp.width = HEADLESS_W;
+            vp.height = buf_h;
+        }
     }
     Ok(app)
+}
+
+// ── headless window-geometry helpers ──────────────────────────────────────────
+
+use hjkl_layout::{LayoutRect, SplitDir};
+
+/// Return the headless buffer-pane area that the layout tree is divided into.
+///
+/// `build_app` stores the BUFFER-PANE height (total terminal height minus the
+/// 1-row status line) directly in the slot editor and the initial window
+/// editor. Subsequent splits inherit that height via `make_view_editor`.
+/// Therefore `vp.height` already IS the buffer-pane height — no further
+/// subtraction is needed here.
+///
+/// A fresh 80×24 headless app → `vp.height = 23` → single window height = 23,
+/// matching neovim's reported value.
+fn win_area(app: &crate::app::App) -> LayoutRect {
+    let vp = app.active_editor().host().viewport();
+    let w = vp.width.max(1);
+    let h = vp.height.max(1);
+    LayoutRect::new(0, 0, w, h)
 }
 
 // ── settle helper ─────────────────────────────────────────────────────────────
@@ -1445,6 +1483,139 @@ fn dispatch(
             ok(stdout, msgid, Value::Nil)
         }
 
+        // ── window size accessors / mutators ──────────────────────────────────
+        "nvim_win_get_height" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if !app.nvim_window_is_valid(win_id) {
+                return err(stdout, msgid, "invalid window id");
+            }
+            let area = win_area(app);
+            let layout = &app.tabs[app.active_tab].layout;
+            match layout
+                .window_rects(area)
+                .into_iter()
+                .find(|(id, _)| *id == win_id as usize)
+            {
+                Some((_, rect)) => ok(stdout, msgid, Value::from(rect.h as i64)),
+                None => err(stdout, msgid, "window not found in active tab layout"),
+            }
+        }
+
+        "nvim_win_get_width" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if !app.nvim_window_is_valid(win_id) {
+                return err(stdout, msgid, "invalid window id");
+            }
+            let area = win_area(app);
+            let layout = &app.tabs[app.active_tab].layout;
+            match layout
+                .window_rects(area)
+                .into_iter()
+                .find(|(id, _)| *id == win_id as usize)
+            {
+                Some((_, rect)) => ok(stdout, msgid, Value::from(rect.w as i64)),
+                None => err(stdout, msgid, "window not found in active tab layout"),
+            }
+        }
+
+        "nvim_win_set_height" => {
+            // nvim_win_set_height(win, height)
+            // Best-effort: find the enclosing Horizontal split and adjust its ratio
+            // so the target window gets approximately `height` rows.
+            // No-op (ok) when the window has no enclosing horizontal split.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let desired_h = match param_i64(p, 1) {
+                Ok(v) => v,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if !app.nvim_window_is_valid(win_id) {
+                return err(stdout, msgid, "invalid window id");
+            }
+            let area = win_area(app);
+            let layout = &mut app.tabs[app.active_tab].layout;
+            if let Some((ratio, _saved, in_a)) =
+                layout.enclosing_split_mut(win_id as usize, SplitDir::Horizontal)
+            {
+                // The parent height comes from the full headless area for the
+                // enclosing split. We use `area.h` as a conservative estimate
+                // (the actual parent may be smaller in deeply nested layouts,
+                // but for top-level splits this is exact).
+                let parent_h = area.h as f32;
+                let desired = (desired_h as f32).clamp(1.0, parent_h - 1.0);
+                let new_ratio = if in_a {
+                    desired / parent_h
+                } else {
+                    1.0 - desired / parent_h
+                };
+                *ratio = new_ratio.clamp(0.05, 0.95);
+            }
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_win_set_width" => {
+            // nvim_win_set_width(win, width)
+            // Best-effort: find the enclosing Vertical split and adjust its ratio
+            // so the target window gets approximately `width` columns.
+            // No-op (ok) when the window has no enclosing vertical split.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let desired_w = match param_i64(p, 1) {
+                Ok(v) => v,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            if !app.nvim_window_is_valid(win_id) {
+                return err(stdout, msgid, "invalid window id");
+            }
+            let area = win_area(app);
+            let layout = &mut app.tabs[app.active_tab].layout;
+            if let Some((ratio, _saved, in_a)) =
+                layout.enclosing_split_mut(win_id as usize, SplitDir::Vertical)
+            {
+                let parent_w = area.w as f32;
+                let desired = (desired_w as f32).clamp(1.0, parent_w - 1.0);
+                let new_ratio = if in_a {
+                    desired / parent_w
+                } else {
+                    1.0 - desired / parent_w
+                };
+                *ratio = new_ratio.clamp(0.05, 0.95);
+            }
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
         // ── synchronisation barrier ───────────────────────────────────────────
         // The oracle calls `nvim.command("echo 1")` as a barrier. Handle it.
         _ => err(stdout, msgid, &format!("method not implemented: {method}")),
@@ -2448,6 +2619,248 @@ mod tests {
             }
         };
         assert_eq!(line_dollar, 3, "line('$') should be 3 (total line count)");
+    }
+
+    // ── nvim_win_get_height / get_width / set_height / set_width ─────────
+
+    #[test]
+    fn test_nvim_win_get_height_single_window() {
+        // A single window in an 80×24 headless terminal should report height 23
+        // (24 total minus 1 status-line row, matching neovim convention).
+        let mut app = build_app(None).unwrap();
+        let win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        let h = {
+            let resp = call(&mut app, "nvim_win_get_height", vec![win]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            h, 23,
+            "single window height should be 23 (24 - 1 status row)"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_get_width_single_window() {
+        // A single window should report the full 80 columns.
+        let mut app = build_app(None).unwrap();
+        let win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        let w = {
+            let resp = call(&mut app, "nvim_win_get_width", vec![win]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(w, 80, "single window width should be 80");
+    }
+
+    #[test]
+    fn test_nvim_win_get_width_after_vsplit_sums_to_total() {
+        // After vsplit: two windows. Their widths + 1 separator should equal 80.
+        let mut app = build_app(None).unwrap();
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(wins.len(), 2);
+
+        let w0 = {
+            let resp = call(&mut app, "nvim_win_get_width", vec![wins[0].clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        let w1 = {
+            let resp = call(&mut app, "nvim_win_get_width", vec![wins[1].clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        // w0 + 1 (separator) + w1 == 80
+        assert_eq!(
+            w0 + 1 + w1,
+            80,
+            "window widths + separator must sum to 80, got {w0} + 1 + {w1}"
+        );
+        // Both should be approximately half.
+        assert!(
+            (30..=50).contains(&w0),
+            "left width should be near half, got {w0}"
+        );
+        assert!(
+            (30..=50).contains(&w1),
+            "right width should be near half, got {w1}"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_get_height_after_vsplit_unchanged() {
+        // After vsplit: both windows should still have height 23.
+        let mut app = build_app(None).unwrap();
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        for win in &wins {
+            let h = {
+                let resp = call(&mut app, "nvim_win_get_height", vec![win.clone()]);
+                match assert_ok(resp) {
+                    Value::Integer(n) => n.as_i64().unwrap(),
+                    other => panic!("expected integer, got {other:?}"),
+                }
+            };
+            assert_eq!(h, 23, "after vsplit, height should remain 23, got {h}");
+        }
+    }
+
+    #[test]
+    fn test_nvim_win_get_height_after_split_sums_to_total() {
+        // After :split (horizontal): heights + 1 separator == 23.
+        let mut app = build_app(None).unwrap();
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("split")]);
+            assert_ok(resp);
+        }
+        let wins = {
+            let resp = call(&mut app, "nvim_list_wins", vec![]);
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(wins.len(), 2);
+        let h0 = {
+            let resp = call(&mut app, "nvim_win_get_height", vec![wins[0].clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        let h1 = {
+            let resp = call(&mut app, "nvim_win_get_height", vec![wins[1].clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            h0 + 1 + h1,
+            23,
+            "window heights + separator must sum to 23, got {h0} + 1 + {h1}"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_set_width_moves_split_toward_target() {
+        // After vsplit: request that the focused window become 30 cols wide.
+        // The resulting width should be closer to 30 than the original ~40.
+        let mut app = build_app(None).unwrap();
+        {
+            let resp = call(&mut app, "nvim_command", vec![Value::from("vsplit")]);
+            assert_ok(resp);
+        }
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        // Current width before set.
+        let w_before = {
+            let resp = call(&mut app, "nvim_win_get_width", vec![cur_win.clone()]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+
+        // Set width to 30.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_width",
+                vec![cur_win.clone(), Value::from(30i64)],
+            );
+            assert_ok(resp);
+        }
+
+        let w_after = {
+            let resp = call(&mut app, "nvim_win_get_width", vec![cur_win]);
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+
+        // After set_width(30): width should have moved toward 30 (or stay 30).
+        // The ratio math gives us ratio = 30/80 = 0.375; headless rect gives
+        // a_w = round(80 * 0.375) = 30, minus separator = 29.
+        // Either way, it must be less than the original ~40.
+        assert!(
+            (w_after as i64 - 30).abs() <= (w_before as i64 - 30).abs(),
+            "width should move toward 30: before={w_before}, after={w_after}"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_set_height_single_window_noop() {
+        // Single window has no enclosing horizontal split → set_height is a no-op.
+        let mut app = build_app(None).unwrap();
+        let win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        // set_height on a single window should return Ok(Nil) without error.
+        let resp = call(
+            &mut app,
+            "nvim_win_set_height",
+            vec![win, Value::from(10i64)],
+        );
+        assert_ok(resp);
+    }
+
+    #[test]
+    fn test_nvim_win_get_height_invalid_window_returns_err() {
+        let mut app = build_app(None).unwrap();
+        let resp = call(&mut app, "nvim_win_get_height", vec![make_win_param(9999)]);
+        assert!(
+            resp[2] != Value::Nil,
+            "invalid window id should return an error"
+        );
+    }
+
+    #[test]
+    fn test_nvim_win_get_width_invalid_window_returns_err() {
+        let mut app = build_app(None).unwrap();
+        let resp = call(&mut app, "nvim_win_get_width", vec![make_win_param(9999)]);
+        assert!(
+            resp[2] != Value::Nil,
+            "invalid window id should return an error"
+        );
     }
 
     // ── tabpage helpers ───────────────────────────────────────────────────

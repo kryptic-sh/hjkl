@@ -506,6 +506,55 @@ impl LayoutTree {
         }
     }
 
+    /// Walk the tree and compute the [`LayoutRect`] each leaf window occupies
+    /// within `area`, mirroring the renderer's `split_rect` + separator logic
+    /// exactly so headless geometry matches what the TUI renderer would produce.
+    ///
+    /// # Split math (mirrors `render.rs::split_rect` + separator carving)
+    ///
+    /// For a **Horizontal** split (stacks top-to-bottom, `Axis::Row`):
+    ///   `a_h = round(area.h * ratio).clamp(1, area.h - 1)`
+    ///   `b_h = area.h - a_h`
+    ///   If `a_h >= 2` and `b_h > 0`: the bottom row of `a` becomes a separator;
+    ///   `a` shrinks by 1 (height becomes `a_h - 1`), `b` starts after the separator.
+    ///
+    /// For a **Vertical** split (side-by-side, `Axis::Col`):
+    ///   `a_w = round(area.w * ratio).clamp(1, area.w - 1)`
+    ///   `b_w = area.w - a_w`
+    ///   If `a_w >= 2` and `b_w > 0`: the rightmost column of `a` becomes a separator;
+    ///   `a` shrinks by 1 (width becomes `a_w - 1`), `b` starts right after `a`.
+    ///
+    /// Leaf → single entry `(id, area)`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_layout::{LayoutTree, SplitDir, LayoutRect};
+    ///
+    /// let tree = LayoutTree::Leaf(0);
+    /// let area = LayoutRect::new(0, 0, 80, 23);
+    /// let rects = tree.window_rects(area);
+    /// assert_eq!(rects, vec![(0, area)]);
+    /// ```
+    pub fn window_rects(&self, area: LayoutRect) -> Vec<(WindowId, LayoutRect)> {
+        let mut out = Vec::new();
+        self.collect_rects(area, &mut out);
+        out
+    }
+
+    fn collect_rects(&self, area: LayoutRect, out: &mut Vec<(WindowId, LayoutRect)>) {
+        match self {
+            LayoutTree::Leaf(id) => out.push((*id, area)),
+            LayoutTree::Split {
+                dir, ratio, a, b, ..
+            } => {
+                let (rect_a, rect_b) = headless_split_rect(area, *dir, *ratio);
+                a.collect_rects(rect_a, out);
+                b.collect_rects(rect_b, out);
+            }
+        }
+    }
+
     /// Swap the two children of the deepest Split that directly contains
     /// `Leaf(id)` as one of its `a` or `b` children.
     ///
@@ -586,6 +635,52 @@ impl LayoutTree {
                 }
                 None
             }
+        }
+    }
+}
+
+/// Pure headless split — mirrors `render.rs::split_rect` + separator carving.
+///
+/// Divides `area` at `ratio` along the axis implied by `dir`, then carves
+/// out the 1-cell separator so each child's rect is exactly what the TUI
+/// renderer would pass to `render_layout`.
+///
+/// ## Separator rules (copied verbatim from `render.rs::render_layout`)
+///
+/// **Vertical** (side-by-side, `Axis::Col`): separator is the rightmost cell
+/// of `rect_a`. Applied only when `rect_a.w >= 2` AND `rect_b.w > 0`; `a`
+/// shrinks by 1 column, `b` position/size are unchanged.
+///
+/// **Horizontal** (stacked, `Axis::Row`): separator is the bottom cell of
+/// `rect_a`. Applied only when `rect_a.h >= 2` AND `rect_b.h > 0`; `a`
+/// shrinks by 1 row, `b` position/size are unchanged.
+fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRect, LayoutRect) {
+    match dir.axis() {
+        Axis::Row => {
+            // Horizontal split: divide height.
+            let a_h = ((area.h as f32) * ratio).round() as u16;
+            let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
+            let b_h = area.h.saturating_sub(a_h);
+            let mut rect_a = LayoutRect::new(area.x, area.y, area.w, a_h);
+            let rect_b = LayoutRect::new(area.x, area.y + a_h, area.w, b_h);
+            // Carve separator: bottom row of rect_a, only when safe.
+            if rect_a.h >= 2 && rect_b.h > 0 {
+                rect_a.h -= 1;
+            }
+            (rect_a, rect_b)
+        }
+        Axis::Col => {
+            // Vertical split: divide width.
+            let a_w = ((area.w as f32) * ratio).round() as u16;
+            let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
+            let b_w = area.w.saturating_sub(a_w);
+            let mut rect_a = LayoutRect::new(area.x, area.y, a_w, area.h);
+            let rect_b = LayoutRect::new(area.x + a_w, area.y, b_w, area.h);
+            // Carve separator: rightmost column of rect_a, only when safe.
+            if rect_a.w >= 2 && rect_b.w > 0 {
+                rect_a.w -= 1;
+            }
+            (rect_a, rect_b)
         }
     }
 }
@@ -1089,6 +1184,82 @@ mod tests {
         assert_eq!(tree.next_leaf(2), Some(0));
         assert_eq!(tree.prev_leaf(0), Some(2));
         assert_eq!(tree.prev_leaf(2), Some(1));
+    }
+
+    // ── window_rects() ────────────────────────────────────────────────────────
+
+    #[test]
+    fn window_rects_single_leaf_gets_full_area() {
+        let tree = leaf(0);
+        let area = LayoutRect::new(0, 0, 80, 23);
+        let rects = tree.window_rects(area);
+        assert_eq!(rects, vec![(0, area)]);
+    }
+
+    #[test]
+    fn window_rects_vsplit_two_side_by_side() {
+        // Vertical split (side-by-side): area.w=80, ratio=0.5
+        // a_w = round(80 * 0.5) = 40, clamped => 40
+        // b_w = 80 - 40 = 40
+        // Separator: rect_a.w(40) >= 2 and rect_b.w(40) > 0 → rect_a.w = 39
+        // rect_a = (0,0,39,23), rect_b = (40,0,40,23)
+        let tree = vsplit(0.5, leaf(0), leaf(1));
+        let area = LayoutRect::new(0, 0, 80, 23);
+        let rects = tree.window_rects(area);
+        assert_eq!(rects.len(), 2);
+        let (id_a, ra) = rects[0];
+        let (id_b, rb) = rects[1];
+        assert_eq!(id_a, 0);
+        assert_eq!(id_b, 1);
+        // widths: 39 + 1 (sep) + 40 = 80
+        assert_eq!(
+            ra.w + 1 + rb.w,
+            80,
+            "widths + separator must sum to parent width"
+        );
+        assert_eq!(ra.h, 23);
+        assert_eq!(rb.h, 23);
+        // rect_b starts right after rect_a + separator
+        assert_eq!(rb.x, ra.x + ra.w + 1);
+    }
+
+    #[test]
+    fn window_rects_hsplit_stacked() {
+        // Horizontal split (stacked): area.h=23, ratio=0.5
+        // a_h = round(23 * 0.5) = 12 (banker's rounding on some platforms; 11.5 → 12)
+        // Actually: 23 * 0.5 = 11.5, round() = 12 in Rust (round half away from zero)
+        // b_h = 23 - 12 = 11
+        // Separator: rect_a.h(12) >= 2 and rect_b.h(11) > 0 → rect_a.h = 11
+        let tree = hsplit(0.5, leaf(0), leaf(1));
+        let area = LayoutRect::new(0, 0, 80, 23);
+        let rects = tree.window_rects(area);
+        assert_eq!(rects.len(), 2);
+        let (_, ra) = rects[0];
+        let (_, rb) = rects[1];
+        // heights: ra.h + 1 (sep) + rb.h == area.h
+        assert_eq!(
+            ra.h + 1 + rb.h,
+            23,
+            "heights + separator must sum to parent height"
+        );
+        assert_eq!(ra.w, 80);
+        assert_eq!(rb.w, 80);
+        // rect_b starts after rect_a + separator row
+        assert_eq!(rb.y, ra.y + ra.h + 1);
+    }
+
+    #[test]
+    fn window_rects_nested_vsplit_inside_vsplit() {
+        // vsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2))) over 80x23
+        // Outer: a_w=40, sep → rect_a.w=39; b_w=40 starting at x=40
+        // Inner (over 40-wide area starting at x=40): a_w=20, sep → 19; b_w=20 at x=60
+        let tree = vsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
+        let area = LayoutRect::new(0, 0, 80, 23);
+        let rects = tree.window_rects(area);
+        assert_eq!(rects.len(), 3);
+        // total width coverage: sum(widths) + 2 separators = 80
+        let total_w: u16 = rects.iter().map(|(_, r)| r.w).sum::<u16>() + 2;
+        assert_eq!(total_w, 80, "all window widths + 2 separators == 80");
     }
 
     // ── remove_leaf error message ─────────────────────────────────────────────
