@@ -42,8 +42,35 @@ fn encode_id(id: u64) -> Vec<u8> {
     buf
 }
 
-fn buf_handle() -> Value {
-    Value::Ext(BUFFER_EXT, encode_id(1))
+fn buf_handle(id: u64) -> Value {
+    Value::Ext(BUFFER_EXT, encode_id(id))
+}
+
+/// Decode a `Value::Ext(BUFFER_EXT, bytes)` back to a buffer id.
+/// If the param is missing, Nil, or decodes to 0, returns `None` (caller
+/// substitutes the current buffer id).
+fn param_buf(params: &[Value], idx: usize) -> std::result::Result<Option<u64>, String> {
+    match params.get(idx) {
+        None | Some(Value::Nil) => Ok(None),
+        Some(Value::Ext(tag, bytes)) if *tag == BUFFER_EXT => {
+            let mut cursor = std::io::Cursor::new(bytes.as_slice());
+            match rmpv::decode::read_value(&mut cursor) {
+                Ok(inner) => {
+                    let id = inner.as_u64().unwrap_or(0);
+                    Ok(if id == 0 { None } else { Some(id) })
+                }
+                Err(e) => Err(format!("invalid buffer handle encoding: {e}")),
+            }
+        }
+        Some(Value::Integer(n)) => {
+            // Some clients send a raw integer 0 meaning "current".
+            let id = n.as_u64().unwrap_or(0);
+            Ok(if id == 0 { None } else { Some(id) })
+        }
+        Some(other) => Err(format!(
+            "params[{idx}] must be buffer handle, got {other:?}"
+        )),
+    }
 }
 
 fn win_handle() -> Value {
@@ -212,17 +239,85 @@ fn dispatch(
 ) -> Result<()> {
     match method {
         // ── buffer/window handle accessors ────────────────────────────────────
-        "nvim_get_current_buf" => ok(stdout, msgid, buf_handle()),
+        "nvim_get_current_buf" => ok(stdout, msgid, buf_handle(app.nvim_current_buffer_id())),
+
+        "nvim_list_bufs" => {
+            let handles: Vec<Value> = app.nvim_buffer_ids().into_iter().map(buf_handle).collect();
+            ok(stdout, msgid, Value::Array(handles))
+        }
+
+        "nvim_set_current_buf" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_slot_index_for_buffer(id) {
+                Some(i) => {
+                    app.switch_to(i);
+                    app.sync_after_engine_mutation();
+                    settle(app);
+                    ok(stdout, msgid, Value::Nil)
+                }
+                None => err(stdout, msgid, "invalid buffer id"),
+            }
+        }
+
+        "nvim_create_buf" => {
+            // nvim_create_buf(listed: bool, scratch: bool) — both ignored for now.
+            let new_id = app.nvim_create_buffer();
+            ok(stdout, msgid, buf_handle(new_id))
+        }
+
+        "nvim_buf_get_name" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = app.nvim_buffer_name(id).unwrap_or_default();
+            ok(stdout, msgid, Value::from(name.as_str()))
+        }
+
+        "nvim_buf_set_name" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            app.nvim_set_buffer_name(id, &name);
+            ok(stdout, msgid, Value::Nil)
+        }
 
         "nvim_get_current_win" => ok(stdout, msgid, win_handle()),
 
         // ── buffer line mutations ─────────────────────────────────────────────
         "nvim_buf_set_lines" => {
             // nvim_buf_set_lines(buf, start, end, strict, lines)
-            // params[0]=buf handle (ignored, single buffer), [1]=start, [2]=end,
-            // [3]=strict, [4]=replacement lines
+            // params[0]=buf handle, [1]=start, [2]=end, [3]=strict, [4]=replacement lines
             let p = match as_array(params) {
                 Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
                 Err(e) => return err(stdout, msgid, &e),
             };
             // param index: buf=0, start=1, end=2, strict=3, lines=4
@@ -240,38 +335,67 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
 
-            let rope = app.active_editor().buffer().rope();
-            let line_count = rope.len_lines();
-            let (s, e) = match resolve_line_range(line_count, start, end) {
-                Ok(r) => r,
-                Err(msg) => return err(stdout, msgid, &msg),
-            };
+            let current_id = app.nvim_current_buffer_id();
+            if buf_id == current_id {
+                // Fast path: operate on the active editor (oracle-parity path).
+                let rope = app.active_editor().buffer().rope();
+                let line_count = rope.len_lines();
+                let (s, e) = match resolve_line_range(line_count, start, end) {
+                    Ok(r) => r,
+                    Err(msg) => return err(stdout, msgid, &msg),
+                };
 
-            // Build new full content: prefix[0..s] + new_lines + suffix[e..]
-            let mut result: Vec<String> = Vec::new();
-            for i in 0..s {
-                result.push(hjkl_buffer::rope_line_str(&rope, i));
-            }
-            result.extend(new_lines);
-            for i in e..line_count {
-                result.push(hjkl_buffer::rope_line_str(&rope, i));
-            }
+                // Build new full content: prefix[0..s] + new_lines + suffix[e..]
+                let mut result: Vec<String> = Vec::new();
+                for i in 0..s {
+                    result.push(hjkl_buffer::rope_line_str(&rope, i));
+                }
+                result.extend(new_lines);
+                for i in e..line_count {
+                    result.push(hjkl_buffer::rope_line_str(&rope, i));
+                }
 
-            // Join WITHOUT a trailing newline. BufferEdit::replace_all uses
-            // split('\n') internally, so "hello\n" → ["hello", ""] (two rows)
-            // whereas "hello" → ["hello"] (one row, matching nvim semantics).
-            let content = result.join("\n");
-            app.active_editor_mut().set_content(&content);
-            // Apply modeline overrides so oracle cases that embed a `vim:`
-            // marker see the same options that a real file-open would apply.
-            {
-                let mut opts = app.active_editor().current_options();
-                if opts.modeline {
-                    let scan_depth = opts.modelines as usize;
-                    hjkl_app::modeline::overlay_modeline_for_content(
-                        &mut opts, &content, scan_depth,
-                    );
-                    app.active_editor_mut().apply_options(&opts);
+                // Join WITHOUT a trailing newline. BufferEdit::replace_all uses
+                // split('\n') internally, so "hello\n" → ["hello", ""] (two rows)
+                // whereas "hello" → ["hello"] (one row, matching nvim semantics).
+                let content = result.join("\n");
+                app.active_editor_mut().set_content(&content);
+                // Apply modeline overrides so oracle cases that embed a `vim:`
+                // marker see the same options that a real file-open would apply.
+                {
+                    let mut opts = app.active_editor().current_options();
+                    if opts.modeline {
+                        let scan_depth = opts.modelines as usize;
+                        hjkl_app::modeline::overlay_modeline_for_content(
+                            &mut opts, &content, scan_depth,
+                        );
+                        app.active_editor_mut().apply_options(&opts);
+                    }
+                }
+            } else {
+                // Non-current buffer: operate on the slot's own editor.
+                let rope = match app.nvim_slot_editor(buf_id) {
+                    Some(ed) => ed.buffer().rope(),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                };
+                let line_count = rope.len_lines();
+                let (s, e) = match resolve_line_range(line_count, start, end) {
+                    Ok(r) => r,
+                    Err(msg) => return err(stdout, msgid, &msg),
+                };
+
+                let mut result: Vec<String> = Vec::new();
+                for i in 0..s {
+                    result.push(hjkl_buffer::rope_line_str(&rope, i));
+                }
+                result.extend(new_lines);
+                for i in e..line_count {
+                    result.push(hjkl_buffer::rope_line_str(&rope, i));
+                }
+                let content = result.join("\n");
+                match app.nvim_slot_editor_mut(buf_id) {
+                    Some(ed) => ed.set_content(&content),
+                    None => return err(stdout, msgid, "invalid buffer id"),
                 }
             }
             settle(app);
@@ -284,6 +408,11 @@ fn dispatch(
                 Ok(p) => p,
                 Err(e) => return err(stdout, msgid, &e),
             };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
             let start = match param_i64(p, 1) {
                 Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
@@ -294,7 +423,15 @@ fn dispatch(
             };
             let _strict = param_bool(p, 3).unwrap_or(false);
 
-            let rope = app.active_editor().buffer().rope();
+            let current_id = app.nvim_current_buffer_id();
+            let rope = if buf_id == current_id {
+                app.active_editor().buffer().rope()
+            } else {
+                match app.nvim_slot_editor(buf_id) {
+                    Some(ed) => ed.buffer().rope(),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                }
+            };
             let line_count = rope.len_lines();
             let (s, e) = match resolve_line_range(line_count, start, end) {
                 Ok(r) => r,
@@ -578,4 +715,249 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmpv::Value;
+
+    /// Encode a buffer handle `Value::Ext(BUFFER_EXT, encode_id(id))` suitable
+    /// for passing as a param to dispatch.
+    #[allow(dead_code)]
+    fn make_buf_param(id: u64) -> Value {
+        buf_handle(id)
+    }
+
+    /// Decode the msgpack-rpc response written to `out` and return
+    /// `[type, msgid, error, result]` as a `Vec<Value>`.
+    fn decode_response(out: &[u8]) -> Vec<Value> {
+        let mut cursor = std::io::Cursor::new(out);
+        match rmpv::decode::read_value(&mut cursor).expect("decode_response") {
+            Value::Array(arr) => arr,
+            other => panic!("expected array response, got {other:?}"),
+        }
+    }
+
+    fn call(app: &mut crate::app::App, method: &str, params: Vec<Value>) -> Vec<Value> {
+        let mut out: Vec<u8> = Vec::new();
+        let mut quit = false;
+        dispatch(app, &mut quit, method, &Value::Array(params), &mut out, 1)
+            .expect("dispatch error");
+        decode_response(&out)
+    }
+
+    /// Assert a response is a success (error slot is Nil) and return the result.
+    fn assert_ok(resp: Vec<Value>) -> Value {
+        assert_eq!(resp[2], Value::Nil, "expected no error, got {:?}", resp[2]);
+        resp[3].clone()
+    }
+
+    #[test]
+    fn test_nvim_create_buf_returns_new_handle() {
+        let mut app = build_app(None).unwrap();
+        let resp = call(
+            &mut app,
+            "nvim_create_buf",
+            vec![Value::Boolean(true), Value::Boolean(false)],
+        );
+        let result = assert_ok(resp);
+        // Must be an Ext with BUFFER_EXT tag and a non-zero id.
+        match &result {
+            Value::Ext(tag, bytes) => {
+                assert_eq!(*tag, BUFFER_EXT);
+                let mut cur = std::io::Cursor::new(bytes.as_slice());
+                let inner = rmpv::decode::read_value(&mut cur).unwrap();
+                let id = inner.as_u64().expect("id should be integer");
+                assert!(id > 0, "new buffer id should be > 0");
+            }
+            other => panic!("expected Ext buffer handle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_nvim_list_bufs_grows_after_create() {
+        let mut app = build_app(None).unwrap();
+
+        let before = {
+            let resp = call(&mut app, "nvim_list_bufs", vec![]);
+            let result = assert_ok(resp);
+            match result {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        // Create a new buffer.
+        call(
+            &mut app,
+            "nvim_create_buf",
+            vec![Value::Boolean(true), Value::Boolean(false)],
+        );
+
+        let after = {
+            let resp = call(&mut app, "nvim_list_bufs", vec![]);
+            let result = assert_ok(resp);
+            match result {
+                Value::Array(v) => v.len(),
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        assert_eq!(after, before + 1, "list_bufs should grow by 1 after create");
+    }
+
+    #[test]
+    fn test_nvim_set_current_buf_switches() {
+        let mut app = build_app(None).unwrap();
+
+        // Remember the initial current buffer id.
+        let initial_handle = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        // Create a new buffer.
+        let new_handle = {
+            let resp = call(
+                &mut app,
+                "nvim_create_buf",
+                vec![Value::Boolean(true), Value::Boolean(false)],
+            );
+            assert_ok(resp)
+        };
+
+        // Switch to the new buffer.
+        {
+            let resp = call(&mut app, "nvim_set_current_buf", vec![new_handle.clone()]);
+            assert_ok(resp);
+        }
+
+        // Current buf should now equal the new handle.
+        let current_handle = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        assert_eq!(
+            current_handle, new_handle,
+            "current buf should be the newly switched-to buffer"
+        );
+        assert_ne!(
+            current_handle, initial_handle,
+            "current buf should differ from initial"
+        );
+    }
+
+    #[test]
+    fn test_nvim_buf_set_name_get_name_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        // Get the current buffer handle.
+        let cur_handle = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        // Set name.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_name",
+                vec![
+                    cur_handle.clone(),
+                    Value::from("/tmp/test_hjkl_nvim_api_roundtrip.txt"),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Get name back — should contain the path we set.
+        let name = {
+            let resp = call(&mut app, "nvim_buf_get_name", vec![cur_handle]);
+            match assert_ok(resp) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+
+        // The name should contain the file part we set (canonical may differ on prefix).
+        assert!(
+            name.contains("test_hjkl_nvim_api_roundtrip.txt"),
+            "expected name to contain 'test_hjkl_nvim_api_roundtrip.txt', got {name:?}"
+        );
+    }
+
+    #[test]
+    fn test_nvim_buf_get_lines_non_current_buffer() {
+        let mut app = build_app(None).unwrap();
+
+        // Create a second buffer and get its handle.
+        let new_handle = {
+            let resp = call(
+                &mut app,
+                "nvim_create_buf",
+                vec![Value::Boolean(true), Value::Boolean(false)],
+            );
+            assert_ok(resp)
+        };
+
+        // Write lines into the new (non-current) buffer.
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    new_handle.clone(),
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("hello from other buf"),
+                        Value::from("second line"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Read them back — the current buffer should NOT be switched.
+        let current_after = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        // Current buf should still be the original (we never called set_current_buf).
+        let initial_resp = call(&mut app, "nvim_list_bufs", vec![]);
+        let bufs = match assert_ok(initial_resp) {
+            Value::Array(v) => v,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(
+            current_after, bufs[0],
+            "current buf should still be the first (original) buffer"
+        );
+
+        // Get lines from the non-current buffer.
+        let lines = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_lines",
+                vec![
+                    new_handle.clone(),
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        assert_eq!(lines.len(), 2, "should have 2 lines in non-current buffer");
+        assert_eq!(lines[0], Value::from("hello from other buf"));
+        assert_eq!(lines[1], Value::from("second line"));
+    }
 }

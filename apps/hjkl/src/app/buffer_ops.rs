@@ -360,6 +360,146 @@ impl App {
         parts.join(" | ")
     }
 
+    // ── nvim-api helpers ──────────────────────────────────────────────────────
+
+    /// Buffer ids of all non-explorer slots, as `u64` (nvim wire format).
+    pub(crate) fn nvim_buffer_ids(&self) -> Vec<u64> {
+        self.slots
+            .iter()
+            .filter(|s| !s.is_explorer)
+            .map(|s| s.buffer_id)
+            .collect()
+    }
+
+    /// Buffer id of the currently focused slot, as `u64`.
+    pub(crate) fn nvim_current_buffer_id(&self) -> u64 {
+        self.active().buffer_id
+    }
+
+    /// Index into `self.slots` whose `buffer_id` matches `id`, or `None`.
+    pub(crate) fn nvim_slot_index_for_buffer(&self, id: u64) -> Option<usize> {
+        self.slots.iter().position(|s| s.buffer_id == id)
+    }
+
+    /// Absolute-path filename for the slot with `buffer_id == id`.
+    /// Returns `""` when the slot has no filename (unnamed scratch buffer).
+    pub(crate) fn nvim_buffer_name(&self, id: u64) -> Option<String> {
+        let slot = self.slots.iter().find(|s| s.buffer_id == id)?;
+        Some(match &slot.filename {
+            None => String::new(),
+            Some(p) => {
+                // Try to canonicalize (resolves symlinks + relative paths);
+                // fall back to whatever we have if the file doesn't exist yet.
+                std::fs::canonicalize(p)
+                    .unwrap_or_else(|_| {
+                        if p.is_absolute() {
+                            p.clone()
+                        } else {
+                            std::env::current_dir()
+                                .map(|cwd| cwd.join(p))
+                                .unwrap_or_else(|_| p.clone())
+                        }
+                    })
+                    .display()
+                    .to_string()
+            }
+        })
+    }
+
+    /// Set the filename for the slot with `buffer_id == id`.
+    pub(crate) fn nvim_set_buffer_name(&mut self, id: u64, name: &str) {
+        if let Some(slot) = self.slots.iter_mut().find(|s| s.buffer_id == id) {
+            slot.filename = if name.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(name))
+            };
+        }
+    }
+
+    /// Shared reference to the slot-level editor for the given buffer id.
+    pub(crate) fn nvim_slot_editor(
+        &self,
+        id: u64,
+    ) -> Option<&hjkl_engine::Editor<hjkl_buffer::Buffer, crate::host::TuiHost>> {
+        self.slots
+            .iter()
+            .find(|s| s.buffer_id == id)
+            .map(|s| &s.editor)
+    }
+
+    /// Mutable reference to the slot-level editor for the given buffer id.
+    pub(crate) fn nvim_slot_editor_mut(
+        &mut self,
+        id: u64,
+    ) -> Option<&mut hjkl_engine::Editor<hjkl_buffer::Buffer, crate::host::TuiHost>> {
+        self.slots
+            .iter_mut()
+            .find(|s| s.buffer_id == id)
+            .map(|s| &mut s.editor)
+    }
+
+    /// Allocate a fresh empty unnamed buffer slot (nvim_create_buf).
+    /// The slot is appended but NOT switched to; returns the new buffer id.
+    pub(crate) fn nvim_create_buffer(&mut self) -> u64 {
+        use super::{BufferFeatures, BufferSlot, DiskState};
+        use crate::app::STATUS_LINE_HEIGHT;
+        use crate::host::TuiHost;
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::{Editor, Options};
+        use std::time::Instant;
+
+        let buffer_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+        let host = TuiHost::new();
+        let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        editor.set_current_buffer_id(buffer_id);
+        editor.set_registers_arc(self.registers.clone());
+        // Mirror the nvim_api build_app viewport (80×24) for headless paths;
+        // in the real TUI crossterm::terminal::size() wins.
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
+        let mut slot = BufferSlot {
+            buffer_id,
+            is_explorer: false,
+            features: BufferFeatures::default(),
+            editor,
+            filename: None,
+            dirty: false,
+            is_new_file: false,
+            is_untracked: false,
+            diag_signs: Vec::new(),
+            diag_signs_lsp: Vec::new(),
+            lsp_diags: Vec::new(),
+            last_lsp_dirty_gen: None,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            blame: Vec::new(),
+            last_blame_dirty_gen: None,
+            last_blame_refresh_at: Instant::now(),
+            saved_hash: 0,
+            saved_len: 0,
+            signature_cache: None,
+            disk_mtime: None,
+            disk_len: None,
+            disk_state: DiskState::Synced,
+            swap_path: None,
+            last_swap_dirty_gen: None,
+            last_fold_dirty_gen: None,
+            git_repo_present: None,
+            commit_ctx: None,
+        };
+        slot.snapshot_saved();
+        self.slots.push(slot);
+        buffer_id
+    }
+
     /// Allocate a fresh `BufferId` and load `path` into a new slot.
     /// Returns the index of the newly pushed slot (does NOT switch).
     pub(crate) fn open_new_slot(&mut self, path: PathBuf) -> Result<usize, String> {
