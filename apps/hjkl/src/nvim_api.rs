@@ -1733,6 +1733,180 @@ fn dispatch(
             ok(stdout, msgid, Value::Nil)
         }
 
+        // ── global variable store (g:) ────────────────────────────────────────
+        "nvim_set_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let value = match p.get(1) {
+                Some(v) => v.clone(),
+                None => return err(stdout, msgid, "params[1] (value) missing"),
+            };
+            app.nvim_gvars.insert(name, value);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_get_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_gvars.get(&name) {
+                Some(v) => ok(stdout, msgid, v.clone()),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
+        "nvim_del_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_gvars.remove(&name) {
+                Some(_) => ok(stdout, msgid, Value::Nil),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
+        // ── buffer-local variable store (b:) ──────────────────────────────────
+        "nvim_buf_set_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let value = match p.get(2) {
+                Some(v) => v.clone(),
+                None => return err(stdout, msgid, "params[2] (value) missing"),
+            };
+            app.nvim_bvars.insert((buf_id, name), value);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_buf_get_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_bvars.get(&(buf_id, name.clone())) {
+                Some(v) => ok(stdout, msgid, v.clone()),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
+        "nvim_buf_del_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let buf_id = match param_buf(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_buffer_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_bvars.remove(&(buf_id, name.clone())) {
+                Some(_) => ok(stdout, msgid, Value::Nil),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
+        // ── window-local variable store (w:) ──────────────────────────────────
+        "nvim_win_set_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let value = match p.get(2) {
+                Some(v) => v.clone(),
+                None => return err(stdout, msgid, "params[2] (value) missing"),
+            };
+            app.nvim_wvars.insert((win_id, name), value);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_win_get_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_wvars.get(&(win_id, name.clone())) {
+                Some(v) => ok(stdout, msgid, v.clone()),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
+        "nvim_win_del_var" => {
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let win_id = match param_win(p, 0) {
+                Ok(Some(id)) => id,
+                Ok(None) => app.nvim_current_window_id(),
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let name = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            match app.nvim_wvars.remove(&(win_id, name.clone())) {
+                Some(_) => ok(stdout, msgid, Value::Nil),
+                None => err(stdout, msgid, &format!("Key not found: {name}")),
+            }
+        }
+
         // ── synchronisation barrier ───────────────────────────────────────────
         // The oracle calls `nvim.command("echo 1")` as a barrier. Handle it.
         _ => err(stdout, msgid, &format!("method not implemented: {method}")),
@@ -3611,5 +3785,254 @@ mod tests {
         // Non-boolean, non-integer, not quoted → pass through.
         assert_eq!(coerce_option_display("auto"), Value::from("auto"));
         assert_eq!(coerce_option_display("manual"), Value::from("manual"));
+    }
+
+    // ── nvim_set_var / nvim_get_var / nvim_del_var (global g:) ───────────────
+
+    #[test]
+    fn test_nvim_gvar_string_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        // set "mykey" = "hello"
+        {
+            let resp = call(
+                &mut app,
+                "nvim_set_var",
+                vec![Value::from("mykey"), Value::from("hello")],
+            );
+            assert_ok(resp);
+        }
+
+        // get "mykey" should return "hello"
+        let result = {
+            let resp = call(&mut app, "nvim_get_var", vec![Value::from("mykey")]);
+            assert_ok(resp)
+        };
+        assert_eq!(result, Value::from("hello"), "gvar string round-trip");
+    }
+
+    #[test]
+    fn test_nvim_gvar_integer_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        {
+            let resp = call(
+                &mut app,
+                "nvim_set_var",
+                vec![
+                    Value::from("counter"),
+                    Value::Integer(rmpv::Integer::from(42i64)),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        let result = {
+            let resp = call(&mut app, "nvim_get_var", vec![Value::from("counter")]);
+            assert_ok(resp)
+        };
+        assert_eq!(
+            result,
+            Value::Integer(rmpv::Integer::from(42i64)),
+            "gvar integer round-trip"
+        );
+    }
+
+    #[test]
+    fn test_nvim_gvar_get_missing_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        let resp = call(&mut app, "nvim_get_var", vec![Value::from("no_such_key")]);
+        assert_ne!(resp[2], Value::Nil, "get missing gvar should return error");
+    }
+
+    #[test]
+    fn test_nvim_gvar_del_then_get_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        // set, del, get → error
+        assert_ok(call(
+            &mut app,
+            "nvim_set_var",
+            vec![Value::from("tmp"), Value::from("x")],
+        ));
+        assert_ok(call(&mut app, "nvim_del_var", vec![Value::from("tmp")]));
+        let resp = call(&mut app, "nvim_get_var", vec![Value::from("tmp")]);
+        assert_ne!(resp[2], Value::Nil, "get after del should return error");
+    }
+
+    // ── nvim_buf_set_var / nvim_buf_get_var / nvim_buf_del_var (b:) ─────────
+
+    #[test]
+    fn test_nvim_bvar_roundtrip_on_current_buf() {
+        let mut app = build_app(None).unwrap();
+
+        let cur_buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        // set var on current buffer
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_var",
+                vec![
+                    cur_buf.clone(),
+                    Value::from("bufkey"),
+                    Value::from("bufval"),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // get var back
+        let result = {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_var",
+                vec![cur_buf, Value::from("bufkey")],
+            );
+            assert_ok(resp)
+        };
+        assert_eq!(
+            result,
+            Value::from("bufval"),
+            "bvar round-trip on current buf"
+        );
+    }
+
+    #[test]
+    fn test_nvim_bvar_isolation_across_buffers() {
+        let mut app = build_app(None).unwrap();
+
+        // Get current (buf A) handle.
+        let buf_a = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        // Create a second buffer (buf B).
+        let buf_b = {
+            let resp = call(
+                &mut app,
+                "nvim_create_buf",
+                vec![Value::Boolean(true), Value::Boolean(false)],
+            );
+            assert_ok(resp)
+        };
+
+        // Set a var on buf A.
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_var",
+            vec![
+                buf_a.clone(),
+                Value::from("shared_name"),
+                Value::from("value_a"),
+            ],
+        ));
+
+        // Set a DIFFERENT value for the same name on buf B.
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_var",
+            vec![
+                buf_b.clone(),
+                Value::from("shared_name"),
+                Value::from("value_b"),
+            ],
+        ));
+
+        // buf A's var should still be "value_a".
+        let val_a = assert_ok(call(
+            &mut app,
+            "nvim_buf_get_var",
+            vec![buf_a, Value::from("shared_name")],
+        ));
+        assert_eq!(val_a, Value::from("value_a"), "buf A var should be value_a");
+
+        // buf B's var should be "value_b".
+        let val_b = assert_ok(call(
+            &mut app,
+            "nvim_buf_get_var",
+            vec![buf_b, Value::from("shared_name")],
+        ));
+        assert_eq!(val_b, Value::from("value_b"), "buf B var should be value_b");
+    }
+
+    #[test]
+    fn test_nvim_bvar_get_missing_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        let cur_buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_var",
+            vec![cur_buf, Value::from("no_such_bvar")],
+        );
+        assert_ne!(resp[2], Value::Nil, "get missing bvar should return error");
+    }
+
+    // ── nvim_win_set_var / nvim_win_get_var / nvim_win_del_var (w:) ─────────
+
+    #[test]
+    fn test_nvim_wvar_roundtrip_on_current_win() {
+        let mut app = build_app(None).unwrap();
+
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        // set var on current window
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_var",
+                vec![
+                    cur_win.clone(),
+                    Value::from("winkey"),
+                    Value::from("winval"),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // get var back
+        let result = {
+            let resp = call(
+                &mut app,
+                "nvim_win_get_var",
+                vec![cur_win, Value::from("winkey")],
+            );
+            assert_ok(resp)
+        };
+        assert_eq!(
+            result,
+            Value::from("winval"),
+            "wvar round-trip on current win"
+        );
+    }
+
+    #[test]
+    fn test_nvim_wvar_get_missing_returns_error() {
+        let mut app = build_app(None).unwrap();
+
+        let cur_win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+
+        let resp = call(
+            &mut app,
+            "nvim_win_get_var",
+            vec![cur_win, Value::from("no_such_wvar")],
+        );
+        assert_ne!(resp[2], Value::Nil, "get missing wvar should return error");
     }
 }

@@ -518,6 +518,15 @@ pub struct App {
     pub(crate) loclist_older: Vec<hjkl_quickfix::QfList>,
     /// Newer location lists for `:lnewer`.
     pub(crate) loclist_newer: Vec<hjkl_quickfix::QfList>,
+    /// Global variable store (`g:` namespace). Keyed by variable name.
+    /// Populated by `nvim_set_var` / `nvim_get_var` / `nvim_del_var`.
+    pub(crate) nvim_gvars: std::collections::HashMap<String, rmpv::Value>,
+    /// Buffer-local variable store (`b:` namespace). Keyed by `(buffer_id, name)`.
+    /// Populated by `nvim_buf_set_var` / `nvim_buf_get_var` / `nvim_buf_del_var`.
+    pub(crate) nvim_bvars: std::collections::HashMap<(u64, String), rmpv::Value>,
+    /// Window-local variable store (`w:` namespace). Keyed by `(window_id, name)`.
+    /// Populated by `nvim_win_set_var` / `nvim_win_get_var` / `nvim_win_del_var`.
+    pub(crate) nvim_wvars: std::collections::HashMap<(u64, String), rmpv::Value>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -1938,6 +1947,9 @@ impl App {
             quickfix_newer: Vec::new(),
             loclist_older: Vec::new(),
             loclist_newer: Vec::new(),
+            nvim_gvars: std::collections::HashMap::new(),
+            nvim_bvars: std::collections::HashMap::new(),
+            nvim_wvars: std::collections::HashMap::new(),
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();
