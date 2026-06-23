@@ -2002,6 +2002,8 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     // Dirty = any leaf window in the layout has a dirty slot.
     let mut tab_bar: TabBar<usize> = TabBar::new();
     if show_tabs {
+        // `:set tabline_icons` (default on) — Nerd-Font filetype icon per tab.
+        let tabline_icons = app.active_editor().settings().tabline_icons;
         for (i, layout_tab) in app.tabs.iter().enumerate() {
             let slot_idx = app.windows[layout_tab.focused_window]
                 .as_ref()
@@ -2014,7 +2016,24 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("[No Name]");
-            let title = format!("{}: {} {}", i + 1, base_name, crate::app::TAB_CLOSE_GLYPH);
+            // Prepend a filetype icon (generic glyph when the buffer is unnamed
+            // or the extension is unknown). Gated on the `tabline_icons` toggle.
+            let icon_part = if tabline_icons {
+                let ic = match slot.filename.as_deref() {
+                    Some(p) => hjkl_icons::file_icon_for_path(p, app.icon_mode),
+                    None => hjkl_icons::file_icon(None, app.icon_mode),
+                };
+                format!("{ic} ")
+            } else {
+                String::new()
+            };
+            let title = format!(
+                "{}: {}{} {}",
+                i + 1,
+                icon_part,
+                base_name,
+                crate::app::TAB_CLOSE_GLYPH
+            );
             tab_bar.open(i, title);
             let tab_dirty = layout_tab.layout.leaves().iter().any(|&wid| {
                 app.windows[wid]

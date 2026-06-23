@@ -60,6 +60,7 @@ pub fn all_setting_names() -> Vec<String> {
         "background".into(),
         "bg".into(),
         "list".into(),
+        "tabline_icons".into(),
         "blame_inline".into(),
         "diagnostics_inline".into(),
         "diaginline".into(),
@@ -138,7 +139,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::FoldMethod::Marker => "marker",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}  scroll_duration_ms={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}  scroll_duration_ms={}  tabline_icons={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -187,6 +188,7 @@ pub(crate) fn apply_set<H: Host>(
             if s.matchparen { "on" } else { "off" },
             if s.autoreload { "on" } else { "off" },
             s.scroll_duration_ms,
+            if s.tabline_icons { "on" } else { "off" },
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -271,6 +273,7 @@ fn query_option_value<H: Host>(
         "autopair" | "ap" => on_off(s.autopair),
         "autoclose-tag" | "act" => on_off(s.autoclose_tag),
         "list" => on_off(s.list),
+        "tabline_icons" => on_off(s.tabline_icons),
         "blame_inline" => on_off(s.blame_inline),
         "diagnostics_inline" | "diaginline" => match s.diagnostics_inline {
             hjkl_engine::types::DiagInlineMode::Off => "off".into(),
@@ -570,6 +573,7 @@ fn apply_bool_option<H: Host>(
         "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
         "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
         "list" => editor.settings_mut().list = value,
+        "tabline_icons" => editor.settings_mut().tabline_icons = value,
         "blame_inline" => editor.settings_mut().blame_inline = value,
         "indent_guides" | "ig" => editor.settings_mut().indent_guides = value,
         "format_on_save" | "fos" => editor.settings_mut().format_on_save = value,
@@ -1166,6 +1170,18 @@ mod tests {
             }
             other => panic!("expected Info(_), got {other:?}"),
         }
+    }
+
+    // ---- tabline_icons (#200) -----------------------------------------------
+
+    #[test]
+    fn tabline_icons_default_on_and_toggles() {
+        let mut editor = make_editor();
+        assert!(editor.settings().tabline_icons, "tabline_icons defaults on");
+        assert_eq!(apply_set(&mut editor, "notabline_icons"), ExEffect::Ok);
+        assert!(!editor.settings().tabline_icons, ":set notabline_icons off");
+        assert_eq!(apply_set(&mut editor, "tabline_icons"), ExEffect::Ok);
+        assert!(editor.settings().tabline_icons, ":set tabline_icons on");
     }
 
     // ---- list / listchars ---------------------------------------------------

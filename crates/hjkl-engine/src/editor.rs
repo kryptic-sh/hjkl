@@ -829,6 +829,9 @@ pub struct Settings {
     /// Render invisible characters (tabs, trailing spaces, EOL markers).
     /// Matches vim's `:set list` / `:set nolist`. Default `false`.
     pub list: bool,
+    /// Show Nerd-Font filetype icons in the tabline. `:set tabline_icons` /
+    /// `:set notabline_icons`. Default `true`.
+    pub tabline_icons: bool,
     /// Show inline git blame as end-of-line virtual text on the cursor line
     /// (gitsigns-style). Default `true`. (#202)
     pub blame_inline: bool,
@@ -907,6 +910,7 @@ impl Default for Settings {
             autoreload: true,
             motion_sneak: true,
             list: false,
+            tabline_icons: true,
             blame_inline: true,
             diagnostics_inline: crate::types::DiagInlineMode::All,
             listchars: crate::types::ListChars::default(),
@@ -988,6 +992,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         autoreload: o.autoreload,
         motion_sneak: o.motion_sneak,
         list: o.list,
+        tabline_icons: true,
         blame_inline: true,
         diagnostics_inline: crate::types::DiagInlineMode::All,
         listchars: o.listchars.clone(),
