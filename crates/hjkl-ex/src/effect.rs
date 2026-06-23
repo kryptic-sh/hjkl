@@ -161,4 +161,18 @@ pub enum QfCommand {
     ///
     /// Mirror of [`QfCommand::Older`]: pops from the newer stack.
     Newer(usize),
+    /// `:cdo {cmd}` / `:ldo {cmd}` — run `cmd` once per valid entry
+    /// (jumping to each entry first).
+    ///
+    /// `:cfdo {cmd}` / `:lfdo {cmd}` — run `cmd` once per DISTINCT FILE
+    /// (the first entry of each file in the list, in order).
+    ///
+    /// `per_file = false` → visit every entry (`:cdo` / `:ldo`).
+    /// `per_file = true`  → visit only the first entry per file (`:cfdo` / `:lfdo`).
+    Do {
+        /// The ex command to run at each visited entry.
+        cmd: String,
+        /// `false` = per-entry (`:cdo`), `true` = per-file (`:cfdo`).
+        per_file: bool,
+    },
 }

@@ -145,6 +145,7 @@ impl crate::app::App {
             }
             QfCommand::Older(n) => self.qf_do_older(w, n),
             QfCommand::Newer(n) => self.qf_do_newer(w, n),
+            QfCommand::Do { cmd, per_file } => self.qf_run_do(w, &cmd, per_file),
         }
     }
 
@@ -203,6 +204,55 @@ impl crate::app::App {
         let current_idx = older_len + 1;
         self.bus
             .info(format!("{} list {} of {}", w.label(), current_idx, total));
+    }
+
+    /// `:cdo {cmd}` / `:cfdo {cmd}` (and `l*` variants) — run an ex command at
+    /// each quickfix/location-list entry.
+    ///
+    /// - `per_file = false` (`:cdo`/`:ldo`): visit every entry in order.
+    /// - `per_file = true` (`:cfdo`/`:lfdo`): visit only the FIRST entry for
+    ///   each distinct file path, preserving original order; empty-path entries
+    ///   all collapse to a single visit (matches "current buffer" semantics).
+    ///
+    /// The entry snapshot is taken up front so mutations caused by `cmd` (e.g.
+    /// a substitute that changes buffer content) don't affect iteration order.
+    /// The popup is NOT opened — vim's `:cdo` leaves the popup as-is.
+    /// On completion the cursor position is wherever the last `cmd` left it,
+    /// matching vim behaviour.
+    fn qf_run_do(&mut self, w: QfWhich, cmd: &str, per_file: bool) {
+        // Snapshot entries so the command loop iterates a stable list even if
+        // the list or buffer is mutated by `cmd`.
+        let entries: Vec<QfEntry> = self.qf_list(w).entries().to_vec();
+        if entries.is_empty() {
+            self.bus.info("no entries");
+            return;
+        }
+
+        // Compute which indices to visit.
+        let indices: Vec<usize> = if per_file {
+            // One visit per distinct file path; preserve original order.
+            let mut seen = std::collections::HashSet::new();
+            entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    if seen.insert(e.path.clone()) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            (0..entries.len()).collect()
+        };
+
+        let cmd_owned = cmd.to_string();
+        for i in indices {
+            self.qf_list_mut(w).set_cursor(i);
+            self.qf_jump_to_current(w);
+            self.dispatch_ex(&cmd_owned);
+        }
     }
 
     /// `]q`/`[q` (and `]l`/`[l`) and the `:cnext`/`:lnext` families route here

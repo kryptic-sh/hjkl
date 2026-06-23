@@ -657,6 +657,35 @@ mod tests {
             go(&mut editor, "cne"),
             Some(ExEffect::Quickfix(QfCommand::Next))
         );
+        // :cdo / :cfdo — per-entry and per-file iteration (#261 Phase 5b "A2")
+        assert_eq!(
+            go(&mut editor, "cdo s/^/X/"),
+            Some(ExEffect::Quickfix(QfCommand::Do {
+                cmd: "s/^/X/".into(),
+                per_file: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "cfdo s/^/X/"),
+            Some(ExEffect::Quickfix(QfCommand::Do {
+                cmd: "s/^/X/".into(),
+                per_file: true,
+            }))
+        );
+        // "cfd" is the 3-char min_prefix for cfdo; "cf" must still resolve to :cfirst.
+        assert_eq!(
+            go(&mut editor, "cf"),
+            Some(ExEffect::Quickfix(QfCommand::First))
+        );
+        assert_eq!(
+            go(&mut editor, "cfirst"),
+            Some(ExEffect::Quickfix(QfCommand::First))
+        );
+        // "cfile" has min_prefix=4 "cfil"; "cfi" is still :cfirst (prefix match).
+        assert_eq!(
+            go(&mut editor, "cfi"),
+            Some(ExEffect::Quickfix(QfCommand::First))
+        );
     }
 
     #[test]
@@ -796,6 +825,30 @@ mod tests {
         assert_eq!(
             go(&mut editor, "lne"),
             Some(ExEffect::Location(QfCommand::Next))
+        );
+        // :ldo / :lfdo — per-entry and per-file iteration (#261 Phase 5b "A2")
+        assert_eq!(
+            go(&mut editor, "ldo s/^/X/"),
+            Some(ExEffect::Location(QfCommand::Do {
+                cmd: "s/^/X/".into(),
+                per_file: false,
+            }))
+        );
+        assert_eq!(
+            go(&mut editor, "lfdo s/^/X/"),
+            Some(ExEffect::Location(QfCommand::Do {
+                cmd: "s/^/X/".into(),
+                per_file: true,
+            }))
+        );
+        // "lfi" must still resolve to :lfirst (min_prefix=3 "lfi"), not :lfdo (min=3 "lfd").
+        assert_eq!(
+            go(&mut editor, "lfi"),
+            Some(ExEffect::Location(QfCommand::First))
+        );
+        assert_eq!(
+            go(&mut editor, "lfirst"),
+            Some(ExEffect::Location(QfCommand::First))
         );
     }
 

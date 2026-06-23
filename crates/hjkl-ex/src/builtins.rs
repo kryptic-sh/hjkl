@@ -1810,6 +1810,40 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: lnewer_handler::<H>,
     });
 
+    // :cdo / :cfdo / :ldo / :lfdo — run a command per entry / per file (#261 Phase 5b "A2")
+    // min_prefix for cdo:  "cdo" (3) — "cd" is `:cd` (exact), "cdo" is unambiguous.
+    // min_prefix for cfdo: "cfd" (3) — "cf" is `:cfirst` (min=2); "cfd" is exclusive to cfdo.
+    // min_prefix for ldo:  "ldo" (3) — no conflicts.
+    // min_prefix for lfdo: "lfd" (3) — "lf" < lfirst min=3; "lfd" is exclusive to lfdo.
+    reg.add(ExCommand {
+        name: "cdo",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "cdo"
+        run: cdo_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cfdo",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "cfd" — avoids :cfirst (min=2 "cf")
+        run: cfdo_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "ldo",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "ldo"
+        run: ldo_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lfdo",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "lfd" — avoids :lfirst (min=3 "lfi")
+        run: lfdo_handler::<H>,
+    });
+
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
     reg.add(ExCommand {
@@ -2346,6 +2380,56 @@ fn lnewer_handler<H: Host>(
 ) -> Option<ExEffect> {
     let n = args.trim().parse::<usize>().unwrap_or(1).max(1);
     Some(ExEffect::Location(QfCommand::Newer(n)))
+}
+
+// ---- :cdo / :cfdo / :ldo / :lfdo (#261 Phase 5b "A2") ---------------------
+
+/// `:cdo {cmd}` — run `cmd` once per valid quickfix entry.
+fn cdo_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Do {
+        cmd: args.to_string(),
+        per_file: false,
+    }))
+}
+
+/// `:cfdo {cmd}` — run `cmd` once per distinct file in the quickfix list.
+fn cfdo_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Do {
+        cmd: args.to_string(),
+        per_file: true,
+    }))
+}
+
+/// `:ldo {cmd}` — run `cmd` once per valid location-list entry.
+fn ldo_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Do {
+        cmd: args.to_string(),
+        per_file: false,
+    }))
+}
+
+/// `:lfdo {cmd}` — run `cmd` once per distinct file in the location list.
+fn lfdo_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Do {
+        cmd: args.to_string(),
+        per_file: true,
+    }))
 }
 
 // ---- :syntax ---------------------------------------------------------------

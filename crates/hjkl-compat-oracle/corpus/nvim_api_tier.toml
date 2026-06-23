@@ -595,3 +595,36 @@ initial_cursor = [0, 0]
 keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"2:1:a\"<CR>:cexpr \"4:1:b\"<CR>:colder<CR>:cnewer<CR>:cc<CR>"
 expected_buffer = "line1\nline2\nline3\nline4\nline5\nline6\n"
 expected_cursor = [3, 0]
+
+# ── :cdo substitute (#261 Phase 5b "A2") ─────────────────────────────────────
+#
+# nvim probe (run 2026-06-24):
+#   5-line buffer {'word1','word2','word3','word4','word5'};
+#   :set errorformat=%l:%c:%m<CR>
+#   :cexpr "2:1:a\n4:1:b"  → 2 empty-path entries (bufnr=0) at lnum=2 and lnum=4
+#   :cdo s/^/X/            → runs substitute on each entry's line (current buffer)
+#
+# Probe command used:
+#   See /tmp/nvim_cdo_probe4.lua (2026-06-24):
+#     vim.api.nvim_buf_set_lines(buf,0,-1,false,{'word1','word2','word3','word4','word5'})
+#     vim.o.errorformat='%l:%c:%m'
+#     vim.cmd([[cexpr "2:1:a\n4:1:b"]])
+#     vim.cmd('cdo s/^/X/')
+#   Output:
+#     After cdo:
+#     line1=word1
+#     line2=Xword2
+#     line3=word3
+#     line4=Xword4
+#     line5=word5
+#     cursor=row=3 col=0
+#
+# Rows 2 and 4 (1-based) = rows 1 and 3 (0-based) get X prepended.
+# Cursor lands at row=3 col=0 (last entry visited was line 4 / row 3).
+[[cases]]
+name = "cdo_substitute_each_entry"
+initial_buffer = "word1\nword2\nword3\nword4\nword5\n"
+initial_cursor = [0, 0]
+keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"2:1:a\\n4:1:b\"<CR>:cdo s/^/X/<CR>"
+expected_buffer = "word1\nXword2\nword3\nXword4\nword5\n"
+expected_cursor = [3, 0]

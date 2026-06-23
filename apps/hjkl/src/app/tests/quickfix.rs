@@ -390,6 +390,125 @@ fn cfile_missing_path_reports_error() {
     );
 }
 
+// ── :cdo / :cfdo / :ldo / :lfdo in-process tests (#261 Phase 5b "A2") ───────
+
+/// Read the rope line at 0-based `row` from the active editor.
+fn buf_row(app: &App, row: usize) -> String {
+    hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), row)
+}
+
+#[test]
+fn cdo_runs_command_per_entry() {
+    // App with a 5-line buffer; errorformat=%l:%c:%m; :cexpr produces two
+    // empty-path entries at rows 1 (line 2) and 3 (line 4); :cdo s/^/X/
+    // prepends X to each of those rows.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut()
+        .set_content("alpha\nbeta\ngamma\ndelta\nepsilon\n");
+    app.active_editor_mut().settings_mut().errorformat = "%l:%c:%m".to_string();
+
+    // Populate the quickfix list with entries at lines 2 and 4 (0-based rows 1,3).
+    app.handle_quickfix_command(QfCommand::Expr {
+        text: r#""2:1:a\n4:1:b""#.to_string(),
+        append: false,
+        jump: false,
+    });
+    assert_eq!(app.quickfix.len(), 2, "should have 2 entries");
+
+    // Run :cdo s/^/X/
+    app.handle_quickfix_command(QfCommand::Do {
+        cmd: "s/^/X/".to_string(),
+        per_file: false,
+    });
+
+    // Rows 1 and 3 should now start with X; others unchanged.
+    assert_eq!(buf_row(&app, 0), "alpha", "row 0 must be untouched");
+    assert!(
+        buf_row(&app, 1).starts_with('X'),
+        "row 1 must start with X, got: {:?}",
+        buf_row(&app, 1)
+    );
+    assert_eq!(buf_row(&app, 2), "gamma", "row 2 must be untouched");
+    assert!(
+        buf_row(&app, 3).starts_with('X'),
+        "row 3 must start with X, got: {:?}",
+        buf_row(&app, 3)
+    );
+    assert_eq!(buf_row(&app, 4), "epsilon", "row 4 must be untouched");
+}
+
+#[test]
+fn cfdo_runs_once_per_file() {
+    // Build two real temp files, populate the quickfix list with entries
+    // referencing them (2 entries in fileA, 1 in fileB), run :cfdo s/^/Z/,
+    // and assert that the substitution ran exactly once per file.
+    let dir = std::env::temp_dir().join(format!("hjkl_cfdo_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let file_a = dir.join("a.txt");
+    let file_b = dir.join("b.txt");
+    // fileA: 4 lines; fileB: 3 lines
+    std::fs::write(&file_a, "alpha\nbeta\ngamma\ndelta\n").unwrap();
+    std::fs::write(&file_b, "uno\ndos\ntres\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Populate quickfix: two entries in fileA (rows 0,1), one in fileB (row 0).
+    app.quickfix.set(vec![
+        QfEntry {
+            path: file_a.clone(),
+            row: 0,
+            col: 0,
+            kind: QfKind::Grep,
+            message: "a0".into(),
+        },
+        QfEntry {
+            path: file_a.clone(),
+            row: 1,
+            col: 0,
+            kind: QfKind::Grep,
+            message: "a1".into(),
+        },
+        QfEntry {
+            path: file_b.clone(),
+            row: 0,
+            col: 0,
+            kind: QfKind::Grep,
+            message: "b0".into(),
+        },
+    ]);
+
+    // :cfdo s/^/Z/ — runs once per distinct file.
+    app.handle_quickfix_command(QfCommand::Do {
+        cmd: "s/^/Z/".to_string(),
+        per_file: true,
+    });
+
+    // After :cfdo the editor last opened fileB (last visited file).
+    // fileA row 0 was the cursor position for fileA's visit → got Z prepended.
+    // fileA row 1 (second entry, same file) was NOT visited.
+    // Verify by opening files explicitly.
+    app.dispatch_ex(&format!("e {}", file_a.display()));
+    let row0_a = buf_row(&app, 0);
+    let row1_a = buf_row(&app, 1);
+    assert!(
+        row0_a.starts_with('Z'),
+        "fileA row 0 must start with Z (cfdo visited first entry), got: {row0_a:?}"
+    );
+    assert!(
+        !row1_a.starts_with('Z'),
+        "fileA row 1 must NOT start with Z (second entry skipped by cfdo), got: {row1_a:?}"
+    );
+
+    app.dispatch_ex(&format!("e {}", file_b.display()));
+    let row0_b = buf_row(&app, 0);
+    assert!(
+        row0_b.starts_with('Z'),
+        "fileB row 0 must start with Z (cfdo visited its single entry), got: {row0_b:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── :colder / :cnewer list-stack tests (#261 Phase 5b) ──────────────────────
 
 /// Helper: populate quickfix via Expr (non-append) with a given `%l:%c:%m` line.
