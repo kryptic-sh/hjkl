@@ -2268,6 +2268,7 @@ dependencies = [
  "hjkl-picker-tui",
  "hjkl-prompt",
  "hjkl-prompt-tui",
+ "hjkl-quickfix",
  "hjkl-splash",
  "hjkl-splash-tui",
  "hjkl-statusline",
@@ -2731,6 +2732,10 @@ dependencies = [
  "hjkl-prompt",
  "ratatui",
 ]
+
+[[package]]
+name = "hjkl-quickfix"
+version = "0.33.0"
 
 [[package]]
 name = "hjkl-splash"

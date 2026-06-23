@@ -1932,6 +1932,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         which_key_popup(frame, app, buf_area);
     }
 
+    // Quickfix popup (`:copen`, #184) — bottom pane listing locations.
+    if app.quickfix_open {
+        quickfix_popup_overlay(frame, app, buf_area);
+    }
+
     // Info popup (`:reg`, `:marks`, `:jumps`, `:changes`) renders on top of
     // the picker overlay so it always shows.
     if app.info_popup.is_some() {
@@ -2710,6 +2715,55 @@ fn render_picker_input_and_list(
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
 /// output and the K-key LSP hover info path.
 ///
+/// `:copen` quickfix popup (#184) — a read-only bottom pane listing
+/// `path:row:col: message`, with the current entry highlighted. Not the fuzzy
+/// picker; navigation is `j`/`k`/`<CR>` (see `event_loop`). The `ListState`
+/// auto-scrolls to keep the selected entry visible.
+fn quickfix_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
+    let ui = &app.theme.ui;
+    let entries = app.quickfix.entries();
+    let body_rows = entries.len().clamp(1, 10) as u16;
+    let h = body_rows + 2; // +2 for the border.
+    if buf_area.height <= h {
+        return;
+    }
+    let area = Rect {
+        x: buf_area.x,
+        y: buf_area.y + buf_area.height - h,
+        width: buf_area.width,
+        height: h,
+    };
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" quickfix ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ui.border));
+    if entries.is_empty() {
+        frame.render_widget(Paragraph::new("quickfix list is empty").block(block), area);
+        return;
+    }
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|e| {
+            ListItem::new(format!(
+                "{}:{}:{}: {}",
+                e.path.display(),
+                e.row + 1,
+                e.col + 1,
+                e.message
+            ))
+        })
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(ui.picker_selection_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(app.quickfix.cursor()));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
 /// Delegates to `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
 fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
     let popup = match app.info_popup.as_ref() {

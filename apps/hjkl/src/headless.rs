@@ -102,6 +102,9 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             match effect {
                 ExEffect::None => {}
 
+                // Quickfix has no popup in headless mode — no-op.
+                ExEffect::Quickfix(_) => {}
+
                 ExEffect::Ok => {}
 
                 ExEffect::Info(_) | ExEffect::InfoTitled { .. } => {

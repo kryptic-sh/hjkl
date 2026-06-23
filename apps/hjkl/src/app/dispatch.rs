@@ -56,6 +56,8 @@ impl App {
             // ── Diff-mode change navigation (#208 Phase 2) ─────────────────
             AppAction::DiffNextChange => self.diff_next_change(),
             AppAction::DiffPrevChange => self.diff_prev_change(),
+            AppAction::QuickfixNext => self.handle_quickfix_command(hjkl_ex::QfCommand::Next),
+            AppAction::QuickfixPrev => self.handle_quickfix_command(hjkl_ex::QfCommand::Prev),
 
             // ── Window / layout management ─────────────────────────────────
             AppAction::FocusLeft

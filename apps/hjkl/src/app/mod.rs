@@ -43,6 +43,7 @@ pub mod mouse;
 mod pending_actions;
 mod picker_glue;
 mod prompt;
+pub(crate) mod quickfix;
 mod syntax_glue;
 #[cfg(test)]
 mod tests;
@@ -495,6 +496,11 @@ pub struct App {
     /// While `Some`, all keypresses are routed to the hop handler instead of
     /// the editor engine.
     pub(crate) hop: Option<hop::HopState>,
+    /// Quickfix list (#184): file+line locations from `:grep` (and later `:make`
+    /// / LSP). Navigated via `:cnext`/`:cprev`/`]q`/`[q`; shown by `:copen`.
+    pub(crate) quickfix: hjkl_quickfix::QfList,
+    /// `:copen` popup visibility.
+    pub(crate) quickfix_open: bool,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -897,6 +903,7 @@ impl App {
             || self.search_field.is_some()
             || self.info_popup.is_some()
             || self.hop.is_some()
+            || self.quickfix_open
     }
 
     /// Full-screen rect for clamping popups / context menus to the
@@ -1905,6 +1912,8 @@ impl App {
             fs_watch: None,
             scroll_anim: None,
             hop: None,
+            quickfix: hjkl_quickfix::QfList::new(),
+            quickfix_open: false,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

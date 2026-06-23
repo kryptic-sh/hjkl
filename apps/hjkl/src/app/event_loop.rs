@@ -285,6 +285,23 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── Quickfix popup (#184) ─────────────────────────────────
+        // While `:copen` is up, the popup owns navigation keys. `<CR>` jumps to
+        // the highlighted entry (popup stays open, vim-style); Esc/q close.
+        if self.quickfix_open {
+            match key.code {
+                KeyCode::Esc => self.quickfix_open = false,
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
+                    self.quickfix_open = false
+                }
+                KeyCode::Char('j') | KeyCode::Down => self.quickfix_popup_down(),
+                KeyCode::Char('k') | KeyCode::Up => self.quickfix_popup_up(),
+                KeyCode::Enter => self.quickfix_jump_to_current(),
+                _ => {}
+            }
+            return KeyOutcome::Continue;
+        }
+
         // ── BLAME mode ────────────────────────────────────────────
         // BLAME is now an FSM-owned read-only view (`Editor::view_mode`). The
         // engine handles every transition out of it natively: `Esc` (hjkl-vim

@@ -1,0 +1,20 @@
+[package]
+name = "hjkl-quickfix"
+description = "Renderer-agnostic quickfix / location list data model for hjkl editors: an ordered list of file+line locations (QfEntry) with a cursor pointer and vim-style navigation (next/prev/first/last/nth)."
+keywords = ["editor", "quickfix", "location-list", "vim", "tui"]
+categories = ["text-editors"]
+version.workspace = true
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

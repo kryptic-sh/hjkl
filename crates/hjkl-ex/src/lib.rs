@@ -13,7 +13,7 @@ pub use complete::{
     collect_host_registry_names, collect_registry_names, complete, complete_arg,
     complete_command_from_names, complete_command_meta, first_word_end, longest_common_prefix,
 };
-pub use effect::ExEffect;
+pub use effect::{ExEffect, QfCommand};
 pub use expand::{ExpandContext, expand_args, expand_filename};
 pub use range::{LineRange, parse_range};
 pub use registry::{ArgKind, ExCommand, HostCmd, HostRegistry, Registry};
@@ -502,6 +502,46 @@ mod tests {
                 save: false
             })
         );
+    }
+
+    // ---- quickfix (#184) ----------------------------------------------------
+
+    #[test]
+    fn dispatch_quickfix_commands() {
+        use crate::QfCommand;
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let go = |ed: &mut _, s: &str| try_dispatch(&reg, ed, s);
+        assert_eq!(
+            go(&mut editor, "copen"),
+            Some(ExEffect::Quickfix(QfCommand::Open))
+        );
+        assert_eq!(
+            go(&mut editor, "ccl"),
+            Some(ExEffect::Quickfix(QfCommand::Close))
+        );
+        assert_eq!(
+            go(&mut editor, "cn"),
+            Some(ExEffect::Quickfix(QfCommand::Next))
+        );
+        assert_eq!(
+            go(&mut editor, "cp"),
+            Some(ExEffect::Quickfix(QfCommand::Prev))
+        );
+        assert_eq!(
+            go(&mut editor, "cc 3"),
+            Some(ExEffect::Quickfix(QfCommand::Nth(3)))
+        );
+        assert_eq!(
+            go(&mut editor, "cc"),
+            Some(ExEffect::Quickfix(QfCommand::Nth(0)))
+        );
+        assert_eq!(
+            go(&mut editor, "grep TODO"),
+            Some(ExEffect::Quickfix(QfCommand::Grep("TODO".into())))
+        );
+        // `:grep` with no pattern errors.
+        assert!(matches!(go(&mut editor, "grep"), Some(ExEffect::Error(_))));
     }
 
     // ---- Phase 2a: nohlsearch ----------------------------------------------

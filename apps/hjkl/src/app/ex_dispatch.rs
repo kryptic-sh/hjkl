@@ -585,6 +585,9 @@ impl App {
             ExEffect::Recover(path) => {
                 self.do_recover(&path);
             }
+            ExEffect::Quickfix(cmd) => {
+                self.handle_quickfix_command(cmd);
+            }
             ExEffect::SubstituteConfirm { matches } => {
                 if matches.is_empty() {
                     self.bus.warn("Pattern not found");

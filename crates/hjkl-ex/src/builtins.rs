@@ -1,5 +1,5 @@
 use crate::{
-    effect::ExEffect,
+    effect::{ExEffect, QfCommand},
     range::LineRange,
     registry::{ArgKind, ExCommand, Registry},
 };
@@ -1504,6 +1504,66 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: retab_bang_handler::<H>,
     });
 
+    // ---- quickfix (#184) -----------------------------------------------------
+    // min_prefix chosen so each 2-3 char prefix resolves unambiguously and does
+    // not shadow `:cd`/`:colorscheme` etc.
+    reg.add(ExCommand {
+        name: "copen",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 4, // "cope"
+        run: copen_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cclose",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "ccl"
+        run: cclose_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cnext",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "cn"
+        run: cnext_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cprevious",
+        aliases: &["cprev", "cp"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "cp"
+        run: cprev_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cfirst",
+        aliases: &["crewind"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "cf"
+        run: cfirst_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "clast",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3, // "cla"
+        run: clast_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "cc",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2, // exact "cc"
+        run: cc_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "grep",
+        aliases: &["vimgrep"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3, // "gre"
+        run: grep_handler::<H>,
+    });
+
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
     reg.add(ExCommand {
@@ -1653,6 +1713,50 @@ fn redraw_clear_handler<H: Host>(
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Redraw { clear: true })
+}
+
+// ---- quickfix (#184) -------------------------------------------------------
+
+macro_rules! qf_handler {
+    ($name:ident, $cmd:expr) => {
+        fn $name<H: Host>(
+            _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+            _args: &str,
+            _range: Option<LineRange>,
+        ) -> Option<ExEffect> {
+            Some(ExEffect::Quickfix($cmd))
+        }
+    };
+}
+
+qf_handler!(copen_handler, QfCommand::Open);
+qf_handler!(cclose_handler, QfCommand::Close);
+qf_handler!(cnext_handler, QfCommand::Next);
+qf_handler!(cprev_handler, QfCommand::Prev);
+qf_handler!(cfirst_handler, QfCommand::First);
+qf_handler!(clast_handler, QfCommand::Last);
+
+/// `:cc [N]` — jump to the 1-based entry `N`; no arg means "current" (`Nth(0)`).
+fn cc_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let n = args.trim().parse::<usize>().unwrap_or(0);
+    Some(ExEffect::Quickfix(QfCommand::Nth(n)))
+}
+
+/// `:grep <pattern>` — run ripgrep, populate the quickfix list, open the popup.
+fn grep_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let pat = args.trim();
+    if pat.is_empty() {
+        return Some(ExEffect::Error("E471: Argument required: grep".into()));
+    }
+    Some(ExEffect::Quickfix(QfCommand::Grep(pat.to_string())))
 }
 
 // ---- :syntax ---------------------------------------------------------------

@@ -77,4 +77,30 @@ pub enum ExEffect {
     /// An empty `path` means recover the current buffer's swap.
     /// A non-empty `path` means open that file and force recovery on it.
     Recover(String),
+    /// Quickfix-list command (`:copen`, `:cnext`, `:grep`, … — #184). The host
+    /// owns the quickfix list state, popup, and file-open; this just names the
+    /// requested action.
+    Quickfix(QfCommand),
+}
+
+/// A quickfix-list action requested by a `:c*` / `:grep` command (#184).
+/// The host interprets these against its `QfList` + popup state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QfCommand {
+    /// `:copen` — show the quickfix popup.
+    Open,
+    /// `:cclose` — hide the quickfix popup.
+    Close,
+    /// `:cnext` — jump to the next entry.
+    Next,
+    /// `:cprev` — jump to the previous entry.
+    Prev,
+    /// `:cfirst` — jump to the first entry.
+    First,
+    /// `:clast` — jump to the last entry.
+    Last,
+    /// `:cc [N]` — jump to the 1-based entry `N`; `0` means "current".
+    Nth(usize),
+    /// `:grep <pattern>` — run ripgrep, populate the quickfix list, open popup.
+    Grep(String),
 }

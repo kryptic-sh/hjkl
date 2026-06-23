@@ -68,6 +68,9 @@ pub enum AppAction {
     // ── Diff-mode change navigation (#208 Phase 2) ─────────────────────
     DiffNextChange,
     DiffPrevChange,
+    // ── Quickfix navigation (#184) ─────────────────────────────────────
+    QuickfixNext,
+    QuickfixPrev,
 
     // ── Window focus ───────────────────────────────────────────────────
     FocusLeft,

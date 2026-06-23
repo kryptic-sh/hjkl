@@ -60,6 +60,7 @@ hjkl-clipboard.workspace = true
 hjkl-form.workspace = true
 hjkl-picker.workspace = true
 hjkl-picker-tui.workspace = true
+hjkl-quickfix.workspace = true
 hjkl-config.workspace = true
 hjkl-mangler.workspace = true
 hjkl-menu.workspace = true
