@@ -58,3 +58,20 @@ initial_buffer = "ab\ncd\n"
 keys = "j<BS>"
 expected_buffer = "ab\ncd\n"
 expected_cursor = [0, 1]
+
+# `<C-h>` is vim's `<BS>` — same wrapping left motion. (The hjkl app rebinds it
+# to window-focus before the engine sees it; the engine stays vim-faithful for
+# consumers that don't override it.)
+[[cases]]
+name = "ctrl_h_moves_left_like_bs"
+initial_buffer = "hello\n"
+keys = "ll<C-h>"
+expected_buffer = "hello\n"
+expected_cursor = [0, 1]
+
+[[cases]]
+name = "ctrl_h_wraps_at_bol"
+initial_buffer = "ab\ncd\n"
+keys = "j<C-h>"
+expected_buffer = "ab\ncd\n"
+expected_cursor = [0, 1]

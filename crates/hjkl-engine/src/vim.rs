@@ -3571,6 +3571,12 @@ fn scroll_cursor_rows<H: crate::types::Host>(
 /// Promoted to `pub` in Phase 6.6e so `hjkl-vim::normal` can call it.
 pub fn parse_motion(input: &Input) -> Option<Motion> {
     if input.ctrl {
+        // `<C-h>` is vim's `<BS>` — a wrapping left motion. (The hjkl app
+        // rebinds `<C-h>` to window-focus-left before it reaches the engine;
+        // this keeps it correct for engine consumers that don't override it.)
+        if input.key == Key::Char('h') {
+            return Some(Motion::BackspaceBack);
+        }
         return None;
     }
     match input.key {

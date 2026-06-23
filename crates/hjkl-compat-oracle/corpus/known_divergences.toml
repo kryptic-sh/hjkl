@@ -25,15 +25,4 @@
 # No known divergences remain. The empty `cases` array keeps the corpus loader
 # (and the `known_divergences_report` test) happy; add new `[[cases]]` here when
 # a fresh divergence is discovered.
-
-# ─── <C-h> is window-focus-left, not vim's left motion (#253) ─────────────────
-# Vim/nvim treat <C-h> as <BS> (a left motion). hjkl deliberately repurposes
-# <C-h> for window/tmux navigation (focus left — see keymap_build.rs
-# TmuxNavigate(Left)), so the engine leaves it unhandled as a motion. Intentional
-# divergence — `expected_*` below is NEOVIM's behavior; hjkl stays put.
-[[cases]]
-name = "ctrl_h_is_window_focus_not_left_motion"
-initial_buffer = "hello\n"
-keys = "ll<C-h>"
-expected_buffer = "hello\n"
-expected_cursor = [0, 1]
+cases = []

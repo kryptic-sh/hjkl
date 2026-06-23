@@ -202,6 +202,20 @@ fn backspace_wraps_at_bol() {
 }
 
 #[test]
+fn ctrl_h_moves_left_like_bs() {
+    // Engine treats <C-h> as <BS> (wrapping left), vim-faithful. The hjkl app
+    // rebinds <C-h> to window focus before the engine sees it, but engine
+    // consumers without that override get the motion.
+    let mut e = editor_with("hello");
+    run_keys(&mut e, "ll"); // col 2
+    run_keys(&mut e, "<C-h>");
+    assert_eq!(e.cursor().1, 1, "<C-h> moves left like <BS>");
+    let mut e2 = editor_with("ab\ncd");
+    run_keys(&mut e2, "j<C-h>");
+    assert_eq!(e2.cursor(), (0, 1), "<C-h> wraps to prev line at BOL");
+}
+
+#[test]
 fn delete_space_deletes_char_right() {
     // `d<Space>` deletes the char under the cursor (charwise, like `dl`/`x`).
     let mut e = editor_with("hello");
