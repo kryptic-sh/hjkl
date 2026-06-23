@@ -852,6 +852,51 @@ mod tests {
         );
     }
 
+    // ---- :diagnostics / :ldiagnostics (#261 Phase 5b A3) -------------------
+
+    #[test]
+    fn dispatch_diagnostics_commands() {
+        use crate::QfCommand;
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let go = |ed: &mut _, s: &str| try_dispatch(&reg, ed, s);
+
+        // `:diagnostics` (min_prefix=4 "diag") → Quickfix(Diagnostics)
+        assert_eq!(
+            go(&mut editor, "diag"),
+            Some(ExEffect::Quickfix(QfCommand::Diagnostics))
+        );
+        assert_eq!(
+            go(&mut editor, "diagnostics"),
+            Some(ExEffect::Quickfix(QfCommand::Diagnostics))
+        );
+
+        // `:ldiagnostics` (min_prefix=5 "ldiag") → Location(Diagnostics)
+        assert_eq!(
+            go(&mut editor, "ldiag"),
+            Some(ExEffect::Location(QfCommand::Diagnostics))
+        );
+        assert_eq!(
+            go(&mut editor, "ldiagnostics"),
+            Some(ExEffect::Location(QfCommand::Diagnostics))
+        );
+
+        // "dia" (3 chars) must NOT resolve to :diagnostics (min_prefix=4).
+        // It will return None (no match) or Unknown.
+        let dia_result = go(&mut editor, "dia");
+        assert!(
+            !matches!(dia_result, Some(ExEffect::Quickfix(QfCommand::Diagnostics))),
+            "\"dia\" must not resolve to :diagnostics (min_prefix is 4)"
+        );
+
+        // "ldi" (3 chars) must NOT resolve to :ldiagnostics (min_prefix=5).
+        let ldi_result = go(&mut editor, "ldi");
+        assert!(
+            !matches!(ldi_result, Some(ExEffect::Location(QfCommand::Diagnostics))),
+            "\"ldi\" must not resolve to :ldiagnostics (min_prefix is 5)"
+        );
+    }
+
     // ---- Phase 2a: nohlsearch ----------------------------------------------
 
     #[test]

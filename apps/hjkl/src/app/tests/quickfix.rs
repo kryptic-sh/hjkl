@@ -647,3 +647,97 @@ fn loclist_colder_cnewer_work_independently() {
     app.handle_loclist_command(QfCommand::Newer(1));
     assert_eq!(app.loclist.entries(), loc_b.as_slice());
 }
+
+// ── :diagnostics / :ldiagnostics in-process tests (#261 Phase 5b A3) ────────
+
+fn make_lsp_diag(
+    start_row: usize,
+    start_col: usize,
+    severity: DiagSeverity,
+    message: &str,
+) -> LspDiag {
+    LspDiag {
+        start_row,
+        start_col,
+        end_row: start_row,
+        end_col: start_col + message.len(),
+        severity,
+        message: message.to_string(),
+        source: None,
+        code: None,
+    }
+}
+
+#[test]
+fn diagnostics_populates_quickfix_from_all_buffers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Inject diagnostics onto the active (only) slot.
+    app.active_mut().lsp_diags = vec![
+        make_lsp_diag(5, 3, DiagSeverity::Error, "type mismatch"),
+        make_lsp_diag(2, 0, DiagSeverity::Hint, "consider renaming"),
+        make_lsp_diag(2, 10, DiagSeverity::Warning, "unused variable"),
+    ];
+
+    app.handle_quickfix_command(QfCommand::Diagnostics);
+
+    // 3 diags, sorted by (path, row, col): row2/col0, row2/col10, row5/col3.
+    assert_eq!(app.quickfix.len(), 3, "quickfix should have 3 entries");
+    assert!(app.quickfix_open, "popup should be open when diags present");
+
+    let entries = app.quickfix.entries();
+    assert_eq!(entries[0].row, 2);
+    assert_eq!(entries[0].col, 0);
+    assert_eq!(entries[0].kind, QfKind::Note, "Hint → Note");
+
+    assert_eq!(entries[1].row, 2);
+    assert_eq!(entries[1].col, 10);
+    assert_eq!(entries[1].kind, QfKind::Warning, "Warning → Warning");
+
+    assert_eq!(entries[2].row, 5);
+    assert_eq!(entries[2].col, 3);
+    assert_eq!(entries[2].kind, QfKind::Error, "Error → Error");
+
+    // Location list must be untouched.
+    assert!(app.loclist.is_empty(), "loclist must not be touched");
+}
+
+#[test]
+fn ldiagnostics_uses_current_buffer_only() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    app.active_mut().lsp_diags = vec![
+        make_lsp_diag(1, 0, DiagSeverity::Info, "info message"),
+        make_lsp_diag(0, 5, DiagSeverity::Warning, "warn here"),
+    ];
+
+    app.handle_loclist_command(QfCommand::Diagnostics);
+
+    // 2 diags, sorted: row0/col5, row1/col0.
+    assert_eq!(app.loclist.len(), 2, "loclist should have 2 entries");
+    assert!(app.loclist_open, "loclist popup should be open");
+
+    let entries = app.loclist.entries();
+    assert_eq!(entries[0].row, 0);
+    assert_eq!(entries[0].col, 5);
+    assert_eq!(entries[0].kind, QfKind::Warning);
+
+    assert_eq!(entries[1].row, 1);
+    assert_eq!(entries[1].col, 0);
+    assert_eq!(entries[1].kind, QfKind::Info);
+
+    // Quickfix must be untouched.
+    assert!(app.quickfix.is_empty(), "quickfix must not be touched");
+    assert!(!app.quickfix_open, "quickfix popup must not be open");
+}
+
+#[test]
+fn diagnostics_empty_no_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // No diags injected — lsp_diags is empty by default.
+    app.handle_quickfix_command(QfCommand::Diagnostics);
+
+    assert!(app.quickfix.is_empty(), "list must remain empty");
+    assert!(!app.quickfix_open, "popup must stay closed when no diags");
+}

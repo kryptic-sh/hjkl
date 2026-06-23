@@ -1864,6 +1864,32 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: recover_handler::<H>,
     });
 
+    // ---- :diagnostics / :ldiagnostics (#261 Phase 5b A3) --------------------
+
+    // `:diagnostics` — populate quickfix from all-buffer LSP diags.
+    // min_prefix=4 ("diag") — avoids clash with `:delete` (min=1 "d"),
+    // `:delete` only claims single-letter prefixes; "dia" is unambiguous but
+    // "diag" makes intent clear without shadowing anything.
+    // No clash with `:diffthis`, `:diffget`, `:diffput` etc. (all start "diff").
+    reg.add(ExCommand {
+        name: "diagnostics",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 4, // "diag"
+        run: diagnostics_handler::<H>,
+    });
+
+    // `:ldiagnostics` — populate location list from current-buffer LSP diags.
+    // min_prefix=5 ("ldiag") — "ld" is ambiguous with :ldo (min=3 "ldo") only
+    // at 2 chars; "ldi" is exclusive to ldiagnostics.  Use 5 for readability.
+    reg.add(ExCommand {
+        name: "ldiagnostics",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5, // "ldiag"
+        run: ldiagnostics_handler::<H>,
+    });
+
     // ---- abbreviations (#abbreviations) -------------------------------------
 
     // `:abbreviate {lhs} {rhs}` / `:ab {lhs} {rhs}` — insert + cmdline abbrev.
@@ -2755,6 +2781,28 @@ fn recover_handler<H: Host>(
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Recover(args.trim().to_string()))
+}
+
+// ---- :diagnostics / :ldiagnostics (#261 Phase 5b A3) ----------------------
+
+/// `:diagnostics` — populate the QUICKFIX list from LSP diagnostics across all
+/// non-explorer buffer slots.
+fn diagnostics_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Diagnostics))
+}
+
+/// `:ldiagnostics` — populate the LOCATION list from LSP diagnostics of the
+/// current buffer slot.
+fn ldiagnostics_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Location(QfCommand::Diagnostics))
 }
 
 fn retab_impl<H: Host>(

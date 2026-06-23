@@ -175,4 +175,12 @@ pub enum QfCommand {
         /// `false` = per-entry (`:cdo`), `true` = per-file (`:cfdo`).
         per_file: bool,
     },
+    /// `:diagnostics` — populate the quickfix / location list from LSP diagnostics.
+    ///
+    /// For [`ExEffect::Quickfix`]: collects diagnostics from ALL non-explorer
+    /// buffer slots, sorted by `(path, row, col)`.
+    ///
+    /// For [`ExEffect::Location`]: collects diagnostics from the CURRENT buffer
+    /// slot only.
+    Diagnostics,
 }

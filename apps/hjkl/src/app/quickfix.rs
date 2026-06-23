@@ -8,6 +8,8 @@ use hjkl_buffer::rope_line_str;
 use hjkl_ex::QfCommand;
 use hjkl_quickfix::{QfEntry, QfKind, QfList};
 
+use crate::app::types::DiagSeverity;
+
 /// Which list a quickfix action targets: the global quickfix list (`:c*`) or
 /// the location list (`:l*`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -146,6 +148,7 @@ impl crate::app::App {
             QfCommand::Older(n) => self.qf_do_older(w, n),
             QfCommand::Newer(n) => self.qf_do_newer(w, n),
             QfCommand::Do { cmd, per_file } => self.qf_run_do(w, &cmd, per_file),
+            QfCommand::Diagnostics => self.qf_run_diagnostics(w),
         }
     }
 
@@ -533,6 +536,74 @@ impl crate::app::App {
         self.loclist_open = false; // populate silently; user opens via :lopen
     }
 
+    /// `:diagnostics` / `:ldiagnostics` — populate the quickfix / location list
+    /// from the LSP diagnostics stored on buffer slots.
+    ///
+    /// For [`QfWhich::Quickfix`]: iterates ALL non-explorer slots.
+    /// For [`QfWhich::Location`]: only the ACTIVE slot.
+    ///
+    /// Maps [`DiagSeverity`] → [`QfKind`]:
+    /// `Error → Error`, `Warning → Warning`, `Info → Info`, `Hint → Note`.
+    ///
+    /// Entries are sorted by `(path, row, col)` (vim convention).
+    /// When the resulting list is non-empty the popup is opened; when empty
+    /// the popup is closed.  No cursor jump on population.
+    fn qf_run_diagnostics(&mut self, w: QfWhich) {
+        let mut entries: Vec<QfEntry> = match w {
+            QfWhich::Quickfix => {
+                // Collect from all non-explorer slots.
+                self.slots
+                    .iter()
+                    .filter(|s| !s.is_explorer)
+                    .flat_map(|s| {
+                        let path = s.filename.clone().unwrap_or_default();
+                        s.lsp_diags.iter().map(move |d| QfEntry {
+                            path: path.clone(),
+                            row: d.start_row,
+                            col: d.start_col,
+                            kind: diag_severity_to_qf_kind(d.severity),
+                            message: d.message.clone(),
+                        })
+                    })
+                    .collect()
+            }
+            QfWhich::Location => {
+                // Collect from the active slot only.
+                let slot = self.active();
+                let path = slot.filename.clone().unwrap_or_default();
+                slot.lsp_diags
+                    .iter()
+                    .map(|d| QfEntry {
+                        path: path.clone(),
+                        row: d.start_row,
+                        col: d.start_col,
+                        kind: diag_severity_to_qf_kind(d.severity),
+                        message: d.message.clone(),
+                    })
+                    .collect()
+            }
+        };
+
+        // Sort by (path, row, col) — vim convention.
+        entries.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then(a.row.cmp(&b.row))
+                .then(a.col.cmp(&b.col))
+        });
+
+        let n = entries.len();
+        self.qf_push_history(w);
+        self.qf_list_mut(w).set(entries);
+        if n > 0 {
+            self.qf_set_open(w, true);
+            self.bus.info(format!("{n} diagnostics"));
+        } else {
+            self.qf_set_open(w, false);
+            self.bus.info("no diagnostics");
+        }
+    }
+
     // ── popup navigation (event loop) ───────────────────────────────────────
 
     /// `:copen` popup: move the highlight down (`j` / `<Down>`). Does NOT jump —
@@ -565,6 +636,18 @@ impl crate::app::App {
     /// `:lopen` popup: jump to the highlighted entry.
     pub(crate) fn loclist_jump_to_current(&mut self) {
         self.qf_jump_to_current(QfWhich::Location);
+    }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+/// Map LSP [`DiagSeverity`] to quickfix [`QfKind`].
+fn diag_severity_to_qf_kind(sev: DiagSeverity) -> QfKind {
+    match sev {
+        DiagSeverity::Error => QfKind::Error,
+        DiagSeverity::Warning => QfKind::Warning,
+        DiagSeverity::Info => QfKind::Info,
+        DiagSeverity::Hint => QfKind::Note,
     }
 }
 
