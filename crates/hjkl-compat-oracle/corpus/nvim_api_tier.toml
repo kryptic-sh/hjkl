@@ -628,3 +628,197 @@ initial_cursor = [0, 0]
 keys = ":set errorformat=%l:%c:%m<CR>:cexpr \"2:1:a\\n4:1:b\"<CR>:cdo s/^/X/<CR>"
 expected_buffer = "word1\nXword2\nword3\nXword4\nword5\n"
 expected_cursor = [3, 0]
+
+# ── Phase D: option plumbing / multi-buffer / tabpage / window cases ─────────
+#
+# All cases driven via hjkl --nvim-api subprocess.  Each expected value was
+# derived from a headless-nvim probe script (listed inline) and then verified
+# against the oracle test run.  See issue #261 Phase D.
+
+# ── Option plumbing (shiftwidth / expandtab) ────────────────────────────────
+
+# :set shiftwidth=2 + :set expandtab then >> on 4-space-indented line.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_set_shiftwidth2_expandtab.lua'
+#   Script: buf_set_lines({"    hello"}), set shiftwidth=2, set expandtab, normal! >>
+#   Output: line1=      hello  cursor=row=0 col=0
+# Expected: 4 leading spaces + 2 added = 6 spaces.
+[[cases]]
+name = "set_shiftwidth2_et_via_set_cmd_indent"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=2<CR>:set expandtab<CR>>>"
+expected_buffer = "      hello\n"
+expected_cursor = [0, 0]
+
+# :set shiftwidth=8 + :set expandtab then >> on 4-space-indented line.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_set_shiftwidth8.lua'
+#   Script: buf_set_lines({"    hello"}), set shiftwidth=8, set expandtab, normal! >>
+#   Output: line1=            hello  cursor=row=0 col=0
+# Expected: 4 leading spaces + 8 added = 12 spaces.
+[[cases]]
+name = "set_shiftwidth8_et_via_set_cmd_indent"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=8<CR>:set expandtab<CR>>>"
+expected_buffer = "            hello\n"
+expected_cursor = [0, 0]
+
+# :set shiftwidth=2 + :set expandtab then << on 4-space-indented line.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_unindent.lua'
+#   Script: buf_set_lines({"    hello"}), set shiftwidth=2, set expandtab, normal! <<
+#   Output: line1=  hello  cursor=row=0 col=0
+# Expected: 4 leading spaces - 2 removed = 2 spaces.
+[[cases]]
+name = "set_shiftwidth2_et_via_set_cmd_unindent"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=2<CR>:set expandtab<CR><<"
+expected_buffer = "  hello\n"
+expected_cursor = [0, 0]
+
+# :set shiftwidth=4 noexpandtab tabstop=4 then >> on bare "hello".
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_noet_ts4.lua'
+#   Script: buf_set_lines({"hello"}), set shiftwidth=4, set noexpandtab, set tabstop=4, normal! >>
+#   Hex output: 09 68 65 6c 6c 6f  (tab + "hello")
+#   Output: line1=[\thello]  cursor=row=0 col=0
+# Expected: one hard-tab prefix.
+[[cases]]
+name = "set_shiftwidth4_noet_ts4_via_set_cmd_indent"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=4<CR>:set noexpandtab<CR>:set tabstop=4<CR>>>"
+expected_buffer = "\thello\n"
+expected_cursor = [0, 0]
+
+# ── Multi-buffer (bnext / bprevious with single-slot wrapping) ───────────────
+
+# :bnext with only one buffer slot — no-op, content and cursor unchanged.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_bnext_noop.lua'
+#   Script: buf_set_lines({"onlybuf"}), bnext
+#   Output: line1=onlybuf  cursor=row=0 col=0
+[[cases]]
+name = "bnext_single_buffer_noop"
+initial_buffer = "onlybuf\n"
+initial_cursor = [0, 0]
+keys = ":bnext<CR>"
+expected_buffer = "onlybuf\n"
+expected_cursor = [0, 0]
+
+# :bprevious with only one buffer slot — no-op, content and cursor unchanged.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_bprevious_noop.lua'
+#   Script: buf_set_lines({"onlybuf"}), bprevious
+#   Output: line1=onlybuf  cursor=row=0 col=0
+[[cases]]
+name = "bprevious_single_buffer_noop"
+initial_buffer = "onlybuf\n"
+initial_cursor = [0, 0]
+keys = ":bprevious<CR>"
+expected_buffer = "onlybuf\n"
+expected_cursor = [0, 0]
+
+# ── Tabpages ─────────────────────────────────────────────────────────────────
+
+# :tabnew then :tabprevious — round-trip back to original tab.
+# Oracle reads the ORIGINAL buffer handle (grabbed before tabnew) so content
+# and cursor are unchanged.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_tabnew_roundtrip.lua'
+#   Script: buf_set_lines({"hello"}), tabnew, tabprevious; read orig buf+win
+#   Output: line1=hello  cursor=row=0 col=0
+[[cases]]
+name = "tabnew_tabprevious_roundtrip"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>:tabprevious<CR>"
+expected_buffer = "hello\n"
+expected_cursor = [0, 0]
+
+# :tabnew, insert Z in new tab, :tabprevious back to original — original buffer unchanged.
+# Oracle driver holds original buf handle; after tabprevious focus returns to
+# original tab, cur_win is the same window → original content visible.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_tabnew_insert_tabprevious.lua'
+#   Script: buf_set_lines({"original"}), tabnew, feedkeys("iZ<Esc>"), tabprevious;
+#           read orig buf+win
+#   Output: line1=original  cursor=row=0 col=0
+[[cases]]
+name = "tabnew_insert_tabprevious_sees_original"
+initial_buffer = "original\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>iZ<Esc>:tabprevious<CR>"
+expected_buffer = "original\n"
+expected_cursor = [0, 0]
+
+# ── Windows (split / vsplit) ─────────────────────────────────────────────────
+#
+# The oracle driver captures cur_buf and cur_win BEFORE split commands.
+# After :split/:vsplit the focused window changes to the new one; cur_win
+# (the original window) is still accessible via nvim_win_get_cursor(cur_win).
+# Since both windows share the same buffer, cur_buf.get_lines() reads the same
+# content regardless of which window is active.
+
+# :split — opens a horizontal split sharing the same buffer.
+# cur_buf content unchanged; cur_win cursor stays at initial position.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_split_noop.lua'
+#   Script: buf_set_lines({"hello","world"}), orig_win=get_current_win(), split;
+#           read buf via orig buf handle, cursor via nvim_win_get_cursor(orig_win)
+#   Output: line1=hello line2=world  cursor=row=0 col=0
+[[cases]]
+name = "split_buffer_and_orig_window_cursor_unchanged"
+initial_buffer = "hello\nworld\n"
+initial_cursor = [0, 0]
+keys = ":split<CR>"
+expected_buffer = "hello\nworld\n"
+expected_cursor = [0, 0]
+
+# :split then G in the NEW focused window — original window cursor stays [0,0].
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_split_curwin_G.lua'
+#   Script: buf_set_lines({"line1","line2","line3"}), split, feedkeys("G"),
+#           cursor via nvim_win_get_cursor(orig_win)
+#   Output: line1..3 unchanged  cursor=row=0 col=0
+[[cases]]
+name = "split_G_in_new_window_orig_cursor_unchanged"
+initial_buffer = "line1\nline2\nline3\n"
+initial_cursor = [0, 0]
+keys = ":split<CR>G"
+expected_buffer = "line1\nline2\nline3\n"
+expected_cursor = [0, 0]
+
+# :vsplit — opens a vertical split sharing the same buffer.
+# cur_buf content unchanged; cur_win cursor stays at initial [0,2].
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_vsplit_noop.lua'
+#   Script: buf_set_lines({"alpha","beta","gamma"}), set_cursor({1,2}),
+#           orig_win=get_current_win(), vsplit;
+#           read buf via orig buf handle, cursor via nvim_win_get_cursor(orig_win)
+#   Output: alpha/beta/gamma unchanged  cursor=row=0 col=2
+[[cases]]
+name = "vsplit_buffer_and_orig_window_cursor_unchanged"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 2]
+keys = ":vsplit<CR>"
+expected_buffer = "alpha\nbeta\ngamma\n"
+expected_cursor = [0, 2]
+
+# ── Buffer text via ex — sanity cross-check ───────────────────────────────────
+
+# :%s/old/new/g on a 3-line buffer — all occurrences replaced, cursor at last line.
+# Probe (2026-06-24):
+#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_percent_s.lua'
+#   Script: buf_set_lines({"old text","more old","last old"}), %s/old/new/g
+#   Output: new text / more new / last new  cursor=row=2 col=0
+[[cases]]
+name = "percent_s_global_replace_all_lines"
+initial_buffer = "old text\nmore old\nlast old\n"
+initial_cursor = [0, 0]
+keys = ":%s/old/new/g<CR>"
+expected_buffer = "new text\nmore new\nlast new\n"
+expected_cursor = [2, 0]
