@@ -1563,6 +1563,13 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 3, // "gre"
         run: grep_handler::<H>,
     });
+    reg.add(ExCommand {
+        name: "make",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4, // "make"
+        run: make_handler::<H>,
+    });
 
     // `:preserve` — force-write the swap file immediately (issue #185).
     // min_prefix=3 so `:pre` resolves here.
@@ -1757,6 +1764,16 @@ fn grep_handler<H: Host>(
         return Some(ExEffect::Error("E471: Argument required: grep".into()));
     }
     Some(ExEffect::Quickfix(QfCommand::Grep(pat.to_string())))
+}
+
+/// `:make [args]` — run `makeprg` (appending `args`), parse output via the
+/// errorformat, populate the quickfix list, open the popup.
+fn make_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Quickfix(QfCommand::Make(args.trim().to_string())))
 }
 
 // ---- :syntax ---------------------------------------------------------------

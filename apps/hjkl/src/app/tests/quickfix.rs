@@ -37,6 +37,35 @@ fn quickfix_popup_nav_and_toggle() {
     assert!(!app.quickfix_open);
 }
 
+#[cfg(unix)]
+#[test]
+fn quickfix_make_parses_output_into_list() {
+    // A fake `makeprg` script that emits a gcc-style diagnostic to stderr.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("hjkl_make_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("fakemake.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho 'src/main.rs:3:5: error: boom' 1>&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().settings_mut().makeprg = script.to_string_lossy().into_owned();
+    app.handle_quickfix_command(QfCommand::Make(String::new()));
+
+    assert_eq!(app.quickfix.len(), 1, ":make should populate the list");
+    assert!(app.quickfix_open, ":make with errors opens the popup");
+    let e = app.quickfix.current().unwrap();
+    assert_eq!((e.row, e.col), (2, 4)); // 0-based
+    assert_eq!(e.kind, QfKind::Error);
+    assert_eq!(e.message, "boom");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn quickfix_open_empty_does_not_show() {
     let mut app = App::new(None, false, None, None).unwrap();

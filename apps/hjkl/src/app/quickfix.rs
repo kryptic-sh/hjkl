@@ -10,6 +10,7 @@ impl crate::app::App {
     pub(crate) fn handle_quickfix_command(&mut self, cmd: QfCommand) {
         match cmd {
             QfCommand::Grep(pat) => self.quickfix_run_grep(&pat),
+            QfCommand::Make(extra) => self.quickfix_run_make(&extra),
             QfCommand::Open => {
                 if self.quickfix.is_empty() {
                     self.bus.info("quickfix list is empty");
@@ -130,6 +131,52 @@ impl crate::app::App {
         } else {
             self.quickfix_open = true;
             self.bus.info(format!("{n} matches"));
+        }
+    }
+
+    /// `:make [extra]` — run `makeprg` (with `extra` appended) blocking, parse
+    /// stdout+stderr through the errorformat, populate the quickfix list, and
+    /// open the popup. Blocking: the TUI is frozen for the build's duration
+    /// (cargo check can take seconds). Async `:make` is a possible follow-up.
+    pub(crate) fn quickfix_run_make(&mut self, extra: &str) {
+        const MAX_ENTRIES: usize = 10_000;
+        let makeprg = self.active_editor().settings().makeprg.clone();
+        let mut argv: Vec<String> = makeprg.split_whitespace().map(str::to_string).collect();
+        argv.extend(extra.split_whitespace().map(str::to_string));
+        let Some((program, rest)) = argv.split_first() else {
+            self.bus.error("makeprg is empty");
+            return;
+        };
+
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let output = std::process::Command::new(program)
+            .args(rest)
+            .current_dir(&root)
+            .output();
+        let out = match output {
+            Ok(o) => o,
+            Err(e) => {
+                self.bus.error(format!("make failed: {e}"));
+                return;
+            }
+        };
+
+        // Compilers write diagnostics to stderr (cargo/rustc/gcc); parse both
+        // streams so stdout-emitting tools also work.
+        let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&out.stdout));
+        let mut entries = hjkl_quickfix::parse_make_output(&text, &root);
+        entries.truncate(MAX_ENTRIES);
+
+        let n = entries.len();
+        self.quickfix.set(entries);
+        if n == 0 {
+            self.quickfix_open = false;
+            self.bus.info(format!("{makeprg}: no errors"));
+        } else {
+            self.quickfix_open = true;
+            self.bus.info(format!("{n} entries"));
         }
     }
 

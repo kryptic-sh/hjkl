@@ -56,6 +56,8 @@ pub fn all_setting_names() -> Vec<String> {
         "ft".into(),
         "commentstring".into(),
         "cms".into(),
+        "makeprg".into(),
+        "mp".into(),
         // completion-only (handled by host in ex_dispatch.rs)
         "background".into(),
         "bg".into(),
@@ -139,7 +141,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::FoldMethod::Marker => "marker",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}  scroll_duration_ms={}  tabline_icons={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  makeprg=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}  scroll_duration_ms={}  tabline_icons={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -170,6 +172,7 @@ pub(crate) fn apply_set<H: Host>(
             s.formatoptions,
             s.filetype,
             s.commentstring,
+            s.makeprg,
             if s.autopair { "on" } else { "off" },
             if s.autoclose_tag { "on" } else { "off" },
             s.scrolloff,
@@ -247,6 +250,7 @@ fn query_option_value<H: Host>(
         "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
         "filetype" | "ft" => format!("\"{}\"", s.filetype),
         "commentstring" | "cms" => format!("\"{}\"", s.commentstring),
+        "makeprg" | "mp" => format!("\"{}\"", s.makeprg),
         "signcolumn" | "scl" => match s.signcolumn {
             hjkl_engine::types::SignColumnMode::Yes => "yes".into(),
             hjkl_engine::types::SignColumnMode::No => "no".into(),
@@ -393,6 +397,10 @@ fn apply_set_token<H: Host>(
         }
         if matches!(name, "commentstring" | "cms") {
             editor.settings_mut().commentstring = value.to_string();
+            return Ok(());
+        }
+        if matches!(name, "makeprg" | "mp") {
+            editor.settings_mut().makeprg = value.to_string();
             return Ok(());
         }
         if matches!(name, "indent_guide_char" | "igc") {

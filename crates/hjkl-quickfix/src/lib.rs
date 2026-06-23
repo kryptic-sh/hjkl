@@ -6,6 +6,9 @@
 //! LSP references) and rendering are the host's responsibility — this crate is
 //! pure `std`.
 
+mod errorformat;
+pub use errorformat::parse_make_output;
+
 use std::path::PathBuf;
 
 /// Classification of a quickfix entry — drives the display marker / color.

@@ -796,6 +796,9 @@ pub struct Settings {
     /// prefix/suffix portion (before/after `%s`).  An empty string means "use
     /// the filetype default".  Default `""`.
     pub commentstring: String,
+    /// Program run by `:make` (vim's `makeprg`). Its stdout+stderr are parsed
+    /// via the errorformat into the quickfix list. Default `"cargo check"`.
+    pub makeprg: String,
     /// When `true`, typing an opening bracket or quote automatically inserts
     /// the matching close character and parks the cursor between them.
     /// Matches vim's `set autopairs` (Neovim) / nvim-autopairs behaviour.
@@ -903,6 +906,7 @@ impl Default for Settings {
             formatoptions: "ro".to_string(),
             filetype: String::new(),
             commentstring: String::new(),
+            makeprg: "cargo check".to_string(),
             autopair: true,
             autoclose_tag: true,
             scrolloff: 5,
@@ -985,6 +989,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         formatoptions: o.formatoptions.clone(),
         filetype: o.filetype.clone(),
         commentstring: String::new(),
+        makeprg: "cargo check".to_string(),
         autopair: true,
         autoclose_tag: true,
         scrolloff: o.scrolloff,

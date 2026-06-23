@@ -103,4 +103,7 @@ pub enum QfCommand {
     Nth(usize),
     /// `:grep <pattern>` — run ripgrep, populate the quickfix list, open popup.
     Grep(String),
+    /// `:make [args]` — run `makeprg` (appending `args`), parse the output via
+    /// the errorformat, populate the quickfix list, open popup.
+    Make(String),
 }
