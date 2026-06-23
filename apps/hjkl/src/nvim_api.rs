@@ -25,9 +25,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use hjkl_buffer::Buffer;
-use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options, VimMode};
-use hjkl_ex::ExEffect;
+use hjkl_engine::{Host, VimMode};
 use rmpv::Value;
+
+use crate::host::TuiHost;
 
 // ── ext-type tags (nvim wire protocol) ────────────────────────────────────────
 const BUFFER_EXT: i8 = 0;
@@ -79,25 +80,26 @@ fn err(stdout: &mut impl Write, msgid: u32, msg: &str) -> Result<()> {
     )
 }
 
-// ── Editor construction ───────────────────────────────────────────────────────
+// ── App construction ──────────────────────────────────────────────────────────
 
-fn build_editor(
-    maybe_path: Option<&PathBuf>,
-) -> Result<(Editor<Buffer, DefaultHost>, Option<PathBuf>)> {
-    let mut buffer = Buffer::new();
-    if let Some(path) = maybe_path {
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                let content = content.strip_suffix('\n').unwrap_or(&content);
-                BufferEdit::replace_all(&mut buffer, content);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(anyhow::anyhow!("hjkl: {}: {e}", path.display())),
-        }
+fn build_app(first_file: Option<PathBuf>) -> anyhow::Result<crate::app::App> {
+    let mut app = crate::app::App::new(first_file, false, None, None)?;
+    {
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 24;
     }
-    let host = DefaultHost::new();
-    let editor = Editor::new(buffer, host, Options::default());
-    Ok((editor, maybe_path.cloned()))
+    Ok(app)
+}
+
+// ── settle helper ─────────────────────────────────────────────────────────────
+
+fn settle(app: &mut crate::app::App) {
+    app.reconcile_window_editors();
+    if app.pending_recompute {
+        app.pending_recompute = false;
+        app.recompute_and_install();
+    }
 }
 
 // ── Parameter extractors ──────────────────────────────────────────────────────
@@ -158,7 +160,7 @@ fn param_string_array(params: &[Value], idx: usize) -> std::result::Result<Vec<S
 
 // ── nvim_get_mode helper ───────────────────────────────────────────────────────
 
-fn mode_code(editor: &Editor<Buffer, DefaultHost>) -> &'static str {
+fn mode_code(editor: &hjkl_engine::Editor<Buffer, TuiHost>) -> &'static str {
     match editor.vim_mode() {
         VimMode::Normal => "n",
         VimMode::Insert => "i",
@@ -201,8 +203,7 @@ fn resolve_line_range(
 // ── method dispatch ───────────────────────────────────────────────────────────
 
 fn dispatch(
-    editor: &mut Editor<Buffer, DefaultHost>,
-    current_filename: &mut Option<PathBuf>,
+    app: &mut crate::app::App,
     should_quit: &mut bool,
     method: &str,
     params: &Value,
@@ -239,7 +240,7 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
 
-            let rope = editor.buffer().rope();
+            let rope = app.active_editor().buffer().rope();
             let line_count = rope.len_lines();
             let (s, e) = match resolve_line_range(line_count, start, end) {
                 Ok(r) => r,
@@ -260,19 +261,20 @@ fn dispatch(
             // split('\n') internally, so "hello\n" → ["hello", ""] (two rows)
             // whereas "hello" → ["hello"] (one row, matching nvim semantics).
             let content = result.join("\n");
-            editor.set_content(&content);
+            app.active_editor_mut().set_content(&content);
             // Apply modeline overrides so oracle cases that embed a `vim:`
             // marker see the same options that a real file-open would apply.
             {
-                let mut opts = editor.current_options();
+                let mut opts = app.active_editor().current_options();
                 if opts.modeline {
                     let scan_depth = opts.modelines as usize;
                     hjkl_app::modeline::overlay_modeline_for_content(
                         &mut opts, &content, scan_depth,
                     );
-                    editor.apply_options(&opts);
+                    app.active_editor_mut().apply_options(&opts);
                 }
             }
+            settle(app);
             ok(stdout, msgid, Value::Nil)
         }
 
@@ -292,7 +294,7 @@ fn dispatch(
             };
             let _strict = param_bool(p, 3).unwrap_or(false);
 
-            let rope = editor.buffer().rope();
+            let rope = app.active_editor().buffer().rope();
             let line_count = rope.len_lines();
             let (s, e) = match resolve_line_range(line_count, start, end) {
                 Ok(r) => r,
@@ -336,7 +338,7 @@ fn dispatch(
             let row = (row_1based - 1).max(0) as usize;
             // For byte-col → char-col: walk the line's chars (ASCII = identity).
             let char_col = {
-                let rope = editor.buffer().rope();
+                let rope = app.active_editor().buffer().rope();
                 if row < rope.len_lines() {
                     let line = hjkl_buffer::rope_line_str(&rope, row);
                     let byte_offset = (col as usize).min(line.len());
@@ -345,16 +347,16 @@ fn dispatch(
                     0
                 }
             };
-            editor.jump_cursor(row, char_col);
+            app.active_editor_mut().jump_cursor(row, char_col);
             ok(stdout, msgid, Value::Nil)
         }
 
         "nvim_win_get_cursor" => {
             // Returns [row (1-based), col (byte-col)].
-            let (row, char_col) = editor.cursor();
+            let (row, char_col) = app.active_editor().cursor();
             // Convert char-col to byte-col.
             let byte_col = {
-                let rope = editor.buffer().rope();
+                let rope = app.active_editor().buffer().rope();
                 if row < rope.len_lines() {
                     let line = hjkl_buffer::rope_line_str(&rope, row);
                     line.chars()
@@ -385,8 +387,9 @@ fn dispatch(
             let len = keys.len() as i64;
             let inputs = hjkl_engine::decode_macro(&keys);
             for input in inputs {
-                hjkl_vim::dispatch_input(editor, input);
+                hjkl_vim::dispatch_input(app.active_editor_mut(), input);
             }
+            settle(app);
             ok(stdout, msgid, Value::from(len))
         }
 
@@ -401,106 +404,17 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
             let cmd = cmd_raw.strip_prefix(':').unwrap_or(&cmd_raw).to_string();
-            let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
-            let effect =
-                hjkl_ex::try_dispatch(&reg, editor, &cmd).unwrap_or(ExEffect::Unknown(cmd.clone()));
-            match effect {
-                ExEffect::None
-                | ExEffect::Ok
-                | ExEffect::Info(_)
-                | ExEffect::InfoTitled { .. }
-                | ExEffect::Substituted { .. }
-                | ExEffect::Quickfix(_)
-                | ExEffect::Location(_) => ok(stdout, msgid, Value::Nil),
-                ExEffect::Error(msg) | ExEffect::Unknown(msg) => err(stdout, msgid, &msg),
-                ExEffect::Save => {
-                    if let Err(e) = write_buffer(editor, current_filename) {
-                        err(stdout, msgid, &e)
-                    } else {
-                        ok(stdout, msgid, Value::Nil)
-                    }
-                }
-                ExEffect::SaveAs(path_str) => {
-                    let new_path = PathBuf::from(&path_str);
-                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
-                        err(stdout, msgid, &e)
-                    } else {
-                        *current_filename = Some(new_path);
-                        ok(stdout, msgid, Value::Nil)
-                    }
-                }
-                ExEffect::Quit { save, force: _ } => {
-                    if save && let Err(e) = write_buffer(editor, current_filename) {
-                        return err(stdout, msgid, &e);
-                    }
-                    *should_quit = true;
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::EditFile { path, .. } => {
-                    // Single-buffer nvim-api mode: treat :e as reload.
-                    match std::fs::read_to_string(&path) {
-                        Ok(content) => {
-                            let content = content.strip_suffix('\n').unwrap_or(&content);
-                            hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
-                            *current_filename = Some(PathBuf::from(&path));
-                            ok(stdout, msgid, Value::Nil)
-                        }
-                        Err(e) => err(stdout, msgid, &format!("{path}: {e}")),
-                    }
-                }
-                ExEffect::BufferDelete { .. } => {
-                    // No multi-buffer in nvim-api mode — treat as quit.
-                    *should_quit = true;
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::PutRegister { .. } => {
-                    // No multi-buffer paste in nvim-api mode — no-op.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::SaveAndRename { path } => {
-                    let new_path = PathBuf::from(&path);
-                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
-                        err(stdout, msgid, &e)
-                    } else {
-                        *current_filename = Some(new_path);
-                        ok(stdout, msgid, Value::Nil)
-                    }
-                }
-                ExEffect::RenameBuffer { .. } => {
-                    // In-memory rename — no-op in nvim-api mode.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::Cwd(_) => {
-                    // Directory already changed by the handler — no-op.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::Redraw { .. } => {
-                    // No terminal to clear in nvim-api mode — treat as no-op.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::Preserve => {
-                    // No swap files in nvim-api mode — no-op.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::Recover(_) => {
-                    // No swap recovery in nvim-api mode — no-op.
-                    ok(stdout, msgid, Value::Nil)
-                }
-                ExEffect::SubstituteConfirm { matches } => {
-                    // nvim-api mode has no interactive TUI; apply all matches immediately.
-                    let count = matches.len();
-                    if count > 0 {
-                        let accepted = vec![true; count];
-                        hjkl_engine::apply_collected_matches(editor, &matches, &accepted);
-                    }
-                    ok(stdout, msgid, Value::Nil)
-                }
+            app.dispatch_ex(&cmd);
+            settle(app);
+            if app.exit_requested {
+                *should_quit = true;
             }
+            ok(stdout, msgid, Value::Nil)
         }
 
         // ── mode ──────────────────────────────────────────────────────────────
         "nvim_get_mode" => {
-            let code = mode_code(editor);
+            let code = mode_code(app.active_editor());
             // Returns Map: {mode: str, blocking: false}
             let map = Value::Map(vec![
                 (Value::from("mode"), Value::from(code)),
@@ -536,7 +450,7 @@ fn dispatch(
                 _ => "\"".to_owned(),
             };
             let reg_char = reg_name.chars().next().unwrap_or('"');
-            let text = match editor.registers().read(reg_char) {
+            let text = match app.active_editor().registers().read(reg_char) {
                 Some(slot) => slot.text.clone(),
                 None => String::new(),
             };
@@ -549,36 +463,13 @@ fn dispatch(
     }
 }
 
-// ── buffer write helper ───────────────────────────────────────────────────────
-
-fn write_buffer(
-    editor: &Editor<Buffer, DefaultHost>,
-    path: &Option<PathBuf>,
-) -> std::result::Result<(), String> {
-    match path {
-        None => Err("E32: No file name".to_string()),
-        Some(p) => {
-            // `content_joined()` is a per-`dirty_gen` cached `Arc<String>`
-            // shared with the syntax/LSP/dirty-check paths.
-            let joined = editor.buffer().content_joined();
-            let mut content = String::with_capacity(joined.len() + 1);
-            content.push_str(&joined);
-            if !joined.is_empty() {
-                content.push('\n');
-            }
-            std::fs::write(p, &content).map_err(|e| format!("hjkl: {}: {e}", p.display()))
-        }
-    }
-}
-
 // ── public entry point ────────────────────────────────────────────────────────
 
 /// Run in nvim-api mode: msgpack-rpc server over stdin/stdout.
 ///
 /// `files` — files to open. Only the first is loaded (single-buffer for now).
 pub fn run(files: Vec<PathBuf>) -> Result<i32> {
-    let first_file = files.into_iter().next();
-    let (mut editor, mut current_filename) = build_editor(first_file.as_ref())?;
+    let mut app = build_app(files.into_iter().next())?;
     let mut should_quit = false;
 
     let stdin = std::io::stdin();
@@ -648,8 +539,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
                 };
                 let params = arr.get(3).cloned().unwrap_or(Value::Array(vec![]));
                 dispatch(
-                    &mut editor,
-                    &mut current_filename,
+                    &mut app,
                     &mut should_quit,
                     &method,
                     &params,
@@ -670,8 +560,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
                 // Use a dummy msgid=0; response is suppressed.
                 let mut dev_null = std::io::sink();
                 dispatch(
-                    &mut editor,
-                    &mut current_filename,
+                    &mut app,
                     &mut should_quit,
                     &method,
                     &params,
