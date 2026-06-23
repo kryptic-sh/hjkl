@@ -524,6 +524,83 @@ fn coerce_option_display(display: &str) -> Value {
     Value::from(display)
 }
 
+// ── termcode translation ──────────────────────────────────────────────────────
+
+/// Translate common vim key-notation tags to their control-byte equivalents.
+///
+/// Covered subset (case-insensitive tag names):
+///   <CR> / <Enter> / <Return> → \r (0x0D)
+///   <Esc>                     → \x1B
+///   <Tab>                     → \t  (0x09)
+///   <BS>                      → \x08
+///   <Space>                   → ' ' (0x20)
+///   <Nul>                     → \x00
+///   <lt>                      → '<'
+///   <Bar>                     → '|'
+///   <Bslash>                  → '\'
+///   <C-x> (any letter x)      → x & 0x1F  (ctrl byte)
+///
+/// Unrecognised `<...>` tags are left unchanged in the output.
+/// This covers the common subset used by plugin configs; it does NOT implement
+/// the full nvim termcode table (function keys, mouse, <M-x>, <A-x>, etc.).
+fn replace_termcodes(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '<' {
+            out.push(ch);
+            continue;
+        }
+        // Collect tag contents up to the matching '>'.
+        let mut tag = String::new();
+        let mut closed = false;
+        for next in chars.by_ref() {
+            if next == '>' {
+                closed = true;
+                break;
+            }
+            tag.push(next);
+        }
+        if !closed {
+            // No closing '>' — emit literally and stop.
+            out.push('<');
+            out.push_str(&tag);
+            break;
+        }
+        let lower = tag.to_ascii_lowercase();
+        match lower.as_str() {
+            "cr" | "enter" | "return" => out.push('\r'),
+            "esc" => out.push('\x1B'),
+            "tab" => out.push('\t'),
+            "bs" => out.push('\x08'),
+            "space" => out.push(' '),
+            "nul" => out.push('\x00'),
+            "lt" => out.push('<'),
+            "bar" => out.push('|'),
+            "bslash" => out.push('\\'),
+            _ if lower.starts_with("c-") && lower.len() == 3 => {
+                // <C-x> for a single ASCII letter → ctrl byte (x & 0x1F).
+                let letter = lower.as_bytes()[2];
+                if letter.is_ascii_alphabetic() || letter.is_ascii_digit() {
+                    out.push((letter & 0x1F) as char);
+                } else {
+                    // Non-letter <C-x>: leave as-is.
+                    out.push('<');
+                    out.push_str(&tag);
+                    out.push('>');
+                }
+            }
+            _ => {
+                // Unrecognised tag — leave as-is.
+                out.push('<');
+                out.push_str(&tag);
+                out.push('>');
+            }
+        }
+    }
+    out
+}
+
 // ── method dispatch ───────────────────────────────────────────────────────────
 
 fn dispatch(
@@ -1905,6 +1982,204 @@ fn dispatch(
                 Some(_) => ok(stdout, msgid, Value::Nil),
                 None => err(stdout, msgid, &format!("Key not found: {name}")),
             }
+        }
+
+        // ── keymap API ────────────────────────────────────────────────────────
+        "nvim_set_keymap" => {
+            // nvim_set_keymap(mode: string, lhs: string, rhs: string, opts: dict|nil)
+            //
+            // Maps the nvim single-char mode to the hjkl ex-command prefix,
+            // then calls dispatch_ex("{prefix}{noremap|map} {lhs} {rhs}").
+            //
+            // Mode character → prefix mapping (confirmed from keymap.rs parse_mode_groups):
+            //   "n"  → n   (nmap / nnoremap)
+            //   "i"  → i   (imap / inoremap)
+            //   "v"  → v   (vmap / vnoremap)
+            //   "x"  → x   (xmap / xnoremap — also Visual in hjkl)
+            //   "o"  → o   (omap / onoremap — OperatorPending)
+            //   ""   →     (map / noremap — Normal+Visual+OpPending)
+            //   any other → plain map (best-effort fallback)
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let mode = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let lhs = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let rhs = match param_str(p, 2) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // Extract opts dict — noremap defaults to false.
+            let noremap = match p.get(3) {
+                Some(Value::Map(m)) => map_get(m, "noremap")
+                    .and_then(|v| {
+                        if let Value::Boolean(b) = v {
+                            Some(*b)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(false),
+                _ => false,
+            };
+            let prefix = match mode.as_str() {
+                "n" => "n",
+                "i" => "i",
+                "v" => "v",
+                "x" => "x",
+                "o" => "o",
+                "" => "",
+                _ => "", // unknown modes fall back to plain map
+            };
+            let verb = if noremap {
+                if prefix.is_empty() {
+                    "noremap".to_string()
+                } else {
+                    format!("{prefix}noremap")
+                }
+            } else if prefix.is_empty() {
+                "map".to_string()
+            } else {
+                format!("{prefix}map")
+            };
+            let cmd = format!("{verb} {lhs} {rhs}");
+            app.dispatch_ex(&cmd);
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_del_keymap" => {
+            // nvim_del_keymap(mode: string, lhs: string)
+            // Builds "{prefix}unmap {lhs}" and dispatches it.
+            // Mode → unmap prefix mapping (from keymap.rs parse_mode_groups):
+            //   "n" → nunmap, "i" → iunmap, "v" → vunmap, "x" → xunmap,
+            //   "o" → ounmap, "" → unmap (Normal+Visual+OpPending+Insert+...)
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let mode = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let lhs = match param_str(p, 1) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let prefix = match mode.as_str() {
+                "n" => "n",
+                "i" => "i",
+                "v" => "v",
+                "x" => "x",
+                "o" => "o",
+                _ => "", // "" and unknowns → plain unmap
+            };
+            let verb = format!("{prefix}unmap");
+            let cmd = format!("{verb} {lhs}");
+            app.dispatch_ex(&cmd);
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_replace_termcodes" => {
+            // nvim_replace_termcodes(str: string, from_part: bool, do_lt: bool, special: bool)
+            //
+            // v1: translates the common subset of vim key-notation tags to their
+            // control-byte equivalents. Unrecognised <...> tags are left as-is.
+            // This does NOT cover the full nvim termcode table (function keys,
+            // mouse events, modifiers beyond C-x, etc.).
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let src = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // from_part / do_lt / special are accepted but not acted on in v1.
+            let result = replace_termcodes(&src);
+            ok(stdout, msgid, Value::from(result.as_str()))
+        }
+
+        "nvim_feedkeys" => {
+            // nvim_feedkeys(keys: string, mode: string, escape_ks: bool)
+            //
+            // v1: replays `keys` through the same engine path as nvim_input —
+            // decode_macro parses vim notation and dispatch_input feeds each
+            // key to the active editor. The `mode` flags (remap/typeahead/etc.)
+            // and `escape_ks` are NOT honoured in v1; all keys are dispatched
+            // immediately in the current editor mode.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let keys = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // params[1]=mode, params[2]=escape_ks — both ignored in v1.
+            let inputs = hjkl_engine::decode_macro(&keys);
+            for input in inputs {
+                hjkl_vim::dispatch_input(app.active_editor_mut(), input);
+            }
+            settle(app);
+            ok(stdout, msgid, Value::Nil)
+        }
+
+        "nvim_exec2" => {
+            // nvim_exec2(src: string, opts: dict|nil)
+            // → always returns a dict; if opts["output"]==true returns {"output": ""}
+            //   (hjkl routes command output to its message bus; capturing it is a
+            //   future task — v1 always returns an empty string for output).
+            //
+            // src is split on '\n'; each non-empty trimmed line (with a leading ':'
+            // stripped) is dispatched as an ex command.
+            let p = match as_array(params) {
+                Ok(p) => p,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            let src = match param_str(p, 0) {
+                Ok(s) => s,
+                Err(e) => return err(stdout, msgid, &e),
+            };
+            // Determine whether the caller wants captured output.
+            let want_output = match p.get(1) {
+                Some(Value::Map(m)) => map_get(m, "output")
+                    .and_then(|v| {
+                        if let Value::Boolean(b) = v {
+                            Some(*b)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(false),
+                _ => false,
+            };
+            // Execute each line.
+            for line in src.split('\n') {
+                let line = line.trim().strip_prefix(':').unwrap_or(line.trim());
+                if !line.is_empty() {
+                    app.dispatch_ex(line);
+                }
+            }
+            if app.exit_requested {
+                *should_quit = true;
+            }
+            settle(app);
+            // nvim_exec2 always returns a Map dict.
+            let result_map = if want_output {
+                // v1: output capture not implemented — always returns empty string.
+                Value::Map(vec![(Value::from("output"), Value::from(""))])
+            } else {
+                Value::Map(vec![])
+            };
+            ok(stdout, msgid, result_map)
         }
 
         // ── synchronisation barrier ───────────────────────────────────────────
@@ -4034,5 +4309,268 @@ mod tests {
             vec![cur_win, Value::from("no_such_wvar")],
         );
         assert_ne!(resp[2], Value::Nil, "get missing wvar should return error");
+    }
+
+    // ── Phase C3 tests ────────────────────────────────────────────────────────
+
+    // ── nvim_replace_termcodes ─────────────────────────────────────────────
+
+    #[test]
+    fn test_replace_termcodes_cr() {
+        assert_eq!(replace_termcodes("<CR>"), "\r");
+        assert_eq!(replace_termcodes("<Enter>"), "\r");
+        assert_eq!(replace_termcodes("<Return>"), "\r");
+        // Case-insensitive.
+        assert_eq!(replace_termcodes("<cr>"), "\r");
+    }
+
+    #[test]
+    fn test_replace_termcodes_esc() {
+        assert_eq!(replace_termcodes("<Esc>"), "\x1b");
+        assert_eq!(replace_termcodes("<ESC>"), "\x1b");
+    }
+
+    #[test]
+    fn test_replace_termcodes_lt() {
+        // "<lt>" → literal "<"; "a<lt>b" → "a<b"
+        assert_eq!(replace_termcodes("a<lt>b"), "a<b");
+    }
+
+    #[test]
+    fn test_replace_termcodes_ctrl_a() {
+        // <C-a> → 0x01
+        assert_eq!(replace_termcodes("<C-a>"), "\x01");
+        // <C-z> → 0x1A
+        assert_eq!(replace_termcodes("<C-z>"), "\x1a");
+    }
+
+    #[test]
+    fn test_replace_termcodes_unknown_tag_passthrough() {
+        // Unrecognised tags are left as-is.
+        assert_eq!(replace_termcodes("<F1>"), "<F1>");
+        assert_eq!(replace_termcodes("<M-a>"), "<M-a>");
+    }
+
+    // via dispatch
+    #[test]
+    fn test_nvim_replace_termcodes_via_api() {
+        let mut app = build_app(None).unwrap();
+
+        let resp = call(
+            &mut app,
+            "nvim_replace_termcodes",
+            vec![
+                Value::from("<CR>"),
+                Value::Boolean(false),
+                Value::Boolean(false),
+                Value::Boolean(true),
+            ],
+        );
+        let result = match assert_ok(resp) {
+            Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert_eq!(result, "\r", "nvim_replace_termcodes('<CR>') should be \\r");
+    }
+
+    // ── nvim_exec2 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_nvim_exec2_set_options() {
+        let mut app = build_app(None).unwrap();
+
+        // Execute two set commands via nvim_exec2.
+        let resp = call(
+            &mut app,
+            "nvim_exec2",
+            vec![Value::from("set shiftwidth=4\nset number"), Value::Nil],
+        );
+        // nvim_exec2 returns a dict, not Nil.
+        assert_ok(resp);
+
+        // Verify shiftwidth=4 via nvim_get_option_value.
+        let sw = assert_ok(call(
+            &mut app,
+            "nvim_get_option_value",
+            vec![Value::from("shiftwidth"), Value::Nil],
+        ));
+        assert_eq!(
+            sw,
+            Value::Integer(rmpv::Integer::from(4i64)),
+            "shiftwidth should be 4 after nvim_exec2"
+        );
+
+        // Verify number=true via nvim_get_option_value.
+        let nu = assert_ok(call(
+            &mut app,
+            "nvim_get_option_value",
+            vec![Value::from("number"), Value::Nil],
+        ));
+        assert_eq!(
+            nu,
+            Value::Boolean(true),
+            "number should be true after nvim_exec2"
+        );
+    }
+
+    #[test]
+    fn test_nvim_exec2_returns_dict() {
+        let mut app = build_app(None).unwrap();
+
+        // Without output option → empty map.
+        let result = assert_ok(call(
+            &mut app,
+            "nvim_exec2",
+            vec![Value::from("set tabstop=2"), Value::Nil],
+        ));
+        match &result {
+            Value::Map(m) => assert!(m.is_empty(), "no opts → empty map"),
+            other => panic!("expected map, got {other:?}"),
+        }
+
+        // With output=true → map with "output" key.
+        let result2 = assert_ok(call(
+            &mut app,
+            "nvim_exec2",
+            vec![
+                Value::from("set tabstop=2"),
+                Value::Map(vec![(Value::from("output"), Value::Boolean(true))]),
+            ],
+        ));
+        match &result2 {
+            Value::Map(m) => {
+                let out = map_get(m, "output");
+                assert!(
+                    out.is_some(),
+                    "opts.output=true → 'output' key should be present"
+                );
+            }
+            other => panic!("expected map, got {other:?}"),
+        }
+    }
+
+    // ── nvim_feedkeys ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_nvim_feedkeys_insert_x_then_escape() {
+        // Start in Normal mode; feed "ix<Esc>" → insert 'x' then return to Normal.
+        // The buffer's first line should gain an 'x' at the start.
+        let mut app = build_app(None).unwrap();
+
+        // Set a known initial buffer content.
+        let buf = assert_ok(call(&mut app, "nvim_get_current_buf", vec![]));
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("hello")]),
+            ],
+        ));
+
+        // Feed "ix<Esc>" — enter insert, type 'x', escape back to normal.
+        let resp = call(
+            &mut app,
+            "nvim_feedkeys",
+            vec![
+                Value::from("ix<Esc>"),
+                Value::from("n"),
+                Value::Boolean(false),
+            ],
+        );
+        assert_ok(resp);
+
+        // The first line should now start with 'x'.
+        let line_resp = call(&mut app, "nvim_get_current_line", vec![]);
+        let line = match assert_ok(line_resp) {
+            Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert!(
+            line.contains('x'),
+            "line should contain 'x' after feedkeys('ix<Esc>'), got: {line:?}"
+        );
+    }
+
+    // ── nvim_set_keymap / nvim_del_keymap ────────────────────────────────
+
+    #[test]
+    fn test_nvim_set_keymap_returns_ok() {
+        let mut app = build_app(None).unwrap();
+
+        // nvim_set_keymap("n", "Q", "dd", {}) → ok(Nil)
+        let resp = call(
+            &mut app,
+            "nvim_set_keymap",
+            vec![
+                Value::from("n"),
+                Value::from("Q"),
+                Value::from("dd"),
+                Value::Map(vec![]),
+            ],
+        );
+        assert_ok(resp);
+    }
+
+    #[test]
+    fn test_nvim_set_keymap_noremap_and_del() {
+        let mut app = build_app(None).unwrap();
+
+        // Set a noremap.
+        let set_resp = call(
+            &mut app,
+            "nvim_set_keymap",
+            vec![
+                Value::from("n"),
+                Value::from("Q"),
+                Value::from("dd"),
+                Value::Map(vec![(Value::from("noremap"), Value::Boolean(true))]),
+            ],
+        );
+        assert_ok(set_resp);
+
+        // The mapping should have been registered (user_keymap_records contains it).
+        assert!(
+            app.user_keymap_records
+                .iter()
+                .any(|r| matches!(r.mode, crate::app::keymap::MapMode::Normal)),
+            "Normal mode record should exist after set_keymap"
+        );
+
+        // Delete the mapping.
+        let del_resp = call(
+            &mut app,
+            "nvim_del_keymap",
+            vec![Value::from("n"), Value::from("Q")],
+        );
+        assert_ok(del_resp);
+    }
+
+    #[test]
+    fn test_nvim_set_keymap_insert_mode() {
+        let mut app = build_app(None).unwrap();
+
+        let resp = call(
+            &mut app,
+            "nvim_set_keymap",
+            vec![
+                Value::from("i"),
+                Value::from("<C-s>"),
+                Value::from("<Esc>:w<CR>"),
+                Value::Map(vec![]),
+            ],
+        );
+        assert_ok(resp);
+
+        // Insert-mode record exists.
+        assert!(
+            app.user_keymap_records
+                .iter()
+                .any(|r| matches!(r.mode, crate::app::keymap::MapMode::Insert)),
+            "Insert mode record should exist"
+        );
     }
 }
