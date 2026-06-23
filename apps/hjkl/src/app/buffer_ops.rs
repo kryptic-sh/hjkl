@@ -439,6 +439,20 @@ impl App {
             .map(|s| &mut s.editor)
     }
 
+    /// First buffer id whose stored filename string contains `name` as a
+    /// substring, or `None` if no slot matches. Used by `nvim_call_function`
+    /// `bufnr("name")` semantics.
+    pub(crate) fn nvim_buffer_id_for_name(&self, name: &str) -> Option<u64> {
+        self.slots.iter().find_map(|s| {
+            let fname = s.filename.as_ref()?.to_string_lossy();
+            if fname.contains(name) {
+                Some(s.buffer_id)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Allocate a fresh empty unnamed buffer slot (nvim_create_buf).
     /// The slot is appended but NOT switched to; returns the new buffer id.
     pub(crate) fn nvim_create_buffer(&mut self) -> u64 {

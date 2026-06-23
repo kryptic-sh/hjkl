@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use hjkl_buffer::Buffer;
 use hjkl_engine::{Host, VimMode};
+use hjkl_quickfix::{QfEntry, QfKind};
 use rmpv::Value;
 
 use crate::host::TuiHost;
@@ -249,6 +250,183 @@ fn resolve_line_range(
         ));
     }
     Ok((s, e))
+}
+
+// ── nvim_call_function helpers ────────────────────────────────────────────────
+
+/// Convert a `QfEntry` into the `Value::Map` dict that `getqflist` /
+/// `getloclist` returns. Shape:
+/// `{bufnr, lnum, col, text, valid}` (matches nvim wire semantics).
+fn qf_entry_to_value(app: &crate::app::App, entry: &QfEntry) -> Value {
+    let path_str = entry.path.to_string_lossy();
+    let bufnr: i64 = if path_str.is_empty() {
+        0
+    } else {
+        app.nvim_buffer_id_for_name(&path_str).unwrap_or(0) as i64
+    };
+    Value::Map(vec![
+        (Value::from("bufnr"), Value::from(bufnr)),
+        (Value::from("lnum"), Value::from((entry.row + 1) as i64)),
+        (Value::from("col"), Value::from((entry.col + 1) as i64)),
+        (Value::from("text"), Value::from(entry.message.as_str())),
+        (Value::from("valid"), Value::from(1i64)),
+    ])
+}
+
+/// Extract a value from a `Value::Map` by string key.
+fn map_get<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
+    map.iter().find_map(|(k, v)| {
+        if let Value::String(s) = k
+            && s.as_str() == Some(key)
+        {
+            return Some(v);
+        }
+        None
+    })
+}
+
+/// Parse `fn_args[list_idx]` as a list of dicts and convert to `Vec<QfEntry>`.
+/// Used by both `setqflist` and `setloclist`.
+fn parse_qf_list(fn_args: &[Value], list_idx: usize, app: &crate::app::App) -> Vec<QfEntry> {
+    let list = match fn_args.get(list_idx) {
+        Some(Value::Array(arr)) => arr.as_slice(),
+        _ => return Vec::new(),
+    };
+
+    list.iter()
+        .filter_map(|v| {
+            let map = match v {
+                Value::Map(m) => m.as_slice(),
+                _ => return None,
+            };
+
+            // path: from "filename" or "bufnr"
+            let path = if let Some(Value::String(s)) = map_get(map, "filename") {
+                PathBuf::from(s.as_str().unwrap_or(""))
+            } else if let Some(Value::Integer(n)) = map_get(map, "bufnr") {
+                let id = n.as_u64().unwrap_or(0);
+                if id > 0 {
+                    if let Some(name) = app.nvim_buffer_name(id) {
+                        PathBuf::from(name)
+                    } else {
+                        PathBuf::new()
+                    }
+                } else {
+                    PathBuf::new()
+                }
+            } else {
+                PathBuf::new()
+            };
+
+            // row: lnum (1-based in dict) → 0-based; default 0
+            let row = match map_get(map, "lnum") {
+                Some(Value::Integer(n)) => (n.as_i64().unwrap_or(0) as usize).saturating_sub(1),
+                _ => 0,
+            };
+
+            // col: col (1-based in dict) → 0-based; default 0
+            let col = match map_get(map, "col") {
+                Some(Value::Integer(n)) => (n.as_i64().unwrap_or(0) as usize).saturating_sub(1),
+                _ => 0,
+            };
+
+            // kind: "type" field — "W"->Warning, "I"->Info, "N"->Note, else Error
+            let kind = match map_get(map, "type") {
+                Some(Value::String(s)) => match s.as_str().unwrap_or("") {
+                    "W" => QfKind::Warning,
+                    "I" => QfKind::Info,
+                    "N" => QfKind::Note,
+                    _ => QfKind::Error,
+                },
+                _ => QfKind::Error,
+            };
+
+            // message: "text" field
+            let message = match map_get(map, "text") {
+                Some(Value::String(s)) => s.as_str().unwrap_or("").to_owned(),
+                _ => String::new(),
+            };
+
+            Some(QfEntry {
+                path,
+                row,
+                col,
+                kind,
+                message,
+            })
+        })
+        .collect()
+}
+
+/// Expand a vimscript `%`-style filename expression against the current buffer.
+fn expand_expr(app: &crate::app::App, expr: &str) -> String {
+    // Resolve the current filename (use the stored path as-is first, then
+    // fall back to the canonical name string used elsewhere).
+    let filename = app.active().filename.clone();
+
+    // Alternate file "#" — not tracked yet.
+    if expr == "#" {
+        return String::new();
+    }
+
+    let path: std::path::PathBuf = match &filename {
+        Some(p) => p.clone(),
+        None => {
+            // Try via nvim_buffer_name which may have been set explicitly.
+            let cur_id = app.nvim_current_buffer_id();
+            match app.nvim_buffer_name(cur_id) {
+                Some(s) if !s.is_empty() => PathBuf::from(s),
+                _ => return String::new(),
+            }
+        }
+    };
+
+    match expr {
+        "%" => path.to_string_lossy().into_owned(),
+        "%:p" => {
+            // Absolute path
+            std::fs::canonicalize(&path)
+                .unwrap_or_else(|_| {
+                    if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        std::env::current_dir()
+                            .map(|d| d.join(&path))
+                            .unwrap_or_else(|_| path.clone())
+                    }
+                })
+                .to_string_lossy()
+                .into_owned()
+        }
+        "%:t" => path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        "%:h" => path
+            .parent()
+            .map(|p| {
+                let s = p.to_string_lossy();
+                if s.is_empty() {
+                    ".".to_owned()
+                } else {
+                    s.into_owned()
+                }
+            })
+            .unwrap_or_else(|| ".".to_owned()),
+        "%:e" => path
+            .extension()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        "%:r" => {
+            // Remove final extension
+            let s = path.to_string_lossy();
+            match s.rfind('.') {
+                Some(dot) => s[..dot].to_owned(),
+                None => s.into_owned(),
+            }
+        }
+        _ => String::new(),
+    }
 }
 
 // ── method dispatch ───────────────────────────────────────────────────────────
@@ -744,7 +922,7 @@ fn dispatch(
             ok(stdout, msgid, map)
         }
 
-        // ── registers via nvim_call_function("getreg", [name]) ────────────────
+        // ── vimscript functions via nvim_call_function ────────────────────────
         "nvim_call_function" => {
             let p = match as_array(params) {
                 Ok(p) => p,
@@ -754,28 +932,187 @@ fn dispatch(
                 Ok(s) => s,
                 Err(e) => return err(stdout, msgid, &e),
             };
-            if fn_name != "getreg" {
-                return err(
+            // params[1] is the argument array for the function.
+            let fn_args: &[Value] = match p.get(1) {
+                Some(Value::Array(arr)) => arr.as_slice(),
+                _ => &[],
+            };
+
+            match fn_name.as_str() {
+                // ── getreg ────────────────────────────────────────────────────
+                "getreg" => {
+                    let reg_name = match fn_args.first() {
+                        Some(Value::String(s)) => s.as_str().unwrap_or("\"").to_owned(),
+                        _ => "\"".to_owned(),
+                    };
+                    let reg_char = reg_name.chars().next().unwrap_or('"');
+                    let text = match app.active_editor().registers().read(reg_char) {
+                        Some(slot) => slot.text.clone(),
+                        None => String::new(),
+                    };
+                    ok(stdout, msgid, Value::from(text.as_str()))
+                }
+
+                // ── getqflist ─────────────────────────────────────────────────
+                "getqflist" => {
+                    let entries: Vec<Value> = app
+                        .quickfix
+                        .entries()
+                        .iter()
+                        .map(|e| qf_entry_to_value(app, e))
+                        .collect();
+                    ok(stdout, msgid, Value::Array(entries))
+                }
+
+                // ── getloclist ────────────────────────────────────────────────
+                "getloclist" => {
+                    // args[0] = window (ignored)
+                    let entries: Vec<Value> = app
+                        .loclist
+                        .entries()
+                        .iter()
+                        .map(|e| qf_entry_to_value(app, e))
+                        .collect();
+                    ok(stdout, msgid, Value::Array(entries))
+                }
+
+                // ── setqflist ─────────────────────────────────────────────────
+                "setqflist" => {
+                    // args[0] = list of dicts; optional args[1]=action, args[2]=what ignored
+                    let qf_entries = parse_qf_list(fn_args, 0, app);
+                    app.quickfix.set(qf_entries);
+                    ok(stdout, msgid, Value::from(0i64))
+                }
+
+                // ── setloclist ────────────────────────────────────────────────
+                "setloclist" => {
+                    // args[0] = window (ignored); args[1] = list of dicts
+                    let qf_entries = parse_qf_list(fn_args, 1, app);
+                    app.loclist.set(qf_entries);
+                    ok(stdout, msgid, Value::from(0i64))
+                }
+
+                // ── bufnr ─────────────────────────────────────────────────────
+                "bufnr" => {
+                    let result = match fn_args.first() {
+                        None => app.nvim_current_buffer_id() as i64,
+                        Some(Value::String(s)) => {
+                            let s = s.as_str().unwrap_or("");
+                            if s.is_empty() || s == "%" {
+                                app.nvim_current_buffer_id() as i64
+                            } else if s == "$" {
+                                app.nvim_buffer_ids().into_iter().max().unwrap_or(0) as i64
+                            } else {
+                                // substring match on buffer name
+                                match app.nvim_buffer_id_for_name(s) {
+                                    Some(id) => id as i64,
+                                    None => -1,
+                                }
+                            }
+                        }
+                        Some(Value::Integer(n)) => {
+                            let id = n.as_u64().unwrap_or(0);
+                            if app.nvim_slot_index_for_buffer(id).is_some() {
+                                id as i64
+                            } else {
+                                -1
+                            }
+                        }
+                        _ => -1,
+                    };
+                    ok(stdout, msgid, Value::from(result))
+                }
+
+                // ── bufname ───────────────────────────────────────────────────
+                "bufname" => {
+                    let name = match fn_args.first() {
+                        None => app
+                            .nvim_buffer_name(app.nvim_current_buffer_id())
+                            .unwrap_or_default(),
+                        Some(Value::String(s)) => {
+                            let s = s.as_str().unwrap_or("");
+                            if s.is_empty() || s == "%" {
+                                app.nvim_buffer_name(app.nvim_current_buffer_id())
+                                    .unwrap_or_default()
+                            } else {
+                                match app.nvim_buffer_id_for_name(s) {
+                                    Some(id) => app.nvim_buffer_name(id).unwrap_or_default(),
+                                    None => String::new(),
+                                }
+                            }
+                        }
+                        Some(Value::Integer(n)) => {
+                            let id = n.as_u64().unwrap_or(0);
+                            let cid = if id == 0 {
+                                app.nvim_current_buffer_id()
+                            } else {
+                                id
+                            };
+                            app.nvim_buffer_name(cid).unwrap_or_default()
+                        }
+                        _ => String::new(),
+                    };
+                    ok(stdout, msgid, Value::from(name.as_str()))
+                }
+
+                // ── expand ────────────────────────────────────────────────────
+                "expand" => {
+                    let expr = match fn_args.first() {
+                        Some(Value::String(s)) => s.as_str().unwrap_or("").to_owned(),
+                        _ => String::new(),
+                    };
+                    let result = expand_expr(app, &expr);
+                    ok(stdout, msgid, Value::from(result.as_str()))
+                }
+
+                // ── line ──────────────────────────────────────────────────────
+                "line" => {
+                    let expr = match fn_args.first() {
+                        Some(Value::String(s)) => s.as_str().unwrap_or(".").to_owned(),
+                        _ => ".".to_owned(),
+                    };
+                    let rope = app.active_editor().buffer().rope();
+                    let result: i64 = match expr.as_str() {
+                        "." => {
+                            let (row, _) = app.active_editor().cursor();
+                            (row + 1) as i64
+                        }
+                        "$" => {
+                            let n = rope.len_lines();
+                            // vim: empty buffer has 1 line
+                            n.max(1) as i64
+                        }
+                        _ => 0,
+                    };
+                    ok(stdout, msgid, Value::from(result))
+                }
+
+                // ── col ───────────────────────────────────────────────────────
+                "col" => {
+                    let expr = match fn_args.first() {
+                        Some(Value::String(s)) => s.as_str().unwrap_or(".").to_owned(),
+                        _ => ".".to_owned(),
+                    };
+                    let (row, char_col) = app.active_editor().cursor();
+                    let rope = app.active_editor().buffer().rope();
+                    let result: i64 = match expr.as_str() {
+                        "." => (char_col + 1) as i64,
+                        "$" => {
+                            // Length of the current line in chars + 1
+                            let line = hjkl_buffer::rope_line_str(&rope, row);
+                            (line.chars().count() + 1) as i64
+                        }
+                        _ => 0,
+                    };
+                    ok(stdout, msgid, Value::from(result))
+                }
+
+                _ => err(
                     stdout,
                     msgid,
                     &format!("nvim_call_function: unsupported function: {fn_name}"),
-                );
+                ),
             }
-            // params[1] is the argument array for the function.
-            let fn_args = match p.get(1) {
-                Some(Value::Array(arr)) => arr.as_slice(),
-                _ => return err(stdout, msgid, "nvim_call_function: params[1] must be array"),
-            };
-            let reg_name = match fn_args.first() {
-                Some(Value::String(s)) => s.as_str().unwrap_or("\"").to_owned(),
-                _ => "\"".to_owned(),
-            };
-            let reg_char = reg_name.chars().next().unwrap_or('"');
-            let text = match app.active_editor().registers().read(reg_char) {
-                Some(slot) => slot.text.clone(),
-                None => String::new(),
-            };
-            ok(stdout, msgid, Value::from(text.as_str()))
         }
 
         // ── synchronisation barrier ───────────────────────────────────────────
@@ -1429,5 +1766,357 @@ mod tests {
         assert_eq!(lines.len(), 2, "should have 2 lines in non-current buffer");
         assert_eq!(lines[0], Value::from("hello from other buf"));
         assert_eq!(lines[1], Value::from("second line"));
+    }
+
+    // ── setqflist / getqflist roundtrip ───────────────────────────────────────
+
+    #[test]
+    fn test_setqflist_getqflist_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        // Build two qf dicts.
+        let entry1 = Value::Map(vec![
+            (Value::from("filename"), Value::from("/tmp/a.rs")),
+            (Value::from("lnum"), Value::from(3i64)),
+            (Value::from("col"), Value::from(7i64)),
+            (Value::from("text"), Value::from("error one")),
+            (Value::from("type"), Value::from("E")),
+        ]);
+        let entry2 = Value::Map(vec![
+            (Value::from("filename"), Value::from("/tmp/b.rs")),
+            (Value::from("lnum"), Value::from(10i64)),
+            (Value::from("col"), Value::from(1i64)),
+            (Value::from("text"), Value::from("warning two")),
+            (Value::from("type"), Value::from("W")),
+        ]);
+
+        // setqflist([entry1, entry2])
+        {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("setqflist"),
+                    Value::Array(vec![Value::Array(vec![entry1, entry2])]),
+                ],
+            );
+            let r = assert_ok(resp);
+            assert_eq!(r, Value::from(0i64), "setqflist should return 0");
+        }
+
+        // getqflist() should return 2 entries with correct 1-based lnum/col.
+        let entries = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![Value::from("getqflist"), Value::Array(vec![])],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+
+        assert_eq!(entries.len(), 2, "should have 2 entries");
+
+        // Check entry 1: lnum=3, col=7, text="error one"
+        let e1 = match &entries[0] {
+            Value::Map(m) => m.clone(),
+            other => panic!("expected map, got {other:?}"),
+        };
+        let get = |m: &[(Value, Value)], k: &str| -> Value {
+            m.iter()
+                .find_map(|(key, v)| {
+                    if let Value::String(s) = key
+                        && s.as_str() == Some(k)
+                    {
+                        return Some(v.clone());
+                    }
+                    None
+                })
+                .unwrap_or(Value::Nil)
+        };
+        assert_eq!(get(&e1, "lnum"), Value::from(3i64));
+        assert_eq!(get(&e1, "col"), Value::from(7i64));
+        assert_eq!(get(&e1, "text"), Value::from("error one"));
+        assert_eq!(get(&e1, "valid"), Value::from(1i64));
+
+        // Check entry 2: lnum=10, col=1
+        let e2 = match &entries[1] {
+            Value::Map(m) => m.clone(),
+            other => panic!("expected map, got {other:?}"),
+        };
+        assert_eq!(get(&e2, "lnum"), Value::from(10i64));
+        assert_eq!(get(&e2, "col"), Value::from(1i64));
+        assert_eq!(get(&e2, "text"), Value::from("warning two"));
+    }
+
+    // ── getloclist empty, setloclist roundtrip ────────────────────────────────
+
+    #[test]
+    fn test_getloclist_empty_then_setloclist() {
+        let mut app = build_app(None).unwrap();
+
+        // Initially empty.
+        let initial = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("getloclist"),
+                    Value::Array(vec![Value::from(0i64)]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert!(initial.is_empty(), "loclist should start empty");
+
+        // setloclist(0, [entry])
+        let loc_entry = Value::Map(vec![
+            (Value::from("filename"), Value::from("/tmp/loc.rs")),
+            (Value::from("lnum"), Value::from(5i64)),
+            (Value::from("col"), Value::from(2i64)),
+            (Value::from("text"), Value::from("loc msg")),
+        ]);
+        {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("setloclist"),
+                    Value::Array(vec![
+                        Value::from(0i64), // window arg (ignored)
+                        Value::Array(vec![loc_entry]),
+                    ]),
+                ],
+            );
+            let r = assert_ok(resp);
+            assert_eq!(r, Value::from(0i64));
+        }
+
+        // getloclist should now have 1 entry.
+        let after = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("getloclist"),
+                    Value::Array(vec![Value::from(0i64)]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::Array(v) => v,
+                other => panic!("expected array, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            after.len(),
+            1,
+            "loclist should have 1 entry after setloclist"
+        );
+        if let Value::Map(ref m) = after[0] {
+            let get = |m: &[(Value, Value)], k: &str| -> Value {
+                m.iter()
+                    .find_map(|(key, v)| {
+                        if let Value::String(s) = key
+                            && s.as_str() == Some(k)
+                        {
+                            return Some(v.clone());
+                        }
+                        None
+                    })
+                    .unwrap_or(Value::Nil)
+            };
+            assert_eq!(get(m, "lnum"), Value::from(5i64));
+            assert_eq!(get(m, "col"), Value::from(2i64));
+            assert_eq!(get(m, "text"), Value::from("loc msg"));
+        } else {
+            panic!("expected map entry");
+        }
+    }
+
+    // ── bufnr("%") matches nvim_get_current_buf id ────────────────────────────
+
+    #[test]
+    fn test_bufnr_percent_matches_current_buf() {
+        let mut app = build_app(None).unwrap();
+
+        // Get the current buffer id via nvim_get_current_buf.
+        let cur_handle = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        // Decode the ext handle to a u64 id.
+        let cur_id = match &cur_handle {
+            Value::Ext(_, bytes) => {
+                let mut c = std::io::Cursor::new(bytes.as_slice());
+                rmpv::decode::read_value(&mut c)
+                    .unwrap()
+                    .as_u64()
+                    .expect("id")
+            }
+            other => panic!("expected Ext handle, got {other:?}"),
+        };
+
+        // bufnr("%") should return the same id.
+        let resp = call(
+            &mut app,
+            "nvim_call_function",
+            vec![Value::from("bufnr"), Value::Array(vec![Value::from("%")])],
+        );
+        let result = assert_ok(resp);
+        assert_eq!(
+            result,
+            Value::from(cur_id as i64),
+            "bufnr('%') should match current buffer id"
+        );
+    }
+
+    // ── expand("%:t") / expand("%:e") roundtrip via nvim_buf_set_name ─────────
+
+    #[test]
+    fn test_expand_modifiers_roundtrip() {
+        let mut app = build_app(None).unwrap();
+
+        // Set the current buffer name to a known path.
+        let cur_handle = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_name",
+                vec![cur_handle, Value::from("/home/user/project/main.rs")],
+            );
+            assert_ok(resp);
+        }
+
+        // expand("%:t") should return "main.rs"
+        let tail = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("expand"),
+                    Value::Array(vec![Value::from("%:t")]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+        assert_eq!(tail, "main.rs", "expand('%:t') should be the filename tail");
+
+        // expand("%:e") should return "rs"
+        let ext = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![
+                    Value::from("expand"),
+                    Value::Array(vec![Value::from("%:e")]),
+                ],
+            );
+            match assert_ok(resp) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+        assert_eq!(ext, "rs", "expand('%:e') should be the extension");
+    }
+
+    // ── line(".") and col(".") are 1-based ────────────────────────────────────
+
+    #[test]
+    fn test_line_col_are_one_based() {
+        let mut app = build_app(None).unwrap();
+
+        // Seed content.
+        {
+            let buf = {
+                let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+                assert_ok(resp)
+            };
+            let resp = call(
+                &mut app,
+                "nvim_buf_set_lines",
+                vec![
+                    buf,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false),
+                    Value::Array(vec![
+                        Value::from("hello world"),
+                        Value::from("second line"),
+                        Value::from("third"),
+                    ]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Move cursor to row=2 (1-based), col=5 via nvim_win_set_cursor.
+        {
+            let win = {
+                let resp = call(&mut app, "nvim_get_current_win", vec![]);
+                assert_ok(resp)
+            };
+            let resp = call(
+                &mut app,
+                "nvim_win_set_cursor",
+                vec![
+                    win,
+                    Value::Array(vec![Value::from(2i64), Value::from(4i64)]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // line(".") should be 2 (1-based row).
+        let line_dot = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![Value::from("line"), Value::Array(vec![Value::from(".")])],
+            );
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(line_dot, 2, "line('.') should be 2 (1-based)");
+
+        // col(".") should be 5 (char-col 4 + 1).
+        let col_dot = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![Value::from("col"), Value::Array(vec![Value::from(".")])],
+            );
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(col_dot, 5, "col('.') should be 5 (1-based char col)");
+
+        // line("$") should be 3 (total lines).
+        let line_dollar = {
+            let resp = call(
+                &mut app,
+                "nvim_call_function",
+                vec![Value::from("line"), Value::Array(vec![Value::from("$")])],
+            );
+            match assert_ok(resp) {
+                Value::Integer(n) => n.as_i64().unwrap(),
+                other => panic!("expected integer, got {other:?}"),
+            }
+        };
+        assert_eq!(line_dollar, 3, "line('$') should be 3 (total line count)");
     }
 }
