@@ -45,6 +45,15 @@ anvil-env = { max-threads = 1 }
 grammar-cache = { max-threads = 1 }
 pty-e2e = { max-threads = 1 }
 
+[profile.default]
+# Hard per-test timeout so a deadlocked test is SIGKILLed + reported by name
+# instead of hanging the whole CI job forever (#264: `test ubuntu-latest`
+# hung >24h with no signal). 120s × 4 = an 8-minute ceiling — far above any
+# real unit/integration/pty-e2e test, while cold tree-sitter grammar builds
+# (the slowest legit work, in the separate `--run-ignored` grammar job) finish
+# well under it. nextest prints `SLOW` at each period, naming the culprit.
+slow-timeout = { period = "120s", terminate-after = 4 }
+
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
 test-group = 'clipboard-display'
