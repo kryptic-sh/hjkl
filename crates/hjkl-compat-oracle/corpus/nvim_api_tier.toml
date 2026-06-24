@@ -730,3 +730,62 @@ initial_cursor = [0, 0]
 keys = ":%s/old/new/g<CR>"
 expected_buffer = "new text\nmore new\nlast new\n"
 expected_cursor = [2, 0]
+
+# ── Phase D re-added (#262 fix): :set plumbing + tabnew, buffer-only ──────────
+#
+# These mix an ex command with a normal-mode operator/insert sent via
+# nvim_input. They were removed once (the embedded cursor was startofline-
+# dependent and the input path was non-deterministic across platforms). After
+# the #262 fix (nvim_input uses sync_after_engine_mutation, not settle) the
+# input path is deterministic. We assert BUFFER ONLY (no cursor) — matching the
+# tier2 indent convention — because hjkl does not yet honor 'startofline'
+# (separate vim-compat gap), so the post->> cursor column differs from nvim's
+# default (startofline=off). Expected buffers derived from nvim --headless -u NONE.
+
+# :set shiftwidth=2 + expandtab then >> on a 4-space line → 6 spaces.
+[[cases]]
+name = "set_shiftwidth2_et_indent_buf"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=2<CR>:set expandtab<CR>>>"
+expected_buffer = "      hello\n"
+
+# :set shiftwidth=8 + expandtab then >> on a 4-space line → 12 spaces.
+[[cases]]
+name = "set_shiftwidth8_et_indent_buf"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=8<CR>:set expandtab<CR>>>"
+expected_buffer = "            hello\n"
+
+# :set shiftwidth=2 + expandtab then << on a 4-space line → 2 spaces.
+[[cases]]
+name = "set_shiftwidth2_et_unindent_buf"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=2<CR>:set expandtab<CR><<"
+expected_buffer = "  hello\n"
+
+# :set shiftwidth=4 noexpandtab tabstop=4 then >> on "hello" → one hard tab.
+[[cases]]
+name = "set_shiftwidth4_noet_ts4_indent_buf"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=4<CR>:set noexpandtab<CR>:set tabstop=4<CR>>>"
+expected_buffer = "\thello\n"
+
+# :tabnew then :tabprevious — current window returns to the original buffer.
+[[cases]]
+name = "tabnew_tabprevious_roundtrip_buf"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>:tabprevious<CR>"
+expected_buffer = "hello\n"
+
+# :tabnew, insert Z in the new tab, :tabprevious — original buffer untouched.
+[[cases]]
+name = "tabnew_insert_tabprevious_sees_original_buf"
+initial_buffer = "original\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>iZ<Esc>:tabprevious<CR>"
+expected_buffer = "original\n"

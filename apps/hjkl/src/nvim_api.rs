@@ -1060,7 +1060,13 @@ fn dispatch(
             for input in inputs {
                 hjkl_vim::dispatch_input(app.active_editor_mut(), input);
             }
-            settle(app);
+            // Use the canonical post-edit sync, NOT settle (#262): settle's
+            // reconcile_window_editors rebuilds the focused window editor from
+            // its slot when the content Arc diverges, resetting the cursor to
+            // the slot's stale position (the edit landed on the window editor).
+            // sync_after_engine_mutation mirrors the TUI keypress path —
+            // scrolloff / viewport / syntax sync without a window rebuild.
+            app.sync_after_engine_mutation();
             ok(stdout, msgid, Value::from(len))
         }
 
@@ -2128,7 +2134,8 @@ fn dispatch(
             for input in inputs {
                 hjkl_vim::dispatch_input(app.active_editor_mut(), input);
             }
-            settle(app);
+            // Canonical post-edit sync, NOT settle — see nvim_input (#262).
+            app.sync_after_engine_mutation();
             ok(stdout, msgid, Value::Nil)
         }
 
