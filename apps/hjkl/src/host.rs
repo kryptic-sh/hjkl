@@ -18,7 +18,27 @@
 
 use hjkl_clipboard::{Capabilities, Clipboard, MimeType, Selection};
 use hjkl_engine::{CursorShape, Host, Viewport};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+/// Process-global gate: when set, [`TuiHost::new`] builds with **no** clipboard
+/// backend.
+///
+/// The msgpack-rpc servers (`--nvim-api`, `--embed`, `--headless`) own stdout
+/// for the protocol stream. On a display-less host (e.g. CI) the clipboard
+/// probe falls back to OSC 52, which writes escape sequences to **stdout** — the
+/// rpc pipe — corrupting the protocol and deadlocking the peer (#264). Those
+/// entry points call [`disable_clipboard_for_rpc`] before constructing any
+/// `App`, so every editor host in rpc mode runs clipboard-free. The client owns
+/// the clipboard in an embedding scenario.
+static RPC_NO_CLIPBOARD: AtomicBool = AtomicBool::new(false);
+
+/// Disable the OS clipboard for all subsequently-built [`TuiHost`]s in this
+/// process. Call once, at rpc-server startup, before building the `App`. See
+/// [`RPC_NO_CLIPBOARD`].
+pub fn disable_clipboard_for_rpc() {
+    RPC_NO_CLIPBOARD.store(true, Ordering::Relaxed);
+}
 
 /// Standalone-binary host adapter. See module docs.
 pub struct TuiHost {
@@ -37,7 +57,13 @@ impl TuiHost {
         Self {
             last_cursor_shape: CursorShape::Block,
             started: Instant::now(),
-            clipboard: Clipboard::new().ok(),
+            // Rpc modes (--nvim-api/--embed/--headless) own stdout; a clipboard
+            // probe that lands on OSC 52 would corrupt the protocol (#264).
+            clipboard: if RPC_NO_CLIPBOARD.load(Ordering::Relaxed) {
+                None
+            } else {
+                Clipboard::new().ok()
+            },
             viewport: Viewport {
                 top_row: 0,
                 top_col: 0,

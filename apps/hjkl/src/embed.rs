@@ -395,6 +395,9 @@ fn write_buffer(
 /// `files` — files to open. Only the first is loaded; the rest are ignored
 /// for now (Phase 2.5 will add multi-buffer support).
 pub fn run(files: Vec<PathBuf>) -> Result<i32> {
+    // Stdout is the rpc channel here — keep the clipboard off so an OSC 52
+    // fallback can't write escapes into the protocol stream (#264).
+    crate::host::disable_clipboard_for_rpc();
     let first_file = files.into_iter().next();
     let (mut editor, mut current_filename) = build_editor(first_file.as_ref())?;
     let mut should_quit = false;

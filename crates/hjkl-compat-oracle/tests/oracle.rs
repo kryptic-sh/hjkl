@@ -100,17 +100,13 @@ fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
 /// Skips when the binary isn't built. Used for `:`-ex / substitute corpora
 /// that need the command line, not in-process key replay.
 async fn run_corpus_via_nvim_api(rel_path: &str, label: &str) {
-    // Opt-in (#264): the nvim-api subprocess oracle spawns a `hjkl --nvim-api`
-    // child per case. On the ubuntu CI runner one of these children hangs
-    // indefinitely for some corpora (never reproduced on macOS/Windows/local),
-    // and the release pipeline is gated behind the test job — so a hang there
-    // blocks every release. Run these only when explicitly enabled (CI does so
-    // on macOS/Windows, and locally); the plain ubuntu `test` job skips them.
-    // The same vim behaviours are also covered by the in-process oracle.
-    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
-        eprintln!("skipping {label}: set HJKL_ORACLE_NVIM_API=1 to run the nvim-api oracle");
-        return;
-    }
+    // #264 (fixed): the nvim-api subprocess oracle spawns a `hjkl --nvim-api`
+    // child per case. These used to hang on the display-less ubuntu CI runner —
+    // root cause was the child's clipboard probe falling back to OSC 52, which
+    // writes escapes to stdout (the rpc pipe) and desyncs the protocol. Rpc
+    // modes now run clipboard-free (host::disable_clipboard_for_rpc), so these
+    // run unconditionally again. The binary-not-found skip below + the nextest
+    // slow-timeout remain as backstops.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
@@ -700,13 +696,9 @@ async fn known_divergences_report() {
 /// 2. `<workspace>/target/debug/hjkl{EXE_SUFFIX}` derived from `CARGO_MANIFEST_DIR`.
 #[tokio::test(flavor = "multi_thread")]
 async fn nvim_api_tier_passes() {
-    // Opt-in (#264) — see run_corpus_via_nvim_api. Skips on the plain ubuntu
-    // `test` job (which doesn't set the var) where a `hjkl --nvim-api` child
-    // hangs indefinitely; runs where the var is set (macOS/Windows CI + local).
-    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
-        eprintln!("skipping nvim_api_tier_passes: set HJKL_ORACLE_NVIM_API=1 to run it");
-        return;
-    }
+    // #264 (fixed) — see run_corpus_via_nvim_api. The ubuntu hang was the child's
+    // OSC 52 clipboard fallback corrupting the rpc stream; rpc modes now run
+    // clipboard-free, so this runs unconditionally on all platforms again.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/nvim_api_tier.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
@@ -805,12 +797,9 @@ async fn tier2_gaps_corpus_passes() {
 /// fallback path is compared against nvim's substitute-char behavior.
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_sneak_disabled_fallback_corpus_passes() {
-    // Opt-in (#264) — spawns a `hjkl --nvim-api` child; skip on the plain
-    // ubuntu `test` job where it hangs. Set HJKL_ORACLE_NVIM_API=1 to run.
-    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
-        eprintln!("skipping tier2_sneak_disabled_fallback: set HJKL_ORACLE_NVIM_API=1 to run it");
-        return;
-    }
+    // #264 (fixed) — spawns a `hjkl --nvim-api` child. The ubuntu hang was the
+    // child's OSC 52 clipboard fallback corrupting the rpc stream; rpc modes now
+    // run clipboard-free, so this runs unconditionally on all platforms again.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_sneak.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();

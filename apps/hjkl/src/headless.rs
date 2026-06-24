@@ -40,6 +40,9 @@ use hjkl_ex::ExEffect;
 /// Returns the desired process exit code: `0` on full success, `1` on any
 /// ex-command error or I/O failure.
 pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
+    // Stdout carries command output here — keep the clipboard off so an OSC 52
+    // fallback can't inject escapes into it (#264).
+    crate::host::disable_clipboard_for_rpc();
     if files.is_empty() && commands.is_empty() {
         eprintln!("hjkl --headless: no commands or files; exiting");
         return Ok(0);

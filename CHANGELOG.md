@@ -8,7 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.33.2] - 2026-06-25
+### Fixed
+
+- **`hjkl --nvim-api` clipboard no longer corrupts the rpc stream** (#264, root
+  cause): on a display-less host (e.g. the ubuntu CI runner) the editor's
+  clipboard probe falls back to OSC 52, which writes terminal escape sequences
+  to **stdout** — the same channel the msgpack-rpc protocol uses. A yank/delete
+  in any session emitted escapes into the protocol stream, desyncing the peer's
+  decoder and deadlocking both sides (the long-hunted ubuntu-only hang). The rpc
+  servers (`--nvim-api`, `--embed`, `--headless`) now run **clipboard-free**
+  (`host::disable_clipboard_for_rpc`); the embedding client owns the clipboard.
+  The three subprocess oracle tests gated off in 0.33.2 are re-enabled and run
+  unconditionally on all platforms again.
 
 ### Fixed
 
