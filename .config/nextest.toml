@@ -44,6 +44,7 @@ clipboard-display = { max-threads = 1 }
 anvil-env = { max-threads = 1 }
 grammar-cache = { max-threads = 1 }
 pty-e2e = { max-threads = 1 }
+oracle-serial = { max-threads = 1 }
 
 [profile.default]
 # Hard per-test timeout so a deadlocked test is SIGKILLed + reported by name
@@ -53,6 +54,18 @@ pty-e2e = { max-threads = 1 }
 # (the slowest legit work, in the separate `--run-ignored` grammar job) finish
 # well under it. nextest prints `SLOW` at each period, naming the culprit.
 slow-timeout = { period = "120s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+# The hjkl-compat-oracle tests that drive `hjkl --nvim-api` spawn a heavy
+# subprocess each; under nextest's process-per-test parallelism a batch of them
+# saturates a constrained runner and the tail can't finish within the timeout
+# (#264: the same 3 nvim-api oracle tests deterministically timed out at the end
+# of the ubuntu run, while macOS/Windows/local — with more headroom — passed).
+# Run the oracle binary's tests one at a time, like pty-e2e. The in-process
+# corpus tests are sub-millisecond so the serial cost is dominated by the few
+# subprocess tests, which were already the bottleneck.
+filter = 'package(hjkl-compat-oracle)'
+test-group = 'oracle-serial'
 
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
