@@ -100,6 +100,17 @@ fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
 /// Skips when the binary isn't built. Used for `:`-ex / substitute corpora
 /// that need the command line, not in-process key replay.
 async fn run_corpus_via_nvim_api(rel_path: &str, label: &str) {
+    // Opt-in (#264): the nvim-api subprocess oracle spawns a `hjkl --nvim-api`
+    // child per case. On the ubuntu CI runner one of these children hangs
+    // indefinitely for some corpora (never reproduced on macOS/Windows/local),
+    // and the release pipeline is gated behind the test job — so a hang there
+    // blocks every release. Run these only when explicitly enabled (CI does so
+    // on macOS/Windows, and locally); the plain ubuntu `test` job skips them.
+    // The same vim behaviours are also covered by the in-process oracle.
+    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
+        eprintln!("skipping {label}: set HJKL_ORACLE_NVIM_API=1 to run the nvim-api oracle");
+        return;
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
@@ -689,6 +700,13 @@ async fn known_divergences_report() {
 /// 2. `<workspace>/target/debug/hjkl{EXE_SUFFIX}` derived from `CARGO_MANIFEST_DIR`.
 #[tokio::test(flavor = "multi_thread")]
 async fn nvim_api_tier_passes() {
+    // Opt-in (#264) — see run_corpus_via_nvim_api. Skips on the plain ubuntu
+    // `test` job (which doesn't set the var) where a `hjkl --nvim-api` child
+    // hangs indefinitely; runs where the var is set (macOS/Windows CI + local).
+    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
+        eprintln!("skipping nvim_api_tier_passes: set HJKL_ORACLE_NVIM_API=1 to run it");
+        return;
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/nvim_api_tier.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
