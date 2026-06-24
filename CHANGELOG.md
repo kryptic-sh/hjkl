@@ -8,6 +8,63 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-06-24
+
+### Added
+
+- **Quickfix & location lists** (#184): full `:c*` / `:l*` command family —
+  `:copen`/`:cclose`, `:cnext`/`:cprev`/`:cfirst`/`:clast`/`:cc`, navigation
+  binds `]q`/`[q`/`]l`/`[l`, and a bottom-pane popup. Population via `:grep`,
+  `:make` (with `:set errorformat`), `:cexpr`/`:cgetexpr`/`:caddexpr`,
+  `:cbuffer`/`:cfile` (and `:l*` variants), `:colder`/`:cnewer` list stack,
+  `:cdo`/`:cfdo` batch ops, and `:diagnostics`/`:ldiagnostics` from LSP. `gr`
+  references populate the location list. New `hjkl-quickfix` crate holds the
+  renderer-agnostic list model + errorformat parser.
+- **Headless multi-buffer nvim-api** (#261): `hjkl --nvim-api` now drives the
+  full multi-buffer app instead of a single bare editor. New surface: buffers
+  (`nvim_list_bufs`/`create_buf`/`set_current_buf`/`buf_get_set_name`/
+  `buf_get_set_lines`/`buf_get_set_text`/`buf_line_count`/`get_set_current_line`),
+  windows (`nvim_list_wins`/`set_current_win`/`win_get_set_buf`/`win_close`/
+  `win_get_set_cursor`/`win_get_set_height_width`), tabpages
+  (`nvim_list_tabpages`/`get_set_current_tabpage`/`tabpage_list_wins`),
+  `nvim_call_function` (`getqflist`/`setqflist`/`getloclist`/`setloclist`/
+  `bufnr`/`bufname`/`expand`/`line`/`col`), `nvim_get_set_option_value`,
+  `g:`/`b:`/`w:` variables, `nvim_set_keymap`/`del_keymap`,
+  `nvim_replace_termcodes`, `nvim_feedkeys`, `nvim_exec2`. Backed by 60+
+  nvim-cross-checked oracle cases.
+- **Diff mode** (#250): `:diffthis`/`:diffsplit`/`:diffoff`, line bands,
+  char-level diffs, filler-line alignment + scrollbind; `]c`/`[c` change
+  motions.
+- **Motions**: `<Space>`/`<BS>` wrapping motions (`whichwrap=b,s`), `<C-h>` as
+  `<BS>`/left in the engine, `gm` (middle of the screen line), and hop-style
+  label jumps in Normal + Visual (#197).
+- **Tabline filetype icons** + `tabline_icons` toggle (#200).
+- **Opt-in smooth scrolling** for page/recenter motions (#195).
+- **Dirty-buffer reload prompt** on external change + Windows PID liveness
+  (#241).
+- `:set errorformat` option.
+
+### Changed
+
+- **Per-window editors are authoritative** (#151 Phase D): per-buffer state
+  (named marks, syntax fold ranges) moved to the shared `Content`; one register
+  bank is shared across all editors; cursor/scroll read directly from the window
+  editor instead of a mirrored copy; multi-window views of the same buffer
+  rebase cursors on edits. Removed the `layout::Window` cursor/scroll mirror.
+
+### Fixed
+
+- **UTF-8 char-boundary crashes**: the paste/completion-prefix slice, the HTML
+  auto-close-tag scan (`scan_tag_opener`), status-line filename truncation, and
+  the LSP `token_between` slice all used char indices as byte offsets and
+  panicked on multibyte content (nerd icons, box-drawing, accents). Audited +
+  fixed workspace-wide with regression tests.
+- **Deterministic headless input** (#262): `nvim_input`/`nvim_feedkeys` now run
+  the canonical post-edit sync instead of a full reconcile, so the cursor is no
+  longer clobbered by a window-editor rebuild (was platform-divergent).
+- splash animation anchor persistence across frames; `hjkl-fs-watch` macOS
+  flake.
+
 ## [0.32.0] - 2026-06-11
 
 ### Added
@@ -4069,7 +4126,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/kryptic-sh/hjkl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/kryptic-sh/hjkl/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/kryptic-sh/hjkl/compare/v0.29.0...v0.30.0

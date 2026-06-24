@@ -792,6 +792,7 @@ jobs:
           #  47.  hjkl                  — TUI binary.
           #  48.  hjkl-css              — CSS parser / cascade engine (no hjkl deps).
           #  49.  hjkl-css-gui          — floem GUI CSS adapter (#48).
+          #  50.  hjkl-quickfix         — quickfix/loclist data model (no hjkl deps).
           publish_if_missing() {
             local crate="$1"
             local manifest version
@@ -924,4 +925,5 @@ jobs:
           publish_if_missing hjkl-app
           publish_if_missing hjkl-syntax
           publish_if_missing hjkl-syntax-tui
+          publish_if_missing hjkl-quickfix
           publish_if_missing hjkl
