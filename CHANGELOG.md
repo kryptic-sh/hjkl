@@ -21,6 +21,8 @@ patch bumps.
   The three subprocess oracle tests gated off in 0.33.2 are re-enabled and run
   unconditionally on all platforms again.
 
+## [0.33.2] - 2026-06-25
+
 ### Fixed
 
 - **`hjkl --nvim-api` no longer spins / hangs on pipe close** (#264): the
