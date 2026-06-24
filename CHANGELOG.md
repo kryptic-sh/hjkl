@@ -8,6 +8,23 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-06-25
+
+### Fixed
+
+- **`hjkl --nvim-api` no longer spins / hangs on pipe close** (#264): the
+  msgpack-rpc read loop only exited on `UnexpectedEof`; any other stdin read
+  error (broken pipe / connection reset when the client disconnects) fell
+  through to `continue`, spin-looping at 100% CPU instead of exiting. It now
+  exits on any read I/O error.
+
+### Internal
+
+- CI hardening (#264): a hard per-test `slow-timeout` in nextest so a deadlocked
+  test is killed + named instead of hanging the job; the `hjkl --nvim-api`
+  subprocess oracle tests are serialized and made opt-in via
+  `HJKL_ORACLE_NVIM_API` (they hang on the ubuntu CI runner — tracked in #264).
+
 ## [0.33.0] - 2026-06-24
 
 ### Added
@@ -4126,7 +4143,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.1...HEAD
+[0.33.1]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/kryptic-sh/hjkl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/kryptic-sh/hjkl/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...v0.31.0
