@@ -805,6 +805,12 @@ async fn tier2_gaps_corpus_passes() {
 /// fallback path is compared against nvim's substitute-char behavior.
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_sneak_disabled_fallback_corpus_passes() {
+    // Opt-in (#264) — spawns a `hjkl --nvim-api` child; skip on the plain
+    // ubuntu `test` job where it hangs. Set HJKL_ORACLE_NVIM_API=1 to run.
+    if std::env::var_os("HJKL_ORACLE_NVIM_API").is_none() {
+        eprintln!("skipping tier2_sneak_disabled_fallback: set HJKL_ORACLE_NVIM_API=1 to run it");
+        return;
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_sneak.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
