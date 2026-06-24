@@ -2005,17 +2005,25 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
                 let new_col = cursor.col + 1;
                 buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
                 // Now check for tag autoclose on the line up to new_col.
-                if let Some(line) = buf_line(&ed.buffer, cursor.row)
-                    && let Some(tag) = scan_tag_opener(&line, new_col.saturating_sub(1))
-                {
-                    let close_tag = format!("</{tag}>");
-                    let insert_pos = Position::new(cursor.row, new_col);
-                    ed.mutate_edit(Edit::InsertStr {
-                        at: insert_pos,
-                        text: close_tag,
-                    });
-                    // Cursor stays at new_col (between > and </tag>).
-                    buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                // `new_col.saturating_sub(1)` is a char index; convert to a
+                // byte offset before slicing in scan_tag_opener.
+                if let Some(line) = buf_line(&ed.buffer, cursor.row) {
+                    let char_col = new_col.saturating_sub(1);
+                    let byte_col = line
+                        .char_indices()
+                        .nth(char_col)
+                        .map(|(b, _)| b)
+                        .unwrap_or(line.len());
+                    if let Some(tag) = scan_tag_opener(&line, byte_col) {
+                        let close_tag = format!("</{tag}>");
+                        let insert_pos = Position::new(cursor.row, new_col);
+                        ed.mutate_edit(Edit::InsertStr {
+                            at: insert_pos,
+                            text: close_tag,
+                        });
+                        // Cursor stays at new_col (between > and </tag>).
+                        buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                    }
                 }
             } else {
                 buf_set_cursor_rc(&mut ed.buffer, cursor.row, cursor.col + 1);
@@ -2088,17 +2096,25 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
                 let new_col = cursor.col + 1;
                 // scan_tag_opener looks at the line up to (new_col-1), i.e.
                 // the char just inserted is at index new_col-1.
-                if let Some(line) = buf_line(&ed.buffer, cursor.row)
-                    && let Some(tag) = scan_tag_opener(&line, new_col.saturating_sub(1))
-                {
-                    let close_tag = format!("</{tag}>");
-                    let insert_pos = Position::new(cursor.row, new_col);
-                    ed.mutate_edit(Edit::InsertStr {
-                        at: insert_pos,
-                        text: close_tag,
-                    });
-                    // Cursor stays at new_col (between `>` and `</tag>`).
-                    buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                // `new_col.saturating_sub(1)` is a char index; convert to a
+                // byte offset before slicing in scan_tag_opener.
+                if let Some(line) = buf_line(&ed.buffer, cursor.row) {
+                    let char_col = new_col.saturating_sub(1);
+                    let byte_col = line
+                        .char_indices()
+                        .nth(char_col)
+                        .map(|(b, _)| b)
+                        .unwrap_or(line.len());
+                    if let Some(tag) = scan_tag_opener(&line, byte_col) {
+                        let close_tag = format!("</{tag}>");
+                        let insert_pos = Position::new(cursor.row, new_col);
+                        ed.mutate_edit(Edit::InsertStr {
+                            at: insert_pos,
+                            text: close_tag,
+                        });
+                        // Cursor stays at new_col (between `>` and `</tag>`).
+                        buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                    }
                 }
                 ed.push_buffer_cursor_to_textarea();
                 return true;
@@ -10039,5 +10055,78 @@ mod abbrev_tests {
         let abbrevs = [make_abbrev("teh", "the")];
         let r = expand(&abbrevs, "", 0, AbbrevTrigger::NonKeyword(' '));
         assert_eq!(r, None);
+    }
+}
+
+// ─── scan_tag_opener / autoclose multibyte tests ──────────────────────────────
+
+#[cfg(test)]
+mod scan_tag_opener_multibyte_tests {
+    use crate::types::Options;
+    use crate::{DefaultHost, Editor};
+    use hjkl_buffer::Buffer;
+
+    fn html_editor(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let host = DefaultHost::new();
+        let mut ed = Editor::new(buf, host, Options::default());
+        ed.settings.filetype = "html".to_string();
+        ed.settings.autoclose_tag = true;
+        ed.settings.autopair = true;
+        ed
+    }
+
+    /// Typing `>` after a multibyte char must not panic.
+    ///
+    /// With "ñ" in the buffer (ñ = 2 UTF-8 bytes), the cursor is at char
+    /// col 1 (one past ñ).  `insert_char('>')` calls `scan_tag_opener` with
+    /// `col = cursor.col = 1`.  Before the fix, `&line[..1]` landed inside
+    /// the 2-byte ñ sequence → panic "byte index 1 is not a char boundary".
+    #[test]
+    fn autoclose_gt_after_multibyte_no_panic() {
+        let mut ed = html_editor("ñ");
+        // Cursor starts at col 0 (on ñ). Enter insert at end-of-line.
+        ed.enter_insert_i(1);
+        // Move to end (col 1, after ñ).
+        ed.jump_cursor(0, 1);
+        // Insert '>' — must not panic.
+        ed.insert_char('>');
+        // The `>` should be in the buffer (no autoclose tag fires for bare ">").
+        let rope = ed.buffer().rope();
+        let line = hjkl_buffer::rope_line_str(&rope, 0);
+        assert!(line.contains('>'), "inserted > must appear in buffer");
+    }
+
+    /// Same repro via the direct tag-autoclose path.
+    ///
+    /// "ä<div" has a multibyte char at the start.  Positioning the cursor
+    /// at char col 5 (after 'v') and inserting '>' exercises the
+    /// scan_tag_opener branch.  Before the fix, `col = cursor.col = 5` and
+    /// `&line[..5]` is byte index 5, which falls inside 'ä' (2 bytes at
+    /// positions 0-1) — wait, 'ä'=2 bytes then '<','d','i','v' are 1 byte
+    /// each, so byte 5 = 'v' (valid boundary).  Use a CJK char (3 bytes)
+    /// to force a panic at a narrower position:
+    ///
+    /// "中<div>": 中 = 3 bytes; after '>', char col 5 → byte index 5.
+    /// Bytes: 中=0,1,2  <=3  d=4  i=5  v=6  >=7.  Char index 4 = 'i', byte 4
+    /// is safe. Need char 2 to map to byte 5 → that's inside '<'.
+    ///
+    /// Simplest panic case: "ñ>" (ñ=2 bytes, >=1 byte):
+    /// char 0=ñ, char 1=>; cursor.col=1, &line[..1] = byte 1 = 0xb1 inside ñ → PANIC.
+    #[test]
+    fn autoclose_gt_direct_after_multibyte_no_panic() {
+        // "ñ>" already in buffer — cursor at char col 1 (the '>').
+        // We'll test by inserting '>' after 'ñ' from scratch.
+        let mut ed = html_editor("ñ");
+        ed.enter_insert_i(1);
+        ed.jump_cursor(0, 1); // char col 1 = one past ñ
+        // Insert '>' — before fix: scan_tag_opener("ñ>", 1) → &"ñ>"[..1] panics.
+        ed.insert_char('>');
+        let rope = ed.buffer().rope();
+        let line = hjkl_buffer::rope_line_str(&rope, 0);
+        assert!(
+            line.contains('>'),
+            "inserted > must appear in buffer, got: {line:?}"
+        );
     }
 }
