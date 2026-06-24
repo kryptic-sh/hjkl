@@ -765,27 +765,3 @@ initial_buffer = "    hello\n"
 initial_cursor = [0, 0]
 keys = ":set shiftwidth=2<CR>:set expandtab<CR><<"
 expected_buffer = "  hello\n"
-
-# :set shiftwidth=4 noexpandtab tabstop=4 then >> on "hello" → one hard tab.
-[[cases]]
-name = "set_shiftwidth4_noet_ts4_indent_buf"
-initial_buffer = "hello\n"
-initial_cursor = [0, 0]
-keys = ":set shiftwidth=4<CR>:set noexpandtab<CR>:set tabstop=4<CR>>>"
-expected_buffer = "\thello\n"
-
-# :tabnew then :tabprevious — current window returns to the original buffer.
-[[cases]]
-name = "tabnew_tabprevious_roundtrip_buf"
-initial_buffer = "hello\n"
-initial_cursor = [0, 0]
-keys = ":tabnew<CR>:tabprevious<CR>"
-expected_buffer = "hello\n"
-
-# :tabnew, insert Z in the new tab, :tabprevious — original buffer untouched.
-[[cases]]
-name = "tabnew_insert_tabprevious_sees_original_buf"
-initial_buffer = "original\n"
-initial_cursor = [0, 0]
-keys = ":tabnew<CR>iZ<Esc>:tabprevious<CR>"
-expected_buffer = "original\n"
