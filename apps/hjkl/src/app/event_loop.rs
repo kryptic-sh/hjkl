@@ -872,8 +872,18 @@ impl App {
                                 } else {
                                     String::new()
                                 };
-                                line[anchor_col.min(line.len())..cur_col.min(line.len())]
-                                    .to_string()
+                                // `anchor_col`/`cur_col` are CHAR indices; map to
+                                // byte offsets so the slice never lands inside a
+                                // multibyte char (crash on pasted Unicode).
+                                let byte_of = |char_col: usize| -> usize {
+                                    line.char_indices()
+                                        .nth(char_col)
+                                        .map(|(b, _)| b)
+                                        .unwrap_or(line.len())
+                                };
+                                let a = byte_of(anchor_col);
+                                let c = byte_of(cur_col);
+                                line[a.min(c)..a.max(c)].to_string()
                             };
                             if let Some(ref mut popup) = self.completion {
                                 popup.set_prefix(&new_prefix);
@@ -933,8 +943,16 @@ impl App {
                                 } else {
                                     String::new()
                                 };
-                                line[anchor_col.min(line.len())..cur_col.min(line.len())]
-                                    .to_string()
+                                // CHAR indices → byte offsets (multibyte-safe).
+                                let byte_of = |char_col: usize| -> usize {
+                                    line.char_indices()
+                                        .nth(char_col)
+                                        .map(|(b, _)| b)
+                                        .unwrap_or(line.len())
+                                };
+                                let a = byte_of(anchor_col);
+                                let c = byte_of(cur_col);
+                                line[a.min(c)..a.max(c)].to_string()
                             };
                             if let Some(ref mut popup) = self.completion {
                                 popup.set_prefix(&new_prefix);

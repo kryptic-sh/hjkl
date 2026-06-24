@@ -1059,3 +1059,21 @@ fn readonly_w_different_path_succeeds() {
     );
     assert!(other.exists(), "output file must have been written");
 }
+
+// ── Regression: multibyte insert must not panic on the completion-prefix
+// slice (char-col used as byte index). Pasting Unicode (nerd icons, box-
+// drawing chars) crashed at event_loop.rs char/byte slicing. ──────────────
+#[test]
+fn insert_multibyte_does_not_panic_on_completion_prefix() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Enter insert mode, then type a line mixing ASCII + multibyte glyphs.
+    app.handle_keypress(key(KeyCode::Char('i')));
+    for c in "a├b\u{f0149}c│d".chars() {
+        // Before the fix this panicked: "byte index N is not a char boundary".
+        app.handle_keypress(key(KeyCode::Char(c)));
+    }
+    // Backspace through the multibyte content too (the other slice site).
+    for _ in 0..4 {
+        app.handle_keypress(key(KeyCode::Backspace));
+    }
+}
