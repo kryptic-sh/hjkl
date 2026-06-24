@@ -2219,14 +2219,17 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
             Err(e) => {
                 use rmpv::decode::Error;
                 match e {
-                    Error::InvalidMarkerRead(io) | Error::InvalidDataRead(io)
-                        if io.kind() == std::io::ErrorKind::UnexpectedEof =>
-                    {
-                        // EOF — clean exit.
-                        break;
-                    }
+                    // ANY failure to read bytes off stdin — EOF, broken pipe,
+                    // connection reset, closed handle — means the peer is gone.
+                    // Exit cleanly. Previously only `UnexpectedEof` broke and
+                    // every other io kind `continue`d, so a pipe-close that
+                    // returned a different kind (observed on the ubuntu CI
+                    // runner) span-looped at 100% CPU forever — hanging the
+                    // parent's `child.wait()` and starving sibling tests (#264).
+                    Error::InvalidMarkerRead(_) | Error::InvalidDataRead(_) => break,
                     _ => {
-                        // Protocol error; we can't know the msgid, skip.
+                        // Structurally malformed value on a still-live stream
+                        // (bytes were consumed) — log and skip to the next.
                         eprintln!("hjkl --nvim-api: decode error: {e}");
                         continue;
                     }
