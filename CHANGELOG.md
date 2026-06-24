@@ -8,7 +8,7 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.33.1] - 2026-06-25
+## [0.33.2] - 2026-06-25
 
 ### Fixed
 
@@ -24,6 +24,12 @@ patch bumps.
   test is killed + named instead of hanging the job; the `hjkl --nvim-api`
   subprocess oracle tests are serialized and made opt-in via
   `HJKL_ORACLE_NVIM_API` (they hang on the ubuntu CI runner — tracked in #264).
+- Release hygiene: `hjkl-buffer` and `hjkl-engine` were pinned to hardcoded
+  package versions (`0.33.0` / `0.32.1`) instead of inheriting the workspace
+  version like the other 58 crates, so a workspace bump left them stale (and
+  `hjkl-engine`'s changes wouldn't have published). Both now use
+  `version.workspace = true`; the `hjkl-engine` workspace-dependency req was
+  widened to `0.33`. (0.33.1 was tagged but never published — superseded here.)
 
 ## [0.33.0] - 2026-06-24
 
@@ -4143,8 +4149,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.1...HEAD
-[0.33.1]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...v0.33.1
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.2...HEAD
+[0.33.2]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...v0.33.2
 [0.33.0]: https://github.com/kryptic-sh/hjkl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/kryptic-sh/hjkl/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...v0.31.0
