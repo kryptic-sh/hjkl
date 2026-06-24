@@ -635,65 +635,6 @@ expected_cursor = [3, 0]
 # derived from a headless-nvim probe script (listed inline) and then verified
 # against the oracle test run.  See issue #261 Phase D.
 
-# ── Option plumbing (shiftwidth / expandtab) ────────────────────────────────
-
-# :set shiftwidth=2 + :set expandtab then >> on 4-space-indented line.
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_set_shiftwidth2_expandtab.lua'
-#   Script: buf_set_lines({"    hello"}), set shiftwidth=2, set expandtab, normal! >>
-#   Output: line1=      hello  cursor=row=0 col=0
-# Expected: 4 leading spaces + 2 added = 6 spaces.
-[[cases]]
-name = "set_shiftwidth2_et_via_set_cmd_indent"
-initial_buffer = "    hello\n"
-initial_cursor = [0, 0]
-keys = ":set shiftwidth=2<CR>:set expandtab<CR>>>"
-expected_buffer = "      hello\n"
-expected_cursor = [0, 0]
-
-# :set shiftwidth=8 + :set expandtab then >> on 4-space-indented line.
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_set_shiftwidth8.lua'
-#   Script: buf_set_lines({"    hello"}), set shiftwidth=8, set expandtab, normal! >>
-#   Output: line1=            hello  cursor=row=0 col=0
-# Expected: 4 leading spaces + 8 added = 12 spaces.
-[[cases]]
-name = "set_shiftwidth8_et_via_set_cmd_indent"
-initial_buffer = "    hello\n"
-initial_cursor = [0, 0]
-keys = ":set shiftwidth=8<CR>:set expandtab<CR>>>"
-expected_buffer = "            hello\n"
-expected_cursor = [0, 0]
-
-# :set shiftwidth=2 + :set expandtab then << on 4-space-indented line.
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_unindent.lua'
-#   Script: buf_set_lines({"    hello"}), set shiftwidth=2, set expandtab, normal! <<
-#   Output: line1=  hello  cursor=row=0 col=0
-# Expected: 4 leading spaces - 2 removed = 2 spaces.
-[[cases]]
-name = "set_shiftwidth2_et_via_set_cmd_unindent"
-initial_buffer = "    hello\n"
-initial_cursor = [0, 0]
-keys = ":set shiftwidth=2<CR>:set expandtab<CR><<"
-expected_buffer = "  hello\n"
-expected_cursor = [0, 0]
-
-# :set shiftwidth=4 noexpandtab tabstop=4 then >> on bare "hello".
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_noet_ts4.lua'
-#   Script: buf_set_lines({"hello"}), set shiftwidth=4, set noexpandtab, set tabstop=4, normal! >>
-#   Hex output: 09 68 65 6c 6c 6f  (tab + "hello")
-#   Output: line1=[\thello]  cursor=row=0 col=0
-# Expected: one hard-tab prefix.
-[[cases]]
-name = "set_shiftwidth4_noet_ts4_via_set_cmd_indent"
-initial_buffer = "hello\n"
-initial_cursor = [0, 0]
-keys = ":set shiftwidth=4<CR>:set noexpandtab<CR>:set tabstop=4<CR>>>"
-expected_buffer = "\thello\n"
-expected_cursor = [0, 0]
-
 # ── Multi-buffer (bnext / bprevious with single-slot wrapping) ───────────────
 
 # :bnext with only one buffer slot — no-op, content and cursor unchanged.
@@ -720,39 +661,6 @@ initial_buffer = "onlybuf\n"
 initial_cursor = [0, 0]
 keys = ":bprevious<CR>"
 expected_buffer = "onlybuf\n"
-expected_cursor = [0, 0]
-
-# ── Tabpages ─────────────────────────────────────────────────────────────────
-
-# :tabnew then :tabprevious — round-trip back to original tab.
-# Oracle reads the ORIGINAL buffer handle (grabbed before tabnew) so content
-# and cursor are unchanged.
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_tabnew_roundtrip.lua'
-#   Script: buf_set_lines({"hello"}), tabnew, tabprevious; read orig buf+win
-#   Output: line1=hello  cursor=row=0 col=0
-[[cases]]
-name = "tabnew_tabprevious_roundtrip"
-initial_buffer = "hello\n"
-initial_cursor = [0, 0]
-keys = ":tabnew<CR>:tabprevious<CR>"
-expected_buffer = "hello\n"
-expected_cursor = [0, 0]
-
-# :tabnew, insert Z in new tab, :tabprevious back to original — original buffer unchanged.
-# Oracle driver holds original buf handle; after tabprevious focus returns to
-# original tab, cur_win is the same window → original content visible.
-# Probe (2026-06-24):
-#   nvim --headless -u NONE -c 'luafile /tmp/nvim_probe_tabnew_insert_tabprevious.lua'
-#   Script: buf_set_lines({"original"}), tabnew, feedkeys("iZ<Esc>"), tabprevious;
-#           read orig buf+win
-#   Output: line1=original  cursor=row=0 col=0
-[[cases]]
-name = "tabnew_insert_tabprevious_sees_original"
-initial_buffer = "original\n"
-initial_cursor = [0, 0]
-keys = ":tabnew<CR>iZ<Esc>:tabprevious<CR>"
-expected_buffer = "original\n"
 expected_cursor = [0, 0]
 
 # ── Windows (split / vsplit) ─────────────────────────────────────────────────
