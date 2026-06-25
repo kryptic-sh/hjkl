@@ -391,6 +391,9 @@ fn main() -> Result<()> {
     if app.mouse_enabled {
         execute!(stdout(), event::EnableMouseCapture)?;
     }
+    // Push kitty keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES) unconditionally.
+    // Non-supporting terminals silently ignore this escape; no blocking query needed.
+    let _ = hjkl_kitty::enable(&mut stdout());
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
@@ -404,6 +407,7 @@ fn main() -> Result<()> {
     // sequence is idempotent on most terminals; emit unconditionally
     // to recover from a runtime `:set mouse` that may have toggled
     // state since startup.
+    let _ = hjkl_kitty::disable(&mut io::stdout());
     let _ = terminal::disable_raw_mode();
     let _ = execute!(
         io::stdout(),

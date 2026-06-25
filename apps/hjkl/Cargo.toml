@@ -33,6 +33,7 @@ hjkl-hover-tui.workspace = true
 hjkl-icons.workspace = true
 hjkl-anvil.workspace = true
 hjkl-keymap.workspace = true
+hjkl-kitty.workspace = true
 hjkl-keymap-tui.workspace = true
 hjkl-vim.workspace = true
 hjkl-vim-tui.workspace = true

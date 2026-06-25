@@ -284,6 +284,19 @@ impl TerminalSession {
         self.wait_ms(settle_ms());
     }
 
+    /// Send raw bytes to the pty and wait for the screen to settle.
+    ///
+    /// Use this for byte sequences that cannot be expressed as vim notation
+    /// (e.g. CSI-u sequences from the Kitty keyboard protocol).
+    #[allow(dead_code)]
+    pub fn send_raw(&mut self, bytes: &[u8]) {
+        self.writer
+            .write_all(bytes)
+            .expect("write raw bytes to pty");
+        self.writer.flush().expect("flush pty");
+        self.wait_ms(settle_ms());
+    }
+
     // ── Screen queries ────────────────────────────────────────────────────────
 
     /// Snapshot the current screen state.

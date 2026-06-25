@@ -1758,6 +1758,17 @@ impl App {
                     // Record keystroke time for the idle swap-write timer (#185).
                     self.last_input_at = std::time::Instant::now();
 
+                    // ── Kitty keyboard normalization (vim only) ────────
+                    // Under DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab,
+                    // Ctrl+M ≠ Enter at the terminal level. Normalize back to the
+                    // legacy aliases for vim discipline only; VSCode gets raw keys
+                    // (Ctrl+[ = outdent, etc.).
+                    let key = if self.keybinding_mode == hjkl_engine::KeybindingMode::Vim {
+                        hjkl_kitty::normalize_legacy(key)
+                    } else {
+                        key
+                    };
+
                     // ── VSCode keybinding mode early intercept ────────
                     // Non-modal: bypass the vim FSM entirely. Ctrl+C without
                     // an active selection is exempted so quit / overlay-
@@ -1931,6 +1942,16 @@ impl App {
                 if let Ok(extra) = event::read() {
                     match extra {
                         Event::Key(k) => {
+                            // Kitty-protocol legacy normalization (drain-loop
+                            // mirror of the primary path): in the vim discipline,
+                            // map disambiguated Ctrl+[ / Ctrl+I / Ctrl+M back to
+                            // Esc / Tab / Enter so muscle-memory survives. VSCode
+                            // keeps the raw keys (Ctrl+[ = outdent, etc.).
+                            let k = if self.keybinding_mode == hjkl_engine::KeybindingMode::Vim {
+                                hjkl_kitty::normalize_legacy(k)
+                            } else {
+                                k
+                            };
                             // ── VSCode early intercept (drain loop mirror) ──
                             let is_ctrl_c = k.code == KeyCode::Char('c')
                                 && k.modifiers.contains(KeyModifiers::CONTROL);

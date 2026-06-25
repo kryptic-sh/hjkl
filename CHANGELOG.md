@@ -10,6 +10,18 @@ patch bumps.
 
 ### Added
 
+- **`hjkl-kitty` crate + kitty keyboard protocol** (#265): new toolkit-agnostic
+  (crossterm-only) crate exposing `enable`/`disable` (push/pop
+  `DISAMBIGUATE_ESCAPE_CODES`, unconditional — no blocking capability query) and
+  a `normalize_legacy` helper (maps disambiguated `Ctrl+[`/`Ctrl+I`/`Ctrl+M`
+  back to `Esc`/`Tab`/`Enter`). hjkl now enables the protocol; the vim
+  discipline normalizes those keys so muscle-memory is unchanged, while
+  non-modal disciplines receive the raw disambiguated keys. Reusable by other
+  kryptic-sh TUIs (e.g. sqeel). Unsupported terminals ignore the escape and keep
+  legacy behavior.
+- **VSCode mode — comment / indent chords** (#265): with the kitty protocol on,
+  `Ctrl+/` toggles line comments, `Ctrl+]` / `Ctrl+[` indent / outdent, and
+  `Ctrl+Backspace` deletes the word before the caret.
 - **VSCode keybinding mode (pilot, non-modal)** (#265): `--keybindings vscode`
   (or `editor.keybindings = "vscode"`) selects a non-modal discipline — typing,
   navigation (arrows/Home/End/PageUp-Down), Backspace/Delete/Tab/Enter, and

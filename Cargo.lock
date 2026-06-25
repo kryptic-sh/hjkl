@@ -2257,6 +2257,7 @@ dependencies = [
  "hjkl-info-popup-tui",
  "hjkl-keymap",
  "hjkl-keymap-tui",
+ "hjkl-kitty",
  "hjkl-lang",
  "hjkl-layout",
  "hjkl-lsp",
@@ -2627,6 +2628,13 @@ version = "0.33.2"
 dependencies = [
  "crossterm",
  "hjkl-keymap",
+]
+
+[[package]]
+name = "hjkl-kitty"
+version = "0.33.2"
+dependencies = [
+ "crossterm",
 ]
 
 [[package]]

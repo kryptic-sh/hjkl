@@ -871,6 +871,7 @@ jobs:
             exit 1
           }
           publish_if_missing hjkl-xdg
+          publish_if_missing hjkl-kitty
           publish_if_missing hjkl-anvil
           publish_if_missing hjkl-theme
           publish_if_missing hjkl-css

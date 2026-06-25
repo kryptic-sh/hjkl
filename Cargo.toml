@@ -42,6 +42,7 @@ hjkl-info-popup = { path = "crates/hjkl-info-popup", version = "0.33" }
 hjkl-info-popup-tui = { path = "crates/hjkl-info-popup-tui", version = "0.33" }
 hjkl-keymap = { path = "crates/hjkl-keymap", version = "0.33", default-features = false }
 hjkl-keymap-tui = { path = "crates/hjkl-keymap-tui", version = "0.33" }
+hjkl-kitty = { path = "crates/hjkl-kitty", version = "0.33" }
 hjkl-lang = { path = "crates/hjkl-lang", version = "0.33" }
 hjkl-layout = { path = "crates/hjkl-layout", version = "0.33" }
 hjkl-lsp = { path = "crates/hjkl-lsp", version = "0.33" }

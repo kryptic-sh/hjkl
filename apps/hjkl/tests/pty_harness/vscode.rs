@@ -525,3 +525,173 @@ fn vscode_plain_left_collapses_without_replace() {
         "plain Left after selection collapses then insert at start"
     );
 }
+
+// ── Kitty chords (Vp-kitty, DISAMBIGUATE_ESCAPE_CODES) ───────────────────────
+//
+// CSI-u byte sequences (verified against crossterm 0.29 parse.rs):
+//   <C-/>   → \x1b[47;5u   → Char('/')  + CONTROL  (codepoint 47  = '/')
+//   <C-]>   → \x1b[93;5u   → Char(']')  + CONTROL  (codepoint 93  = ']')
+//   <C-[>   → \x1b[91;5u   → Char('[')  + CONTROL  (codepoint 91  = '[')
+//   <C-BS>  → \x1b[127;5u  → Backspace  + CONTROL  (codepoint 127 = DEL/Backspace)
+//
+// Modifier param 5 → (5-1)=4 → bit-2 set → CONTROL only (crossterm parse_modifiers).
+//
+// These keys are only reachable under DISAMBIGUATE_ESCAPE_CODES (Kitty protocol).
+// hjkl pushes the flags unconditionally in main.rs, so they work in all sessions.
+// In VSCode mode, Ctrl+[ is NOT normalized back to Esc (normalize_legacy is vim-only).
+
+/// Ctrl+/ (CSI-u) toggles a line comment on the current line.
+/// Buffer: "hello\n" → Ctrl+/ → "// hello\n" (Rust/default comment style `//`).
+/// Ctrl+/ again → back to "hello\n".
+/// We assert the commented state after one toggle and save.
+#[test]
+fn vscode_ctrl_slash_toggles_line_comment() {
+    // Use a .rs file so filetype detection picks up Rust comment style `// `.
+    let mut f = tempfile::Builder::new()
+        .suffix(".rs")
+        .tempfile()
+        .expect("create temp file");
+    std::io::Write::write_all(&mut f, b"hello\n").expect("seed");
+    std::io::Write::flush(&mut f).expect("flush");
+    let path = f.path().to_owned();
+
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Send Ctrl+/ as CSI-u: \x1b[47;5u
+    s.send_raw(b"\x1b[47;5u");
+
+    // Save with Ctrl+S.
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "// hello\n");
+    assert_eq!(
+        got, "// hello\n",
+        "Ctrl+/ should toggle a line comment on 'hello' → '// hello'"
+    );
+}
+
+/// Ctrl+] (CSI-u) indents the current line by one shiftwidth.
+/// Buffer: "hello\n" → Home → Ctrl+] → "    hello\n" (shiftwidth=4 default).
+#[test]
+fn vscode_ctrl_bracket_close_indents() {
+    let (_keep, path) = seed("hello\n");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Move to start of line.
+    s.keys("<Home>");
+
+    // Send Ctrl+] as CSI-u: \x1b[93;5u
+    s.send_raw(b"\x1b[93;5u");
+
+    // Save.
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "    hello\n");
+    assert_eq!(
+        got, "    hello\n",
+        "Ctrl+] should indent 'hello' by one shiftwidth (4 spaces)"
+    );
+}
+
+/// Ctrl+[ (CSI-u) outdents the current line.
+/// Buffer: "    hello\n" → Home → Ctrl+[ → "hello\n".
+/// Note: in VSCode mode Ctrl+[ is NOT normalized to Esc (that's vim-only).
+#[test]
+fn vscode_ctrl_bracket_open_outdents() {
+    let (_keep, path) = seed("    hello\n");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("<Home>");
+
+    // Send Ctrl+[ as CSI-u: \x1b[91;5u
+    s.send_raw(b"\x1b[91;5u");
+
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "hello\n");
+    assert_eq!(
+        got, "hello\n",
+        "Ctrl+[ should outdent '    hello' → 'hello'"
+    );
+}
+
+/// Ctrl+Backspace (CSI-u) deletes the word (or partial word) before the caret.
+///
+/// `insert_end` places the cursor ON the last char (col 6 = 'r' in "foo bar").
+/// `insert_ctrl_w` uses vim's `b`-motion word-back from col 6 → col 4 ('b'),
+/// deleting the range [4..6) = "ba" and leaving the 'r' at col 4.
+/// Result: "foo r\n".
+#[test]
+fn vscode_ctrl_backspace_deletes_word_before() {
+    let (_keep, path) = seed("foo bar\n");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Move caret to end of "bar" — insert_end lands at col 6 (on 'r').
+    s.keys("<End>");
+
+    // Send Ctrl+Backspace as CSI-u: \x1b[127;5u
+    // Deletes chars from word-start (col 4) up to cursor (col 6): "ba".
+    s.send_raw(b"\x1b[127;5u");
+
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "foo r\n");
+    assert_eq!(
+        got, "foo r\n",
+        "Ctrl+Backspace from col 6 ('r') deletes word-back 'ba' (cols 4..6) → 'foo r'"
+    );
+}
+
+// ── Vim normalization: Ctrl+[ CSI-u must still be Esc ────────────────────────
+
+/// In VIM mode (default), the disambiguated Ctrl+[ (`\x1b[91;5u`) must behave
+/// as Esc: exit insert mode and return to Normal. This proves `normalize_legacy`
+/// is active for vim discipline.
+///
+/// Test: open empty buffer (default vim mode), press `i` to enter insert,
+/// type "hello", send Ctrl+[ as CSI-u → should exit insert (back to normal),
+/// then send `dd` to delete the line, save with `:wq`.
+/// After `:wq` the file on disk must be empty (the dd deleted the only line).
+#[test]
+fn vim_ctrl_bracket_csi_u_acts_as_esc() {
+    let (_keep, path) = seed("");
+    // Default mode: VIM (no --keybindings flag).
+    let mut s = TerminalSession::spawn_with_file(&path);
+
+    // Wait for NORMAL mode badge.
+    assert!(
+        s.wait_for_line(23, "NORMAL", 2000),
+        "expected NORMAL badge; got: {:?}",
+        s.line(23)
+    );
+
+    // Enter insert, type "hello".
+    s.keys("ihello");
+
+    // Send disambiguated Ctrl+[ (CSI-u) — must be normalized to Esc.
+    s.send_raw(b"\x1b[91;5u");
+
+    // Wait for NORMAL mode badge to return.
+    assert!(
+        s.wait_for_line(23, "NORMAL", 2000),
+        "Ctrl+[ CSI-u should exit insert → NORMAL; got: {:?}",
+        s.line(23)
+    );
+
+    // In Normal mode, dd deletes the current line.
+    s.keys("dd");
+
+    // Save and quit.
+    s.keys(":wq<Enter>");
+
+    // File should be empty (dd deleted the "hello" line).
+    let got = wait_for_contents(&path, "");
+    assert!(
+        got.is_empty() || got == "\n",
+        "after dd+:wq the file should be empty or just a newline; got: {got:?}"
+    );
+}

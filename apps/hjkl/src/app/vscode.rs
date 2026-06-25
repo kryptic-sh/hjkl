@@ -236,6 +236,84 @@ impl App {
                 self.vscode_plain_home_end(true);
             }
 
+            // ── Kitty chords (reachable under DISAMBIGUATE_ESCAPE_CODES) ──────
+
+            // Ctrl+/ → toggle comment on current line or selection
+            (KeyCode::Char('/'), KeyModifiers::CONTROL) => {
+                let (top, bot) = if self.vscode_has_selection() {
+                    if let Some(((sr, _), (er, _))) =
+                        self.active_editor().visual_char_range_exclusive()
+                    {
+                        (sr, er)
+                    } else {
+                        let (row, _) = self.active_editor().cursor();
+                        (row, row)
+                    }
+                } else {
+                    let (row, _) = self.active_editor().cursor();
+                    (row, row)
+                };
+                if self.vscode_has_selection() {
+                    self.collapse_to_insert_if_visual();
+                }
+                self.active_editor_mut().toggle_comment_range(top, bot);
+            }
+
+            // Ctrl+] → indent selection or current line by one shiftwidth
+            (KeyCode::Char(']'), KeyModifiers::CONTROL) => {
+                let (top, bot) = if self.vscode_has_selection() {
+                    if let Some(((sr, _), (er, _))) =
+                        self.active_editor().visual_char_range_exclusive()
+                    {
+                        (sr, er)
+                    } else {
+                        let (row, _) = self.active_editor().cursor();
+                        (row, row)
+                    }
+                } else {
+                    let (row, _) = self.active_editor().cursor();
+                    (row, row)
+                };
+                if self.vscode_has_selection() {
+                    self.collapse_to_insert_if_visual();
+                }
+                // shiftwidth=0 → use the editor's own settings.shiftwidth
+                self.active_editor_mut()
+                    .indent_range((top, 0), (bot, 0), 1, 0);
+            }
+
+            // Ctrl+[ → outdent selection or current line by one shiftwidth
+            (KeyCode::Char('['), KeyModifiers::CONTROL) => {
+                let (top, bot) = if self.vscode_has_selection() {
+                    if let Some(((sr, _), (er, _))) =
+                        self.active_editor().visual_char_range_exclusive()
+                    {
+                        (sr, er)
+                    } else {
+                        let (row, _) = self.active_editor().cursor();
+                        (row, row)
+                    }
+                } else {
+                    let (row, _) = self.active_editor().cursor();
+                    (row, row)
+                };
+                if self.vscode_has_selection() {
+                    self.collapse_to_insert_if_visual();
+                }
+                // shiftwidth=0 → use the editor's own settings.shiftwidth
+                self.active_editor_mut()
+                    .indent_range((top, 0), (bot, 0), -1, 0);
+            }
+
+            // Ctrl+Backspace → delete word before caret (insert_ctrl_w)
+            (KeyCode::Backspace, KeyModifiers::CONTROL) => {
+                if self.vscode_has_selection() {
+                    self.vscode_delete_selection();
+                } else {
+                    self.active_editor_mut().insert_ctrl_w();
+                }
+            }
+
             // ── Printable characters ───────────────────────────────────────────
             (KeyCode::Char(c), mods)
                 if mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT =>
