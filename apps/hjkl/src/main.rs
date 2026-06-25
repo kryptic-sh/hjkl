@@ -345,6 +345,9 @@ fn main() -> Result<()> {
     // `--keybindings` CLI flag overrides the config value.
     if let Some(ref kb) = args.keybindings {
         app.keybinding_mode = hjkl_engine::KeybindingMode::from_config(kb);
+        // Re-propagate VSCode-specific per-editor settings now that the mode
+        // is finalised (the CLI flag can override the config-derived mode).
+        app.propagate_vscode_settings();
     }
     // Load any additional files into extra slots (argv order). Errors are
     // printed to stderr but do not abort — the editor opens with whatever

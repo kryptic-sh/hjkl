@@ -19,6 +19,12 @@ patch bumps.
   multi-cursor are tracked follow-ups in #265. The bottom-left mode badge is now
   discipline-aware (modal disciplines show their mode; non-modal show a static
   label).
+- **VSCode mode — text selection** (#265, V5): Shift+Arrows / Shift+Home/End
+  extend a selection, Ctrl+A selects all, plain arrows collapse it, and typing /
+  Backspace / Delete over a selection replaces it. Selections use **exclusive**
+  (bar-caret) semantics. Visual mode gained an opt-in `selection_exclusive`
+  setting — inclusive (block-cursor) stays the vim default; vscode mode renders
+  and edits half-open ranges so the cell under the caret is not included.
 
 ### Fixed
 

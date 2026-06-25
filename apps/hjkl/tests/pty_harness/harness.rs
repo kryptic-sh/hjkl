@@ -460,6 +460,13 @@ fn vim_notation_to_bytes(seq: &str) -> Vec<u8> {
                 "pageup" => out.extend_from_slice(b"\x1b[5~"),
                 "pagedown" => out.extend_from_slice(b"\x1b[6~"),
                 "del" | "delete" => out.extend_from_slice(b"\x1b[3~"),
+                // Shift+arrow / Shift+home / Shift+end — ANSI modifier param 2.
+                "s-right" => out.extend_from_slice(b"\x1b[1;2C"),
+                "s-left" => out.extend_from_slice(b"\x1b[1;2D"),
+                "s-up" => out.extend_from_slice(b"\x1b[1;2A"),
+                "s-down" => out.extend_from_slice(b"\x1b[1;2B"),
+                "s-home" => out.extend_from_slice(b"\x1b[1;2H"),
+                "s-end" => out.extend_from_slice(b"\x1b[1;2F"),
                 _ => {
                     // Modifier combos: C-x, S-x, C-w (then remainder after tag).
                     if let Some(bytes) = parse_modifier_tag(&tag) {

@@ -873,6 +873,13 @@ pub struct Settings {
     /// Smooth-scroll animation duration for page/recenter motions, ms.
     /// `:set scroll_duration_ms`. Default `0` (instant — animation off).
     pub scroll_duration_ms: u16,
+    /// When `true`, char-wise Visual selections are treated as
+    /// **half-open** (exclusive end): the cell at the cursor/head position
+    /// is NOT included in the selection. This matches VSCode / kakoune
+    /// bar-cursor semantics where the caret sits *between* characters.
+    /// Default `false` (vim inclusive). The vim oracle path must leave this
+    /// at `false`; set it programmatically for VSCode keybinding mode.
+    pub selection_exclusive: bool,
 }
 
 impl Default for Settings {
@@ -945,6 +952,7 @@ impl Default for Settings {
             updatetime: 4000,
             matchparen: true,
             scroll_duration_ms: 0,
+            selection_exclusive: false,
         }
     }
 }
@@ -1017,6 +1025,10 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         updatetime: o.updatetime,
         matchparen: o.matchparen,
         scroll_duration_ms: 0,
+        // `selection_exclusive` is not part of `Options` — it is set
+        // programmatically by the host (e.g. VSCode keybinding mode via
+        // `propagate_vscode_settings`). Default to `false` (vim inclusive).
+        selection_exclusive: false,
     }
 }
 
@@ -1108,8 +1120,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         if mode == self.last_emitted_mode {
             return;
         }
+        let exclusive = self.settings.selection_exclusive;
         let shape = match mode {
             crate::VimMode::Insert => crate::types::CursorShape::Bar,
+            // VSCode: exclusive-visual also uses a bar caret (caret between chars).
+            crate::VimMode::Visual if exclusive => crate::types::CursorShape::Bar,
             _ => crate::types::CursorShape::Block,
         };
         self.host.emit_cursor_shape(shape);
@@ -2275,15 +2290,56 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.last_substitute = Some(cmd);
     }
 
-    /// Start/end `(row, col)` of the active char-wise Visual selection
-    /// (inclusive on both ends, positionally ordered). `None` when not
-    /// in Visual mode.
+    /// Start/end `(row, col)` of the active char-wise Visual selection,
+    /// positionally ordered. `None` when not in Visual mode.
+    ///
+    /// When [`Settings::selection_exclusive`] is `false` (default, vim
+    /// behaviour): both endpoints are **inclusive** — the cells at `start`
+    /// and `end` are both selected.
+    ///
+    /// When [`Settings::selection_exclusive`] is `true` (VSCode bar-cursor
+    /// behaviour): the range is **half-open** — `start` is included but
+    /// `end` is the first cell that is NOT selected (the caret sits before
+    /// it). If the selection is empty (`anchor == cursor`) `None` is
+    /// returned so callers do not need to check for zero-length ranges.
     pub fn char_highlight(&self) -> Option<((usize, usize), (usize, usize))> {
         if self.vim_mode() != VimMode::Visual {
             return None;
         }
         let anchor = self.vim.visual_anchor;
         let cursor = self.cursor();
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+        if self.settings.selection_exclusive {
+            // Half-open: start..end (end excluded). Empty when start == end.
+            if start == end {
+                return None;
+            }
+            Some((start, end))
+        } else {
+            // Inclusive (vim default): both endpoints are selected.
+            Some((start, end))
+        }
+    }
+
+    /// Return the half-open exclusive char-visual range `(start, end)` where
+    /// `end` is the first cell NOT selected (the caret position). `None`
+    /// when not in Visual mode or the selection is empty.
+    ///
+    /// Convenience accessor for the VSCode dispatcher; avoids duplicating
+    /// the anchor/cursor ordering logic at the call site.
+    pub fn visual_char_range_exclusive(&self) -> Option<((usize, usize), (usize, usize))> {
+        if self.vim_mode() != VimMode::Visual {
+            return None;
+        }
+        let anchor = self.vim.visual_anchor;
+        let cursor = self.cursor();
+        if anchor == cursor {
+            return None;
+        }
         let (start, end) = if anchor <= cursor {
             (anchor, cursor)
         } else {
@@ -2322,12 +2378,50 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// straight to `BufferView` once render flips off textarea
     /// (Phase 7d-ii drops the `paint_*_overlay` calls on the same
     /// switch).
+    /// Move a position back by one character, wrapping to the end of the
+    /// previous line when at column 0. Clamps at the buffer start `(0, 0)`.
+    /// Used to render exclusive (VSCode) char selections via the inclusive
+    /// buffer-tui paint path.
+    fn dec_pos_one_char(&self, p: hjkl_buffer::Position) -> hjkl_buffer::Position {
+        use hjkl_buffer::Position;
+        if p.col > 0 {
+            return Position::new(p.row, p.col - 1);
+        }
+        if p.row > 0 {
+            let prev = p.row - 1;
+            let rope = crate::types::Query::rope(&self.buffer);
+            let len = hjkl_buffer::rope_line_str(&rope, prev).chars().count();
+            return Position::new(prev, len);
+        }
+        Position::new(0, 0)
+    }
+
     pub fn buffer_selection(&self) -> Option<hjkl_buffer::Selection> {
         use hjkl_buffer::{Position, Selection};
         match self.vim_mode() {
             VimMode::Visual => {
                 let (ar, ac) = self.vim.visual_anchor;
                 let head = buf_cursor_pos(&self.buffer);
+                if self.settings.selection_exclusive {
+                    // Exclusive (VSCode bar-caret): render the half-open char set
+                    // [start, end) so the cell under the caret is NOT highlighted.
+                    // The buffer-tui renderer paints `row_span` inclusively, so
+                    // drop one char off the max end. Empty selection → no
+                    // highlight (caller is effectively in Insert).
+                    let anchor_pos = Position::new(ar, ac);
+                    if anchor_pos == head {
+                        return None;
+                    }
+                    let (start, end) = if (ar, ac) <= (head.row, head.col) {
+                        (anchor_pos, head)
+                    } else {
+                        (head, anchor_pos)
+                    };
+                    return Some(Selection::Char {
+                        anchor: start,
+                        head: self.dec_pos_one_char(end),
+                    });
+                }
                 Some(Selection::Char {
                     anchor: Position::new(ar, ac),
                     head,
@@ -2357,6 +2451,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Force back to normal mode (used when dismissing completions etc.)
     pub fn force_normal(&mut self) {
         self.vim.force_normal();
+    }
+
+    /// Number of rows (lines) in the buffer.
+    ///
+    /// Convenience accessor for call sites that only need the row count without
+    /// routing through the `Query` trait directly (e.g. the VSCode selection
+    /// dispatcher computing buffer-end positions).
+    pub fn row_count(&self) -> usize {
+        buf_row_count(&self.buffer)
     }
 
     pub fn content(&self) -> String {
@@ -7056,5 +7159,194 @@ mod scroll_anim_tests {
             !ed.take_scroll_anim_hint(),
             "hint must NOT be set for C-e/C-y"
         );
+    }
+}
+
+// ── char_highlight exclusive-mode unit tests ──────────────────────────────────
+
+#[cfg(test)]
+mod char_highlight_exclusive_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+
+    /// Helper: create an editor in Insert mode with `content`.
+    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let mut ed = Editor::new(buf, DefaultHost::default(), Options::default());
+        ed.enter_insert_i(1);
+        ed
+    }
+
+    /// Helper: create an editor with `selection_exclusive = true` in Insert
+    /// mode.
+    fn make_ed_exclusive(content: &str) -> Editor<Buffer, DefaultHost> {
+        let mut ed = make_ed(content);
+        ed.settings_mut().selection_exclusive = true;
+        ed
+    }
+
+    // ── buffer_selection (render path) ────────────────────────────────────────
+
+    #[test]
+    fn buffer_selection_exclusive_drops_head_cell() {
+        use hjkl_buffer::{Position, Selection};
+        // "hello", caret at col 5, select left to col 3 → exclusive chars [3,5).
+        // The renderer paints row_span inclusively, so buffer_selection must
+        // return head = col 4 (one back) so cols 3..=4 = "lo" highlight.
+        let mut ed = make_ed_exclusive("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 5);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 3);
+        match ed.buffer_selection() {
+            Some(Selection::Char { anchor, head }) => {
+                assert_eq!(anchor, Position::new(0, 3));
+                assert_eq!(head, Position::new(0, 4), "head cell must be dropped");
+            }
+            other => panic!("expected exclusive Char selection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn buffer_selection_inclusive_keeps_head_cell() {
+        use hjkl_buffer::{Position, Selection};
+        // Vim default: head stays at the cursor cell (inclusive).
+        let mut ed = make_ed("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 5);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 3);
+        match ed.buffer_selection() {
+            Some(Selection::Char { anchor, head }) => {
+                assert_eq!(anchor, Position::new(0, 5));
+                assert_eq!(head, Position::new(0, 3));
+            }
+            other => panic!("expected Char selection, got {other:?}"),
+        }
+    }
+
+    // ── inclusive (default, vim) ──────────────────────────────────────────────
+
+    #[test]
+    fn inclusive_default_single_char_right() {
+        // Buffer "abc". Cursor at col 0, enter visual, move right 1 → selects 'a'.
+        let mut ed = make_ed("abc");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 0);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 1);
+        let hl = ed.char_highlight();
+        // Inclusive: (0,0)..(0,1) both included.
+        assert_eq!(hl, Some(((0, 0), (0, 1))));
+    }
+
+    #[test]
+    fn inclusive_default_not_none_for_same_pos() {
+        // With inclusive mode, anchor == cursor still returns Some (single char).
+        let mut ed = make_ed("abc");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 0);
+        ed.enter_visual_char();
+        let hl = ed.char_highlight();
+        assert_eq!(hl, Some(((0, 0), (0, 0))));
+    }
+
+    // ── exclusive (VSCode) ────────────────────────────────────────────────────
+
+    #[test]
+    fn exclusive_single_char_right() {
+        // Buffer "hello". Cursor at 0, enter visual, advance caret to col 1.
+        // Exclusive range: 0..1 (only 'h' selected, caret before 'e').
+        let mut ed = make_ed_exclusive("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 0);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 1);
+        let hl = ed.char_highlight();
+        assert_eq!(hl, Some(((0, 0), (0, 1))));
+    }
+
+    #[test]
+    fn exclusive_multi_char() {
+        // "hello", anchor 0, caret 3 → chars 0,1,2 ("hel") selected.
+        let mut ed = make_ed_exclusive("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 0);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 3);
+        let hl = ed.char_highlight();
+        assert_eq!(hl, Some(((0, 0), (0, 3))));
+    }
+
+    #[test]
+    fn exclusive_leftward_cursor_before_anchor() {
+        // "hello", anchor at col 3, caret moved left to col 1.
+        // start = (0,1), end = (0,3).
+        let mut ed = make_ed_exclusive("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 3);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 1);
+        let hl = ed.char_highlight();
+        assert_eq!(hl, Some(((0, 1), (0, 3))));
+    }
+
+    #[test]
+    fn exclusive_multi_line() {
+        // "abc\ndef", anchor (0,2), caret (1,1) → half-open multiline.
+        let mut ed = make_ed_exclusive("abc\ndef");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 2);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(1, 1);
+        let hl = ed.char_highlight();
+        assert_eq!(hl, Some(((0, 2), (1, 1))));
+    }
+
+    #[test]
+    fn exclusive_empty_returns_none() {
+        // Anchor == cursor → empty selection → None.
+        let mut ed = make_ed_exclusive("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 2);
+        ed.enter_visual_char();
+        // Caret stays at anchor (no movement).
+        let hl = ed.char_highlight();
+        assert_eq!(hl, None, "exclusive empty selection should be None");
+    }
+
+    // ── visual_char_range_exclusive ───────────────────────────────────────────
+
+    #[test]
+    fn range_exclusive_rightward() {
+        let mut ed = make_ed("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 0);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 2);
+        let r = ed.visual_char_range_exclusive();
+        assert_eq!(r, Some(((0, 0), (0, 2))));
+    }
+
+    #[test]
+    fn range_exclusive_leftward() {
+        let mut ed = make_ed("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 4);
+        ed.enter_visual_char();
+        ed.set_cursor_doc(0, 1);
+        let r = ed.visual_char_range_exclusive();
+        assert_eq!(r, Some(((0, 1), (0, 4))));
+    }
+
+    #[test]
+    fn range_exclusive_empty_returns_none() {
+        let mut ed = make_ed("hello");
+        ed.exit_visual_to_normal();
+        ed.set_cursor_doc(0, 2);
+        ed.enter_visual_char();
+        let r = ed.visual_char_range_exclusive();
+        assert_eq!(r, None);
     }
 }

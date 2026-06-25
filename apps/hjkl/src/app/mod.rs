@@ -2060,7 +2060,21 @@ impl App {
             }
             slot.editor.apply_options(&opts);
         }
+        self.propagate_vscode_settings();
         self
+    }
+
+    /// Propagate VSCode-specific per-editor settings to all slot editors.
+    ///
+    /// Currently: sets `selection_exclusive = true` on every slot editor when
+    /// the keybinding mode is VSCode, so the exclusive-selection highlight and
+    /// bar-cursor shape are active from the first frame. View editors inherit
+    /// this via `make_view_editor` (which clones slot settings).
+    pub(crate) fn propagate_vscode_settings(&mut self) {
+        let is_vscode = self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode;
+        for slot in &mut self.slots {
+            slot.editor.settings_mut().selection_exclusive = is_vscode;
+        }
     }
 
     /// Attach an `LspManager` to the app. Call after `with_config`. Iterates

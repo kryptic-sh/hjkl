@@ -97,3 +97,86 @@ fn vscode_ctrl_z_undo() {
         "after Ctrl+Z undo of 'hello', disk should be empty; got: {got:?}"
     );
 }
+
+// ── V5 selection tests ────────────────────────────────────────────────────────
+
+/// Shift+Left x2 selects "lo" in "hello"; typing "X" replaces the selection →
+/// disk content = "helX\n".
+#[test]
+fn vscode_shift_select_then_type_replaces() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Type "hello" — caret is now after the 'o' (col 5).
+    s.keys("hello");
+    // Shift+Left twice: select "lo" (caret moves from col 5 to col 3).
+    s.keys("<S-Left>");
+    s.keys("<S-Left>");
+    // Typing "X" replaces the selection.
+    s.keys("X");
+    // Save.
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "helX\n");
+    assert_eq!(got, "helX\n", "Shift+Left×2 + type 'X' should give 'helX'");
+}
+
+/// Shift+Left x2 selects "lo"; Backspace deletes the selection → "hel\n".
+#[test]
+fn vscode_shift_select_then_backspace_deletes() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("hello");
+    s.keys("<S-Left>");
+    s.keys("<S-Left>");
+    s.keys("<BS>"); // delete the "lo" selection
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "hel\n");
+    assert_eq!(got, "hel\n", "Shift+Left×2 + Backspace should give 'hel'");
+}
+
+/// Ctrl+A selects everything; typing "Z" replaces the whole buffer → "Z\n".
+#[test]
+fn vscode_ctrl_a_then_type_replaces_all() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("abc");
+    s.keys("<C-a>"); // select all ("abc")
+    s.keys("Z"); // replace with "Z"
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "Z\n");
+    assert_eq!(got, "Z\n", "Ctrl+A + type 'Z' should give 'Z'");
+}
+
+/// Plain Left collapses the selection without replacing; typing after collapse
+/// inserts at the collapsed position (selection start).
+#[test]
+fn vscode_plain_left_collapses_without_replace() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("hello");
+    // Select "lo" with Shift+Left twice.
+    s.keys("<S-Left>");
+    s.keys("<S-Left>");
+    // Plain Left: collapse to selection start (col 3, between 'l' and 'l').
+    s.keys("<Left>");
+    // Typing 'X' now inserts at col 3 (between first 'l' and 'l').
+    s.keys("X");
+    s.keys("<C-s>");
+
+    // "hello" with X inserted at col 3 (0-indexed) → "helXlo"
+    let got = wait_for_contents(&path, "helXlo\n");
+    assert_eq!(
+        got, "helXlo\n",
+        "plain Left after selection collapses then insert at start"
+    );
+}
