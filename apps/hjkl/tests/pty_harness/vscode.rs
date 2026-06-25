@@ -98,6 +98,33 @@ fn vscode_ctrl_z_undo() {
     );
 }
 
+/// Word-granularity undo: Ctrl+Z in VSCode mode removes one word at a time.
+///
+/// Typing "foo bar" and pressing Ctrl+Z once should remove only the last word
+/// ("bar"), leaving "foo " (or "foo") on disk — not the entire session. This
+/// verifies that `UndoGranularity::Word` is active for VSCode mode.
+#[test]
+fn vscode_ctrl_z_undo_word_granularity() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Type two words separated by a space.
+    s.keys("foo bar");
+    // One Ctrl+Z: should remove only "bar" (last word), not the whole session.
+    s.keys("<C-z>");
+    s.keys("<C-s>");
+
+    // After one undo, "bar" should be gone but "foo" (possibly with trailing
+    // space) should remain — the whole session was NOT reverted.
+    let got = wait_for_contents(&path, "foo ");
+    assert!(
+        got.starts_with("foo") && !got.contains("bar"),
+        "word-granularity undo should leave 'foo[ ]' on disk, not revert all; got: {got:?}"
+    );
+}
+
 // ── V5 selection tests ────────────────────────────────────────────────────────
 
 /// Shift+Left x2 selects "lo" in "hello"; typing "X" replaces the selection →

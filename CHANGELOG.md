@@ -10,6 +10,12 @@ patch bumps.
 
 ### Added
 
+- **Mode-selectable undo granularity** (#265, V1): undo checkpointing is now a
+  discipline-agnostic engine setting (`Settings.undo_granularity`:
+  `InsertSession` | `Word`). Vim keeps `InsertSession` (one undo per insert
+  session — byte-identical, the default); VSCode mode uses `Word`, so `Ctrl+Z`
+  reverts one word/line at a time (word starts + newlines open a new undo unit)
+  instead of the whole typing session. Reusable by future FSMs (emacs, …).
 - **`hjkl-kitty` crate + kitty keyboard protocol** (#265): new toolkit-agnostic
   (crossterm-only) crate exposing `enable`/`disable` (push/pop
   `DISAMBIGUATE_ESCAPE_CODES`, unconditional — no blocking capability query) and

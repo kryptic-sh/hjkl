@@ -2064,16 +2064,34 @@ impl App {
         self
     }
 
-    /// Propagate VSCode-specific per-editor settings to all slot editors.
+    /// Propagate VSCode-specific per-editor settings to all slot editors and
+    /// all live window-view editors.
     ///
-    /// Currently: sets `selection_exclusive = true` on every slot editor when
-    /// the keybinding mode is VSCode, so the exclusive-selection highlight and
-    /// bar-cursor shape are active from the first frame. View editors inherit
-    /// this via `make_view_editor` (which clones slot settings).
+    /// Settings that only make sense in VSCode keybinding mode (e.g.
+    /// `selection_exclusive`, `undo_granularity`) are written to every editor
+    /// that might serve as the `active_editor`. `make_view_editor` clones slot
+    /// settings at creation time, so window editors created before this call
+    /// also need the update applied directly.
     pub(crate) fn propagate_vscode_settings(&mut self) {
         let is_vscode = self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode;
+        let granularity = if is_vscode {
+            hjkl_engine::UndoGranularity::Word
+        } else {
+            hjkl_engine::UndoGranularity::InsertSession
+        };
         for slot in &mut self.slots {
             slot.editor.settings_mut().selection_exclusive = is_vscode;
+            slot.editor.settings_mut().undo_granularity = granularity;
+        }
+        // Window-view editors are separate instances from slot editors.
+        // They are built by `make_view_editor` (which clones slot settings),
+        // but that clone may pre-date the keybinding-mode finalisation (e.g.
+        // when the `--keybindings` CLI flag is processed after App::new).
+        // Apply the same settings here so `active_editor_mut()` always returns
+        // an editor with up-to-date VSCode settings.
+        for ed in self.window_editors.values_mut() {
+            ed.settings_mut().selection_exclusive = is_vscode;
+            ed.settings_mut().undo_granularity = granularity;
         }
     }
 

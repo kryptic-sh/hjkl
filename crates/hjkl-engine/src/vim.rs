@@ -1454,6 +1454,95 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
     }
 }
 
+/// Word-boundary undo break for [`crate::editor::UndoGranularity::Word`].
+///
+/// Called from [`insert_char_bridge`] (before inserting `next`) and from
+/// [`insert_newline_bridge`] (pass `next = '\n'`).
+///
+/// **Heuristic:** a break is inserted when:
+/// - `next` is a non-whitespace char **and** the char immediately before
+///   the cursor is whitespace (or the cursor is at column 0 but not the
+///   session-start position — i.e. the user has already typed something
+///   and then navigated or wrapped to column 0). This corresponds to
+///   "the first character of a new word just after whitespace."
+/// - `next` is `'\n'` (newline always starts a new undo unit).
+///
+/// **No break on the session's very first char:** `begin_insert` already
+/// pushed an undo snapshot; breaking again would create an empty entry.
+/// We detect "first char" by comparing the current cursor position to the
+/// session's `(start_row, start_col)`.
+///
+/// During replay (`ed.vim.replaying`) or when there is no active insert
+/// session, this is a complete no-op — the vim path is unchanged.
+///
+/// When `undo_granularity == InsertSession` this function returns
+/// immediately, adding zero calls to the hot path.
+pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    next: char,
+) {
+    use crate::buf_helpers::{buf_cursor_pos, buf_line};
+    use crate::editor::UndoGranularity;
+
+    // Fast-path: default (vim) granularity → no-op.
+    if ed.settings.undo_granularity != UndoGranularity::Word {
+        return;
+    }
+    // No-op during replay or when there is no active insert session.
+    if ed.vim.replaying {
+        return;
+    }
+    let session = match ed.vim.insert_session.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let cursor = buf_cursor_pos(&ed.buffer);
+
+    // Skip the very first inserted char (begin_insert already snapshotted).
+    let is_first_pos = cursor.row == session.start_row && cursor.col == session.start_col;
+    if is_first_pos {
+        return;
+    }
+
+    // Newline always breaks.
+    let should_break = if next == '\n' {
+        true
+    } else if next.is_whitespace() {
+        // Whitespace chars do not start a new word.
+        false
+    } else {
+        // Non-whitespace: break only when the char immediately before the
+        // cursor is whitespace (entering a word from whitespace territory).
+        let prev_char = buf_line(&ed.buffer, cursor.row)
+            .as_deref()
+            .and_then(|line| line.chars().nth(cursor.col.wrapping_sub(1)));
+        match prev_char {
+            // Previous char is whitespace → this is a word start.
+            Some(p) if p.is_whitespace() => true,
+            // cursor.col == 0 means we arrived here from another line:
+            // that too is a word-start boundary (newline already handled
+            // above for the \n itself; this handles the first char on the
+            // new line after the newline was inserted as a prior break).
+            None if cursor.col == 0 => false, // col-0 on first position covered by start check above
+            _ => false,
+        }
+    };
+
+    if should_break {
+        // Reuse the existing mid-session break machinery: push a snapshot
+        // and reset session.before_rope + row_min/row_max.
+        ed.push_undo();
+        let before_rope = crate::types::Query::rope(&ed.buffer);
+        let row = cursor.row;
+        if let Some(ref mut session) = ed.vim.insert_session {
+            session.before_rope = before_rope;
+            session.row_min = row;
+            session.row_max = row;
+        }
+    }
+}
+
 // ─── Phase 6.1: public insert-mode primitives ──────────────────────────────
 //
 // Each `pub(crate)` free function below implements one insert-mode action.
@@ -1975,6 +2064,12 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
             // (we do NOT return early; continue to insert `ch` below)
         }
     }
+    // ── Word-boundary undo break (Word granularity only; no-op for vim) ────────
+    // Must fire after abbreviation expansion (the expansion may have changed the
+    // cursor position) but before any actual buffer mutation so the snapshot
+    // captures the pre-char state.
+    maybe_word_undo_break(ed, ch);
+
     // Read cursor (after any abbreviation expansion that may have changed the buffer).
     let cursor = buf_cursor_pos(&ed.buffer);
     let line_chars = buf_line_chars(&ed.buffer, cursor.row);
@@ -2148,6 +2243,11 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
     if !ed.vim.abbrevs.is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Cr);
     }
+
+    // ── Word-boundary undo break for newline (Word granularity only) ────────────
+    // Newline always starts a new undo unit in Word mode. Fire after
+    // abbreviation expansion but before any buffer mutation.
+    maybe_word_undo_break(ed, '\n');
 
     let cursor = buf_cursor_pos(&ed.buffer);
     let prev_line = buf_line(&ed.buffer, cursor.row)

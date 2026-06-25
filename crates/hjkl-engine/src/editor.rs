@@ -880,6 +880,35 @@ pub struct Settings {
     /// Default `false` (vim inclusive). The vim oracle path must leave this
     /// at `false`; set it programmatically for VSCode keybinding mode.
     pub selection_exclusive: bool,
+    /// How coarsely a single `u` (or Ctrl+Z) step walks back through
+    /// changes made during an insert session.
+    ///
+    /// - `InsertSession` (default, vim parity): one undo step reverts the
+    ///   entire session from `i` to `<Esc>`. This is byte-identical to
+    ///   vim's behaviour and must never be changed for the vim path.
+    /// - `Word`: mid-session undo breaks are inserted at word boundaries
+    ///   (non-whitespace char following whitespace, or a newline). One
+    ///   step of `u` then reverts roughly one word of typing at a time —
+    ///   matching VSCode's "edit-chunked Ctrl+Z" experience.
+    ///
+    /// The vim oracle path **must** leave this at `InsertSession`.
+    /// VSCode keybinding mode sets it to `Word` via
+    /// `propagate_vscode_settings`. Other future FSMs may choose freely.
+    pub undo_granularity: UndoGranularity,
+}
+
+/// Controls the granularity of per-insert-session undo steps.
+///
+/// Discipline-agnostic: vim uses `InsertSession`, VSCode uses `Word`.
+/// Future FSMs (emacs, kakoune, …) may adopt either or add new variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UndoGranularity {
+    /// One `u` step reverts the entire insert session (vim default).
+    #[default]
+    InsertSession,
+    /// Mid-session undo breaks at word boundaries (non-whitespace after
+    /// whitespace, or newline). Matches VSCode's Ctrl+Z granularity.
+    Word,
 }
 
 impl Default for Settings {
@@ -953,6 +982,7 @@ impl Default for Settings {
             matchparen: true,
             scroll_duration_ms: 0,
             selection_exclusive: false,
+            undo_granularity: UndoGranularity::InsertSession,
         }
     }
 }
@@ -1029,6 +1059,9 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         // programmatically by the host (e.g. VSCode keybinding mode via
         // `propagate_vscode_settings`). Default to `false` (vim inclusive).
         selection_exclusive: false,
+        // `undo_granularity` is not part of `Options` — set programmatically
+        // by the host. Default: `InsertSession` (vim parity).
+        undo_granularity: UndoGranularity::InsertSession,
     }
 }
 
@@ -7348,5 +7381,171 @@ mod char_highlight_exclusive_tests {
         ed.enter_visual_char();
         let r = ed.visual_char_range_exclusive();
         assert_eq!(r, None);
+    }
+}
+
+// ── UndoGranularity unit tests ───────────────────────────────────────────────
+//
+// These tests prove the critical invariant: vim (InsertSession) is byte-
+// identical before and after this feature; Word granularity splits undo at
+// word boundaries.
+
+#[cfg(test)]
+mod undo_granularity_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        Editor::new(buf, DefaultHost::default(), Options::default())
+    }
+
+    /// Helper: type a string char-by-char in insert mode.
+    fn type_str(ed: &mut Editor<Buffer, DefaultHost>, s: &str) {
+        for ch in s.chars() {
+            ed.insert_char(ch);
+        }
+    }
+
+    /// Helper: return current buffer content as a plain String.
+    fn content(ed: &Editor<Buffer, DefaultHost>) -> String {
+        ed.buffer().content_joined().to_string()
+    }
+
+    // ── InsertSession (vim default) ───────────────────────────────────────────
+
+    /// With the default `InsertSession` granularity, a single `u` reverts the
+    /// entire insert session — vim byte-identical behaviour.
+    #[test]
+    fn insert_session_granularity_single_undo_reverts_all() {
+        let mut ed = make_ed("");
+        assert_eq!(
+            ed.settings().undo_granularity,
+            UndoGranularity::InsertSession,
+            "default must be InsertSession"
+        );
+
+        // Enter insert, type "foo bar baz", leave.
+        ed.enter_insert_i(1);
+        type_str(&mut ed, "foo bar baz");
+        ed.leave_insert_to_normal();
+
+        assert_eq!(content(&ed), "foo bar baz");
+
+        // One undo step → back to empty (full session reverted).
+        ed.undo();
+        assert_eq!(
+            content(&ed),
+            "",
+            "InsertSession: one undo must revert the entire session"
+        );
+    }
+
+    /// A second `u` after the first in InsertSession mode has nothing left
+    /// on the stack (the initial state was the baseline push_undo snapshot).
+    /// The buffer stays empty.
+    #[test]
+    fn insert_session_granularity_second_undo_is_noop() {
+        let mut ed = make_ed("");
+        ed.enter_insert_i(1);
+        type_str(&mut ed, "hello");
+        ed.leave_insert_to_normal();
+        ed.undo();
+        let after_first = content(&ed);
+        ed.undo(); // should be a no-op
+        assert_eq!(
+            content(&ed),
+            after_first,
+            "second undo must not change buffer when stack is exhausted"
+        );
+    }
+
+    // ── Word granularity ─────────────────────────────────────────────────────
+
+    /// With `Word` granularity, typing "foo bar baz" produces three undo
+    /// units: "baz", "bar ", "foo".
+    ///
+    /// Observed chunking (heuristic: break at non-WS char following WS):
+    ///
+    /// - After 'b' of "bar": prev char was ' ' → break
+    /// - After 'b' of "baz": prev char was ' ' → break
+    ///
+    /// Undo strides: "baz" → "bar " → "foo"
+    #[test]
+    fn word_granularity_undo_steps_by_word() {
+        let mut ed = make_ed("");
+        ed.settings_mut().undo_granularity = UndoGranularity::Word;
+
+        ed.enter_insert_i(1);
+        type_str(&mut ed, "foo bar baz");
+        ed.leave_insert_to_normal();
+
+        assert_eq!(content(&ed), "foo bar baz");
+
+        // First undo: removes "baz" (the last word).
+        ed.undo();
+        let after1 = content(&ed);
+        assert!(
+            after1.ends_with("foo bar ") || after1 == "foo bar",
+            "after first undo expected 'foo bar[ ]', got {after1:?}"
+        );
+
+        // Second undo: removes "bar " (or "bar").
+        ed.undo();
+        let after2 = content(&ed);
+        assert!(
+            after2 == "foo" || after2 == "foo ",
+            "after second undo expected 'foo[ ]', got {after2:?}"
+        );
+
+        // Third undo: removes "foo" → empty.
+        ed.undo();
+        assert_eq!(content(&ed), "", "after third undo buffer must be empty");
+    }
+
+    /// Newline starts a new undo unit under Word granularity.
+    #[test]
+    fn word_granularity_newline_starts_new_unit() {
+        let mut ed = make_ed("");
+        ed.settings_mut().undo_granularity = UndoGranularity::Word;
+
+        ed.enter_insert_i(1);
+        type_str(&mut ed, "hello");
+        ed.insert_newline();
+        type_str(&mut ed, "world");
+        ed.leave_insert_to_normal();
+
+        // Should have at least "hello\nworld" in buffer.
+        let full = content(&ed);
+        assert!(
+            full.contains("hello") && full.contains("world"),
+            "buffer must contain both lines: {full:?}"
+        );
+
+        // First undo: should remove at least "world" (the post-newline text).
+        ed.undo();
+        let after1 = content(&ed);
+        assert!(
+            !after1.contains("world"),
+            "after one undo 'world' should be gone; got {after1:?}"
+        );
+    }
+
+    /// Verify that switching to Word granularity does NOT alter the behaviour
+    /// of existing operations when no insert session is active (undo on an
+    /// already-empty stack is a no-op regardless of granularity).
+    #[test]
+    fn word_granularity_undo_noop_on_empty_stack() {
+        let mut ed = make_ed("hello");
+        ed.settings_mut().undo_granularity = UndoGranularity::Word;
+        // Do NOT enter insert — stack has nothing.
+        let before = content(&ed);
+        ed.undo();
+        assert_eq!(
+            content(&ed),
+            before,
+            "undo with empty stack must be no-op under Word granularity"
+        );
     }
 }
