@@ -26,3 +26,7 @@ pub mod indent;
 pub mod paste;
 pub mod register_count;
 pub mod render_sync;
+// Reads tabline cell colors after `:tabe`; restrict to linux for the same macOS
+// pty `:cmd\r` timing reasons as the other suites.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod tabline_icons;

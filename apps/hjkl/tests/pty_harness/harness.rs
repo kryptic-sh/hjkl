@@ -270,6 +270,41 @@ impl TerminalSession {
         self.line(row).contains(expected)
     }
 
+    /// Foreground color of the first cell on `row` whose rendered content equals
+    /// `symbol`. Returns `None` if no such cell is present. Used to assert a
+    /// glyph (e.g. a tabline devicon) is painted with a specific color.
+    #[allow(dead_code)]
+    pub fn cell_fg_of_symbol(&self, row: u16, symbol: &str) -> Option<vt100::Color> {
+        let screen = self.screen();
+        for col in 0..self.cols {
+            if let Some(cell) = screen.cell(row, col)
+                && cell.contents() == symbol
+            {
+                return Some(cell.fgcolor());
+            }
+        }
+        None
+    }
+
+    /// Poll up to `timeout_ms` for a cell on `row` rendering `symbol`, returning
+    /// its foreground color once it appears (or `None` on timeout).
+    #[allow(dead_code)]
+    pub fn wait_cell_fg_of_symbol(
+        &self,
+        row: u16,
+        symbol: &str,
+        timeout_ms: u64,
+    ) -> Option<vt100::Color> {
+        let steps = (timeout_ms / 20).max(1);
+        for _ in 0..steps {
+            if let Some(c) = self.cell_fg_of_symbol(row, symbol) {
+                return Some(c);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.cell_fg_of_symbol(row, symbol)
+    }
+
     /// Rendered text of a 0-based screen row (trailing spaces stripped).
     pub fn line(&self, row: u16) -> String {
         let screen = self.screen();
