@@ -2021,24 +2021,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("[No Name]");
-            // Prepend a filetype icon (generic glyph when the buffer is unnamed
-            // or the extension is unknown). Gated on the `tabline_icons` toggle.
-            let icon_part = if tabline_icons {
-                let ic = match slot.filename.as_deref() {
-                    Some(p) => hjkl_icons::file_icon_for_path(p, app.icon_mode),
-                    None => hjkl_icons::file_icon(None, app.icon_mode),
-                };
-                format!("{ic} ")
-            } else {
-                String::new()
-            };
-            let title = format!(
-                "{}: {}{} {}",
-                i + 1,
-                icon_part,
-                base_name,
-                crate::app::TAB_CLOSE_GLYPH
-            );
+            let title = format!("{}: {} {}", i + 1, base_name, crate::app::TAB_CLOSE_GLYPH);
             tab_bar.open(i, title);
             let tab_dirty = layout_tab.layout.leaves().iter().any(|&wid| {
                 app.windows[wid]
@@ -2048,6 +2031,21 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
             });
             if let Some(t) = tab_bar.tabs.last_mut() {
                 t.dirty = tab_dirty;
+                // Per-filetype icon as a separate colored span (#260). Generic
+                // glyph when the buffer is unnamed / extension unknown; devicon
+                // color via `file_color_for_path` (None → inherits tab fg).
+                // Gated on the `tabline_icons` toggle.
+                if tabline_icons {
+                    let glyph = match slot.filename.as_deref() {
+                        Some(p) => hjkl_icons::file_icon_for_path(p, app.icon_mode),
+                        None => hjkl_icons::file_icon(None, app.icon_mode),
+                    };
+                    t.icon = Some(glyph.to_string());
+                    t.icon_color = slot
+                        .filename
+                        .as_deref()
+                        .and_then(hjkl_icons::file_color_for_path);
+                }
             }
         }
         tab_bar.focus(&app.active_tab);

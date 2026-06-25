@@ -197,13 +197,30 @@ pub fn build_line<Id: Eq + Clone>(
         let abs_idx = tabs_slice_start + i;
         let is_active = active_idx == Some(abs_idx);
 
-        let label = format!(" {} ", tab.display_label());
         let style = if is_active {
             active_style
         } else {
             inactive_style
         };
-        spans.push(Span::styled(label, style));
+
+        // Leading cell padding.
+        spans.push(Span::styled(" ".to_string(), style));
+
+        // Optional filetype icon as its own span so it can carry the devicon
+        // colour while keeping the tab's background. Painted regardless of
+        // active state (mirrors the explorer tree, which keeps the devicon
+        // colour on the cursor row). When the tab has no icon colour the glyph
+        // inherits the tab fg.
+        if let Some(icon) = &tab.icon {
+            let icon_style = match tab.icon_color {
+                Some((r, g, b)) => style.fg(Color::Rgb(r, g, b)),
+                None => style,
+            };
+            spans.push(Span::styled(format!("{icon} "), icon_style));
+        }
+
+        // Label + trailing padding.
+        spans.push(Span::styled(format!("{} ", tab.display_label()), style));
     }
 
     if right_overflow {
@@ -359,6 +376,51 @@ mod tests {
             s.content.contains("inactive.rs") && s.style.add_modifier.contains(Modifier::BOLD)
         });
         assert!(!inactive_bold, "inactive tab must not be bold");
+    }
+
+    #[test]
+    fn icon_renders_as_separate_span_with_devicon_color() {
+        let mut bar: TabBar<u32> = TabBar::new();
+        bar.open(1, "main.rs".to_string());
+        if let Some(t) = bar.tabs.last_mut() {
+            t.icon = Some("R".to_string()); // stand-in glyph
+            t.icon_color = Some((0xde, 0xa5, 0x84)); // rust orange
+        }
+        let line = build_line(80, &bar, &TabBarTheme::default());
+        // The icon must be its OWN span carrying the devicon fg, distinct from
+        // the label span (which keeps the tab fg).
+        let icon_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('R') && !s.content.contains("main.rs"))
+            .expect("icon span present");
+        assert_eq!(icon_span.style.fg, Some(Color::Rgb(0xde, 0xa5, 0x84)));
+        // The label span exists and is NOT the icon color.
+        let label_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("main.rs"))
+            .expect("label span present");
+        assert_ne!(label_span.style.fg, Some(Color::Rgb(0xde, 0xa5, 0x84)));
+    }
+
+    #[test]
+    fn icon_without_color_inherits_tab_fg() {
+        let mut bar: TabBar<u32> = TabBar::new();
+        bar.open(1, "x".to_string());
+        if let Some(t) = bar.tabs.last_mut() {
+            t.icon = Some("?".to_string());
+            t.icon_color = None;
+        }
+        let theme = TabBarTheme::default();
+        let line = build_line(80, &bar, &theme);
+        let icon_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('?'))
+            .expect("icon span present");
+        // No icon color → inherits the (active, since sole tab) tab fg.
+        assert_eq!(icon_span.style.fg, Some(theme.active_fg));
     }
 
     #[test]

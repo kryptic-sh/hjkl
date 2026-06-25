@@ -55,6 +55,14 @@ pub struct Tab<Id> {
     pub title: String,
     /// Whether the buffer associated with this tab has unsaved changes.
     pub dirty: bool,
+    /// Optional filetype icon glyph rendered in its own span before the title
+    /// (e.g. a Nerd-Font devicon). `None` → no icon cell. UI-toolkit-agnostic:
+    /// the renderer ([`hjkl_tabs_tui`]) owns glyph placement + spacing.
+    pub icon: Option<String>,
+    /// Optional RGB colour for [`Self::icon`] (the devicon colour). `None` →
+    /// the icon inherits the tab's foreground. Stored as a raw `(r, g, b)`
+    /// triple so this crate stays free of any rendering-toolkit colour type.
+    pub icon_color: Option<(u8, u8, u8)>,
 }
 
 impl<Id: Clone + Eq> Tab<Id> {
@@ -73,6 +81,8 @@ impl<Id: Clone + Eq> Tab<Id> {
             id,
             title,
             dirty: false,
+            icon: None,
+            icon_color: None,
         }
     }
 
@@ -97,13 +107,25 @@ impl<Id: Clone + Eq> Tab<Id> {
         }
     }
 
-    /// Pixel-free width of this tab's padded cell: `" {label} "` in chars.
+    /// Char width of this tab's icon cell — the glyph plus one trailing space —
+    /// or `0` when the tab has no icon. The renderer paints the icon as a
+    /// separate span (`"{icon} "`) so its colour is independent of the label.
+    pub fn icon_width(&self) -> usize {
+        self.icon
+            .as_ref()
+            .map(|i| i.chars().count() + 1)
+            .unwrap_or(0)
+    }
+
+    /// Pixel-free width of this tab's padded cell: `" {icon} {label} "` in
+    /// chars (the icon segment is omitted when absent).
     ///
     /// The two spaces (one on each side) are the inter-tab padding used by the
-    /// renderer. Width accounts for the `●` dirty-marker prefix when present.
+    /// renderer. Width accounts for the `●` dirty-marker prefix when present and
+    /// the optional icon cell.
     pub fn cell_width(&self) -> usize {
-        // " {label} " = 2 padding + label chars
-        2 + self.display_label().chars().count()
+        // " {icon }{label} " = 2 padding + icon cell + label chars
+        2 + self.icon_width() + self.display_label().chars().count()
     }
 }
 
@@ -413,6 +435,25 @@ mod tests {
             bar.open(id, title.to_string());
         }
         bar
+    }
+
+    #[test]
+    fn cell_width_accounts_for_icon() {
+        let mut t: Tab<u32> = Tab::new(1, "a.rs".to_string());
+        let base = t.cell_width(); // 2 padding + "a.rs" = 6
+        assert_eq!(base, 6);
+        assert_eq!(t.icon_width(), 0);
+        t.icon = Some("R".to_string());
+        // icon cell = glyph + one space = 2.
+        assert_eq!(t.icon_width(), 2);
+        assert_eq!(t.cell_width(), base + 2);
+    }
+
+    #[test]
+    fn new_tab_has_no_icon() {
+        let t: Tab<u32> = Tab::new(1, "a.rs".to_string());
+        assert!(t.icon.is_none());
+        assert!(t.icon_color.is_none());
     }
 
     #[test]

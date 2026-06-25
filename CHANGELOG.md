@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-filetype color for tabline icons** (#260): each tab's filetype icon is
+  now painted with its devicon color (via `hjkl_icons::file_color_for_path`),
+  matching the explorer tree, instead of inheriting the tab's monochrome fg.
+  `hjkl_tabs::Tab` gained optional `icon` / `icon_color` fields and the
+  `hjkl-tabs-tui` renderer paints the icon as its own span (kept colored on the
+  active tab too, mirroring the explorer). Still gated on `:set tabline_icons`
+  (default on).
+
 ### Fixed
 
 - **Multi-line paste into Insert mode no longer bunches lines together**: the
