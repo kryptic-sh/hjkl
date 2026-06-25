@@ -25,6 +25,13 @@ patch bumps.
   (bar-caret) semantics. Visual mode gained an opt-in `selection_exclusive`
   setting — inclusive (block-cursor) stays the vim default; vscode mode renders
   and edits half-open ranges so the cell under the caret is not included.
+- **VSCode mode — clipboard chords** (#265, V6): `Ctrl+C` copy, `Ctrl+X` cut,
+  `Ctrl+V` paste, operating on the exclusive selection. Copy/cut write to both
+  the system clipboard and the unnamed register; paste reads the system
+  clipboard and falls back to the register when the clipboard is unreadable
+  (e.g. headless), so in-session cut→paste always round-trips. Paste replaces an
+  active selection. `Ctrl+C` with no selection still interrupts/quits (terminal
+  convention); empty-selection line-cut is a follow-up.
 
 ### Fixed
 

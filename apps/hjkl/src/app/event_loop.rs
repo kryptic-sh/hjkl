@@ -1759,14 +1759,20 @@ impl App {
                     self.last_input_at = std::time::Instant::now();
 
                     // ── VSCode keybinding mode early intercept ────────
-                    // Non-modal: bypass the vim FSM entirely. Ctrl+C is
-                    // exempted so quit / overlay-dismiss still works.
+                    // Non-modal: bypass the vim FSM entirely. Ctrl+C without
+                    // an active selection is exempted so quit / overlay-
+                    // dismiss still works. With a selection active, Ctrl+C
+                    // is routed to dispatch_vscode_key to copy the selection.
                     // Overlays (command field, search, hop, quickfix) take
                     // priority — fall through to handle_keypress for those.
                     let is_ctrl_c = key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL);
+                    // Allow Ctrl+C into the VSCode dispatcher only when a
+                    // selection is active (copy); otherwise fall through so
+                    // handle_keypress can quit / dismiss overlays.
+                    let ctrl_c_copy = is_ctrl_c && self.vscode_has_selection();
                     if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
-                        && !is_ctrl_c
+                        && (!is_ctrl_c || ctrl_c_copy)
                         && self.command_field.is_none()
                         && self.search_field.is_none()
                         && self.hop.is_none()
@@ -1928,8 +1934,9 @@ impl App {
                             // ── VSCode early intercept (drain loop mirror) ──
                             let is_ctrl_c = k.code == KeyCode::Char('c')
                                 && k.modifiers.contains(KeyModifiers::CONTROL);
+                            let ctrl_c_copy = is_ctrl_c && self.vscode_has_selection();
                             if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
-                                && !is_ctrl_c
+                                && (!is_ctrl_c || ctrl_c_copy)
                                 && self.command_field.is_none()
                                 && self.search_field.is_none()
                                 && self.hop.is_none()

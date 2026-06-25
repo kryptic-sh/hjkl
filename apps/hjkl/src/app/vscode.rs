@@ -1,4 +1,4 @@
-//! VSCode keybinding dispatcher (V5: selection + non-modal typing/nav).
+//! VSCode keybinding dispatcher (V6: clipboard chords).
 //!
 //! Non-modal "EDITOR" mode: there are two underlying states —
 //!   • INSERT  — no active selection; caret between chars (bar cursor).
@@ -7,7 +7,28 @@
 //!
 //! Shift+arrows extend/begin the selection; plain arrows collapse it.
 //! Typing / Backspace / Delete with an active selection replaces / deletes it.
-//! Ctrl+A selects the whole buffer. Clipboard (Ctrl+C/X/V) is V6.
+//! Ctrl+A selects the whole buffer.
+//!
+//! ## V6 clipboard (Ctrl+C / Ctrl+X / Ctrl+V)
+//!
+//! Cut/copy write to BOTH the unnamed register (`"`) for in-session round-trips
+//! AND the system clipboard (`host.write_clipboard`) for cross-app use.
+//!
+//! Paste reads the OS clipboard first (`host.read_clipboard()`), falling back
+//! to the unnamed register when the OS clipboard is unreadable or `None` — so
+//! in-session cut→paste round-trips work deterministically in CI (where OSC52
+//! is write-only / unreadable).
+//!
+//! Ctrl+C without a selection is a no-op (the caller keeps the `Ctrl+C →
+//! quit` path alive when there is no selection — see `event_loop.rs`).
+//!
+//! ### Double-sync avoidance
+//!
+//! `dispatch_vscode_key` must NOT call `sync_after_engine_mutation` internally;
+//! the caller (`event_loop.rs`) runs the full post-dispatch sync block after
+//! every call. For paste we use a private `vscode_insert_text` helper that
+//! calls `insert_str` + `mark_content_dirty` — matching what `handle_paste`
+//! does but without the extra `sync_after_engine_mutation` call inside it.
 //!
 //! Caller contract (mirrors the Insert-mode FallThrough path in `event_loop`):
 //! - Call `dispatch_vscode_key` before the main vim routing.
@@ -17,7 +38,7 @@
 
 use super::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_engine::{BufferEdit, InsertDir, Pos, VimMode};
+use hjkl_engine::{BufferEdit, Host, InsertDir, Pos, VimMode};
 
 impl App {
     /// Dispatch a single key event in VSCode (non-modal) mode.
@@ -66,6 +87,59 @@ impl App {
             // Ctrl+A → select whole buffer
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                 self.vscode_select_all();
+            }
+
+            // ── V6 clipboard chords ────────────────────────────────────────
+
+            // Ctrl+C → copy selection (no-op when no selection; the caller
+            // keeps Ctrl+C → quit alive when vscode_has_selection() is false,
+            // so this arm only fires when a selection is active).
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                if self.vscode_has_selection() {
+                    self.vscode_copy_selection();
+                }
+                // No selection: fall through (no-op here); the event_loop guard
+                // ensures we only reach this arm when a selection is present.
+            }
+
+            // Ctrl+X → cut selection (copy + delete). No selection → no-op.
+            // NOTE: VSCode cuts the whole line on empty selection; that is a
+            // planned follow-up — not implemented here.
+            (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                if self.vscode_has_selection() {
+                    self.vscode_copy_selection();
+                    self.vscode_delete_selection();
+                }
+            }
+
+            // Ctrl+V → paste. Reads OS clipboard first, falls back to the
+            // unnamed register. If a selection is active, deletes it first
+            // (→ INSERT) then inserts the pasted text at the caret.
+            (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+                // Read OS clipboard first (split borrow: host_mut is released
+                // before we read the register).
+                let clip = self.active_editor_mut().host_mut().read_clipboard();
+                let clip_text = clip.filter(|s| !s.is_empty());
+                // Fall back to unnamed register when OS clipboard is
+                // unreadable (CI/PTY env where OSC52 is write-only).
+                let reg_text = if clip_text.is_none() {
+                    let t = self
+                        .active_editor()
+                        .registers()
+                        .read('"')
+                        .map(|s| s.text.clone())
+                        .unwrap_or_default();
+                    if t.is_empty() { None } else { Some(t) }
+                } else {
+                    None
+                };
+                let text = clip_text.or(reg_text);
+                if let Some(text) = text {
+                    if self.vscode_has_selection() {
+                        self.vscode_delete_selection();
+                    }
+                    self.vscode_insert_text(&text);
+                }
             }
 
             // Esc → collapse any selection, stay in Insert (non-modal; do NOT
@@ -172,9 +246,66 @@ impl App {
     // ── Selection helpers ──────────────────────────────────────────────────────
 
     /// `true` when there is an active (non-empty) VSCode selection.
-    fn vscode_has_selection(&self) -> bool {
+    /// Exposed as `pub(crate)` so `event_loop.rs` can check it inside the
+    /// Ctrl+C guard without entering `dispatch_vscode_key`.
+    pub(crate) fn vscode_has_selection(&self) -> bool {
         let ed = self.active_editor();
         ed.vim_mode() == VimMode::Visual && ed.visual_char_range_exclusive().is_some()
+    }
+
+    // ── V6 clipboard helpers ───────────────────────────────────────────────────
+
+    /// Extract the text covered by the current exclusive VSCode selection.
+    ///
+    /// Returns `None` when no selection is active. Reads directly from the
+    /// buffer rope using char indices so the result is exactly the half-open
+    /// range — no trailing character, no linewise newline expansion, and
+    /// correct for multi-byte/multi-codepoint content.
+    fn vscode_selection_text(&self) -> Option<String> {
+        let ((sr, sc), (er, ec)) = self.active_editor().visual_char_range_exclusive()?;
+        let rope = self.active_editor().buffer().rope();
+        // Convert (row, char-col) to absolute char indices. ropey's
+        // `line_to_char` returns the char index of the first codepoint of the
+        // row (including the trailing '\n' of the previous row), so adding the
+        // column gives the exact codepoint position.
+        let start_char = rope.line_to_char(sr) + sc;
+        let end_char = rope.line_to_char(er) + ec;
+        Some(rope.slice(start_char..end_char).to_string())
+    }
+
+    /// Write the current selection text to both the unnamed register and the
+    /// system clipboard. Does NOT modify the buffer or change mode.
+    fn vscode_copy_selection(&mut self) {
+        let text = match self.vscode_selection_text() {
+            Some(t) if !t.is_empty() => t,
+            _ => return,
+        };
+        // Write to unnamed register (in-session fallback for CI / read-only clipboard).
+        self.active_editor_mut().set_yank(text.clone());
+        // Write to system clipboard (fire-and-forget; host queues the write).
+        self.active_editor_mut().host_mut().write_clipboard(text);
+    }
+
+    /// Insert `text` at the current caret in Insert mode.
+    ///
+    /// Mirrors the body of `handle_paste` (CRLF normalisation + `insert_str`)
+    /// but does NOT call `sync_after_engine_mutation` — the caller's post-
+    /// dispatch sync block in `event_loop.rs` handles that.
+    fn vscode_insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        // Ensure we are in Insert before inserting.
+        if self.active_editor().vim_mode() != VimMode::Insert {
+            self.active_editor_mut().enter_insert_i(1);
+        }
+        let normalised = if text.contains('\r') {
+            text.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            text.to_owned()
+        };
+        self.active_editor_mut().insert_str(&normalised);
+        self.active_editor_mut().mark_content_dirty();
     }
 
     /// Collapse a Visual selection back to Insert mode. The caret stays where

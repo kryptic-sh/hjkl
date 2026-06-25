@@ -155,6 +155,128 @@ fn vscode_ctrl_a_then_type_replaces_all() {
     assert_eq!(got, "Z\n", "Ctrl+A + type 'Z' should give 'Z'");
 }
 
+// ── V6 clipboard tests ────────────────────────────────────────────────────────
+//
+// Clipboard testability strategy (CI-safe):
+//
+// The real `hjkl` binary uses `TuiHost` whose clipboard backend in CI / PTY
+// (no X display) either has no READ capability (OSC 52) or fails construction.
+// `read_clipboard()` therefore returns `None`, and paste falls back to the
+// unnamed register — which the cut/copy step populated in the same process.
+//
+// All tests below rely on the **register fallback path only**:
+//   cut / copy → unnamed register (in-process)
+//   paste      → read_clipboard() == None → unnamed register
+//
+// If the host clipboard *is* readable (local dev box with wl-paste / pbpaste),
+// the OS clipboard also holds the text, so `read_clipboard()` returns the same
+// string — both paths produce identical results.
+//
+// Tests that depend on the register fallback are annotated with
+// "NOTE: register fallback" below.
+
+/// Ctrl+X removes the selected text from the buffer.
+///
+/// Type "hello", Shift+Left×2 selects "lo", Ctrl+X deletes → "hel".
+#[test]
+fn vscode_cut_removes_selection() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("hello");
+    s.keys("<S-Left>");
+    s.keys("<S-Left>"); // selects "lo" (caret col 3, anchor col 5)
+    s.keys("<C-x>"); // cut "lo" → "hel"
+    s.keys("<C-s>"); // save
+
+    let got = wait_for_contents(&path, "hel\n");
+    assert_eq!(
+        got, "hel\n",
+        "Ctrl+X should cut selected 'lo', leaving 'hel'"
+    );
+}
+
+/// Ctrl+X then Ctrl+V round-trips the cut text (register fallback).
+///
+/// Type "hello", select "lo", cut → "hel"; paste at caret → "hello".
+/// NOTE: register fallback — OS clipboard read returns None in CI/PTY so
+/// paste reads the unnamed register, which cut populated.
+#[test]
+fn vscode_cut_then_paste_roundtrip() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("hello");
+    s.keys("<S-Left>");
+    s.keys("<S-Left>"); // selects "lo"
+    s.keys("<C-x>"); // cut → buffer is "hel", register/clip = "lo"
+    s.keys("<C-v>"); // paste "lo" back → "hello"
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "hello\n");
+    assert_eq!(
+        got, "hello\n",
+        "cut then paste should round-trip: 'hello' → cut 'lo' → paste 'lo' → 'hello'"
+    );
+}
+
+/// Ctrl+C keeps the buffer intact and the selection active; a subsequent paste
+/// appends the copied text.
+///
+/// Type "hello", select "lo" with Shift+Left×2, Ctrl+C (copies, keeps
+/// selection), Right (collapses to end col 5), Ctrl+V inserts "lo" → "hellolo".
+/// NOTE: register fallback (same reasoning as cut→paste test above).
+#[test]
+fn vscode_copy_keeps_buffer_then_paste_appends() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("hello");
+    s.keys("<S-Left>");
+    s.keys("<S-Left>"); // selects "lo" (caret col 3, anchor col 5)
+    s.keys("<C-c>"); // copy "lo"; buffer unchanged, selection stays
+    s.keys("<Right>"); // collapse to end of selection (col 5 = after 'o')
+    s.keys("<C-v>"); // paste "lo" at col 5 → "hellolo"
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "hellolo\n");
+    assert_eq!(
+        got, "hellolo\n",
+        "Ctrl+C copy + Right + Ctrl+V should give 'hellolo'"
+    );
+}
+
+/// Ctrl+V with a selection pastes and replaces the selection.
+///
+/// Uses two steps to set up the register: type "XY", select "Y", cut → register="Y",
+/// type "ab", select "b", paste → replaces "b" with "Y" → "aY".
+/// NOTE: register fallback.
+#[test]
+fn vscode_paste_replaces_selection() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Phase 1: populate register with "Y" via cut.
+    s.keys("XY");
+    s.keys("<S-Left>"); // select "Y"
+    s.keys("<C-x>"); // cut "Y" → buffer "X", register="Y"
+    // Phase 2: type "ab", select "b", paste → "aY".
+    s.keys("ab"); // buffer is now "Xab"
+    s.keys("<S-Left>"); // select "b"
+    s.keys("<C-v>"); // paste "Y", replacing "b" → "XaY"
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "XaY\n");
+    assert_eq!(
+        got, "XaY\n",
+        "Ctrl+V with selection should replace 'b' with 'Y'"
+    );
+}
+
 /// Plain Left collapses the selection without replacing; typing after collapse
 /// inserts at the collapsed position (selection start).
 #[test]
