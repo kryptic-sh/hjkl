@@ -2251,6 +2251,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.current_mode
     }
 
+    /// Discipline-agnostic coarse mode for app chrome (status badge, cursor
+    /// shape). App code that only needs "inserting / selecting / idle" — not the
+    /// precise vim mode — should read this so it works identically under any
+    /// keybinding discipline (vim, vscode, future helix/emacs). See
+    /// [`crate::CoarseMode`] (epic #265 G3). Today this projects from the vim
+    /// mode; once FSM state is pluggable each discipline supplies its own.
+    pub fn coarse_mode(&self) -> crate::CoarseMode {
+        use crate::CoarseMode;
+        match self.vim.current_mode {
+            VimMode::Normal => CoarseMode::Normal,
+            VimMode::Insert => CoarseMode::Insert,
+            VimMode::Visual => CoarseMode::Select,
+            VimMode::VisualLine => CoarseMode::SelectLine,
+            VimMode::VisualBlock => CoarseMode::SelectBlock,
+        }
+    }
+
     /// The active read-only view overlay (see [`crate::ViewMode`]). Independent
     /// of [`Editor::vim_mode`]; the host renderer reads this as the source of
     /// truth for whether to draw the git-blame framing.

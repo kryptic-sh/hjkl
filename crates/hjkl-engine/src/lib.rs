@@ -119,6 +119,31 @@ pub enum VimMode {
     VisualBlock,
 }
 
+/// Discipline-agnostic coarse mode for app chrome (status badge, cursor
+/// shape) that must work the same whether the active keybinding discipline is
+/// vim, vscode, or a future helix/emacs. Unlike [`VimMode`] — which names
+/// vim-specific states — `CoarseMode` is the projection every discipline can
+/// express: "are we inserting text, selecting, in a command prompt, or idle?"
+///
+/// This is the seam app chrome reads instead of `VimMode` (epic #265 G3): the
+/// vim discipline maps its modes onto these; non-modal disciplines (vscode)
+/// project their own state. Today it is derived from [`VimMode`]; once the FSM
+/// state is pluggable, each discipline supplies its own projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoarseMode {
+    /// Idle / command-ready (vim Normal).
+    #[default]
+    Normal,
+    /// Text is being inserted at the caret (vim Insert).
+    Insert,
+    /// A character-wise selection is active (vim Visual).
+    Select,
+    /// A line-wise selection is active (vim VisualLine).
+    SelectLine,
+    /// A block / column selection is active (vim VisualBlock).
+    SelectBlock,
+}
+
 /// A read-only *view* layered over the real input [`VimMode`]. Unlike a vim
 /// mode (which decides how keystrokes are interpreted), a `ViewMode` only
 /// changes what the buffer presents — input is still interpreted as Normal.

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Host};
-use hjkl_engine::{CursorShape, Editor, Options, VimMode};
+use hjkl_engine::{CoarseMode, CursorShape, Editor, Options};
 use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_form::TextFieldEditor;
 use hjkl_holler::HollerBus;
@@ -2122,12 +2122,16 @@ impl App {
         if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode {
             return "EDITOR";
         }
-        match self.active_editor().vim_mode() {
-            VimMode::Normal => "NORMAL",
-            VimMode::Insert => "INSERT",
-            VimMode::Visual => "VISUAL",
-            VimMode::VisualLine => "VISUAL LINE",
-            VimMode::VisualBlock => "VISUAL BLOCK",
+        // Modal disciplines (vim today) project their precise mode onto the
+        // discipline-agnostic CoarseMode; the badge text is the discipline's
+        // concern. Read CoarseMode rather than VimMode so this stays correct as
+        // FSM state becomes pluggable (epic #265 G3).
+        match self.active_editor().coarse_mode() {
+            CoarseMode::Normal => "NORMAL",
+            CoarseMode::Insert => "INSERT",
+            CoarseMode::Select => "VISUAL",
+            CoarseMode::SelectLine => "VISUAL LINE",
+            CoarseMode::SelectBlock => "VISUAL BLOCK",
         }
     }
 
