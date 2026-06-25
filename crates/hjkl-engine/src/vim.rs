@@ -555,20 +555,10 @@ pub struct VimState {
     pub replaying_macro: bool,
     /// Last register played via `@reg`. `@@` re-plays this one.
     pub last_macro: Option<char>,
-    /// Position of the most recent buffer mutation. Surfaced via
-    /// the `'.` / `` `. `` marks for quick "back to last edit".
-    pub last_edit_pos: Option<(usize, usize)>,
     /// Position where the cursor was when insert mode last exited (Esc).
     /// Used by `gi` to return to the exact (row, col) where the user
     /// last typed, matching vim's `:h gi`.
     pub last_insert_pos: Option<(usize, usize)>,
-    /// Bounded ring of recent edit positions (newest at the back).
-    /// `g;` walks toward older entries, `g,` toward newer ones. Capped
-    /// at [`CHANGE_LIST_MAX`].
-    pub change_list: Vec<(usize, usize)>,
-    /// Index into `change_list` while walking. `None` outside a walk —
-    /// any new edit clears it (and trims forward entries past it).
-    pub change_list_cursor: Option<usize>,
     /// Snapshot of the last visual selection for `gv` re-entry.
     /// Stored on every Visual / VisualLine / VisualBlock exit.
     pub last_visual: Option<LastVisual>,
@@ -918,11 +908,11 @@ fn walk_change_list<H: crate::types::Host>(
     dir: isize,
     count: usize,
 ) {
-    if ed.vim.change_list.is_empty() {
+    if ed.change_list.is_empty() {
         return;
     }
-    let len = ed.vim.change_list.len();
-    let mut idx: isize = match (ed.vim.change_list_cursor, dir) {
+    let len = ed.change_list.len();
+    let mut idx: isize = match (ed.change_list_cursor, dir) {
         (None, -1) => len as isize - 1,
         (None, 1) => return, // already past the newest entry
         (Some(i), -1) => i as isize - 1,
@@ -940,8 +930,8 @@ fn walk_change_list<H: crate::types::Host>(
         return;
     }
     let idx = idx as usize;
-    ed.vim.change_list_cursor = Some(idx);
-    let (row, col) = ed.vim.change_list[idx];
+    ed.change_list_cursor = Some(idx);
+    let (row, col) = ed.change_list[idx];
     ed.jump_cursor(row, col);
 }
 
@@ -3484,7 +3474,7 @@ pub(crate) fn goto_mark<H: crate::types::Host>(
     let target = match ch {
         'a'..='z' => ed.mark(ch),
         '\'' | '`' => ed.vim.jump_back.last().copied(),
-        '.' => ed.vim.last_edit_pos,
+        '.' => ed.last_edit_pos,
         '[' | ']' | '<' | '>' => ed.mark(ch),
         _ => None,
     };

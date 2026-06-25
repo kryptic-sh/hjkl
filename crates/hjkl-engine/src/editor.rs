@@ -562,6 +562,19 @@ pub struct Editor<
     /// overlay. Orthogonal to the input mode; auto-reset to `Normal` whenever
     /// the input mode leaves Normal (see `drop_blame_if_left_normal`).
     pub(crate) view: crate::ViewMode,
+    /// Position of the most recent buffer mutation, recorded by the core edit
+    /// funnel ([`Editor::mutate_edit`]). Surfaced via the `'.` / `` `. `` marks.
+    /// Discipline-agnostic substrate (#265 G3): the engine-core edit path writes
+    /// it and any discipline can offer "back to last edit", so it lives on
+    /// `Editor`, not `VimState`.
+    pub(crate) last_edit_pos: Option<(usize, usize)>,
+    /// Bounded ring of recent edit positions (newest at back), maintained by
+    /// `mutate_edit`. `g;` walks toward older, `g,` toward newer. Capped at
+    /// [`crate::vim::CHANGE_LIST_MAX`]. Substrate — see [`Editor::last_edit_pos`].
+    pub(crate) change_list: Vec<(usize, usize)>,
+    /// Index into `change_list` while walking; `None` outside a walk (any new
+    /// edit clears it and trims forward entries). Substrate.
+    pub(crate) change_list_cursor: Option<usize>,
     /// Undo history: each entry is `(joined_document, cursor)` before the
     /// edit. Stored as `Arc<String>` so it shares the
     /// Undo history: snapshots taken via `Buffer::rope()` — `ropey::Rope::clone`
@@ -1097,6 +1110,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             keybinding_mode: KeybindingMode::Vim,
             vim: VimState::default(),
             view: crate::ViewMode::default(),
+            last_edit_pos: None,
+            change_list: Vec::new(),
+            change_list_cursor: None,
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
             buffer,
@@ -1300,7 +1316,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Position of the last edit (where `.` would replay). `None` if
     /// no edit has happened yet in this session.
     pub fn last_edit_pos(&self) -> Option<(usize, usize)> {
-        self.vim.last_edit_pos
+        self.last_edit_pos
     }
 
     /// Read-only view of the file-marks table — uppercase / "file"
@@ -1536,7 +1552,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Read-only view of the change list (positions of recent edits) plus
     /// the current walk cursor. Newest entry is at the back.
     pub fn change_list(&self) -> (&[(usize, usize)], Option<usize>) {
-        (&self.vim.change_list, self.vim.change_list_cursor)
+        (&self.change_list, self.change_list_cursor)
     }
 
     /// Replace the unnamed register without touching any other slot.
@@ -2022,25 +2038,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Dot mark records the PRE-edit position (change start), matching
         // vim's `:h '.` semantics. Previously this stored the post-edit
         // cursor, which diverged from nvim on `iX<Esc>j`.
-        self.vim.last_edit_pos = Some((pre_edit_row, pre_edit_col));
+        self.last_edit_pos = Some((pre_edit_row, pre_edit_col));
         // Append to the change-list ring (skip when the cursor sits on
         // the same cell as the last entry — back-to-back keystrokes on
         // one column shouldn't pollute the ring). A new edit while
         // walking the ring trims the forward half, vim style.
         let entry = (pos_row, pos_col);
-        if self.vim.change_list.last() != Some(&entry) {
-            if let Some(idx) = self.vim.change_list_cursor.take() {
-                self.vim.change_list.truncate(idx + 1);
+        if self.change_list.last() != Some(&entry) {
+            if let Some(idx) = self.change_list_cursor.take() {
+                self.change_list.truncate(idx + 1);
             }
-            self.vim.change_list.push(entry);
-            let len = self.vim.change_list.len();
+            self.change_list.push(entry);
+            let len = self.change_list.len();
             if len > crate::vim::CHANGE_LIST_MAX {
-                self.vim
-                    .change_list
-                    .drain(0..len - crate::vim::CHANGE_LIST_MAX);
+                self.change_list.drain(0..len - crate::vim::CHANGE_LIST_MAX);
             }
         }
-        self.vim.change_list_cursor = None;
+        self.change_list_cursor = None;
         // Shift / drop marks + jump-list entries to track the row
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
