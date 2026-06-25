@@ -99,6 +99,77 @@ impl TerminalSession {
         Self::spawn_inner_cwd(Some(file), 24, 80, Some(dir))
     }
 
+    /// Spawn `hjkl` with a file argument plus extra CLI arguments (e.g.
+    /// `["--keybindings", "vscode"]`) and the default terminal size (80x24).
+    #[allow(dead_code)]
+    pub fn spawn_with_file_and_args(path: &Path, extra_args: &[&str]) -> Self {
+        Self::spawn_inner_args(Some(path), 24, 80, extra_args)
+    }
+
+    fn spawn_inner_args(file: Option<&Path>, rows: u16, cols: u16, extra_args: &[&str]) -> Self {
+        let pty_system = NativePtySystem::default();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+
+        let hjkl_bin = env!("CARGO_BIN_EXE_hjkl");
+        let mut cmd = CommandBuilder::new(hjkl_bin);
+        cmd.env("HJKL_LOG", "off");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env(
+            "XDG_CONFIG_HOME",
+            std::env::temp_dir().join("hjkl-e2e-config"),
+        );
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        cmd.env("XDG_CACHE_HOME", cache_dir.path());
+
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
+        if let Some(p) = file {
+            cmd.arg(p);
+        }
+
+        let child = pair.slave.spawn_command(cmd).expect("spawn hjkl");
+
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+
+        let parser_clone = Arc::clone(&parser);
+        let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut p = parser_clone.lock().unwrap();
+                        p.process(&buf[..n]);
+                    }
+                }
+            }
+        });
+
+        let writer = pair.master.take_writer().expect("take pty writer");
+
+        let session = Self {
+            master: pair.master,
+            writer,
+            child,
+            parser,
+            rows,
+            cols,
+            cache_dir,
+        };
+
+        session.wait_ms(spawn_ms());
+        session
+    }
+
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
         Self::spawn_inner_cwd(file, rows, cols, None)
     }

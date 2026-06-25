@@ -30,3 +30,7 @@ pub mod render_sync;
 // pty `:cmd\r` timing reasons as the other suites.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod tabline_icons;
+// VSCode keybinding mode e2e: `--keybindings vscode` typing, Ctrl+S save,
+// Ctrl+Z undo; restrict to linux for the same macOS pty timing reasons.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod vscode;

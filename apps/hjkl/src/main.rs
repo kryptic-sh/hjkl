@@ -97,6 +97,12 @@ struct Cli {
     #[arg(short = 'c', long = "command", value_name = "CMD", action = clap::ArgAction::Append)]
     commands: Vec<String>,
 
+    /// Override the keybinding discipline: `vim` (default, modal) or `vscode`
+    /// (non-modal, always in "insert" mode). Overrides `editor.keybindings`
+    /// in the user config. Useful for testing without editing the config file.
+    #[arg(long, value_name = "MODE")]
+    keybindings: Option<String>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -121,6 +127,9 @@ pub struct Args {
     /// Ex commands to dispatch in headless mode. `-c` commands precede `+cmd`
     /// tokens; argv interleaving within each group is preserved.
     pub commands: Vec<String>,
+    /// Optional `--keybindings` override (`"vim"` | `"vscode"`). `None` means
+    /// use whatever the config specifies.
+    pub keybindings: Option<String>,
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -210,6 +219,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         nvim_api: cli.nvim_api,
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
+        keybindings: cli.keybindings,
     };
     let warnings = apply_vim_tokens(&mut args, &vim_tokens);
     Ok((args, warnings))
@@ -332,6 +342,10 @@ fn main() -> Result<()> {
     } else {
         base_app
     };
+    // `--keybindings` CLI flag overrides the config value.
+    if let Some(ref kb) = args.keybindings {
+        app.keybinding_mode = hjkl_engine::KeybindingMode::from_config(kb);
+    }
     // Load any additional files into extra slots (argv order). Errors are
     // printed to stderr but do not abort — the editor opens with whatever
     // could be loaded.
@@ -647,6 +661,7 @@ mod cli_tests {
             embed: false,
             nvim_api: false,
             commands: vec![],
+            keybindings: None,
         }
     }
 }

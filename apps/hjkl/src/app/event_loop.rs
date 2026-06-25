@@ -1757,6 +1757,69 @@ impl App {
                 Event::Key(key) => {
                     // Record keystroke time for the idle swap-write timer (#185).
                     self.last_input_at = std::time::Instant::now();
+
+                    // ── VSCode keybinding mode early intercept ────────
+                    // Non-modal: bypass the vim FSM entirely. Ctrl+C is
+                    // exempted so quit / overlay-dismiss still works.
+                    // Overlays (command field, search, hop, quickfix) take
+                    // priority — fall through to handle_keypress for those.
+                    let is_ctrl_c = key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
+                    if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
+                        && !is_ctrl_c
+                        && self.command_field.is_none()
+                        && self.search_field.is_none()
+                        && self.hop.is_none()
+                        && !self.quickfix_open
+                        && !self.loclist_open
+                    {
+                        self.scroll_anim = None;
+                        let prev_top = self.window_scroll(self.focused_window()).0;
+                        self.dispatch_vscode_key(key);
+                        self.active_editor_mut().emit_cursor_shape_if_changed();
+                        self.sync_viewport_from_editor();
+                        if self.active_editor_mut().take_dirty() {
+                            let elapsed = self.active_mut().refresh_dirty_against_saved();
+                            self.last_signature_us = elapsed;
+                            if self.active().dirty {
+                                self.active_mut().is_new_file = false;
+                            }
+                        }
+                        let buffer_id = self.active().buffer_id;
+                        if self.active_editor_mut().take_content_reset() {
+                            self.handle_active_content_reset(buffer_id);
+                        }
+                        let edits = self.active_editor_mut().take_content_edits();
+                        if !edits.is_empty() {
+                            self.syntax.apply_edits(buffer_id, &edits);
+                            self.active_editor_mut()
+                                .shift_syntax_spans_for_edits(&edits);
+                        }
+                        self.lsp_notify_change_active(&edits);
+                        self.rebase_sibling_cursors(&edits);
+                        let _ = self.active_editor_mut().take_fold_ops();
+                        {
+                            let hint = self.active_editor_mut().take_scroll_anim_hint();
+                            if hint {
+                                let ms = self.active_editor().settings().scroll_duration_ms;
+                                let win = self.focused_window();
+                                let new_top = self.window_scroll(win).0;
+                                if ms > 0 && new_top != prev_top {
+                                    self.scroll_anim = Some(crate::app::ScrollAnim {
+                                        win_id: win,
+                                        start_top: prev_top,
+                                        target_top: new_top,
+                                        started_at: std::time::Instant::now(),
+                                        duration: std::time::Duration::from_millis(ms as u64),
+                                    });
+                                }
+                            }
+                        }
+                        self.pending_recompute = true;
+                        // Skip vim FSM entirely.
+                        continue;
+                    }
+
                     let consumed_inline = match self.handle_keypress(key) {
                         KeyOutcome::Break => break,
                         // Insert-mode arms handle the keystroke fully and
@@ -1861,23 +1924,22 @@ impl App {
                 drained += 1;
                 if let Ok(extra) = event::read() {
                     match extra {
-                        Event::Key(k) => match self.handle_keypress(k) {
-                            KeyOutcome::Break => {
-                                self.exit_requested = true;
-                                break;
-                            }
-                            KeyOutcome::Continue => continue,
-                            KeyOutcome::FallThrough => {
+                        Event::Key(k) => {
+                            // ── VSCode early intercept (drain loop mirror) ──
+                            let is_ctrl_c = k.code == KeyCode::Char('c')
+                                && k.modifiers.contains(KeyModifiers::CONTROL);
+                            if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
+                                && !is_ctrl_c
+                                && self.command_field.is_none()
+                                && self.search_field.is_none()
+                                && self.hop.is_none()
+                                && !self.quickfix_open
+                                && !self.loclist_open
+                            {
                                 self.scroll_anim = None;
                                 let prev_top = self.window_scroll(self.focused_window()).0;
-                                let mode_was_insert =
-                                    self.active_editor().vim_mode() == VimMode::Insert;
-                                if mode_was_insert {
-                                    self.dispatch_insert_key(k);
-                                    self.active_editor_mut().emit_cursor_shape_if_changed();
-                                } else {
-                                    hjkl_vim_tui::handle_key(self.active_editor_mut(), k);
-                                }
+                                self.dispatch_vscode_key(k);
+                                self.active_editor_mut().emit_cursor_shape_if_changed();
                                 self.sync_viewport_from_editor();
                                 if self.active_editor_mut().take_dirty() {
                                     let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -1898,8 +1960,6 @@ impl App {
                                 }
                                 self.lsp_notify_change_active(&edits);
                                 self.rebase_sibling_cursors(&edits);
-                                // Drain pending fold ops (drain-loop mirror of
-                                // the primary key arm above).
                                 let _ = self.active_editor_mut().take_fold_ops();
                                 {
                                     let hint = self.active_editor_mut().take_scroll_anim_hint();
@@ -1921,8 +1981,73 @@ impl App {
                                     }
                                 }
                                 self.pending_recompute = true;
+                                continue;
                             }
-                        },
+                            match self.handle_keypress(k) {
+                                KeyOutcome::Break => {
+                                    self.exit_requested = true;
+                                    break;
+                                }
+                                KeyOutcome::Continue => continue,
+                                KeyOutcome::FallThrough => {
+                                    self.scroll_anim = None;
+                                    let prev_top = self.window_scroll(self.focused_window()).0;
+                                    let mode_was_insert =
+                                        self.active_editor().vim_mode() == VimMode::Insert;
+                                    if mode_was_insert {
+                                        self.dispatch_insert_key(k);
+                                        self.active_editor_mut().emit_cursor_shape_if_changed();
+                                    } else {
+                                        hjkl_vim_tui::handle_key(self.active_editor_mut(), k);
+                                    }
+                                    self.sync_viewport_from_editor();
+                                    if self.active_editor_mut().take_dirty() {
+                                        let elapsed =
+                                            self.active_mut().refresh_dirty_against_saved();
+                                        self.last_signature_us = elapsed;
+                                        if self.active().dirty {
+                                            self.active_mut().is_new_file = false;
+                                        }
+                                    }
+                                    let bid = self.active().buffer_id;
+                                    if self.active_editor_mut().take_content_reset() {
+                                        self.handle_active_content_reset(bid);
+                                    }
+                                    let edits = self.active_editor_mut().take_content_edits();
+                                    if !edits.is_empty() {
+                                        self.syntax.apply_edits(bid, &edits);
+                                        self.active_editor_mut()
+                                            .shift_syntax_spans_for_edits(&edits);
+                                    }
+                                    self.lsp_notify_change_active(&edits);
+                                    self.rebase_sibling_cursors(&edits);
+                                    // Drain pending fold ops (drain-loop mirror of
+                                    // the primary key arm above).
+                                    let _ = self.active_editor_mut().take_fold_ops();
+                                    {
+                                        let hint = self.active_editor_mut().take_scroll_anim_hint();
+                                        if hint {
+                                            let ms =
+                                                self.active_editor().settings().scroll_duration_ms;
+                                            let win = self.focused_window();
+                                            let new_top = self.window_scroll(win).0;
+                                            if ms > 0 && new_top != prev_top {
+                                                self.scroll_anim = Some(crate::app::ScrollAnim {
+                                                    win_id: win,
+                                                    start_top: prev_top,
+                                                    target_top: new_top,
+                                                    started_at: std::time::Instant::now(),
+                                                    duration: std::time::Duration::from_millis(
+                                                        ms as u64,
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    self.pending_recompute = true;
+                                }
+                            }
+                        }
                         Event::Mouse(me2) => {
                             let _ = self.handle_mouse(me2);
                         }

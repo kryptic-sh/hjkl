@@ -69,27 +69,42 @@ pub use vim::Mode as FsmMode;
 // Consumers must use the canonical names: `Buffer`, `BufferEdit`,
 // `Edit`, `Viewport`.
 
-/// Which keyboard discipline the editor uses. Currently vim-only, but
-/// kept as an enum so future emacs / plain bindings can slot in without
-/// touching the public signature.
+/// Which keyboard discipline the editor uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeybindingMode {
     #[default]
     Vim,
+    /// Non-modal VSCode-style editing: always in "insert" mode, Ctrl+S saves,
+    /// Ctrl+Z/Y undo/redo. Selection/clipboard/find are tracked separately.
+    Vscode,
+}
+
+impl KeybindingMode {
+    /// Parse a config string into a [`KeybindingMode`]. Unrecognised values
+    /// fall back to `Vim` (same pattern as `hjkl_icons::IconMode::from_config`).
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "vscode" => KeybindingMode::Vscode,
+            _ => KeybindingMode::Vim,
+        }
+    }
 }
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for KeybindingMode {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str("vim")
+        match self {
+            KeybindingMode::Vim => s.serialize_str("vim"),
+            KeybindingMode::Vscode => s.serialize_str("vscode"),
+        }
     }
 }
 
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for KeybindingMode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let _ = String::deserialize(d)?;
-        Ok(KeybindingMode::Vim)
+        let raw = String::deserialize(d)?;
+        Ok(KeybindingMode::from_config(&raw))
     }
 }
 
@@ -118,4 +133,56 @@ pub enum ViewMode {
     #[default]
     Normal,
     Blame,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeybindingMode;
+
+    // ── KeybindingMode::from_config ────────────────────────────────────────
+
+    #[test]
+    fn from_config_vim_maps_to_vim() {
+        assert_eq!(KeybindingMode::from_config("vim"), KeybindingMode::Vim);
+    }
+
+    #[test]
+    fn from_config_vscode_maps_to_vscode() {
+        assert_eq!(
+            KeybindingMode::from_config("vscode"),
+            KeybindingMode::Vscode
+        );
+    }
+
+    #[test]
+    fn from_config_unknown_falls_back_to_vim() {
+        assert_eq!(KeybindingMode::from_config("emacs"), KeybindingMode::Vim);
+        assert_eq!(KeybindingMode::from_config(""), KeybindingMode::Vim);
+        assert_eq!(KeybindingMode::from_config("VSCode"), KeybindingMode::Vim);
+    }
+
+    #[test]
+    fn default_is_vim() {
+        assert_eq!(KeybindingMode::default(), KeybindingMode::Vim);
+    }
+
+    // ── Serde round-trip ───────────────────────────────────────────────────
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_vim_round_trip() {
+        let json = serde_json::to_string(&KeybindingMode::Vim).unwrap();
+        assert_eq!(json, "\"vim\"");
+        let back: KeybindingMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, KeybindingMode::Vim);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_vscode_round_trip() {
+        let json = serde_json::to_string(&KeybindingMode::Vscode).unwrap();
+        assert_eq!(json, "\"vscode\"");
+        let back: KeybindingMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, KeybindingMode::Vscode);
+    }
 }

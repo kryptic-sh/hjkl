@@ -49,6 +49,7 @@ mod syntax_glue;
 mod tests;
 mod types;
 mod viewport_sync;
+mod vscode;
 pub mod window;
 
 use crate::completion::Completion;
@@ -237,6 +238,9 @@ pub struct App {
     /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
     /// `icons` config setting.
     pub(crate) icon_mode: hjkl_icons::IconMode,
+    /// Active keybinding discipline (`vim` or `vscode`), from the
+    /// `editor.keybindings` config setting. Overridable via `--keybindings` CLI flag.
+    pub(crate) keybinding_mode: hjkl_engine::KeybindingMode,
     /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -1845,6 +1849,7 @@ impl App {
             explorer: None,
             explorer_git_discard_confirm: None,
             icon_mode: hjkl_icons::IconMode::default(),
+            keybinding_mode: hjkl_engine::KeybindingMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
@@ -2038,6 +2043,7 @@ impl App {
         // reliable fallback for non-Nerd setups.
         self.icon_mode = hjkl_icons::IconMode::from_config(&config.editor.icons)
             .unwrap_or(hjkl_icons::IconMode::Nerd);
+        self.keybinding_mode = hjkl_engine::KeybindingMode::from_config(&config.editor.keybindings);
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();
@@ -2079,6 +2085,10 @@ impl App {
         // to Normal by `is_blame`).
         if self.active_editor().is_blame() {
             return "BLAME";
+        }
+        // VSCode mode is non-modal — always "EDITOR" regardless of internal vim state.
+        if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode {
+            return "EDITOR";
         }
         match self.active_editor().vim_mode() {
             VimMode::Normal => "NORMAL",

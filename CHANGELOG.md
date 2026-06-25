@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **VSCode keybinding mode (pilot, non-modal)** (#265): `--keybindings vscode`
+  (or `editor.keybindings = "vscode"`) selects a non-modal discipline — typing,
+  navigation (arrows/Home/End/PageUp-Down), Backspace/Delete/Tab/Enter, and
+  Ctrl+S save / Ctrl+Z undo / Ctrl+Y redo — with the status badge reading
+  `EDITOR`. First non-vim discipline through the pluggable-FSM seam; vim stays
+  the default and is unchanged. Selection, clipboard chords, find, and
+  multi-cursor are tracked follow-ups in #265. The bottom-left mode badge is now
+  discipline-aware (modal disciplines show their mode; non-modal show a static
+  label).
+
 ### Fixed
 
 - **`>>` / `<{motion}` indent now honors `noexpandtab`** (#263): the indent
