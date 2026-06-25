@@ -555,6 +555,13 @@ pub struct Editor<
     /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
     /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
     pub(crate) vim: VimState,
+    /// Read-only view overlay (git blame, …) layered over the input mode.
+    /// Discipline-agnostic engine substrate (#265 G3): hoisted out of
+    /// `VimState` because the core edit funnel (`mutate_edit`) and render/chrome
+    /// (`is_blame`/`view_mode`) read it, and any discipline can present an
+    /// overlay. Orthogonal to the input mode; auto-reset to `Normal` whenever
+    /// the input mode leaves Normal (see `drop_blame_if_left_normal`).
+    pub(crate) view: crate::ViewMode,
     /// Undo history: each entry is `(joined_document, cursor)` before the
     /// edit. Stored as `Arc<String>` so it shares the
     /// Undo history: snapshots taken via `Buffer::rope()` — `ropey::Rope::clone`
@@ -1089,6 +1096,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         Self {
             keybinding_mode: KeybindingMode::Vim,
             vim: VimState::default(),
+            view: crate::ViewMode::default(),
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
             buffer,
@@ -1968,7 +1976,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // current cursor) so callers that push the return value onto an undo
         // stack still get a structurally valid round trip.
         // Note: `readonly` no longer blocks edits here — it only gates `:w`.
-        if !self.settings.modifiable || self.vim.view == crate::ViewMode::Blame {
+        if !self.settings.modifiable || self.view == crate::ViewMode::Blame {
             let _ = edit;
             return hjkl_buffer::Edit::InsertStr {
                 at: buf_cursor_pos(&self.buffer),
@@ -2272,7 +2280,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// of [`Editor::vim_mode`]; the host renderer reads this as the source of
     /// truth for whether to draw the git-blame framing.
     pub fn view_mode(&self) -> crate::ViewMode {
-        self.vim.view
+        self.view
     }
 
     /// `true` when the git-blame read-only overlay is active. Masked on the
@@ -2280,21 +2288,21 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// the instant the editor enters Insert/Visual/etc., even before the
     /// overlay flag is dropped. Use this for both rendering and mode-label.
     pub fn is_blame(&self) -> bool {
-        self.vim.view == crate::ViewMode::Blame && self.vim.current_mode == VimMode::Normal
+        self.view == crate::ViewMode::Blame && self.coarse_mode() == crate::CoarseMode::Normal
     }
 
     /// Enter the git-blame read-only overlay. No-op unless the editor is in
     /// Normal mode (BLAME is a Normal-only view). While active, every mutation
     /// funnel is blocked and the host renders the per-commit framing.
     pub fn enter_blame(&mut self) {
-        if self.vim.current_mode == VimMode::Normal {
-            self.vim.view = crate::ViewMode::Blame;
+        if self.coarse_mode() == crate::CoarseMode::Normal {
+            self.view = crate::ViewMode::Blame;
         }
     }
 
     /// Leave the git-blame overlay, returning to a plain Normal view. Idempotent.
     pub fn exit_blame(&mut self) {
-        self.vim.view = crate::ViewMode::Normal;
+        self.view = crate::ViewMode::Normal;
     }
 
     /// Bounds of the active visual-block rectangle as

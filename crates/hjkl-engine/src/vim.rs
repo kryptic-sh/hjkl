@@ -643,12 +643,6 @@ pub struct VimState {
     /// sole source of truth; until then both fields are kept in sync.
     /// Initialized to `Normal` via `#[derive(Default)]`.
     pub(crate) current_mode: crate::VimMode,
-    /// Read-only view overlay layered over `current_mode` (git blame, …).
-    /// Orthogonal to the input mode: while `Blame`, input is still
-    /// interpreted as Normal but mutations are blocked and the host renders
-    /// the overlay. Auto-reset to `Normal` whenever the input mode leaves
-    /// `Normal` (see `drop_blame_if_left_normal`). Initialized to `Normal`.
-    pub(crate) view: crate::ViewMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
     pub last_substitute: Option<crate::substitute::SubstituteCmd>,
     /// Stack of auto-inserted closing characters awaiting skip-over.
@@ -1389,8 +1383,8 @@ pub(crate) fn begin_insert<H: crate::types::Host>(
         return;
     }
     // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
-    if ed.vim.view == crate::ViewMode::Blame {
-        ed.vim.view = crate::ViewMode::Normal;
+    if ed.view == crate::ViewMode::Blame {
+        ed.view = crate::ViewMode::Normal;
         return;
     }
     let record = !matches!(reason, InsertReason::ReplayOnly);
@@ -3231,7 +3225,7 @@ pub(crate) fn drop_blame_if_left_normal<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     if ed.vim.current_mode != crate::VimMode::Normal {
-        ed.vim.view = crate::ViewMode::Normal;
+        ed.view = crate::ViewMode::Normal;
     }
 }
 
