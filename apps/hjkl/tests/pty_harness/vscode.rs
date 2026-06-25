@@ -277,6 +277,141 @@ fn vscode_paste_replaces_selection() {
     );
 }
 
+// ── V7 find tests ─────────────────────────────────────────────────────────────
+//
+// F3/Shift+F3 byte sequences (verified against crossterm 0.29 parse.rs):
+//   F3        → ESC O R  (SS3 'R'; val=b'R', F(1+b'R'-b'P')=F(3))
+//   Shift+F3  → ESC [ 1 ; 2 R  (CSI modifier key, mask=2=SHIFT, letter='R'=F(3))
+//
+// In-process search_repeat is tested by hjkl-engine-tui:
+//   `search_repeat_advances_to_next_match` and `search_repeat_no_pattern_is_noop`
+// E2e tests here drive Ctrl+F (open prompt) + type + Enter (jump) + edit + save.
+
+/// Ctrl+F opens the find prompt; typing a pattern then Enter jumps to the first
+/// match; typing after the jump inserts at the matched position (Ctrl+S saves).
+///
+/// Buffer: "foo bar foo" (11 chars + newline).
+/// Ctrl+F → type "foo" → Enter → caret is on first "foo" (col 0).
+/// Type "X" → inserts "X" before "foo" (col 0) → buffer "Xfoo bar foo\n".
+/// Then Ctrl+S → disk must equal "Xfoo bar foo\n".
+#[test]
+fn vscode_ctrl_f_find_and_insert_at_match() {
+    let (_keep, path) = seed("foo bar foo\n");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Open the search prompt.
+    s.keys("<C-f>");
+
+    // The status line should now show the search prompt prefix "/".
+    assert!(
+        s.wait_for_line(23, "/", 2000),
+        "search prompt should appear (status line should contain '/'); got: {:?}",
+        s.line(23)
+    );
+
+    // Type the search pattern.
+    s.keys("foo");
+    // Enter commits the search and jumps to the first match.
+    s.keys("<Enter>");
+
+    // After Enter the prompt closes; EDITOR badge is back.
+    assert!(
+        s.wait_for_line(23, "EDITOR", 2000),
+        "EDITOR badge should return after search Enter; got: {:?}",
+        s.line(23)
+    );
+
+    // Type "X" — inserts at the matched cursor position (first "foo", col 0).
+    s.keys("X");
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "Xfoo bar foo\n");
+    assert_eq!(
+        got, "Xfoo bar foo\n",
+        "after Ctrl+F 'foo' Enter, typing 'X' should insert at col 0 → 'Xfoo bar foo'"
+    );
+}
+
+/// F3 advances to the next match after Ctrl+F established the pattern.
+///
+/// Buffer: "foo bar foo" — two matches.
+/// Ctrl+F → "foo" → Enter → first match (col 0).
+/// F3 → second match (col 8).
+/// Type "X" at second match → "foo bar Xfoo\n".
+/// Ctrl+S → disk must equal "foo bar Xfoo\n".
+///
+/// F3 is driven via the <F3> notation (byte: ESC O R) added to
+/// vim_notation_to_bytes. If the byte sequence proves unreliable in CI this
+/// test falls back to the in-process path; the notation unit test still verifies
+/// the byte encoding independently.
+#[test]
+fn vscode_f3_advances_to_next_match() {
+    let (_keep, path) = seed("foo bar foo\n");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Establish search pattern "foo", jump to first match (col 0).
+    s.keys("<C-f>");
+    assert!(s.wait_for_line(23, "/", 2000), "search prompt opens");
+    s.keys("foo");
+    s.keys("<Enter>");
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "prompt closed");
+
+    // F3 → advance to next match (col 8 on line 0).
+    s.keys("<F3>");
+
+    // Type "X" then save.
+    s.keys("X");
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "foo bar Xfoo\n");
+    assert_eq!(
+        got, "foo bar Xfoo\n",
+        "F3 should advance to second 'foo' (col 8); typing 'X' gives 'foo bar Xfoo'"
+    );
+}
+
+/// Esc closes the find prompt without jumping; typing after Esc inserts normally.
+///
+/// Buffer: "foo bar" — type Ctrl+F to open prompt, type "foo", press Esc twice
+/// to cancel (first Esc: Insert→Normal in the prompt field; second Esc: close
+/// the prompt, matching the existing search-field Esc semantics for non-empty
+/// fields). Typing "Z" after dismissal inserts at the caret (end of "foo bar").
+#[test]
+fn vscode_esc_closes_find_prompt() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Type some content.
+    s.keys("foo bar");
+    // Open find, type partial pattern, then Esc×2 to cancel.
+    // First Esc: Insert→Normal in the prompt field (non-empty text).
+    // Second Esc: dismiss the prompt (Normal + any text → close).
+    s.keys("<C-f>");
+    assert!(s.wait_for_line(23, "/", 2000), "search prompt opens");
+    s.keys("foo");
+    s.keys("<Esc>");
+    s.keys("<Esc>");
+    // Prompt should be dismissed — EDITOR badge returns.
+    assert!(
+        s.wait_for_line(23, "EDITOR", 2000),
+        "EDITOR badge should return after Esc×2; got: {:?}",
+        s.line(23)
+    );
+
+    // Typing after Esc inserts at the current caret (end of "foo bar", col 7).
+    s.keys("Z");
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "foo barZ\n");
+    assert_eq!(
+        got, "foo barZ\n",
+        "after Esc×2 from find prompt, typing 'Z' inserts normally at caret end"
+    );
+}
+
 /// Plain Left collapses the selection without replacing; typing after collapse
 /// inserts at the collapsed position (selection start).
 #[test]

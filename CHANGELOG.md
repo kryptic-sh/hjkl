@@ -32,6 +32,9 @@ patch bumps.
   (e.g. headless), so in-session cut→paste always round-trips. Paste replaces an
   active selection. `Ctrl+C` with no selection still interrupts/quits (terminal
   convention); empty-selection line-cut is a follow-up.
+- **VSCode mode — find** (#265, V7): `Ctrl+F` opens the incremental search
+  prompt (seeded with the active selection, if any); `F3` / `Shift+F3` jump to
+  the next / previous match. Reuses the existing search infrastructure.
 
 ### Fixed
 

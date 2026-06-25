@@ -1,4 +1,4 @@
-//! VSCode keybinding dispatcher (V6: clipboard chords).
+//! VSCode keybinding dispatcher (V7: find / Ctrl+F).
 //!
 //! Non-modal "EDITOR" mode: there are two underlying states —
 //!   • INSERT  — no active selection; caret between chars (bar cursor).
@@ -36,7 +36,7 @@
 //!   content-reset, edits, LSP, sibling cursors, fold-ops, pending_recompute).
 //! - Do NOT emit cursor shape or run sync here.
 
-use super::App;
+use super::{App, SearchDir};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{BufferEdit, Host, InsertDir, Pos, VimMode};
 
@@ -87,6 +87,34 @@ impl App {
             // Ctrl+A → select whole buffer
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                 self.vscode_select_all();
+            }
+
+            // ── V7 find (Ctrl+F / F3 / Shift+F3) ─────────────────────────
+
+            // Ctrl+F → open the incremental search prompt (forward).
+            // If a selection is active, seed the find box with the selected
+            // text (VSCode behaviour) — one-liner via set_text.
+            (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                let seed = if self.vscode_has_selection() {
+                    self.vscode_selection_text()
+                } else {
+                    None
+                };
+                self.open_search_prompt(SearchDir::Forward);
+                if let (Some(text), Some(field)) = (seed, self.search_field.as_mut()) {
+                    field.set_text(&text);
+                    field.enter_insert_at_end();
+                }
+            }
+
+            // F3 → next match (repeat last search forward).
+            (KeyCode::F(3), KeyModifiers::NONE) => {
+                self.active_editor_mut().search_repeat(true, 1);
+            }
+
+            // Shift+F3 → previous match (repeat last search backward).
+            (KeyCode::F(3), mods) if mods.contains(KeyModifiers::SHIFT) => {
+                self.active_editor_mut().search_repeat(false, 1);
             }
 
             // ── V6 clipboard chords ────────────────────────────────────────

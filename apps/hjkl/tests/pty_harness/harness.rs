@@ -467,6 +467,16 @@ fn vim_notation_to_bytes(seq: &str) -> Vec<u8> {
                 "s-down" => out.extend_from_slice(b"\x1b[1;2B"),
                 "s-home" => out.extend_from_slice(b"\x1b[1;2H"),
                 "s-end" => out.extend_from_slice(b"\x1b[1;2F"),
+                // Function keys F1–F4 (SS3 sequences, xterm-256color).
+                // crossterm decodes: ESC O P→F1, Q→F2, R→F3, S→F4.
+                "f1" => out.extend_from_slice(b"\x1bOP"),
+                "f2" => out.extend_from_slice(b"\x1bOQ"),
+                "f3" => out.extend_from_slice(b"\x1bOR"),
+                "f4" => out.extend_from_slice(b"\x1bOS"),
+                // Shift+F3 — CSI modifier-key sequence: ESC [ 1 ; 2 R
+                // crossterm parse_csi_modifier_key_code: final byte 'R' → F(3),
+                // modifier-mask 2 → SHIFT.
+                "s-f3" => out.extend_from_slice(b"\x1b[1;2R"),
                 _ => {
                     // Modifier combos: C-x, S-x, C-w (then remainder after tag).
                     if let Some(bytes) = parse_modifier_tag(&tag) {
@@ -575,5 +585,13 @@ mod tests {
         assert_eq!(vim_notation_to_bytes("30j"), b"30j");
         // ctrl-w then j
         assert_eq!(vim_notation_to_bytes("<C-w>j"), &[0x17, b'j']);
+    }
+
+    #[test]
+    fn notation_function_keys() {
+        // F3 → SS3 'R' (xterm application-cursor mode)
+        assert_eq!(vim_notation_to_bytes("<F3>"), b"\x1bOR");
+        // Shift+F3 → CSI modifier sequence
+        assert_eq!(vim_notation_to_bytes("<S-F3>"), b"\x1b[1;2R");
     }
 }
