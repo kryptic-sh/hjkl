@@ -10,6 +10,15 @@ patch bumps.
 
 ### Fixed
 
+- **Multi-line paste into Insert mode no longer bunches lines together**: the
+  TUI did not enable terminal bracketed paste, so in raw mode crossterm mapped a
+  pasted `\n` (0x0A) to Ctrl+J — which the Insert-mode dispatcher dropped —
+  collapsing every pasted line onto one. The binary now enables bracketed paste
+  (`EnableBracketedPaste`) and handles `Event::Paste`: the whole blob is
+  inserted verbatim at the cursor with newlines preserved and no autoindent
+  (correct paste behaviour); CRLF/CR are normalised to LF. New e2e coverage
+  pastes a multi-line `.toml` into Insert mode and asserts the on-disk lines
+  survive.
 - **`hjkl --nvim-api` clipboard no longer corrupts the rpc stream** (#264, root
   cause): on a display-less host (e.g. the ubuntu CI runner) the editor's
   clipboard probe falls back to OSC 52, which writes terminal escape sequences

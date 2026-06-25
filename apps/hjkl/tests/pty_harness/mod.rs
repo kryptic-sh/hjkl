@@ -20,5 +20,9 @@ pub mod harness;
 // insert text (see `at_colon` note above), so restrict to linux.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod indent;
+// Bracketed-paste into Insert mode then `:w`; restrict to linux for the same
+// macOS pty `:cmd\r` timing reasons as the other suites.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod paste;
 pub mod register_count;
 pub mod render_sync;

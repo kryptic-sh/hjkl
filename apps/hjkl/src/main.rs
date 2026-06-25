@@ -364,7 +364,12 @@ fn main() -> Result<()> {
     execute!(
         stdout(),
         terminal::EnterAlternateScreen,
-        event::EnableFocusChange
+        event::EnableFocusChange,
+        // Bracketed paste: the terminal wraps pasted text in ESC[200~ … ESC[201~
+        // so it arrives as one atomic `Event::Paste(text)` with real newlines.
+        // Without this, in raw mode crossterm maps a pasted `\n` (0x0A) to Ctrl+J
+        // — which the insert dispatcher drops — so pasted lines bunch together.
+        event::EnableBracketedPaste
     )?;
     if app.mouse_enabled {
         execute!(stdout(), event::EnableMouseCapture)?;
@@ -387,6 +392,7 @@ fn main() -> Result<()> {
         io::stdout(),
         event::DisableMouseCapture,
         event::DisableFocusChange,
+        event::DisableBracketedPaste,
         terminal::LeaveAlternateScreen
     );
 

@@ -170,6 +170,35 @@ impl App {
         }
     }
 
+    /// Handle a terminal bracketed-paste (`Event::Paste`) — the whole pasted
+    /// blob arrives as one atomic string with real newlines.
+    ///
+    /// Insert mode inserts the text verbatim at the cursor: `insert_str` splits
+    /// embedded `\n` into lines and applies **no** autoindent, which is correct
+    /// paste behaviour (no cascading-indent like `:set paste`). CRLF/CR are
+    /// normalised to LF so Windows-clipboard line endings split lines too.
+    ///
+    /// In any non-Insert mode the paste is dropped: feeding pasted bytes to the
+    /// Normal-mode FSM would interpret them as commands, which is worse than a
+    /// no-op. (Pasting into the `:`/`/` command line is future work.)
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        self.last_input_at = std::time::Instant::now();
+        if self.active_editor().vim_mode() != VimMode::Insert {
+            return;
+        }
+        let normalised = if text.contains('\r') {
+            text.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            text
+        };
+        self.active_editor_mut().insert_str(&normalised);
+        self.sync_after_engine_mutation();
+        self.pending_recompute = true;
+    }
+
     /// Poll in-flight grammar loads, git signs, format results, and anvil jobs.
     /// Called once per event loop tick before the poll wait.
     pub(crate) fn drain_async_polls(&mut self) {
@@ -1809,6 +1838,9 @@ impl App {
                 Event::FocusGained => {
                     self.checktime_all();
                 }
+                Event::Paste(text) => {
+                    self.handle_paste(text);
+                }
                 _ => {}
             }
 
@@ -1901,6 +1933,9 @@ impl App {
                         }
                         Event::FocusGained => {
                             self.checktime_all();
+                        }
+                        Event::Paste(text) => {
+                            self.handle_paste(text);
                         }
                         _ => {}
                     }

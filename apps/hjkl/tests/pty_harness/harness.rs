@@ -193,6 +193,26 @@ impl TerminalSession {
         self.wait_ms(settle_ms());
     }
 
+    /// Send `text` as a terminal **bracketed paste**: wrap it in the
+    /// `ESC[200~` … `ESC[201~` markers exactly as a real terminal does when the
+    /// user presses Ctrl+Shift+V. The spawned `hjkl` (which enables bracketed
+    /// paste) decodes this into a single `Event::Paste(text)`. `text` is sent
+    /// verbatim — embedded newlines are preserved, which is the whole point.
+    #[allow(dead_code)]
+    pub fn paste(&mut self, text: &str) {
+        self.writer
+            .write_all(b"\x1b[200~")
+            .expect("write paste start");
+        self.writer
+            .write_all(text.as_bytes())
+            .expect("write paste body");
+        self.writer
+            .write_all(b"\x1b[201~")
+            .expect("write paste end");
+        self.writer.flush().expect("flush pty");
+        self.wait_ms(settle_ms());
+    }
+
     // ── Screen queries ────────────────────────────────────────────────────────
 
     /// Snapshot the current screen state.
