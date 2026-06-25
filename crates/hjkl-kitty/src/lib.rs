@@ -219,6 +219,12 @@ mod tests {
 
     // ── enable / disable emit bytes ─────────────────────────────────────────
 
+    // ANSI byte emission is unix/ANSI-terminal-specific: crossterm routes the
+    // keyboard-enhancement commands through the ANSI path on unix, but on the
+    // Windows console they error / write nothing (the protocol is unsupported
+    // there — hjkl degrades to legacy). Gate the byte-shape assertions to unix;
+    // `normalize_legacy` (the cross-platform logic) is covered above.
+    #[cfg(unix)]
     #[test]
     fn enable_emits_nonempty_csi_sequence() {
         let mut buf = Vec::<u8>::new();
@@ -228,6 +234,7 @@ mod tests {
         assert_eq!(&buf[..2], b"\x1b[", "enable output must start with ESC [");
     }
 
+    #[cfg(unix)]
     #[test]
     fn disable_emits_nonempty_csi_sequence() {
         let mut buf = Vec::<u8>::new();
