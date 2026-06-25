@@ -1770,70 +1770,10 @@ impl App {
                     };
 
                     // ── VSCode keybinding mode early intercept ────────
-                    // Non-modal: bypass the vim FSM entirely. Ctrl+C without
-                    // an active selection is exempted so quit / overlay-
-                    // dismiss still works. With a selection active, Ctrl+C
-                    // is routed to dispatch_vscode_key to copy the selection.
-                    // Overlays (command field, search, hop, quickfix) take
-                    // priority — fall through to handle_keypress for those.
-                    let is_ctrl_c = key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL);
-                    // Allow Ctrl+C into the VSCode dispatcher only when a
-                    // selection is active (copy); otherwise fall through so
-                    // handle_keypress can quit / dismiss overlays.
-                    let ctrl_c_copy = is_ctrl_c && self.vscode_has_selection();
-                    if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
-                        && (!is_ctrl_c || ctrl_c_copy)
-                        && self.command_field.is_none()
-                        && self.search_field.is_none()
-                        && self.hop.is_none()
-                        && !self.quickfix_open
-                        && !self.loclist_open
-                    {
-                        self.scroll_anim = None;
-                        let prev_top = self.window_scroll(self.focused_window()).0;
-                        self.dispatch_vscode_key(key);
-                        self.active_editor_mut().emit_cursor_shape_if_changed();
-                        self.sync_viewport_from_editor();
-                        if self.active_editor_mut().take_dirty() {
-                            let elapsed = self.active_mut().refresh_dirty_against_saved();
-                            self.last_signature_us = elapsed;
-                            if self.active().dirty {
-                                self.active_mut().is_new_file = false;
-                            }
-                        }
-                        let buffer_id = self.active().buffer_id;
-                        if self.active_editor_mut().take_content_reset() {
-                            self.handle_active_content_reset(buffer_id);
-                        }
-                        let edits = self.active_editor_mut().take_content_edits();
-                        if !edits.is_empty() {
-                            self.syntax.apply_edits(buffer_id, &edits);
-                            self.active_editor_mut()
-                                .shift_syntax_spans_for_edits(&edits);
-                        }
-                        self.lsp_notify_change_active(&edits);
-                        self.rebase_sibling_cursors(&edits);
-                        let _ = self.active_editor_mut().take_fold_ops();
-                        {
-                            let hint = self.active_editor_mut().take_scroll_anim_hint();
-                            if hint {
-                                let ms = self.active_editor().settings().scroll_duration_ms;
-                                let win = self.focused_window();
-                                let new_top = self.window_scroll(win).0;
-                                if ms > 0 && new_top != prev_top {
-                                    self.scroll_anim = Some(crate::app::ScrollAnim {
-                                        win_id: win,
-                                        start_top: prev_top,
-                                        target_top: new_top,
-                                        started_at: std::time::Instant::now(),
-                                        duration: std::time::Duration::from_millis(ms as u64),
-                                    });
-                                }
-                            }
-                        }
-                        self.pending_recompute = true;
-                        // Skip vim FSM entirely.
+                    // Folded into one choke point shared with the drain loop
+                    // (#265 G3 B3). Returns true (consumed) when VSCode owns
+                    // the key; false falls through to handle_keypress.
+                    if self.try_vscode_intercept(key) {
                         continue;
                     }
 
@@ -1953,62 +1893,8 @@ impl App {
                                 k
                             };
                             // ── VSCode early intercept (drain loop mirror) ──
-                            let is_ctrl_c = k.code == KeyCode::Char('c')
-                                && k.modifiers.contains(KeyModifiers::CONTROL);
-                            let ctrl_c_copy = is_ctrl_c && self.vscode_has_selection();
-                            if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
-                                && (!is_ctrl_c || ctrl_c_copy)
-                                && self.command_field.is_none()
-                                && self.search_field.is_none()
-                                && self.hop.is_none()
-                                && !self.quickfix_open
-                                && !self.loclist_open
-                            {
-                                self.scroll_anim = None;
-                                let prev_top = self.window_scroll(self.focused_window()).0;
-                                self.dispatch_vscode_key(k);
-                                self.active_editor_mut().emit_cursor_shape_if_changed();
-                                self.sync_viewport_from_editor();
-                                if self.active_editor_mut().take_dirty() {
-                                    let elapsed = self.active_mut().refresh_dirty_against_saved();
-                                    self.last_signature_us = elapsed;
-                                    if self.active().dirty {
-                                        self.active_mut().is_new_file = false;
-                                    }
-                                }
-                                let bid = self.active().buffer_id;
-                                if self.active_editor_mut().take_content_reset() {
-                                    self.handle_active_content_reset(bid);
-                                }
-                                let edits = self.active_editor_mut().take_content_edits();
-                                if !edits.is_empty() {
-                                    self.syntax.apply_edits(bid, &edits);
-                                    self.active_editor_mut()
-                                        .shift_syntax_spans_for_edits(&edits);
-                                }
-                                self.lsp_notify_change_active(&edits);
-                                self.rebase_sibling_cursors(&edits);
-                                let _ = self.active_editor_mut().take_fold_ops();
-                                {
-                                    let hint = self.active_editor_mut().take_scroll_anim_hint();
-                                    if hint {
-                                        let ms = self.active_editor().settings().scroll_duration_ms;
-                                        let win = self.focused_window();
-                                        let new_top = self.window_scroll(win).0;
-                                        if ms > 0 && new_top != prev_top {
-                                            self.scroll_anim = Some(crate::app::ScrollAnim {
-                                                win_id: win,
-                                                start_top: prev_top,
-                                                target_top: new_top,
-                                                started_at: std::time::Instant::now(),
-                                                duration: std::time::Duration::from_millis(
-                                                    ms as u64,
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
-                                self.pending_recompute = true;
+                            // Shared choke point with the primary path (#265 G3 B3).
+                            if self.try_vscode_intercept(k) {
                                 continue;
                             }
                             match self.handle_keypress(k) {

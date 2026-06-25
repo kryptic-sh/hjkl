@@ -41,6 +41,84 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{BufferEdit, Host, InsertDir, Motion, Pos, VimMode};
 
 impl App {
+    /// VSCode-discipline early key intercept — the single routing choke point
+    /// shared by the primary and drain-loop `Event::Key` paths in
+    /// `event_loop.rs` (previously two byte-identical copies). When the active
+    /// discipline is VSCode and no overlay owns the key, this dispatches it
+    /// through the non-modal [`App::dispatch_vscode_key`] and runs the full
+    /// post-edit sync chain, returning `true` so the caller `continue`s and
+    /// skips the vim FSM.
+    ///
+    /// Returns `false` when this key is NOT a VSCode intercept — not in VSCode
+    /// mode, a non-selection `Ctrl+C` (kept alive for quit / overlay-dismiss),
+    /// or an overlay (command / search / hop / quickfix / loclist) is active —
+    /// in which case the caller falls through to `handle_keypress`.
+    ///
+    /// `key` must already be discipline-normalized (VSCode keeps raw keys;
+    /// `normalize_legacy` in `event_loop` runs vim-only, before this).
+    pub(crate) fn try_vscode_intercept(&mut self, key: KeyEvent) -> bool {
+        // Non-modal: bypass the vim FSM entirely. Ctrl+C without an active
+        // selection is exempted so quit / overlay-dismiss still works; with a
+        // selection it copies. Overlays take priority.
+        let is_ctrl_c =
+            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        let ctrl_c_copy = is_ctrl_c && self.vscode_has_selection();
+        if !(self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode
+            && (!is_ctrl_c || ctrl_c_copy)
+            && self.command_field.is_none()
+            && self.search_field.is_none()
+            && self.hop.is_none()
+            && !self.quickfix_open
+            && !self.loclist_open)
+        {
+            return false;
+        }
+        self.scroll_anim = None;
+        let prev_top = self.window_scroll(self.focused_window()).0;
+        self.dispatch_vscode_key(key);
+        self.active_editor_mut().emit_cursor_shape_if_changed();
+        self.sync_viewport_from_editor();
+        if self.active_editor_mut().take_dirty() {
+            let elapsed = self.active_mut().refresh_dirty_against_saved();
+            self.last_signature_us = elapsed;
+            if self.active().dirty {
+                self.active_mut().is_new_file = false;
+            }
+        }
+        let buffer_id = self.active().buffer_id;
+        if self.active_editor_mut().take_content_reset() {
+            self.handle_active_content_reset(buffer_id);
+        }
+        let edits = self.active_editor_mut().take_content_edits();
+        if !edits.is_empty() {
+            self.syntax.apply_edits(buffer_id, &edits);
+            self.active_editor_mut()
+                .shift_syntax_spans_for_edits(&edits);
+        }
+        self.lsp_notify_change_active(&edits);
+        self.rebase_sibling_cursors(&edits);
+        let _ = self.active_editor_mut().take_fold_ops();
+        {
+            let hint = self.active_editor_mut().take_scroll_anim_hint();
+            if hint {
+                let ms = self.active_editor().settings().scroll_duration_ms;
+                let win = self.focused_window();
+                let new_top = self.window_scroll(win).0;
+                if ms > 0 && new_top != prev_top {
+                    self.scroll_anim = Some(crate::app::ScrollAnim {
+                        win_id: win,
+                        start_top: prev_top,
+                        target_top: new_top,
+                        started_at: std::time::Instant::now(),
+                        duration: std::time::Duration::from_millis(ms as u64),
+                    });
+                }
+            }
+        }
+        self.pending_recompute = true;
+        true
+    }
+
     /// Dispatch a single key event in VSCode (non-modal) mode.
     ///
     /// Home state is INSERT. A charwise-Visual selection is the "selection"
