@@ -38,7 +38,7 @@
 
 use super::{App, SearchDir};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_engine::{BufferEdit, Host, InsertDir, Pos, VimMode};
+use hjkl_engine::{BufferEdit, Host, InsertDir, Motion, Pos, VimMode};
 
 impl App {
     /// Dispatch a single key event in VSCode (non-modal) mode.
@@ -130,13 +130,13 @@ impl App {
                 // ensures we only reach this arm when a selection is present.
             }
 
-            // Ctrl+X → cut selection (copy + delete). No selection → no-op.
-            // NOTE: VSCode cuts the whole line on empty selection; that is a
-            // planned follow-up — not implemented here.
+            // Ctrl+X → cut selection (copy + delete). No selection → cut whole line.
             (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
                 if self.vscode_has_selection() {
                     self.vscode_copy_selection();
                     self.vscode_delete_selection();
+                } else {
+                    self.vscode_cut_line();
                 }
             }
 
@@ -174,6 +174,26 @@ impl App {
             // leave Insert the way vim does)
             (KeyCode::Esc, _) => {
                 self.collapse_to_insert_if_visual();
+            }
+
+            // ── Ctrl+Shift+arrows: word-wise selection extend ──────────────────
+            (KeyCode::Left, mods) if mods == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                self.vscode_shift_word(ShiftDir::WordBack);
+            }
+            (KeyCode::Right, mods) if mods == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+                self.vscode_shift_word(ShiftDir::WordFwd);
+            }
+
+            // ── Ctrl+arrows: word navigation ───────────────────────────────────
+            // Ctrl+Left → word-backward (collapse selection first if any)
+            (KeyCode::Left, mods) if mods == KeyModifiers::CONTROL => {
+                self.collapse_to_insert_if_visual();
+                self.active_editor_mut().execute_motion(Motion::WordBack, 1);
+            }
+            // Ctrl+Right → word-forward (collapse selection first if any)
+            (KeyCode::Right, mods) if mods == KeyModifiers::CONTROL => {
+                self.collapse_to_insert_if_visual();
+                self.active_editor_mut().execute_motion(Motion::WordFwd, 1);
             }
 
             // ── Shift+arrow: begin or extend selection ─────────────────────────
@@ -232,6 +252,14 @@ impl App {
                     self.vscode_delete_selection();
                 } else {
                     self.active_editor_mut().insert_backspace();
+                }
+            }
+            // Ctrl+Delete → delete word forward (or selection if active)
+            (KeyCode::Delete, mods) if mods.contains(KeyModifiers::CONTROL) => {
+                if self.vscode_has_selection() {
+                    self.vscode_delete_selection();
+                } else {
+                    self.vscode_delete_word_fwd();
                 }
             }
             (KeyCode::Delete, _) => {
@@ -514,7 +542,99 @@ impl App {
                 let line_len = ed.line_char_count(row);
                 (row, line_len)
             }
+            ShiftDir::WordFwd | ShiftDir::WordBack => {
+                // These are handled by vscode_shift_word, not vscode_compute_move.
+                unreachable!("word directions are handled by vscode_shift_word")
+            }
         }
+    }
+
+    /// Ctrl+Shift+arrow: begin or extend the selection by one word.
+    fn vscode_shift_word(&mut self, dir: ShiftDir) {
+        let in_visual = self.active_editor().vim_mode() == VimMode::Visual;
+        if !in_visual {
+            self.active_editor_mut().enter_visual_char();
+        }
+        // Execute the word motion (moves cursor, anchor stays fixed).
+        match dir {
+            ShiftDir::WordFwd => self.active_editor_mut().execute_motion(Motion::WordFwd, 1),
+            ShiftDir::WordBack => self.active_editor_mut().execute_motion(Motion::WordBack, 1),
+            _ => unreachable!(),
+        }
+        // Collapse if cursor == anchor (empty selection).
+        let anchor = self.active_editor().visual_anchor();
+        let cursor = self.active_editor().cursor();
+        if cursor == anchor {
+            self.active_editor_mut().exit_visual_to_normal();
+            self.active_editor_mut().enter_insert_i(1);
+        }
+    }
+
+    /// Ctrl+Delete: delete from the caret to the start of the next word.
+    fn vscode_delete_word_fwd(&mut self) {
+        // Snapshot caret before motion.
+        let (row, col) = self.active_editor().cursor();
+        // Execute the word forward motion → cursor lands at next word start.
+        self.active_editor_mut().execute_motion(Motion::WordFwd, 1);
+        let (new_row, new_col) = self.active_editor().cursor();
+        // Restore cursor to original position, then delete the range [old..new).
+        self.active_editor_mut().set_cursor_doc(row, col);
+        // Only delete if motion actually moved (prevents deleting on last word).
+        if (new_row, new_col) != (row, col) {
+            let start = Pos::new(row as u32, col as u32);
+            let end = Pos::new(new_row as u32, new_col as u32);
+            BufferEdit::delete_range(self.active_editor_mut().buffer_mut(), start..end);
+            self.active_editor_mut().mark_content_dirty();
+        }
+    }
+
+    /// Ctrl+X with no selection: cut the whole current line (including newline,
+    /// unless it is the last line). Writes to the unnamed register and the system
+    /// clipboard, then deletes the line from the buffer.
+    fn vscode_cut_line(&mut self) {
+        let (row, _col) = self.active_editor().cursor();
+        let row_count = self.active_editor().row_count();
+        // Get line text (no newline).
+        let rope = self.active_editor().buffer().rope();
+        let line_text = hjkl_buffer::rope_line_str(&rope, row);
+        drop(rope);
+        // The text to cut: if not last line, include the newline.
+        let cut_text = if row + 1 < row_count {
+            format!("{line_text}\n")
+        } else {
+            line_text.clone()
+        };
+        // Write to register + clipboard.
+        self.active_editor_mut().set_yank(cut_text.clone());
+        self.active_editor_mut()
+            .host_mut()
+            .write_clipboard(cut_text);
+        // Delete the line including its newline (or just the text for last line).
+        if row + 1 < row_count {
+            let start = Pos::new(row as u32, 0);
+            let end = Pos::new((row + 1) as u32, 0);
+            // Ensure insert mode before deletion.
+            if self.active_editor().vim_mode() != VimMode::Insert {
+                self.active_editor_mut().enter_insert_i(1);
+            }
+            BufferEdit::delete_range(self.active_editor_mut().buffer_mut(), start..end);
+        } else {
+            // Last line: delete just the text content (no newline to delete).
+            let line_len = self.active_editor().line_char_count(row);
+            if line_len > 0 {
+                let start = Pos::new(row as u32, 0);
+                let end = Pos::new(row as u32, line_len as u32);
+                if self.active_editor().vim_mode() != VimMode::Insert {
+                    self.active_editor_mut().enter_insert_i(1);
+                }
+                BufferEdit::delete_range(self.active_editor_mut().buffer_mut(), start..end);
+            }
+        }
+        // Clamp cursor to new line start.
+        let new_row_count = self.active_editor().row_count();
+        let new_row = row.min(new_row_count.saturating_sub(1));
+        self.active_editor_mut().set_cursor_doc(new_row, 0);
+        self.active_editor_mut().mark_content_dirty();
     }
 }
 
@@ -527,4 +647,6 @@ enum ShiftDir {
     Down,
     Home,
     End,
+    WordFwd,
+    WordBack,
 }

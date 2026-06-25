@@ -41,6 +41,11 @@ patch bumps.
   a headless client can reconstruct the active selection from anchor + cursor +
   mode. Positions use the 1-based char-col convention of the existing `col()`.
   Unblocks the planned Monaco conformance oracle.
+- **VSCode mode — word motions + line-cut** (#265): `Ctrl+Left` / `Ctrl+Right`
+  word-wise caret nav, `Ctrl+Shift+Left` / `Ctrl+Shift+Right` word-wise
+  selection, `Ctrl+Delete` delete-word-forward, and `Ctrl+X` with no selection
+  cuts the whole line. (Ctrl+/ comment and Ctrl+] / Ctrl+[ indent need the kitty
+  keyboard protocol — terminal-aliased today — tracked separately on #265.)
 
 ### Fixed
 

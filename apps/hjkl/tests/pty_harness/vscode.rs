@@ -412,6 +412,94 @@ fn vscode_esc_closes_find_prompt() {
     );
 }
 
+// ── Word-navigation / word-select / Ctrl+Delete / line-cut tests ─────────────
+
+/// Ctrl+Right moves caret to start of next word.
+/// Type "foo bar", Home (col 0), Ctrl+Right → caret at col 4 (start of "bar").
+/// Type "X" → inserts at col 4 → "foo Xbar\n".
+#[test]
+fn vscode_ctrl_right_word_nav() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("foo bar");
+    s.keys("<Home>"); // col 0
+    s.keys("<C-Right>"); // word forward → col 4
+    s.keys("X");
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "foo Xbar\n");
+    assert_eq!(got, "foo Xbar\n", "Ctrl+Right jumps to next word start");
+}
+
+/// Ctrl+Shift+Right from col 0 selects first word "foo " (col 0..4).
+/// Typing "X" replaces selection → "Xbar\n".
+#[test]
+fn vscode_ctrl_shift_right_word_select_then_type() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("foo bar");
+    s.keys("<Home>"); // col 0
+    s.keys("<C-S-Right>"); // select "foo " (col 0..4)
+    s.keys("X"); // replace selection with "X"
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "Xbar\n");
+    assert_eq!(
+        got, "Xbar\n",
+        "Ctrl+Shift+Right selects first word; typing X replaces it"
+    );
+}
+
+/// Ctrl+Delete at col 0 deletes "foo " (up to next word start at col 4).
+/// Buffer "foo bar" → after Ctrl+Delete → "bar\n".
+#[test]
+fn vscode_ctrl_delete_word_fwd() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("foo bar");
+    s.keys("<Home>"); // col 0
+    s.keys("<C-Delete>"); // delete from col 0 to col 4 ("foo ")
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "bar\n");
+    assert_eq!(
+        got, "bar\n",
+        "Ctrl+Delete deletes from caret to next word start"
+    );
+}
+
+/// Ctrl+X with no selection cuts the whole current line.
+/// Type "line1\nline2" (two lines), move to line 0 with Up+Home, Ctrl+X → line 0 deleted.
+/// Disk should contain "line2\n".
+#[test]
+fn vscode_ctrl_x_cuts_whole_line() {
+    let (_keep, path) = seed("");
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    s.keys("line1");
+    s.keys("<Enter>");
+    s.keys("line2");
+    // Move back to line 0: Up arrow, then Home.
+    s.keys("<Up>");
+    s.keys("<Home>");
+    // Ctrl+X: cut the whole first line (including newline).
+    s.keys("<C-x>");
+    s.keys("<C-s>");
+
+    let got = wait_for_contents(&path, "line2\n");
+    assert_eq!(
+        got, "line2\n",
+        "Ctrl+X with no selection cuts the whole current line"
+    );
+}
+
 /// Plain Left collapses the selection without replacing; typing after collapse
 /// inserts at the collapsed position (selection start).
 #[test]

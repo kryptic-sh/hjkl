@@ -477,6 +477,16 @@ fn vim_notation_to_bytes(seq: &str) -> Vec<u8> {
                 // crossterm parse_csi_modifier_key_code: final byte 'R' → F(3),
                 // modifier-mask 2 → SHIFT.
                 "s-f3" => out.extend_from_slice(b"\x1b[1;2R"),
+                // Ctrl+Arrow — ANSI CSI modifier sequences (modifier=5 → CONTROL).
+                "c-right" => out.extend_from_slice(b"\x1b[1;5C"),
+                "c-left" => out.extend_from_slice(b"\x1b[1;5D"),
+                "c-up" => out.extend_from_slice(b"\x1b[1;5A"),
+                "c-down" => out.extend_from_slice(b"\x1b[1;5B"),
+                // Ctrl+Shift+Arrow — modifier=6 → CONTROL|SHIFT.
+                "c-s-right" => out.extend_from_slice(b"\x1b[1;6C"),
+                "c-s-left" => out.extend_from_slice(b"\x1b[1;6D"),
+                // Ctrl+Delete — CSI 3;5~ (modifier=5 → CONTROL, code=3 → Delete).
+                "c-del" | "c-delete" => out.extend_from_slice(b"\x1b[3;5~"),
                 _ => {
                     // Modifier combos: C-x, S-x, C-w (then remainder after tag).
                     if let Some(bytes) = parse_modifier_tag(&tag) {
@@ -593,5 +603,14 @@ mod tests {
         assert_eq!(vim_notation_to_bytes("<F3>"), b"\x1bOR");
         // Shift+F3 → CSI modifier sequence
         assert_eq!(vim_notation_to_bytes("<S-F3>"), b"\x1b[1;2R");
+    }
+
+    #[test]
+    fn notation_ctrl_arrow_keys() {
+        assert_eq!(vim_notation_to_bytes("<C-Right>"), b"\x1b[1;5C");
+        assert_eq!(vim_notation_to_bytes("<C-Left>"), b"\x1b[1;5D");
+        assert_eq!(vim_notation_to_bytes("<C-S-Right>"), b"\x1b[1;6C");
+        assert_eq!(vim_notation_to_bytes("<C-S-Left>"), b"\x1b[1;6D");
+        assert_eq!(vim_notation_to_bytes("<C-Delete>"), b"\x1b[3;5~");
     }
 }
