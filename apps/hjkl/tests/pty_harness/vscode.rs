@@ -1146,20 +1146,40 @@ fn vscode_ctrl_slash_multiline_comment_add() {
     );
 }
 
-// BUG MARKER: vscode_ctrl_slash_toggle_removes_comment is NOT tested here
-// because toggle_comment_range (hjkl-engine) fails to REMOVE comments when
-// opening a pre-commented .rs file in VSCode mode. The `all_commented`
-// detection path in toggle_comment_range appears correct on inspection but
-// Ctrl+/ on a line that STARTS as "// hello\n" is a no-op — the toggle
-// only works in the ADD direction (uncommented → commented). Single-line
-// reproduce: seed "// hello\n", open in vscode mode, send Ctrl+/ →
-// file remains "// hello\n" (unchanged). Filed as epic #265 blocker.
+// NOTE on the comment toggle: it requires a filetype WITH a comment syntax.
+// toggle_comment_range no-ops on .txt (plaintext has no line-comment marker) in
+// BOTH directions — that is correct behavior, not a bug. So these tests build a
+// .rs temp (the shared `seed()` helper uses .txt).
+//
+// Second gotcha: format_on_save is ON by default, so saving a .rs file runs
+// rustfmt. The seed content must be rustfmt-STABLE in BOTH the commented and
+// uncommented states, otherwise rustfmt rejects the (invalid-Rust) result and
+// aborts the save — masking a perfectly-correct toggle as a "no-op". `fn a() {}`
+// / `fn b() {}` round-trips through rustfmt unchanged either way.
+#[test]
+fn vscode_ctrl_slash_multiline_comment_remove() {
+    let mut f = tempfile::Builder::new()
+        .suffix(".rs")
+        .tempfile()
+        .expect("create temp file");
+    std::io::Write::write_all(&mut f, b"// fn a() {}\n// fn b() {}\n").expect("seed");
+    std::io::Write::flush(&mut f).expect("flush");
+    let path = f.path().to_owned();
 
-// NOTE: vscode_ctrl_slash_multiline_comment_remove is intentionally omitted.
-// toggle_comment_range DOES NOT remove comments when opening a pre-commented
-// file — this is a confirmed product bug (see BUG MARKER above). The test
-// for the REMOVE direction is suppressed here to avoid encoding a false
-// expectation; the ADD direction test below is retained.
+    let mut s = TerminalSession::spawn_with_file_and_args(&path, &["--keybindings", "vscode"]);
+    assert!(s.wait_for_line(23, "EDITOR", 2000), "status badge EDITOR");
+
+    // Select both pre-commented lines, then Ctrl+/ to uncomment.
+    s.keys("<S-Down>");
+    s.send_raw(b"\x1b[47;5u");
+    s.keys("<C-s>");
+
+    let after = wait_for_contents(&path, "fn a() {}\nfn b() {}\n");
+    assert_eq!(
+        after, "fn a() {}\nfn b() {}\n",
+        "Ctrl+/ on a 2-line pre-commented selection should REMOVE comments"
+    );
+}
 
 // ── 7. Indent / outdent on multi-line selection ───────────────────────────────
 
