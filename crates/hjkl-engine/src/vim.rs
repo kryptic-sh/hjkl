@@ -6205,7 +6205,17 @@ fn indent_rows<H: crate::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth * count.max(1);
-    let pad: String = " ".repeat(width);
+    // Honour `expandtab` (#263): `>>` under `noexpandtab` must insert hard tabs,
+    // not spaces. Render `width` columns as tabs (`width / tabstop`) plus any
+    // sub-tab remainder as spaces; under `expandtab` it stays all spaces.
+    let pad: String = if ed.settings().expandtab {
+        " ".repeat(width)
+    } else {
+        let tabstop = ed.settings().tabstop.max(1);
+        let tabs = width / tabstop;
+        let spaces = width % tabstop;
+        format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
+    };
     let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
@@ -9784,6 +9794,31 @@ mod indent_count_tests {
         ed.jump_cursor(0, 0);
         execute_line_op(&mut ed, Operator::Indent, 3);
         assert_eq!(content(&ed), "    a\n    b\n    c\nd\ne\nf\n");
+    }
+
+    // #263: `>>` under `noexpandtab` must insert a hard tab, not spaces.
+    #[test]
+    fn indent_noexpandtab_inserts_tab() {
+        let mut ed = make_editor("hello\n");
+        ed.settings_mut().expandtab = false;
+        ed.settings_mut().shiftwidth = 4;
+        ed.settings_mut().tabstop = 4;
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Indent, 1);
+        assert_eq!(content(&ed), "\thello\n");
+    }
+
+    // #263: a sub-tabstop shiftwidth under `noexpandtab` pads with spaces for
+    // the remainder (shiftwidth=2 < tabstop=4 → two spaces, no tab).
+    #[test]
+    fn indent_noexpandtab_subtab_remainder_is_spaces() {
+        let mut ed = make_editor("hello\n");
+        ed.settings_mut().expandtab = false;
+        ed.settings_mut().shiftwidth = 2;
+        ed.settings_mut().tabstop = 4;
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Indent, 1);
+        assert_eq!(content(&ed), "  hello\n");
     }
 
     #[test]

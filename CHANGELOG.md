@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`>>` / `<{motion}` indent now honors `noexpandtab`** (#263): the indent
+  operator always inserted spaces, ignoring `expandtab`. Under `noexpandtab` it
+  now inserts hard tabs (`width / tabstop` tabs plus a sub-tab remainder in
+  spaces); `expandtab` is unchanged.
+- **`:tabprevious` works (and `:tabp` / `:tabN` / `:tabNext`)** (#263): the
+  command was registered under the canonical name `tabprev`, so the full vim
+  word `:tabprevious` never matched the prefix table and silently did nothing —
+  leaving the wrong tab/buffer focused. The canonical name is now the full
+  `tabprevious`. Re-added the three #263 oracle cases (dropped in 0.33.2) as the
+  regression gate; they pass on all platforms.
+
 ### Added
 
 - **Per-filetype color for tabline icons** (#260): each tab's filetype icon is

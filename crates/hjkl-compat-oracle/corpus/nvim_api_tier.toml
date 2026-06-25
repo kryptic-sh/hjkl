@@ -765,3 +765,34 @@ initial_buffer = "    hello\n"
 initial_cursor = [0, 0]
 keys = ":set shiftwidth=2<CR>:set expandtab<CR><<"
 expected_buffer = "  hello\n"
+
+# #263: `>>` under `noexpandtab` must insert a hard tab, not spaces.
+# (`indent_rows` previously always emitted spaces, ignoring `expandtab`.)
+[[cases]]
+name = "set_shiftwidth4_noet_ts4_indent_buf"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":set shiftwidth=4<CR>:set noexpandtab<CR>:set tabstop=4<CR>>>"
+expected_buffer = "\thello\n"
+
+# #263: `:tabnew` then `:tabprevious` returns to the original buffer.
+# (`:tabprevious` was registered as `tabprev`, so the full vim word never
+# matched the prefix table — the command was a silent no-op.)
+[[cases]]
+name = "tabnew_tabprevious_roundtrip_buf"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>:tabprevious<CR>"
+expected_buffer = "hello\n"
+
+# #263: editing the new tab does not corrupt the original tab's buffer.
+# The bare `<CR>` after `<Esc>` is a no-op normal-mode keystroke; it only
+# separates the insert segment from the ex command so the subprocess driver
+# routes `:tabprevious` through nvim_command (its `nvim_input` does not
+# dispatch `:` — a separate, documented cmdline-replay gap).
+[[cases]]
+name = "tabnew_insert_tabprevious_sees_original_buf"
+initial_buffer = "original\n"
+initial_cursor = [0, 0]
+keys = ":tabnew<CR>iZ<Esc><CR>:tabprevious<CR>"
+expected_buffer = "original\n"

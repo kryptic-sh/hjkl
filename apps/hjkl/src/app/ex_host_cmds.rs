@@ -141,16 +141,22 @@ impl HostCmd<App> for TabnewCmd {
     }
 }
 
-/// `:tabprev` / `:tabp` / `:tabN` — cycle to the previous tab, wrapping.
+/// `:tabprevious` / `:tabp` / `:tabN` / `:tabNext` — cycle to the previous tab,
+/// wrapping. The canonical name MUST be the full vim word so prefix matching
+/// (`name().starts_with(typed)`) accepts the full `:tabprevious` form — not just
+/// `:tabprev` (#263).
 pub(crate) struct TabprevCmd;
 
 impl HostCmd<App> for TabprevCmd {
     fn name(&self) -> &'static str {
-        "tabprev"
+        "tabprevious"
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["tabp", "tabN"]
+        // `tabp`/`tabprev` resolve via prefix match against the full name;
+        // `tabN`/`tabNext` (capital N) are distinct vim spellings for prev-tab
+        // and must be explicit aliases.
+        &["tabN", "tabNext"]
     }
 
     fn min_prefix(&self) -> usize {
