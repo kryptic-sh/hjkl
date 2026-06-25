@@ -35,6 +35,12 @@ patch bumps.
 - **VSCode mode — find** (#265, V7): `Ctrl+F` opens the incremental search
   prompt (seeded with the active selection, if any); `F3` / `Shift+F3` jump to
   the next / previous match. Reuses the existing search infrastructure.
+- **nvim-api: selection readout** (#265, V10a):
+  `nvim_call_function("getpos", …)` now supports `"."` (cursor) and `"v"`
+  (visual-selection anchor), and `line("v")` / `col("v")` return the anchor — so
+  a headless client can reconstruct the active selection from anchor + cursor +
+  mode. Positions use the 1-based char-col convention of the existing `col()`.
+  Unblocks the planned Monaco conformance oracle.
 
 ### Fixed
 

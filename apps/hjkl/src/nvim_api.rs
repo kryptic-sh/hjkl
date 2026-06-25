@@ -1262,6 +1262,16 @@ fn dispatch(
                             // vim: empty buffer has 1 line
                             n.max(1) as i64
                         }
+                        // "v" → anchor row when in charwise Visual, else cursor row
+                        "v" => {
+                            let ed = app.active_editor();
+                            let row = if ed.vim_mode() == hjkl_engine::VimMode::Visual {
+                                ed.visual_anchor().0
+                            } else {
+                                ed.cursor().0
+                            };
+                            (row + 1) as i64
+                        }
                         _ => 0,
                     };
                     ok(stdout, msgid, Value::from(result))
@@ -1282,9 +1292,58 @@ fn dispatch(
                             let line = hjkl_buffer::rope_line_str(&rope, row);
                             (line.chars().count() + 1) as i64
                         }
+                        // "v" → anchor char-col when in charwise Visual, else cursor col.
+                        // Matches the char-col convention used by col(".") throughout
+                        // this file (1-based char-col, NOT byte-col).
+                        "v" => {
+                            let ed = app.active_editor();
+                            let col = if ed.vim_mode() == hjkl_engine::VimMode::Visual {
+                                ed.visual_anchor().1
+                            } else {
+                                char_col
+                            };
+                            (col + 1) as i64
+                        }
                         _ => 0,
                     };
                     ok(stdout, msgid, Value::from(result))
+                }
+
+                // ── getpos ────────────────────────────────────────────────────
+                // Returns nvim's 4-element [bufnum, lnum, col, off] form
+                // (1-based lnum and col, bufnum=0, off=0).
+                // Col follows the same char-col convention as col(".") above —
+                // 1-based char index, NOT byte offset. Supported exprs:
+                //   "."  → cursor
+                //   "v"  → visual anchor when in charwise Visual; cursor otherwise
+                //          (nvim fallback when not in visual)
+                //   "'<" / "'>": last-visual-start / end — not tracked; returns cursor
+                "getpos" => {
+                    let expr = match fn_args.first() {
+                        Some(Value::String(s)) => s.as_str().unwrap_or(".").to_owned(),
+                        _ => ".".to_owned(),
+                    };
+                    let ed = app.active_editor();
+                    let (cur_row, cur_col) = ed.cursor();
+                    let (lnum, col): (usize, usize) = match expr.as_str() {
+                        "v" => {
+                            if ed.vim_mode() == hjkl_engine::VimMode::Visual {
+                                ed.visual_anchor()
+                            } else {
+                                (cur_row, cur_col)
+                            }
+                        }
+                        // "'<" and "'>" are not yet tracked; fall back to cursor
+                        // position as nvim does when no prior visual selection exists.
+                        _ => (cur_row, cur_col),
+                    };
+                    let pos = Value::Array(vec![
+                        Value::from(0i64),              // bufnum
+                        Value::from((lnum + 1) as i64), // 1-based row
+                        Value::from((col + 1) as i64),  // 1-based char-col
+                        Value::from(0i64),              // off
+                    ]);
+                    ok(stdout, msgid, pos)
                 }
 
                 _ => err(
@@ -4585,5 +4644,202 @@ mod tests {
                 .any(|r| matches!(r.mode, crate::app::keymap::MapMode::Insert)),
             "Insert mode record should exist"
         );
+    }
+
+    // ── getpos / line("v") / col("v") ─────────────────────────────────────
+
+    /// Helper: decode `getpos` result into (bufnum, lnum, col, off).
+    fn decode_getpos(v: Value) -> (i64, i64, i64, i64) {
+        match v {
+            Value::Array(arr) if arr.len() == 4 => {
+                let n = |v: &Value| match v {
+                    Value::Integer(i) => i.as_i64().unwrap_or(0),
+                    _ => panic!("expected integer in getpos result, got {v:?}"),
+                };
+                (n(&arr[0]), n(&arr[1]), n(&arr[2]), n(&arr[3]))
+            }
+            other => panic!("getpos: expected 4-element array, got {other:?}"),
+        }
+    }
+
+    fn call_getpos(app: &mut crate::app::App, expr: &str) -> (i64, i64, i64, i64) {
+        let resp = call(
+            app,
+            "nvim_call_function",
+            vec![Value::from("getpos"), Value::Array(vec![Value::from(expr)])],
+        );
+        decode_getpos(assert_ok(resp))
+    }
+
+    fn call_line(app: &mut crate::app::App, expr: &str) -> i64 {
+        let resp = call(
+            app,
+            "nvim_call_function",
+            vec![Value::from("line"), Value::Array(vec![Value::from(expr)])],
+        );
+        match assert_ok(resp) {
+            Value::Integer(n) => n.as_i64().unwrap(),
+            other => panic!("line({expr}): expected integer, got {other:?}"),
+        }
+    }
+
+    fn call_col(app: &mut crate::app::App, expr: &str) -> i64 {
+        let resp = call(
+            app,
+            "nvim_call_function",
+            vec![Value::from("col"), Value::Array(vec![Value::from(expr)])],
+        );
+        match assert_ok(resp) {
+            Value::Integer(n) => n.as_i64().unwrap(),
+            other => panic!("col({expr}): expected integer, got {other:?}"),
+        }
+    }
+
+    fn call_get_mode(app: &mut crate::app::App) -> String {
+        let resp = call(app, "nvim_get_mode", vec![]);
+        match assert_ok(resp) {
+            Value::Map(pairs) => {
+                for (k, v) in pairs {
+                    if k == Value::from("mode") {
+                        return match v {
+                            Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                            other => panic!("mode is not a string: {other:?}"),
+                        };
+                    }
+                }
+                panic!("nvim_get_mode: no 'mode' key");
+            }
+            other => panic!("nvim_get_mode: expected map, got {other:?}"),
+        }
+    }
+
+    /// Set up a 3-line buffer via nvim_buf_set_lines so we have text to
+    /// position the cursor on.
+    fn setup_buffer(app: &mut crate::app::App) {
+        let buf = {
+            let resp = call(app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let lines = Value::Array(vec![
+            Value::from("hello world"),
+            Value::from("second line"),
+            Value::from("third"),
+        ]);
+        let resp = call(
+            app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                lines,
+            ],
+        );
+        assert_ok(resp);
+    }
+
+    #[test]
+    fn test_getpos_no_selection_equals_cursor() {
+        // With no active visual selection, getpos("v") must equal getpos(".").
+        let mut app = build_app(None).unwrap();
+        setup_buffer(&mut app);
+
+        // Move cursor to row=1 (2nd line, 0-based), col=3 (0-based).
+        // nvim_win_set_cursor takes [lnum(1-based), byte-col].
+        // Col 3 is ASCII so byte-col == char-col.
+        let win = {
+            let resp = call(&mut app, "nvim_get_current_win", vec![]);
+            assert_ok(resp)
+        };
+        {
+            let resp = call(
+                &mut app,
+                "nvim_win_set_cursor",
+                vec![
+                    win.clone(),
+                    Value::Array(vec![Value::from(2i64), Value::from(3i64)]),
+                ],
+            );
+            assert_ok(resp);
+        }
+
+        // Normal mode: getpos("v") == getpos(".") == [0, 2, 4, 0] (1-based)
+        let pos_dot = call_getpos(&mut app, ".");
+        let pos_v = call_getpos(&mut app, "v");
+        assert_eq!(pos_dot, (0, 2, 4, 0), "getpos('.') mismatch");
+        assert_eq!(
+            pos_v, pos_dot,
+            "getpos('v') should equal getpos('.') when not in visual"
+        );
+
+        // line("v") and col("v") should also agree
+        assert_eq!(
+            call_line(&mut app, "v"),
+            2,
+            "line('v') should equal line('.') outside visual"
+        );
+        assert_eq!(
+            call_col(&mut app, "v"),
+            4,
+            "col('v') should equal col('.') outside visual"
+        );
+    }
+
+    #[test]
+    fn test_getpos_active_visual_selection() {
+        // Drive the engine directly into charwise Visual mode:
+        //   anchor at (0, 2) → getpos("v") = [0, 1, 3, 0]
+        //   cursor at (0, 5) → getpos(".") = [0, 1, 6, 0]
+        let mut app = build_app(None).unwrap();
+        setup_buffer(&mut app);
+
+        {
+            let ed = app.active_editor_mut();
+            // Place cursor at (0, 2) and enter Visual — this becomes the anchor.
+            ed.set_cursor_doc(0, 2);
+            ed.enter_visual_char();
+            // Now move the caret to (0, 5); anchor stays at (0, 2).
+            ed.set_cursor_doc(0, 5);
+        }
+
+        // Verify mode is "v".
+        assert_eq!(
+            call_get_mode(&mut app),
+            "v",
+            "nvim_get_mode should return 'v' in Visual"
+        );
+
+        // getpos(".") → cursor (0-based row=0, char-col=5) → [0, 1, 6, 0]
+        let pos_dot = call_getpos(&mut app, ".");
+        assert_eq!(
+            pos_dot,
+            (0, 1, 6, 0),
+            "getpos('.') should be cursor position"
+        );
+
+        // getpos("v") → anchor (0-based row=0, char-col=2) → [0, 1, 3, 0]
+        let pos_v = call_getpos(&mut app, "v");
+        assert_eq!(pos_v, (0, 1, 3, 0), "getpos('v') should be visual anchor");
+
+        // line("v") / col("v") must agree with getpos("v")
+        assert_eq!(
+            call_line(&mut app, "v"),
+            1,
+            "line('v') should be anchor row (1-based)"
+        );
+        assert_eq!(
+            call_col(&mut app, "v"),
+            3,
+            "col('v') should be anchor col (1-based char-col)"
+        );
+
+        // Sanity: line(".") / col(".") still agree with getpos(".")
+        assert_eq!(
+            call_line(&mut app, "."),
+            1,
+            "line('.') should be cursor row"
+        );
+        assert_eq!(call_col(&mut app, "."), 6, "col('.') should be cursor col");
     }
 }
