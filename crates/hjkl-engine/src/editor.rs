@@ -6,7 +6,6 @@
 //! [`vim`] and communicates with Editor through a small internal API
 //! exposed via `pub(super)` fields and helper methods.
 
-use crate::input::Input;
 use crate::vim::{self, VimState};
 use crate::{KeybindingMode, VimMode};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -554,7 +553,9 @@ pub struct Editor<
     /// Internal — exposed via Editor accessor methods
     /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
     /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
-    pub(crate) vim: VimState,
+    /// Transitional pub (#267): hjkl-vim begin/end_step access this directly
+    /// during the lift; becomes the Box<dyn DisciplineState> slot at the final flip.
+    pub vim: VimState,
     /// Read-only view overlay (git blame, …) layered over the input mode.
     /// Discipline-agnostic engine substrate (#265 G3): hoisted out of
     /// `VimState` because the core edit funnel (`mutate_edit`) and render/chrome
@@ -1948,7 +1949,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Was the full textarea → buffer content sync. Buffer is the
     /// content authority now; this remains as a no-op so the per-step
     /// call sites don't have to be ripped in the same patch.
-    pub(crate) fn sync_buffer_content_from_textarea(&mut self) {
+    pub fn sync_buffer_content_from_textarea(&mut self) {
         self.sync_buffer_from_textarea();
     }
 
@@ -5372,27 +5373,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 // one-line `///` rustdoc. Fields mutated as a unit get a combined action method
 // rather than individual getters + setters (e.g. `accumulate_count_digit`).
 
-/// State carried between [`Editor::begin_step`] and [`Editor::end_step`].
-///
-/// Treat as opaque — construct by calling `begin_step` and pass the
-/// returned value directly into `end_step` without modification.
-/// The fields capture per-step pre-dispatch state that the epilogue
-/// needs to run its invariants correctly.
-pub struct StepBookkeeping {
-    /// True when the pending chord before this step was a macro-chord
-    /// (`q{reg}` or `@{reg}`). The recorder hook skips these bookkeeping
-    /// keys so that only the *payload* keys enter `recording_keys`.
-    pub pending_was_macro_chord: bool,
-    /// True when the mode was Insert *before* the FSM body ran. Used by
-    /// the Ctrl-o one-shot-normal epilogue to decide whether to bounce
-    /// back into Insert.
-    pub was_insert: bool,
-    /// Pre-dispatch visual snapshot. When the FSM body transitions out of
-    /// a visual mode the epilogue uses this to set the `<`/`>` marks and
-    /// store `last_visual` for `gv`.
-    pub pre_visual_snapshot: Option<vim::LastVisual>,
-}
-
 impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // ── Pending chord ─────────────────────────────────────────────────────────
 
@@ -6003,187 +5983,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.push_search_pattern(&text);
     }
 
-    // ── Phase 6.6d: pre/post FSM bookkeeping ────────────────────────────────
-    //
-    // `begin_step` and `end_step` are the bookkeeping prelude/epilogue that
-    // `hjkl_vim::dispatch_input` wraps around its per-mode FSM dispatch.
-
-    /// Pre-dispatch bookkeeping that must run before every per-mode FSM step.
-    ///
-    /// Call this at the start of every step; pass the returned
-    /// [`StepBookkeeping`] to [`end_step`] after the FSM body finishes.
-    ///
-    /// Returns `Ok(bk)` when the caller should proceed with FSM dispatch.
-    /// Returns `Err(consumed)` when the prelude itself handled the input
-    /// (macro-stop chord); in that case skip the FSM body and do NOT call
-    /// `end_step` — the macro-stop path is a true short-circuit with no
-    /// epilogue needed.
-    ///
-    /// This method does NOT handle the search-prompt intercept — callers
-    /// must check `search_prompt_state().is_some()` before calling `begin_step`
-    /// and dispatch to the search-prompt FSM body directly.
-    pub fn begin_step(&mut self, input: Input) -> Result<StepBookkeeping, bool> {
-        use crate::input::Key;
-        use vim::{Mode, Pending};
-        // ── Timestamps ───────────────────────────────────────────────────────
-        // Phase 7f: sync buffer before motion handlers see it.
-        self.sync_buffer_content_from_textarea();
-        // `:set timeoutlen` chord-timeout handling.
-        let now = std::time::Instant::now();
-        let host_now = self.host.now();
-        let timed_out = match self.vim.last_input_host_at {
-            Some(prev) => host_now.saturating_sub(prev) > self.settings.timeout_len,
-            None => false,
-        };
-        if timed_out {
-            let chord_in_flight = !matches!(self.vim.pending, Pending::None)
-                || self.vim.count != 0
-                || self.vim.pending_register.is_some()
-                || self.vim.insert_pending_register;
-            if chord_in_flight {
-                self.vim.clear_pending_prefix();
-            }
-        }
-        self.vim.last_input_at = Some(now);
-        self.vim.last_input_host_at = Some(host_now);
-        // ── Macro-stop: bare `q` outside Insert ends the recording ───────────
-        if self.vim.recording_macro.is_some()
-            && !self.vim.replaying_macro
-            && matches!(self.vim.pending, Pending::None)
-            && self.vim.mode != Mode::Insert
-            && input.key == Key::Char('q')
-            && !input.ctrl
-            && !input.alt
-        {
-            let reg = self.vim.recording_macro.take().unwrap();
-            let keys = std::mem::take(&mut self.vim.recording_keys);
-            let text = crate::input::encode_macro(&keys);
-            self.set_named_register_text(reg.to_ascii_lowercase(), text);
-            return Err(true);
-        }
-        // ── Snapshots for epilogue ────────────────────────────────────────────
-        let pending_was_macro_chord = matches!(
-            self.vim.pending,
-            Pending::RecordMacroTarget | Pending::PlayMacroTarget { .. }
-        );
-        let was_insert = self.vim.mode == Mode::Insert;
-        let pre_visual_snapshot = match self.vim.mode {
-            Mode::Visual => Some(vim::LastVisual {
-                mode: Mode::Visual,
-                anchor: self.vim.visual_anchor,
-                cursor: self.cursor(),
-                block_vcol: 0,
-            }),
-            Mode::VisualLine => Some(vim::LastVisual {
-                mode: Mode::VisualLine,
-                anchor: (self.vim.visual_line_anchor, 0),
-                cursor: self.cursor(),
-                block_vcol: 0,
-            }),
-            Mode::VisualBlock => Some(vim::LastVisual {
-                mode: Mode::VisualBlock,
-                anchor: self.vim.block_anchor,
-                cursor: self.cursor(),
-                block_vcol: self.vim.block_vcol,
-            }),
-            _ => None,
-        };
-        Ok(StepBookkeeping {
-            pending_was_macro_chord,
-            was_insert,
-            pre_visual_snapshot,
-        })
-    }
-
-    /// Post-dispatch bookkeeping that must run after every per-mode FSM step.
-    ///
-    /// `input` is the same input that was passed to `begin_step`.
-    /// `bk` is the [`StepBookkeeping`] returned by `begin_step`.
-    /// `consumed` is the return value of the FSM body; this method returns
-    /// it after running all epilogue invariants.
-    ///
-    /// Must NOT be called when `begin_step` returned `Err(...)`.
-    pub fn end_step(&mut self, input: Input, bk: StepBookkeeping, consumed: bool) -> bool {
-        use crate::input::Key;
-        use vim::{Mode, Pending};
-        let StepBookkeeping {
-            pending_was_macro_chord,
-            was_insert,
-            pre_visual_snapshot,
-        } = bk;
-        // ── Visual-exit: set `<`/`>` marks and stash `last_visual` ───────────
-        if let Some(snap) = pre_visual_snapshot
-            && !matches!(
-                self.vim.mode,
-                Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-            )
-        {
-            let (lo, hi) = match snap.mode {
-                Mode::Visual => {
-                    if snap.anchor <= snap.cursor {
-                        (snap.anchor, snap.cursor)
-                    } else {
-                        (snap.cursor, snap.anchor)
-                    }
-                }
-                Mode::VisualLine => {
-                    let r_lo = snap.anchor.0.min(snap.cursor.0);
-                    let r_hi = snap.anchor.0.max(snap.cursor.0);
-                    let vl_rope = self.buffer().rope();
-                    let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
-                    let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
-                        .chars()
-                        .count()
-                        .saturating_sub(1);
-                    ((r_lo, 0), (r_hi, last_col))
-                }
-                Mode::VisualBlock => {
-                    let (r1, c1) = snap.anchor;
-                    let (r2, c2) = snap.cursor;
-                    ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
-                }
-                _ => {
-                    if snap.anchor <= snap.cursor {
-                        (snap.anchor, snap.cursor)
-                    } else {
-                        (snap.cursor, snap.anchor)
-                    }
-                }
-            };
-            self.set_mark('<', lo);
-            self.set_mark('>', hi);
-            self.vim.last_visual = Some(snap);
-        }
-        // ── Ctrl-o one-shot-normal return to Insert ───────────────────────────
-        if !was_insert
-            && self.vim.one_shot_normal
-            && self.vim.mode == Mode::Normal
-            && matches!(self.vim.pending, Pending::None)
-        {
-            self.vim.one_shot_normal = false;
-            self.vim.mode = Mode::Insert;
-        }
-        // ── Content + viewport sync ───────────────────────────────────────────
-        self.sync_buffer_content_from_textarea();
-        if !self.vim.viewport_pinned {
-            self.ensure_cursor_in_scrolloff();
-        }
-        self.vim.viewport_pinned = false;
-        // ── Recorder hook ─────────────────────────────────────────────────────
-        if self.vim.recording_macro.is_some()
-            && !self.vim.replaying_macro
-            && input.key != Key::Char('q')
-            && !pending_was_macro_chord
-        {
-            self.vim.recording_keys.push(input);
-        }
-        // ── Phase 6.3: current_mode sync ─────────────────────────────────────
-        self.vim.current_mode = self.vim.public_mode();
-        // BLAME is a Normal-only read-only view; any transition out of Normal
-        // (a keyboard mode switch, etc.) implicitly leaves it.
-        vim::drop_blame_if_left_normal(self);
-        consumed
-    }
+    // The per-step prelude/epilogue (`begin_step`/`end_step` + `StepBookkeeping`)
+    // moved to `hjkl_vim::step` (#267); the engine no longer owns FSM bookkeeping.
 
     // ── Phase 6.6e: additional public primitives for hjkl-vim::normal ─────────
 

@@ -234,7 +234,7 @@ pub struct VimState {
     /// `enter_visual_char_bridge`, …). Once the FSM is gone this is the
     /// sole source of truth; until then both fields are kept in sync.
     /// Initialized to `Normal` via `#[derive(Default)]`.
-    pub(crate) current_mode: crate::VimMode,
+    pub current_mode: crate::VimMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
     pub last_substitute: Option<crate::substitute::SubstituteCmd>,
     /// Stack of auto-inserted closing characters awaiting skip-over.
@@ -285,7 +285,7 @@ impl VimState {
     /// `insert_pending_register`. Does NOT touch `mode`,
     /// `insert_session`, marks, jump list, or visual anchors —
     /// those aren't part of the in-flight chord.
-    pub(crate) fn clear_pending_prefix(&mut self) {
+    pub fn clear_pending_prefix(&mut self) {
         self.pending = Pending::None;
         self.count = 0;
         self.pending_register = None;
@@ -2711,9 +2711,7 @@ pub(crate) fn do_undo_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer:
 /// Called from every mode-transition funnel so the FSM is the single source of
 /// truth — the host never has to police this.
 #[inline]
-pub(crate) fn drop_blame_if_left_normal<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     if ed.vim.current_mode != crate::VimMode::Normal {
         ed.view = crate::ViewMode::Normal;
     }

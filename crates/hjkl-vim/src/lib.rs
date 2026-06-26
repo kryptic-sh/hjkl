@@ -7,6 +7,7 @@ pub mod normal;
 pub mod operator;
 pub mod pending;
 pub mod search_prompt;
+mod step;
 
 pub use cmd::EngineCmd;
 pub use count::CountAccumulator;
@@ -84,7 +85,7 @@ pub fn dispatch_input<H: hjkl_engine::Host>(
         return search_prompt::step_search_prompt(editor, input);
     }
     // Run the prelude (timestamps, chord-timeout, macro-stop, snapshots).
-    let bk = match editor.begin_step(input) {
+    let bk = match step::begin_step(editor, input) {
         Ok(bk) => bk,
         Err(consumed) => return consumed,
     };
@@ -94,5 +95,5 @@ pub fn dispatch_input<H: hjkl_engine::Host>(
         _ => normal::step_normal(editor, input),
     };
     // Run the epilogue (marks, one-shot-normal, sync, recorder, mode sync).
-    editor.end_step(input, bk, consumed)
+    step::end_step(editor, input, bk, consumed)
 }
