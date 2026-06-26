@@ -22,6 +22,7 @@
 
 mod buf_helpers;
 mod buffer_impl;
+mod discipline;
 mod editor;
 mod input;
 pub mod keymap_motion;
@@ -33,6 +34,7 @@ pub mod types;
 mod viewport_math;
 pub mod vim;
 
+pub use discipline::{DisciplineState, NoDiscipline};
 pub use editor::{Editor, LspIntent, MarkJump, StepBookkeeping, UndoGranularity};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};
