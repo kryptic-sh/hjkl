@@ -885,6 +885,7 @@ jobs:
           publish_if_missing hjkl-lang
           publish_if_missing hjkl-clipboard
           publish_if_missing hjkl-config
+          publish_if_missing hjkl-vim-types
           publish_if_missing hjkl-engine
           publish_if_missing hjkl-engine-tui
           publish_if_missing hjkl-editor
