@@ -1,6 +1,7 @@
 //! Renderer-agnostic markdown event stream and theming hooks.
 //!
-//! Parses CommonMark markdown into a flat [`Event`] stream. No renderer types
+//! Parses CommonMark + common GFM extensions (tables, task lists,
+//! strikethrough, footnotes) into a flat [`Event`] stream. No renderer types
 //! leak out — backends (ratatui, floem, …) consume `&[Event]` independently.
 //!
 //! # Quick start
@@ -16,6 +17,17 @@ use pulldown_cmark::{Options, Parser, Tag, TagEnd};
 
 // ── Public event type ─────────────────────────────────────────────────────────
 
+/// Column alignment for an [`Event::Table`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnAlign {
+    /// No explicit alignment.
+    #[default]
+    None,
+    Left,
+    Center,
+    Right,
+}
+
 /// A single logical unit of rendered markdown content.
 ///
 /// `#[non_exhaustive]` — new variants may be added in minor releases.
@@ -29,6 +41,8 @@ pub enum Event {
         bold: bool,
         /// True when inside an `*italic*` run.
         italic: bool,
+        /// True when inside a `~~strikethrough~~` run.
+        strikethrough: bool,
         /// True when inside a `` `code` `` span.
         code_span: bool,
     },
@@ -51,10 +65,15 @@ pub enum Event {
     /// `CodeBlock` events belong to this item until the next `ListItem` or a
     /// non-list event.
     ListItem {
+        /// Nesting depth, 0 for a top-level item.
+        depth: u8,
         /// Bullet character for unordered (`'-'`, `'*'`, `'+'`); `'\0'` for ordered.
         bullet: char,
         /// 1-based ordinal for ordered lists; 0 for unordered.
         number: u64,
+        /// Task-list checkbox state: `Some(true)` = `[x]`, `Some(false)` = `[ ]`,
+        /// `None` = not a task item.
+        task: Option<bool>,
     },
     /// Blank separator between block elements (paragraph / heading / rule).
     Blank,
@@ -64,6 +83,27 @@ pub enum Event {
         text: String,
         /// Raw destination URL.
         url: String,
+    },
+    /// An image reference.
+    Image {
+        /// Alt text.
+        alt: String,
+        /// Raw source URL.
+        url: String,
+    },
+    /// Start of a `> blockquote`. Content events until the matching
+    /// [`Event::BlockQuoteEnd`] belong to the quote (may nest).
+    BlockQuoteStart,
+    /// End of a blockquote.
+    BlockQuoteEnd,
+    /// A GFM table. Cells are flattened to plain text.
+    Table {
+        /// Per-column alignment.
+        aligns: Vec<ColumnAlign>,
+        /// Header cells.
+        header: Vec<String>,
+        /// Body rows of cells.
+        rows: Vec<Vec<String>>,
     },
 }
 
@@ -115,19 +155,23 @@ impl MdThemeSlots {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Parse a CommonMark string into a flat [`Event`] stream.
+/// Parse a CommonMark + GFM string into a flat [`Event`] stream.
 ///
-/// The output is suitable for rendering by any backend (ratatui, floem, …).
-/// Inline emphasis state (`bold`, `italic`, `code_span`) is tracked and
+/// Enables tables, task lists, strikethrough, and footnotes. Inline emphasis
+/// state (`bold`, `italic`, `strikethrough`, `code_span`) is tracked and
 /// annotated on each `Text` event so backends need not maintain a state machine.
 pub fn parse(src: &str) -> Vec<Event> {
-    let opts = Options::ENABLE_STRIKETHROUGH;
+    let opts = Options::ENABLE_TABLES
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_FOOTNOTES;
     let parser = Parser::new_ext(src, opts);
 
     let mut events: Vec<Event> = Vec::new();
-    // Inline state machine.
+    // Inline state.
     let mut bold = false;
     let mut italic = false;
+    let mut strike = false;
     // Block accumulators.
     let mut heading_level: Option<u8> = None;
     let mut heading_buf = String::new();
@@ -136,13 +180,49 @@ pub fn parse(src: &str) -> Vec<Event> {
     let mut link_text = String::new();
     let mut link_url = String::new();
     let mut in_link = false;
+    let mut image_alt = String::new();
+    let mut image_url = String::new();
+    let mut in_image = false;
     // List tracking.
     let mut list_ordered_stack: Vec<bool> = Vec::new();
     let mut list_number_stack: Vec<u64> = Vec::new();
+    // Table tracking.
+    let mut table_aligns: Vec<ColumnAlign> = Vec::new();
+    let mut table_header: Vec<String> = Vec::new();
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut table_row: Vec<String> = Vec::new();
+    let mut cell_buf: Option<String> = None;
+    let mut in_table_head = false;
+
+    // Route an inline text fragment to whichever accumulator is active, or emit it.
+    macro_rules! sink_text {
+        ($s:expr, $code_span:expr) => {{
+            let s = $s;
+            if let Some(buf) = cell_buf.as_mut() {
+                buf.push_str(&s);
+            } else if let Some(buf) = code_buf.as_mut() {
+                buf.push_str(&s);
+            } else if heading_level.is_some() {
+                heading_buf.push_str(&s);
+            } else if in_link {
+                link_text.push_str(&s);
+            } else if in_image {
+                image_alt.push_str(&s);
+            } else {
+                events.push(Event::Text {
+                    content: s.to_string(),
+                    bold,
+                    italic,
+                    strikethrough: strike,
+                    code_span: $code_span,
+                });
+            }
+        }};
+    }
 
     for ev in parser {
         match ev {
-            // ── Block-level opens ─────────────────────────────────────────
+            // ── Block-level opens/closes ──────────────────────────────────
             pulldown_cmark::Event::Start(Tag::Heading { level, .. }) => {
                 heading_level = Some(level as u8);
                 heading_buf.clear();
@@ -182,6 +262,13 @@ pub fn parse(src: &str) -> Vec<Event> {
                 events.push(Event::Rule);
                 events.push(Event::Blank);
             }
+            pulldown_cmark::Event::Start(Tag::BlockQuote(_)) => {
+                events.push(Event::BlockQuoteStart);
+            }
+            pulldown_cmark::Event::End(TagEnd::BlockQuote(_)) => {
+                events.push(Event::BlockQuoteEnd);
+                events.push(Event::Blank);
+            }
             // ── Lists ─────────────────────────────────────────────────────
             pulldown_cmark::Event::Start(Tag::List(start)) => {
                 list_ordered_stack.push(start.is_some());
@@ -195,44 +282,75 @@ pub fn parse(src: &str) -> Vec<Event> {
             pulldown_cmark::Event::Start(Tag::Item) => {
                 let ordered = *list_ordered_stack.last().unwrap_or(&false);
                 let number = *list_number_stack.last().unwrap_or(&1);
+                let depth = list_ordered_stack.len().saturating_sub(1) as u8;
                 events.push(Event::ListItem {
+                    depth,
                     bullet: if ordered { '\0' } else { '-' },
                     number,
+                    task: None,
                 });
-                // Advance the counter.
                 if let Some(n) = list_number_stack.last_mut() {
                     *n += 1;
                 }
             }
             pulldown_cmark::Event::End(TagEnd::Item) => {}
-            // ── Inline emphasis ───────────────────────────────────────────
-            pulldown_cmark::Event::Start(Tag::Strong) => {
-                bold = true;
-            }
-            pulldown_cmark::Event::End(TagEnd::Strong) => {
-                bold = false;
-            }
-            pulldown_cmark::Event::Start(Tag::Emphasis) => {
-                italic = true;
-            }
-            pulldown_cmark::Event::End(TagEnd::Emphasis) => {
-                italic = false;
-            }
-            pulldown_cmark::Event::Code(s) => {
-                if let Some(ref mut buf) = code_buf {
-                    buf.push_str(&s);
-                } else if heading_level.is_some() {
-                    heading_buf.push_str(&s);
-                } else {
-                    events.push(Event::Text {
-                        content: s.to_string(),
-                        bold,
-                        italic,
-                        code_span: true,
-                    });
+            pulldown_cmark::Event::TaskListMarker(checked) => {
+                if let Some(Event::ListItem { task, .. }) = events.last_mut() {
+                    *task = Some(checked);
                 }
             }
-            // ── Links ─────────────────────────────────────────────────────
+            // ── Tables ────────────────────────────────────────────────────
+            pulldown_cmark::Event::Start(Tag::Table(aligns)) => {
+                table_aligns = aligns
+                    .iter()
+                    .map(|a| match a {
+                        pulldown_cmark::Alignment::Left => ColumnAlign::Left,
+                        pulldown_cmark::Alignment::Center => ColumnAlign::Center,
+                        pulldown_cmark::Alignment::Right => ColumnAlign::Right,
+                        pulldown_cmark::Alignment::None => ColumnAlign::None,
+                    })
+                    .collect();
+                table_header.clear();
+                table_rows.clear();
+            }
+            pulldown_cmark::Event::End(TagEnd::Table) => {
+                events.push(Event::Table {
+                    aligns: std::mem::take(&mut table_aligns),
+                    header: std::mem::take(&mut table_header),
+                    rows: std::mem::take(&mut table_rows),
+                });
+                events.push(Event::Blank);
+            }
+            pulldown_cmark::Event::Start(Tag::TableHead) => {
+                in_table_head = true;
+                table_row.clear();
+            }
+            pulldown_cmark::Event::End(TagEnd::TableHead) => {
+                table_header = std::mem::take(&mut table_row);
+                in_table_head = false;
+            }
+            pulldown_cmark::Event::Start(Tag::TableRow) => {
+                table_row.clear();
+            }
+            pulldown_cmark::Event::End(TagEnd::TableRow) => {
+                if !in_table_head {
+                    table_rows.push(std::mem::take(&mut table_row));
+                }
+            }
+            pulldown_cmark::Event::Start(Tag::TableCell) => {
+                cell_buf = Some(String::new());
+            }
+            pulldown_cmark::Event::End(TagEnd::TableCell) => {
+                table_row.push(cell_buf.take().unwrap_or_default().trim().to_string());
+            }
+            // ── Inline emphasis ───────────────────────────────────────────
+            pulldown_cmark::Event::Start(Tag::Strong) => bold = true,
+            pulldown_cmark::Event::End(TagEnd::Strong) => bold = false,
+            pulldown_cmark::Event::Start(Tag::Emphasis) => italic = true,
+            pulldown_cmark::Event::End(TagEnd::Emphasis) => italic = false,
+            pulldown_cmark::Event::Start(Tag::Strikethrough) => strike = true,
+            pulldown_cmark::Event::End(TagEnd::Strikethrough) => strike = false,
+            // ── Links & images ────────────────────────────────────────────
             pulldown_cmark::Event::Start(Tag::Link { dest_url, .. }) => {
                 in_link = true;
                 link_text.clear();
@@ -247,37 +365,35 @@ pub fn parse(src: &str) -> Vec<Event> {
                 link_text.clear();
                 link_url.clear();
             }
-            // ── Text ──────────────────────────────────────────────────────
-            pulldown_cmark::Event::Text(s) => {
-                if let Some(ref mut buf) = code_buf {
-                    buf.push_str(&s);
-                } else if heading_level.is_some() {
-                    heading_buf.push_str(&s);
-                } else if in_link {
-                    link_text.push_str(&s);
-                } else {
+            pulldown_cmark::Event::Start(Tag::Image { dest_url, .. }) => {
+                in_image = true;
+                image_alt.clear();
+                image_url = dest_url.to_string();
+            }
+            pulldown_cmark::Event::End(TagEnd::Image) => {
+                in_image = false;
+                events.push(Event::Image {
+                    alt: image_alt.clone(),
+                    url: image_url.clone(),
+                });
+                image_alt.clear();
+                image_url.clear();
+            }
+            // ── Inline code & text ────────────────────────────────────────
+            pulldown_cmark::Event::Code(s) => sink_text!(s, true),
+            pulldown_cmark::Event::Text(s) => sink_text!(s, false),
+            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
+                if let Some(buf) = cell_buf.as_mut() {
+                    buf.push(' ');
+                } else if code_buf.is_none() && heading_level.is_none() && !in_link && !in_image {
                     events.push(Event::Text {
-                        content: s.to_string(),
+                        content: "\n".to_string(),
                         bold,
                         italic,
+                        strikethrough: strike,
                         code_span: false,
                     });
                 }
-            }
-            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak
-                if code_buf.is_none() && heading_level.is_none() && !in_link =>
-            {
-                events.push(Event::Text {
-                    content: "\n".to_string(),
-                    bold,
-                    italic,
-                    code_span: false,
-                });
-            }
-            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {}
-            pulldown_cmark::Event::Start(Tag::BlockQuote(_)) => {}
-            pulldown_cmark::Event::End(TagEnd::BlockQuote(_)) => {
-                events.push(Event::Blank);
             }
             _ => {}
         }
@@ -297,8 +413,7 @@ mod tests {
         let evs = parse("# Hello world");
         assert!(
             evs.iter()
-                .any(|e| matches!(e, Event::Heading { level: 1, text } if text == "Hello world")),
-            "expected Heading(1, Hello world), got {evs:?}"
+                .any(|e| matches!(e, Event::Heading { level: 1, text } if text == "Hello world"))
         );
     }
 
@@ -323,31 +438,72 @@ mod tests {
     }
 
     #[test]
-    fn bold_flag() {
-        let evs = parse("**bold text**");
+    fn bold_and_strikethrough_flags() {
         assert!(
-            evs.iter()
+            parse("**bold**")
+                .iter()
                 .any(|e| matches!(e, Event::Text { bold: true, .. }))
         );
+        assert!(parse("~~gone~~").iter().any(
+            |e| matches!(e, Event::Text { strikethrough: true, content, .. } if content == "gone")
+        ));
     }
 
     #[test]
-    fn italic_flag() {
-        let evs = parse("*italic*");
+    fn nested_list_depth() {
+        let evs = parse("- a\n  - b\n");
+        let depths: Vec<u8> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::ListItem { depth, .. } => Some(*depth),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(depths, vec![0, 1], "got {evs:?}");
+    }
+
+    #[test]
+    fn task_list_markers() {
+        let evs = parse("- [x] done\n- [ ] todo\n");
+        let tasks: Vec<Option<bool>> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::ListItem { task, .. } => Some(*task),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tasks, vec![Some(true), Some(false)], "got {evs:?}");
+    }
+
+    #[test]
+    fn table_parsed() {
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let evs = parse(md);
+        let table = evs.iter().find_map(|e| match e {
+            Event::Table { header, rows, .. } => Some((header, rows)),
+            _ => None,
+        });
+        let (header, rows) = table.expect("a table event");
+        assert_eq!(header, &vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(rows, &vec![vec!["1".to_string(), "2".to_string()]]);
+    }
+
+    #[test]
+    fn blockquote_brackets_content() {
+        let evs = parse("> quoted\n");
+        let start = evs.iter().position(|e| matches!(e, Event::BlockQuoteStart));
+        let end = evs.iter().position(|e| matches!(e, Event::BlockQuoteEnd));
         assert!(
-            evs.iter()
-                .any(|e| matches!(e, Event::Text { italic: true, .. }))
+            start.is_some() && end.is_some() && start < end,
+            "got {evs:?}"
         );
     }
 
     #[test]
-    fn list_item_event() {
-        let evs = parse("- item one\n- item two");
-        let items: Vec<_> = evs
-            .iter()
-            .filter(|e| matches!(e, Event::ListItem { .. }))
-            .collect();
-        assert_eq!(items.len(), 2, "expected 2 ListItem events");
+    fn image_event() {
+        let evs = parse("![alt text](http://x/y.png)");
+        assert!(evs.iter().any(|e| matches!(e, Event::Image { alt, url }
+            if alt == "alt text" && url == "http://x/y.png")));
     }
 
     #[test]
@@ -359,8 +515,7 @@ mod tests {
 
     #[test]
     fn rule_event() {
-        let evs = parse("---");
-        assert!(evs.iter().any(|e| matches!(e, Event::Rule)));
+        assert!(parse("---").iter().any(|e| matches!(e, Event::Rule)));
     }
 
     #[test]

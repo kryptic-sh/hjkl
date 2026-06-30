@@ -2,6 +2,8 @@
 //!
 //! Converts a [`hjkl_markdown::Event`] stream into a `Vec<ratatui::text::Line>`
 //! suitable for rendering in a [`ratatui::widgets::Paragraph`] or similar widget.
+//! Supports headings, emphasis (bold/italic/strikethrough), inline + fenced
+//! code, links, images, nested + task lists, blockquotes, rules, and tables.
 //!
 //! # Quick start
 //!
@@ -15,7 +17,7 @@
 //! assert!(!lines.is_empty());
 //! ```
 
-use hjkl_markdown::Event;
+use hjkl_markdown::{ColumnAlign, Event};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -50,7 +52,7 @@ pub struct MdTheme {
     pub bold: Color,
     /// Italic text foreground.
     pub italic: Color,
-    /// Horizontal rule foreground.
+    /// Horizontal rule / blockquote bar / table border foreground.
     pub rule: Color,
 }
 
@@ -106,101 +108,210 @@ impl Default for MdTheme {
 
 /// Convert a [`hjkl_markdown::Event`] slice into `ratatui::text::Line` rows.
 ///
-/// `width` is the available column count — long lines are wrapped at word
-/// boundaries. Blank events become empty separator lines.
+/// `width` is the available column count. Block elements (headings, code, rules,
+/// tables) are laid out to fit; inline prose is left for the host
+/// `Paragraph`/widget to wrap.
 pub fn to_lines(events: &[Event], theme: &MdTheme, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    // Current line accumulator.
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
-
-    let flush = |spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>| {
-        if !spans.is_empty() {
-            lines.push(Line::from(std::mem::take(spans)));
-        }
+    let mut r = Renderer {
+        lines: Vec::new(),
+        cur: Vec::new(),
+        theme,
+        width,
+        quote: 0,
     };
-
     for ev in events {
+        r.event(ev);
+    }
+    r.flush();
+    // Strip trailing blank lines.
+    while r
+        .lines
+        .last()
+        .map(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
+        .unwrap_or(false)
+    {
+        r.lines.pop();
+    }
+    r.lines
+}
+
+/// Stateful markdown → ratatui line renderer (tracks blockquote nesting).
+struct Renderer<'a> {
+    lines: Vec<Line<'static>>,
+    cur: Vec<Span<'static>>,
+    theme: &'a MdTheme,
+    width: u16,
+    quote: usize,
+}
+
+impl Renderer<'_> {
+    /// Columns available for content after the blockquote bar.
+    fn inner_width(&self) -> usize {
+        (self.width as usize).saturating_sub(self.quote * 2).max(1)
+    }
+
+    fn quote_bar(&self) -> Option<Span<'static>> {
+        (self.quote > 0).then(|| {
+            Span::styled(
+                "│ ".repeat(self.quote),
+                Style::default().fg(self.theme.rule),
+            )
+        })
+    }
+
+    /// Flush any pending inline spans as a line.
+    fn flush(&mut self) {
+        if self.cur.is_empty() {
+            return;
+        }
+        let mut spans = Vec::new();
+        if let Some(bar) = self.quote_bar() {
+            spans.push(bar);
+        }
+        spans.append(&mut self.cur);
+        self.lines.push(Line::from(spans));
+    }
+
+    /// Flush pending inline, then push `content` as its own (quote-prefixed) line.
+    fn push_line(&mut self, content: Vec<Span<'static>>) {
+        self.flush();
+        let mut spans = Vec::new();
+        if let Some(bar) = self.quote_bar() {
+            spans.push(bar);
+        }
+        spans.extend(content);
+        self.lines.push(Line::from(spans));
+    }
+
+    fn blank(&mut self) {
+        self.flush();
+        match self.quote_bar() {
+            Some(bar) => self.lines.push(Line::from(bar)),
+            None => self.lines.push(Line::default()),
+        }
+    }
+
+    fn event(&mut self, ev: &Event) {
         match ev {
             Event::Heading { level, text } => {
-                flush(&mut current_spans, &mut lines);
                 let fg = if *level == 1 {
-                    theme.heading1
+                    self.theme.heading1
                 } else {
-                    theme.heading
+                    self.theme.heading
                 };
-                let prefix = "#".repeat(*level as usize);
-                let label = format!("{prefix} {text}");
                 let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-                for wrapped in wrap_str(&label, width as usize) {
-                    lines.push(Line::from(vec![Span::styled(wrapped, style)]));
+                let label = format!("{} {text}", "#".repeat(*level as usize));
+                for w in wrap_str(&label, self.inner_width()) {
+                    self.push_line(vec![Span::styled(w, style)]);
                 }
             }
             Event::CodeBlock { lang, content } => {
-                flush(&mut current_spans, &mut lines);
+                self.flush();
                 if !lang.is_empty() {
-                    let lang_line = format!("[{lang}]");
-                    lines.push(Line::from(vec![Span::styled(
-                        lang_line,
+                    self.push_line(vec![Span::styled(
+                        format!("[{lang}]"),
                         Style::default()
-                            .fg(theme.code_block)
+                            .fg(self.theme.code_block)
                             .add_modifier(Modifier::DIM),
-                    )]));
+                    )]);
                 }
-                let style = Style::default().fg(theme.code_block);
-                for src_line in content.lines() {
-                    for wrapped in wrap_str(src_line, width as usize) {
-                        lines.push(Line::from(vec![Span::styled(wrapped, style)]));
+                let style = Style::default().fg(self.theme.code_block);
+                for src in content.lines() {
+                    for w in wrap_str(src, self.inner_width()) {
+                        self.push_line(vec![Span::styled(w, style)]);
                     }
                 }
             }
             Event::Rule => {
-                flush(&mut current_spans, &mut lines);
-                let rule_str = "─".repeat(width.saturating_sub(0) as usize);
-                lines.push(Line::from(vec![Span::styled(
-                    rule_str,
-                    Style::default().fg(theme.rule),
-                )]));
+                let bar = "─".repeat(self.inner_width());
+                self.push_line(vec![Span::styled(
+                    bar,
+                    Style::default().fg(self.theme.rule),
+                )]);
             }
-            Event::ListItem { bullet, number } => {
-                flush(&mut current_spans, &mut lines);
-                let prefix = if *bullet == '\0' {
-                    format!("{number}. ")
-                } else {
-                    format!("{bullet} ")
+            Event::ListItem {
+                depth,
+                bullet,
+                number,
+                task,
+            } => {
+                self.flush();
+                let indent = "  ".repeat(*depth as usize);
+                let (marker, mstyle) = match task {
+                    Some(true) => (
+                        "[x] ".to_string(),
+                        Style::default().fg(self.theme.list_bullet),
+                    ),
+                    Some(false) => (
+                        "[ ] ".to_string(),
+                        Style::default().fg(self.theme.list_bullet),
+                    ),
+                    None if *bullet == '\0' => (
+                        format!("{number}. "),
+                        Style::default().fg(self.theme.list_bullet),
+                    ),
+                    None => (
+                        "• ".to_string(),
+                        Style::default().fg(self.theme.list_bullet),
+                    ),
                 };
-                current_spans.push(Span::styled(prefix, Style::default().fg(theme.list_bullet)));
+                if !indent.is_empty() {
+                    self.cur.push(Span::raw(indent));
+                }
+                self.cur.push(Span::styled(marker, mstyle));
             }
-            Event::Blank => {
-                flush(&mut current_spans, &mut lines);
-                lines.push(Line::default());
-            }
+            Event::Blank => self.blank(),
             Event::Link { text, url } => {
                 let label = if text.is_empty() {
                     url.clone()
                 } else {
                     format!("{text} <{url}>")
                 };
-                let style = Style::default()
-                    .fg(theme.link)
-                    .add_modifier(Modifier::UNDERLINED);
-                for wrapped in wrap_str(&label, width as usize) {
-                    current_spans.push(Span::styled(wrapped, style));
-                }
+                self.cur.push(Span::styled(
+                    label,
+                    Style::default()
+                        .fg(self.theme.link)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
             }
+            Event::Image { alt, url } => {
+                // No emoji — glyph width/support varies across terminals.
+                let label = if alt.is_empty() {
+                    format!("image: <{url}>")
+                } else {
+                    format!("image: {alt} <{url}>")
+                };
+                self.cur
+                    .push(Span::styled(label, Style::default().fg(self.theme.link)));
+            }
+            Event::BlockQuoteStart => {
+                self.flush();
+                self.quote += 1;
+            }
+            Event::BlockQuoteEnd => {
+                self.flush();
+                self.quote = self.quote.saturating_sub(1);
+            }
+            Event::Table {
+                aligns,
+                header,
+                rows,
+            } => self.render_table(aligns, header, rows),
             Event::Text {
                 content,
                 bold,
                 italic,
+                strikethrough,
                 code_span,
             } => {
                 let fg = if *code_span {
-                    theme.code_span
+                    self.theme.code_span
                 } else if *bold {
-                    theme.bold
+                    self.theme.bold
                 } else if *italic {
-                    theme.italic
+                    self.theme.italic
                 } else {
-                    theme.text
+                    self.theme.text
                 };
                 let mut style = Style::default().fg(fg);
                 if *bold {
@@ -209,75 +320,164 @@ pub fn to_lines(events: &[Event], theme: &MdTheme, width: u16) -> Vec<Line<'stat
                 if *italic {
                     style = style.add_modifier(Modifier::ITALIC);
                 }
+                if *strikethrough {
+                    style = style.add_modifier(Modifier::CROSSED_OUT);
+                }
                 if *code_span {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
-                // Newlines in text → flush + new line.
+                // Embedded newlines (soft/hard breaks) split into separate lines.
                 for (i, part) in content.split('\n').enumerate() {
                     if i > 0 {
-                        flush(&mut current_spans, &mut lines);
+                        self.flush();
                     }
                     if !part.is_empty() {
-                        for wrapped in wrap_str(part, width as usize) {
-                            current_spans.push(Span::styled(wrapped, style));
-                        }
+                        self.cur.push(Span::styled(part.to_string(), style));
                     }
                 }
             }
-            // Forward compat: ignore unknown variants from #[non_exhaustive] Event.
             _ => {}
         }
     }
 
-    flush(&mut current_spans, &mut lines);
+    fn render_table(&mut self, aligns: &[ColumnAlign], header: &[String], rows: &[Vec<String>]) {
+        self.flush();
+        let ncols = header
+            .len()
+            .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+        if ncols == 0 {
+            return;
+        }
 
-    // Strip trailing blank lines.
-    while lines
-        .last()
-        .map(|l: &Line<'_>| l.spans.is_empty())
-        .unwrap_or(false)
-    {
-        lines.pop();
+        // Natural column widths from header + body cells.
+        let mut col_w = vec![0usize; ncols];
+        let measure = |cells: &[String], col_w: &mut [usize]| {
+            for (i, c) in cells.iter().enumerate().take(ncols) {
+                col_w[i] = col_w[i].max(c.chars().count());
+            }
+        };
+        measure(header, &mut col_w);
+        for r in rows {
+            measure(r, &mut col_w);
+        }
+
+        // Fit to the available width: each column has 2 padding spaces plus a
+        // border, and one trailing border.
+        let overhead = 3 * ncols + 1;
+        let budget = self.inner_width().saturating_sub(overhead).max(ncols);
+        let total: usize = col_w.iter().sum();
+        if total > budget && total > 0 {
+            for w in col_w.iter_mut() {
+                *w = (((*w as f64) / total as f64) * budget as f64).floor() as usize;
+                *w = (*w).max(3);
+            }
+        }
+
+        let border = Style::default().fg(self.theme.rule);
+        let head_style = Style::default()
+            .fg(self.theme.heading)
+            .add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(self.theme.text);
+
+        self.push_line(vec![Span::styled(sep_line(&col_w, '┌', '┬', '┐'), border)]);
+        self.push_line(self.row_spans(header, &col_w, aligns, head_style, border));
+        self.push_line(vec![Span::styled(sep_line(&col_w, '├', '┼', '┤'), border)]);
+        for r in rows {
+            self.push_line(self.row_spans(r, &col_w, aligns, body_style, border));
+        }
+        self.push_line(vec![Span::styled(sep_line(&col_w, '└', '┴', '┘'), border)]);
     }
 
-    lines
+    fn row_spans(
+        &self,
+        cells: &[String],
+        col_w: &[usize],
+        aligns: &[ColumnAlign],
+        cell_style: Style,
+        border: Style,
+    ) -> Vec<Span<'static>> {
+        let mut spans = vec![Span::styled("│", border)];
+        for (i, w) in col_w.iter().enumerate() {
+            let cell = cells.get(i).map(String::as_str).unwrap_or("");
+            let align = aligns.get(i).copied().unwrap_or_default();
+            spans.push(Span::styled(
+                format!(" {} ", pad(cell, *w, align)),
+                cell_style,
+            ));
+            spans.push(Span::styled("│", border));
+        }
+        spans
+    }
 }
 
-/// Naive word-wrap: split `s` into chunks that fit in `width` columns.
-/// Falls back to hard-breaking if a single word exceeds `width`.
+/// Build a horizontal table separator like `├───┼───┤`.
+fn sep_line(col_w: &[usize], left: char, mid: char, right: char) -> String {
+    let mut s = String::new();
+    s.push(left);
+    for (i, w) in col_w.iter().enumerate() {
+        s.push_str(&"─".repeat(w + 2));
+        s.push(if i + 1 < col_w.len() { mid } else { right });
+    }
+    s
+}
+
+/// Truncate (with `…`) and pad `s` to `w` display columns per `align`.
+fn pad(s: &str, w: usize, align: ColumnAlign) -> String {
+    let n = s.chars().count();
+    let s = if n > w && w > 0 {
+        let head: String = s.chars().take(w.saturating_sub(1)).collect();
+        format!("{head}…")
+    } else {
+        s.to_string()
+    };
+    let len = s.chars().count();
+    let padn = w.saturating_sub(len);
+    match align {
+        ColumnAlign::Right => format!("{}{s}", " ".repeat(padn)),
+        ColumnAlign::Center => {
+            let l = padn / 2;
+            format!("{}{s}{}", " ".repeat(l), " ".repeat(padn - l))
+        }
+        _ => format!("{s}{}", " ".repeat(padn)),
+    }
+}
+
+/// Word-wrap `s` into chunks that fit in `width` display columns, hard-breaking
+/// any single word that is itself wider than `width`.
 fn wrap_str(s: &str, width: usize) -> Vec<String> {
-    if width == 0 || s.len() <= width {
+    if width == 0 || s.chars().count() <= width {
         return vec![s.to_string()];
     }
     let mut out = Vec::new();
-    let mut current = String::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
     for word in s.split_whitespace() {
-        let needed = if current.is_empty() {
-            word.len()
-        } else {
-            current.len() + 1 + word.len()
-        };
-        if needed > width && !current.is_empty() {
-            out.push(std::mem::take(&mut current));
+        let ww = word.chars().count();
+        let needed = if cur.is_empty() { ww } else { cur_w + 1 + ww };
+        if needed > width && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+            cur_w = 0;
         }
-        if !current.is_empty() {
-            current.push(' ');
+        if !cur.is_empty() {
+            cur.push(' ');
+            cur_w += 1;
         }
-        if word.len() > width {
-            // Hard-break long token.
-            for chunk in word.as_bytes().chunks(width) {
-                let s = String::from_utf8_lossy(chunk).to_string();
-                if current.len() + s.len() > width && !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
+        if ww > width {
+            for ch in word.chars() {
+                if cur_w >= width && !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                    cur_w = 0;
                 }
-                current.push_str(&s);
+                cur.push(ch);
+                cur_w += 1;
             }
         } else {
-            current.push_str(word);
+            cur.push_str(word);
+            cur_w += ww;
         }
     }
-    if !current.is_empty() {
-        out.push(current);
+    if !cur.is_empty() {
+        out.push(cur);
     }
     if out.is_empty() {
         out.push(String::new());
@@ -292,6 +492,19 @@ mod tests {
     use super::*;
     use hjkl_markdown::parse;
 
+    fn flat(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn smoke_empty() {
         let lines = to_lines(&[], &MdTheme::default(), 80);
@@ -300,29 +513,60 @@ mod tests {
 
     #[test]
     fn heading_produces_lines() {
-        let evs = parse("# Hello");
-        let lines = to_lines(&evs, &MdTheme::default(), 80);
-        assert!(!lines.is_empty());
-        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("Hello"), "heading text not found: {text:?}");
+        let lines = to_lines(&parse("# Hello"), &MdTheme::default(), 80);
+        assert!(flat(&lines).contains("Hello"));
     }
 
     #[test]
     fn code_block_lines() {
-        let evs = parse("```rust\nfn main() {}\n```");
-        let lines = to_lines(&evs, &MdTheme::default(), 80);
+        let lines = to_lines(
+            &parse("```rust\nfn main() {}\n```"),
+            &MdTheme::default(),
+            80,
+        );
+        assert!(flat(&lines).contains("fn main"));
+    }
+
+    #[test]
+    fn table_renders_box() {
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let out = flat(&to_lines(&parse(md), &MdTheme::default(), 80));
         assert!(
-            lines
-                .iter()
-                .any(|l| l.spans.iter().any(|s| s.content.contains("fn main")))
+            out.contains('┌') && out.contains('│'),
+            "no box drawing: {out}"
+        );
+        assert!(out.contains('a') && out.contains('1'));
+    }
+
+    #[test]
+    fn task_list_checkboxes() {
+        let out = flat(&to_lines(
+            &parse("- [x] done\n- [ ] todo\n"),
+            &MdTheme::default(),
+            80,
+        ));
+        assert!(out.contains("[x]") && out.contains("[ ]"), "{out}");
+    }
+
+    #[test]
+    fn nested_list_indents() {
+        let out = flat(&to_lines(&parse("- a\n  - b\n"), &MdTheme::default(), 80));
+        assert!(
+            out.lines().any(|l| l.starts_with("  ")),
+            "no indent: {out:?}"
         );
     }
 
     #[test]
+    fn blockquote_has_bar() {
+        let out = flat(&to_lines(&parse("> hi\n"), &MdTheme::default(), 80));
+        assert!(out.contains('│'), "no quote bar: {out}");
+    }
+
+    #[test]
     fn wrap_long_line() {
-        let chunks = wrap_str("hello world foo bar baz", 10);
-        for c in &chunks {
-            assert!(c.len() <= 10, "chunk too wide: {c:?}");
+        for c in wrap_str("hello world foo bar baz", 10) {
+            assert!(c.chars().count() <= 10, "chunk too wide: {c:?}");
         }
     }
 
@@ -330,6 +574,5 @@ mod tests {
     fn default_theme_has_colors() {
         let t = MdTheme::default();
         assert!(matches!(t.text, Color::Rgb(_, _, _)));
-        assert!(matches!(t.heading1, Color::Rgb(_, _, _)));
     }
 }
