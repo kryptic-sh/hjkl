@@ -7,7 +7,7 @@ terminal apps in Rust.
 [![crates.io](https://img.shields.io/crates/v/hjkl-engine.svg)](https://crates.io/crates/hjkl-engine)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-engine)](https://docs.rs/hjkl-engine)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![Website](https://img.shields.io/badge/website-kryptic.sh%2Fhjkl-7ee787)](https://www.kryptic.sh/hjkl/)
 
 Extracted from [sqeel](https://github.com/kryptic-sh/sqeel) for reuse across
 sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
