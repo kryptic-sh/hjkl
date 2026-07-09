@@ -72,6 +72,7 @@ hjkl-vim-tui = { path = "crates/hjkl-vim-tui", version = "0.33" }
 hjkl-which-key = { path = "crates/hjkl-which-key", version = "0.33" }
 hjkl-which-key-tui = { path = "crates/hjkl-which-key-tui", version = "0.33" }
 hjkl-xdg = { path = "crates/hjkl-xdg", version = "0.33" }
+unicode-width = "0.2"
 
 [profile.release]
 lto = "thin"

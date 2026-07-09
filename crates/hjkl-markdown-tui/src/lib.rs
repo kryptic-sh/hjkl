@@ -22,6 +22,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ── MdTheme ───────────────────────────────────────────────────────────────────
 
@@ -353,7 +354,7 @@ impl Renderer<'_> {
         let mut col_w = vec![0usize; ncols];
         let measure = |cells: &[String], col_w: &mut [usize]| {
             for (i, c) in cells.iter().enumerate().take(ncols) {
-                col_w[i] = col_w[i].max(c.chars().count());
+                col_w[i] = col_w[i].max(UnicodeWidthStr::width(c.as_str()));
             }
         };
         measure(header, &mut col_w);
@@ -423,14 +424,14 @@ fn sep_line(col_w: &[usize], left: char, mid: char, right: char) -> String {
 
 /// Truncate (with `…`) and pad `s` to `w` display columns per `align`.
 fn pad(s: &str, w: usize, align: ColumnAlign) -> String {
-    let n = s.chars().count();
+    let n = UnicodeWidthStr::width(s);
     let s = if n > w && w > 0 {
-        let head: String = s.chars().take(w.saturating_sub(1)).collect();
+        let head = trunc_to_width(s, w.saturating_sub(1));
         format!("{head}…")
     } else {
         s.to_string()
     };
-    let len = s.chars().count();
+    let len = UnicodeWidthStr::width(s.as_str());
     let padn = w.saturating_sub(len);
     match align {
         ColumnAlign::Right => format!("{}{s}", " ".repeat(padn)),
@@ -445,14 +446,14 @@ fn pad(s: &str, w: usize, align: ColumnAlign) -> String {
 /// Word-wrap `s` into chunks that fit in `width` display columns, hard-breaking
 /// any single word that is itself wider than `width`.
 fn wrap_str(s: &str, width: usize) -> Vec<String> {
-    if width == 0 || s.chars().count() <= width {
+    if width == 0 || UnicodeWidthStr::width(s) <= width {
         return vec![s.to_string()];
     }
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut cur_w = 0usize;
     for word in s.split_whitespace() {
-        let ww = word.chars().count();
+        let ww = UnicodeWidthStr::width(word);
         let needed = if cur.is_empty() { ww } else { cur_w + 1 + ww };
         if needed > width && !cur.is_empty() {
             out.push(std::mem::take(&mut cur));
@@ -464,12 +465,13 @@ fn wrap_str(s: &str, width: usize) -> Vec<String> {
         }
         if ww > width {
             for ch in word.chars() {
+                let ch_w = ch.width().unwrap_or(1).max(1);
                 if cur_w >= width && !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
                     cur_w = 0;
                 }
                 cur.push(ch);
-                cur_w += 1;
+                cur_w += ch_w;
             }
         } else {
             cur.push_str(word);
@@ -481,6 +483,22 @@ fn wrap_str(s: &str, width: usize) -> Vec<String> {
     }
     if out.is_empty() {
         out.push(String::new());
+    }
+    out
+}
+
+/// Take characters from the front of `s` whose combined display width ≤ `max_w`,
+/// returning them as a new String.
+fn trunc_to_width(s: &str, max_w: usize) -> String {
+    let mut out = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(1).max(1);
+        if w + cw > max_w {
+            break;
+        }
+        out.push(ch);
+        w += cw;
     }
     out
 }
@@ -565,8 +583,9 @@ mod tests {
 
     #[test]
     fn wrap_long_line() {
+        use unicode_width::UnicodeWidthStr;
         for c in wrap_str("hello world foo bar baz", 10) {
-            assert!(c.chars().count() <= 10, "chunk too wide: {c:?}");
+            assert!(UnicodeWidthStr::width(c.as_str()) <= 10, "chunk too wide: {c:?}");
         }
     }
 
@@ -574,5 +593,25 @@ mod tests {
     fn default_theme_has_colors() {
         let t = MdTheme::default();
         assert!(matches!(t.text, Color::Rgb(_, _, _)));
+    }
+
+    #[test]
+    fn table_emojis_align_columns() {
+        // Issue #270: emojis are multi-width (display width 2) but chars().count()
+        // returns 1, causing column width under-measurement and border misalignment.
+        use unicode_width::UnicodeWidthStr;
+
+        let md = "| status | desc |\n|---|---|\n| ✅ | pass |\n| ❌ | fail |\n";
+        let out = flat(&to_lines(&parse(md), &MdTheme::default(), 80));
+
+        // Every row must have the same *display* width (not scalar count).
+        let widths: Vec<usize> = out.lines().map(|l| UnicodeWidthStr::width(l)).collect();
+        let first = widths.first().copied().unwrap_or(0);
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(
+                *w, first,
+                "table row {i} display-width {w} differs from expected {first}; full output:\n{out}"
+            );
+        }
     }
 }
