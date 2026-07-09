@@ -585,7 +585,10 @@ mod tests {
     fn wrap_long_line() {
         use unicode_width::UnicodeWidthStr;
         for c in wrap_str("hello world foo bar baz", 10) {
-            assert!(UnicodeWidthStr::width(c.as_str()) <= 10, "chunk too wide: {c:?}");
+            assert!(
+                UnicodeWidthStr::width(c.as_str()) <= 10,
+                "chunk too wide: {c:?}"
+            );
         }
     }
 
@@ -605,7 +608,7 @@ mod tests {
         let out = flat(&to_lines(&parse(md), &MdTheme::default(), 80));
 
         // Every row must have the same *display* width (not scalar count).
-        let widths: Vec<usize> = out.lines().map(|l| UnicodeWidthStr::width(l)).collect();
+        let widths: Vec<usize> = out.lines().map(UnicodeWidthStr::width).collect();
         let first = widths.first().copied().unwrap_or(0);
         for (i, w) in widths.iter().enumerate() {
             assert_eq!(
