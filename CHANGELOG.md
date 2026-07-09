@@ -8,6 +8,29 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.33.4] - 2026-07-09
+
+### Fixed
+
+- **markdown-tui: table column alignment with multi-width characters** (#270):
+  emojis, CJK, and other wide Unicode characters now contribute their terminal
+  display width (via `unicode-width`) rather than their scalar `char` count when
+  measuring table columns, padding cells, and word-wrapping content. Table box
+  borders correctly align regardless of cell contents.
+
+### Changed
+
+- **cargo-deny policy updates**: added `CDLA-Permissive-2.0` and `BSL-1.0` to the
+  license allow-list (transitive via `webpki-root-certs` and clipboard/error
+  crates, respectively), and ignored the `ttf-parser` unmaintained advisory
+  (floem GUI stack only; not linked into the TUI binary).
+- Dependency bumps for 68 crates across the workspace.
+
+### Internal
+
+- Moved the marketing landing page to `www.kryptic.sh/hjkl/`.
+- Fixed a flaky e2e test on macOS (pty write ordering after bare Esc).
+
 ## [0.33.3] - 2026-07-01
 
 ### Added
