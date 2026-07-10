@@ -1,14 +1,14 @@
-# Contributing to `hjkl-buffer`
+# Contributing to `hjkl-mangler`
 
-Thanks for considering a contribution. `hjkl-buffer` is pre-1.0 and the public
+Thanks for considering a contribution. `hjkl-mangler` is pre-1.0 and the public
 API is still in motion — please open an issue before starting any non-trivial PR
 so the design can be sanity-checked early.
 
 ## Development setup
 
 ```bash
-git clone git@github.com:kryptic-sh/hjkl-buffer.git
-cd hjkl-buffer
+git clone git@github.com:kryptic-sh/hjkl-mangler.git
+cd hjkl-mangler
 rustup toolchain install stable
 cargo test --all-features
 ```
