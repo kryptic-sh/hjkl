@@ -24,7 +24,7 @@
 //! root. They are serialized automatically by `cargo nextest run`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hjkl_xdg::{cache_home, data_home};
 use thiserror::Error;
@@ -38,6 +38,27 @@ pub enum StoreError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("invalid package name: {0}")]
+    InvalidName(String),
+}
+
+/// Reject any tool name that is not a single, safe path component.
+///
+/// A name with separators, `.`/`..`, or an absolute prefix could otherwise
+/// escape `packages/` when joined — e.g. `:Anvil uninstall ../../foo` or an
+/// absolute path, which `Path::join` would treat as the whole target — and
+/// reach `remove_dir_all` / install writes on an arbitrary directory.
+fn validate_name(name: &str) -> Result<(), StoreError> {
+    use std::path::Component;
+    let mut comps = Path::new(name).components();
+    let single_normal =
+        matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none();
+    if single_normal {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidName(name.to_string()))
+    }
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
@@ -59,6 +80,7 @@ pub fn packages_dir() -> Result<PathBuf, StoreError> {
 
 /// `<data_root>/packages/<name>/`.
 pub fn package_dir(name: &str) -> Result<PathBuf, StoreError> {
+    validate_name(name)?;
     Ok(packages_dir()?.join(name))
 }
 
@@ -284,6 +306,49 @@ mod tests {
     // Under nextest the `anvil-env` group (max-threads = 1) provides the same
     // guarantee across processes.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── Name validation (no I/O, parallel-safe) ─────────────────────────────
+
+    #[test]
+    fn validate_name_accepts_plain_names() {
+        for n in ["rust-analyzer", "gopls", "foo_bar", "a.b"] {
+            assert!(validate_name(n).is_ok(), "{n} should be accepted");
+        }
+    }
+
+    #[test]
+    fn validate_name_rejects_traversal_and_absolute() {
+        for n in [
+            "",
+            ".",
+            "..",
+            "../foo",
+            "../../etc",
+            "foo/bar",
+            "foo/../bar",
+            "/etc/passwd",
+            "/",
+        ] {
+            assert!(
+                validate_name(n).is_err(),
+                "{n:?} must be rejected as an unsafe package name"
+            );
+        }
+    }
+
+    #[test]
+    fn package_dir_rejects_escaping_name() {
+        // Regression: `:Anvil uninstall ../../foo` must not resolve outside
+        // `packages/` and reach `remove_dir_all`.
+        assert!(matches!(
+            package_dir("../../foo"),
+            Err(StoreError::InvalidName(_))
+        ));
+        assert!(matches!(
+            package_dir("/tmp/evil"),
+            Err(StoreError::InvalidName(_))
+        ));
+    }
 
     // ── RevSidecar unit tests (no I/O, parallel-safe) ────────────────────────
 

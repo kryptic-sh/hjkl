@@ -120,6 +120,14 @@ pub fn install_blocking(
     spec: &ToolSpec,
     progress: &dyn Fn(InstallStatus),
 ) -> Result<PathBuf, InstallError> {
+    // `spec.bin` is joined into extract and symlink paths (`dest_dir.join(bin)`,
+    // `bin_dir.join(&spec.bin)`). A name with separators or `..` from an
+    // untrusted manifest would escape those roots (archive *entry* paths are
+    // guarded by `safe_join`, but the bin name is not). Require a single safe
+    // path component up front for every install method.
+    if !is_safe_component(&spec.bin) {
+        return Err(InstallError::PathEscape(spec.bin.clone()));
+    }
     match &spec.method {
         InstallMethod::Github(_) => GithubInstaller.install(name, spec, progress),
         InstallMethod::Cargo(_) => CargoInstaller.install(name, spec, progress),
@@ -139,6 +147,14 @@ pub fn install_blocking(
 ///
 /// Neither `root` nor `entry` is required to exist on disk — this is a
 /// pure-path check.
+/// True if `name` is exactly one normal path component — no separators, `..`,
+/// `.`, or absolute/root prefix. Used to keep an untrusted `bin` name from
+/// escaping the extract dir or the flat `bin/` symlink dir.
+fn is_safe_component(name: &str) -> bool {
+    let mut comps = Path::new(name).components();
+    matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none()
+}
+
 pub fn safe_join(root: &Path, entry: &Path) -> Result<PathBuf, InstallError> {
     let mut out = root.to_path_buf();
     for comp in entry.components() {
@@ -385,7 +401,11 @@ fn real_download(
     dest: &Path,
     progress: &dyn Fn(InstallStatus),
 ) -> Result<(), InstallError> {
-    let response = reqwest::blocking::get(url)?;
+    // Reject non-2xx responses. Without this a GitHub 404/500 HTML body would
+    // be written to the staging file and treated as the artifact — and under
+    // TOFU its hash would be recorded as the trusted checksum, or (for raw
+    // binary assets) installed and symlinked as the executable.
+    let response = reqwest::blocking::get(url)?.error_for_status()?;
     let total = response.content_length();
     let mut downloaded: u64 = 0;
 
@@ -654,10 +674,8 @@ fn run_subprocess(
     })?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    for line in stderr.lines() {
-        let truncated = if line.len() > 200 { &line[..200] } else { line };
+    for _line in stderr.lines() {
         progress(InstallStatus::Installing);
-        let _ = truncated; // callers may capture via the closure if needed
     }
 
     if !output.status.success() {
