@@ -87,6 +87,14 @@ pub fn swap_dir() -> std::io::Result<PathBuf> {
         .map_err(|e| std::io::Error::other(format!("xdg cache_dir: {e}")))?;
     let dir = base.join("swap");
     std::fs::create_dir_all(&dir)?;
+    // Swap files hold unsaved buffer contents (potentially credentials, private
+    // keys, etc.). Keep the directory owner-only so other local users cannot
+    // enumerate or read them.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     Ok(dir)
 }
 
@@ -187,7 +195,18 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
     })?;
 
     // Write: 4-byte magic + u32-LE header length + header bytes + body chunks.
-    let mut f = std::fs::File::create(&tmp)?;
+    // Create owner-only (0600) on Unix so the unsaved contents are not exposed
+    // to other local users.
+    let mut f = {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&tmp)?
+    };
     f.write_all(&SwapHeader::MAGIC)?;
     let hlen = header_bytes.len() as u32;
     f.write_all(&hlen.to_le_bytes())?;
