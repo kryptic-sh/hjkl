@@ -247,7 +247,7 @@ Same thread, same protocol, two front doors. ~150 LOC total.
 | macOS desktop session   | NSPasteboard real apps round-trip    |
 | Windows 10 / 11         | clipboard contention with other apps |
 
-Manual checklist in `CONTRIBUTING.md`. Tag each release with results.
+Manual checklist in `RELEASE-VERIFICATION.md`. Tag each release with results.
 
 ## Module layout
 
@@ -1151,8 +1151,8 @@ Notes from execution:
 - [ ] `CHANGELOG.md` `[0.4.0]` entry. Breaking: removed direct text helpers,
       added `Selection`, `MimeType`, `Uri`, async API, OSC 52 fallback,
       `Io(Arc<io::Error>)` change. Migration notes from 0.3.x.
-- [ ] Manual matrix checklist in `CONTRIBUTING.md` (defer the actual run;
-      document what to test on each compositor).
+- [ ] Manual matrix checklist in `RELEASE-VERIFICATION.md` (defer the actual
+      run; document what to test on each compositor).
 - [ ] `cargo deny check` clean (CI runs it green; verify locally).
 - [ ] Final sweep: `cargo fmt`, `cargo clippy --all-targets -- -D warnings` on
       all 4 targets, `cargo test`, doc-tests.

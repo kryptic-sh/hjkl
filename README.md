@@ -95,10 +95,9 @@ cargo +nightly fuzz run handle_key
 
 ## Contributing
 
-See the org-wide
-[CONTRIBUTING guide](https://github.com/kryptic-sh/.github/blob/main/.github/CONTRIBUTING.md)
-for PR conventions, BCTP release flow, snapshot test workflow, and supported
-language toolchains. Project-specific dev setup lives above in **Development**.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, PR conventions, the BCTP
+release flow, and MSRV policy. Org-wide conventions live in the
+[kryptic-sh CONTRIBUTING guide](https://github.com/kryptic-sh/.github/blob/main/.github/CONTRIBUTING.md).
 
 For security issues, see the org-wide
 [SECURITY policy](https://github.com/kryptic-sh/.github/blob/main/.github/SECURITY.md)
