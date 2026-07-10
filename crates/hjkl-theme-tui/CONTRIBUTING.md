@@ -1,8 +1,8 @@
 # Contributing to `hjkl-theme-tui`
 
-Thanks for considering a contribution. `hjkl-theme-tui` is pre-1.0 and the public
-API is still in motion — please open an issue before starting any non-trivial PR
-so the design can be sanity-checked early.
+Thanks for considering a contribution. `hjkl-theme-tui` is pre-1.0 and the
+public API is still in motion — please open an issue before starting any
+non-trivial PR so the design can be sanity-checked early.
 
 ## Development setup
 

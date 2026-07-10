@@ -1,7 +1,11 @@
 # Submodule Absorption Plan — Issue #152
 
-> **Status**: Pre-execution plan. Read-only prep. Do NOT act on this until
-> v0.21.35 hotfix (7-submodule) is merged and the monorepo is green.
+> **Status**: ✅ COMPLETED — historical record. The absorption described below
+> has fully landed: there are no git submodules or `.gitmodules`, no
+> `[patch.crates-io]` in the root `Cargo.toml`, the `hjkl-ratatui` crate is
+> gone, and the workspace is unified at version 0.33.4. Kept for provenance; do
+> not treat the version targets (0.22.0/0.23.0) or crate counts below as
+> current.
 >
 > **Generated**: 2026-05-18
 

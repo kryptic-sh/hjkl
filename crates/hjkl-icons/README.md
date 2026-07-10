@@ -21,6 +21,6 @@ assert_eq!(dir_icon(None, true, IconMode::Ascii), 'v');
 
 > Note: there is no portable way to detect whether the terminal's font actually
 > contains Nerd glyphs (terminals don't expose their font; a missing glyph and a
-> real one both usually occupy one cell). Hosts should expose an explicit setting
-> and may add a best-effort runtime probe for an `auto` mode — this crate stays a
-> pure mapping and takes the resolved [`IconMode`] as input.
+> real one both usually occupy one cell). Hosts should expose an explicit
+> setting and may add a best-effort runtime probe for an `auto` mode — this
+> crate stays a pure mapping and takes the resolved [`IconMode`] as input.

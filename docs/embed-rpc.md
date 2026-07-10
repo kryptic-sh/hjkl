@@ -158,12 +158,13 @@ assert_eq!(lines, vec!["hello"]);
 
 ### compat-oracle integration
 
-The `hjkl-compat-oracle` includes a `substitute_via_nvim_api` test that drives
-the 4 substitute cases from `known_divergences.toml` through `hjkl --nvim-api`
-rather than the in-process key-replay driver. These cases pass via the nvim-api
-path (ex commands route through `ex::run`) but diverge in-process (the vim FSM
-does not handle `:` keystrokes). Enable the test with:
+The `hjkl-compat-oracle` includes a `nvim_api_tier_passes` test that drives the
+cases in `corpus/nvim_api_tier.toml` through `hjkl --nvim-api` rather than the
+in-process key-replay driver. These cases pass via the nvim-api path (ex
+commands route through `ex::run`) but diverge in-process (the vim FSM does not
+handle `:` keystrokes), so they graduated out of `known_divergences.toml` (now
+empty) into their own tier. Enable the test with:
 
 ```sh
-HJKL_ORACLE_NVIM_API=1 cargo test -p hjkl-compat-oracle substitute_via_nvim_api
+HJKL_ORACLE_NVIM_API=1 cargo test -p hjkl-compat-oracle nvim_api_tier_passes
 ```

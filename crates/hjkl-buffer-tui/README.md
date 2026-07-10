@@ -1,11 +1,11 @@
 # hjkl-buffer-tui
 
-Ratatui Widget adapter for [`hjkl-buffer`](https://crates.io/crates/hjkl-buffer).
+Ratatui Widget adapter for
+[`hjkl-buffer`](https://crates.io/crates/hjkl-buffer).
 
 Provides a single-pass cell renderer [`BufferView`] that implements
 `ratatui::widgets::Widget`. Extracted from `hjkl-buffer` as part of #162
-(Host-trait phase 4) so the agnostic buffer crate carries no ratatui
-dependency.
+(Host-trait phase 4) so the agnostic buffer crate carries no ratatui dependency.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-buffer-tui.svg)](https://crates.io/crates/hjkl-buffer-tui)

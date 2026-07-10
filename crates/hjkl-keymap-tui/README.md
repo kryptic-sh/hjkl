@@ -1,8 +1,8 @@
 # hjkl-keymap-tui
 
-Ratatui/crossterm KeyEvent ↔ `hjkl-keymap` KeyEvent adapter. The TUI-side
-input boundary for hjkl. Renamed from `hjkl-keymap-crossterm` 2026-05-18 to
-match the `-tui` adapter convention used across the workspace.
+Ratatui/crossterm KeyEvent ↔ `hjkl-keymap` KeyEvent adapter. The TUI-side input
+boundary for hjkl. Renamed from `hjkl-keymap-crossterm` 2026-05-18 to match the
+`-tui` adapter convention used across the workspace.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-keymap-tui.svg)](https://crates.io/crates/hjkl-keymap-tui)
