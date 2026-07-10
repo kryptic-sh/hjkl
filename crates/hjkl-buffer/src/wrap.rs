@@ -49,6 +49,14 @@ pub fn wrap_segments(line: &str, width: u16, mode: Wrap) -> Vec<(usize, usize)> 
             cells += w;
             i += 1;
         }
+        // A single char wider than `width` (e.g. a double-width CJK/emoji char
+        // in a 1-cell text area) consumes zero cells above, leaving `i == start`.
+        // Force progress by emitting it as its own overflowing segment; without
+        // this `break_at` collapses to `start`, `start` never advances, and the
+        // loop spins forever pushing `(start, start)` until the process OOMs.
+        if i == start {
+            i = start + 1;
+        }
         if i == total {
             segs.push((start, total));
             break;
@@ -97,6 +105,20 @@ mod tests {
     fn none_returns_full_line_segment() {
         let segs = wrap_segments("hello world", 4, Wrap::None);
         assert_eq!(segs, vec![(0, 11)]);
+    }
+
+    #[test]
+    fn wide_char_wider_than_width_terminates() {
+        // Regression: a double-width char in a 1-cell area used to spin forever
+        // (i == start → break_at == start → start never advances → OOM). Each
+        // wide char must become its own overflowing segment and progress.
+        let segs = wrap_segments("你好", 1, Wrap::Char);
+        assert_eq!(segs, vec![(0, 1), (1, 2)]);
+        let segs = wrap_segments("你好", 1, Wrap::Word);
+        assert_eq!(segs, vec![(0, 1), (1, 2)]);
+        // Mixed narrow + wide with a 1-cell width still fully covers the line.
+        let segs = wrap_segments("a你b", 1, Wrap::Char);
+        assert_eq!(segs, vec![(0, 1), (1, 2), (2, 3)]);
     }
 
     #[test]
