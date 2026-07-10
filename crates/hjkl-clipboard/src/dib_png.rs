@@ -104,8 +104,15 @@ fn read_chunk(data: &[u8], pos: usize) -> Result<([u8; 4], &[u8], usize), Clipbo
     let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
     let type_start = pos + 4;
     let data_start = type_start + 4;
-    let data_end = data_start + len;
-    let crc_end = data_end + 4;
+    // Checked arithmetic: `len` is attacker-controlled (up to u32::MAX), so the
+    // naive `data_start + len + 4` can wrap on 32-bit targets and defeat the
+    // bounds check below.
+    let data_end = data_start
+        .checked_add(len)
+        .ok_or_else(|| bad("truncated PNG chunk data"))?;
+    let crc_end = data_end
+        .checked_add(4)
+        .ok_or_else(|| bad("truncated PNG chunk data"))?;
 
     if crc_end > data.len() {
         return Err(bad("truncated PNG chunk data"));
@@ -458,9 +465,16 @@ pub(crate) fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         _ => return Err(bad("unsupported DIB bit depth (only 24 and 32 bpp)")),
     };
 
-    let stride = row_stride(width, bpp) as usize;
+    // Checked stride/size math: width and height come from an untrusted header
+    // (each up to i32::MAX), so `row_stride`'s u32 `width * bpp` product and
+    // the `stride * height` product can overflow — panicking in debug or
+    // wrapping to a tiny `expected` in release, which would let the per-row
+    // slicing below run out of bounds and panic.
+    let too_big = || bad("DIB dimensions too large");
+    let row_bytes = (width as usize).checked_mul(channels).ok_or_else(too_big)?;
+    let stride = row_bytes.checked_next_multiple_of(4).ok_or_else(too_big)?;
     let image_data = &dib[DIB_HEADER_SIZE as usize..];
-    let expected = stride * height as usize;
+    let expected = stride.checked_mul(height as usize).ok_or_else(too_big)?;
 
     if image_data.len() < expected {
         return Err(bad("DIB pixel data shorter than expected"));
@@ -501,7 +515,7 @@ pub(crate) fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
     } else {
         PNG_COLOR_RGB
     };
-    let row_bytes = width as usize * channels;
+    // `row_bytes` (width * channels) was computed with checked math above.
 
     // IHDR data
     let mut ihdr = Vec::with_capacity(13);
@@ -868,6 +882,27 @@ mod tests {
         write_chunk(&mut png, b"IEND", &[]);
 
         assert!(png_to_dib(&png).is_err(), "expected error for 16-bit PNG");
+    }
+
+    #[test]
+    fn dib_huge_dimensions_error_not_panic() {
+        // A hostile DIB header advertising enormous dimensions must produce an
+        // error, not an arithmetic-overflow panic (debug) or wrapped stride
+        // leading to out-of-bounds slicing (release).
+        let make_dib = |width: i32, height: i32, bpp: u16| {
+            let mut dib = vec![0u8; 200];
+            dib[0..4].copy_from_slice(&DIB_HEADER_SIZE.to_le_bytes());
+            dib[4..8].copy_from_slice(&width.to_le_bytes());
+            dib[8..12].copy_from_slice(&height.to_le_bytes());
+            dib[14..16].copy_from_slice(&bpp.to_le_bytes());
+            dib
+        };
+        // width * bpp overflows u32 in row_stride's old math.
+        assert!(dib_to_png(&make_dib(i32::MAX, 1, 32)).is_err());
+        // stride * height overflows usize (even on 64-bit).
+        assert!(dib_to_png(&make_dib(i32::MAX, i32::MAX, 32)).is_err());
+        // Top-down variant (negative height) of the same bomb.
+        assert!(dib_to_png(&make_dib(i32::MAX, i32::MIN + 1, 24)).is_err());
     }
 
     #[test]

@@ -121,6 +121,13 @@ impl WaylandSocket {
 
 impl Drop for WaylandSocket {
     fn drop(&mut self) {
+        // Close any fds received via SCM_RIGHTS that were never consumed —
+        // they are owned by us once recvmsg delivers them and would otherwise
+        // leak.
+        for fd in self.rx_fds.drain(..) {
+            // SAFETY: fd was received via SCM_RIGHTS and is owned by us.
+            unsafe { libc::close(fd) };
+        }
         // SAFETY: fd was opened by us via libc::socket; close it exactly once.
         unsafe { libc::close(self.fd) };
     }

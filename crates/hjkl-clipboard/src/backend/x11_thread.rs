@@ -281,6 +281,12 @@ impl X11Thread {
                     Ok(w) => w,
                     Err(e) => {
                         eprintln!("hjkl-clipboard x11 thread: window creation failed: {e}");
+                        // Keep serving the inbox with errors so callers that
+                        // enqueue requests get an error instead of hanging on
+                        // a reply that would never be resolved.
+                        while let Ok(req) = rx.recv() {
+                            fail_request(req);
+                        }
                         return;
                     }
                 };
@@ -303,9 +309,11 @@ impl X11Thread {
         let oneshot = crate::oneshot::Oneshot::new();
         let reply = crate::reply::Reply::Async(Arc::clone(&oneshot));
 
-        self.tx
-            .send(X11Request { op, reply })
-            .expect("x11 thread inbox closed");
+        if let Err(mpsc::SendError(req)) = self.tx.send(X11Request { op, reply }) {
+            // Bg thread is gone — resolve the future with an error instead of
+            // panicking the caller.
+            fail_request(req);
+        }
 
         X11Future { oneshot }
     }
@@ -394,6 +402,19 @@ fn create_selection_window(conn: &X11Connection) -> Result<u32, ClipboardError> 
 // ---------------------------------------------------------------------------
 // Main event loop
 // ---------------------------------------------------------------------------
+
+/// Resolve a request with a "thread unavailable" error — used when the bg
+/// thread cannot service ops (dead inbox or failed startup).
+fn fail_request(req: X11Request) {
+    let err = || ClipboardError::io_other("x11 thread unavailable");
+    let result = match req.op {
+        X11Op::Set { .. } => X11OpResult::Set(Err(err())),
+        X11Op::Clear { .. } => X11OpResult::Clear(Err(err())),
+        X11Op::Get { .. } => X11OpResult::Get(Err(err())),
+        X11Op::Available { .. } => X11OpResult::Available(Err(err())),
+    };
+    req.reply.resolve(result);
+}
 
 fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
     loop {

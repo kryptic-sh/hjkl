@@ -259,6 +259,10 @@ impl WaylandThread {
                     Ok(s) => s,
                     Err(e) => {
                         eprintln!("hjkl-clipboard wayland thread: init failed: {e}");
+                        // Keep serving the inbox with errors so callers that
+                        // already enqueued (or will enqueue) requests get an
+                        // error instead of hanging on a never-resolved reply.
+                        serve_inbox_with_errors(rx);
                         return;
                     }
                 };
@@ -274,9 +278,11 @@ impl WaylandThread {
         let oneshot = crate::oneshot::Oneshot::new();
         let reply = crate::reply::Reply::Async(Arc::clone(&oneshot));
 
-        self.tx
-            .send(WaylandRequest { op, reply })
-            .expect("wayland thread inbox closed");
+        if let Err(mpsc::SendError(req)) = self.tx.send(WaylandRequest { op, reply }) {
+            // Bg thread is gone (compositor connection lost) — resolve the
+            // future with an error instead of panicking the caller.
+            fail_request(req);
+        }
 
         WaylandFuture { oneshot }
     }
@@ -675,6 +681,32 @@ fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>) {
             }
         }
     }
+
+    // Compositor connection lost. Keep serving the inbox with errors so
+    // callers blocked in send_sync (condvar) or awaiting a future never hang
+    // on a request that would otherwise be silently dropped.
+    serve_inbox_with_errors(rx);
+}
+
+/// Resolve a request with an "inbox closed" error — used when the bg thread
+/// can no longer talk to the compositor.
+fn fail_request(req: WaylandRequest) {
+    let err = || ClipboardError::io_other("wayland thread unavailable");
+    let result = match req.op {
+        WaylandOp::Set { .. } => WaylandOpResult::Set(Err(err())),
+        WaylandOp::Clear { .. } => WaylandOpResult::Clear(Err(err())),
+        WaylandOp::Get { .. } => WaylandOpResult::Get(Err(err())),
+        WaylandOp::Available { .. } => WaylandOpResult::Available(Err(err())),
+    };
+    req.reply.resolve(result);
+}
+
+/// Answer every remaining/future inbox request with an error. Returns when
+/// all senders are gone (process teardown).
+fn serve_inbox_with_errors(rx: mpsc::Receiver<WaylandRequest>) {
+    while let Ok(req) = rx.recv() {
+        fail_request(req);
+    }
 }
 
 /// Call poll(2) on the Wayland socket plus any pending-write fds.
@@ -809,21 +841,23 @@ fn dispatch_events(state: &mut WaylandState) {
     let mut messages: Vec<(super::wayland_wire::MessageHeader, Vec<u8>, Option<c_int>)> =
         Vec::new();
 
-    loop {
-        // Check if there's an fd waiting (for data_source.send events).
-        let opt_fd = state.socket.next_fd();
-        match state.socket.next_message() {
-            Some((hdr, args)) => messages.push((hdr, args, opt_fd)),
-            None => {
-                // Return the fd if we took one but there was no message.
-                // We cannot put it back into socket; just close it to avoid leak.
-                if let Some(fd) = opt_fd {
-                    // SAFETY: fd came from the socket receive queue and is valid.
-                    unsafe { libc::close(fd) };
-                }
-                break;
-            }
-        }
+    while let Some((hdr, args)) = state.socket.next_message() {
+        // Only `data_source.send` events carry an fd (via SCM_RIGHTS). Pop the
+        // fd queue exclusively for those messages: popping an fd for every
+        // message would misattribute (and close) an fd that belongs to a later
+        // send event whenever unrelated messages arrive in the same batch,
+        // breaking the paste. Unmatched fds stay queued for the message they
+        // belong to (and are closed by WaylandSocket::drop as a last resort).
+        let expects_fd = (hdr.opcode == EXT_SOURCE_SEND
+            && state.clipboard_source.as_ref().map(|s| s.id) == Some(hdr.object_id))
+            || (hdr.opcode == ZWP_PRIMARY_SOURCE_SEND
+                && state.primary_source.as_ref().map(|s| s.id) == Some(hdr.object_id));
+        let opt_fd = if expects_fd {
+            state.socket.next_fd()
+        } else {
+            None
+        };
+        messages.push((hdr, args, opt_fd));
     }
 
     for (hdr, args, opt_fd) in messages {
@@ -1534,15 +1568,20 @@ fn receive_from_offer(
     // SAFETY: write_fd was created by us; close exactly once.
     unsafe { libc::close(write_fd) };
 
-    send_result?;
+    if let Err(e) = send_result {
+        // SAFETY: read_fd was created by us; close to avoid a leak.
+        unsafe { libc::close(read_fd) };
+        return Err(e);
+    }
 
     // Read from read_fd until EOF (the owner closed write_fd after writing).
-    let data = read_fd_to_end(read_fd)?;
+    let data = read_fd_to_end(read_fd);
 
-    // SAFETY: read_fd was created by us; close after reading.
+    // SAFETY: read_fd was created by us; close after reading (on both the
+    // success and the error path).
     unsafe { libc::close(read_fd) };
 
-    Ok(data)
+    data
 }
 
 /// Read all available bytes from `fd` until EOF.

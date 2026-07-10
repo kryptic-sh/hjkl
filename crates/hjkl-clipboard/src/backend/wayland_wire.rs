@@ -111,8 +111,11 @@ pub(crate) fn parse_string(args: &[u8]) -> Option<(&str, &[u8])> {
         let total_consumed = 4; // just the length field; nothing after
         return Some(("", &args[total_consumed..]));
     }
-    let payload_start = 4;
-    let payload_end = payload_start + len_with_nul;
+    let payload_start = 4usize;
+    // Checked arithmetic: `len_with_nul` is attacker-controlled (up to
+    // u32::MAX); the naive additions can wrap on 32-bit targets, defeating the
+    // truncation checks and panicking on the slice below.
+    let payload_end = payload_start.checked_add(len_with_nul)?;
     if args.len() < payload_end {
         return None;
     }
@@ -120,8 +123,8 @@ pub(crate) fn parse_string(args: &[u8]) -> Option<(&str, &[u8])> {
     let str_bytes = &args[payload_start..payload_end - 1];
     let s = std::str::from_utf8(str_bytes).ok()?;
     // Advance past payload + padding to 4-byte boundary.
-    let padded_len = pad4_up(len_with_nul);
-    let total_consumed = 4 + padded_len;
+    let padded_len = len_with_nul.checked_next_multiple_of(4)?;
+    let total_consumed = payload_start.checked_add(padded_len)?;
     if args.len() < total_consumed {
         return None;
     }
@@ -150,6 +153,9 @@ fn pad4(len: usize) -> usize {
 }
 
 /// Round `len` up to the nearest 4-byte boundary.
+/// Production code uses `checked_next_multiple_of` instead (overflow-safe);
+/// kept for the padding unit test.
+#[cfg_attr(not(test), allow(dead_code))]
 fn pad4_up(len: usize) -> usize {
     len.div_ceil(4) * 4
 }
