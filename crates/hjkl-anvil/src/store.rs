@@ -276,6 +276,9 @@ impl ChecksumSidecar {
     ///
     /// Returns `Ok(None)` when the file is absent (no prior TOFU installs).
     pub fn read(tool: &str) -> Result<Option<Self>, StoreError> {
+        // `tool` is joined into the checksums path — reject names that could
+        // escape `checksums/` (e.g. `../…` or an absolute path).
+        validate_name(tool)?;
         let path = checksums_dir()?.join(format!("{tool}.toml"));
         match std::fs::read_to_string(&path) {
             Ok(s) => Ok(Some(Self::from_toml(&s)?)),
@@ -286,6 +289,8 @@ impl ChecksumSidecar {
 
     /// Write the checksum sidecar for `tool` atomically (tmpfile + rename).
     pub fn write(&self, tool: &str) -> Result<(), StoreError> {
+        // Same escape guard as `read` — this path is written to.
+        validate_name(tool)?;
         let dir = checksums_dir()?;
         let target = dir.join(format!("{tool}.toml"));
         let staging = target.with_extension("toml.tmp");
@@ -348,6 +353,26 @@ mod tests {
             package_dir("/tmp/evil"),
             Err(StoreError::InvalidName(_))
         ));
+    }
+
+    #[test]
+    fn checksum_sidecar_rejects_escaping_tool_name() {
+        // Regression: the tool name is joined into `checksums/<tool>.toml`
+        // and must not escape the checksums dir (read or write). Validation
+        // happens before any I/O, so no XDG env setup is needed.
+        for name in ["../evil", "a/b", "/abs", "..", ""] {
+            assert!(
+                matches!(ChecksumSidecar::read(name), Err(StoreError::InvalidName(_))),
+                "read({name:?}) must be rejected"
+            );
+            assert!(
+                matches!(
+                    ChecksumSidecar::default().write(name),
+                    Err(StoreError::InvalidName(_))
+                ),
+                "write({name:?}) must be rejected"
+            );
+        }
     }
 
     // ── RevSidecar unit tests (no I/O, parallel-safe) ────────────────────────

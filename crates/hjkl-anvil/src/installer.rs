@@ -75,6 +75,9 @@ pub enum InstallError {
 
     #[error("binary not found in installed package: {0}")]
     BinNotFound(String),
+
+    #[error("refusing option-like or empty argument: {0:?}")]
+    OptionLike(String),
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -128,6 +131,15 @@ pub fn install_blocking(
     if !is_safe_component(&spec.bin) {
         return Err(InstallError::PathEscape(spec.bin.clone()));
     }
+    // `name` is joined into the download staging path
+    // (`<cache>/staging/<name>`) and the checksum sidecar path
+    // (`<data>/checksums/<name>.toml`) *before* `store::package_dir` ever
+    // validates it — an unsafe name from an untrusted manifest would read and
+    // write files outside those roots. Require a single safe component here
+    // too.
+    if !is_safe_component(name) {
+        return Err(InstallError::PathEscape(name.to_string()));
+    }
     match &spec.method {
         InstallMethod::Github(_) => GithubInstaller.install(name, spec, progress),
         InstallMethod::Cargo(_) => CargoInstaller.install(name, spec, progress),
@@ -153,6 +165,16 @@ pub fn install_blocking(
 fn is_safe_component(name: &str) -> bool {
     let mut comps = Path::new(name).components();
     matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none()
+}
+
+/// Reject a package/crate/module identifier that the spawned package manager
+/// would parse as an option flag (e.g. `cargo install --path=…`,
+/// `npm install -g`), plus empty identifiers which would silently shift argv.
+fn reject_option_like(value: &str) -> Result<(), InstallError> {
+    if value.is_empty() || value.starts_with('-') {
+        return Err(InstallError::OptionLike(value.to_string()));
+    }
+    Ok(())
 }
 
 pub fn safe_join(root: &Path, entry: &Path) -> Result<PathBuf, InstallError> {
@@ -298,7 +320,19 @@ fn move_dir_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
 /// On Windows, symlink creation requires elevated privileges or Developer Mode.
 /// TODO: On Windows, consider copying the binary instead of symlinking.
 fn atomic_symlink(link_path: &Path, target: &Path) -> Result<(), InstallError> {
-    let tmp = link_path.with_extension("tmp");
+    // Append (not `with_extension`, which *replaces* the extension) so that
+    // bins like `foo.sh` and `foo.py` don't collide on the same `foo.tmp`
+    // staging path when two workers install concurrently, and so the staging
+    // name can never equal another tool's live symlink (e.g. bin `foo.tmp`),
+    // which the `remove_file` below would otherwise delete.
+    let tmp = match link_path.file_name() {
+        Some(fname) => {
+            let mut f = fname.to_os_string();
+            f.push(".anvil-tmp");
+            link_path.with_file_name(f)
+        }
+        None => link_path.with_extension("anvil-tmp"),
+    };
     // Remove stale temp if present.
     let _ = std::fs::remove_file(&tmp);
 
@@ -443,6 +477,17 @@ pub fn install_github_inner(
         return Err(InstallError::UnsupportedMethod("not a github method"));
     };
 
+    // `install_github_inner` is public and can be reached without going
+    // through `install_blocking`, so re-validate the two identifiers that are
+    // joined into filesystem paths below (staging dir, checksum sidecar,
+    // extract/symlink paths).
+    if !is_safe_component(name) {
+        return Err(InstallError::PathEscape(name.to_string()));
+    }
+    if !is_safe_component(&spec.bin) {
+        return Err(InstallError::PathEscape(spec.bin.clone()));
+    }
+
     // 1. Detect triple → resolve expected sha (manifest pin | cached TOFU | first-time TOFU).
     let triple = host_triple()?;
     let expected = resolve_expected_sha(gh, name, &spec.version, triple)?;
@@ -497,6 +542,12 @@ pub fn install_github_inner(
     // 5. Extract.
     progress(InstallStatus::Extracting);
     let extract_dir = staging_dir.join("extract");
+    // A previous failed install may have left a partial tree here; extracting
+    // on top of it would merge stale files into the final package (and
+    // `find_bin` could pick up a stale binary).
+    if extract_dir.exists() {
+        std::fs::remove_dir_all(&extract_dir)?;
+    }
     std::fs::create_dir_all(&extract_dir)?;
     extract_archive(&dl_path, ext, &extract_dir, &spec.bin)?;
 
@@ -739,6 +790,10 @@ impl Install for CargoInstaller {
             return Err(InstallError::UnsupportedMethod("not a cargo method"));
         };
 
+        // `crate_name` is passed to `cargo install` as a positional argument;
+        // an option-like value (e.g. `--path=…`) would be argument injection.
+        reject_option_like(&cargo.crate_name)?;
+
         // 1. Build the install root.
         let install_root = store::package_dir(name)?;
         std::fs::create_dir_all(&install_root)?;
@@ -831,6 +886,10 @@ impl Install for NpmInstaller {
             return Err(InstallError::UnsupportedMethod("not an npm method"));
         };
 
+        // `package` becomes the `<pkg>@<version>` positional argument; an
+        // option-like value (e.g. `-g`) would be argument injection.
+        reject_option_like(&npm.package)?;
+
         // 1. Prepare package directory.
         let pkg_dir = store::package_dir(name)?;
         let node_modules_bin = pkg_dir.join("node_modules").join(".bin");
@@ -886,6 +945,10 @@ impl Install for PipInstaller {
         let InstallMethod::Pip(ref pip) = spec.method else {
             return Err(InstallError::UnsupportedMethod("not a pip method"));
         };
+
+        // `package` becomes the `<pkg>==<version>` positional argument; an
+        // option-like value would be argument injection into pip.
+        reject_option_like(&pip.package)?;
 
         let pkg_dir = store::package_dir(name)?;
         let venv_dir = pkg_dir.join("venv");
@@ -945,6 +1008,10 @@ impl Install for GoInstaller {
         let InstallMethod::GoInstall(ref go) = spec.method else {
             return Err(InstallError::UnsupportedMethod("not a goinstall method"));
         };
+
+        // `module` becomes the `<module>@<version>` positional argument; an
+        // option-like value would be argument injection into `go install`.
+        reject_option_like(&go.module)?;
 
         // 1. Prepare isolated GOBIN directory.
         let pkg_dir = store::package_dir(name)?;
@@ -1157,6 +1224,98 @@ mod tests {
         );
     }
 
+    // ── unsafe tool names / option-like package args ──────────────────────────
+
+    #[test]
+    fn install_blocking_rejects_unsafe_tool_name() {
+        // The tool name is joined into the staging and checksum-sidecar paths
+        // before store::package_dir validates it — it must be rejected up
+        // front, before any I/O.
+        let spec = make_cargo_spec("taplo");
+        for name in ["../evil", "a/b", "/abs", "..", "."] {
+            let err = install_blocking(name, &spec, &|_| {}).unwrap_err();
+            assert!(
+                matches!(err, InstallError::PathEscape(_)),
+                "{name:?}: expected PathEscape, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn install_github_inner_rejects_unsafe_tool_name() {
+        let triple = match host_triple() {
+            Ok(t) => t,
+            Err(_) => return, // skip on unsupported platform
+        };
+        let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+        let err = install_github_inner("../evil", &spec, stub_download("hello.tar.gz"), &|_| {})
+            .unwrap_err();
+        assert!(
+            matches!(err, InstallError::PathEscape(_)),
+            "expected PathEscape, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn subprocess_installers_reject_option_like_package_ids() {
+        use crate::manifest::{CargoMethod, GoMethod, NpmMethod, PipMethod};
+        let mk = |method: InstallMethod| ToolSpec {
+            category: ToolCategory::Lsp,
+            description: "test".to_string(),
+            version: "1.0".to_string(),
+            bin: "safe-bin".to_string(),
+            method,
+        };
+        let specs = [
+            mk(InstallMethod::Cargo(CargoMethod {
+                crate_name: "--path=/tmp/evil".to_string(),
+            })),
+            mk(InstallMethod::Npm(NpmMethod {
+                package: "-g".to_string(),
+            })),
+            mk(InstallMethod::Pip(PipMethod {
+                package: "--index-url=https://evil.example".to_string(),
+            })),
+            mk(InstallMethod::GoInstall(GoMethod {
+                module: "-x".to_string(),
+            })),
+            mk(InstallMethod::Cargo(CargoMethod {
+                crate_name: String::new(),
+            })),
+        ];
+        for spec in &specs {
+            let err = install_blocking("safe-name", spec, &|_| {}).unwrap_err();
+            assert!(
+                matches!(err, InstallError::OptionLike(_)),
+                "expected OptionLike for {:?}, got {err:?}",
+                spec.method
+            );
+        }
+    }
+
+    // ── atomic_symlink staging-name isolation ─────────────────────────────────
+
+    /// The symlink staging path must be derived by appending to the full file
+    /// name — `with_extension("tmp")` would map `hello` to `hello.tmp`, which
+    /// can be another tool's live symlink and would be deleted.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_symlink_does_not_delete_neighbor_dot_tmp_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target-bin");
+        std::fs::write(&target, b"#!/bin/sh\n").unwrap();
+
+        // Simulate another tool whose bin symlink is literally `hello.tmp`.
+        let neighbor = tmp.path().join("hello.tmp");
+        std::fs::write(&neighbor, b"neighbor").unwrap();
+
+        let link = tmp.path().join("hello");
+        atomic_symlink(&link, &target).unwrap();
+
+        assert!(neighbor.exists(), "hello.tmp must not be deleted");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    }
+
     // ── checksum mismatch ─────────────────────────────────────────────────────
 
     #[test]
@@ -1323,6 +1482,51 @@ mod tests {
             statuses
                 .iter()
                 .any(|s| matches!(s, InstallStatus::Done { .. }))
+        );
+    }
+
+    /// A stale extract tree left by a previous failed install must not leak
+    /// files into the final package.
+    #[cfg(unix)]
+    #[test]
+    fn stale_extract_dir_is_cleared_before_extraction() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let data_dir = tempfile::tempdir().unwrap();
+        let cache_dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data_dir.path());
+            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
+        }
+
+        // Simulate a leftover partial extraction from a failed run.
+        let stale = cache_dir
+            .path()
+            .join("anvil")
+            .join("staging")
+            .join("hello")
+            .join("extract")
+            .join("stale.txt");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, b"stale").unwrap();
+
+        let triple = host_triple().unwrap();
+        let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|_| {});
+
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+
+        result.expect("pipeline must succeed");
+        let final_pkg = data_dir.path().join("anvil").join("packages").join("hello");
+        assert!(
+            final_pkg.join("bin").join("hello").exists(),
+            "fresh bin must be installed"
+        );
+        assert!(
+            !final_pkg.join("stale.txt").exists(),
+            "stale extract content must not leak into the final package"
         );
     }
 
