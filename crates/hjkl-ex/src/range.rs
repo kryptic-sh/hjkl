@@ -44,8 +44,11 @@ fn parse_address(s: &str) -> Option<(Address, &str)> {
         '.' => Some((Address::Current, &s[1..])),
         '$' => Some((Address::Last, &s[1..])),
         '\'' => {
-            let (_, mark) = chars.next()?;
-            Some((Address::Mark(mark), &s[2..]))
+            // The mark char may be multibyte (e.g. `:'é`); slice at its real
+            // byte boundary rather than a hard-coded `2` to avoid a
+            // char-boundary panic that would crash the editor.
+            let (mark_start, mark) = chars.next()?;
+            Some((Address::Mark(mark), &s[mark_start + mark.len_utf8()..]))
         }
         '0'..='9' => {
             let mut end = 1;
@@ -178,6 +181,16 @@ mod tests {
     fn parse(cmd: &str) -> Result<(Option<(usize, usize)>, String), String> {
         let e = make_editor();
         parse_range(cmd, &e).map(|(r, rest)| (r.map(|lr| (lr.start, lr.end)), rest.to_owned()))
+    }
+
+    #[test]
+    fn multibyte_mark_does_not_panic() {
+        // Regression: `&s[2..]` assumed a 1-byte mark; a multibyte mark char
+        // (`:'é`) sliced mid-char and crashed the editor. Must resolve
+        // gracefully (unknown mark → error) rather than panic.
+        let _ = parse("'é");
+        let _ = parse("'あx");
+        let _ = parse("'😀,5");
     }
 
     #[test]
