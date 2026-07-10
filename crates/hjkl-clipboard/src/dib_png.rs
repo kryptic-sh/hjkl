@@ -334,12 +334,29 @@ pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         return Err(bad("PNG has zero dimension"));
     }
 
-    // --- Inflate IDAT (zlib-wrapped deflate) ---
-    let raw = miniz_oxide::inflate::decompress_to_vec_zlib(&idat_data)
+    // Compute the exact decompressed size with checked arithmetic (attacker
+    // controls width/height; the naive `width * channels` and `height * …`
+    // products would otherwise overflow `usize` on huge dimensions), and bound
+    // it: a tiny IDAT can inflate to gigabytes (decompression bomb), and a
+    // header can advertise enormous dimensions. Clipboard images are modest, so
+    // reject anything past a generous ceiling before allocating.
+    const MAX_DECOMPRESSED: usize = 128 * 1024 * 1024; // 128 MiB
+    let row_bytes = (width as usize)
+        .checked_mul(channels)
+        .ok_or_else(|| bad("PNG dimensions too large"))?;
+    let expected = (1usize)
+        .checked_add(row_bytes)
+        .and_then(|per_row| per_row.checked_mul(height as usize)) // 1 filter byte per row
+        .ok_or_else(|| bad("PNG dimensions too large"))?;
+    if expected > MAX_DECOMPRESSED {
+        return Err(bad("PNG too large"));
+    }
+
+    // --- Inflate IDAT (zlib-wrapped deflate), capped at the expected size so a
+    // bomb cannot allocate beyond it. ---
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat_data, expected)
         .map_err(|_| bad("PNG IDAT deflate error"))?;
 
-    let row_bytes = width as usize * channels;
-    let expected = height as usize * (1 + row_bytes); // 1 filter byte per row
     if raw.len() != expected {
         return Err(bad("PNG IDAT decompressed size mismatch"));
     }
@@ -631,6 +648,34 @@ mod tests {
     // -----------------------------------------------------------------------
     // Round-trip tests
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn rejects_decompression_bomb_dimensions() {
+        // A tiny IDAT with an IHDR claiming huge dimensions must be rejected
+        // fast (before allocating), not inflate to gigabytes or panic on
+        // overflow. Build a valid-looking PNG with 65535x65535 RGBA and a
+        // small (mismatched) IDAT.
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&65535u32.to_be_bytes()); // width
+        ihdr.extend_from_slice(&65535u32.to_be_bytes()); // height
+        ihdr.push(8); // bit depth
+        ihdr.push(PNG_COLOR_RGBA);
+        ihdr.push(0);
+        ihdr.push(0);
+        ihdr.push(0);
+        let idat = miniz_oxide::deflate::compress_to_vec_zlib(
+            &[0u8; 32],
+            miniz_oxide::deflate::CompressionLevel::DefaultLevel as u8,
+        );
+        let mut png = Vec::new();
+        png.extend_from_slice(&PNG_SIGNATURE);
+        write_chunk(&mut png, b"IHDR", &ihdr);
+        write_chunk(&mut png, b"IDAT", &idat);
+        write_chunk(&mut png, b"IEND", &[]);
+
+        let err = png_to_dib(&png);
+        assert!(err.is_err(), "oversized PNG must be rejected, not inflated");
+    }
 
     #[test]
     fn rgba_2x2_round_trip() {

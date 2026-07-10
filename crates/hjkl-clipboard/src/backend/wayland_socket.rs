@@ -72,7 +72,16 @@ impl WaylandSocket {
 
         let (hdr, _) = parse_message_header(contiguous)?;
         let total = hdr.size as usize;
-        if contiguous.len() < total {
+        // A well-formed Wayland message is at least its 8-byte header. A smaller
+        // advertised size is malformed (buggy or hostile compositor / corrupted
+        // stream); slicing `msg_bytes[8..]` would then panic. Drop the 8 header
+        // bytes we peeked to make forward progress instead of trusting `total`.
+        if total < 8 {
+            let drop = 8.min(self.rx_buf.len());
+            self.rx_buf.drain(..drop);
+            return None;
+        }
+        if self.rx_buf.len() < total {
             return None;
         }
 
