@@ -30,6 +30,27 @@ use unicode_width::UnicodeWidthChar;
 use hjkl_buffer::wrap::wrap_segments;
 use hjkl_buffer::{Buffer, Selection, Span, Viewport, Wrap};
 
+/// Map a C0/C1 control character or DEL to a printable, single-width glyph so
+/// raw terminal escape sequences embedded in a file (e.g. `ESC`, OSC 52
+/// clipboard writes, title-spoofing) can never reach the terminal when the
+/// buffer is rendered. Tabs are handled separately by the caller and pass
+/// through unchanged; all other (printable) characters are returned as-is.
+///
+/// C0 controls map to the Unicode "Control Pictures" block (U+2400..=U+241F),
+/// DEL to U+2421 (␡). Both are width-1 — matching the `ch.width().unwrap_or(1)`
+/// the width calculation already assigns to control chars — so no column or
+/// cursor math shifts. C1 controls (0x80..=0x9F) have no picture glyph and fall
+/// back to the replacement character.
+fn sanitize_control(ch: char) -> char {
+    match ch {
+        '\t' => ch,
+        '\0'..='\u{1f}' => char::from_u32(0x2400 + ch as u32).unwrap_or('\u{fffd}'),
+        '\u{7f}' => '\u{2421}',
+        '\u{80}'..='\u{9f}' => '\u{fffd}',
+        _ => ch,
+    }
+}
+
 /// Resolves an opaque [`hjkl_buffer::Span::style`] id to a real ratatui
 /// style. The buffer doesn't know about colours; the host (sqeel-vim
 /// or any future user) keeps a lookup table.
@@ -1378,11 +1399,11 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     ch
                 };
                 if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
-                    cell.set_char(display_ch);
+                    cell.set_char(sanitize_control(display_ch));
                     cell.set_style(style);
                 }
             } else if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
-                cell.set_char(ch);
+                cell.set_char(sanitize_control(ch));
                 cell.set_style(style);
             }
             screen_x += width;
@@ -1499,6 +1520,28 @@ mod tests {
     use super::*;
     use ratatui::style::{Color, Modifier};
     use ratatui::widgets::Widget;
+
+    #[test]
+    fn sanitize_control_neutralizes_escape_sequences() {
+        // ESC and other C0 controls must never render verbatim (OSC 52
+        // clipboard hijack, title spoofing). They map to width-1 Control
+        // Pictures glyphs.
+        assert_eq!(sanitize_control('\u{1b}'), '\u{241b}'); // ESC → ␛
+        assert_eq!(sanitize_control('\0'), '\u{2400}'); // NUL → ␀
+        assert_eq!(sanitize_control('\u{07}'), '\u{2407}'); // BEL → ␇
+        assert_eq!(sanitize_control('\u{7f}'), '\u{2421}'); // DEL → ␡
+        assert_eq!(sanitize_control('\u{9b}'), '\u{fffd}'); // C1 CSI → replacement
+        // Tab is handled by the caller and passes through.
+        assert_eq!(sanitize_control('\t'), '\t');
+        // Printable text is untouched, including wide/unicode.
+        for ch in ['a', 'Z', '9', ' ', 'é', '世', '🦀'] {
+            assert_eq!(sanitize_control(ch), ch);
+        }
+        // Every replacement is single-width, matching the width calculation.
+        for c in ['\u{1b}', '\0', '\u{7f}', '\u{9b}'] {
+            assert_eq!(sanitize_control(c).width().unwrap_or(1), 1);
+        }
+    }
 
     #[test]
     fn diff_filler_screen_offset_accounts_for_inserted_rows() {
