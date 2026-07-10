@@ -317,7 +317,7 @@ impl crate::app::App {
 
         let output = match backend {
             GrepBackend::Rg => std::process::Command::new("rg")
-                .args(["--json", "--no-config", "--smart-case", pat, root_str])
+                .args(["--json", "--no-config", "--smart-case", "--", pat, root_str])
                 .output(),
             GrepBackend::Grep => std::process::Command::new("grep")
                 .args(["-rnH", "--", pat, root_str])

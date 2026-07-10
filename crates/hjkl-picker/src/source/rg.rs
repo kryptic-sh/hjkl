@@ -393,6 +393,7 @@ impl PickerLogic for RgSource {
                                 "--smart-case",
                                 "--max-count",
                                 "200",
+                                "--",
                                 &q,
                                 root.to_str().unwrap_or("."),
                             ])
@@ -478,6 +479,7 @@ impl PickerLogic for RgSource {
                                 "-rn",
                                 "-E",
                                 "--color=never",
+                                "--",
                                 &q,
                                 root.to_str().unwrap_or("."),
                             ])
