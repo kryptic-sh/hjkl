@@ -450,9 +450,13 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // clone ~50 rows instead of the entire Vec<String>. Closed folds
         // can skip past the precomputed bound — the rare overflow branch
         // falls back to `Buffer::line(row)`.
-        let total_rows = self.buffer.row_count();
-        let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
         let rope = self.buffer.rope();
+        // Derive the row count from the same rope snapshot the line fetches
+        // use. `row_count()` takes a separate lock; another view mutating the
+        // shared Content between the two reads could leave a stale count and
+        // panic `rope.line()` past the snapshot's last line.
+        let total_rows = rope.len_lines();
+        let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
         let lines_prefetch: Vec<String> = (top_row..prefetch_end)
             .map(|i| hjkl_buffer::rope_line_str(&rope, i))
             .collect();
@@ -596,7 +600,9 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     screen_to_doc[screen_row as usize] = Some(doc_row);
                 }
                 screen_row += 1;
-                doc_row = fold.end_row + 1;
+                // Saturating: `folds_override` is host data and may carry
+                // `end_row == usize::MAX`.
+                doc_row = fold.end_row.saturating_add(1);
                 continue;
             }
             let search_ranges = self.row_search_ranges(line);
@@ -688,16 +694,16 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let line = line_at(doc);
                 let text_cols = display_width(&line, tab_width);
                 let start_vis = text_cols.saturating_sub(top_col);
-                // 2-col gap after the text.
-                let x = text_area
-                    .x
-                    .saturating_add(start_vis as u16)
-                    .saturating_add(2);
-                let y = text_area.y + sr as u16;
-                let right = text_area.x + text_area.width;
-                if x >= right {
+                // 2-col gap after the text. Compare in usize before casting:
+                // `start_vis as u16` truncates on very long lines and would
+                // paint the hint over the row's text.
+                let x_off = start_vis.saturating_add(2);
+                if x_off >= text_area.width as usize {
                     continue; // no room
                 }
+                let x = text_area.x + x_off as u16;
+                let y = text_area.y + sr as u16;
+                let right = text_area.x + text_area.width;
                 for (i, ch) in hint.text.chars().enumerate() {
                     let cx = x + i as u16;
                     if cx >= right {
@@ -789,7 +795,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     .copied()
                 {
                     ig_screen_row += 1;
-                    ig_doc_row = fold.end_row + 1;
+                    ig_doc_row = fold.end_row.saturating_add(1);
                     continue;
                 }
                 let line_owned = line_at(ig_doc_row);
@@ -939,6 +945,11 @@ impl<R: StyleResolver> BufferView<'_, R> {
             match item {
                 BlameRow::Content(dr) => {
                     let dr = *dr;
+                    if dr >= rope.len_lines() {
+                        // Stale host plan (buffer shrank since it was built):
+                        // never index past the rope snapshot.
+                        continue;
+                    }
                     let line_owned = hjkl_buffer::rope_line_str(&rope, dr);
                     let line: &str = line_owned.as_str();
                     let row_spans = self.spans.get(dr).map(Vec::as_slice).unwrap_or(&[]);
@@ -1446,10 +1457,13 @@ impl<R: StyleResolver> BufferView<'_, R> {
         {
             let (start_col, end_col) = if hi == usize::MAX { (0, 0) } else { (lo, hi) };
             for col in start_col..=end_col {
-                let pad_x = area.x + col as u16;
-                if pad_x >= row_end_x {
+                // Compare in usize before casting: `col as u16` truncates for
+                // block selections on >64K-char columns, which would wrap
+                // `pad_x` back inside the row and defeat the bounds check.
+                if col >= area.width as usize {
                     break;
                 }
+                let pad_x = area.x + col as u16;
                 if let Some(cell) = term_buf.cell_mut((pad_x, y)) {
                     let prev = cell.style();
                     cell.set_char(' ');
@@ -1467,9 +1481,12 @@ impl<R: StyleResolver> BufferView<'_, R> {
             && cursor_col >= line.chars().count()
             && cursor_col >= seg_start
         {
-            let pad_x = area.x + (cursor_col.saturating_sub(seg_start)) as u16;
-            if pad_x < row_end_x
-                && let Some(cell) = term_buf.cell_mut((pad_x, y))
+            // Compare in usize before casting: on a >64K-char line the u16
+            // cast truncates, painting a phantom cursor cell mid-row (and
+            // overflowing `area.x + …` in debug builds).
+            let dx = cursor_col - seg_start;
+            if dx < area.width as usize
+                && let Some(cell) = term_buf.cell_mut((area.x + dx as u16, y))
             {
                 cell.set_char(' ');
                 cell.set_style(self.cursor_line_bg.patch(self.cursor_style));
@@ -1587,6 +1604,68 @@ mod tests {
             wrap: Wrap::None,
             text_width: width,
             tab_width: 0,
+        }
+    }
+
+    /// Regression: the past-EOL cursor placeholder cast
+    /// `cursor_col - seg_start` to u16 before bounds-checking. On a >64K-char
+    /// line the cast truncated — overflowing `area.x + …` in debug builds and
+    /// painting a phantom cursor cell mid-row in release builds.
+    #[test]
+    fn cursor_past_end_on_very_long_line_does_not_overflow() {
+        let line = "a".repeat(65_530);
+        let mut b = Buffer::from_str(&line);
+        b.set_cursor(hjkl_buffer::Position::new(0, 65_530));
+        let v = vp(20, 1);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_line_row: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
+            folds_override: None,
+            eol_hints: &[],
+            blame_plan: None,
+            diff_filler: None,
+        };
+        // Non-zero area.x so the old `area.x + truncated_dx` overflowed u16.
+        let area = Rect::new(100, 0, 20, 1);
+        let mut term = TermBuffer::empty(area);
+        view.render(area, &mut term);
+        // Cursor is far right of the un-scrolled viewport: no cell on the
+        // visible row may carry the REVERSED phantom-cursor modifier.
+        for x in 100..120 {
+            assert!(
+                !term
+                    .cell((x, 0))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "phantom cursor cell painted at x={x}"
+            );
         }
     }
 

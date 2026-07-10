@@ -181,6 +181,9 @@ pub fn apply_listchars<'a>(
         return std::borrow::Cow::Borrowed(line);
     }
 
+    // Guard against a zero tabstop from the host — `col % 0` panics.
+    let tabstop = tabstop.max(1);
+
     // Find the index of the first trailing whitespace char.
     // "trailing whitespace" = spaces/tabs at the end of the line that would
     // be rendered with `trail` glyph.
@@ -398,6 +401,15 @@ mod tests {
         let lc = ListChars::parse("tab:>-,nbsp:_").unwrap();
         let result = apply_listchars("a\u{00a0}b", &lc, true, 4);
         assert_eq!(result.as_ref(), "a_b");
+    }
+
+    /// Regression: `tabstop == 0` used to hit `col % 0` and panic when the
+    /// line contained a tab. Zero is normalised to 1.
+    #[test]
+    fn apply_listchars_tabstop_zero_does_not_panic() {
+        let lc = ListChars::parse("tab:>-").unwrap();
+        let result = apply_listchars("\tx", &lc, true, 0);
+        assert_eq!(result.as_ref(), ">x");
     }
 
     #[test]

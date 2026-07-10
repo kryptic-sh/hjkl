@@ -366,15 +366,22 @@ impl Buffer {
             return None;
         }
         let c = self.content.lock().unwrap();
+        // Clamp against the live rope: another view sharing this Content may
+        // have removed rows since this view's cursor was last clamped, and
+        // `rope.line(r)` panics past the last line.
+        let cursor_row = cursor.row.min(c.text.len_lines().saturating_sub(1));
+        if cursor_row < top {
+            return None;
+        }
         let v = *viewport;
         let mut screen = 0usize;
-        for r in top..=cursor.row {
+        for r in top..=cursor_row {
             if c.folds.iter().any(|f| f.hides(r)) {
                 continue;
             }
             let line = rope_line_str(&c.text, r);
             let segs = crate::wrap::wrap_segments(&line, v.text_width, v.wrap);
-            if r == cursor.row {
+            if r == cursor_row {
                 let seg_idx = crate::wrap::segment_for_col(&segs, cursor.col);
                 return Some(screen + seg_idx);
             }
@@ -622,7 +629,11 @@ pub(crate) fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
 }
 
 /// Char index from `(row, col)` where `col` is a char index within the line.
+/// Both coordinates are clamped to the rope's bounds so a position that went
+/// stale (e.g. another view shrank the shared `Content` between the caller's
+/// clamp and this call) can never panic `line_to_char`.
 pub(crate) fn pos_to_char_idx(rope: &ropey::Rope, row: usize, col: usize) -> usize {
+    let row = row.min(rope.len_lines().saturating_sub(1));
     let line_start = rope.line_to_char(row);
     let line_char_count = rope_line_char_count(rope, row);
     line_start + col.min(line_char_count)
@@ -753,6 +764,24 @@ mod tests {
         assert_eq!(b.cursor_screen_row(&v), Some(1));
         b.set_cursor(Position::new(1, 0));
         assert_eq!(b.cursor_screen_row(&v), Some(3));
+    }
+
+    /// Regression: a view whose cursor went stale after another view shrank
+    /// the shared Content used to panic `rope.line()` inside
+    /// `cursor_screen_row_from`. The row must clamp to the live rope.
+    #[test]
+    fn cursor_screen_row_survives_shrink_from_other_view() {
+        let a = Buffer::from_str("a\nb\nc\nd\ne");
+        let arc = a.content_arc();
+        let mut view_a = Buffer::new_view(Arc::clone(&arc));
+        let mut view_b = Buffer::new_view(Arc::clone(&arc));
+        view_b.set_cursor(Position::new(4, 0));
+        // view_a truncates the document; view_b's cursor row 4 is now stale.
+        view_a.replace_all("a");
+        let v = vp_wrap(4, 3);
+        assert_eq!(view_b.cursor_screen_row(&v), Some(0));
+        let mut v2 = vp_wrap(4, 3);
+        view_b.ensure_cursor_visible(&mut v2); // must not panic
     }
 
     #[test]

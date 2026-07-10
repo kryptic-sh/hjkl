@@ -246,10 +246,13 @@ impl Buffer {
                 }
             }
             MotionKind::Line => {
-                let lo = start.row;
-                let (removed_text, new_cursor) = {
+                let (removed_text, new_cursor, lo) = {
                     let mut c = self.content.lock().unwrap();
                     let n = c.text.len_lines();
+                    // Clamp BOTH endpoints. An unclamped `lo` past the last
+                    // row underflows the `hi - lo + 1` capacity below and
+                    // panics `line_to_char(lo)`.
+                    let lo = start.row.min(n.saturating_sub(1));
                     let hi = end.row.min(n.saturating_sub(1));
 
                     // Collect the removed rows as a joined string (needed for inverse).
@@ -288,7 +291,7 @@ impl Buffer {
                         s.push('\n');
                         s
                     };
-                    (removed_joined, Position::new(target_row, 0))
+                    (removed_joined, Position::new(target_row, 0), lo)
                 };
                 self.dirty_gen_bump();
                 self.set_cursor(new_cursor);
@@ -624,6 +627,21 @@ mod tests {
                 with: "QUUX".into(),
             },
         );
+    }
+
+    /// Regression: a linewise delete whose START row lies past the last
+    /// buffer row used to underflow `hi - lo + 1` (capacity math) and panic
+    /// `line_to_char(lo)`. Both endpoints must clamp to the last row.
+    #[test]
+    fn delete_linewise_start_past_end_is_clamped() {
+        let mut b = Buffer::from_str("a\nb\nc");
+        b.apply_edit(Edit::DeleteRange {
+            start: Position::new(10, 0),
+            end: Position::new(20, 0),
+            kind: MotionKind::Line,
+        });
+        // Clamps to the last row and removes it.
+        assert_eq!(b.as_string(), "a\nb");
     }
 
     #[test]
