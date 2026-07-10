@@ -8,6 +8,12 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- Parsing a `'<mark>` range address no longer panics on a multibyte mark
+  character (e.g. `:'é`); the address is sliced at the mark's real byte boundary
+  instead of a hard-coded 2-byte offset.
+
 ## [0.5.1] - 2026-05-18
 
 ### Fixed

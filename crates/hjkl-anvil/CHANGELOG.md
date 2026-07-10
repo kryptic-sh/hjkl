@@ -7,6 +7,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 
 ## [Unreleased]
 
+### Security
+
+- `store::package_dir` rejects any tool name that is not a single safe path
+  component, so a caller-supplied name containing `..` or an absolute path can
+  no longer resolve outside `packages/` and reach `remove_dir_all`. Likewise
+  `install_blocking` validates `spec.bin` before it is joined into the extract
+  directory and the flat `bin/` symlink directory.
+
+### Fixed
+
+- `real_download` calls `error_for_status`, so a non-2xx HTTP response (e.g. a
+  GitHub 404/500 body) is no longer written to the staging file and hashed —
+  under TOFU its hash would otherwise be recorded as the trusted checksum, or a
+  raw-binary asset installed from the error body.
+- Removed a `&line[..200]` truncation of subprocess stderr that panicked when a
+  non-ASCII byte fell on the 200-byte boundary (the truncated value was also
+  unused).
+
 ## [0.2.4] - 2026-05-17
 
 ### Fixed

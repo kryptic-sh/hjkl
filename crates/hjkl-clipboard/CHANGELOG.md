@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `WaylandSocket::next_message` rejects a message header advertising a size
+  smaller than the 8-byte header instead of slicing out of bounds and panicking
+  on a malformed or hostile stream.
+- `png_to_dib` bounds the decompressed image size — checked size arithmetic, a
+  128 MiB ceiling, and a limit-bounded inflate — so a small malicious clipboard
+  PNG can no longer inflate to gigabytes or overflow the row/size math.
+
 ## [0.5.5] - 2026-05-18
 
 ### Fixed

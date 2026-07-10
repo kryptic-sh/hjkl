@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- The live-grep source passes the user query after a `--` separator for both the
+  ripgrep and grep backends, so a query beginning with `-` can no longer be
+  interpreted as an option (e.g. ripgrep's `--pre=<cmd>`, which runs an
+  arbitrary command).
+
 ## [0.9.1] - 2026-05-18
 
 ### Changed

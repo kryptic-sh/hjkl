@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `wrap::wrap_segments` no longer loops forever (growing an unbounded `Vec`
+  until the process runs out of memory) when a single character is wider than
+  the wrap width — e.g. a double-width CJK/emoji character in a 1-cell text
+  area. The oversized character is emitted as its own segment so wrapping always
+  makes forward progress.
+
 ### Removed
 
 - Dropped the `ratatui` feature and `render` module. The ratatui Widget adapter

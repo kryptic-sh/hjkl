@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Control characters in rendered buffer text are neutralized: C0/C1 controls and
+  DEL now map to visible single-width glyphs (the Unicode Control Pictures
+  block) instead of being written to the terminal verbatim. Previously a file
+  containing raw escape sequences (OSC 52 clipboard writes, title spoofing, and
+  other terminal control) could act on the host terminal merely by being
+  displayed. The replacement glyphs are single-width, matching the width already
+  assigned to control characters, so no column or cursor math changes.
+
 ## [0.25.0] - 2026-05-18
 
 ### Added

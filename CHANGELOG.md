@@ -8,6 +8,38 @@ patch bumps.
 
 ## [Unreleased]
 
+### Security
+
+- **Blocked ripgrep/grep option injection in `:grep`**: the quickfix `:grep` /
+  `:lgrep` pattern is now passed after a `--` separator, so a pattern beginning
+  with `-` can no longer be parsed as an option (e.g. ripgrep's `--pre=<cmd>`,
+  which executes an arbitrary command). The live-grep picker was fixed the same
+  way. See also `hjkl-picker`.
+- **Terminal escape sequences in file contents are now neutralized on render**:
+  the buffer view mapped raw bytes straight into terminal cells, so a file
+  containing control sequences (e.g. an OSC 52 clipboard write or a title-spoof)
+  took effect merely from viewing it. C0/C1 control characters and DEL now
+  render as visible single-width glyphs. See `hjkl-buffer-tui`.
+- **Explorer reconcile can no longer escape its root**: a buffer line naming
+  `../evil` (or an absolute path) had the name joined onto the parent verbatim,
+  letting a create/rename/trash op target a path outside the explorer tree.
+  Names with parent-dir, root, or drive-prefix components are now rejected;
+  internal slashes for nested creation are still allowed.
+
+### Fixed
+
+- **Swap files are created owner-only (`0600`)** on Unix, and the swap directory
+  `0700`. They hold unsaved buffer contents (potentially credentials or private
+  keys) and were previously world-readable in a traversable cache directory.
+
+### Internal
+
+- Made the `hjkl` app's explorer/render tests deterministic under a parallel
+  `cargo test` run (they raced on process-global `set_current_dir`,
+  `XDG_CACHE_HOME`, and a pid-keyed scratch directory; `cargo nextest`, which
+  isolates each test in its own process, was unaffected). Added a `test_cwd`
+  module with `CwdGuard`/`EnvVarGuard` and a per-call unique scratch dir.
+
 ## [0.33.4] - 2026-07-09
 
 ### Fixed
@@ -20,8 +52,8 @@ patch bumps.
 
 ### Changed
 
-- **cargo-deny policy updates**: added `CDLA-Permissive-2.0` and `BSL-1.0` to the
-  license allow-list (transitive via `webpki-root-certs` and clipboard/error
+- **cargo-deny policy updates**: added `CDLA-Permissive-2.0` and `BSL-1.0` to
+  the license allow-list (transitive via `webpki-root-certs` and clipboard/error
   crates, respectively), and ignored the `ttf-parser` unmaintained advisory
   (floem GUI stack only; not linked into the TUI binary).
 - Dependency bumps for 68 crates across the workspace.
