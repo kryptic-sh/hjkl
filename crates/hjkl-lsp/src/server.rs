@@ -76,7 +76,7 @@ impl Server {
             .initialization_options
             .clone()
             .or_else(|| default_init_options(&cmd.command));
-        let capabilities = initialize_handshake(
+        let capabilities = match initialize_handshake(
             &key,
             &stdin_tx,
             stdout,
@@ -84,7 +84,17 @@ impl Server {
             pending.clone(),
             init_options.as_ref(),
         )
-        .await?;
+        .await
+        {
+            Ok(caps) => caps,
+            Err(e) => {
+                // Handshake failed (garbage frames, closed stdout, …) — kill
+                // and reap the child so it doesn't linger as an orphan.
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(e);
+            }
+        };
 
         // Spawn wait task so ServerExited is emitted when the child exits.
         spawn_wait_task(child, key.clone(), evt_tx);
@@ -244,7 +254,9 @@ async fn initialize_handshake(
         let val: Value = serde_json::from_slice(&raw)?;
 
         // Skip server-initiated requests/notifications before the response.
-        if val.get("id").and_then(Value::as_i64) == Some(0) {
+        // A response has an `id` and no `method`; the `method` check matters
+        // because a server-initiated *request* may legally also use id 0.
+        if val.get("id").and_then(Value::as_i64) == Some(0) && val.get("method").is_none() {
             // This is our initialize response.
             if let Some(err) = val.get("error") {
                 bail!("initialize error: {err}");
@@ -431,24 +443,35 @@ fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>, pend
 }
 
 /// Task: read stderr lines and log them as warnings.
+///
+/// Each read is capped so a server spewing an endless line with no newline
+/// cannot grow the buffer without bound (overlong lines are logged in
+/// chunks), and non-UTF-8 output is logged lossily instead of killing the
+/// logger task.
 async fn stderr_task<R: tokio::io::AsyncRead + Unpin>(stderr: R, lang: String) {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    const MAX_LINE_BYTES: u64 = 8 * 1024;
     let mut reader = BufReader::new(stderr);
-    let mut line = String::new();
+    let mut buf = Vec::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim_end();
-                if !trimmed.is_empty() {
-                    tracing::warn!(lang, "LSP stderr: {trimmed}");
+        buf.clear();
+        let n = {
+            let mut limited = (&mut reader).take(MAX_LINE_BYTES);
+            match limited.read_until(b'\n', &mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::debug!(lang, "LSP stderr read error: {e}");
+                    break;
                 }
             }
-            Err(e) => {
-                tracing::debug!(lang, "LSP stderr read error: {e}");
-                break;
-            }
+        };
+        if n == 0 {
+            break;
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let trimmed = text.trim_end();
+        if !trimmed.is_empty() {
+            tracing::warn!(lang, "LSP stderr: {trimmed}");
         }
     }
 }

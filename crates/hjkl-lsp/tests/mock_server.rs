@@ -399,6 +399,128 @@ async fn request_response_roundtrip() {
     .expect("request_response_roundtrip timed out");
 }
 
+/// A server-initiated request that happens to use id 0 (servers number their
+/// own requests independently) must NOT be mistaken for the initialize
+/// response — the real response that follows carries the capabilities.
+#[tokio::test(flavor = "current_thread")]
+async fn server_request_with_id_zero_not_mistaken_for_init_response() {
+    tokio::time::timeout(Duration::from_millis(500), async {
+        let (client_io, driver_io) = duplex(64 * 1024);
+        let (evt_tx, _evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+        let key = ServerKey {
+            language: "rust".to_string(),
+            root: workspace_root("id0-workspace"),
+        };
+
+        let (driver_read, mut driver_write) = tokio::io::split(driver_io);
+        let mut driver_reader = BufReader::with_capacity(256 * 1024, driver_read);
+        let (client_read, client_write) = tokio::io::split(client_io);
+
+        let server_task = tokio::spawn({
+            let key = key.clone();
+            async move {
+                hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx)
+                    .await
+            }
+        });
+
+        let req = read_json(&mut driver_reader).await;
+        let req_id = req["id"].as_i64().unwrap();
+
+        // Server-initiated request with id 0 BEFORE the initialize response.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "window/workDoneProgress/create",
+                "params": { "token": "rustAnalyzer/Indexing" }
+            }),
+        )
+        .await;
+
+        // Now the real initialize response.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": { "capabilities": { "hoverProvider": true } }
+            }),
+        )
+        .await;
+
+        let notif = read_json(&mut driver_reader).await;
+        assert_eq!(notif["method"], "initialized");
+
+        let server = server_task.await.unwrap().unwrap();
+        assert_eq!(
+            server.capabilities["hoverProvider"], true,
+            "capabilities must come from the initialize response, \
+             not the server-initiated id-0 request"
+        );
+    })
+    .await
+    .expect("server_request_with_id_zero_not_mistaken_for_init_response timed out");
+}
+
+/// When the initialize handshake fails (server emits a garbage frame), the
+/// spawned child process must be killed rather than left running.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn spawn_kills_child_on_handshake_failure() {
+    use hjkl_lsp::{Server, ServerConfig};
+
+    let pid_file =
+        std::env::temp_dir().join(format!("hjkl-lsp-test-kill-{}.pid", std::process::id()));
+    let _ = std::fs::remove_file(&pid_file);
+
+    // Fake server: record pid, emit a framed non-JSON payload, then hang.
+    let script = format!(
+        "echo $$ > {}; printf 'Content-Length: 3\\r\\n\\r\\nxyz'; exec sleep 30",
+        pid_file.display()
+    );
+    let cfg = ServerConfig {
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), script],
+        root_markers: vec![],
+        shutdown_idle_after_secs: 0,
+        initialization_options: None,
+    };
+    let key = ServerKey {
+        language: "sh".to_string(),
+        root: workspace_root("kill-workspace"),
+    };
+    let (evt_tx, _evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), Server::spawn(key, &cfg, evt_tx))
+        .await
+        .expect("Server::spawn did not fail promptly");
+    assert!(result.is_err(), "handshake on garbage frame must fail");
+
+    // The child must be dead (killed + reaped, or at worst a zombie).
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .expect("fake server never started")
+        .trim()
+        .parse()
+        .unwrap();
+    let _ = std::fs::remove_file(&pid_file);
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+    let alive = match stat {
+        Err(_) => false, // process gone
+        Ok(s) => {
+            // state char follows the parenthesized comm field
+            let state = s.rsplit(')').next().unwrap_or("").trim().chars().next();
+            state != Some('Z') // zombie counts as dead
+        }
+    };
+    assert!(
+        !alive,
+        "child process {pid} still running after failed handshake"
+    );
+}
+
 /// When the mock server replies with a JSON-RPC error, the response arrives
 /// as `LspEvent::Response { result: Err(RpcError { .. }) }`.
 #[tokio::test(flavor = "current_thread")]
