@@ -7,8 +7,8 @@ non-trivial PR so the design can be sanity-checked early.
 ## Development setup
 
 ```bash
-git clone git@github.com:kryptic-sh/hjkl-clipboard.git
-cd hjkl-clipboard
+git clone git@github.com:kryptic-sh/hjkl.git
+cd hjkl
 rustup toolchain install stable
 cargo test --all-features
 ```

@@ -7,8 +7,8 @@ so the design can be sanity-checked early.
 ## Development setup
 
 ```bash
-git clone git@github.com:kryptic-sh/hjkl-keymap.git
-cd hjkl-keymap
+git clone git@github.com:kryptic-sh/hjkl.git
+cd hjkl
 rustup toolchain install stable
 cargo test --all-features
 ```

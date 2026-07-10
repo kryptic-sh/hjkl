@@ -74,9 +74,9 @@ rustup toolchain install stable    # rust-toolchain.toml pins this for you
 cargo test --workspace
 ```
 
-Each `hjkl-*` crate lives in its own submodule and ships independently to
-crates.io. `#![deny(missing_docs)]` is enforced on `hjkl-engine` — new public
-API needs rustdoc.
+Each `hjkl-*` crate lives under `crates/<name>/` in this monorepo and ships
+independently to crates.io. `#![deny(missing_docs)]` is enforced on
+`hjkl-engine` — new public API needs rustdoc.
 
 Performance budgets are defined in
 [`crates/hjkl-buffer/benches/budgets.rs`](crates/hjkl-buffer/benches/budgets.rs).

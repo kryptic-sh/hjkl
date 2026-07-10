@@ -7,8 +7,8 @@ non-trivial PR so the design can be sanity-checked early.
 ## Development setup
 
 ```bash
-git clone git@github.com:kryptic-sh/hjkl-theme-tui.git
-cd hjkl-theme-tui
+git clone git@github.com:kryptic-sh/hjkl.git
+cd hjkl
 rustup toolchain install stable
 cargo test --all-features
 ```
