@@ -13,16 +13,16 @@ Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
 editor in Rust.
 
 Provides the `Mode` enum used as the mode discriminator in `hjkl-keymap`'s
-generic `Keymap<A, M>`. Phase 2+ will land the vim FSM (transitions,
-operator-pending resolution, count accumulation) here. For now the crate is pure
-plumbing: a stable extraction point so the rest of the stack can depend on a
-versioned crate rather than an in-tree enum.
+generic `Keymap<A, M>`, plus the vim input FSM: `feed_input` / `dispatch_input`
+drive normal/operator-pending/insert handling, with count accumulation
+(`CountAccumulator`), operator resolution (`OperatorKind`), the pending-key
+state machine (`PendingState`, `step`), and engine commands (`EngineCmd`).
 
 ## Usage
 
 ```toml
 [dependencies]
-hjkl-vim = "0.1"
+hjkl-vim = "0.33"
 ```
 
 ```rust

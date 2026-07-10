@@ -12,8 +12,6 @@ model into a ratatui Line / widget.
 Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
 editor in Rust.
 
-Scaffolding crate — render adapter lands in a follow-up patch.
-
 ## Documentation
 
 [docs.rs/hjkl-statusline-tui](https://docs.rs/hjkl-statusline-tui)

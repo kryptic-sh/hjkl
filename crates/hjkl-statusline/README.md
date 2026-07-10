@@ -22,8 +22,6 @@ Pure data — no ratatui, no floem. Companion crates wire it to a backend:
 The naming follows the vim convention (`:help statusline`, lualine, vim-airline,
 lightline).
 
-Scaffolding crate — model lands in a follow-up patch.
-
 ## Documentation
 
 [docs.rs/hjkl-statusline](https://docs.rs/hjkl-statusline)

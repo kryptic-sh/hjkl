@@ -1,7 +1,8 @@
 # hjkl-syntax
 
-Renderer-agnostic syntax-highlighting pipeline for the hjkl editor stack:
-SyntaxWorker background thread, RenderCache, viewport-scoped highlight passes.
+Renderer-agnostic syntax-highlighting pipeline for the hjkl editor stack: the
+`SyntaxLayer` incremental highlighter, viewport-scoped highlight passes
+(`build_by_row`), and a renderer-agnostic `RenderOutput`.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-syntax.svg)](https://crates.io/crates/hjkl-syntax)

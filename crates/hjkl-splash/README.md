@@ -45,14 +45,16 @@ for cell in splash.cells(layout) {
         CellKind::Cursor => paint_highlighted(cell.x, cell.y, cell.ch),
     }
 }
-
-splash.advance(); // call once per animation tick
+// The animation is clock-driven (anchor `Instant` + `period`): call `cells()`
+// again each frame and the tick advances on its own. `reset()` / `set_fixed_tick()`
+// override the clock when you need deterministic frames (e.g. tests).
 ```
 
 ### ratatui adapter
 
-For ratatui rendering, add [`hjkl-splash-tui`](https://crates.io/crates/hjkl-splash-tui)
-and call `hjkl_splash_tui::render(frame, area, &screen)`.
+For ratatui rendering, add
+[`hjkl-splash-tui`](https://crates.io/crates/hjkl-splash-tui) and call
+`hjkl_splash_tui::render(frame, area, &screen)`.
 
 ## What's here
 
