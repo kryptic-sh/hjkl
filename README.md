@@ -15,7 +15,7 @@ sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
 
 ## Status
 
-`0.12.2` — full LSP client (diagnostics, goto, hover, completion, code actions,
+`0.33.4` — full LSP client (diagnostics, goto, hover, completion, code actions,
 rename, format), window splits, tabs, tmux-navigator handoff, mouse scroll, line
 numbers, and a consumer-agnostic picker `PreviewHighlighter` trait. See
 [CHANGELOG.md](CHANGELOG.md) for the full release arc and
@@ -40,15 +40,16 @@ numbers, and a consumer-agnostic picker `PreviewHighlighter` trait. See
 Published on crates.io. Add to `Cargo.toml`:
 
 ```toml
-hjkl-editor = "0.4"
+hjkl-editor = "0.33"
 ```
 
 ## Configuring `hjkl`
 
 The standalone editor reads `$XDG_CONFIG_HOME/hjkl/config.toml` (Linux/macOS) or
 `%APPDATA%\kryptic\hjkl\config\config.toml` (Windows). Defaults are bundled into
-the binary from [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) — that
-file is the single source of truth for default values. The user file is
+the binary from
+[`crates/hjkl-app/src/config.toml`](crates/hjkl-app/src/config.toml) — that file
+is the single source of truth for default values. The user file is
 **deep-merged** on top: only the fields you want to override need to appear
 there. Unknown keys are an error.
 
@@ -61,8 +62,8 @@ leader = "\\"
 tab_width = 2
 ```
 
-See [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) for the full schema
-with comments.
+See [`crates/hjkl-app/src/config.toml`](crates/hjkl-app/src/config.toml) for the
+full schema with comments.
 
 ## Development
 
@@ -77,8 +78,9 @@ Each `hjkl-*` crate lives in its own submodule and ships independently to
 crates.io. `#![deny(missing_docs)]` is enforced on `hjkl-engine` — new public
 API needs rustdoc.
 
-Performance budgets are documented in [`MIGRATION.md`](MIGRATION.md). CI fails
-if a criterion bench regresses past budget.
+Performance budgets are defined in
+[`crates/hjkl-buffer/benches/budgets.rs`](crates/hjkl-buffer/benches/budgets.rs).
+CI fails if a criterion bench regresses past budget.
 
 ### Fuzzing
 

@@ -54,8 +54,7 @@ actions/rename/format), window splits (`:sp`/`:vsp`, `Ctrl-w` nav, resize),
 tabs, tmux-navigator handoff, mouse scroll, line numbers, multi-buffer editing,
 fuzzy file/buffer/grep pickers with syntax-highlighted preview, tree-sitter
 highlighting, smart indent, `.editorconfig`, and clipboard via
-[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
-[SCOPE.md](SCOPE.md) for the full feature roadmap.
+[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard).
 
 ## Usage
 
