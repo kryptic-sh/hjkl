@@ -102,8 +102,13 @@ impl HexColorPass {
     ) {
         let rope_len = rope.len_bytes();
         // Include one byte on each side so left/right boundary checks work.
-        let win_start = range.start.saturating_sub(1);
-        let win_end = (range.end + 1).min(rope_len);
+        // The ±1 offsets (and even `range` itself) may land in the middle of
+        // a multi-byte char; `Rope::byte_slice` panics on non-char-boundary
+        // indices, so snap outward to the enclosing boundaries. Widening is
+        // safe: color literals are pure ASCII, so a multi-byte neighbour can
+        // never extend or invalidate a match.
+        let win_start = floor_char_boundary(rope, range.start.saturating_sub(1));
+        let win_end = ceil_char_boundary(rope, range.end.saturating_add(1).min(rope_len));
         if win_start >= win_end {
             return;
         }
@@ -690,6 +695,24 @@ fn expand_nibble(n: u8) -> u8 {
     (n << 4) | n
 }
 
+/// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
+fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    rope.char_to_byte(rope.byte_to_char(byte_idx))
+}
+
+/// Smallest char-boundary byte index `>= byte_idx` (clamped to rope length).
+fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    let char_idx = rope.byte_to_char(byte_idx);
+    let floored = rope.char_to_byte(char_idx);
+    if floored == byte_idx {
+        byte_idx
+    } else {
+        rope.char_to_byte(char_idx + 1)
+    }
+}
+
 fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
     fn channel(c: u8) -> f32 {
         let c = c as f32 / 255.0;
@@ -994,6 +1017,28 @@ mod tests {
             s.metadata.get(HEX_FG_KEY),
             Some(&MetaValue::Str("#ffffff".into())),
         );
+    }
+
+    /// Regression: the ±1 window bytes must not panic when they land in the
+    /// middle of a multi-byte char (`Rope::byte_slice` requires char-boundary
+    /// indices).
+    #[test]
+    fn apply_range_rope_window_edges_mid_multibyte_char() {
+        // 'é' occupies bytes 1..3; '#fff' occupies bytes 3..7.
+        let rope = ropey::Rope::from_str("aé#fff");
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        // range.start - 1 == 2 → mid-'é' before the fix → panic.
+        HexColorPass::new().apply_range_rope(&mut spans, &rope, 3..7);
+        assert_eq!(spans.len(), 1, "expected the #fff literal to be found");
+        assert_eq!(spans[0].byte_range, 3..7);
+
+        // Right edge: '#abc' at 0..4, then 'é' at 4..6; range.end + 1 == 5 →
+        // mid-'é'.
+        let rope = ropey::Rope::from_str("#abcé");
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        HexColorPass::new().apply_range_rope(&mut spans, &rope, 0..4);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].byte_range, 0..4);
     }
 
     /// Smoke: `apply_range_rope` produces identical spans to `apply_range`

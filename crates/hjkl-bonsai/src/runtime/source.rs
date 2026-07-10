@@ -165,7 +165,12 @@ impl SourceCache {
 }
 
 pub(crate) fn short_rev(rev: &str) -> &str {
-    let take = rev.len().min(12);
+    let mut take = rev.len().min(12);
+    // Revs are normally ASCII hex, but the manifest is parsed input — back
+    // off to a char boundary rather than panicking on a multi-byte rev.
+    while !rev.is_char_boundary(take) {
+        take -= 1;
+    }
     &rev[..take]
 }
 
@@ -301,10 +306,40 @@ impl QuerySourceCache {
 
         let content = resolve_inherits(&repo_root, prefix, subdir, &mut vec![])?;
 
-        let mut f = std::fs::File::create(&resolved_path)
-            .with_context(|| format!("create resolved scm {}", resolved_path.display()))?;
-        f.write_all(content.as_bytes())
-            .with_context(|| format!("write resolved scm {}", resolved_path.display()))?;
+        // Write via staging + rename so a concurrent resolver that observes
+        // `resolved_path.exists()` never reads a truncated/empty query file.
+        let staging = self.base.join(format!(
+            "{}.tmp-{}",
+            resolved_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("resolved.scm"),
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&staging);
+        {
+            let mut f = std::fs::File::create(&staging)
+                .with_context(|| format!("create resolved scm {}", staging.display()))?;
+            f.write_all(content.as_bytes())
+                .with_context(|| format!("write resolved scm {}", staging.display()))?;
+        }
+        match std::fs::rename(&staging, &resolved_path) {
+            Ok(()) => {}
+            // Concurrent resolver won the race — its content is identical.
+            Err(_) if resolved_path.exists() => {
+                let _ = std::fs::remove_file(&staging);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&staging);
+                return Err(e).with_context(|| {
+                    format!(
+                        "rename {} -> {}",
+                        staging.display(),
+                        resolved_path.display()
+                    )
+                });
+            }
+        }
         Ok(resolved_path)
     }
 }
@@ -381,9 +416,24 @@ fn resolve_inherits(
 // git helpers
 // ---------------------------------------------------------------------------
 
+/// Reject clone parameters that git would parse as command-line options
+/// (argument injection, e.g. a rev of `--upload-pack=<cmd>`). Manifest
+/// values are normally trusted, but `Manifest::from_toml_str` is public
+/// API — refuse leading-dash values outright.
+fn validate_clone_args(url: &str, rev: &str) -> Result<()> {
+    if url.is_empty() || url.starts_with('-') {
+        bail!("refusing suspicious git url: {url:?}");
+    }
+    if rev.is_empty() || rev.starts_with('-') {
+        bail!("refusing suspicious git rev: {rev:?}");
+    }
+    Ok(())
+}
+
 /// Sparse clone: init + enable sparse checkout + fetch single rev + checkout.
 /// Only the `sparse_prefix` subtree is materialized on disk.
 fn sparse_clone_into(dir: &Path, url: &str, rev: &str, sparse_prefix: &str) -> Result<()> {
+    validate_clone_args(url, rev)?;
     std::fs::create_dir_all(dir).with_context(|| format!("create staging {}", dir.display()))?;
 
     run_git(dir, &["init", "--quiet"])?;
@@ -405,6 +455,7 @@ fn sparse_clone_into(dir: &Path, url: &str, rev: &str, sparse_prefix: &str) -> R
 /// (`--depth=1`) first, falls back to a full fetch if the server refuses
 /// fetching by SHA.
 fn clone_into(dir: &Path, url: &str, rev: &str) -> Result<()> {
+    validate_clone_args(url, rev)?;
     std::fs::create_dir_all(dir).with_context(|| format!("create staging {}", dir.display()))?;
 
     run_git(dir, &["init", "--quiet"])?;
@@ -473,6 +524,23 @@ mod tests {
     fn short_rev_truncates_to_12() {
         assert_eq!(short_rev("0123456789abcdef"), "0123456789ab");
         assert_eq!(short_rev("abc"), "abc");
+    }
+
+    #[test]
+    fn short_rev_does_not_panic_on_multibyte_rev() {
+        // 12 bytes falls inside the second '€' (3 bytes each) — must back
+        // off to a char boundary instead of panicking.
+        let rev = "0123456789€€";
+        assert_eq!(short_rev(rev), "0123456789");
+    }
+
+    #[test]
+    fn clone_args_reject_leading_dash() {
+        assert!(validate_clone_args("--upload-pack=evil", "deadbeef").is_err());
+        assert!(validate_clone_args("https://example/repo", "--upload-pack=evil").is_err());
+        assert!(validate_clone_args("", "deadbeef").is_err());
+        assert!(validate_clone_args("https://example/repo", "").is_err());
+        assert!(validate_clone_args("https://example/repo", "deadbeef").is_ok());
     }
 
     #[test]

@@ -359,8 +359,12 @@ impl CommentMarkerPass {
         // (for the seed scan) through the last comment's end byte.
         // We use a fixed byte cap of CAP * 200 (≈ 100 KB) as a safe upper bound
         // instead of scanning newlines from the rope, which avoids a second pass.
-        let window_start = first_start.saturating_sub(CAP * 200).min(first_start);
-        let window_end = last_end.min(rope_len);
+        // Both edges are snapped outward to char boundaries: the fixed byte cap
+        // (and untrusted span ends) can land mid-way through a multi-byte char,
+        // and `Rope::byte_slice` panics on non-char-boundary indices.
+        let window_start =
+            floor_char_boundary(rope, first_start.saturating_sub(CAP * 200).min(first_start));
+        let window_end = ceil_char_boundary(rope, last_end.min(rope_len));
 
         let window_str: String = rope.byte_slice(window_start..window_end).to_string();
         let window: &[u8] = window_str.as_bytes();
@@ -592,6 +596,24 @@ fn find_comment_delimiter(line_bytes: &[u8]) -> Option<usize> {
         return line_bytes.iter().position(|&b| b == b'#');
     }
     None
+}
+
+/// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
+fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    rope.char_to_byte(rope.byte_to_char(byte_idx))
+}
+
+/// Smallest char-boundary byte index `>= byte_idx` (clamped to rope length).
+fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    let char_idx = rope.byte_to_char(byte_idx);
+    let floored = rope.char_to_byte(char_idx);
+    if floored == byte_idx {
+        byte_idx
+    } else {
+        rope.char_to_byte(char_idx + 1)
+    }
 }
 
 /// Return `true` when the two comment spans are on directly adjacent lines:
@@ -965,5 +987,29 @@ mod tests {
             assert_eq!(b.capture, r.capture, "capture name mismatch");
             assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
         }
+    }
+
+    /// Regression: the fixed `CAP * 200` seed-window offset must not panic
+    /// when it lands mid-way through a multi-byte char ('€' is 3 bytes, so
+    /// `comment_start - 100_000` falls on a non-char-boundary here).
+    #[test]
+    fn apply_rope_seed_window_start_mid_multibyte_char() {
+        let prefix = "€".repeat(34_000); // 102_000 bytes; boundaries at multiples of 3
+        let comment = "// TODO x";
+        let src = format!("{prefix}{comment}");
+        let rope = ropey::Rope::from_str(&src);
+        let comment_start = prefix.len(); // 102_000; 102_000 - 100_000 = 2_000 (mid-'€')
+
+        let mut spans = vec![HighlightSpan {
+            byte_range: comment_start..src.len(),
+            capture: "comment".to_string(),
+            metadata: Default::default(),
+        }];
+        CommentMarkerPass::new().apply_rope(&mut spans, &rope);
+
+        assert!(
+            spans.iter().any(|s| s.capture() == "comment.marker.todo"),
+            "expected TODO marker span: {spans:#?}"
+        );
     }
 }

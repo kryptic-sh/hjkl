@@ -48,8 +48,13 @@ impl GrammarCompiler {
             return Ok(dest);
         }
 
+        // Unique per call (pid + counter): two threads compiling the same
+        // grammar concurrently must not share a staging file, or one
+        // thread's cleanup deletes the other's in-flight artifact.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let staging = source_root.join(format!(
-            "{name}.tmp-{}{}",
+            "{name}.tmp-{}-{n}{}",
             std::process::id(),
             shared_lib_ext(),
         ));
