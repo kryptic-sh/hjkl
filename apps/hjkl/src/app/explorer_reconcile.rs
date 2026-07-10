@@ -108,6 +108,20 @@ fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
         if name.is_empty() {
             continue;
         }
+        // Reject names that would escape the explorer root — `..`, an absolute
+        // path, or a drive/root prefix — which `Path::join` would otherwise
+        // honor, letting a crafted buffer line create/rename/trash outside the
+        // tree. Internal `/` for nested creation (`a/b.rs`) stays allowed.
+        if Path::new(name).components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        }) {
+            continue;
+        }
 
         // Pop stack entries that are at depth ≥ current depth.
         while stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
@@ -878,6 +892,38 @@ mod tests {
     // Convenience root.
     fn root() -> PathBuf {
         PathBuf::from("/project")
+    }
+
+    // ── path-escape guard ─────────────────────────────────────────────────────
+
+    /// A crafted buffer line with a `..` (or absolute) name must never emit an
+    /// op whose target escapes the explorer root.
+    #[test]
+    fn reconcile_rejects_root_escape() {
+        let baseline = make_baseline(&[("keep.rs", false)]);
+        // root + existing file (id 1) + two malicious new (no-id) lines.
+        let evil_rel = format!("{}../evil", " ".repeat(4)); // depth-1, `..`
+        let evil_abs = format!("{}/etc/passwd", " ".repeat(4)); // depth-1, absolute
+        let buffer = format!(
+            "{}\n{}\n{}\n{}",
+            root_header(),
+            idline(1, "keep.rs", 1),
+            evil_rel,
+            evil_abs,
+        );
+        let ops = reconcile(&baseline, &buffer, &root());
+        for op in &ops {
+            let paths: Vec<&PathBuf> = match op {
+                FsOp::CreateFile(p) | FsOp::CreateDir(p) | FsOp::Trash(p) => vec![p],
+                FsOp::Rename { from, to } => vec![from, to],
+            };
+            for p in paths {
+                assert!(
+                    p.starts_with(root()),
+                    "op escaped explorer root: {op:?} (path {p:?})"
+                );
+            }
+        }
     }
 
     // ── bulk_create ───────────────────────────────────────────────────────────
