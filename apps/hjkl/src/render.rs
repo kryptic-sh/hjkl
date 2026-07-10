@@ -2965,8 +2965,7 @@ mod tests {
             b"x",
         )
         .unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         // Open the DEEP file so there's no splash and its ancestors are expanded
         // (the white-last-char artifact only shows on nested rows).
@@ -2980,7 +2979,6 @@ mod tests {
         terminal.draw(|f| frame(f, &mut app)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let text_color = app.theme.ui.text;
-        std::env::set_current_dir(prev).unwrap();
 
         // Locate the contiguous run of cells spelling "widget.rs".
         let name: Vec<char> = "widget.rs".chars().collect();

@@ -1944,7 +1944,15 @@ mod tests {
     /// Build a unique temp dir tree:
     /// root/{ a_dir/{ inner.txt }, b_dir/, m_file.txt, z_file.txt }
     fn make_tree() -> PathBuf {
-        let base = std::env::temp_dir().join(format!("hjkl_explorer_test_{}", std::process::id()));
+        // Unique per call: keying only on the pid made every parallel test that
+        // calls make_tree() share one directory, so one test's opening
+        // remove_dir_all wiped another's tree mid-run (spurious failures under
+        // `cargo test`'s thread pool). A per-call counter isolates them.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("hjkl_explorer_test_{}_{n}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("a_dir")).unwrap();
         fs::create_dir_all(base.join("b_dir")).unwrap();
@@ -2104,8 +2112,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("a").join("b")).unwrap();
         std::fs::write(tmp.path().join("a").join("b").join("deep.txt"), b"x").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2135,7 +2142,6 @@ mod tests {
             .unwrap()
             .tree
             .is_expanded(&std::env::current_dir().unwrap().join("a"));
-        std::env::set_current_dir(prev).unwrap();
         assert!(revealed, "opening deep.txt must reveal it in the lazy tree");
         assert!(a_expanded, "reveal must lazily expand ancestor dir `a`");
     }
@@ -2148,8 +2154,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2161,7 +2166,6 @@ mod tests {
 
         let picker_open = app.picker.is_some();
         let search_open = app.search_field.is_some();
-        std::env::set_current_dir(prev).unwrap();
         assert!(picker_open, "/ in the explorer must open the fuzzy finder");
         assert!(
             !search_open,
@@ -2192,8 +2196,7 @@ mod tests {
         use hjkl_engine::BufferEdit;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2208,7 +2211,6 @@ mod tests {
 
         let created = tmp.path().join("newfile.rs");
         let exists = created.exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(exists, "reconcile must create newfile.rs on disk");
     }
 
@@ -2218,8 +2220,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2256,7 +2257,6 @@ mod tests {
         // The list must reflect disk: the created file appears in the buffer.
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
-        std::env::set_current_dir(prev).unwrap();
         assert!(exists, "o + type + Esc must create the file on disk");
         assert!(
             buf.contains("made.rs"),
@@ -2272,8 +2272,7 @@ mod tests {
         use hjkl_engine::BufferEdit;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2296,7 +2295,6 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.path.file_name().map(|f| f == "test.txt").unwrap_or(false));
-        std::env::set_current_dir(prev).unwrap();
 
         assert!(dir_exists, "somedir/ must be created on disk");
         assert!(file_exists, "somedir/test.txt must be created on disk");
@@ -2318,8 +2316,7 @@ mod tests {
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "bye").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2348,7 +2345,6 @@ mod tests {
         let on_disk = tmp.path().join("victim.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
-        std::env::set_current_dir(prev).unwrap();
         assert!(!on_disk, "dd must remove victim.txt from disk (to trash)");
         assert!(
             !buf.contains("victim.txt"),
@@ -2364,8 +2360,7 @@ mod tests {
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2393,7 +2388,6 @@ mod tests {
 
         let focused_explorer = app.explorer_buf_focused();
         let on_disk = tmp.path().join("newone.rs").exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(on_disk, "file should be created");
         assert!(
             focused_explorer,
@@ -2414,8 +2408,7 @@ mod tests {
         std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
         std::fs::write(tmp.path().join("z.txt"), "z").unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2447,7 +2440,6 @@ mod tests {
             let row = app.window_cursor(ep.win_id).0;
             ep.tree.nodes.get(row).map(|n| n.path.clone())
         };
-        std::env::set_current_dir(prev).unwrap();
         assert!(on_disk, "a.txt should be restored on disk");
         assert_eq!(
             cursor_path.and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())),
@@ -2464,8 +2456,7 @@ mod tests {
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2495,7 +2486,6 @@ mod tests {
 
         let inside = tmp.path().join("sub").join("kid.txt").exists();
         let sibling = tmp.path().join("kid.txt").exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             inside,
             "o on a dir must create the file INSIDE it (sub/kid.txt)"
@@ -2521,8 +2511,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("aaa")).unwrap();
         std::fs::write(tmp.path().join("aaa").join("kid.txt"), b"").unwrap();
         std::fs::create_dir(tmp.path().join("zzz")).unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2555,7 +2544,6 @@ mod tests {
 
         let sibling = tmp.path().join("twin.txt").exists();
         let inside = tmp.path().join("aaa").join("twin.txt").exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             sibling,
             "O on zzz/ must create a sibling at root (twin.txt)"
@@ -2939,8 +2927,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("d").join("a.rs"), b"a").unwrap();
         std::fs::write(tmp.path().join("d").join("b.rs"), b"b").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
         // The explorer roots at the canonicalized cwd; build expected paths from
         // it (tempdirs are symlinked on macOS/CI, so raw `tmp.path()` mismatches).
         let base = std::env::current_dir().unwrap();
@@ -2985,7 +2972,6 @@ mod tests {
         let dir_gone = !base.join("d").exists();
         let a_orphan = base.join("a.rs").exists();
         let b_orphan = base.join("b.rs").exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(dir_gone, "the dir must be deleted (trashed)");
         assert!(
             !a_orphan && !b_orphan,
@@ -3006,8 +2992,7 @@ mod tests {
         std::fs::write(tmp.path().join("mover").join("inner.txt"), b"CONTENT").unwrap();
         std::fs::create_dir(tmp.path().join("target")).unwrap();
         std::fs::write(tmp.path().join("target").join("keep.txt"), b"k").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
         let base = std::env::current_dir().unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
@@ -3060,7 +3045,6 @@ mod tests {
         let inside_exists = inside.exists();
         let inside_content = std::fs::read(&inside).ok();
         let root_exists = at_root.exists();
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             inside_exists && inside_content.as_deref() == Some(b"CONTENT".as_slice()),
             "expected target/mover/inner.txt with CONTENT.\n inside={inside_exists} content={inside_content:?} root_still={root_exists}\n buffer:\n{buf:?}"
@@ -3169,8 +3153,7 @@ mod tests {
         std::fs::write(tmp.path().join("aaa").join("akid.txt"), b"").unwrap();
         std::fs::create_dir(tmp.path().join("bbb")).unwrap();
         std::fs::write(tmp.path().join("bbb").join("target.txt"), b"x").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3238,7 +3221,6 @@ mod tests {
             .unwrap();
         let cur = app.window_cursor(win_id).0;
 
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             aaa_still_open,
             "opening a file must not collapse other expanded dirs"
@@ -3264,8 +3246,7 @@ mod tests {
             std::fs::write(tmp.path().join("aaa").join(format!("f{i:02}.txt")), b"").unwrap();
         }
         std::fs::write(tmp.path().join("target.txt"), b"x").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3294,7 +3275,6 @@ mod tests {
         app.dispatch_ex("edit target.txt");
 
         let top = app.window_scroll(win_id).0;
-        std::env::set_current_dir(prev).unwrap();
         assert_eq!(
             top, 0,
             "explorer must not scroll when the opened file is already visible"
@@ -3309,8 +3289,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("parent").join("empty")).unwrap();
         std::fs::write(tmp.path().join("parent").join("file.txt"), b"").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3356,7 +3335,6 @@ mod tests {
         let er = row_of(&app, &empty);
         activate(&mut app, er);
         let parent_row2 = row_of(&app, &parent);
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             fold_open_at(&app, parent_row2),
             "activating an empty dir must not collapse the parent fold"
@@ -3392,8 +3370,7 @@ mod tests {
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3418,7 +3395,6 @@ mod tests {
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
         let text = app.slots[slot].editor.buffer().as_string();
-        std::env::set_current_dir(prev).unwrap();
         assert!(
             !text.split('\n').any(|l| l.trim().is_empty()),
             "o<Esc> must not leave a blank line; buffer was {text:?}"
@@ -3435,8 +3411,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
         std::fs::write(tmp.path().join("sub").join("k.txt"), b"").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3466,7 +3441,6 @@ mod tests {
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
         let buf_folds = app.slots[slot].editor.buffer().folds();
         let snap = app.window_folds.get(&win_id).cloned().unwrap();
-        std::env::set_current_dir(prev).unwrap();
         assert_eq!(
             snap, buf_folds,
             "window_folds snapshot must match buffer folds after a fold toggle"
@@ -3525,8 +3499,7 @@ mod tests {
         // Isolate the trash directory so the restore doesn't pick up stale
         // entries from parallel tests.
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3547,8 +3520,6 @@ mod tests {
         let on_disk_after_u = tmp.path().join("victim.txt").exists();
         let buf_after_u = app.slots[idx].editor.buffer().as_string();
         let root_child_after_u = has_root_child(&app, "victim.txt");
-
-        std::env::set_current_dir(prev).unwrap();
 
         assert!(!on_disk_after_dd, "dd must trash victim.txt");
         assert!(
@@ -3573,8 +3544,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3603,8 +3573,6 @@ mod tests {
         let on_disk_after_u = tmp.path().join("fresh.rs").exists();
         let buf_after_u = app.slots[idx].editor.buffer().as_string();
         let root_child_after_u = has_root_child(&app, "fresh.rs");
-
-        std::env::set_current_dir(prev).unwrap();
 
         assert!(
             on_disk_after_create,
@@ -3657,8 +3625,7 @@ mod tests {
         run(&["add", "tracked.txt"], tmp.path());
         run(&["commit", "-m", "init"], tmp.path());
 
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3686,8 +3653,6 @@ mod tests {
             })
             .map(|n| n.git);
 
-        std::env::set_current_dir(prev).unwrap();
-
         assert!(!on_disk, "dd must remove tracked.txt from disk (to trash)");
         assert!(
             buf.contains("tracked.txt"),
@@ -3709,8 +3674,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
         std::fs::write(tmp.path().join("untracked.txt"), "bye").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3722,8 +3686,6 @@ mod tests {
         let on_disk = tmp.path().join("untracked.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
-
-        std::env::set_current_dir(prev).unwrap();
 
         assert!(!on_disk, "dd must remove untracked.txt from disk");
         assert!(
@@ -3742,8 +3704,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("recover.txt"), "restore_me").unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3780,8 +3741,6 @@ mod tests {
             .map(|ep| ep.redo_stack.len())
             .unwrap_or(0);
 
-        std::env::set_current_dir(prev).unwrap();
-
         assert!(on_disk, "u must restore recover.txt to disk");
         assert!(
             buf.contains("recover.txt"),
@@ -3801,8 +3760,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("trashable.txt"), "yo").unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3831,8 +3789,6 @@ mod tests {
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
 
-        std::env::set_current_dir(prev).unwrap();
-
         assert!(!on_disk, "<C-r> must re-trash trashable.txt");
         assert!(
             !has_root_child(&app, "trashable.txt"),
@@ -3848,8 +3804,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3876,8 +3831,6 @@ mod tests {
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
 
-        std::env::set_current_dir(prev).unwrap();
-
         assert!(!on_disk, "u must remove newborn.rs (trash it)");
         assert!(
             !has_root_child(&app, "newborn.rs"),
@@ -3895,8 +3848,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "data").unwrap();
         unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3927,8 +3879,6 @@ mod tests {
         let on_disk = tmp.path().join("victim.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].editor.buffer().as_string();
-
-        std::env::set_current_dir(prev).unwrap();
 
         assert!(!on_disk, "<C-r> must re-trash victim.txt");
         assert!(
@@ -3994,8 +3944,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("subdir")).unwrap();
         fs::write(tmp.path().join("subdir").join("child.txt"), "x").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4029,7 +3978,5 @@ mod tests {
             nodes_closed, nodes_before,
             "activate again must collapse back to the prior node count"
         );
-
-        std::env::set_current_dir(prev).unwrap();
     }
 }

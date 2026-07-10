@@ -28,6 +28,9 @@ mod syntax;
 mod theme;
 mod which_key;
 
+#[cfg(test)]
+pub(crate) mod test_cwd;
+
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{event, execute, terminal};

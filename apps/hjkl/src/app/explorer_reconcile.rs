@@ -1512,16 +1512,20 @@ mod tests {
 
     // ── apply_ops integration tests ───────────────────────────────────────────
 
-    /// Override `XDG_CACHE_HOME` to a temp dir for trash isolation.
-    fn isolated_trash(td: &tempfile::TempDir) {
-        // SAFETY: nextest runs each test in its own process so no data-race.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", td.path()) };
+    /// Override `XDG_CACHE_HOME` to a temp dir for trash isolation. Returns a
+    /// guard that serializes env-mutating tests (so this is race-free under
+    /// `cargo test`'s thread pool, not only under nextest's process isolation)
+    /// and restores the prior value on drop. Callers must bind it for the whole
+    /// test: `let _trash = isolated_trash(&td);`.
+    #[must_use]
+    fn isolated_trash(td: &tempfile::TempDir) -> crate::test_cwd::EnvVarGuard {
+        crate::test_cwd::EnvVarGuard::set("XDG_CACHE_HOME", td.path())
     }
 
     #[test]
     fn apply_create_file_makes_empty_file() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let target = td.path().join("new.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
         let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
@@ -1543,7 +1547,7 @@ mod tests {
     #[test]
     fn apply_create_nested_makes_parents() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let target = td.path().join("a").join("b").join("c.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
         let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
@@ -1556,7 +1560,7 @@ mod tests {
     #[test]
     fn apply_trash_moves_into_trash_not_deleted() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         // Create the source file.
         let src = td.path().join("source.txt");
         std::fs::write(&src, b"hello").unwrap();
@@ -1586,7 +1590,7 @@ mod tests {
     #[test]
     fn apply_rename_preserves_content() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let foo = td.path().join("foo.rs");
         std::fs::write(&foo, b"hi").unwrap();
         let bar = td.path().join("bar.rs");
@@ -1615,7 +1619,7 @@ mod tests {
     #[test]
     fn apply_move_via_trash_then_create_restores_content() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         // Set up: foo.rs in src_dir with content "x".
         let src_dir = td.path().join("src_dir");
         std::fs::create_dir_all(&src_dir).unwrap();
@@ -1664,7 +1668,7 @@ mod tests {
     #[test]
     fn apply_create_dir_restores_trashed_subtree() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         // src/mover/inner.txt — `mover` is the dir being moved while collapsed.
         let mover = td.path().join("mover");
         std::fs::create_dir_all(&mover).unwrap();
@@ -1700,7 +1704,7 @@ mod tests {
     #[test]
     fn revert_create_removes_file_redo_recreates() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let target = td.path().join("round.rs");
 
         // Apply: create
@@ -1724,7 +1728,7 @@ mod tests {
     #[test]
     fn revert_trash_restores_file_redo_retrashes() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let src = td.path().join("restore_me.txt");
         std::fs::write(&src, b"data").unwrap();
 
@@ -1754,7 +1758,7 @@ mod tests {
     #[test]
     fn revert_rename_swaps_back_redo_renames_again() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let foo = td.path().join("orig.rs");
         let bar = td.path().join("renamed.rs");
         std::fs::write(&foo, b"content").unwrap();
@@ -1786,7 +1790,7 @@ mod tests {
     #[test]
     fn revert_restore_retrashes_redo_restores() {
         let td = tempfile::tempdir().unwrap();
-        isolated_trash(&td);
+        let _trash = isolated_trash(&td);
         let src = td.path().join("moved.txt");
         std::fs::write(&src, b"hello").unwrap();
 

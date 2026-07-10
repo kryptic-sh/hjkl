@@ -1873,8 +1873,7 @@ fn leader_slash_grep_picker_populates_items() {
     std::fs::write(&file, "alpha\nUNIQUE_NEEDLE_42\nomega\n").unwrap();
 
     // App's cwd drives the grep root.
-    let orig_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
+    let cwd = crate::test_cwd::CwdGuard::enter(&dir);
 
     let mut app = App::new(None, false, None, None).unwrap();
     app.route_chord_key(key(KeyCode::Char(' ')));
@@ -1903,7 +1902,9 @@ fn leader_slash_grep_picker_populates_items() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    std::env::set_current_dir(&orig_cwd).unwrap();
+    // Restore cwd before removing the temp dir — Windows cannot remove a
+    // directory that is any process's current working directory.
+    drop(cwd);
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
