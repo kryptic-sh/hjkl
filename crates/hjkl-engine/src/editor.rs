@@ -4378,7 +4378,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // before invoking a range-mutation primitive (`delete_range`, etc.).
     //
     // Return value: `Some((start, end))` where both positions are `(row, col)`
-    // byte-column pairs and `end` is *exclusive* (one past the last byte to act
+    // char-column pairs and `end` is *exclusive* (one past the last char to act
     // on), matching the convention used by `delete_range` / `yank_range` / etc.
     // Returns `None` when the cursor is on an empty line or the resolver cannot
     // find a word boundary.
@@ -4454,7 +4454,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // hjkl-vim grammar layer normalises close→open before calling these methods.
     //
     // Return value: `Some((start, end))` where both positions are `(row, col)`
-    // byte-column pairs and `end` is *exclusive* (one past the last byte to act
+    // char-column pairs and `end` is *exclusive* (one past the last char to act
     // on), matching the convention used by `delete_range` / `yank_range` / etc.
     // `bracket_text_object` internally distinguishes Linewise vs Exclusive
     // ranges for multi-line pairs; that tag is stripped here — callers receive
@@ -4842,8 +4842,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let keys = crate::input::decode_macro(&text);
         self.vim.last_macro = Some(resolved);
         self.vim.replaying_macro = true;
-        // Multiply by count (minimum 1).
-        keys.repeat(count.max(1))
+        // Multiply by count (minimum 1). Clamp to vim's count limit
+        // (`:h count` — counts are capped at 999999999); an unclamped
+        // saturated prefix would overflow `Vec` capacity in `repeat`.
+        keys.repeat(count.clamp(1, 999_999_999))
     }
 
     /// Clear the `replaying_macro` flag. Called by the app after the
@@ -5405,7 +5407,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Accumulate one more digit into the count prefix (mirrors `count * 10 + digit`).
     pub fn accumulate_count_digit(&mut self, digit: usize) {
-        self.vim.count = self.vim.count.saturating_mul(10) + digit;
+        // Saturate the add too: once the multiply has saturated at
+        // `usize::MAX`, a plain `+ digit` overflows (panic in debug builds)
+        // after ~20 typed digits.
+        self.vim.count = self.vim.count.saturating_mul(10).saturating_add(digit);
     }
 
     /// Reset the count prefix to zero (no pending count).

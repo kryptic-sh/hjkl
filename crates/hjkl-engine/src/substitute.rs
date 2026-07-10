@@ -436,6 +436,11 @@ pub fn apply_collected_matches<H: crate::types::Host>(
         if be > line.len() || bs > be {
             continue;
         }
+        // Stale matches (buffer changed between collect and apply) can land
+        // mid-char on multibyte text; skip instead of panicking on the slice.
+        if !line.is_char_boundary(bs) || !line.is_char_boundary(be) {
+            continue;
+        }
         // Splice the replacement in.
         let mut new_line = String::with_capacity(line.len() + sm.replacement.len());
         new_line.push_str(&line[..bs]);

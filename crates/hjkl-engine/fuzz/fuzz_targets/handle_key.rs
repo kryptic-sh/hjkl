@@ -100,7 +100,13 @@ fuzz_target!(|data: &[u8]| {
     // Seed with the arbitrary text so motions / deletes have something
     // to chew on. Trim to a reasonable size so the bench runs fast.
     let seed = if input.seed_text.len() > 1024 {
-        &input.seed_text[..1024]
+        // Back off to a char boundary so the trim itself can't panic on
+        // multibyte seed text (which would be a harness false positive).
+        let mut cut = 1024;
+        while !input.seed_text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        &input.seed_text[..cut]
     } else {
         &input.seed_text
     };
