@@ -99,6 +99,18 @@ pub fn row_range_to_byte_range(source: &str, range: RangeSpec) -> (usize, usize)
     (start_byte, end_byte)
 }
 
+/// Convert a byte offset into `source` to a UTF-16 code-unit count of the
+/// prefix — the offset units prettier (a JS tool) expects for
+/// `--range-start`/`--range-end`. `byte` is snapped down to a char boundary
+/// defensively.
+fn byte_to_utf16(source: &str, byte: usize) -> usize {
+    let mut b = byte.min(source.len());
+    while b > 0 && !source.is_char_boundary(b) {
+        b -= 1;
+    }
+    source[..b].encode_utf16().count()
+}
+
 /// Maximum time we wait for a formatter subprocess before giving up.
 /// 30 s is generous enough for rustfmt on very large files (10k+ LOC)
 /// without making a hung formatter feel permanent.
@@ -335,8 +347,12 @@ impl Formatter for PrettierFormatter {
 
         if let Some(range) = range {
             let (start_byte, end_byte) = row_range_to_byte_range(source, range);
-            let start_str = start_byte.to_string();
-            let end_str = end_byte.to_string();
+            // Prettier's --range-start/--range-end are JS string offsets
+            // (UTF-16 code units), not byte offsets; any non-ASCII before the
+            // range would otherwise reformat the wrong region. (Stylua below
+            // genuinely takes bytes, so it is left as-is.)
+            let start_str = byte_to_utf16(source, start_byte).to_string();
+            let end_str = byte_to_utf16(source, end_byte).to_string();
             run_formatter(
                 "prettier",
                 base_args,
