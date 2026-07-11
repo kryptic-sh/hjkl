@@ -18,6 +18,7 @@ pub struct RgMatch {
 }
 
 /// Which search backend is available on this system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrepBackend {
     /// ripgrep (`rg`) — preferred; produces rich JSON output.
     Rg,
@@ -29,9 +30,21 @@ pub enum GrepBackend {
     Neither,
 }
 
-/// Probe PATH once per requery to decide which backend to use.
-/// The probes are cheap (`--version` exits immediately).
+/// Decide which search backend to use, caching the result for the process.
+///
+/// This used to shell out up to three `--version`/`/?` probes on **every**
+/// requery (i.e. every keystroke in the grep picker). The available backend
+/// doesn't change during a session, so the probe now runs once and the answer
+/// is memoized.
 pub fn detect_grep_backend() -> GrepBackend {
+    static CACHED: std::sync::OnceLock<GrepBackend> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(probe_grep_backend)
+}
+
+/// Probe PATH to decide which backend is available. Cheap
+/// (`--version` exits immediately) but spawns subprocesses, so callers should
+/// go through the memoized [`detect_grep_backend`].
+fn probe_grep_backend() -> GrepBackend {
     if std::process::Command::new("rg")
         .arg("--version")
         .stdout(std::process::Stdio::null())

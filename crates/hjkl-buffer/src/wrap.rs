@@ -1,7 +1,16 @@
 //! Soft-wrap helpers shared between the renderer, viewport scroll,
 //! and the buffer's vertical motion code.
 
+use std::cell::RefCell;
+
 use unicode_width::UnicodeWidthChar;
+
+thread_local! {
+    /// Reused `(char, width)` scratch for [`wrap_segments`]. `wrap_segments` is
+    /// called once per visible row per frame; reusing this buffer avoids a
+    /// per-call heap allocation (it grows to the widest line seen, then stays).
+    static WRAP_SCRATCH: RefCell<Vec<(char, u16)>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Soft-wrap mode controlling how doc rows wider than the text area
 /// turn into multiple visual rows. Default is [`Wrap::None`] — every
@@ -28,59 +37,64 @@ pub enum Wrap {
 /// expected here — callers branch before calling — but is handled
 /// for completeness as a single segment covering the full line.
 pub fn wrap_segments(line: &str, width: u16, mode: Wrap) -> Vec<(usize, usize)> {
-    let total = line.chars().count();
     if matches!(mode, Wrap::None) || width == 0 || line.is_empty() {
-        return vec![(0, total)];
+        return vec![(0, line.chars().count())];
     }
-    let chars: Vec<(char, u16)> = line
-        .chars()
-        .map(|c| (c, c.width().unwrap_or(1).max(1) as u16))
-        .collect();
-    let mut segs = Vec::new();
-    let mut start = 0usize;
-    while start < total {
-        let mut cells: u16 = 0;
-        let mut i = start;
-        while i < total {
-            let w = chars[i].1;
-            if cells + w > width {
+    WRAP_SCRATCH.with(|scratch| {
+        let mut chars = scratch.borrow_mut();
+        chars.clear();
+        chars.extend(
+            line.chars()
+                .map(|c| (c, c.width().unwrap_or(1).max(1) as u16)),
+        );
+        let total = chars.len();
+        let mut segs = Vec::new();
+        let mut start = 0usize;
+        while start < total {
+            let mut cells: u16 = 0;
+            let mut i = start;
+            while i < total {
+                let w = chars[i].1;
+                if cells + w > width {
+                    break;
+                }
+                cells += w;
+                i += 1;
+            }
+            // A single char wider than `width` (e.g. a double-width CJK/emoji
+            // char in a 1-cell text area) consumes zero cells above, leaving
+            // `i == start`. Force progress by emitting it as its own
+            // overflowing segment; without this `break_at` collapses to
+            // `start`, `start` never advances, and the loop spins forever
+            // pushing `(start, start)` until the process OOMs.
+            if i == start {
+                i = start + 1;
+            }
+            if i == total {
+                segs.push((start, total));
                 break;
             }
-            cells += w;
-            i += 1;
+            let break_at = if matches!(mode, Wrap::Word) {
+                // Look for the last whitespace inside [start, i] so the
+                // segment ends *after* that whitespace. Falls back to a
+                // hard char break when the segment has no whitespace.
+                (start..i)
+                    .rev()
+                    .find(|&k| chars[k].0.is_whitespace())
+                    .map(|k| k + 1)
+                    .filter(|&end| end > start)
+                    .unwrap_or(i)
+            } else {
+                i
+            };
+            segs.push((start, break_at));
+            start = break_at;
         }
-        // A single char wider than `width` (e.g. a double-width CJK/emoji char
-        // in a 1-cell text area) consumes zero cells above, leaving `i == start`.
-        // Force progress by emitting it as its own overflowing segment; without
-        // this `break_at` collapses to `start`, `start` never advances, and the
-        // loop spins forever pushing `(start, start)` until the process OOMs.
-        if i == start {
-            i = start + 1;
+        if segs.is_empty() {
+            segs.push((0, 0));
         }
-        if i == total {
-            segs.push((start, total));
-            break;
-        }
-        let break_at = if matches!(mode, Wrap::Word) {
-            // Look for the last whitespace inside [start, i] so the
-            // segment ends *after* that whitespace. Falls back to a
-            // hard char break when the segment has no whitespace.
-            (start..i)
-                .rev()
-                .find(|&k| chars[k].0.is_whitespace())
-                .map(|k| k + 1)
-                .filter(|&end| end > start)
-                .unwrap_or(i)
-        } else {
-            i
-        };
-        segs.push((start, break_at));
-        start = break_at;
-    }
-    if segs.is_empty() {
-        segs.push((0, 0));
-    }
-    segs
+        segs
+    })
 }
 
 /// Returns the index into `segments` whose `[start, end)` covers

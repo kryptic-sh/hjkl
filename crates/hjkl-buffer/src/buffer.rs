@@ -169,25 +169,40 @@ impl Buffer {
             return;
         }
         let height = v.height as usize;
-        // Push top_row forward until cursor lands inside [0, height).
-        loop {
-            let csr = self.cursor_screen_row_from(viewport, viewport.top_row);
-            match csr {
-                Some(row) if row < height => break,
-                _ => {}
+        // Compute the cursor's screen row once, then push `top_row` down
+        // incrementally: each dropped row reduces the screen row by its own
+        // visible height. O(distance) instead of recomputing
+        // `cursor_screen_row_from` every step (which was O(distance^2) on a
+        // large soft-wrapped jump).
+        let mut screen = match self.cursor_screen_row_from(viewport, viewport.top_row) {
+            Some(s) => s,
+            None => {
+                viewport.top_col = 0;
+                return;
             }
-            let next = {
-                let c = self.content.lock().unwrap();
-                let mut n = viewport.top_row + 1;
-                while n <= cursor.row && c.folds.iter().any(|f| f.hides(n)) {
-                    n += 1;
-                }
-                n
-            };
+        };
+        while screen >= height {
+            let c = self.content.lock().unwrap();
+            let mut next = viewport.top_row + 1;
+            while next <= cursor.row && c.folds.iter().any(|f| f.hides(next)) {
+                next += 1;
+            }
             if next > cursor.row {
+                drop(c);
                 viewport.top_row = cursor.row;
                 break;
             }
+            // Removing rows [top_row, next) drops their visible heights (hidden
+            // rows contribute 0). After this, `screen` equals
+            // `cursor_screen_row_from(next)`.
+            for r in viewport.top_row..next {
+                if c.folds.iter().any(|f| f.hides(r)) {
+                    continue;
+                }
+                let line = rope_line_str(&c.text, r);
+                screen -= crate::wrap::wrap_segments(&line, v.text_width, v.wrap).len();
+            }
+            drop(c);
             viewport.top_row = next;
         }
         viewport.top_col = 0;

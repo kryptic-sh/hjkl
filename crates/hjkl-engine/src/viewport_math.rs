@@ -58,12 +58,21 @@ where
         return;
     }
     let height = v.height as usize;
-    loop {
-        let csr = cursor_screen_row_from(buf, folds, viewport, viewport.top_row);
-        match csr {
-            Some(row) if row < height => break,
-            _ => {}
+    // Compute the cursor's screen row from the current top ONCE (one linear
+    // pass), then push `top_row` down incrementally: each dropped row reduces
+    // the screen row by its own visible height. This is O(distance) rather than
+    // recomputing `cursor_screen_row_from` (itself O(distance)) every step,
+    // which made a big soft-wrapped jump O(distance^2).
+    let mut screen = match cursor_screen_row_from(buf, folds, viewport, viewport.top_row) {
+        Some(s) => s,
+        // Cursor above `top_row` is handled by the earlier branch; treat any
+        // surprise `None` as "leave the viewport where it is".
+        None => {
+            viewport.top_col = 0;
+            return;
         }
+    };
+    while screen >= height {
         let mut next = viewport.top_row + 1;
         while next <= cursor_row && folds.is_row_hidden(next) {
             next += 1;
@@ -71,6 +80,15 @@ where
         if next > cursor_row {
             viewport.top_row = cursor_row;
             break;
+        }
+        // Removing rows [top_row, next) from the top of the range drops their
+        // visible heights (hidden rows contribute 0). After this, `screen`
+        // equals `cursor_screen_row_from(..., next)`.
+        for r in viewport.top_row..next {
+            if !folds.is_row_hidden(r) {
+                let line = Query::line(buf, r as u32);
+                screen -= hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap).len();
+            }
         }
         viewport.top_row = next;
     }

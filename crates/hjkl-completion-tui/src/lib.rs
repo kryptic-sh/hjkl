@@ -185,14 +185,29 @@ pub fn popup(
     let normal_style = Style::default().fg(to_rcolor(theme.normal_fg));
     let detail_style = Style::default().fg(to_rcolor(theme.detail_fg));
 
-    // Build items in logical order (vis_idx 0 = best match).
+    // Window the visible list to just the rows that will actually be shown, so
+    // we build at most `visible_count` (≤ MAX_HEIGHT) ListItems per frame —
+    // an LSP server can return thousands of candidates, and building a
+    // ListItem (with its allocations) for every one each frame is wasteful.
+    // The window scrolls so the selected row stays visible.
+    let win = visible_count as usize;
+    let total = completion.visible.len();
+    let off = if completion.selected < win {
+        0
+    } else {
+        completion.selected - win + 1
+    }
+    .min(total.saturating_sub(win));
+
+    // Build items in logical order (vis_idx 0 = best match), windowed.
     // The per-item inline bold style is pre-baked here and will travel with
     // its item through any subsequent reverse().
-    let mut items: Vec<ListItem> = completion
-        .visible
+    let end = (off + win).min(total);
+    let mut items: Vec<ListItem> = completion.visible[off..end]
         .iter()
         .enumerate()
-        .filter_map(|(vis_idx, &item_idx)| {
+        .filter_map(|(local_idx, &item_idx)| {
+            let vis_idx = off + local_idx;
             let item = completion.all_items.get(item_idx)?;
             let icon = item.kind.icon();
             let label = &item.label;
@@ -235,15 +250,19 @@ pub fn popup(
         items.reverse();
     }
 
-    // ListState selection must point at the correct VISUAL row after any reverse.
-    // Not flipped: visual row == logical row (sel = completion.selected).
-    // Flipped:     visual row = (N-1) - logical row.
+    // ListState selection must point at the correct VISUAL row after any
+    // reverse. Selection is relative to the window (`off`).
+    // Not flipped: visual row == in-window row (sel - off).
+    // Flipped:     visual row = (N-1) - in-window row.
     let n = items.len();
-    let clamped_sel = completion.selected.min(n.saturating_sub(1));
+    let sel_in_window = completion
+        .selected
+        .saturating_sub(off)
+        .min(n.saturating_sub(1));
     let sel_visual = if flipped {
-        n.saturating_sub(1).saturating_sub(clamped_sel)
+        n.saturating_sub(1).saturating_sub(sel_in_window)
     } else {
-        clamped_sel
+        sel_in_window
     };
 
     let mut state = ListState::default();
@@ -414,6 +433,52 @@ mod tests {
                 popup(frame, &completion, &theme, anchor, viewport);
             })
             .unwrap();
+    }
+
+    /// Windowing: with far more candidates than MAX_HEIGHT, the popup renders a
+    /// scrolled window that keeps the selected row on screen and drops the rows
+    /// that scrolled off (so we don't build a ListItem for every candidate).
+    #[test]
+    fn large_list_windows_around_selection() {
+        let width: u16 = 80;
+        let height: u16 = 40;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let labels: Vec<String> = (0..200).map(|i| format!("cand{i:03}")).collect();
+        let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let mut completion = make_completion(&refs);
+        completion.selected = 150; // deep in the list
+
+        let theme = CompletionTheme::default();
+        let anchor = Rect {
+            x: 2,
+            y: 2,
+            width: 1,
+            height: 1,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+
+        terminal
+            .draw(|frame| popup(frame, &completion, &theme, anchor, viewport))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // The selected candidate must be visible…
+        assert!(
+            find_row(&buf, "cand150", 0, width, 0, height).is_some(),
+            "selected candidate must be on screen"
+        );
+        // …and the very first candidate must have scrolled off.
+        assert!(
+            find_row(&buf, "cand000", 0, width, 0, height).is_none(),
+            "far-away candidate must not be rendered"
+        );
     }
 
     /// Directional: popup below → visible[0] (best match) appears on a higher

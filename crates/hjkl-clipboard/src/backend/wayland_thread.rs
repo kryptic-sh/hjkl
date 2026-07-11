@@ -1589,22 +1589,56 @@ fn receive_from_offer(
 /// reach tens of MiB.
 const MAX_PASTE_BYTES: usize = 256 * 1024 * 1024;
 
-/// Read all available bytes from `fd` until EOF, capped at [`MAX_PASTE_BYTES`].
+/// Give up on a paste if the selection owner sends no data (and doesn't close
+/// the pipe) for this long. This is an **idle** timeout — it resets every time
+/// bytes arrive — so a legitimately large-but-streaming paste still completes,
+/// while a hostile owner that opens the pipe and then stalls forever can't hang
+/// the clipboard thread.
+const PASTE_IDLE_TIMEOUT_MS: c_int = 2000;
+
+/// Read all available bytes from `fd` until EOF, capped at [`MAX_PASTE_BYTES`]
+/// and bounded by an idle timeout ([`PASTE_IDLE_TIMEOUT_MS`]).
 fn read_fd_to_end(fd: c_int) -> Result<Vec<u8>, ClipboardError> {
     let mut result = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
-        // SAFETY: fd is valid; buf is valid memory.
-        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-        if n < 0 {
+        // Wait for the fd to become readable (or hang up) before reading, so a
+        // stalled owner that never writes and never closes can't block us in
+        // `read` indefinitely.
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: single valid pollfd, count 1.
+        let pr = unsafe { libc::poll(&mut pfd, 1, PASTE_IDLE_TIMEOUT_MS) };
+        if pr < 0 {
             let err = std::io::Error::last_os_error();
             if err.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
             return Err(ClipboardError::io(err));
         }
+        if pr == 0 {
+            return Err(ClipboardError::io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "clipboard paste stalled (no data from selection owner)",
+            )));
+        }
+
+        // SAFETY: fd is valid; buf is valid memory.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted
+                || err.kind() == std::io::ErrorKind::WouldBlock
+            {
+                continue;
+            }
+            return Err(ClipboardError::io(err));
+        }
         if n == 0 {
-            break; // EOF
+            break; // EOF (owner closed the write end)
         }
         result.extend_from_slice(&buf[..n as usize]);
         if result.len() > MAX_PASTE_BYTES {
