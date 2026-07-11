@@ -2,6 +2,9 @@
 name = "hjkl-gui"
 description = "Vim-modal floem GUI editor built on the hjkl engine."
 version.workspace = true
+# Not published to crates.io — the floem GUI binary is workspace-only. Enforced
+# here so an accidental `cargo publish` (or the release job) can't push it.
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

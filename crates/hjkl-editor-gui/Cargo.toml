@@ -2,6 +2,9 @@
 name = "hjkl-editor-gui"
 description = "Floem adapter for the hjkl modal editor stack."
 version.workspace = true
+# Not published to crates.io — the floem GUI stack is workspace-only. Enforced
+# here so an accidental `cargo publish` (or the release job) can't push it.
+publish = false
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
