@@ -8038,8 +8038,16 @@ pub(crate) fn replace_char<H: crate::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
-    ed.push_undo();
     ed.sync_buffer_content_from_textarea();
+    // Vim aborts `r{count}{char}` entirely — replacing nothing — when fewer
+    // than `count` characters remain from the cursor to end-of-line, rather
+    // than replacing a partial run. Check before touching undo/the buffer.
+    let start = buf_cursor_pos(&ed.buffer);
+    let start_line_chars = buf_line_chars(&ed.buffer, start.row);
+    if count == 0 || start.col + count > start_line_chars {
+        return;
+    }
+    ed.push_undo();
     for _ in 0..count {
         let cursor = buf_cursor_pos(&ed.buffer);
         let line_chars = buf_line_chars(&ed.buffer, cursor.row);
@@ -8936,6 +8944,35 @@ fn extract_inserted(before: &str, after: &str) -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod replace_char_tests {
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::{Buffer, rope_line_str};
+
+    fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+        rope_line_str(&ed.buffer().rope(), row)
+    }
+
+    #[test]
+    fn replace_char_count_exceeding_line_replaces_nothing() {
+        let buf = Buffer::from_str("ab\ncd");
+        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        // Cursor at (0,0); `3rx` needs 3 chars but the line has 2 — vim aborts
+        // the whole command and replaces nothing (not a partial run).
+        ed.replace_char_at('x', 3);
+        assert_eq!(line(&ed, 0), "ab", "partial replace must not happen");
+        assert_eq!(line(&ed, 1), "cd", "must not spill onto the next line");
+    }
+
+    #[test]
+    fn replace_char_count_fitting_replaces_run() {
+        let buf = Buffer::from_str("abc");
+        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        ed.replace_char_at('x', 2);
+        assert_eq!(line(&ed, 0), "xxc");
+    }
+}
 
 #[cfg(test)]
 mod comment_continuation_tests {

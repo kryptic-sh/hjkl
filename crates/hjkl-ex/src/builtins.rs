@@ -754,13 +754,12 @@ fn line_relocate_handler<H: Host>(
         return Some(ExEffect::Ok);
     }
 
-    // vim rejects moving a range into itself.
-    if !copy && dest >= s && dest < e + 1 && dest != 0 {
-        // dest inside [s, e] is illegal; dest == e means "after last src line"
-        // which is a no-op move. Treat both as no-op (vim errors; be lenient).
-        if dest >= s && dest <= e {
-            return Some(ExEffect::Error("cannot move lines into themselves".into()));
-        }
+    // vim (E134) rejects moving a range strictly *into* itself: the
+    // destination line lies in `[s, e-1]`. `dest == e` ("move to after the
+    // last source line") and `dest == s-1` ("move to before the first") are
+    // legal no-ops in vim — e.g. `:1,3m3` — so only reject the inner range.
+    if !copy && dest >= s && dest < e {
+        return Some(ExEffect::Error("cannot move lines into themselves".into()));
     }
 
     let block: Vec<String> = all_lines[(s - 1)..=(e - 1)].to_vec();

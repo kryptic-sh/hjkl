@@ -1380,6 +1380,42 @@ mod tests {
         assert_eq!(editor.buffer().row_count(), 1);
     }
 
+    #[test]
+    fn dispatch_move_range_to_its_own_end_is_noop_not_error() {
+        // `:1,3m3` moves lines 1-3 to after line 3 — a legal no-op in vim
+        // (E134 only fires for a destination strictly inside the range).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c", "d"]);
+        let result = try_dispatch(&reg, &mut editor, "1,3m3");
+        assert_eq!(result, Some(ExEffect::Ok), "`:1,3m3` must be accepted");
+        assert_eq!(
+            buf_lines(&editor),
+            vec!["a", "b", "c", "d"],
+            "must be a no-op"
+        );
+    }
+
+    #[test]
+    fn dispatch_move_range_into_itself_errors() {
+        // `:1,3m2` — destination line 2 is inside the source range → E134.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c", "d"]);
+        assert!(matches!(
+            try_dispatch(&reg, &mut editor, "1,3m2"),
+            Some(ExEffect::Error(_))
+        ));
+    }
+
+    #[test]
+    fn dispatch_move_range_to_top_reorders() {
+        // `:2,3m0` moves lines 2-3 to the top.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c", "d"]);
+        let result = try_dispatch(&reg, &mut editor, "2,3m0");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&editor), vec!["b", "c", "a", "d"]);
+    }
+
     // ---- Phase 2d: :sort ---------------------------------------------------
 
     #[test]

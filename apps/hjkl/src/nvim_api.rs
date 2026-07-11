@@ -502,11 +502,16 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
         "%:r" => {
-            // Remove final extension
+            // Remove the final extension — but only from the last path
+            // component, and never a leading dot (a dotfile like `.bashrc`
+            // has no extension). A dot inside a directory name, e.g.
+            // `foo.bar/baz`, must be left untouched.
             let s = path.to_string_lossy();
-            match s.rfind('.') {
-                Some(dot) => s[..dot].to_owned(),
-                None => s.into_owned(),
+            let file_start = s.rfind('/').map(|i| i + 1).unwrap_or(0);
+            match s[file_start..].rfind('.') {
+                // Dot strictly after the component start (relative index > 0).
+                Some(rel) if rel > 0 => s[..file_start + rel].to_owned(),
+                _ => s.into_owned(),
             }
         }
         _ => String::new(),
@@ -3195,6 +3200,46 @@ mod tests {
             }
         };
         assert_eq!(ext, "rs", "expand('%:e') should be the extension");
+    }
+
+    // ── expand("%:r") strips only the final-component extension ───────────────
+
+    #[test]
+    fn test_expand_root_modifier_respects_path_components() {
+        let mut app = build_app(None).unwrap();
+        let cur_handle = assert_ok(call(&mut app, "nvim_get_current_buf", vec![]));
+
+        let root_of = |app: &mut crate::app::App, path: &str| -> String {
+            assert_ok(call(
+                app,
+                "nvim_buf_set_name",
+                vec![cur_handle.clone(), Value::from(path)],
+            ));
+            match assert_ok(call(
+                app,
+                "nvim_call_function",
+                vec![
+                    Value::from("expand"),
+                    Value::Array(vec![Value::from("%:r")]),
+                ],
+            )) {
+                Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+                other => panic!("expected string, got {other:?}"),
+            }
+        };
+
+        // Normal extension strip.
+        assert_eq!(root_of(&mut app, "/home/user/main.rs"), "/home/user/main");
+        // A dot in a *directory* name must NOT be treated as an extension.
+        assert_eq!(
+            root_of(&mut app, "/home/user/proj.v2/main"),
+            "/home/user/proj.v2/main"
+        );
+        // A dotfile has no extension.
+        assert_eq!(
+            root_of(&mut app, "/home/user/.bashrc"),
+            "/home/user/.bashrc"
+        );
     }
 
     // ── line(".") and col(".") are 1-based ────────────────────────────────────

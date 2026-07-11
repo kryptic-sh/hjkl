@@ -19,12 +19,18 @@ pub struct ExpandContext<'a> {
 }
 
 /// Apply a single modifier (`:p`, `:h`, `:t`) to a path string.
+///
+/// `cwd` supplies the base directory for `:p` (making a relative path
+/// absolute); when `None` it falls back to the process working directory.
 /// Returns `None` when the modifier is unrecognised.
-fn apply_modifier(s: &str, modifier: &str) -> Option<String> {
+fn apply_modifier(s: &str, modifier: &str, cwd: Option<&Path>) -> Option<String> {
     match modifier {
         "p" => {
             let p = Path::new(s);
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cwd = cwd
+                .map(Path::to_path_buf)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from("."));
             let abs = if p.is_absolute() {
                 p.to_path_buf()
             } else {
@@ -54,8 +60,8 @@ fn apply_modifier(s: &str, modifier: &str) -> Option<String> {
 }
 
 /// Apply a chain of modifiers (e.g. `p:h` from `%:p:h`) to a base value.
-/// Returns `None` if any modifier is unknown.
-fn apply_modifiers(mut value: String, modifiers: &str) -> Option<String> {
+/// `cwd` is forwarded to `:p`. Returns `None` if any modifier is unknown.
+fn apply_modifiers(mut value: String, modifiers: &str, cwd: Option<&Path>) -> Option<String> {
     if modifiers.is_empty() {
         return Some(value);
     }
@@ -63,7 +69,7 @@ fn apply_modifiers(mut value: String, modifiers: &str) -> Option<String> {
         if modifier.is_empty() {
             continue;
         }
-        value = apply_modifier(&value, modifier)?;
+        value = apply_modifier(&value, modifier, cwd)?;
     }
     Some(value)
 }
@@ -81,7 +87,7 @@ pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
             .unwrap()
             .strip_prefix(':')
             .unwrap_or("");
-        return apply_modifiers(base, mods);
+        return apply_modifiers(base, mods, ctx.cwd);
     }
 
     // Try `#` with optional `:mod` chain.
@@ -92,7 +98,7 @@ pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
             .unwrap()
             .strip_prefix(':')
             .unwrap_or("");
-        return apply_modifiers(base, mods);
+        return apply_modifiers(base, mods, ctx.cwd);
     }
 
     // Try `<cword>` with optional `:mod` chain.
@@ -103,7 +109,7 @@ pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
             .unwrap()
             .strip_prefix(':')
             .unwrap_or("");
-        return apply_modifiers(base, mods);
+        return apply_modifiers(base, mods, ctx.cwd);
     }
 
     // Try `<cWORD>` with optional `:mod` chain.
@@ -114,7 +120,7 @@ pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
             .unwrap()
             .strip_prefix(':')
             .unwrap_or("");
-        return apply_modifiers(base, mods);
+        return apply_modifiers(base, mods, ctx.cwd);
     }
 
     None
@@ -267,6 +273,23 @@ mod tests {
             ":p must produce absolute path, got {expanded:?}"
         );
         assert!(expanded.ends_with("Cargo.toml"), "must end with Cargo.toml");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn percent_colon_p_uses_ctx_cwd() {
+        // `:p` must resolve a relative path against `ctx.cwd` when supplied,
+        // not the process working directory. Use a nonexistent cwd so
+        // `canonicalize` fails and the lexical join is observable.
+        let ctx = ExpandContext {
+            current_path: Some(Path::new("rel.txt")),
+            cwd: Some(Path::new("/nonexistent-cwd-abc")),
+            ..Default::default()
+        };
+        assert_eq!(
+            expand_filename(&ctx, "%:p"),
+            Some("/nonexistent-cwd-abc/rel.txt".to_string())
+        );
     }
 
     #[test]
