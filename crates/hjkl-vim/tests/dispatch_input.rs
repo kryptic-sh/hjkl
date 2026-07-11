@@ -249,6 +249,93 @@ fn sneak_disabled_falls_through_to_substitute_char() {
     assert_eq!(e.cursor().1, 0, "cursor should be col 0 after s+char+Esc");
 }
 
+// ── count-threading regression tests ──────────────────────────────────────────
+
+/// Completing a sneak jump must not leave a stale count in the editor: after
+/// `sba`, `0` is the LineStart motion, not a count digit.
+#[test]
+fn sneak_does_not_leak_count_into_next_command() {
+    let mut e = editor_with("foo bar baz qux");
+    dispatch_keys(&mut e, "sba");
+    assert_eq!(e.cursor(), (0, 4), "s+ba should land on 'ba' in 'bar'");
+    assert_eq!(e.count(), 0, "sneak must not leave a stale count behind");
+    dispatch_keys(&mut e, "0");
+    assert_eq!(e.cursor(), (0, 0), "0 after a sneak must be LineStart");
+}
+
+/// Cancelling `f` with Esc must drop the stashed count: `3f<Esc>x` deletes
+/// one char, not three.
+#[test]
+fn cancelled_find_drops_count() {
+    let mut e = editor_with("abcdef");
+    dispatch_keys(&mut e, "3f<Esc>x");
+    assert!(
+        e.content().starts_with("bcdef"),
+        "3f<Esc> must discard the count; got: {:?}",
+        e.content()
+    );
+}
+
+/// Cancelling `r` with Esc must drop the stashed count: `3r<Esc>x` deletes
+/// one char, not three.
+#[test]
+fn cancelled_replace_drops_count() {
+    let mut e = editor_with("abcdef");
+    dispatch_keys(&mut e, "3r<Esc>x");
+    assert!(
+        e.content().starts_with("bcdef"),
+        "3r<Esc> must discard the count; got: {:?}",
+        e.content()
+    );
+}
+
+// Note: the pathological `count1 * count2` saturation is covered by the
+// `op_total_count_saturates_instead_of_overflowing` unit test in
+// `pending.rs`. It is NOT exercised end-to-end here because feeding a
+// `usize::MAX` count into the real engine makes the engine's operator-apply
+// loop iterate that many times (a separate, engine-side unbounded-work
+// concern outside this crate's slice).
+
+/// `@1` plays register 1 — a digit after `@` names a register, it is not a
+/// count prefix (mirrors `q1` / `"1`).
+#[test]
+fn at_digit_plays_numbered_register() {
+    let mut e = editor_with("ab");
+    // Register `"1` is the head of the delete ring.
+    e.registers_mut()
+        .record_delete("x".to_string(), false, None);
+    dispatch_keys(&mut e, "@1");
+    assert!(
+        e.content().starts_with('b'),
+        "@1 should play the `x` macro in register 1; got: {:?}",
+        e.content()
+    );
+}
+
+/// A self-recursive macro (register `a` containing `@a`) must terminate at
+/// the replay-depth cap instead of overflowing the stack.
+#[test]
+fn recursive_macro_terminates() {
+    let mut e = editor_with("hello");
+    e.registers_mut()
+        .record_yank("@a".to_string(), false, Some('a'));
+    dispatch_keys(&mut e, "@a");
+    // Reaching here (no stack overflow) is the regression assertion.
+}
+
+/// A huge numeric search offset (`/pat/e+N`) must saturate instead of
+/// overflowing isize arithmetic (panic in debug builds).
+#[test]
+fn search_offset_huge_value_does_not_panic() {
+    let mut e = editor_with("abx");
+    dispatch_keys(&mut e, "/x/e+9223372036854775807<CR>");
+    assert_eq!(e.cursor().0, 0, "cursor stays on the matched row");
+    let mut e2 = editor_with("foo\nbar x baz");
+    e2.jump_cursor(1, 0);
+    dispatch_keys(&mut e2, "/x/-9223372036854775808<CR>");
+    // Reaching here without a panic is the regression assertion.
+}
+
 /// `esc_exits_blame_view`: BLAME is an FSM-owned read-only view; Esc in Normal
 /// leaves it (the host no longer intercepts the key).
 #[test]

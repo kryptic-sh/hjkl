@@ -42,6 +42,7 @@ pub fn step_normal<H: Host>(
                 | Pending::GotoMarkLine
                 | Pending::GotoMarkChar
                 | Pending::RecordMacroTarget
+                | Pending::PlayMacroTarget { .. }
                 | SneakFirst { .. }
                 | SneakSecond { .. }
                 | OpSneakFirst { .. }
@@ -549,8 +550,10 @@ fn handle_normal_only<H: Host>(
         }
         Key::Char('s') => {
             if ed.settings().motion_sneak {
-                // vim-sneak: `s` enters SneakFirst (forward).
-                ed.set_count(count);
+                // vim-sneak: `s` enters SneakFirst (forward). The count is
+                // threaded through the pending payload only — stashing it in
+                // the editor accumulator too would leak it into the command
+                // that follows the sneak (nothing on this path takes it back).
                 ed.set_pending(SneakFirst {
                     forward: true,
                     count,
@@ -562,8 +565,8 @@ fn handle_normal_only<H: Host>(
         }
         Key::Char('S') => {
             if ed.settings().motion_sneak {
-                // vim-sneak: `S` enters SneakFirst (backward).
-                ed.set_count(count);
+                // vim-sneak: `S` enters SneakFirst (backward). Count threads
+                // through the pending payload only (see `s` above).
                 ed.set_pending(SneakFirst {
                     forward: false,
                     count,
@@ -684,6 +687,20 @@ fn handle_play_macro_target<H: Host>(
     };
     let keys = hjkl_engine::decode_macro(&text);
     ed.set_last_macro(Some(reg));
+    // Replay-recursion guard: a register whose text plays itself (e.g.
+    // register `a` holding "@a") would otherwise recurse through
+    // `dispatch_input` until the stack overflows. Vim bounds nested
+    // replay via 'maxmapdepth'; we cap the same way and silently stop
+    // at the limit.
+    const MAX_REPLAY_DEPTH: usize = 100;
+    thread_local! {
+        static REPLAY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    let depth = REPLAY_DEPTH.with(std::cell::Cell::get);
+    if depth >= MAX_REPLAY_DEPTH {
+        return true;
+    }
+    REPLAY_DEPTH.with(|d| d.set(depth + 1));
     let times = count.max(1);
     let was_replaying = ed.is_replaying_macro_raw();
     ed.set_replaying_macro_raw(true);
@@ -693,6 +710,7 @@ fn handle_play_macro_target<H: Host>(
         }
     }
     ed.set_replaying_macro_raw(was_replaying);
+    REPLAY_DEPTH.with(|d| d.set(depth));
     true
 }
 
@@ -771,7 +789,7 @@ fn handle_after_op<H: Host>(
         && Some(c) == double_ch
     {
         let count2 = ed.take_count();
-        let total = count1.max(1) * count2.max(1);
+        let total = count1.max(1).saturating_mul(count2.max(1));
         ed.apply_op_double(op, total);
         return true;
     }
@@ -838,7 +856,7 @@ fn handle_after_op<H: Host>(
 
     // Motion.
     let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let total = count1.max(1).saturating_mul(count2.max(1));
     if let Some(motion) = parse_motion(&input) {
         let motion = match motion {
             Motion::FindRepeat { reverse } => match ed.last_find() {
@@ -885,11 +903,13 @@ fn handle_op_after_g<H: Host>(
     op: Operator,
     count1: usize,
 ) -> bool {
+    // Consume the inner count first so a cancelled chord (ctrl-key /
+    // non-char) doesn't leak it into the next command.
+    let count2 = ed.take_count();
     if input.ctrl {
         return true;
     }
-    let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let total = count1.max(1).saturating_mul(count2.max(1));
     if let Key::Char(ch) = input.key {
         ed.apply_op_g(op, ch, total);
     }
@@ -958,12 +978,14 @@ fn handle_replace<H: Host>(
     ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     input: Input,
 ) -> bool {
+    // Consume the stashed count up front so a cancelled chord (Esc or any
+    // non-char key) doesn't leak it into the next command.
+    let count = ed.take_count();
     if let Key::Char(ch) = input.key {
         if ed.fsm_mode() == FsmMode::VisualBlock {
             ed.replace_block_char(ch);
             return true;
         }
-        let count = ed.take_count();
         ed.replace_char_at(ch, count.max(1));
         if !ed.is_replaying() {
             ed.set_last_change(Some(LastChange::ReplaceChar {
@@ -981,10 +1003,12 @@ fn handle_find_target<H: Host>(
     forward: bool,
     till: bool,
 ) -> bool {
+    // Consume the count first: a cancelled chord (Esc / non-char) must not
+    // leak the stashed count into the next command.
+    let count = ed.take_count();
     let Key::Char(ch) = input.key else {
         return true;
     };
-    let count = ed.take_count();
     ed.find_char(ch, forward, till, count.max(1));
     true
 }
@@ -997,11 +1021,12 @@ fn handle_op_find_target<H: Host>(
     forward: bool,
     till: bool,
 ) -> bool {
+    // Consume the inner count first so a cancelled chord doesn't leak it.
+    let count2 = ed.take_count();
     let Key::Char(ch) = input.key else {
         return true;
     };
-    let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let total = count1.max(1).saturating_mul(count2.max(1));
     ed.apply_op_find(op, ch, forward, till, total);
     true
 }
@@ -1013,14 +1038,15 @@ fn handle_text_object<H: Host>(
     count1: usize,
     inner: bool,
 ) -> bool {
-    let Key::Char(ch) = input.key else {
-        return true;
-    };
     // Counts multiply across the operator and the text object: both `2di{` and
     // `d2i{` target the 2nd enclosing pair. For bracket objects this selects
     // the Nth enclosing pair; non-bracket objects ignore the count (as in vim).
+    // Consumed before the char check so a cancelled chord doesn't leak it.
     let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let Key::Char(ch) = input.key else {
+        return true;
+    };
+    let total = count1.max(1).saturating_mul(count2.max(1));
     // Delegate to shared implementation; unknown chars are a no-op (return true
     // to consume the key from the FSM regardless).
     ed.apply_op_text_obj(op, ch, inner, total);
@@ -1113,6 +1139,9 @@ fn handle_op_after_square_bracket_open<H: Host>(
     op: Operator,
     count1: usize,
 ) -> bool {
+    // Consume the inner count first so an unknown second key (cancel path)
+    // doesn't leak it into the next command.
+    let count2 = ed.take_count();
     let motion = match input.key {
         Key::Char('[') => Motion::SectionBackward,
         Key::Char(']') => Motion::SectionEndBackward,
@@ -1126,8 +1155,7 @@ fn handle_op_after_square_bracket_open<H: Host>(
         },
         _ => return true,
     };
-    let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let total = count1.max(1).saturating_mul(count2.max(1));
     ed.apply_op_with_motion_direct(op, &motion, total);
     true
 }
@@ -1139,6 +1167,8 @@ fn handle_op_after_square_bracket_close<H: Host>(
     op: Operator,
     count1: usize,
 ) -> bool {
+    // Consume the inner count first (mirrors the `[`-prefix handler).
+    let count2 = ed.take_count();
     let motion = match input.key {
         Key::Char(']') => Motion::SectionForward,
         Key::Char('[') => Motion::SectionEndForward,
@@ -1152,8 +1182,7 @@ fn handle_op_after_square_bracket_close<H: Host>(
         },
         _ => return true,
     };
-    let count2 = ed.take_count();
-    let total = count1.max(1) * count2.max(1);
+    let total = count1.max(1).saturating_mul(count2.max(1));
     ed.apply_op_with_motion_direct(op, &motion, total);
     true
 }
@@ -1265,7 +1294,11 @@ fn handle_op_sneak_first<H: Host>(
     forward: bool,
 ) -> bool {
     match input.key {
-        Key::Esc => true,
+        Key::Esc => {
+            // Cancel — drop any inner count so it doesn't leak.
+            ed.reset_count();
+            true
+        }
         Key::Char(c1) => {
             ed.set_pending(hjkl_engine::Pending::OpSneakSecond {
                 op,
@@ -1275,7 +1308,10 @@ fn handle_op_sneak_first<H: Host>(
             });
             true
         }
-        _ => true,
+        _ => {
+            ed.reset_count();
+            true
+        }
     }
 }
 
@@ -1288,11 +1324,12 @@ fn handle_op_sneak_second<H: Host>(
     c1: char,
     forward: bool,
 ) -> bool {
+    // Consume the inner count first so a cancelled chord doesn't leak it.
+    let count2 = ed.take_count();
     match input.key {
         Key::Esc => true,
         Key::Char(c2) => {
-            let count2 = ed.take_count();
-            let total = count1.max(1) * count2.max(1);
+            let total = count1.max(1).saturating_mul(count2.max(1));
             ed.apply_op_sneak(op, c1, c2, forward, total);
             true
         }

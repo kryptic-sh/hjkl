@@ -149,21 +149,26 @@ fn apply_search_offset<H: Host>(
     let (row, col) = ed.cursor();
     match offset.chars().next() {
         Some('e') => {
+            // Saturating arithmetic: `n` is user input and can be `isize::MAX`
+            // / `isize::MIN`, which would overflow a plain add (panic in
+            // debug builds).
             let n: isize = offset[1..].parse().unwrap_or(0);
             let len = match_len_at(ed, row, col) as isize;
-            let end = col as isize + (len - 1).max(0) + n;
+            let end = (col as isize)
+                .saturating_add((len - 1).max(0))
+                .saturating_add(n);
             ed.jump_cursor(row, end.max(0) as usize);
         }
         Some('s') | Some('b') => {
             let n: isize = offset[1..].parse().unwrap_or(0);
-            ed.jump_cursor(row, (col as isize + n).max(0) as usize);
+            ed.jump_cursor(row, (col as isize).saturating_add(n).max(0) as usize);
         }
         _ => {
             // Line offset: move N lines and land on the first non-blank.
             let n: isize = offset.parse().unwrap_or(0);
             let rope = ed.buffer().rope();
             let last = rope.len_lines().saturating_sub(1);
-            let new_row = (row as isize + n).clamp(0, last as isize) as usize;
+            let new_row = (row as isize).saturating_add(n).clamp(0, last as isize) as usize;
             let line = hjkl_buffer::rope_line_str(&rope, new_row);
             let fnb = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
             drop(rope);

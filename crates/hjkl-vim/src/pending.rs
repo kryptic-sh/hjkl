@@ -198,7 +198,7 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
                 }
             }
             Key::Char(ch) => {
-                let total = count1.max(1) * inner_count.max(1);
+                let total = count1.max(1).saturating_mul(inner_count.max(1));
                 // Doubled letter → line op (dd/yy/cc/>>/<<).
                 if ch == op.double_char() {
                     Outcome::Commit(crate::cmd::EngineCmd::ApplyOpDouble {
@@ -211,13 +211,13 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
                 } else if ch == 'i' {
                     Outcome::Wait(PendingState::OpTextObj {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         inner: true,
                     })
                 } else if ch == 'a' {
                     Outcome::Wait(PendingState::OpTextObj {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         inner: false,
                     })
                 // g-chord sub-pending (dgg, dge, etc.): transition to OpG so
@@ -227,7 +227,7 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
                 } else if ch == 'g' {
                     Outcome::Wait(PendingState::OpG {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                     })
                 // Find sub-pending (df/dF/dt/dT): transition to OpFind instead
                 // of setting engine Pending::OpFind. `total_count` collapses
@@ -235,28 +235,28 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
                 } else if ch == 'f' {
                     Outcome::Wait(PendingState::OpFind {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         forward: true,
                         till: false,
                     })
                 } else if ch == 'F' {
                     Outcome::Wait(PendingState::OpFind {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         forward: false,
                         till: false,
                     })
                 } else if ch == 't' {
                     Outcome::Wait(PendingState::OpFind {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         forward: true,
                         till: true,
                     })
                 } else if ch == 'T' {
                     Outcome::Wait(PendingState::OpFind {
                         op,
-                        total_count: count1.max(1) * inner_count.max(1),
+                        total_count: total,
                         forward: false,
                         till: true,
                     })
@@ -980,6 +980,38 @@ mod tests {
                 motion_key: 'w',
                 total_count: 10,
             })
+        );
+    }
+
+    #[test]
+    fn op_total_count_saturates_instead_of_overflowing() {
+        // Pathological counts: count1 * inner_count must saturate, not
+        // overflow (overflow panics in debug builds).
+        let state = PendingState::AfterOp {
+            op: OperatorKind::Delete,
+            count1: usize::MAX,
+            inner_count: 2,
+        };
+        assert_eq!(
+            step(state, Key::Char('w')),
+            Outcome::Commit(EngineCmd::ApplyOpMotion {
+                op: OperatorKind::Delete,
+                motion_key: 'w',
+                total_count: usize::MAX,
+            })
+        );
+        // Same guard on the OpFind transition fold.
+        let Outcome::Wait(folded) = step(state, Key::Char('f')) else {
+            panic!("expected Wait(OpFind)");
+        };
+        assert_eq!(
+            folded,
+            PendingState::OpFind {
+                op: OperatorKind::Delete,
+                total_count: usize::MAX,
+                forward: true,
+                till: false,
+            }
         );
     }
 

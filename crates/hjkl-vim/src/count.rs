@@ -35,6 +35,10 @@ impl CountAccumulator {
         self.buffer
     }
 
+    /// Vim caps counts at 999,999,999 (`:h count`); larger prefixes clamp
+    /// here so downstream `count * n` math can't overflow.
+    pub const MAX_COUNT: u32 = 999_999_999;
+
     /// Try to accumulate a digit character.
     ///
     /// Returns `true` if the digit was consumed; `false` otherwise —
@@ -42,7 +46,7 @@ impl CountAccumulator {
     /// with an empty buffer (vim's LineStart-vs-digit-0 split). The
     /// caller routes `false` results through the keymap.
     ///
-    /// Saturates at `u32::MAX` to guard pathological input.
+    /// Clamps at [`Self::MAX_COUNT`] to guard pathological input.
     pub fn try_accumulate(&mut self, ch: char) -> bool {
         if !ch.is_ascii_digit() {
             return false;
@@ -51,7 +55,11 @@ impl CountAccumulator {
             return false;
         }
         let d = (ch as u8 - b'0') as u32;
-        self.buffer = self.buffer.saturating_mul(10).saturating_add(d);
+        self.buffer = self
+            .buffer
+            .saturating_mul(10)
+            .saturating_add(d)
+            .min(Self::MAX_COUNT);
         true
     }
 
@@ -172,13 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn try_accumulate_saturates_on_overflow() {
-        // Push many '9's — should saturate at u32::MAX without panicking.
+    fn try_accumulate_clamps_at_vim_max_count() {
+        // Push many '9's — must clamp at vim's 999,999,999 count cap
+        // (`:h count`) without panicking.
         let mut acc = CountAccumulator::new();
         for _ in 0..20 {
             acc.try_accumulate('9');
         }
-        assert_eq!(acc.peek(), u32::MAX);
+        assert_eq!(acc.peek(), CountAccumulator::MAX_COUNT);
+        // And drain_as_digits replays the clamped value, not 20 nines.
+        assert_eq!(acc.drain_as_digits(), "999999999");
     }
 
     #[test]
