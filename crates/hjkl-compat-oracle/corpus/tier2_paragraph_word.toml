@@ -40,3 +40,64 @@ initial_cursor = [0, 8]
 keys = "gE"
 expected_buffer = "foo-bar baz\n"
 expected_cursor = [0, 6]
+
+# `w` on an empty line: vim counts the empty line as a word, so `w` steps off
+# it to the first word of the next non-empty line.
+[[cases]]
+name = "word_w_from_empty_line"
+initial_buffer = "foo\n\nbar\n"
+initial_cursor = [1, 0]
+keys = "w"
+expected_buffer = "foo\n\nbar\n"
+expected_cursor = [2, 0]
+
+# `w` on an empty line with another empty line following stops on that next
+# empty line (each empty line is its own word).
+[[cases]]
+name = "word_w_from_empty_line_to_empty_line"
+initial_buffer = "foo\n\n\nbar\n"
+initial_cursor = [1, 0]
+keys = "w"
+expected_buffer = "foo\n\n\nbar\n"
+expected_cursor = [2, 0]
+
+# `dw` on the LAST word of a line stops at end-of-line — it does NOT eat the
+# newline and join the next line (vim `:h word` special case).
+[[cases]]
+name = "operator_dw_last_word_keeps_newline"
+initial_buffer = "foo bar\nbaz\n"
+initial_cursor = [0, 4]
+keys = "dw"
+expected_buffer = "foo \nbaz\n"
+expected_cursor = [0, 3]
+
+# Same special case with leading indent on the next line: `dw` still stops at
+# end of the current line rather than deleting into "  baz".
+[[cases]]
+name = "operator_dw_last_word_next_line_indented"
+initial_buffer = "foo bar\n  baz\n"
+initial_cursor = [0, 4]
+keys = "dw"
+expected_buffer = "foo \n  baz\n"
+expected_cursor = [0, 3]
+
+# `d2w` whose LAST word is mid-line on a later row is NOT clamped — the
+# special case only applies when the last word ends its line. Here it deletes
+# "foo\nbar " up to "baz".
+[[cases]]
+name = "operator_d2w_into_midline_word_not_clamped"
+initial_buffer = "foo\nbar baz\n"
+initial_cursor = [0, 0]
+keys = "d2w"
+expected_buffer = "baz\n"
+expected_cursor = [0, 0]
+
+# `yw` on the last word of a line yanks just the word (no trailing newline);
+# pasting it back reproduces the word inline.
+[[cases]]
+name = "operator_yw_last_word_no_newline"
+initial_buffer = "foo bar\nbaz\n"
+initial_cursor = [0, 4]
+keys = "ywP"
+expected_buffer = "foo barbar\nbaz\n"
+expected_cursor = [0, 6]

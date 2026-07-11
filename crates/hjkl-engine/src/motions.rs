@@ -900,6 +900,16 @@ fn next_word_start<B: Query + ?Sized>(
                 None => return Some(end_of_buffer(buf)),
             }
         }
+    } else {
+        // `from` sits on an empty line. Vim counts an empty line as a word
+        // (`:help word`), so `w` steps off it — the whitespace/word scan
+        // below then lands on the next word start (possibly another empty
+        // line, which stops the scan since its char kind is neither Space
+        // nor a word char).
+        match step_forward(buf, cur) {
+            Some(next) => cur = next,
+            None => return Some(end_of_buffer(buf)),
+        }
     }
     // Skip whitespace runs (within row + across rows) to land on
     // the next non-space char.
@@ -1248,6 +1258,36 @@ mod tests {
         assert_eq!(at(&b), Position::new(0, 3));
         move_word_fwd(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 4));
+    }
+
+    #[test]
+    fn move_word_fwd_off_empty_line() {
+        // vim: `w` on an empty line counts the empty line as a word and steps
+        // to the first word of the next non-empty line.
+        let mut b = Buffer::from_str("foo\n\nbar");
+        let mut sticky = None;
+        {
+            let f = folds(&b);
+            move_down(&mut b, &f, 1, &mut sticky);
+        }
+        assert_eq!(at(&b), Position::new(1, 0));
+        move_word_fwd(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(2, 0));
+    }
+
+    #[test]
+    fn move_word_fwd_empty_line_stops_on_next_empty_line() {
+        // Each empty line is its own word, so `w` from one blank line lands on
+        // the next blank line, not skipping to the following text.
+        let mut b = Buffer::from_str("foo\n\n\nbar");
+        let mut sticky = None;
+        {
+            let f = folds(&b);
+            move_down(&mut b, &f, 1, &mut sticky);
+        }
+        assert_eq!(at(&b), Position::new(1, 0));
+        move_word_fwd(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(2, 0));
     }
 
     #[test]

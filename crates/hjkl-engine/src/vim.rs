@@ -4862,8 +4862,24 @@ pub(crate) fn apply_op_with_motion<H: crate::types::Host>(
     // exclusive-motion endpoint behaviour), enabling `dl` / `cl` /
     // `yl` to cover the final char.
     apply_motion_cursor_ctx(ed, motion, count, true);
-    let end = ed.cursor();
-    let kind = motion_kind(motion);
+    let mut end = ed.cursor();
+    let mut kind = motion_kind(motion);
+    // Vim special case (`:h word`): when `w`/`W` is used with an operator and
+    // the last word moved over ends its line, the operated text stops at the
+    // end of that word instead of eating the line break into the next line's
+    // first word. `d2w` that ends mid-line on a later row is unaffected, since
+    // its last word is not at end-of-line. When the word-forward motion
+    // crossed onto a later row, clamp `end` back to the last non-blank char it
+    // moved over and make the range inclusive.
+    if matches!(motion, Motion::WordFwd | Motion::BigWordFwd)
+        && kind == RangeKind::Exclusive
+        && end.0 > start.0
+        && let Some(word_end) = last_word_end_before(ed, start, end)
+        && word_end.0 < end.0
+    {
+        end = word_end;
+        kind = RangeKind::Inclusive;
+    }
     // Restore cursor before selecting (so Yank leaves cursor at start).
     ed.jump_cursor(start.0, start.1);
 
@@ -4877,6 +4893,39 @@ pub(crate) fn apply_op_with_motion<H: crate::types::Host>(
     }
 
     run_operator_over_range(ed, op, start, end, kind);
+}
+
+/// Position of the last non-blank char in the half-open range `[start, end)`,
+/// scanning rows from the bottom up. Used to clamp `dw`/`dW` at end-of-line
+/// (vim's `:h word` special case): the returned position is the end of the
+/// last word moved over. For a counted `d{n}w` the last word can sit on the
+/// landing row itself (before `end.1`), so that row is scanned too — only
+/// columns `[.., end.1)` there — which is what keeps `d2w` ending mid-line
+/// (last word not at EOL, `word_end.0 == end.0`) from being clamped.
+fn last_word_end_before<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+) -> Option<(usize, usize)> {
+    for r in (start.0..=end.0).rev() {
+        let line = buf_line(&ed.buffer, r).unwrap_or_default();
+        let lo = if r == start.0 { start.1 } else { 0 };
+        let hi = if r == end.0 {
+            end.1
+        } else {
+            line.chars().count()
+        };
+        let last = line
+            .chars()
+            .enumerate()
+            .filter(|(i, ch)| *i >= lo && *i < hi && *ch != ' ' && *ch != '\t')
+            .map(|(i, _)| i)
+            .last();
+        if let Some(col) = last {
+            return Some((r, col));
+        }
+    }
+    None
 }
 
 fn apply_op_with_text_object<H: crate::types::Host>(

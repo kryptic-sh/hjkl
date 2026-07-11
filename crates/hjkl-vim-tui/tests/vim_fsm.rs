@@ -274,6 +274,25 @@ fn dot_repeats_x() {
 }
 
 #[test]
+fn dw_on_last_word_keeps_newline() {
+    // vim `:h word` special case: `dw` on the last word of a line stops at
+    // end-of-line, it does not eat the newline and join the next line.
+    let mut e = editor_with("foo bar\nbaz");
+    run_keys(&mut e, "wdw");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "baz");
+}
+
+#[test]
+fn d2w_into_midline_word_not_clamped() {
+    // The special case only applies when the LAST word moved over ends its
+    // line. `d2w` whose last word is mid-line on a later row still spans it.
+    let mut e = editor_with("foo\nbar baz");
+    run_keys(&mut e, "d2w");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "baz");
+}
+
+#[test]
 fn dot_repeat_count_replaces_not_multiplies() {
     // vim `[count].` replaces the stored count (`:h .`), it does not multiply.
     let mut e = editor_with("abcdefghij");
