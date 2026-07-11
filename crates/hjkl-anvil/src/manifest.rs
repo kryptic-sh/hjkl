@@ -36,6 +36,21 @@ pub enum ManifestError {
     #[error("tool {0:?} has an empty bin string")]
     EmptyBin(String),
 
+    #[error(
+        "tool {tool:?} has invalid github repo {repo:?}: expected \"owner/name\" \
+         (ASCII alphanumeric, '-', '_', '.'; no path traversal)"
+    )]
+    InvalidRepo { tool: String, repo: String },
+
+    #[error(
+        "tool {tool:?} has invalid asset pattern {pattern:?}: must be a flat \
+         filename (no '/', '\\', '..', whitespace, or control characters)"
+    )]
+    InvalidAssetPattern { tool: String, pattern: String },
+
+    #[error("tool {tool:?} has invalid url {url:?}: must be an absolute https:// URL")]
+    InvalidUrl { tool: String, url: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -147,7 +162,15 @@ impl Manifest {
     ///
     /// - Tool names must be lowercase ASCII alphanumeric + `-` + `_`.
     /// - `bin` and `version` must be non-empty per entry.
-    /// - `Github` entries must supply at least one SHA-256 triple.
+    /// - `Github` entries must supply at least one SHA-256 triple, a
+    ///   well-formed `owner/name` repo, and a traversal-free asset pattern.
+    /// - `Script` entries must supply an absolute `https://` URL and a pinned
+    ///   64-hex SHA-256.
+    ///
+    /// The repo / URL / asset checks matter because these fields are
+    /// interpolated into the download URL (and the repo/asset into a path);
+    /// an unvalidated entry from an untrusted manifest could otherwise point
+    /// the downloader at an arbitrary host or escape the release-URL path.
     pub fn validate(&self) -> Result<(), ManifestError> {
         for (name, spec) in &self.tool {
             // Name validation: lowercase ASCII alnum + '-' + '_'
@@ -162,26 +185,109 @@ impl Manifest {
             if spec.bin.is_empty() {
                 return Err(ManifestError::EmptyBin(name.clone()));
             }
-            // Github: validate each sha256 value.
-            // - "" → TOFU (allowed)
-            // - exactly 64 lowercase hex chars → pinned (allowed)
-            // - anything else (including all-zero placeholders) → rejected
-            if let InstallMethod::Github(ref g) = spec.method {
-                if g.sha256.is_empty() {
-                    return Err(ManifestError::MissingChecksums(name.clone()));
+            match &spec.method {
+                InstallMethod::Github(g) => {
+                    // Repo is interpolated into `https://github.com/<repo>/…`;
+                    // require a plain `owner/name` so it can't redirect the
+                    // download or escape the URL path.
+                    if !is_valid_repo(&g.repo) {
+                        return Err(ManifestError::InvalidRepo {
+                            tool: name.clone(),
+                            repo: g.repo.clone(),
+                        });
+                    }
+                    // Asset pattern is the final URL path segment (a flat
+                    // release-asset filename) — reject traversal / separators.
+                    if !is_safe_asset_pattern(&g.asset_pattern) {
+                        return Err(ManifestError::InvalidAssetPattern {
+                            tool: name.clone(),
+                            pattern: g.asset_pattern.clone(),
+                        });
+                    }
+                    if g.sha256.is_empty() {
+                        return Err(ManifestError::MissingChecksums(name.clone()));
+                    }
+                    // Per-triple sha: "" → TOFU (allowed); 64 lowercase hex →
+                    // pinned (allowed); anything else (incl. all-zero) rejected.
+                    for (triple, value) in &g.sha256 {
+                        if !value.is_empty() && !is_valid_pinned_sha256(value) {
+                            return Err(ManifestError::InvalidSha256 {
+                                tool: name.clone(),
+                                triple: triple.clone(),
+                                value: value.clone(),
+                            });
+                        }
+                    }
                 }
-                for (triple, value) in &g.sha256 {
-                    if !value.is_empty() && !is_valid_pinned_sha256(value) {
+                InstallMethod::Script(s) => {
+                    // The script method downloads and executes `url`; require
+                    // an absolute https URL and a pinned checksum (no TOFU for
+                    // arbitrary-URL scripts).
+                    if !is_valid_https_url(&s.url) {
+                        return Err(ManifestError::InvalidUrl {
+                            tool: name.clone(),
+                            url: s.url.clone(),
+                        });
+                    }
+                    if !is_valid_pinned_sha256(&s.sha256) {
                         return Err(ManifestError::InvalidSha256 {
                             tool: name.clone(),
-                            triple: triple.clone(),
-                            value: value.clone(),
+                            triple: "<script>".to_string(),
+                            value: s.sha256.clone(),
                         });
                     }
                 }
+                InstallMethod::Cargo(_)
+                | InstallMethod::Npm(_)
+                | InstallMethod::Pip(_)
+                | InstallMethod::GoInstall(_) => {}
             }
         }
         Ok(())
+    }
+}
+
+/// Valid GitHub `owner/name`: exactly two non-empty segments split by a single
+/// `/`, each ASCII alphanumeric + `-` / `_` / `.`, and neither segment equal to
+/// `.` or `..`. GitHub owners/repos preserve case, so uppercase is allowed.
+fn is_valid_repo(repo: &str) -> bool {
+    let mut parts = repo.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    [owner, name].iter().all(|seg| is_valid_repo_segment(seg))
+}
+
+fn is_valid_repo_segment(seg: &str) -> bool {
+    !seg.is_empty()
+        && seg != "."
+        && seg != ".."
+        && seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// A GitHub release asset is a flat filename. Reject path separators, `..`,
+/// whitespace, and control characters so the pattern can't escape the
+/// release-download URL path once `{triple}`/`{version}` are substituted.
+fn is_safe_asset_pattern(p: &str) -> bool {
+    !p.is_empty()
+        && !p.contains("..")
+        && p.chars()
+            .all(|c| !c.is_control() && !c.is_whitespace() && c != '/' && c != '\\')
+}
+
+/// Structural check that `u` is an absolute `https://` URL with a host and no
+/// control/whitespace characters. The downloader (`reqwest`) performs the full
+/// parse; this rejects `http://`, `file://`, and other schemes up front.
+fn is_valid_https_url(u: &str) -> bool {
+    match u.strip_prefix("https://") {
+        Some(rest) => {
+            !rest.is_empty()
+                && !rest.starts_with('/')
+                && rest.chars().all(|c| !c.is_control() && !c.is_whitespace())
+        }
+        None => false,
     }
 }
 
@@ -617,6 +723,121 @@ schema_version = 1
         );
         m.validate()
             .expect("mix of pinned + TOFU sha256 values must be accepted");
+    }
+
+    // ── URL / repo / asset validation tests ──────────────────────────────────
+
+    fn github_spec_full(repo: &str, asset_pattern: &str) -> ToolSpec {
+        let mut sha256 = BTreeMap::new();
+        sha256.insert("x86_64-unknown-linux-gnu".to_string(), String::new());
+        ToolSpec {
+            category: ToolCategory::Lsp,
+            description: "test".to_string(),
+            version: "1.0".to_string(),
+            bin: "my-tool".to_string(),
+            method: InstallMethod::Github(GithubMethod {
+                repo: repo.to_string(),
+                asset_pattern: asset_pattern.to_string(),
+                sha256,
+            }),
+        }
+    }
+
+    fn validate_one(spec: ToolSpec) -> Result<(), ManifestError> {
+        let mut m = parse_str("[meta]\nschema_version = 1\n").unwrap();
+        m.tool.insert("my-tool".to_string(), spec);
+        m.validate()
+    }
+
+    #[test]
+    fn valid_github_repo_and_asset_accepted() {
+        // Uppercase owner (e.g. `LuaLS`) must be allowed.
+        validate_one(github_spec_full(
+            "LuaLS/lua-language-server",
+            "ls-{version}-{triple}.tar.gz",
+        ))
+        .expect("well-formed github entry must validate");
+    }
+
+    #[test]
+    fn invalid_repo_missing_slash_rejected() {
+        let err = validate_one(github_spec_full("owneronly", "a-{triple}.gz")).unwrap_err();
+        assert!(matches!(err, ManifestError::InvalidRepo { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn invalid_repo_traversal_rejected() {
+        for repo in ["../evil/x", "owner/..", "a/b/c", "owner/na me"] {
+            let err = validate_one(github_spec_full(repo, "a-{triple}.gz")).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidRepo { .. }),
+                "repo {repo:?} must be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_asset_pattern_traversal_rejected() {
+        for pat in [
+            "../../etc/passwd",
+            "a/b.gz",
+            "bad\\name.gz",
+            "with space.gz",
+        ] {
+            let err = validate_one(github_spec_full("owner/repo", pat)).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidAssetPattern { .. }),
+                "asset {pat:?} must be rejected, got {err:?}"
+            );
+        }
+    }
+
+    fn script_spec(url: &str, sha: &str) -> ToolSpec {
+        ToolSpec {
+            category: ToolCategory::Lsp,
+            description: "test".to_string(),
+            version: "1.0".to_string(),
+            bin: "my-tool".to_string(),
+            method: InstallMethod::Script(ScriptMethod {
+                url: url.to_string(),
+                sha256: sha.to_string(),
+                exec: "./install.sh".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn valid_script_https_url_and_pinned_sha_accepted() {
+        let sha = "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567";
+        validate_one(script_spec("https://example.com/install.tar.gz", sha))
+            .expect("https script with pinned sha must validate");
+    }
+
+    #[test]
+    fn script_non_https_url_rejected() {
+        let sha = "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567";
+        for url in [
+            "http://example.com/x.tar.gz",
+            "file:///etc/passwd",
+            "https:///no-host",
+            "ftp://example.com/x",
+        ] {
+            let err = validate_one(script_spec(url, sha)).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidUrl { .. }),
+                "url {url:?} must be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_without_pinned_sha_rejected() {
+        // TOFU is not allowed for arbitrary-URL scripts.
+        let err = validate_one(script_spec("https://example.com/x.tar.gz", "")).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::InvalidSha256 { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -33,9 +33,23 @@ impl Registry {
     /// The catalog is baked into the binary via `include_str!` so no
     /// file-system access is needed at runtime — same pattern used by
     /// `hjkl-bonsai`'s `GrammarRegistry::embedded()`.
+    ///
+    /// The parsed manifest is run through [`Manifest::validate`] before use so
+    /// no tool with a malformed name, repo, URL, or checksum can reach the
+    /// installer. (See also [`Self::from_manifest`] for the file-load path.)
     pub fn embedded() -> Result<Self, RegistryError> {
         let s = include_str!("../anvil.toml");
         let manifest = crate::manifest::parse_str(s)?;
+        Self::from_manifest(manifest)
+    }
+
+    /// Build from an already-parsed manifest, running [`Manifest::validate`]
+    /// first. Prefer this over [`Self::new`] for any manifest that did not
+    /// originate from a trusted, already-validated source: it rejects entries
+    /// whose name, github repo, script URL, asset pattern, or checksum is
+    /// malformed before they can reach the installer.
+    pub fn from_manifest(manifest: Manifest) -> Result<Self, RegistryError> {
+        manifest.validate()?;
         Ok(Self::new(manifest))
     }
 
@@ -140,6 +154,40 @@ mod tests {
     fn len_matches_tool_count() {
         let r = embedded();
         assert_eq!(r.len(), 6);
+    }
+
+    #[test]
+    fn embedded_is_validated() {
+        // `embedded()` must run the manifest through validate() — the shipped
+        // catalog passes, so this simply confirms the path is wired.
+        assert!(Registry::embedded().is_ok());
+    }
+
+    #[test]
+    fn from_manifest_rejects_invalid_entry() {
+        // A github entry with a malformed repo must be rejected at
+        // construction, not silently accepted.
+        let mut manifest = crate::manifest::parse_str("[meta]\nschema_version = 1\n").unwrap();
+        let mut sha256 = std::collections::BTreeMap::new();
+        sha256.insert("x86_64-unknown-linux-gnu".to_string(), String::new());
+        manifest.tool.insert(
+            "bad".to_string(),
+            crate::manifest::ToolSpec {
+                category: ToolCategory::Lsp,
+                description: "d".to_string(),
+                version: "1.0".to_string(),
+                bin: "bad".to_string(),
+                method: crate::manifest::InstallMethod::Github(crate::manifest::GithubMethod {
+                    repo: "no-slash-here".to_string(),
+                    asset_pattern: "bad-{triple}.gz".to_string(),
+                    sha256,
+                }),
+            },
+        );
+        assert!(
+            Registry::from_manifest(manifest).is_err(),
+            "from_manifest must reject an invalid repo"
+        );
     }
 
     #[test]

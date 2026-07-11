@@ -237,16 +237,15 @@ impl ChecksumSidecar {
                 .strip_prefix("[versions.")
                 .and_then(|s| s.strip_suffix(".sha256]"))
             {
-                let ver = inner.trim_matches('"').to_string();
-                current_version = Some(ver);
+                current_version = Some(toml_unescape(strip_one_quote(inner)));
                 continue;
             }
             // Key = value line inside a section.
             if let Some(ver) = &current_version
                 && let Some((key, val)) = line.split_once('=')
             {
-                let key = key.trim().trim_matches('"').to_string();
-                let val = val.trim().trim_matches('"').to_string();
+                let key = toml_unescape(strip_one_quote(key.trim()));
+                let val = toml_unescape(strip_one_quote(val.trim()));
                 if !key.is_empty() && !val.is_empty() {
                     sidecar
                         .versions
@@ -260,12 +259,21 @@ impl ChecksumSidecar {
     }
 
     /// Serialize to TOML.
+    ///
+    /// Every interpolated value (version, triple, hash) is escaped as a TOML
+    /// basic string so that a value containing `"`, `\`, or a newline cannot
+    /// break out of its quotes and inject extra sections or keys — e.g. a
+    /// crafted `version` string poisoning another version's recorded checksum.
     fn to_toml(&self) -> String {
         let mut out = String::new();
         for (version, triples) in &self.versions {
-            out.push_str(&format!("[versions.\"{version}\".sha256]\n"));
+            out.push_str(&format!("[versions.\"{}\".sha256]\n", toml_escape(version)));
             for (triple, hash) in triples {
-                out.push_str(&format!("\"{triple}\" = \"{hash}\"\n"));
+                out.push_str(&format!(
+                    "\"{}\" = \"{}\"\n",
+                    toml_escape(triple),
+                    toml_escape(hash)
+                ));
             }
             out.push('\n');
         }
@@ -298,6 +306,70 @@ impl ChecksumSidecar {
         std::fs::rename(&staging, &target)?;
         Ok(())
     }
+}
+
+/// Escape a string for use as a TOML basic (double-quoted) string value.
+/// Escapes `\`, `"`, and the whitespace/control characters that would
+/// otherwise break the single-line, quote-delimited sidecar format.
+fn toml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse of [`toml_escape`]. Unknown escapes are passed through literally
+/// (with the backslash preserved) rather than dropped.
+fn toml_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    Some(ch) => out.push(ch),
+                    None => {
+                        out.push_str("\\u");
+                        out.push_str(&hex);
+                    }
+                }
+            }
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Strip exactly one wrapping double-quote from each end when both are present.
+/// Unlike `trim_matches('"')` this removes a single quote (not a run), so an
+/// escaped `\"` adjacent to the wrapper quote survives for [`toml_unescape`].
+fn strip_one_quote(s: &str) -> &str {
+    s.strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(s)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -664,6 +736,55 @@ mod tests {
         let toml_str = s.to_toml();
         let parsed = ChecksumSidecar::from_toml(&toml_str).unwrap();
         assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn toml_escape_unescape_round_trips_specials() {
+        for raw in [
+            "plain",
+            "with\"quote",
+            "with\\backslash",
+            "with\nnewline",
+            "tab\tand\r\n",
+            "]injection[\"attempt",
+        ] {
+            assert_eq!(toml_unescape(&toml_escape(raw)), raw, "round-trip {raw:?}");
+        }
+    }
+
+    #[test]
+    fn checksum_sidecar_hostile_version_does_not_inject_sections() {
+        // A version string crafted to break out of its quotes and inject a
+        // second `[versions.…]` section (poisoning another version's hash)
+        // must round-trip verbatim as a SINGLE version entry.
+        let hostile = "1.0\"].sha256]\n[versions.\"evil\".sha256]\n\"t\" = \"beef";
+        let mut s = ChecksumSidecar::default();
+        s.set(
+            hostile,
+            "x86_64-unknown-linux-gnu",
+            "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567",
+        );
+
+        let toml_str = s.to_toml();
+        // The serialized form must not contain a raw newline inside the value
+        // (the injection vector) — the newline is escaped.
+        assert!(
+            !toml_str.contains("\n[versions.\"evil\""),
+            "hostile version injected a section: {toml_str}"
+        );
+
+        let parsed = ChecksumSidecar::from_toml(&toml_str).unwrap();
+        assert_eq!(parsed, s, "hostile version must round-trip verbatim");
+        assert_eq!(
+            parsed.versions.len(),
+            1,
+            "exactly one version entry expected, got {}",
+            parsed.versions.len()
+        );
+        assert!(
+            parsed.versions.contains_key(hostile),
+            "the single entry must be the hostile version key, verbatim"
+        );
     }
 
     // ── ChecksumSidecar I/O tests (use tempdir directly, no env mutation) ────

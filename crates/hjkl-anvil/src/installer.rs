@@ -518,10 +518,17 @@ pub fn install_github_inner(
 
     download(&url, &dl_path, progress)?;
 
-    // 4. Verify SHA-256 (or record it for TOFU).
+    // 4. Verify SHA-256 (or note that this is a first-time TOFU record).
+    //
+    // For a pinned/cached hash we fail closed here, before touching the
+    // archive. For TOFU we do NOT record the hash yet: recording it before
+    // the archive is proven to be a usable package would let a corrupt or
+    // hostile first download poison the trust baseline (a bad hash becomes
+    // the "expected" value for every future install). The sidecar write is
+    // deferred to step 6b, after extraction + bin location succeed.
     progress(InstallStatus::Verifying);
     let actual_sha = sha256_file(&dl_path)?;
-    let recorded_sha = match &expected {
+    let is_tofu = match &expected {
         ExpectedSha::Pinned(expected_hash) | ExpectedSha::Cached(expected_hash) => {
             if &actual_sha != expected_hash {
                 return Err(InstallError::ChecksumMismatch {
@@ -529,20 +536,11 @@ pub fn install_github_inner(
                     actual: actual_sha,
                 });
             }
-            actual_sha.clone()
+            false
         }
-        ExpectedSha::Tofu => {
-            // First install — record the hash in the sidecar.
-            let mut sidecar = ChecksumSidecar::read(name)?.unwrap_or_default();
-            sidecar.set(&spec.version, triple, &actual_sha);
-            sidecar.write(name)?;
-            progress(InstallStatus::TofuRecorded {
-                triple: triple.to_string(),
-                sha256: actual_sha.clone(),
-            });
-            actual_sha.clone()
-        }
+        ExpectedSha::Tofu => true,
     };
+    let recorded_sha = actual_sha.clone();
 
     // 5. Extract.
     progress(InstallStatus::Extracting);
@@ -560,6 +558,18 @@ pub fn install_github_inner(
     let rel_bin = find_bin(&extract_dir, &spec.bin)
         .ok_or_else(|| InstallError::BinNotFound(spec.bin.clone()))?;
     let bin_in_extract = extract_dir.join(&rel_bin);
+
+    // 6b. TOFU: only now — the archive extracted cleanly and contains the
+    // expected binary — do we trust this hash and record it as the baseline.
+    if is_tofu {
+        let mut sidecar = ChecksumSidecar::read(name)?.unwrap_or_default();
+        sidecar.set(&spec.version, triple, &actual_sha);
+        sidecar.write(name)?;
+        progress(InstallStatus::TofuRecorded {
+            triple: triple.to_string(),
+            sha256: actual_sha.clone(),
+        });
+    }
 
     // 7. chmod 0755.
     make_executable(&bin_in_extract)?;
@@ -1885,6 +1895,59 @@ mod tests {
             recorded_hash.unwrap(),
             HELLO_TAR_GZ_SHA,
             "recorded hash must match fixture sha"
+        );
+    }
+
+    /// A first-time (TOFU) install whose archive does not contain the expected
+    /// binary must NOT record a checksum: recording before the archive is
+    /// proven usable would poison the trust baseline with a bad-download hash.
+    #[cfg(unix)]
+    #[test]
+    fn tofu_does_not_record_when_bin_missing() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let cache_dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data_dir.path());
+            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
+        }
+
+        let triple = host_triple().unwrap();
+        // The fixture archive contains `hello`, not `nonexistent-bin`, so
+        // find_bin fails at step 6 — before the deferred TOFU record.
+        let spec = tofu_github_spec(triple, "hello-{triple}.tar.gz", "nonexistent-bin");
+
+        let recorded_tofu = std::cell::Cell::new(false);
+        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|s| {
+            if matches!(s, InstallStatus::TofuRecorded { .. }) {
+                recorded_tofu.set(true);
+            }
+        });
+
+        let sidecar_path = data_dir
+            .path()
+            .join("anvil")
+            .join("checksums")
+            .join("hello.toml");
+        let sidecar_exists = sidecar_path.exists();
+
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+
+        assert!(
+            matches!(result, Err(InstallError::BinNotFound(_))),
+            "expected BinNotFound, got {result:?}"
+        );
+        assert!(
+            !recorded_tofu.get(),
+            "TofuRecorded must NOT be emitted when the archive is unusable"
+        );
+        assert!(
+            !sidecar_exists,
+            "checksum sidecar must NOT be written when the archive is unusable"
         );
     }
 
