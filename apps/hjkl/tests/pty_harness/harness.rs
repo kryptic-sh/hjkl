@@ -120,6 +120,12 @@ impl TerminalSession {
         let hjkl_bin = env!("CARGO_BIN_EXE_hjkl");
         let mut cmd = CommandBuilder::new(hjkl_bin);
         cmd.env("HJKL_LOG", "off");
+        // Force the terminal OSC 52 clipboard backend so copy/paste tests use
+        // the deterministic register-fallback path on every platform. Without
+        // this, macOS spawns the real NSPasteboard, which is a single shared
+        // resource — parallel nextest processes contend on it, flaking the
+        // copy→paste round-trip.
+        cmd.env("HJKL_CLIPBOARD", "osc52");
         cmd.env("TERM", "xterm-256color");
         cmd.env(
             "XDG_CONFIG_HOME",
@@ -189,6 +195,12 @@ impl TerminalSession {
         let mut cmd = CommandBuilder::new(hjkl_bin);
         // Suppress logging noise in test output.
         cmd.env("HJKL_LOG", "off");
+        // Force the terminal OSC 52 clipboard backend so copy/paste tests use
+        // the deterministic register-fallback path on every platform. Without
+        // this, macOS spawns the real NSPasteboard, which is a single shared
+        // resource — parallel nextest processes contend on it, flaking the
+        // copy→paste round-trip.
+        cmd.env("HJKL_CLIPBOARD", "osc52");
         cmd.env("TERM", "xterm-256color");
         // Deterministic config: use an empty tmp dir so no user config leaks in.
         cmd.env(

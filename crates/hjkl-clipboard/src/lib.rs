@@ -64,8 +64,29 @@ impl Clipboard {
     /// - macOS: NSPasteboard (always available).
     /// - Windows: Win32 (always available).
     /// - Other: OSC 52.
+    ///
+    /// The `HJKL_CLIPBOARD` environment variable overrides the probe: set it to
+    /// `osc52` to force the terminal OSC 52 backend on any platform (useful in
+    /// headless/CI/PTY environments where touching the real system clipboard is
+    /// unwanted — e.g. it avoids cross-process contention on the single shared
+    /// macOS pasteboard).
     pub fn new() -> Result<Self, ClipboardError> {
+        if let Some(forced) = Self::forced_backend() {
+            return Ok(forced);
+        }
         Self::probe()
+    }
+
+    /// Honor an explicit `HJKL_CLIPBOARD` backend selection. Returns `None`
+    /// when the variable is unset or holds an unrecognized value (fall through
+    /// to the platform probe).
+    fn forced_backend() -> Option<Self> {
+        match std::env::var("HJKL_CLIPBOARD").ok()?.trim() {
+            "osc52" => Some(Self::with_backend(Box::new(
+                backend::osc52::Osc52Backend::new(),
+            ))),
+            _ => None,
+        }
     }
 
     /// Construct a clipboard handle from a caller-supplied backend.
@@ -293,5 +314,31 @@ mod tests {
         // available is always empty.
         let mimes = cb.available(Selection::Clipboard).unwrap();
         assert!(mimes.is_empty(), "expected empty available from osc52");
+    }
+
+    /// `HJKL_CLIPBOARD=osc52` must force the OSC 52 backend on every platform,
+    /// bypassing the native probe (e.g. the shared macOS pasteboard).
+    #[test]
+    fn env_override_forces_osc52_backend() {
+        // Serialize env mutation so a parallel `cargo test` run can't observe a
+        // torn value (nextest already isolates per-process).
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let prev = std::env::var("HJKL_CLIPBOARD").ok();
+        // SAFETY: guarded by ENV_LOCK; the previous value is restored below.
+        unsafe { std::env::set_var("HJKL_CLIPBOARD", "osc52") };
+
+        let is_osc = Clipboard::new().expect("clipboard construct").is_osc52();
+
+        // SAFETY: same guard; restore the prior environment.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("HJKL_CLIPBOARD", v),
+                None => std::env::remove_var("HJKL_CLIPBOARD"),
+            }
+        }
+
+        assert!(is_osc, "HJKL_CLIPBOARD=osc52 must force the OSC 52 backend");
     }
 }
