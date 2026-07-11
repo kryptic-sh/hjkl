@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-theme.workspace = true
+unicode-width.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

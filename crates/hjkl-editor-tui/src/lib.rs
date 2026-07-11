@@ -32,6 +32,19 @@ pub mod spinner;
 
 use hjkl_engine::{Attrs, Color, Style};
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
+use unicode_width::UnicodeWidthChar;
+
+/// Display width, in terminal cells, of the characters on `line` in the
+/// char-index range `[from_col, to_col)`. CJK/emoji count as 2 cells,
+/// combining marks as 0 — so cursor and scroll math match what the
+/// terminal actually paints for multibyte text.
+pub(crate) fn col_span_width(line: &str, from_col: usize, to_col: usize) -> usize {
+    line.chars()
+        .skip(from_col)
+        .take(to_col.saturating_sub(from_col))
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
+}
 
 // ── Style ──
 

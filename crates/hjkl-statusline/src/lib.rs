@@ -10,6 +10,25 @@
 
 use std::borrow::Cow;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Truncate `s` to at most `max` display columns, dropping trailing chars that
+/// would overflow. A wide (2-col) char at the boundary is dropped whole so the
+/// result never exceeds `max`.
+fn truncate_to_width(s: &str, max: usize) -> String {
+    let mut w = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > max {
+            break;
+        }
+        w += cw;
+        out.push(ch);
+    }
+    out
+}
+
 // ── Re-export hjkl-theme types ──────────────────────────────────────────────
 //
 // `Color`, `Modifiers`, and `Style` (aliased from hjkl-theme's `StyleSpec`)
@@ -95,9 +114,12 @@ pub enum Segment {
 }
 
 impl Segment {
+    /// Display width of the segment in terminal columns (not char count):
+    /// CJK/emoji count as 2, combining marks as 0. This is what the renderer
+    /// actually paints, so layout math stays aligned for multibyte content.
     pub fn len(&self) -> usize {
         match self {
-            Segment::Text { content, .. } => content.chars().count(),
+            Segment::Text { content, .. } => UnicodeWidthStr::width(content.as_ref()),
         }
     }
 
@@ -155,8 +177,7 @@ impl Bar {
                     let remaining = avail_for_left.saturating_sub(used);
                     if remaining > 1 {
                         let Segment::Text { content, style } = seg;
-                        let truncated: String =
-                            content.chars().take(remaining.saturating_sub(1)).collect();
+                        let truncated = truncate_to_width(content, remaining.saturating_sub(1));
                         out.push(Segment::Text {
                             content: format!("{truncated}\u{2026}").into(),
                             style: *style,
@@ -419,19 +440,24 @@ pub fn loading_segment(spinner_frame: &str, label: &str, theme: &StatusTheme) ->
 /// Uses `char_indices()` to find a valid UTF-8 char boundary at or before the
 /// computed byte offset, avoiding panics on multibyte (non-ASCII) filenames.
 pub fn truncate_filename(filename: &str, avail: usize) -> String {
-    if filename.chars().count() <= avail {
+    if UnicodeWidthStr::width(filename) <= avail {
         filename.to_owned()
     } else if avail <= 1 {
         String::new()
     } else {
-        let keep = avail.saturating_sub(1); // one char reserved for '…'
-        // Walk from the end: collect the last `keep` chars' byte start offsets.
-        let start_byte = filename
-            .char_indices()
-            .rev()
-            .nth(keep.saturating_sub(1))
-            .map(|(byte_idx, _)| byte_idx)
-            .unwrap_or(0);
+        let keep = avail.saturating_sub(1); // one column reserved for '…'
+        // Walk from the end accumulating display width until adding the next
+        // char would exceed `keep`; that byte offset is where the tail begins.
+        let mut w = 0usize;
+        let mut start_byte = filename.len();
+        for (byte_idx, ch) in filename.char_indices().rev() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if w + cw > keep {
+                break;
+            }
+            w += cw;
+            start_byte = byte_idx;
+        }
         format!("\u{2026}{}", &filename[start_byte..])
     }
 }
@@ -616,6 +642,45 @@ mod tests {
     fn truncate_filename_short_unchanged() {
         let s = truncate_filename("foo.rs", 20);
         assert_eq!(s, "foo.rs");
+    }
+
+    #[test]
+    fn segment_len_counts_display_width_not_chars() {
+        // Three CJK chars = 6 display columns, not 3.
+        let seg = Segment::Text {
+            content: "世界好".into(),
+            style: Style::default_style(),
+        };
+        assert_eq!(seg.len(), 6);
+    }
+
+    #[test]
+    fn truncate_filename_wide_chars_respects_columns() {
+        // 5 CJK chars = 10 columns; fit into 6 columns → '…' + tail ≤ 6 cols.
+        let s = truncate_filename("一二三四五", 6);
+        assert!(s.starts_with('\u{2026}'), "must start with ellipsis: {s:?}");
+        assert!(
+            UnicodeWidthStr::width(s.as_str()) <= 6,
+            "width {} exceeds 6: {s:?}",
+            UnicodeWidthStr::width(s.as_str())
+        );
+    }
+
+    #[test]
+    fn bar_layout_truncates_wide_segment_within_width() {
+        let theme = test_theme();
+        let mut bar = Bar {
+            fill_style: Style::default_style().bg(theme.fill_bg).fg(theme.fg),
+            ..Default::default()
+        };
+        // 10 CJK chars = 20 columns, bar only 10 wide.
+        bar.left.push(Segment::Text {
+            content: "一二三四五六七八九十".into(),
+            style: Style::default_style(),
+        });
+        let segments = bar.layout(10);
+        let total_w: usize = segments.iter().map(|s| s.len()).sum();
+        assert!(total_w <= 10, "layout width {total_w} exceeds bar width 10");
     }
 
     #[test]

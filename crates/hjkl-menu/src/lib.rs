@@ -23,6 +23,8 @@
 
 #![forbid(unsafe_code)]
 
+use unicode_width::UnicodeWidthStr;
+
 // ── MenuAction ────────────────────────────────────────────────────────────────
 
 /// Each selectable item in the context menu maps to one of these variants.
@@ -521,11 +523,13 @@ impl ContextMenu {
                 let hint_len = it
                     .shortcut_hint
                     .as_deref()
-                    .map(|h| h.len() + 2)
+                    .map(|h| UnicodeWidthStr::width(h) + 2)
                     .unwrap_or(0);
-                // Clamp before the u16 cast so a pathologically long label
-                // can't wrap around (and overflow on the `+ 4` below).
-                (it.label.len() + hint_len).min(u16::MAX as usize - 4) as u16
+                // Display width (CJK/emoji = 2 cols), not byte length. Clamp
+                // before the u16 cast so a pathologically long label can't wrap
+                // around (and overflow on the `+ 4` below).
+                (UnicodeWidthStr::width(it.label.as_str()) + hint_len).min(u16::MAX as usize - 4)
+                    as u16
             })
             .max()
             .unwrap_or(8);

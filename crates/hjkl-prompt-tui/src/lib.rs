@@ -22,6 +22,45 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Compute a horizontally-scrolled window of `content` whose display width is
+/// at most `body_width` cells and which keeps the char at index `cursor_char`
+/// visible. Returns the window string and the cursor's display column within
+/// that window. Walking back from the cursor is O(window), not O(content), so
+/// a pathologically long prompt stays cheap.
+fn scroll_window(content: &str, cursor_char: usize, body_width: usize) -> (String, usize) {
+    if body_width == 0 {
+        return (String::new(), 0);
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let cur = cursor_char.min(chars.len());
+    // Grow the window leftward from the cursor until the columns before it
+    // reach `body_width - 1` (reserve one cell for the cursor itself).
+    let reserve = body_width.saturating_sub(1);
+    let mut start = cur;
+    let mut cursor_col = 0usize;
+    while start > 0 {
+        let cw = UnicodeWidthChar::width(chars[start - 1]).unwrap_or(0);
+        if cursor_col + cw > reserve {
+            break;
+        }
+        cursor_col += cw;
+        start -= 1;
+    }
+    // Collect forward from `start` until `body_width` columns are filled.
+    let mut w = 0usize;
+    let mut out = String::new();
+    for &ch in &chars[start..] {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > body_width {
+            break;
+        }
+        w += cw;
+        out.push(ch);
+    }
+    (out, cursor_col)
+}
 
 // ── PromptTheme ───────────────────────────────────────────────────────────────
 
@@ -111,16 +150,26 @@ pub fn render_prompt_line(
     let display: String = text.lines().next().unwrap_or("").to_string();
     let content = format!("{prefix}{display}");
 
-    let line = prompt_line_spans(&content, prompt.field.vim_mode(), theme, area.width);
+    // Body columns available for text (the mode tag reserves the tail).
+    let mode = prompt.field.vim_mode();
+    let tag_w = mode_tag(mode).width();
+    let body_width = (area.width as usize).saturating_sub(tag_w);
+
+    // Horizontal scroll: window the content around the cursor so long
+    // prompts show the region being edited (not a stale head) and the
+    // insertion point stays on screen. Cursor char index in `content` is
+    // the single-column prefix plus the field's char column.
+    let (_, ccol) = prompt.field.cursor();
+    let cursor_char = ccol.saturating_add(1); // +1 for the prefix char
+    let (visible, cursor_col) = scroll_window(&content, cursor_char, body_width);
+
+    let line = prompt_line_spans(&visible, mode, theme, area.width);
     frame.render_widget(Paragraph::new(line), area);
 
-    // Position terminal cursor at the insertion point, clamped to the bar so
-    // a pathologically long input can't overflow the u16 math.
-    let (_, ccol) = prompt.field.cursor();
-    let cursor_col = ccol
-        .saturating_add(1)
-        .min(area.width.saturating_sub(1) as usize) as u16;
-    frame.set_cursor_position((area.x.saturating_add(cursor_col), area.y));
+    // Cursor display column within the visible window (already < body_width);
+    // clamp to the bar for safety.
+    let cx = cursor_col.min(area.width.saturating_sub(1) as usize) as u16;
+    frame.set_cursor_position((area.x.saturating_add(cx), area.y));
 }
 
 /// Build a ratatui [`Line`] for the given prompt content string and mode.
@@ -145,19 +194,40 @@ pub fn build_prompt_line(
     prompt_line_spans(content, mode, theme, width)
 }
 
+/// The right-aligned mode tag string for the prompt bar.
+fn mode_tag(mode: VimMode) -> &'static str {
+    match mode {
+        VimMode::Insert => " [I]",
+        _ => " [N]",
+    }
+}
+
 fn prompt_line_spans(
     content: &str,
     mode: VimMode,
     theme: &PromptTheme,
     width: u16,
 ) -> Line<'static> {
-    let (bg, tag, tag_fg) = match mode {
-        VimMode::Insert => (theme.insert_bg, " [I]", theme.tag_insert_fg),
-        _ => (theme.normal_bg, " [N]", theme.tag_normal_fg),
+    let (bg, tag_fg) = match mode {
+        VimMode::Insert => (theme.insert_bg, theme.tag_insert_fg),
+        _ => (theme.normal_bg, theme.tag_normal_fg),
     };
-    let body_width = (width as usize).saturating_sub(tag.len());
-    let visible: String = content.chars().take(body_width).collect();
-    let body = format!("{visible:<body_width$}");
+    let tag = mode_tag(mode);
+    let body_width = (width as usize).saturating_sub(tag.width());
+    // Truncate to `body_width` display columns (wide chars count as 2), then
+    // pad with spaces to fill the body so the background style extends fully.
+    let mut w = 0usize;
+    let mut visible = String::new();
+    for ch in content.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > body_width {
+            break;
+        }
+        w += cw;
+        visible.push(ch);
+    }
+    let pad = body_width.saturating_sub(w);
+    let body = format!("{visible}{}", " ".repeat(pad));
     Line::from(vec![
         Span::styled(body, Style::default().bg(bg).fg(theme.text)),
         Span::styled(tag.to_string(), Style::default().bg(bg).fg(tag_fg)),
@@ -193,7 +263,7 @@ pub fn render_wildmenu(frame: &mut Frame, prompt: &PromptState, theme: &PromptTh
     for (i, cand) in comp.candidates.iter().enumerate() {
         let is_selected = comp.selected == Some(i);
         let entry = cand.clone();
-        let entry_len = entry.chars().count();
+        let entry_len = UnicodeWidthStr::width(entry.as_str());
 
         // If we stop before rendering candidate `i`, candidates `i..n` are all
         // hidden — that is `n - i` of them (not `n - i - 1`).
@@ -376,6 +446,37 @@ mod tests {
                 render_prompt_line(frame, &p, &theme, Rect::new(0, 0, 80, 1));
             })
             .unwrap();
+    }
+
+    #[test]
+    fn scroll_window_short_content_not_scrolled() {
+        let (vis, col) = scroll_window(":write", 6, 40);
+        assert_eq!(vis, ":write");
+        assert_eq!(col, 6);
+    }
+
+    #[test]
+    fn scroll_window_long_input_keeps_cursor_visible() {
+        // 78 chars, cursor near the end, 20-col body.
+        let content: String = "abcdefghijklmnopqrstuvwxyz".repeat(3);
+        let (vis, col) = scroll_window(&content, 70, 20);
+        assert!(
+            UnicodeWidthStr::width(vis.as_str()) <= 20,
+            "window overflows body: {vis:?}"
+        );
+        assert!(col < 20, "cursor col {col} must stay within body");
+        // The char just before the cursor must be inside the window.
+        let before = content.chars().nth(69).unwrap();
+        assert!(vis.contains(before), "cursor region not visible: {vis:?}");
+    }
+
+    #[test]
+    fn scroll_window_wide_chars_stay_within_width() {
+        // 20 double-width CJK chars = 40 cols; cursor at end, 20-col body.
+        let content: String = "世".repeat(20);
+        let (vis, col) = scroll_window(&content, 20, 20);
+        assert!(UnicodeWidthStr::width(vis.as_str()) <= 20);
+        assert!(col < 20, "cursor col {col} must stay within body");
     }
 
     #[test]

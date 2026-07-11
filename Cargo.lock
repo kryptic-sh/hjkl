@@ -2501,6 +2501,7 @@ dependencies = [
  "hjkl-engine",
  "hjkl-form",
  "ratatui",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2699,6 +2700,9 @@ dependencies = [
 [[package]]
 name = "hjkl-menu"
 version = "0.33.4"
+dependencies = [
+ "unicode-width 0.2.2",
+]
 
 [[package]]
 name = "hjkl-menu-tui"
@@ -2749,6 +2753,7 @@ dependencies = [
  "hjkl-form",
  "hjkl-prompt",
  "ratatui",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2775,6 +2780,7 @@ name = "hjkl-statusline"
 version = "0.33.4"
 dependencies = [
  "hjkl-theme",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2876,6 +2882,7 @@ version = "0.33.4"
 dependencies = [
  "hjkl-keymap",
  "hjkl-vim",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

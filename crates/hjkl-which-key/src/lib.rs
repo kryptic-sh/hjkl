@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use hjkl_keymap::{Chord, KeyEvent};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -73,16 +74,26 @@ pub fn format_key(ev: KeyEvent, leader: char) -> String {
     Chord(vec![ev]).to_notation(leader)
 }
 
-/// Truncate `s` to at most `max_chars` Unicode scalar values, appending `…`
-/// if truncated.
-pub fn truncate_desc(s: &str, max_chars: usize) -> String {
-    let mut chars = s.chars();
-    let collected: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{collected}…")
-    } else {
-        collected
+/// Truncate `s` to at most `max_width` display columns, appending `…` if
+/// truncated. Uses terminal display width (CJK/emoji = 2 cols) so the popup
+/// column math and the rendered text agree for multibyte descriptions.
+pub fn truncate_desc(s: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(s) <= max_width {
+        return s.to_string();
     }
+    // Reserve one column for the trailing ellipsis.
+    let budget = max_width.saturating_sub(1);
+    let mut w = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > budget {
+            break;
+        }
+        w += cw;
+        out.push(ch);
+    }
+    format!("{out}…")
 }
 
 /// Query `km` for the direct children of `prefix` in `mode` and return
@@ -170,7 +181,10 @@ pub fn layout(entries: &[Entry], width: u16) -> PopupLayout {
     }
     let entry_width = entries
         .iter()
-        .map(|e| e.key.len() + 1 + e.desc.len()) // key + space + desc
+        // Display width (CJK/emoji = 2 cols), not byte length: key + space + desc.
+        .map(|e| {
+            UnicodeWidthStr::width(e.key.as_str()) + 1 + UnicodeWidthStr::width(e.desc.as_str())
+        })
         .max()
         .unwrap_or(8)
         // Clamp before the u16 cast: a pathologically long desc would
@@ -333,6 +347,31 @@ mod tests {
         let s: String = "x".repeat(41);
         let result = truncate_desc(&s, 40);
         assert!(result.ends_with('…'));
-        assert_eq!(result.chars().count(), 41); // 40 x's + ellipsis
+        // Result now fits within max_width columns (ellipsis included).
+        assert_eq!(UnicodeWidthStr::width(result.as_str()), 40);
+    }
+
+    #[test]
+    fn truncate_desc_wide_chars_respect_columns() {
+        // 5 CJK chars = 10 columns; truncate to 6 columns.
+        let result = truncate_desc("一二三四五", 6);
+        assert!(result.ends_with('…'));
+        assert!(
+            UnicodeWidthStr::width(result.as_str()) <= 6,
+            "width {} exceeds 6: {result:?}",
+            UnicodeWidthStr::width(result.as_str())
+        );
+    }
+
+    #[test]
+    fn layout_wide_desc_column_uses_display_width() {
+        // key "a" (1) + space (1) + desc "世界" (4 cols) = 6; col_width = 8.
+        let entries = vec![Entry::new("a", "世界")];
+        let l = layout(&entries, 80);
+        assert_eq!(
+            l.col_width, 8,
+            "col_width must use display width, got {}",
+            l.col_width
+        );
     }
 }

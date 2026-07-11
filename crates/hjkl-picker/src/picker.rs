@@ -24,6 +24,25 @@ use hjkl_fuzzy::score;
 /// Debounce delay for `RequeryMode::Spawn` sources (milliseconds).
 const REQUERY_DEBOUNCE_MS: u64 = 150;
 
+/// Case-fold `s`, returning the folded string plus a map from each folded
+/// char index back to the source char index.
+///
+/// `str::to_lowercase` can change the char count for some code points
+/// (e.g. 'İ' → "i̇" is 1→2 chars, 'ẞ' → "ss" is 1→2). Tracking the source
+/// index per folded char lets callers translate fuzzy-match positions back to
+/// the original text so highlights stay aligned.
+fn lower_with_map(s: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::new();
+    let mut map = Vec::new();
+    for (i, ch) in s.chars().enumerate() {
+        for lc in ch.to_lowercase() {
+            lowered.push(lc);
+            map.push(i);
+        }
+    }
+    (lowered, map)
+}
+
 /// Non-generic picker state. Lives in `App::picker` while open.
 pub struct Picker {
     /// Query input — vim modal text field. Lands in Insert at open so
@@ -240,12 +259,25 @@ impl Picker {
         let mut scored: Vec<(i64, usize, String, Vec<usize>)> = Vec::new();
         for i in 0..count {
             let m = self.source.match_text(i);
-            let m_lower = m.to_lowercase();
+            // Case-fold char-by-char, tracking each folded char's source index.
+            // `to_lowercase()` can change char count (e.g. 'İ' → "i̇", 'ẞ' → "ss"),
+            // which would otherwise shift match positions off the original text
+            // and highlight the wrong characters.
+            let (m_lower, index_map) = lower_with_map(&m);
             let (sc, positions) = if q.is_empty() {
                 (0i64, Vec::new())
             } else {
                 match score(&m_lower, &q_lower) {
-                    Some(v) => v,
+                    Some((sc, folded_pos)) => {
+                        // Translate folded-char positions back to original
+                        // char indices so highlights land on the right chars.
+                        let mut orig: Vec<usize> = folded_pos
+                            .into_iter()
+                            .filter_map(|p| index_map.get(p).copied())
+                            .collect();
+                        orig.dedup();
+                        (sc, orig)
+                    }
                     None => continue,
                 }
             };
@@ -454,6 +486,69 @@ impl Drop for Picker {
     /// thread — and any spawned rg/grep child — running to completion.
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    use crate::logic::{PickerAction, PickerLogic};
+
+    struct OneItem(String);
+
+    impl PickerLogic for OneItem {
+        fn title(&self) -> &str {
+            "x"
+        }
+        fn item_count(&self) -> usize {
+            1
+        }
+        fn label(&self, _idx: usize) -> String {
+            self.0.clone()
+        }
+        fn match_text(&self, _idx: usize) -> String {
+            self.0.clone()
+        }
+        fn select(&self, _idx: usize) -> PickerAction {
+            PickerAction::None
+        }
+        fn enumerate(
+            &mut self,
+            _query: Option<&str>,
+            _cancel: Arc<AtomicBool>,
+        ) -> Option<JoinHandle<()>> {
+            None
+        }
+    }
+
+    #[test]
+    fn lower_with_map_tracks_source_indices_across_expansion() {
+        // 'İ' (U+0130) lowercases to two chars ("i̇"); 's' to one.
+        let (lowered, map) = lower_with_map("İs");
+        assert_eq!(lowered.chars().count(), 3);
+        assert_eq!(map, vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn highlight_positions_map_to_original_after_case_expansion() {
+        // "İstanbul" folds to 9 chars but is 8 chars; match positions must map
+        // back into the original char range, not the folded one.
+        let mut p = Picker::new_with_query(Box::new(OneItem("İstanbul".into())), "stanbul");
+        p.refresh();
+        let entries = p.visible_entries();
+        assert_eq!(entries.len(), 1);
+        let (label, positions) = &entries[0];
+        assert_eq!(label, "İstanbul");
+        let nchars = label.chars().count();
+        assert!(
+            positions.iter().all(|&pos| pos < nchars),
+            "positions {positions:?} out of range for {nchars} chars"
+        );
+        // The matched "stanbul" region begins at original char index 1.
+        assert!(
+            positions.contains(&1),
+            "positions {positions:?} miss index 1"
+        );
     }
 }
 

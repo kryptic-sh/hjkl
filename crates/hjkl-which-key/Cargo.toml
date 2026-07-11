@@ -19,6 +19,7 @@ gui = []
 [dependencies]
 hjkl-keymap.workspace = true
 hjkl-vim.workspace = true
+unicode-width.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

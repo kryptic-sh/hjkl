@@ -218,7 +218,10 @@ impl Renderer<'_> {
                 }
                 let style = Style::default().fg(self.theme.code_block);
                 for src in content.lines() {
-                    for w in wrap_str(src, self.inner_width()) {
+                    // Code is whitespace-significant: hard-wrap by display
+                    // width so leading indentation and internal spaces survive
+                    // (word-wrap would collapse them).
+                    for w in hard_wrap(src, self.inner_width()) {
                         self.push_line(vec![Span::styled(w, style)]);
                     }
                 }
@@ -343,12 +346,42 @@ impl Renderer<'_> {
 
     fn render_table(&mut self, aligns: &[ColumnAlign], header: &[String], rows: &[Vec<String>]) {
         self.flush();
-        let ncols = header
+        let mut ncols = header
             .len()
             .max(rows.iter().map(Vec::len).max().unwrap_or(0));
         if ncols == 0 {
             return;
         }
+
+        // How many columns can fit at a minimum content width? Each column
+        // costs MIN_COL content + 2 padding + 1 border; plus one leading
+        // border. Columns beyond that are elided behind a trailing "…" so the
+        // table never renders wider than the viewport (which the host clips).
+        const MIN_COL: usize = 3;
+        let per_col = MIN_COL + 3;
+        let usable = self.inner_width().saturating_sub(1);
+        let max_cols = (usable / per_col).max(1);
+
+        // Owned working copies so we can truncate + append an ellipsis column.
+        let mut header: Vec<String> = header.to_vec();
+        let mut rows: Vec<Vec<String>> = rows.to_vec();
+        let mut aligns: Vec<ColumnAlign> = aligns.to_vec();
+        if ncols > max_cols {
+            let keep = max_cols.saturating_sub(1).max(1); // reserve last col for "…"
+            header.truncate(keep);
+            header.push("\u{2026}".to_string());
+            for r in rows.iter_mut() {
+                r.truncate(keep);
+                while r.len() < keep {
+                    r.push(String::new());
+                }
+                r.push("\u{2026}".to_string());
+            }
+            aligns.truncate(keep);
+            aligns.push(ColumnAlign::default());
+            ncols = keep + 1;
+        }
+        let aligns = aligns.as_slice();
 
         // Natural column widths from header + body cells.
         let mut col_w = vec![0usize; ncols];
@@ -357,8 +390,8 @@ impl Renderer<'_> {
                 col_w[i] = col_w[i].max(UnicodeWidthStr::width(c.as_str()));
             }
         };
-        measure(header, &mut col_w);
-        for r in rows {
+        measure(&header, &mut col_w);
+        for r in &rows {
             measure(r, &mut col_w);
         }
 
@@ -381,9 +414,9 @@ impl Renderer<'_> {
         let body_style = Style::default().fg(self.theme.text);
 
         self.push_line(vec![Span::styled(sep_line(&col_w, '┌', '┬', '┐'), border)]);
-        self.push_line(self.row_spans(header, &col_w, aligns, head_style, border));
+        self.push_line(self.row_spans(&header, &col_w, aligns, head_style, border));
         self.push_line(vec![Span::styled(sep_line(&col_w, '├', '┼', '┤'), border)]);
-        for r in rows {
+        for r in &rows {
             self.push_line(self.row_spans(r, &col_w, aligns, body_style, border));
         }
         self.push_line(vec![Span::styled(sep_line(&col_w, '└', '┴', '┘'), border)]);
@@ -487,6 +520,35 @@ fn wrap_str(s: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Hard-wrap `s` into chunks of at most `width` display columns, preserving
+/// every character (including leading indentation and internal whitespace).
+/// Unlike [`wrap_str`], this never collapses spaces — used for code blocks
+/// where whitespace is significant.
+fn hard_wrap(s: &str, width: usize) -> Vec<String> {
+    if width == 0 || UnicodeWidthStr::width(s) <= width {
+        return vec![s.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for ch in s.chars() {
+        let ch_w = ch.width().unwrap_or(1).max(1);
+        if cur_w + ch_w > width && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        cur.push(ch);
+        cur_w += ch_w;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 /// Take characters from the front of `s` whose combined display width ≤ `max_w`,
 /// returning them as a new String.
 fn trunc_to_width(s: &str, max_w: usize) -> String {
@@ -543,6 +605,57 @@ mod tests {
             80,
         );
         assert!(flat(&lines).contains("fn main"));
+    }
+
+    #[test]
+    fn code_block_preserves_indentation() {
+        // Leading indentation and internal double-spaces must survive.
+        let src = "```rust\n    let x = 1;\nif a  b {}\n```";
+        let out = flat(&to_lines(&parse(src), &MdTheme::default(), 80));
+        assert!(
+            out.lines().any(|l| l.starts_with("    let x = 1;")),
+            "indentation lost: {out:?}"
+        );
+        assert!(
+            out.contains("if a  b {}"),
+            "internal spaces collapsed: {out:?}"
+        );
+    }
+
+    #[test]
+    fn hard_wrap_preserves_all_chars() {
+        // 20 chars incl. leading spaces; wrap at 8 must keep every char and
+        // never exceed the width.
+        let chunks = hard_wrap("   abcde  fghij lmno", 8);
+        let rejoined: String = chunks.concat();
+        assert_eq!(rejoined, "   abcde  fghij lmno");
+        for c in &chunks {
+            assert!(
+                UnicodeWidthStr::width(c.as_str()) <= 8,
+                "chunk too wide: {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_elides_columns_when_too_many_to_fit() {
+        // 10 columns into a narrow 24-col viewport: must elide with a "…"
+        // marker and stay within the viewport width.
+        let header = "| a | b | c | d | e | f | g | h | i | j |";
+        let sep = "|---|---|---|---|---|---|---|---|---|---|";
+        let row = "| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 0 |";
+        let md = format!("{header}\n{sep}\n{row}\n");
+        let lines = to_lines(&parse(&md), &MdTheme::default(), 24);
+        let out = flat(&lines);
+        assert!(out.contains('\u{2026}'), "no elision marker: {out}");
+        for l in &lines {
+            let w: usize = l
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(w <= 24, "table row overflows viewport ({w} > 24): {out}");
+        }
     }
 
     #[test]

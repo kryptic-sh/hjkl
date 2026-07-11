@@ -16,6 +16,7 @@ readme = "README.md"
 hjkl-prompt.workspace = true
 hjkl-form.workspace = true
 ratatui = "0.30"
+unicode-width.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

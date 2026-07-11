@@ -4,6 +4,7 @@
 //! label / body / optional error rows. Returns the focused field's
 //! cursor position so the caller can `frame.set_cursor_position(...)`.
 
+use crate::col_span_width;
 use hjkl_engine::Host;
 use hjkl_form::{Field, Form, FormMode, TextFieldEditor};
 use ratatui::{
@@ -14,6 +15,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Color / style palette for [`draw_form`]. Hosts can override any
 /// field; [`FormPalette::dark`] returns a sensible default for dark
@@ -260,8 +262,9 @@ fn render_body(
                 palette.submit
             };
             let label = format!("[ {} ]", s.meta.label);
-            // Center the button
-            let pad = rect.width.saturating_sub(label.chars().count() as u16) / 2;
+            // Center the button by display width (wide chars occupy 2 cells).
+            let label_w = UnicodeWidthStr::width(label.as_str()).min(u16::MAX as usize) as u16;
+            let pad = rect.width.saturating_sub(label_w) / 2;
             let line = Line::from(vec![
                 Span::raw(" ".repeat(pad as usize)),
                 Span::styled(label, style),
@@ -272,19 +275,37 @@ fn render_body(
     }
 }
 
+/// The text of the buffer row the cursor sits on (empty if out of range).
+fn cursor_line(f: &TextFieldEditor) -> String {
+    let row = f.editor.buffer().cursor().row;
+    f.editor
+        .buffer()
+        .as_string()
+        .lines()
+        .nth(row)
+        .unwrap_or("")
+        .to_string()
+}
+
 fn update_field_viewport(f: &mut TextFieldEditor, rect: Rect) {
     let cursor = f.editor.buffer().cursor();
+    let line = cursor_line(f);
     let v = f.editor.host_mut().viewport_mut();
     v.width = rect.width;
     v.height = rect.height;
-    // Crude horizontal scroll: keep cursor visible.
+    // Horizontal scroll in display columns: keep the cursor cell visible.
     if cursor.col < v.top_col {
         v.top_col = cursor.col;
     }
-    if rect.width > 0 && cursor.col >= v.top_col + rect.width as usize {
-        v.top_col = cursor.col + 1 - rect.width as usize;
+    if rect.width > 0 {
+        let w = rect.width as usize;
+        // Advance the left edge one char at a time until the columns before
+        // the cursor fit within the width (leaving room for the cursor cell).
+        while v.top_col < cursor.col && col_span_width(&line, v.top_col, cursor.col) >= w {
+            v.top_col += 1;
+        }
     }
-    // Vertical scroll for multi-line.
+    // Vertical scroll for multi-line (rows are one cell tall).
     if cursor.row < v.top_row {
         v.top_row = cursor.row;
     }
@@ -300,7 +321,10 @@ fn cursor_xy(f: &TextFieldEditor, rect: Rect) -> Option<(u16, u16)> {
         return None;
     }
     let dy = (cursor.row - v.top_row) as u16;
-    let dx = (cursor.col - v.top_col) as u16;
+    // Horizontal offset is the display width of the scrolled-in prefix, not a
+    // raw char delta, so wide chars push the cursor by the right cell count.
+    let line = cursor_line(f);
+    let dx = col_span_width(&line, v.top_col, cursor.col) as u16;
     if dy >= rect.height || dx >= rect.width {
         return None;
     }
