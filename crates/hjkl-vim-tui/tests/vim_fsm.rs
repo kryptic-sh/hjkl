@@ -274,6 +274,31 @@ fn dot_repeats_x() {
 }
 
 #[test]
+fn d2iw_deletes_word_and_following_space() {
+    // `2iw` = two inner-word runs: the word plus the following whitespace run.
+    let mut e = editor_with("foo bar baz");
+    run_keys(&mut e, "d2iw");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "bar baz");
+}
+
+#[test]
+fn d2aw_deletes_two_words() {
+    // `2aw` = two words plus their trailing whitespace.
+    let mut e = editor_with("foo bar baz");
+    run_keys(&mut e, "d2aw");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "baz");
+}
+
+#[test]
+fn d2ip_spans_paragraph_and_gap() {
+    // `2ip` = the paragraph plus the following blank-line block.
+    let mut e = editor_with("a\nb\n\nc\nd");
+    run_keys(&mut e, "d2ip");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "d");
+}
+
+#[test]
 fn dw_on_last_word_keeps_newline() {
     // vim `:h word` special case: `dw` on the last word of a line stops at
     // end-of-line, it does not eat the newline and join the next line.

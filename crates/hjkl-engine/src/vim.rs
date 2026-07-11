@@ -5454,7 +5454,7 @@ pub(crate) fn auto_indent_range_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_inner_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    word_text_object(ed, true, false)
+    word_text_object(ed, true, false, 1)
 }
 
 /// Resolve the range of `aw` (around word) at the current cursor position.
@@ -5462,7 +5462,7 @@ pub(crate) fn text_object_inner_word_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_around_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    word_text_object(ed, false, false)
+    word_text_object(ed, false, false, 1)
 }
 
 /// Resolve the range of `iW` (inner WORD) at the current cursor position.
@@ -5470,7 +5470,7 @@ pub(crate) fn text_object_around_word_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_inner_big_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    word_text_object(ed, true, true)
+    word_text_object(ed, true, true, 1)
 }
 
 /// Resolve the range of `aW` (around WORD) at the current cursor position.
@@ -5478,7 +5478,7 @@ pub(crate) fn text_object_inner_big_word_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_around_big_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    word_text_object(ed, false, true)
+    word_text_object(ed, false, true, 1)
 }
 
 // ─── Phase 4c pub text-object resolution bridges (quote + bracket) ──────────
@@ -5543,7 +5543,7 @@ pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_inner_sentence_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    sentence_text_object(ed, true)
+    sentence_text_object(ed, true, 1)
 }
 
 /// Resolve the range of `as` (around sentence) at the cursor. Includes
@@ -5551,7 +5551,7 @@ pub(crate) fn text_object_inner_sentence_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_around_sentence_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    sentence_text_object(ed, false)
+    sentence_text_object(ed, false, 1)
 }
 
 // ── Paragraph bridges (ip / ap) ────────────────────────────────────────────
@@ -5561,7 +5561,7 @@ pub(crate) fn text_object_around_sentence_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    paragraph_text_object(ed, true)
+    paragraph_text_object(ed, true, 1)
 }
 
 /// Resolve the range of `ap` (around paragraph) at the cursor. Includes one
@@ -5569,7 +5569,7 @@ pub(crate) fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
 pub(crate) fn text_object_around_paragraph_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
-    paragraph_text_object(ed, false)
+    paragraph_text_object(ed, false, 1)
 }
 
 // ── Tag bridges (it / at) ──────────────────────────────────────────────────
@@ -6801,18 +6801,18 @@ pub(crate) fn text_object_range<H: crate::types::Host>(
 ) -> Option<(Pos, Pos, RangeKind)> {
     match obj {
         TextObject::Word { big } => {
-            word_text_object(ed, inner, big).map(|(s, e)| (s, e, RangeKind::Exclusive))
+            word_text_object(ed, inner, big, count).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
         TextObject::Quote(q) => {
             quote_text_object(ed, q, inner).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
         TextObject::Bracket(open) => bracket_text_object(ed, open, inner, count),
         TextObject::Paragraph => {
-            paragraph_text_object(ed, inner).map(|(s, e)| (s, e, RangeKind::Linewise))
+            paragraph_text_object(ed, inner, count).map(|(s, e)| (s, e, RangeKind::Linewise))
         }
         TextObject::XmlTag => tag_text_object(ed, inner).map(|(s, e)| (s, e, RangeKind::Exclusive)),
         TextObject::Sentence => {
-            sentence_text_object(ed, inner).map(|(s, e)| (s, e, RangeKind::Exclusive))
+            sentence_text_object(ed, inner, count).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
     }
 }
@@ -6937,7 +6937,9 @@ fn sentence_boundary<H: crate::types::Host>(
 fn sentence_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
+    count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
+    let count = count.max(1);
     let rope = crate::types::Query::rope(&ed.buffer);
     let n_lines = rope.len_lines();
     if n_lines == 0 {
@@ -7018,6 +7020,32 @@ fn sentence_text_object<H: crate::types::Host>(
             }
         }
         end += 1;
+    }
+    // `Nis` / `Nas`: extend across `count - 1` further sentences, skipping the
+    // whitespace between each and walking to the next sentence's end.
+    let mut rem = count - 1;
+    while rem > 0 {
+        let mut s = end + 1;
+        while s < chars.len() && chars[s].is_whitespace() {
+            s += 1;
+        }
+        if s >= chars.len() {
+            break;
+        }
+        let mut e = s;
+        while e < chars.len() {
+            if is_terminator(chars[e]) {
+                while e + 1 < chars.len() && is_terminator(chars[e + 1]) {
+                    e += 1;
+                }
+                if e + 1 >= chars.len() || chars[e + 1].is_whitespace() {
+                    break;
+                }
+            }
+            e += 1;
+        }
+        end = e;
+        rem -= 1;
     }
     // Inclusive end → exclusive end_idx.
     let end_idx = (end + 1).min(chars.len());
@@ -7383,14 +7411,17 @@ fn word_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
     big: bool,
+    count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
+    let count = count.max(1);
     let (row, col) = ed.cursor();
     let line = buf_line(&ed.buffer, row)?;
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
         return None;
     }
-    let at = col.min(chars.len().saturating_sub(1));
+    let len = chars.len();
+    let at = col.min(len.saturating_sub(1));
     let classify = |c: char| -> u8 {
         if c.is_whitespace() {
             0
@@ -7406,7 +7437,7 @@ fn word_text_object<H: crate::types::Host>(
         start -= 1;
     }
     let mut end = at;
-    while end + 1 < chars.len() && classify(chars[end + 1]) == cls {
+    while end + 1 < len && classify(chars[end + 1]) == cls {
         end += 1;
     }
     // Columns are char indices — the convention used by the operator
@@ -7417,17 +7448,72 @@ fn word_text_object<H: crate::types::Host>(
     let mut start_col = start;
     // Exclusive end: char index AFTER the last-included char.
     let mut end_col = end + 1;
-    if !inner {
-        // `aw` — include trailing whitespace; if there's no trailing ws, absorb leading ws.
+    if inner {
+        // `Niw` selects N alternating runs (word / punct / whitespace), so
+        // extend the end over `count - 1` further runs.
+        let mut rem = count - 1;
+        while rem > 0 && end + 1 < len {
+            let next_kind = classify(chars[end + 1]);
+            end += 1;
+            while end + 1 < len && classify(chars[end + 1]) == next_kind {
+                end += 1;
+            }
+            rem -= 1;
+        }
+        end_col = end + 1;
+    } else if cls == 0 {
+        // `aw` with the cursor on whitespace — keep the single-object shape
+        // (count extension for this case is uncommon and left as-is).
         let mut t = end + 1;
         let mut included_trailing = false;
-        while t < chars.len() && chars[t].is_whitespace() {
+        while t < len && chars[t].is_whitespace() {
             included_trailing = true;
             t += 1;
         }
         if included_trailing {
             end_col = t;
         } else {
+            let mut s = start;
+            while s > 0 && chars[s - 1].is_whitespace() {
+                s -= 1;
+            }
+            start_col = s;
+        }
+    } else {
+        // `Naw` with the cursor on a word — include N non-blank runs plus the
+        // whitespace between them, then the trailing whitespace after the last
+        // run; if the last run has no trailing whitespace, absorb the leading
+        // whitespace before the first instead (vim `:help aw`).
+        let mut e = end;
+        let mut words_done = 1;
+        let mut included_trailing = false;
+        loop {
+            let mut t = e + 1;
+            let mut got_ws = false;
+            while t < len && chars[t].is_whitespace() {
+                got_ws = true;
+                t += 1;
+            }
+            if words_done == count {
+                if got_ws {
+                    e = t - 1;
+                    included_trailing = true;
+                }
+                break;
+            }
+            if t >= len {
+                break; // no further word to include
+            }
+            // Advance onto the next non-blank run and consume it.
+            e = t;
+            let k = classify(chars[e]);
+            while e + 1 < len && classify(chars[e + 1]) == k {
+                e += 1;
+            }
+            words_done += 1;
+        }
+        end_col = e + 1;
+        if !included_trailing {
             let mut s = start;
             while s > 0 && chars[s - 1].is_whitespace() {
                 s -= 1;
@@ -7757,7 +7843,9 @@ fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usize) {
 fn paragraph_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
+    count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
+    let count = count.max(1);
     let (row, _) = ed.cursor();
     let rope = crate::types::Query::rope(&ed.buffer);
     let n_lines = rope.len_lines();
@@ -7785,6 +7873,29 @@ fn paragraph_text_object<H: crate::types::Host>(
     // For `ap`, include one trailing blank line if present.
     if !inner && bot + 1 < n_lines && is_blank(bot + 1) {
         bot += 1;
+    }
+    // `Nip` / `Nap` extend across `count - 1` further units. For `ip` a unit is
+    // a single block — a maximal run of same-blankness lines — so counting
+    // alternates paragraph → blank gap → paragraph …. For `ap` a unit is a
+    // whole paragraph together with its trailing blank gap (vim `:help ap`),
+    // so `2ap` reaches the blank lines after the second paragraph too.
+    let mut rem = count - 1;
+    while rem > 0 && bot + 1 < n_lines {
+        if inner {
+            let blank_next = is_blank(bot + 1);
+            bot += 1;
+            while bot + 1 < n_lines && is_blank(bot + 1) == blank_next {
+                bot += 1;
+            }
+        } else {
+            while bot + 1 < n_lines && !is_blank(bot + 1) {
+                bot += 1;
+            }
+            while bot + 1 < n_lines && is_blank(bot + 1) {
+                bot += 1;
+            }
+        }
+        rem -= 1;
     }
     let end_col = rope_line_to_str(&rope, bot).chars().count();
     Some(((top, 0), (bot, end_col)))

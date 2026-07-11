@@ -305,3 +305,59 @@ keys = "yaw"
 expected_buffer = "foo bar baz\n"
 expected_cursor = [0, 4]
 expected_register = ["\"", "bar "]
+
+# ── Counted text objects (Niw / Naw / Nip / Nap / Nis / Nas) ─────────────────
+
+# `d2iw` — two inner-word runs: the word "foo" plus the following space.
+[[cases]]
+name = "textobj_d2iw_word_plus_space"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "d2iw"
+expected_buffer = "bar baz\n"
+expected_cursor = [0, 0]
+
+# `d3iw` — three runs: "foo", space, "bar".
+[[cases]]
+name = "textobj_d3iw_two_words_and_space"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "d3iw"
+expected_buffer = " baz\n"
+expected_cursor = [0, 0]
+
+# `d2aw` — two "a word" objects: two words plus their trailing whitespace.
+[[cases]]
+name = "textobj_d2aw_two_words"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "d2aw"
+expected_buffer = "baz\n"
+expected_cursor = [0, 0]
+
+# `d2ip` — inner paragraph plus the following blank-line block.
+[[cases]]
+name = "textobj_d2ip_paragraph_and_gap"
+initial_buffer = "a\nb\n\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "d2ip"
+expected_buffer = "c\nd\n"
+expected_cursor = [0, 0]
+
+# `d2ap` — two paragraphs with the blank gap between them.
+[[cases]]
+name = "textobj_d2ap_two_paragraphs"
+initial_buffer = "a\nb\n\nc\nd\n\ne\n"
+initial_cursor = [0, 0]
+keys = "d2ap"
+expected_buffer = "e\n"
+expected_cursor = [0, 0]
+
+# `d2as` — two sentences on a line (each terminator + following space).
+[[cases]]
+name = "textobj_d2as_two_sentences"
+initial_buffer = "One. Two. Three.\n"
+initial_cursor = [0, 0]
+keys = "d2as"
+expected_buffer = "Three.\n"
+expected_cursor = [0, 0]
