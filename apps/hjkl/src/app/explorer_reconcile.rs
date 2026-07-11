@@ -330,29 +330,66 @@ fn move_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     match std::fs::rename(src, dst) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            let mut stack = vec![src.to_path_buf()];
-            while let Some(dir) = stack.pop() {
-                let rel = dir
-                    .strip_prefix(src)
-                    .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
-                let dst_dir = dst.join(rel);
-                std::fs::create_dir_all(&dst_dir)?;
-                for entry in std::fs::read_dir(&dir)?.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else {
-                        let rel_file = path
-                            .strip_prefix(src)
-                            .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
-                        std::fs::copy(&path, dst.join(rel_file))?;
-                    }
-                }
-            }
+            copy_dir_recursive(src, dst)?;
             std::fs::remove_dir_all(src)?;
             Ok(())
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Recursive copy used by the cross-device fallback of [`move_dir`].
+///
+/// Entries are classified with `symlink_metadata` (lstat — does NOT follow
+/// symlinks): a symlink is recreated as a symlink at the destination, never
+/// followed. Following would (a) recurse unboundedly on a symlink loop and
+/// (b) materialize the link target's tree as a copy, after which the
+/// `remove_dir_all(src)` in [`move_dir`] would delete through the real tree.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rel = dir
+            .strip_prefix(src)
+            .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
+        let dst_dir = dst.join(rel);
+        std::fs::create_dir_all(&dst_dir)?;
+        for entry in std::fs::read_dir(&dir)?.flatten() {
+            let path = entry.path();
+            let rel_entry = path
+                .strip_prefix(src)
+                .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
+            let dst_path = dst.join(rel_entry);
+            let ft = std::fs::symlink_metadata(&path)?.file_type();
+            if ft.is_symlink() {
+                copy_symlink(&path, &dst_path)?;
+            } else if ft.is_dir() {
+                stack.push(path);
+            } else {
+                std::fs::copy(&path, &dst_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recreate the symlink at `src` as an identical symlink at `dst` — never
+/// follows it and never touches the link target.
+#[cfg(unix)]
+fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(std::fs::read_link(src)?, dst)
+}
+
+/// Recreate the symlink at `src` as an identical symlink at `dst` — never
+/// follows it and never touches the link target.
+#[cfg(windows)]
+fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let target = std::fs::read_link(src)?;
+    // Windows distinguishes file and directory symlinks; probe the (followed)
+    // metadata to pick, defaulting to a file symlink for dangling links.
+    if std::fs::metadata(src).map(|m| m.is_dir()).unwrap_or(false) {
+        std::os::windows::fs::symlink_dir(target, dst)
+    } else {
+        std::os::windows::fs::symlink_file(target, dst)
     }
 }
 
@@ -1819,5 +1856,60 @@ mod tests {
         let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(dest.exists(), "dest must be restored again after redo");
+    }
+
+    // ── cross-device copy fallback: symlink safety ────────────────────────────
+
+    /// The recursive-copy fallback of `move_dir` must NOT follow symlinks:
+    /// a directory symlink inside the moved tree is recreated as a symlink at
+    /// the destination, and the tree it points at is left untouched (the old
+    /// `is_dir()`-based walk recursed into it and later deleted through it).
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_preserves_symlinks_without_following() {
+        let td = tempfile::tempdir().unwrap();
+
+        // A "real" tree that the symlink points at — must survive untouched.
+        let real = td.path().join("real");
+        std::fs::create_dir_all(real.join("inner")).unwrap();
+        std::fs::write(real.join("inner/keep.txt"), "keep").unwrap();
+
+        // The tree being moved: a regular file, a subdir, a dir symlink to
+        // `real`, and a self-referential symlink loop.
+        let src = td.path().join("tree");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/file.txt"), "data").unwrap();
+        std::os::unix::fs::symlink(&real, src.join("link_to_real")).unwrap();
+        std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+
+        // Exercise the fallback body directly (rename can't be forced to
+        // fail with CrossesDevices inside one tempdir), then the removal
+        // step exactly as `move_dir` performs it.
+        let dst = td.path().join("moved");
+        copy_dir_recursive(&src, &dst).unwrap();
+        std::fs::remove_dir_all(&src).unwrap();
+
+        // Regular content copied.
+        assert_eq!(
+            std::fs::read_to_string(dst.join("sub/file.txt")).unwrap(),
+            "data"
+        );
+        // The dir symlink was recreated as a symlink — not expanded.
+        let meta = std::fs::symlink_metadata(dst.join("link_to_real")).unwrap();
+        assert!(meta.file_type().is_symlink(), "symlink was materialized");
+        assert_eq!(std::fs::read_link(dst.join("link_to_real")).unwrap(), real);
+        // The loop symlink did not cause unbounded recursion.
+        assert!(
+            std::fs::symlink_metadata(dst.join("loop"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // The real tree the link pointed at is fully intact after the
+        // source removal.
+        assert_eq!(
+            std::fs::read_to_string(real.join("inner/keep.txt")).unwrap(),
+            "keep"
+        );
     }
 }

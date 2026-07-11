@@ -1709,10 +1709,36 @@ impl App {
             }
         }
 
+        // Active LSP workspace roots, for the out-of-root warning below.
+        // When no server is tracked yet (`lsp_state` empty) fall back to the
+        // process cwd so the containment check still means something.
+        let workspace_roots: Vec<std::path::PathBuf> = if self.lsp_state.is_empty() {
+            std::env::current_dir().ok().into_iter().collect()
+        } else {
+            self.lsp_state.keys().map(|k| k.root.clone()).collect()
+        };
+        let mut out_of_root: Vec<std::path::PathBuf> = Vec::new();
+
         let count = file_edits.len();
         for (url, mut edits) in file_edits {
             // Find or open the slot for this URI.
             let target_path = hjkl_lsp::uri::to_path(&url);
+
+            // A server may direct edits at files OUTSIDE every workspace root
+            // (e.g. `~/.bashrc`). Still apply them — buffers are not saved
+            // automatically and legitimate multi-root / out-of-tree setups
+            // exist — but record the path so the user gets a visible warning
+            // before a hurried `:w` / `:wa` persists them.
+            if let Some(ref tp) = target_path {
+                let canon = std::fs::canonicalize(tp).unwrap_or_else(|_| tp.clone());
+                let in_root = workspace_roots.iter().any(|r| {
+                    let rc = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
+                    tp.starts_with(r) || canon.starts_with(&rc)
+                });
+                if !in_root {
+                    out_of_root.push(tp.clone());
+                }
+            }
             let slot_idx = if let Some(ref tp) = target_path {
                 // Try to find an existing slot.
                 let existing = self.slots.iter().position(|s| {
@@ -1764,6 +1790,17 @@ impl App {
             // Mark dirty.
             let _ = self.slots[slot_idx].editor.take_dirty();
             self.slots[slot_idx].dirty = true;
+        }
+
+        if !out_of_root.is_empty() {
+            let names = out_of_root
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.bus.warn(format!(
+                "LSP: workspace edit modified file(s) OUTSIDE the workspace root: {names} — review before saving"
+            ));
         }
 
         Ok(count)
@@ -2339,5 +2376,58 @@ mod lsp_glue_tests {
         assert!(!changes.is_empty());
         // The extracted text must be valid UTF-8 (implicit: it compiled to String).
         assert!(std::str::from_utf8(changes[0].text.as_bytes()).is_ok());
+    }
+
+    /// A `WorkspaceEdit` targeting a file OUTSIDE every active LSP workspace
+    /// root must still apply (buffers are never auto-saved, and multi-root /
+    /// out-of-tree setups are legitimate) but must push a visible WARN toast
+    /// naming the out-of-root file so the user is alerted before `:w`.
+    #[test]
+    #[allow(clippy::mutable_key_type)] // lsp_types::Uri interns via Cell internally
+    fn workspace_edit_outside_root_warns() {
+        use std::str::FromStr;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "hello\n").unwrap();
+
+        let mut app = super::App::new(None, false, None, None).unwrap();
+        // Pretend a server is running rooted at `root`.
+        app.lsp_state.insert(
+            hjkl_lsp::ServerKey {
+                language: "rust".into(),
+                root: root.path().to_path_buf(),
+            },
+            super::LspServerInfo {
+                initialized: true,
+                capabilities: serde_json::Value::Null,
+            },
+        );
+
+        let url = hjkl_lsp::uri::from_path(&victim).unwrap();
+        let uri = lsp_types::Uri::from_str(url.as_str()).unwrap();
+        let te = lsp_types::TextEdit {
+            range: lsp_types::Range::new(
+                lsp_types::Position::new(0, 0),
+                lsp_types::Position::new(0, 5),
+            ),
+            new_text: "howdy".into(),
+        };
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(uri, vec![te]);
+        let edit = lsp_types::WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        };
+
+        let applied = app.apply_workspace_edit(edit).unwrap();
+        assert_eq!(applied, 1, "the out-of-root edit must still be applied");
+
+        let warned = app
+            .bus
+            .history()
+            .any(|h| h.severity == hjkl_holler::Severity::Warn && h.body.contains("victim.txt"));
+        assert!(warned, "expected a WARN toast naming the out-of-root file");
     }
 }
