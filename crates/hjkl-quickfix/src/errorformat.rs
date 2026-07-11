@@ -242,7 +242,8 @@ fn parse_location(s: &str) -> Option<(String, usize, usize)> {
 /// otherwise `("", s)`.
 fn split_drive_prefix(s: &str) -> (&str, &str) {
     let b = s.as_bytes();
-    if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/') {
+    if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+    {
         (&s[..2], &s[2..])
     } else {
         ("", s)

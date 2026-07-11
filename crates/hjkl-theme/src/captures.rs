@@ -27,9 +27,9 @@ impl CaptureMap {
             if let Some(spec) = self.flat.get(key) {
                 return Some(spec);
             }
-            match key.rfind('.') {
-                Some(pos) => key = &key[..pos],
-                None => return None,
+            {
+                let pos = key.rfind('.')?;
+                key = &key[..pos]
             }
         }
     }

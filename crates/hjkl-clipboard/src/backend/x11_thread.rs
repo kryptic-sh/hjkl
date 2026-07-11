@@ -1346,9 +1346,7 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
 
         accumulator.extend_from_slice(&chunk);
         if accumulator.len() > MAX_INCR_TOTAL_BYTES {
-            return Err(ClipboardError::io_other(
-                "INCR receive exceeded size limit",
-            ));
+            return Err(ClipboardError::io_other("INCR receive exceeded size limit"));
         }
 
         if Instant::now() >= total_deadline {

@@ -74,7 +74,11 @@ mod tests {
     /// `TempDir` — keep both in scope for the duration of the test so the env
     /// override is not clobbered by another test and the directory is not
     /// deleted while we use it.
-    fn isolated_trash_dir() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir, PathBuf) {
+    fn isolated_trash_dir() -> (
+        std::sync::MutexGuard<'static, ()>,
+        tempfile::TempDir,
+        PathBuf,
+    ) {
         let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let td = tempfile::tempdir().unwrap();
         // Point XDG_CACHE_HOME at the temp dir so trash_dir() resolves inside it.

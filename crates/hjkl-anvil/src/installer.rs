@@ -1095,12 +1095,21 @@ mod tests {
         // Within budget: copies and decrements.
         let mut budget = 100u64;
         let mut out = Vec::new();
-        copy_capped(&mut std::io::Cursor::new(vec![7u8; 80]), &mut out, &mut budget).unwrap();
+        copy_capped(
+            &mut std::io::Cursor::new(vec![7u8; 80]),
+            &mut out,
+            &mut budget,
+        )
+        .unwrap();
         assert_eq!(out.len(), 80);
         assert_eq!(budget, 20);
         // Over the remaining budget errors (decompression-bomb guard).
         let mut out2 = Vec::new();
-        let err = copy_capped(&mut std::io::Cursor::new(vec![7u8; 21]), &mut out2, &mut budget);
+        let err = copy_capped(
+            &mut std::io::Cursor::new(vec![7u8; 21]),
+            &mut out2,
+            &mut budget,
+        );
         assert!(err.is_err(), "copy beyond remaining budget must error");
     }
 

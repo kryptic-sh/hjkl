@@ -299,7 +299,7 @@ fn status_flags_to_xy(st: Status) -> [u8; 2] {
 
     // Untracked: both columns `?`
     if st.contains(Status::WT_NEW) && x == b' ' {
-        return [b'?', b'?'];
+        return *b"??";
     }
 
     [x, y]
@@ -365,7 +365,7 @@ fn scan_git_status(
             sentinel.store(true, Ordering::Release);
             if let Ok(mut g) = items.lock() {
                 g.push(GitStatusItem {
-                    status: [b'?', b'?'],
+                    status: *b"??",
                     path: PathBuf::new(),
                     is_untracked: true,
                 });
@@ -384,7 +384,7 @@ fn scan_git_status(
             sentinel.store(true, Ordering::Release);
             if let Ok(mut g) = items.lock() {
                 g.push(GitStatusItem {
-                    status: [b'?', b'?'],
+                    status: *b"??",
                     path: PathBuf::new(),
                     is_untracked: true,
                 });
@@ -408,7 +408,7 @@ fn scan_git_status(
         let path = PathBuf::from(path_str);
         let st = entry.status();
         let xy = status_flags_to_xy(st);
-        let is_untracked = xy == [b'?', b'?'];
+        let is_untracked = xy == *b"??";
         parsed.push(GitStatusItem {
             status: xy,
             path,
