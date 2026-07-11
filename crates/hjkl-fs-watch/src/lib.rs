@@ -168,6 +168,12 @@ pub enum FsEvent {
         /// The new path.
         to: PathBuf,
     },
+    /// Events were dropped because a channel filled up faster than it drained
+    /// (e.g. a large tree changing all at once during a build). The specific
+    /// changes are unknown, so the consumer should re-check every watched path
+    /// (a coarse "you may have missed something — rescan" signal). Emitted at
+    /// most once per burst and always eventually delivered.
+    Rescan,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -304,10 +310,19 @@ impl WatcherBuilder {
         let paused = Arc::new(AtomicBool::new(false));
         let paused_worker = Arc::clone(&paused);
 
+        // Overflow flag: set whenever a bounded channel drops an event so the
+        // worker can surface a coarse `Rescan` instead of silently losing it.
+        let overflow = Arc::new(AtomicBool::new(false));
+        let overflow_cb = Arc::clone(&overflow);
+
         // Build the notify watcher.
         let mut notify_watcher = RecommendedWatcher::new(
             move |res| {
-                let _ = raw_tx.try_send(res);
+                if raw_tx.try_send(res).is_err() {
+                    // Worker fell behind and the raw channel is full — a change
+                    // is being dropped. Flag it so a Rescan is emitted.
+                    overflow_cb.store(true, Ordering::SeqCst);
+                }
             },
             notify::Config::default(),
         )?;
@@ -325,7 +340,7 @@ impl WatcherBuilder {
         std::thread::Builder::new()
             .name("hjkl-fs-watch-worker".into())
             .spawn(move || {
-                worker(raw_rx, ev_tx, filter, debounce, paused_worker);
+                worker(raw_rx, ev_tx, filter, debounce, paused_worker, overflow);
             })
             .map_err(WatchError::Io)?;
 
@@ -349,6 +364,7 @@ fn worker(
     filter: Option<FilterFn>,
     debounce: Duration,
     paused: Arc<AtomicBool>,
+    overflow: Arc<AtomicBool>,
 ) {
     // Tick at half the debounce window to flush pending events promptly.
     let flush_interval = if debounce.is_zero() {
@@ -376,7 +392,13 @@ fn worker(
                 }
             }
             recv(ticker) -> _ => {
-                flush_pending(&mut pending, &ev_tx, debounce);
+                flush_pending(&mut pending, &ev_tx, debounce, &overflow);
+                // If anything was dropped (raw or debounced channel full),
+                // surface a single Rescan. Retry each tick until it lands so
+                // the signal itself isn't lost to a full consumer channel.
+                if overflow.load(Ordering::SeqCst) && ev_tx.try_send(FsEvent::Rescan).is_ok() {
+                    overflow.store(false, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -520,6 +542,7 @@ fn flush_pending(
     pending: &mut HashMap<PathBuf, Pending>,
     ev_tx: &Sender<FsEvent>,
     debounce: Duration,
+    overflow: &AtomicBool,
 ) {
     let now = Instant::now();
     let done: Vec<PathBuf> = pending
@@ -528,8 +551,12 @@ fn flush_pending(
         .map(|(path, _)| path.clone())
         .collect();
     for path in done {
-        if let Some(p) = pending.remove(&path) {
-            let _ = ev_tx.try_send(pending_to_event(path, p));
+        if let Some(p) = pending.remove(&path)
+            && ev_tx.try_send(pending_to_event(path, p)).is_err()
+        {
+            // Consumer channel full — this debounced event is being dropped.
+            // Flag it so the worker emits a coarse Rescan.
+            overflow.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -700,6 +727,28 @@ mod tests {
     use std::fs;
     use std::time::Duration;
 
+    #[test]
+    fn flush_pending_flags_overflow_when_consumer_channel_full() {
+        // Consumer channel with a single slot, pre-filled so it's full.
+        let (tx, _rx) = bounded::<FsEvent>(1);
+        tx.try_send(FsEvent::Rescan).unwrap();
+        // One pending entry already past its (zero) debounce window.
+        let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
+        pending.insert(
+            PathBuf::from("/tmp/x"),
+            Pending {
+                kind: PendingKind::Modified,
+                at: Instant::now() - Duration::from_secs(1),
+            },
+        );
+        let overflow = AtomicBool::new(false);
+        flush_pending(&mut pending, &tx, Duration::from_millis(0), &overflow);
+        assert!(
+            overflow.load(Ordering::SeqCst),
+            "a dropped debounced event must set overflow so a Rescan is emitted"
+        );
+    }
+
     /// Wait up to `budget` polling every `interval` until `predicate` is true.
     fn wait_for<F: FnMut() -> bool>(
         mut predicate: F,
@@ -742,6 +791,7 @@ mod tests {
                 let hit = match &ev {
                     FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p == target,
                     FsEvent::Renamed { from, to } => from == target || to == target,
+                    _ => false,
                 };
                 if hit {
                     return Some(ev);
@@ -1023,6 +1073,7 @@ mod tests {
             .filter(|e| match e {
                 FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p == &file,
                 FsEvent::Renamed { from, to } => from == &file || to == &file,
+                _ => false,
             })
             .collect();
 
@@ -1190,6 +1241,7 @@ mod tests {
             .filter(|e| match e {
                 FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => p == &deep,
                 FsEvent::Renamed { from, to } => from == &deep || to == &deep,
+                _ => false,
             })
             .collect();
         assert!(

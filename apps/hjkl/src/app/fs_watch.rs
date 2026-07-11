@@ -143,6 +143,9 @@ impl App {
         }
         // Map events → candidate paths (a rename touches both ends).
         let mut paths: Vec<PathBuf> = Vec::new();
+        // A `Rescan` means the watcher dropped events under load and can't say
+        // which files changed — re-check every open slot.
+        let mut rescan_all = false;
         for ev in events {
             match ev {
                 FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => paths.push(p),
@@ -150,6 +153,7 @@ impl App {
                     paths.push(from);
                     paths.push(to);
                 }
+                FsEvent::Rescan => rescan_all = true,
                 _ => {}
             }
         }
@@ -160,17 +164,25 @@ impl App {
         // A newly-raised dirty-buffer prompt (#241) also needs a repaint even
         // though no content reloaded.
         let had_prompt = self.pending_disk_change.is_some();
-        for p in paths {
-            let canon = canon_for_match(&p);
-            if !seen.insert(canon.clone()) {
-                continue;
-            }
-            // Reconcile every slot whose file canonicalizes to this path.
+        if rescan_all {
+            // Unknown changes — checktime every open slot (superset of any
+            // specific paths in this batch).
             for idx in 0..self.slots.len() {
-                let matches =
-                    self.slots[idx].filename.as_deref().map(canon_for_match) == Some(canon.clone());
-                if matches {
-                    reloaded |= self.checktime_slot(idx, &mut messages);
+                reloaded |= self.checktime_slot(idx, &mut messages);
+            }
+        } else {
+            for p in paths {
+                let canon = canon_for_match(&p);
+                if !seen.insert(canon.clone()) {
+                    continue;
+                }
+                // Reconcile every slot whose file canonicalizes to this path.
+                for idx in 0..self.slots.len() {
+                    let matches = self.slots[idx].filename.as_deref().map(canon_for_match)
+                        == Some(canon.clone());
+                    if matches {
+                        reloaded |= self.checktime_slot(idx, &mut messages);
+                    }
                 }
             }
         }

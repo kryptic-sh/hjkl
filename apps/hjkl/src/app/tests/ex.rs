@@ -1030,6 +1030,27 @@ fn fs_event_modified_reloads_clean_buffer() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A `Rescan` event (the watcher dropped events under load and can't say which
+/// files changed) re-checks every open slot, so a clean+autoreload buffer whose
+/// file changed on disk is still reloaded even though no path was reported.
+#[test]
+fn fs_event_rescan_reloads_clean_buffer() {
+    let path = std::env::temp_dir().join(format!("hjkl_fsw_rescan_{}.txt", std::process::id()));
+    std::fs::write(&path, "old\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    write_and_wait(&path, "fresh\n");
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Rescan]);
+
+    assert!(
+        reloaded,
+        "Rescan must re-check open slots and reload the changed file"
+    );
+    assert_eq!(fsw_lines(&app, app.focused_slot_idx()), vec!["fresh"]);
+    assert!(!app.active().dirty);
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A dirty, focused buffer is never clobbered by a watch event — content
 /// preserved, flagged ChangedOnDisk, and the interactive keep/reload/diff
 /// prompt (#241) is raised (repaint requested).
