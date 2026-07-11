@@ -152,3 +152,12 @@ initial_buffer = "x\nx\nx\n"
 initial_cursor = [0, 0]
 keys = ":s/x/y/g 2<CR>"
 expected_buffer = "y\ny\nx\n"
+
+# `&` flag reuses the previous substitute's flags. `:s/a/x/g` records `g`; then
+# `:s/c/d/&` reuses it, replacing BOTH c's (without `&` only the first would go).
+[[cases]]
+name = "subst_ampersand_flag_reuses_flags"
+initial_buffer = "a c c\n"
+initial_cursor = [0, 0]
+keys = ":s/a/x/g<CR>:s/c/d/&<CR>"
+expected_buffer = "x d d\n"

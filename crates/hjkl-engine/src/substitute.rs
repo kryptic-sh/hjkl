@@ -20,9 +20,11 @@
 //!   (`\u`/`\l`/`\U`/`\L`/`\E`), control chars (`\r`/`\t`/`\n`), and `~` (the
 //!   previous replacement). A plain `$` is literal.
 //! - Flags: `g` (all), `i`/`I` (case), `c` (confirm), `n` (report count only,
-//!   no change), `e` (accepted — hjkl already succeeds on no match), and
-//!   `p`/`#`/`l` (print — parsed/accepted). A trailing `[count]` operates on
-//!   `count` lines from the range's last line.
+//!   no change), `e` (accepted — hjkl already succeeds on no match),
+//!   `p`/`#`/`l` (print the last changed line, optionally with number /
+//!   `:list`-style — surfaced by the ex layer), and `&` (reuse the previous
+//!   substitute's flags — resolved by the ex layer). A trailing `[count]`
+//!   operates on `count` lines from the range's last line.
 //!
 //! See vim's `:help :substitute` for the full spec.
 
@@ -80,6 +82,10 @@ pub struct SubstFlags {
     pub print_num: bool,
     /// `l` — print `:list`-style (implies `print`).
     pub print_list: bool,
+    /// `&` — reuse the flags from the previous substitute (`:h :s_flags`).
+    /// Resolved by the ex handler, which merges the stored `last_substitute`
+    /// flags into this command's before applying.
+    pub reuse_previous: bool,
 }
 
 /// Result of [`apply_substitute`].
@@ -89,6 +95,10 @@ pub struct SubstituteOutcome {
     pub replacements: usize,
     /// Number of lines that had at least one replacement.
     pub lines_changed: usize,
+    /// 0-based row of the last changed line (where the cursor lands). `None`
+    /// when nothing changed. Used by the ex layer to print the line for the
+    /// `p` / `#` / `l` flags.
+    pub last_row: Option<usize>,
 }
 
 /// Parse the tail of a substitute command (everything after the leading
@@ -168,6 +178,9 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
                 flags.print = true;
                 flags.print_list = true;
             }
+            // `&` — reuse the previous substitute's flags. Resolved by the ex
+            // handler (which holds `last_substitute`).
+            '&' => flags.reuse_previous = true,
             ' ' | '\t' => {}
             c if c.is_ascii_digit() => break, // trailing count begins
             other => return Err(format!("unknown flag '{other}' in substitute")),
@@ -307,6 +320,7 @@ pub fn apply_substitute<H: crate::types::Host>(
         return Ok(SubstituteOutcome {
             replacements: 0,
             lines_changed: 0,
+            last_row: None,
         });
     }
 
@@ -318,6 +332,7 @@ pub fn apply_substitute<H: crate::types::Host>(
         return Ok(SubstituteOutcome {
             replacements,
             lines_changed,
+            last_row: None,
         });
     }
 
@@ -349,6 +364,7 @@ pub fn apply_substitute<H: crate::types::Host>(
     Ok(SubstituteOutcome {
         replacements,
         lines_changed,
+        last_row: Some(cursor_row),
     })
 }
 

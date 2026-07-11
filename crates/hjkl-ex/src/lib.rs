@@ -1478,6 +1478,53 @@ mod tests {
     }
 
     #[test]
+    fn substitute_ampersand_flag_reuses_previous_flags() {
+        // A first `:s/.../g` records the `g` flag (even with no match); a later
+        // `:s/c/d/&` reuses it, so BOTH `c`s are replaced — without `&` only the
+        // first would be.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["c c"]);
+        try_dispatch(&reg, &mut editor, "s/zzz/q/g");
+        let result = try_dispatch(&reg, &mut editor, "s/c/d/&");
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 2,
+                lines_changed: 1
+            })
+        );
+        assert_eq!(buf_line(&editor, 0), "d d");
+    }
+
+    #[test]
+    fn substitute_print_flag_echoes_changed_line() {
+        // `:s/foo/bar/p` echoes the changed line as an Info message.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo baz"]);
+        let result = try_dispatch(&reg, &mut editor, "s/foo/bar/p");
+        assert_eq!(result, Some(ExEffect::Info("bar baz".into())));
+        assert_eq!(buf_line(&editor, 0), "bar baz");
+    }
+
+    #[test]
+    fn substitute_print_hash_flag_prefixes_line_number() {
+        // `:2s/foo/bar/#` prints the 1-based line number before the line.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["x", "foo"]);
+        let result = try_dispatch(&reg, &mut editor, "2s/foo/bar/#");
+        assert_eq!(result, Some(ExEffect::Info("2 bar".into())));
+    }
+
+    #[test]
+    fn substitute_print_list_flag_marks_eol_and_tabs() {
+        // `l` flag renders `:list`-style: tabs as `^I`, `$` at end of line.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s/foo/a\\tb/l");
+        assert_eq!(result, Some(ExEffect::Info("a^Ib$".into())));
+    }
+
+    #[test]
     fn substitute_percent_range_applies_to_all_lines() {
         // `:%s/foo/bar/g` — whole buffer.
         let reg = default_registry::<DefaultHost>();

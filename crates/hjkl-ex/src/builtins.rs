@@ -839,10 +839,29 @@ fn substitute_handler<H: Host>(
     use hjkl_engine::substitute::{apply_substitute, collect_substitute_matches, parse_substitute};
 
     // args already starts with `/` (the delimiter); pass straight to engine.
-    let cmd = match parse_substitute(args) {
+    let mut cmd = match parse_substitute(args) {
         Ok(c) => c,
         Err(e) => return Some(ExEffect::Error(e.to_string())),
     };
+
+    // `&` flag: reuse the previous substitute's flags (`:h :s_flags`), unioned
+    // with any flags typed alongside it. Resolved here because the parser has
+    // no access to `last_substitute`.
+    if cmd.flags.reuse_previous {
+        let prev = editor.last_substitute().map(|c| c.flags);
+        cmd.flags.reuse_previous = false;
+        if let Some(pf) = prev {
+            cmd.flags.all |= pf.all;
+            cmd.flags.ignore_case |= pf.ignore_case;
+            cmd.flags.case_sensitive |= pf.case_sensitive;
+            cmd.flags.confirm |= pf.confirm;
+            cmd.flags.report_only |= pf.report_only;
+            cmd.flags.no_error |= pf.no_error;
+            cmd.flags.print |= pf.print;
+            cmd.flags.print_num |= pf.print_num;
+            cmd.flags.print_list |= pf.print_list;
+        }
+    }
 
     // Resolve range to 0-based inclusive u32 bounds.
     // No range → current cursor line (cursor() returns 0-based (row, col)).
@@ -879,14 +898,49 @@ fn substitute_handler<H: Host>(
 
     match apply_substitute(editor, &cmd, r) {
         Ok(out) => {
+            let (print, print_num, print_list) =
+                (cmd.flags.print, cmd.flags.print_num, cmd.flags.print_list);
             // Store so `:&` / `:&&` can repeat this substitution.
             editor.set_last_substitute(cmd);
+            // `p` / `#` / `l` flags: echo the last changed line.
+            if print && let Some(row) = out.last_row {
+                let line = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row);
+                let msg =
+                    format_print_line(line.trim_end_matches('\n'), row, print_num, print_list);
+                return Some(ExEffect::Info(msg));
+            }
             Some(ExEffect::Substituted {
                 count: out.replacements,
                 lines_changed: out.lines_changed,
             })
         }
         Err(e) => Some(ExEffect::Error(e.to_string())),
+    }
+}
+
+/// Format a substitute `p` / `#` / `l` print line.
+///
+/// - `list` renders `:list`-style: tabs as `^I` and a trailing `$` marking EOL.
+/// - `num` prefixes the 1-based line number.
+fn format_print_line(line: &str, row: usize, num: bool, list: bool) -> String {
+    let body = if list {
+        let mut s = String::with_capacity(line.len() + 1);
+        for ch in line.chars() {
+            if ch == '\t' {
+                s.push_str("^I");
+            } else {
+                s.push(ch);
+            }
+        }
+        s.push('$');
+        s
+    } else {
+        line.to_string()
+    };
+    if num {
+        format!("{} {}", row + 1, body)
+    } else {
+        body
     }
 }
 
