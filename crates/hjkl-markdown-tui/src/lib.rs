@@ -466,7 +466,7 @@ fn wrap_str(s: &str, width: usize) -> Vec<String> {
         if ww > width {
             for ch in word.chars() {
                 let ch_w = ch.width().unwrap_or(1).max(1);
-                if cur_w >= width && !cur.is_empty() {
+                if cur_w + ch_w > width && !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
                     cur_w = 0;
                 }
@@ -589,6 +589,29 @@ mod tests {
                 UnicodeWidthStr::width(c.as_str()) <= 10,
                 "chunk too wide: {c:?}"
             );
+        }
+    }
+
+    #[test]
+    fn wrap_wide_chars_do_not_overflow() {
+        use unicode_width::UnicodeWidthStr;
+        // Double-width chars landing at the boundary must not produce a
+        // chunk wider than the requested width.
+        for width in 1..=6usize {
+            for c in wrap_str("ああああああ", width) {
+                assert!(
+                    UnicodeWidthStr::width(c.as_str()) <= width.max(2),
+                    "chunk {c:?} too wide for width {width}"
+                );
+            }
+            if width >= 2 {
+                for c in wrap_str("ああああああ", width) {
+                    assert!(
+                        UnicodeWidthStr::width(c.as_str()) <= width,
+                        "chunk {c:?} too wide for width {width}"
+                    );
+                }
+            }
         }
     }
 

@@ -282,7 +282,10 @@ pub fn parse(src: &str) -> Vec<Event> {
             pulldown_cmark::Event::Start(Tag::Item) => {
                 let ordered = *list_ordered_stack.last().unwrap_or(&false);
                 let number = *list_number_stack.last().unwrap_or(&1);
-                let depth = list_ordered_stack.len().saturating_sub(1) as u8;
+                // Saturate instead of `as`-truncating: 256 levels of nesting
+                // must not wrap the depth back to 0.
+                let depth =
+                    u8::try_from(list_ordered_stack.len().saturating_sub(1)).unwrap_or(u8::MAX);
                 events.push(Event::ListItem {
                     depth,
                     bullet: if ordered { '\0' } else { '-' },
@@ -358,10 +361,21 @@ pub fn parse(src: &str) -> Vec<Event> {
             }
             pulldown_cmark::Event::End(TagEnd::Link) => {
                 in_link = false;
-                events.push(Event::Link {
-                    text: link_text.clone(),
-                    url: link_url.clone(),
-                });
+                if cell_buf.is_some() || code_buf.is_some() || heading_level.is_some() {
+                    // The link text was already flattened into the active
+                    // block accumulator (table cell / heading); emitting a
+                    // standalone Link event here would render the URL as
+                    // stray content outside that block.
+                } else if in_image {
+                    // Link nested in image alt text — fold the text back
+                    // into the alt accumulator.
+                    image_alt.push_str(&link_text);
+                } else {
+                    events.push(Event::Link {
+                        text: link_text.clone(),
+                        url: link_url.clone(),
+                    });
+                }
                 link_text.clear();
                 link_url.clear();
             }
@@ -372,10 +386,19 @@ pub fn parse(src: &str) -> Vec<Event> {
             }
             pulldown_cmark::Event::End(TagEnd::Image) => {
                 in_image = false;
-                events.push(Event::Image {
-                    alt: image_alt.clone(),
-                    url: image_url.clone(),
-                });
+                if cell_buf.is_some() || code_buf.is_some() || heading_level.is_some() {
+                    // Alt text already flattened into the active block
+                    // accumulator — no standalone Image event.
+                } else if in_link {
+                    // Image nested in link text — fold the alt back into
+                    // the link text accumulator.
+                    link_text.push_str(&image_alt);
+                } else {
+                    events.push(Event::Image {
+                        alt: image_alt.clone(),
+                        url: image_url.clone(),
+                    });
+                }
                 image_alt.clear();
                 image_url.clear();
             }
@@ -383,9 +406,20 @@ pub fn parse(src: &str) -> Vec<Event> {
             pulldown_cmark::Event::Code(s) => sink_text!(s, true),
             pulldown_cmark::Event::Text(s) => sink_text!(s, false),
             pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
+                // Mirror sink_text!'s accumulator priority: a break inside a
+                // flattened block becomes a single space so words don't glue
+                // together. Code blocks carry their own newlines in Text
+                // events, so no separator is needed there.
                 if let Some(buf) = cell_buf.as_mut() {
                     buf.push(' ');
-                } else if code_buf.is_none() && heading_level.is_none() && !in_link && !in_image {
+                } else if code_buf.is_some() {
+                } else if heading_level.is_some() {
+                    heading_buf.push(' ');
+                } else if in_link {
+                    link_text.push(' ');
+                } else if in_image {
+                    image_alt.push(' ');
+                } else {
                     events.push(Event::Text {
                         content: "\n".to_string(),
                         bold,
@@ -529,5 +563,94 @@ mod tests {
     fn empty_input_no_panic() {
         let evs = parse("");
         assert!(evs.is_empty() || evs.iter().all(|e| matches!(e, Event::Blank)));
+    }
+
+    #[test]
+    fn link_in_heading_no_stray_event() {
+        // The link text is flattened into the heading; no standalone Link
+        // event may leak out (it used to render as a bare URL line).
+        let evs = parse("# [Click](https://x.example)");
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Event::Heading { level: 1, text } if text == "Click")),
+            "got {evs:?}"
+        );
+        assert!(
+            !evs.iter().any(|e| matches!(e, Event::Link { .. })),
+            "stray Link event: {evs:?}"
+        );
+    }
+
+    #[test]
+    fn link_in_table_cell_no_stray_event() {
+        let md = "| a |\n|---|\n| [x](http://y) |\n";
+        let evs = parse(md);
+        let rows = evs
+            .iter()
+            .find_map(|e| match e {
+                Event::Table { rows, .. } => Some(rows.clone()),
+                _ => None,
+            })
+            .expect("a table event");
+        assert_eq!(rows, vec![vec!["x".to_string()]], "got {evs:?}");
+        assert!(
+            !evs.iter().any(|e| matches!(e, Event::Link { .. })),
+            "stray Link event: {evs:?}"
+        );
+    }
+
+    #[test]
+    fn image_in_table_cell_no_stray_event() {
+        let md = "| a |\n|---|\n| ![alt](http://y.png) |\n";
+        let evs = parse(md);
+        assert!(
+            !evs.iter().any(|e| matches!(e, Event::Image { .. })),
+            "stray Image event: {evs:?}"
+        );
+    }
+
+    #[test]
+    fn setext_heading_softbreak_keeps_word_separator() {
+        // Setext headings can span source lines; the soft break must not
+        // glue the words together.
+        let evs = parse("foo\nbar\n===\n");
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Event::Heading { level: 1, text } if text == "foo bar")),
+            "got {evs:?}"
+        );
+    }
+
+    #[test]
+    fn link_text_softbreak_keeps_word_separator() {
+        let evs = parse("[foo\nbar](http://x)");
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Event::Link { text, .. } if text == "foo bar")),
+            "got {evs:?}"
+        );
+    }
+
+    #[test]
+    fn deep_list_depth_never_wraps() {
+        // 300 nesting levels: depth is a u8, so it must saturate at 255,
+        // never wrap back toward 0.
+        let mut md = String::new();
+        for i in 0..300usize {
+            md.push_str(&"  ".repeat(i));
+            md.push_str("- x\n");
+        }
+        let depths: Vec<u8> = parse(&md)
+            .iter()
+            .filter_map(|e| match e {
+                Event::ListItem { depth, .. } => Some(*depth),
+                _ => None,
+            })
+            .collect();
+        assert!(!depths.is_empty());
+        assert!(
+            depths.windows(2).all(|w| w[1] >= w[0]),
+            "depth wrapped: {depths:?}"
+        );
     }
 }
