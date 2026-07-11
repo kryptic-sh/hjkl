@@ -294,9 +294,16 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
         return Err(ClipboardError::io(std::io::Error::last_os_error()));
     }
 
-    // For simplicity, we assume the entire buffer was sent in one shot.
-    // Wayland messages are small (< 4 KB); partial sends are pathological.
-    // 6b can add a retry loop if needed.
+    // The SCM_RIGHTS control message (the fds) is carried only by this first
+    // `sendmsg`. If the data was written partially, send the remaining bytes
+    // as plain data (no cmsg — the fds are already transferred). Skipping this
+    // would truncate the wire message and desync the wayland protocol. Wayland
+    // messages are small so a partial write is rare, but not impossible under
+    // socket-buffer pressure.
+    let sent = n as usize;
+    if sent < bytes.len() {
+        send_plain(fd, &bytes[sent..])?;
+    }
     Ok(())
 }
 

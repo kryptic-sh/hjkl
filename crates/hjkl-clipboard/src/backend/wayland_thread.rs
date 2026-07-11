@@ -413,6 +413,11 @@ struct WaylandState {
     /// Pipe writes that could not be completed in one shot (EAGAIN on O_NONBLOCK
     /// fd).  Drained by the main event loop via POLLOUT on each fd.
     pending_writes: Vec<PendingWrite>,
+    /// Set when the compositor sends `wl_display.error`. That error is fatal
+    /// per the wayland protocol — the connection is unusable afterwards — so
+    /// the main loop exits (and serves the inbox with errors) instead of
+    /// spinning on a dead socket.
+    fatal_error: bool,
 }
 
 impl WaylandState {
@@ -632,6 +637,7 @@ impl WaylandState {
             primary_manager_id,
             offer_ids: HashMap::new(),
             pending_writes: Vec::new(),
+            fatal_error: false,
         })
     }
 }
@@ -670,6 +676,12 @@ fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>) {
                 break;
             }
             dispatch_events(state);
+            // A `wl_display.error` during dispatch is fatal — the connection is
+            // dead, so stop looping and fall through to serve the inbox with
+            // errors instead of polling a broken socket forever.
+            if state.fatal_error {
+                break;
+            }
         }
 
         // Drain the inbox (non-blocking).
@@ -875,7 +887,13 @@ fn handle_event(
     if object_id == WL_DISPLAY_ID {
         match opcode {
             WL_DISPLAY_ERROR => {
-                eprintln!("hjkl-clipboard wayland: wl_display.error — terminating bg thread");
+                let detail = parse_display_error(args);
+                eprintln!(
+                    "hjkl-clipboard wayland: wl_display.error ({detail}) — terminating bg thread"
+                );
+                // Fatal per protocol: the connection is unusable. Signal the
+                // main loop to stop rather than spin on a dead socket.
+                state.fatal_error = true;
             }
             WL_DISPLAY_DELETE_ID => {
                 // Compositor deleted one of our object ids; clean up offer tracking.
@@ -3171,6 +3189,7 @@ mod tests {
             primary_manager_id: 0,
             offer_ids: HashMap::new(),
             pending_writes: Vec::new(),
+            fatal_error: false,
         };
 
         // Create a pipe.  Hold the read end open but never read from it so
@@ -3218,5 +3237,47 @@ mod tests {
         // The _ suppresses unused-import warning on wayland_wire (it is used
         // transitively but the compiler can't see it here).
         let _ = wayland_wire::encode_u32;
+    }
+
+    /// A `wl_display.error` event must flip `fatal_error` so the main loop
+    /// exits instead of spinning on a now-dead connection.
+    #[test]
+    fn wl_display_error_marks_state_fatal() {
+        let mut sv = [0i32; 2];
+        // SAFETY: standard socketpair call with a valid out-array.
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) };
+        assert_eq!(rc, 0, "socketpair failed");
+        // SAFETY: sv[1] is a valid fd we don't need.
+        unsafe { libc::close(sv[1]) };
+        // SAFETY: sv[0] is a valid, owned fd.
+        let socket = unsafe { WaylandSocket::from_raw_fd(sv[0]) };
+
+        let mut state = WaylandState {
+            socket,
+            next_id: 100,
+            seat_name: 0,
+            seat_id: 0,
+            manager_name: 0,
+            manager_id: 0,
+            device_id: 0,
+            sync_id: 0,
+            clipboard_source: None,
+            primary_source: None,
+            pending_offers: HashMap::new(),
+            current_clipboard_offer: None,
+            current_primary_offer: None,
+            primary_device_id: 0,
+            primary_manager_id: 0,
+            offer_ids: HashMap::new(),
+            pending_writes: Vec::new(),
+            fatal_error: false,
+        };
+
+        assert!(!state.fatal_error);
+        handle_event(&mut state, WL_DISPLAY_ID, WL_DISPLAY_ERROR, &[], None);
+        assert!(
+            state.fatal_error,
+            "wl_display.error must mark the state as fatal"
+        );
     }
 }
