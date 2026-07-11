@@ -4845,7 +4845,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Multiply by count (minimum 1). Clamp to vim's count limit
         // (`:h count` — counts are capped at 999999999); an unclamped
         // saturated prefix would overflow `Vec` capacity in `repeat`.
-        keys.repeat(count.clamp(1, 999_999_999))
+        keys.repeat(count.clamp(1, vim::MAX_COUNT))
     }
 
     /// Clear the `replaying_macro` flag. Called by the app after the
@@ -5400,17 +5400,25 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.count
     }
 
-    /// Overwrite the digit-prefix count directly.
+    /// Overwrite the digit-prefix count directly. Clamped at
+    /// [`vim::MAX_COUNT`] (vim's documented count ceiling, `:h count`).
     pub fn set_count(&mut self, c: usize) {
-        self.vim.count = c;
+        self.vim.count = c.min(vim::MAX_COUNT);
     }
 
     /// Accumulate one more digit into the count prefix (mirrors `count * 10 + digit`).
     pub fn accumulate_count_digit(&mut self, digit: usize) {
         // Saturate the add too: once the multiply has saturated at
         // `usize::MAX`, a plain `+ digit` overflows (panic in debug builds)
-        // after ~20 typed digits.
-        self.vim.count = self.vim.count.saturating_mul(10).saturating_add(digit);
+        // after ~20 typed digits. Then clamp at vim's documented count
+        // ceiling (`:h count`) so no apply loop can iterate more than
+        // 999,999,999 times regardless of how many digits were typed.
+        self.vim.count = self
+            .vim
+            .count
+            .saturating_mul(10)
+            .saturating_add(digit)
+            .min(vim::MAX_COUNT);
     }
 
     /// Reset the count prefix to zero (no pending count).

@@ -90,6 +90,12 @@ use crate::editor::Editor;
 
 // ─── Operator / Motion / TextObject ────────────────────────────────────────
 
+/// Vim caps count prefixes at 999,999,999 (`:h count`); mirror that cap on
+/// every value that can feed a `0..count` apply loop so a pathological digit
+/// stream (`<20 nines>x`) saturating toward `usize::MAX` can't freeze the
+/// editor. Matches `CountAccumulator::MAX_COUNT` in hjkl-vim.
+pub const MAX_COUNT: usize = 999_999_999;
+
 /// ROT13 a string: rotate ASCII letters by 13, leave everything else.
 pub(crate) fn rot13_str(s: &str) -> String {
     s.chars()
@@ -3247,7 +3253,7 @@ pub(crate) fn execute_motion<H: crate::types::Host>(
     motion: Motion,
     count: usize,
 ) {
-    let count = count.max(1);
+    let count = count.clamp(1, MAX_COUNT);
     // `;`/`,` smart fallback: if the last horizontal motion was a sneak
     // digraph, repeat via apply_sneak instead of find-char.
     if let Motion::FindRepeat { reverse } = motion
@@ -3550,6 +3556,10 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
     count: usize,
     as_operator: bool,
 ) {
+    // Folded operator counts (`count1 × count2`) can exceed a single
+    // prefix's cap; re-clamp at vim's count ceiling (`:h count`) where the
+    // count fans out into the per-motion `0..count` loops.
+    let count = count.min(MAX_COUNT);
     match motion {
         Motion::Left => {
             // `h` — Buffer clamps at col 0 (no wrap), matching vim.
@@ -4869,6 +4879,9 @@ fn apply_op_with_text_object<H: crate::types::Host>(
     inner: bool,
     count: usize,
 ) {
+    // Folded counts can exceed a single prefix's cap; re-clamp at vim's
+    // count ceiling (`:h count`).
+    let count = count.min(MAX_COUNT);
     let Some((mut start, mut end, mut kind)) = text_object_range(ed, obj, inner, count) else {
         return;
     };
@@ -6102,6 +6115,9 @@ fn execute_line_op<H: crate::types::Host>(
     op: Operator,
     count: usize,
 ) {
+    // Folded counts (`2d3d` → 6) can exceed a single prefix's cap; re-clamp
+    // at vim's count ceiling (`:h count`).
+    let count = count.min(MAX_COUNT);
     let (row, col) = ed.cursor();
     let total = buf_row_count(&ed.buffer);
     // Vim: `[count]op` for a linewise operator implies a `count_` motion that
@@ -8694,6 +8710,10 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
     };
     ed.vim.replaying = true;
     let scale = if outer_count > 0 { outer_count } else { 1 };
+    // Dot-repeat multiplies the stored count by the `.`-prefix count; both
+    // are individually capped, but their product must re-clamp at vim's
+    // count ceiling (`:h count`) so replay loops stay bounded.
+    let scaled = |c: usize| c.saturating_mul(scale).min(MAX_COUNT);
     match change {
         LastChange::OpMotion {
             op,
@@ -8701,7 +8721,7 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
             count,
             inserted,
         } => {
-            let total = count.max(1).saturating_mul(scale);
+            let total = scaled(count.max(1));
             apply_op_with_motion(ed, op, &motion, total);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
@@ -8725,20 +8745,20 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
             count,
             inserted,
         } => {
-            let total = count.max(1).saturating_mul(scale);
+            let total = scaled(count.max(1));
             execute_line_op(ed, op, total);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
             }
         }
         LastChange::CharDel { forward, count } => {
-            do_char_delete(ed, forward, count.saturating_mul(scale));
+            do_char_delete(ed, forward, scaled(count));
         }
         LastChange::ReplaceChar { ch, count } => {
-            replace_char(ed, ch, count.saturating_mul(scale));
+            replace_char(ed, ch, scaled(count));
         }
         LastChange::ToggleCase { count } => {
-            for _ in 0..count.saturating_mul(scale) {
+            for _ in 0..scaled(count) {
                 ed.push_undo();
                 if !toggle_case_at_cursor(ed) {
                     break;
@@ -8746,7 +8766,7 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
             }
         }
         LastChange::JoinLine { count } => {
-            for _ in 0..count.saturating_mul(scale) {
+            for _ in 0..scaled(count) {
                 ed.push_undo();
                 if !join_line(ed) {
                     break;
@@ -8759,13 +8779,7 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
             cursor_after,
             reindent,
         } => {
-            do_paste(
-                ed,
-                before,
-                count.saturating_mul(scale),
-                cursor_after,
-                reindent,
-            );
+            do_paste(ed, before, scaled(count), cursor_after, reindent);
         }
         LastChange::GnOp {
             op,
