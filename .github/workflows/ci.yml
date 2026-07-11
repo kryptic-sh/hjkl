@@ -812,6 +812,19 @@ jobs:
             if [ -z "$version" ]; then
               echo "::error::could not resolve version for $crate"; exit 1
             fi
+            # Idempotency pre-check: skip a crate whose version is already on
+            # crates.io so re-running this job resumes a partial publish.
+            #
+            # NOTE (by design): `curl -f` fails on ANY HTTP error, so during a
+            # crates.io API outage a 5xx here is indistinguishable from a 404
+            # (not-yet-published). On an outage we fall through and `cargo
+            # publish` then aborts with "already exists on crates.io index"
+            # (checked against the sparse index), failing the job. That is the
+            # intended, safe outcome: DO NOT publish blindly during an outage.
+            # Recovery is simply to RE-RUN the failed job once crates.io is
+            # healthy — this pre-check then returns 200 for the already-published
+            # crates, skips them, and continues from the first missing one.
+            # (Tracked in issue #271; kept as-is deliberately.)
             local url="https://crates.io/api/v1/crates/${crate}/${version}"
             if curl -fsS -A "${crate}-release-ci" -o /dev/null "$url"; then
               echo "::notice::${crate}@${version} already on crates.io, skipping"
