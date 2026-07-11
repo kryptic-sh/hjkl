@@ -301,9 +301,9 @@ fn cancelled_replace_drops_count() {
 #[test]
 fn at_digit_plays_numbered_register() {
     let mut e = editor_with("ab");
-    // Register `"1` is the head of the delete ring.
-    e.registers_mut()
-        .record_delete("x".to_string(), false, None);
+    // Register `"1` is the head of the delete ring. Seed it with a line-sized
+    // delete — small (sub-line) deletes go to `"-`, not the numbered ring.
+    e.registers_mut().record_delete("x".to_string(), true, None);
     dispatch_keys(&mut e, "@1");
     assert!(
         e.content().starts_with('b'),

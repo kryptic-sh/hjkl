@@ -1593,8 +1593,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
     }
 
-    /// Record a delete / change into `"` and the `"1`–`"9` ring.
-    /// Honours the active named-register prefix.
+    /// Record a delete / change into `"` and, by size, the `"1`–`"9`
+    /// ring or the `"-` small-delete register. Honours the active
+    /// named-register prefix.
     pub(crate) fn record_delete(&mut self, text: String, linewise: bool) {
         self.vim.yank_linewise = linewise;
         let target = self.vim.pending_register.take();
@@ -4655,7 +4656,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// path for macro-replay / defensive coverage) delegates here to avoid
     /// logic duplication.
     pub fn set_pending_register(&mut self, reg: char) {
-        if reg.is_ascii_alphanumeric() || matches!(reg, '"' | '+' | '*' | '_') {
+        // `-` is the small-delete register (readable/pasteable, e.g. `"-p`).
+        if reg.is_ascii_alphanumeric() || matches!(reg, '"' | '+' | '*' | '_' | '-') {
             self.vim.pending_register = Some(reg);
         }
         // Invalid chars silently no-op (matches engine FSM behavior).

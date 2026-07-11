@@ -45,3 +45,39 @@ initial_cursor = [0, 0]
 keys = "\"ayyj\"Ayyo<Esc>\"ap"
 expected_buffer = "aaa\nbbb\n\naaa\nbbb\n"
 expected_mode = "normal"
+
+# Small-delete register `"-` survives a later LINEWISE delete. A charwise `x`
+# fills "- with "a"; a following `dd` fills the numbered ring and the unnamed
+# register (linewise "bc\n") but must NOT touch "-. Pasting "- then yields the
+# charwise "a", not the unnamed line. (Discriminates "- from the unnamed reg:
+# a fallback to unnamed would paste "bc\n" on a new line instead.)
+[[cases]]
+name = "register_dash_survives_linewise_delete"
+initial_buffer = "abc\nxyz\n"
+initial_cursor = [0, 0]
+keys = "xdd\"-p"
+expected_buffer = "xayz\n"
+expected_mode = "normal"
+
+# Yank into a NAMED register must not clobber `"0`. `yy` sets "0 to "foo\n";
+# `"ayy` on the next line names register a, leaving "0 untouched; `"0p` pastes
+# the original "foo\n". (A bug that overwrote "0 would paste "bar\n".)
+[[cases]]
+name = "register_zero_survives_named_yank"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "yyj\"ayy\"0p"
+expected_buffer = "foo\nbar\nfoo\n"
+expected_mode = "normal"
+
+# A small (sub-line) delete must NOT rotate the numbered ring. `dd` puts "L1\n"
+# in "1; a following `x` is a small delete (goes to "-), so "1 still holds
+# "L1\n" and `"1p` pastes it. (A bug that rotated the ring on `x` would leave
+# "1 = "L" and paste that instead.)
+[[cases]]
+name = "register_ring_unshifted_by_small_delete"
+initial_buffer = "L1\nL2\nL3\n"
+initial_cursor = [0, 0]
+keys = "ddx\"1p"
+expected_buffer = "2\nL1\nL3\n"
+expected_mode = "normal"

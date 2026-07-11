@@ -3,10 +3,15 @@
 //! Slots:
 //! - `"` (unnamed) — written by every `y` / `d` / `c` / `x`; the
 //!   default source for `p` / `P`.
-//! - `"0` — the most recent **yank**. Deletes do not touch it, so
-//!   `yw…dw…p` still pastes the original yank.
-//! - `"1`–`"9` — small-delete ring. Each delete shifts the ring
-//!   (newest at `"1`, oldest dropped off `"9`).
+//! - `"0` — the most recent **yank** (only when no register was
+//!   named). Deletes do not touch it, so `yw…dw…p` still pastes the
+//!   original yank.
+//! - `"1`–`"9` — numbered delete/change ring. A delete of a whole
+//!   line or spanning more than one line shifts the ring (newest at
+//!   `"1`, oldest dropped off `"9`). Deletes of less than one line
+//!   do **not** touch the ring — they go to `"-` instead.
+//! - `"-` — small-delete register: text from a delete/change of less
+//!   than one line (unless the command named another register).
 //! - `"a`–`"z` — named slots. A capital letter (`"A`…) appends to
 //!   the matching lowercase slot, matching vim semantics.
 
@@ -30,8 +35,11 @@ pub struct Registers {
     pub unnamed: Slot,
     /// `"0` — last yank only.
     pub yank_zero: Slot,
-    /// `"1`–`"9` — last 9 deletes (`"1` newest).
+    /// `"1`–`"9` — last 9 line-sized deletes (`"1` newest).
     pub delete_ring: [Slot; 9],
+    /// `"-` — small-delete register: last delete/change of less than
+    /// one line, when no register was named.
+    pub small_delete: Slot,
     /// `"a`–`"z` — named user registers.
     pub named: [Slot; 26],
     /// `"+` / `"*` — system clipboard register. Both selectors alias
@@ -62,7 +70,11 @@ impl Registers {
         }
         let slot = Slot::new(text, linewise);
         self.unnamed = slot.clone();
-        self.yank_zero = slot.clone();
+        // vim: `"0` holds the last yank only when the command did not name
+        // another register — `"ayy` leaves `"0` untouched.
+        if target.is_none() {
+            self.yank_zero = slot.clone();
+        }
         if let Some(c) = target {
             self.write_named(c, slot);
             // vim: the unnamed register points at the named register just
@@ -74,11 +86,17 @@ impl Registers {
         }
     }
 
-    /// Record a delete / change. Writes to `"`, rotates the
-    /// `"1`–`"9` ring, and (if `target` is set) the named slot.
-    /// Empty deletes are dropped — vim doesn't pollute the ring
-    /// with no-ops. When `target` is `'_'` (black-hole register) all
+    /// Record a delete / change. Writes to `"` and routes the text to a
+    /// numbered or small-delete register (and, if `target` is set, the
+    /// named slot). Empty deletes are dropped — vim doesn't pollute the
+    /// ring with no-ops. When `target` is `'_'` (black-hole register) all
     /// writes are suppressed, preserving the previous register state.
+    ///
+    /// Register routing follows vim (`:help quote1`, `:help quote_-`):
+    /// - a named target suppresses both the numbered ring and `"-`;
+    /// - otherwise a delete of a whole line or spanning more than one line
+    ///   shifts the `"1`–`"9` ring;
+    /// - a smaller (sub-line) delete goes to `"-` and leaves the ring alone.
     pub fn record_delete(&mut self, text: String, linewise: bool, target: Option<char>) {
         if text.is_empty() {
             return;
@@ -89,16 +107,24 @@ impl Registers {
         }
         let slot = Slot::new(text, linewise);
         self.unnamed = slot.clone();
-        for i in (1..9).rev() {
-            self.delete_ring[i] = self.delete_ring[i - 1].clone();
-        }
-        self.delete_ring[0] = slot.clone();
         if let Some(c) = target {
+            // A named register suppresses the numbered ring and `"-`.
             self.write_named(c, slot);
             // vim: unnamed points at the named register just written.
             if let Some(named) = self.read(c) {
                 self.unnamed = named.clone();
             }
+            return;
+        }
+        if slot.linewise || slot.text.contains('\n') {
+            // Line-sized delete: shift the numbered ring, newest into `"1`.
+            for i in (1..9).rev() {
+                self.delete_ring[i] = self.delete_ring[i - 1].clone();
+            }
+            self.delete_ring[0] = slot;
+        } else {
+            // Small delete: goes to `"-`, ring untouched.
+            self.small_delete = slot;
         }
     }
 
@@ -112,6 +138,7 @@ impl Registers {
             '"' => Some(&self.unnamed),
             '0' => Some(&self.yank_zero),
             '1'..='9' => Some(&self.delete_ring[(reg as u8 - b'1') as usize]),
+            '-' => Some(&self.small_delete),
             'a'..='z' => Some(&self.named[(reg as u8 - b'a') as usize]),
             'A'..='Z' => Some(&self.named[(reg.to_ascii_lowercase() as u8 - b'a') as usize]),
             '+' | '*' => Some(&self.clip),
@@ -164,15 +191,66 @@ mod tests {
     fn delete_rotates_ring_and_skips_zero() {
         let mut r = Registers::default();
         r.record_yank("kept".into(), false, None);
-        r.record_delete("d1".into(), false, None);
-        r.record_delete("d2".into(), false, None);
+        // Line-sized deletes fill the numbered ring.
+        r.record_delete("d1\n".into(), true, None);
+        r.record_delete("d2\n".into(), true, None);
         // Newest delete is "1.
-        assert_eq!(r.read('1').unwrap().text, "d2");
-        assert_eq!(r.read('2').unwrap().text, "d1");
+        assert_eq!(r.read('1').unwrap().text, "d2\n");
+        assert_eq!(r.read('2').unwrap().text, "d1\n");
         // "0 untouched by deletes.
         assert_eq!(r.read('0').unwrap().text, "kept");
         // Unnamed mirrors the latest write.
-        assert_eq!(r.read('"').unwrap().text, "d2");
+        assert_eq!(r.read('"').unwrap().text, "d2\n");
+    }
+
+    #[test]
+    fn small_delete_goes_to_dash_not_ring() {
+        let mut r = Registers::default();
+        // Seed the ring with a line-sized delete.
+        r.record_delete("line\n".into(), true, None);
+        // Sub-line deletes (e.g. `x`, `dw`) land in "- and leave the ring.
+        r.record_delete("x".into(), false, None);
+        r.record_delete("y".into(), false, None);
+        assert_eq!(r.read('-').unwrap().text, "y");
+        // Ring still holds the earlier line delete, unshifted.
+        assert_eq!(r.read('1').unwrap().text, "line\n");
+        assert!(r.read('2').unwrap().text.is_empty());
+        // Unnamed still mirrors the latest write.
+        assert_eq!(r.read('"').unwrap().text, "y");
+    }
+
+    #[test]
+    fn multiline_charwise_delete_fills_ring_not_dash() {
+        let mut r = Registers::default();
+        // A charwise delete spanning a newline is "line-sized" for routing.
+        r.record_delete("a\nb".into(), false, None);
+        assert_eq!(r.read('1').unwrap().text, "a\nb");
+        assert!(r.read('-').unwrap().text.is_empty());
+    }
+
+    #[test]
+    fn named_delete_leaves_ring_and_dash_untouched() {
+        let mut r = Registers::default();
+        r.record_delete("ring\n".into(), true, None);
+        r.record_delete("dash".into(), false, None);
+        // `"add` — named target suppresses both ring and "-.
+        r.record_delete("named\n".into(), true, Some('a'));
+        assert_eq!(r.read('a').unwrap().text, "named\n");
+        assert_eq!(r.read('1').unwrap().text, "ring\n");
+        assert_eq!(r.read('-').unwrap().text, "dash");
+        // Unnamed mirrors the named write.
+        assert_eq!(r.read('"').unwrap().text, "named\n");
+    }
+
+    #[test]
+    fn yank_to_named_preserves_zero() {
+        let mut r = Registers::default();
+        r.record_yank("original".into(), false, None);
+        assert_eq!(r.read('0').unwrap().text, "original");
+        // `"ayy` must not clobber "0.
+        r.record_yank("into a".into(), false, Some('a'));
+        assert_eq!(r.read('0').unwrap().text, "original");
+        assert_eq!(r.read('a').unwrap().text, "into a");
     }
 
     #[test]
@@ -188,9 +266,9 @@ mod tests {
     #[test]
     fn empty_delete_is_dropped() {
         let mut r = Registers::default();
-        r.record_delete("first".into(), false, None);
-        r.record_delete(String::new(), false, None);
-        assert_eq!(r.read('1').unwrap().text, "first");
+        r.record_delete("first\n".into(), true, None);
+        r.record_delete(String::new(), true, None);
+        assert_eq!(r.read('1').unwrap().text, "first\n");
         assert!(r.read('2').unwrap().text.is_empty());
     }
 

@@ -4090,16 +4090,19 @@ fn yank_zero_holds_clipboard_after_delete() {
     // Delete a word; "0 should still hold the original yank.
     run_keys(&mut e, "dw");
     assert_eq!(e.registers().read('0').unwrap().text, yanked);
-    // "1 holds the just-deleted text (non-empty, regardless of exact contents).
-    assert!(!e.registers().read('1').unwrap().text.is_empty());
+    // `dw` is a small (sub-line) delete → goes to the small-delete register
+    // "-, not the numbered ring, which stays empty.
+    assert!(!e.registers().read('-').unwrap().text.is_empty());
+    assert!(e.registers().read('1').unwrap().text.is_empty());
 }
 
 #[test]
 fn delete_ring_rotates_through_one_through_nine() {
-    let mut e = editor_with("a b c d e f g h i j");
-    // Delete each word — each delete pushes onto "1, shifting older.
+    let mut e = editor_with("aaa\nbbb\nccc\nddd\n");
+    // Line-sized deletes push onto "1, shifting older down the ring. (Small
+    // sub-line deletes go to "- instead and never touch the ring.)
     for _ in 0..3 {
-        run_keys(&mut e, "dw");
+        run_keys(&mut e, "dd");
     }
     // Most recent delete is in "1.
     let r1 = e.registers().read('1').unwrap().text.clone();
