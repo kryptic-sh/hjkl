@@ -51,6 +51,7 @@ hjkl-mangler = { path = "crates/hjkl-mangler", version = "0.33" }
 hjkl-markdown = { path = "crates/hjkl-markdown", version = "0.33" }
 hjkl-markdown-tui = { path = "crates/hjkl-markdown-tui", version = "0.33" }
 hjkl-menu = { path = "crates/hjkl-menu", version = "0.33" }
+hjkl-menu-gui = { path = "crates/hjkl-menu-gui", version = "0.33" }
 hjkl-menu-tui = { path = "crates/hjkl-menu-tui", version = "0.33" }
 hjkl-picker = { path = "crates/hjkl-picker", version = "0.33" }
 hjkl-quickfix = { path = "crates/hjkl-quickfix", version = "0.33" }

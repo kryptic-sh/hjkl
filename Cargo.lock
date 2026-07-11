@@ -2713,6 +2713,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-menu-gui"
+version = "0.33.5"
+dependencies = [
+ "floem",
+ "hjkl-menu",
+]
+
+[[package]]
 name = "hjkl-menu-tui"
 version = "0.33.5"
 dependencies = [
