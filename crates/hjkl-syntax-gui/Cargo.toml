@@ -1,0 +1,30 @@
+[package]
+name = "hjkl-syntax-gui"
+description = "Floem/cosmic-text adapter for hjkl-syntax: converts renderer-agnostic RenderOutput spans to cosmic-text styling and routes DiagSigns to gutter marks."
+keywords = ["syntax", "gui", "floem", "highlight", "editor"]
+categories = ["gui"]
+version.workspace = true
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+# Not published to crates.io — the floem GUI stack is workspace-only. Enforced
+# here so an accidental `cargo publish` (or the release job) can't push it.
+publish = false
+
+[dependencies]
+hjkl-syntax = { workspace = true }
+# floem 0.2 does not re-export cosmic-text as `floem::cosmic_text` (it only
+# re-exports select types, e.g. `Weight`/`Style`, via `floem::text`, and wraps
+# `Attrs`/`AttrsOwned` in its own types). Depend on cosmic-text directly at
+# the version floem 0.2 resolves to (verified via `cargo tree -p
+# hjkl-css-gui | grep cosmic-text`) so both stay in lockstep.
+cosmic-text = "0.12.1"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

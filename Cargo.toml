@@ -63,6 +63,7 @@ hjkl-splash-tui = { path = "crates/hjkl-splash-tui", version = "0.33" }
 hjkl-statusline = { path = "crates/hjkl-statusline", version = "0.33" }
 hjkl-statusline-tui = { path = "crates/hjkl-statusline-tui", version = "0.33" }
 hjkl-syntax = { path = "crates/hjkl-syntax", version = "0.33" }
+hjkl-syntax-gui = { path = "crates/hjkl-syntax-gui", version = "0.33" }
 hjkl-syntax-tui = { path = "crates/hjkl-syntax-tui", version = "0.33" }
 hjkl-tabs = { path = "crates/hjkl-tabs", version = "0.33" }
 hjkl-tabs-gui = { path = "crates/hjkl-tabs-gui", version = "0.33" }
