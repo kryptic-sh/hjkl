@@ -107,6 +107,54 @@ const FORMAT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval inside the wait loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
+/// Cap on a formatter's stdout/stderr. A runaway formatter that streams more
+/// than this is treated as an error rather than buffered into unbounded memory.
+const MAX_FORMATTER_OUTPUT: usize = 64 * 1024 * 1024;
+
+/// Deadline for the `<tool> --version` availability probe so a hung binary
+/// can't block the calling (often UI) thread forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Run `<tool> --version` and wait up to [`PROBE_TIMEOUT`], killing (and
+/// reaping) the child on timeout. `Ok(Some(status))` = it exited; `Ok(None)` =
+/// it launched but timed out; `Err` = it could not be spawned.
+fn probe_status(tool: &str) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let mut child = Command::new(tool)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Read a child pipe to EOF, capping the buffer at `max` bytes. A formatter
+/// that streams more than `max` errors out instead of allocating without
+/// bound; the pipe is still drained afterward so the child can't deadlock on a
+/// full stdout buffer before the caller's timeout fires.
+fn read_capped(mut r: impl std::io::Read, max: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    (&mut r).take(max as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() > max {
+        let mut sink = [0u8; 8192];
+        while r.read(&mut sink)? > 0 {}
+        return Err(std::io::Error::other("formatter output exceeds size limit"));
+    }
+    Ok(buf)
+}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Errors returned by [`Formatter::format`].
@@ -207,13 +255,9 @@ pub fn is_tool_installed(tool: &str) -> bool {
     // "can we launch this binary?" — the worker reports real errors
     // separately. Use `probe_tool` when you also need exit-code
     // diagnostics.
-    Command::new(tool)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
+    // Spawn succeeded ⇒ launchable. Uses a timeout so a binary that hangs on
+    // `--version` can't block this (often UI-thread) call forever.
+    probe_status(tool).is_ok()
 }
 
 /// Detailed availability probe. Returns `Ok(())` when the tool runs and
@@ -222,21 +266,16 @@ pub fn is_tool_installed(tool: &str) -> bool {
 /// when the caller wants to surface diagnostics; [`is_tool_installed`]
 /// is the convenience wrapper.
 pub fn probe_tool(tool: &str) -> Result<(), String> {
-    match Command::new(tool)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
+    match probe_status(tool) {
+        Ok(Some(status)) if status.success() => Ok(()),
+        Ok(Some(status)) => Err(format!(
             "spawned but exited {}",
             status
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "?".into())
         )),
+        Ok(None) => Err(format!("timed out after {}s", PROBE_TIMEOUT.as_secs())),
         Err(e) => Err(format!("spawn failed: {} ({:?})", e, e.kind())),
     }
 }
@@ -678,21 +717,10 @@ fn run_formatter_with_timeout(
     // 64 KiB on Linux) deadlocks — the child blocks writing stdout, we
     // block in `try_wait` waiting for the child to exit, neither side
     // moves. Read pipes in dedicated threads so they always drain.
-    use std::io::Read as _;
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
-    let stdout_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        let mut s = stdout;
-        s.read_to_end(&mut buf)?;
-        Ok(buf)
-    });
-    let stderr_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        let mut s = stderr;
-        s.read_to_end(&mut buf)?;
-        Ok(buf)
-    });
+    let stdout_handle = std::thread::spawn(move || read_capped(stdout, MAX_FORMATTER_OUTPUT));
+    let stderr_handle = std::thread::spawn(move || read_capped(stderr, MAX_FORMATTER_OUTPUT));
 
     // Write source to stdin in a background thread, then close it so the
     // formatter sees EOF.
@@ -1016,6 +1044,16 @@ fn format_worker_loop(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn read_capped_accepts_within_limit_and_rejects_over() {
+        // Exactly at the cap is fine.
+        let ok = read_capped(std::io::Cursor::new(vec![b'x'; 100]), 100).unwrap();
+        assert_eq!(ok.len(), 100);
+        // One byte over errors instead of buffering unbounded.
+        let err = read_capped(std::io::Cursor::new(vec![b'x'; 101]), 100);
+        assert!(err.is_err(), "output over the cap must error");
+    }
 
     // ── formatter_for_path dispatch ──────────────────────────────────────
 
