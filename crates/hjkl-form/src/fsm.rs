@@ -56,17 +56,19 @@ impl Form {
         let mut moved = false;
         let prev = self.focused;
         match input.key {
+            // BackTab on most terminals comes through as Tab + shift;
+            // crossterm-bridged inputs use Key::Tab with shift. This arm
+            // must precede the forward Tab arm, whose guard does not
+            // exclude shift.
+            Key::Tab if input.shift => {
+                self.focused = self.focused.saturating_sub(1);
+                moved = true;
+            }
             Key::Char('j') | Key::Down | Key::Tab if !input.ctrl && !input.alt => {
                 self.focused = (self.focused + 1) % len;
                 moved = true;
             }
             Key::Char('k') | Key::Up if !input.ctrl && !input.alt => {
-                self.focused = self.focused.saturating_sub(1);
-                moved = true;
-            }
-            // BackTab on most terminals comes through as Tab + shift;
-            // crossterm-bridged inputs use Key::Tab with shift.
-            Key::Tab if input.shift => {
                 self.focused = self.focused.saturating_sub(1);
                 moved = true;
             }
@@ -145,19 +147,14 @@ impl Form {
     }
 
     fn handle_normal_text(&mut self, input: Input, _single_line: bool) -> Option<FormEvent> {
-        // i/I/a/A enter Insert mode — forward via step_input so the
-        // engine performs its own Normal→Insert transition.
-        let entering_insert = matches!(
-            input.key,
-            Key::Char('i') | Key::Char('I') | Key::Char('a') | Key::Char('A')
-        ) && !input.ctrl
-            && !input.alt;
-
-        let prev_gen_before;
+        // Forward the key to the inner editor; if it lands in Insert
+        // (i/I/a/A, but also o/O, s/S, C, cw, ...), mirror that at the
+        // form level so subsequent keys are delegated instead of being
+        // treated as focus navigation.
         if let Field::SingleLineText(f) | Field::MultiLineText(f) = &mut self.fields[self.focused] {
-            prev_gen_before = f.editor.buffer().dirty_gen();
+            let prev_gen_before = f.editor.buffer().dirty_gen();
             hjkl_vim::dispatch_input(&mut f.editor, input);
-            if entering_insert && f.editor.vim_mode() == VimMode::Insert {
+            if f.editor.vim_mode() == VimMode::Insert {
                 f.enter_gen = prev_gen_before;
                 self.mode = FormMode::Insert;
                 return Some(FormEvent::Changed);
@@ -169,6 +166,14 @@ impl Form {
     }
 
     fn handle_insert(&mut self, input: Input) -> Option<FormEvent> {
+        // Resync guard: if focus somehow landed on a non-text field while
+        // the form is in Insert (e.g. a host called `set_focus`), fall
+        // back to Normal so navigation and Esc keep working.
+        if !self.fields[self.focused].is_text() {
+            self.mode = FormMode::Normal;
+            return self.handle_normal(input);
+        }
+
         // Single-line text: Enter jumps to next field instead of
         // inserting a newline.
         let single = matches!(self.fields[self.focused], Field::SingleLineText(_));
@@ -177,7 +182,23 @@ impl Form {
             if self.focused + 1 < len {
                 let prev = self.focused;
                 self.focused += 1;
+                // Leave the previous field's editor in Normal so later
+                // form-Normal keys don't leak into its Insert mode.
+                if let Field::SingleLineText(f) | Field::MultiLineText(f) = &mut self.fields[prev] {
+                    f.enter_normal();
+                }
                 validate_field(&mut self.fields[prev]);
+                // Keep form-Insert only when the next field is text —
+                // and put its editor into Insert so keystrokes insert
+                // instead of running Normal-mode commands. Otherwise
+                // drop to form-Normal to match the focused field kind.
+                match &mut self.fields[self.focused] {
+                    Field::SingleLineText(f) | Field::MultiLineText(f) => {
+                        f.enter_gen = f.editor.buffer().dirty_gen();
+                        f.enter_insert_at_end();
+                    }
+                    _ => self.mode = FormMode::Normal,
+                }
                 self.bump_dirty();
             }
             return Some(FormEvent::Changed);
@@ -392,6 +413,73 @@ mod tests {
         assert_eq!(form.focused(), 1);
         // Stays in Insert after the focus jump.
         assert_eq!(form.mode, FormMode::Insert);
+    }
+
+    #[test]
+    fn shift_tab_moves_focus_backwards() {
+        let mut form = make_form();
+        form.handle_input(key('j'));
+        form.handle_input(key('j'));
+        assert_eq!(form.focused(), 2);
+        form.handle_input(Input {
+            key: Key::Tab,
+            shift: true,
+            ..Input::default()
+        });
+        assert_eq!(form.focused(), 1, "Shift-Tab must move focus backwards");
+    }
+
+    #[test]
+    fn enter_in_insert_puts_next_text_field_in_insert() {
+        let mut form = make_form();
+        form.handle_input(key('i'));
+        form.handle_input(key('a')); // type into Name
+        form.handle_input(special(Key::Enter)); // jump to Email
+        assert_eq!(form.focused(), 1);
+        assert_eq!(form.mode, FormMode::Insert);
+        // Typing must insert into Email, not run Normal-mode commands.
+        form.handle_input(key('x'));
+        if let Field::SingleLineText(f) = &form.fields[1] {
+            assert_eq!(f.text(), "x");
+        } else {
+            panic!("expected text field");
+        }
+        // The previous field's inner editor must be back in Normal.
+        if let Field::SingleLineText(f) = &form.fields[0] {
+            assert_eq!(f.vim_mode(), VimMode::Normal);
+        } else {
+            panic!("expected text field");
+        }
+    }
+
+    #[test]
+    fn enter_in_insert_onto_non_text_field_returns_to_normal() {
+        let mut form = make_form();
+        // Focus Email (index 1) — the field before the checkbox.
+        form.handle_input(key('j'));
+        form.handle_input(key('i'));
+        assert_eq!(form.mode, FormMode::Insert);
+        form.handle_input(special(Key::Enter)); // jump to checkbox
+        assert_eq!(form.focused(), 2);
+        assert_eq!(
+            form.mode,
+            FormMode::Normal,
+            "form must not stay in Insert on a non-text field"
+        );
+        // Sanity: form still responds (no soft-lock) — Esc cancels.
+        let ev = form.handle_input(special(Key::Esc));
+        assert!(matches!(ev, Some(FormEvent::Cancelled)));
+    }
+
+    #[test]
+    fn o_on_text_field_enters_insert_mode() {
+        let mut form = make_form();
+        form.handle_input(key('o'));
+        assert_eq!(
+            form.mode,
+            FormMode::Insert,
+            "any Normal command landing in editor-Insert must switch the form to Insert"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //! field's text. The prompt sets the field's host viewport so the
 //! engine's horizontal scroll keeps the cursor on screen.
 
+use hjkl_engine::Host;
 use hjkl_form::TextFieldEditor;
 use ratatui::{
     Frame,
@@ -55,8 +56,30 @@ pub fn draw_prompt_line_into(
     field.set_viewport_width(field_w.max(1));
     field.set_viewport_height(area.height.max(1));
 
+    // Horizontal scroll: keep the cursor inside the field window so long
+    // prompts show the region being edited (not a stale head) and the
+    // terminal cursor lands over the right cell.
+    let (_, ccol) = field.cursor();
+    let field_cols = field_w.max(1) as usize;
+    let top_col = {
+        let v = field.editor.host_mut().viewport_mut();
+        if ccol < v.top_col {
+            v.top_col = ccol;
+        }
+        if ccol >= v.top_col + field_cols {
+            v.top_col = ccol + 1 - field_cols;
+        }
+        v.top_col
+    };
+
     let text = field.text();
-    let display: String = text.lines().next().unwrap_or("").to_string();
+    let display: String = text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .skip(top_col)
+        .collect();
 
     // Pad with spaces so the prompt's `style` (typically a status-line
     // background) fills the row.
@@ -70,8 +93,7 @@ pub fn draw_prompt_line_into(
     Paragraph::new(line).style(style).render(area, buf);
 
     // Terminal cursor lands one column past the last char-before-cursor.
-    let (_, ccol) = field.cursor();
-    let dx = prefix_w.saturating_add(ccol as u16);
+    let dx = prefix_w.saturating_add((ccol - top_col) as u16);
     let cx = area.x.saturating_add(dx.min(area.width.saturating_sub(1)));
     Some((cx, area.y))
 }
@@ -116,6 +138,32 @@ mod tests {
         // sits at col 2 ('o'). The prompt cursor should land at col 3
         // (`:` + 'f' + 'o' + 'o'-cursor) — i.e. on the trailing 'o'.
         assert!((3..=4).contains(&cx), "cursor x out of range: {cx}");
+    }
+
+    #[test]
+    fn long_text_scrolls_to_keep_cursor_region_visible() {
+        // 20-col area, ':' prefix → 19 field columns. Insert 30 chars:
+        // the tail (not the head) must be visible and the cursor must
+        // sit inside the area over the last typed char.
+        let mut f = TextFieldEditor::new(true);
+        f.enter_insert_at_end();
+        for i in 0..30u8 {
+            f.handle_input(Input {
+                key: Key::Char(char::from(b'a' + (i % 26))),
+                ..Input::default()
+            });
+        }
+        let (buf, cursor) = render(&mut f, ":");
+        let row = row_string(&buf, 0);
+        // Head of the text ("abc…") must have scrolled out of view.
+        assert!(
+            !row.starts_with(":abc"),
+            "expected scrolled view, got {row:?}"
+        );
+        // Last typed char ('d' = index 29 → 'd') must be on screen.
+        assert!(row.contains('d'), "tail must be visible: {row:?}");
+        let (cx, _) = cursor.expect("cursor");
+        assert!(cx < 20, "cursor must stay inside the area, got {cx}");
     }
 
     #[test]

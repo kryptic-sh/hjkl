@@ -187,8 +187,17 @@ fn render_body(
     match field {
         Field::SingleLineText(f) => {
             update_field_viewport(f, rect);
+            let top_col = f.editor.host().viewport().top_col;
             let text = f.editor.buffer().as_string();
-            let display = text.lines().next().unwrap_or("").to_string();
+            // Apply the horizontal scroll the cursor math uses (char
+            // skip) so the cursor points at the right cells.
+            let display: String = text
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .skip(top_col)
+                .collect();
             if display.is_empty() && !(focused && in_insert) {
                 if let Some(ph) = f.meta.placeholder.clone() {
                     Paragraph::new(ph)
@@ -202,11 +211,18 @@ fn render_body(
         }
         Field::MultiLineText(f) => {
             update_field_viewport(f, rect);
+            let (top_row, top_col) = {
+                let v = f.editor.host().viewport();
+                (v.top_row, v.top_col)
+            };
             let text = f.editor.buffer().as_string();
+            // Apply the viewport scroll the cursor math uses so the
+            // cursor points at the right cells.
             let lines: Vec<Line> = text
                 .lines()
+                .skip(top_row)
                 .take(rect.height as usize)
-                .map(|l| Line::raw(l.to_string()))
+                .map(|l| Line::raw(l.chars().skip(top_col).collect::<String>()))
                 .collect();
             // Show placeholder if buffer is empty and not actively editing.
             if text.is_empty() && !(focused && in_insert) {

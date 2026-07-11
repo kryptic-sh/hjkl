@@ -249,6 +249,11 @@ impl<Id: Eq + Clone> TabBar<Id> {
     /// assert_eq!(bar.active().map(|t| t.id), Some(1));
     /// ```
     pub fn focus_next(&mut self) {
+        if self.tabs.is_empty() {
+            // `tabs` / `active` are pub — resync instead of `% 0` panicking.
+            self.active = None;
+            return;
+        }
         if let Some(idx) = self.active {
             self.active = Some((idx + 1) % self.tabs.len());
         }
@@ -271,6 +276,11 @@ impl<Id: Eq + Clone> TabBar<Id> {
     /// assert_eq!(bar.active().map(|t| t.id), Some(2));
     /// ```
     pub fn focus_prev(&mut self) {
+        if self.tabs.is_empty() {
+            // `tabs` / `active` are pub — resync instead of `% 0` panicking.
+            self.active = None;
+            return;
+        }
         if let Some(idx) = self.active {
             let n = self.tabs.len();
             self.active = Some((idx + n - 1) % n);
@@ -355,7 +365,8 @@ impl<Id: Eq + Clone> TabBar<Id> {
 
         let max = max_width as usize;
         let n = self.tabs.len();
-        let active_idx = self.active.unwrap_or(0);
+        // Clamp: `active` is a pub field, so it can be stale/out of range.
+        let active_idx = self.active.unwrap_or(0).min(n - 1);
 
         // Fast path: everything fits without any overflow indicators.
         let total_no_overflow = self.total_display_width();
@@ -647,6 +658,32 @@ mod tests {
         bar.focus_prev(); // -> 1
         bar.focus_prev(); // -> 3 (wrap)
         assert_eq!(bar.active().unwrap().id, 3);
+    }
+
+    #[test]
+    fn focus_next_prev_survive_externally_cleared_tabs() {
+        // `tabs` / `active` are pub — a caller can clear tabs while
+        // `active` is still Some. Must resync, not panic on `% 0`.
+        let mut bar = bar_with(&[1, 2], &["a", "b"]);
+        bar.tabs.clear();
+        bar.focus_next();
+        assert!(bar.active.is_none());
+        let mut bar = bar_with(&[1, 2], &["a", "b"]);
+        bar.tabs.clear();
+        bar.focus_prev();
+        assert!(bar.active.is_none());
+    }
+
+    #[test]
+    fn visible_clamps_out_of_range_active_index() {
+        let mut bar: TabBar<u32> = TabBar::new();
+        for i in 0..10u32 {
+            bar.open(i, format!("longfilename{i}.rs"));
+        }
+        // Simulate external desync via the pub field.
+        bar.active = Some(99);
+        let (vis, _, _) = bar.visible(20);
+        assert!(!vis.is_empty(), "must not panic and must return tabs");
     }
 
     #[test]

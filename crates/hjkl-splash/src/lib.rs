@@ -214,10 +214,16 @@ impl<'a> Splash<'a> {
     fn trail_cells(&self, layout: Layout, tick: u64) -> impl Iterator<Item = SplashCell> + '_ {
         let path_len = self.path.len();
         let trail_len = self.trail_len as usize;
-        let cursor_idx = tick as usize % path_len;
+        // An empty path yields no trail/cursor cells (and guards `% 0`).
+        let count = if path_len == 0 { 0 } else { trail_len + 1 };
+        let cursor_idx = if path_len == 0 {
+            0
+        } else {
+            tick as usize % path_len
+        };
 
         // oldest first (age = trail_len) → cursor last (age = 0)
-        (0..=trail_len).rev().map(move |age| {
+        (0..count).rev().map(move |age| {
             let idx = if cursor_idx + path_len >= age {
                 (cursor_idx + path_len - age) % path_len
             } else {
@@ -364,6 +370,20 @@ mod tests {
         assert_eq!(cursor.len(), 1);
         assert_eq!(cursor[0].x, 2);
         assert_eq!(cursor[0].ch, 'c');
+    }
+
+    #[test]
+    fn empty_path_yields_art_cells_only_without_panicking() {
+        let splash = Splash::fixed_tick("ab", &[], 3);
+        let layout = Layout {
+            origin_x: 0,
+            origin_y: 0,
+            rows: 1,
+            cols: 2,
+        };
+        let cells: Vec<_> = splash.cells(layout).collect();
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|c| c.kind == CellKind::Art));
     }
 
     #[test]
