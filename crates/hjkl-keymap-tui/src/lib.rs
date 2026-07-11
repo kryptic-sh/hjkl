@@ -24,6 +24,12 @@ pub fn from_crossterm(ev: &CtKeyEvent) -> Option<KeyEvent> {
 
     let code = ct_code_to_keymap(ev.code)?;
     let mut modifiers = ct_mods_to_keymap(ev.modifiers);
+    // BackTab is Shift-Tab by definition. crossterm 0.29 pairs BackTab with
+    // SHIFT on every platform path today, but inject it explicitly so the
+    // mapping can't silently collapse to plain Tab if a backend omits it.
+    if ev.code == CtKeyCode::BackTab {
+        modifiers |= KeyModifiers::SHIFT;
+    }
     // SHIFT for plain Char events is redundant — the case is already in the
     // char (vim convention). Some terminals (kitty, foot, wezterm w/ kitty
     // keyboard protocol) deliver `'B' + SHIFT`; others deliver `'B' + NONE`.
@@ -43,9 +49,7 @@ fn ct_code_to_keymap(code: CtKeyCode) -> Option<KeyCode> {
         CtKeyCode::Tab => KeyCode::Tab,
         CtKeyCode::BackTab => {
             // BackTab is <S-Tab> — represented as Tab + SHIFT modifier.
-            // We return the code and rely on the modifier translation below,
-            // but crossterm does not set the SHIFT bit for BackTab.
-            // Handle separately: callers that get BackTab should inject SHIFT.
+            // `from_crossterm` injects SHIFT for BackTab explicitly.
             KeyCode::Tab
         }
         CtKeyCode::Backspace => KeyCode::Backspace,
@@ -165,6 +169,17 @@ mod tests {
     #[test]
     fn shift_preserved_for_tab() {
         let ev = from_crossterm(&ct_key(CK::Tab, CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn backtab_maps_to_shift_tab_even_without_shift_bit() {
+        // crossterm normally pairs BackTab with SHIFT, but the mapping must
+        // not collapse to plain Tab if a backend omits the modifier.
+        let ev = from_crossterm(&ct_key(CK::BackTab, CM::NONE)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+
+        let ev = from_crossterm(&ct_key(CK::BackTab, CM::SHIFT)).unwrap();
         assert_eq!(ev, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
     }
 

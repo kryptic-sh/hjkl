@@ -38,11 +38,17 @@ pub enum ConfigError {
 
 /// Map a byte offset into `src` to a `(line, col, line_text)` triple.
 ///
-/// `line` and `col` are 1-indexed. `line_text` is the full line containing
-/// the offset, with no trailing newline. Used to enrich `toml::de::Error`
-/// span info into human-readable parse errors.
+/// `line` and `col` are 1-indexed; `col` counts characters, not bytes, so
+/// multibyte text earlier in the line doesn't skew it. `line_text` is the
+/// full line containing the offset, with no trailing newline. Used to
+/// enrich `toml::de::Error` span info into human-readable parse errors.
 pub(crate) fn locate(src: &str, byte_offset: usize) -> (usize, usize, String) {
-    let clamped = byte_offset.min(src.len());
+    let mut clamped = byte_offset.min(src.len());
+    // Defensive: snap to the previous char boundary so the column slice
+    // below can't panic if a span ever lands mid-character.
+    while !src.is_char_boundary(clamped) {
+        clamped -= 1;
+    }
     let mut line_start = 0usize;
     let mut line_no = 1usize;
     for (i, ch) in src.char_indices() {
@@ -59,7 +65,7 @@ pub(crate) fn locate(src: &str, byte_offset: usize) -> (usize, usize, String) {
         .map(|n| line_start + n)
         .unwrap_or(src.len());
     let line_text = src[line_start..line_end].to_string();
-    let col = clamped.saturating_sub(line_start) + 1;
+    let col = src[line_start..clamped].chars().count() + 1;
     (line_no, col, line_text)
 }
 
@@ -85,6 +91,25 @@ mod tests {
     fn locate_clamps_past_end() {
         let (l, c, _) = locate("a", 999);
         assert_eq!((l, c), (1, 2));
+    }
+
+    #[test]
+    fn locate_multibyte_before_offset_counts_chars_not_bytes() {
+        // 'é' is 2 bytes but 1 char — the column must be char-based.
+        let src = "é = x";
+        let x_offset = src.find('x').unwrap();
+        let (l, c, txt) = locate(src, x_offset);
+        assert_eq!((l, c), (1, 5));
+        assert_eq!(txt, "é = x");
+    }
+
+    #[test]
+    fn locate_mid_char_offset_snaps_to_boundary() {
+        // Offset 1 lands inside the 2-byte 'é' — must not panic and must
+        // report the column of the char containing the offset.
+        let (l, c, txt) = locate("é = 1", 1);
+        assert_eq!((l, c), (1, 1));
+        assert_eq!(txt, "é = 1");
     }
 
     #[test]

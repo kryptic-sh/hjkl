@@ -223,6 +223,7 @@ fn parse_key_name(name: &str, original_tag: &str) -> Result<KeyCode, ChordParseE
     match lower.as_str() {
         "space" => return Ok(KeyCode::Char(' ')),
         "lt" => return Ok(KeyCode::Char('<')),
+        "gt" => return Ok(KeyCode::Char('>')),
         "cr" | "enter" | "return" => return Ok(KeyCode::Enter),
         "esc" | "escape" => return Ok(KeyCode::Esc),
         "tab" => return Ok(KeyCode::Tab),
@@ -274,6 +275,9 @@ pub(crate) fn event_to_notation(ev: &KeyEvent, leader: char) -> String {
     let key_str = match ev.code {
         KeyCode::Char(' ') => "Space".to_string(),
         KeyCode::Char('<') => "lt".to_string(),
+        // Inside a modifier tag a bare '>' would close the tag early
+        // (`<C->>` is unparseable), so escape it as `gt`.
+        KeyCode::Char('>') => "gt".to_string(),
         KeyCode::Char(c) => c.to_string(),
         KeyCode::Enter => "CR".to_string(),
         KeyCode::Esc => "Esc".to_string(),
@@ -417,6 +421,29 @@ mod tests {
         let chord = Chord::parse("<C-S-Tab>", leader).unwrap();
         let output = chord.to_notation(leader);
         assert_eq!(output, "<C-S-Tab>");
+    }
+
+    #[test]
+    fn parse_modifier_with_gt_and_lt() {
+        // `gt`/`lt` must work as modifier targets too — a bare '>' would
+        // close the tag early and a bare '<' would open a new one.
+        let chord = Chord::parse("<C-gt><C-lt>", ' ').unwrap();
+        assert_eq!(
+            chord.0,
+            vec![
+                KeyEvent::new(KeyCode::Char('>'), KeyModifiers::CTRL),
+                KeyEvent::new(KeyCode::Char('<'), KeyModifiers::CTRL),
+            ]
+        );
+    }
+
+    #[test]
+    fn round_trip_modified_gt() {
+        // Ctrl+'>' must not serialize as `<C->>` (unparseable).
+        let chord = Chord(vec![KeyEvent::new(KeyCode::Char('>'), KeyModifiers::CTRL)]);
+        let notation = chord.to_notation(' ');
+        assert_eq!(notation, "<C-gt>");
+        assert_eq!(Chord::parse(&notation, ' ').unwrap(), chord);
     }
 
     #[test]
