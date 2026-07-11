@@ -454,6 +454,11 @@ fn real_download(
         }
         file.write_all(&buf[..n])?;
         downloaded += n as u64;
+        if downloaded > MAX_DOWNLOAD_BYTES {
+            return Err(InstallError::Archive(format!(
+                "download exceeds size limit of {MAX_DOWNLOAD_BYTES} bytes"
+            )));
+        }
         progress(InstallStatus::Downloading {
             bytes_downloaded: downloaded,
             total,
@@ -628,6 +633,34 @@ fn sha256_file(path: &Path) -> Result<String, InstallError> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Cap on a single downloaded artifact so a runaway or endless HTTP body can't
+/// fill the disk. Generous — no real dev tool approaches this.
+const MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Cap on the total bytes written while extracting one archive so a
+/// decompression bomb (a tiny gz/zip inflating to terabytes) errors out
+/// instead of filling the disk.
+const MAX_EXTRACT_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// `io::copy` against a shared byte budget: errors if the copy would exceed the
+/// remaining budget (decompression-bomb guard) and decrements it otherwise.
+fn copy_capped<R: io::Read, W: io::Write>(
+    r: &mut R,
+    w: &mut W,
+    budget: &mut u64,
+) -> Result<(), InstallError> {
+    // Read at most budget+1 so we can distinguish "exactly at the limit" from
+    // "over the limit".
+    let copied = io::copy(&mut r.take(budget.saturating_add(1)), w)?;
+    if copied > *budget {
+        return Err(InstallError::Archive(
+            "archive expands beyond size limit".to_string(),
+        ));
+    }
+    *budget -= copied;
+    Ok(())
+}
+
 /// Extract an archive into `dest_dir` based on `ext`.
 ///
 /// - `"tar.gz"` / `"tgz"` → flate2 + tar
@@ -635,13 +668,16 @@ fn sha256_file(path: &Path) -> Result<String, InstallError> {
 /// - `"zip"`              → zip::ZipArchive
 /// - `""`  (raw)          → copy dl_path → dest_dir/bin_name
 ///
-/// Every entry path is validated by [`safe_join`].
+/// Every entry path is validated by [`safe_join`]; total output is bounded by
+/// [`MAX_EXTRACT_BYTES`].
 fn extract_archive(
     dl_path: &Path,
     ext: &str,
     dest_dir: &Path,
     bin_name: &str,
 ) -> Result<(), InstallError> {
+    // Shared decompression budget across every file in the archive.
+    let mut budget = MAX_EXTRACT_BYTES;
     match ext {
         "tar.gz" | "tgz" => {
             let f = std::fs::File::open(dl_path)?;
@@ -664,7 +700,7 @@ fn extract_archive(
                 // archive — dirs are created via create_dir_all above).
                 if entry.header().entry_type().is_file() {
                     let mut dest_file = std::fs::File::create(&out)?;
-                    io::copy(&mut entry, &mut dest_file)?;
+                    copy_capped(&mut entry, &mut dest_file, &mut budget)?;
                 } else if entry.header().entry_type() == tar::EntryType::Directory {
                     std::fs::create_dir_all(&out)?;
                 }
@@ -676,7 +712,7 @@ fn extract_archive(
             let mut gz = flate2::read::GzDecoder::new(f);
             let out = dest_dir.join(bin_name);
             let mut dest_file = std::fs::File::create(&out)?;
-            io::copy(&mut gz, &mut dest_file)?;
+            copy_capped(&mut gz, &mut dest_file, &mut budget)?;
         }
         "zip" => {
             let f = std::fs::File::open(dl_path)?;
@@ -695,7 +731,7 @@ fn extract_archive(
                         std::fs::create_dir_all(parent)?;
                     }
                     let mut dest_file = std::fs::File::create(&out)?;
-                    io::copy(&mut entry, &mut dest_file)?;
+                    copy_capped(&mut entry, &mut dest_file, &mut budget)?;
                 }
             }
         }
@@ -1053,6 +1089,20 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::manifest::{GithubMethod, ToolCategory};
+
+    #[test]
+    fn copy_capped_bounds_output() {
+        // Within budget: copies and decrements.
+        let mut budget = 100u64;
+        let mut out = Vec::new();
+        copy_capped(&mut std::io::Cursor::new(vec![7u8; 80]), &mut out, &mut budget).unwrap();
+        assert_eq!(out.len(), 80);
+        assert_eq!(budget, 20);
+        // Over the remaining budget errors (decompression-bomb guard).
+        let mut out2 = Vec::new();
+        let err = copy_capped(&mut std::io::Cursor::new(vec![7u8; 21]), &mut out2, &mut budget);
+        assert!(err.is_err(), "copy beyond remaining budget must error");
+    }
 
     // Serializes all env-mutating tests within a single `cargo test` process.
     // Under nextest the `anvil-env` group (max-threads = 1) provides the same
