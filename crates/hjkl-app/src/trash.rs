@@ -62,25 +62,34 @@ pub fn trash_path(original: &Path) -> std::io::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Serializes the env-mutating trash tests. `XDG_CACHE_HOME` is
+    /// process-global; under `cargo test`'s thread pool (as opposed to
+    /// nextest's process-per-test) two of these tests otherwise race on it and
+    /// fail nondeterministically. Hold the returned guard for the whole test.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Override `XDG_CACHE_HOME` to a temp directory for isolation.
     ///
-    /// Returns the `TempDir` guard — keep it in scope for the duration of the
-    /// test so the directory is not deleted while we use it.
-    fn isolated_trash_dir() -> (tempfile::TempDir, PathBuf) {
+    /// Returns the `ENV_LOCK` guard (serializes concurrent tests) and the
+    /// `TempDir` — keep both in scope for the duration of the test so the env
+    /// override is not clobbered by another test and the directory is not
+    /// deleted while we use it.
+    fn isolated_trash_dir() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir, PathBuf) {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let td = tempfile::tempdir().unwrap();
         // Point XDG_CACHE_HOME at the temp dir so trash_dir() resolves inside it.
-        // SAFETY: Tests run in a single-threaded nextest process (one test per
-        // process) so mutating this env var cannot race with other threads.
+        // SAFETY: the ENV_LOCK guard guarantees no other test thread is reading
+        // or writing the environment while this override is in effect.
         unsafe {
             std::env::set_var("XDG_CACHE_HOME", td.path());
         }
         let expected = td.path().join("hjkl").join("trash");
-        (td, expected)
+        (lock, td, expected)
     }
 
     #[test]
     fn trash_dir_creates_directory() {
-        let (_td, expected) = isolated_trash_dir();
+        let (_lock, _td, expected) = isolated_trash_dir();
         let got = trash_dir().expect("trash_dir must succeed");
         assert_eq!(
             got, expected,
@@ -91,7 +100,7 @@ mod tests {
 
     #[test]
     fn trash_path_is_unique_across_two_calls_for_same_name() {
-        let (_td, _expected) = isolated_trash_dir();
+        let (_lock, _td, _expected) = isolated_trash_dir();
         let fake_original = Path::new("/some/project/foo.rs");
 
         // First call — nothing in trash yet, should get counter 0.
@@ -115,7 +124,7 @@ mod tests {
 
     #[test]
     fn trash_path_does_not_collide_with_gaps() {
-        let (_td, _expected) = isolated_trash_dir();
+        let (_lock, _td, _expected) = isolated_trash_dir();
         let fake_original = Path::new("/home/user/gap_test.txt");
 
         // Pre-populate counters 0 and 2 (leaving 1 absent).
@@ -134,7 +143,7 @@ mod tests {
 
     #[test]
     fn trash_dir_is_idempotent() {
-        let (_td, _expected) = isolated_trash_dir();
+        let (_lock, _td, _expected) = isolated_trash_dir();
         // Calling twice must not error even though the dir already exists.
         let a = trash_dir().unwrap();
         let b = trash_dir().unwrap();
