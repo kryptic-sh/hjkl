@@ -102,3 +102,53 @@ initial_cursor = [0, 2]
 keys = ":s/x/y/<CR>"
 expected_buffer = "  y\n"
 expected_cursor = [0, 2]
+
+# `\U…\E` uppercases a run in the replacement.
+[[cases]]
+name = "subst_case_upper_run"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/world/\\U&\\E/<CR>"
+expected_buffer = "hello WORLD\n"
+
+# `\u` uppercases only the next character.
+[[cases]]
+name = "subst_case_one_upper"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/hello/\\u&/<CR>"
+expected_buffer = "Hello world\n"
+
+# `\L…\E` lowercases a run.
+[[cases]]
+name = "subst_case_lower_run"
+initial_buffer = "HELLO WORLD\n"
+initial_cursor = [0, 0]
+keys = ":s/WORLD/\\L&\\E/<CR>"
+expected_buffer = "HELLO world\n"
+
+# `~` in the replacement reuses the previous substitute's replacement string.
+# First `:s/a/X/` sets it to "X"; then `:s/b/~/` replaces b with X.
+[[cases]]
+name = "subst_tilde_previous_replacement"
+initial_buffer = "a b\n"
+initial_cursor = [0, 0]
+keys = ":s/a/X/<CR>:s/b/~/<CR>"
+expected_buffer = "X X\n"
+
+# `n` flag: report the match count without modifying the buffer or cursor.
+[[cases]]
+name = "subst_n_flag_reports_no_change"
+initial_buffer = "foo boo\n"
+initial_cursor = [0, 0]
+keys = ":s/o/0/gn<CR>"
+expected_buffer = "foo boo\n"
+expected_cursor = [0, 0]
+
+# Trailing `[count]`: operate on `count` lines from the (cursor) line.
+[[cases]]
+name = "subst_trailing_count_spans_lines"
+initial_buffer = "x\nx\nx\n"
+initial_cursor = [0, 0]
+keys = ":s/x/y/g 2<CR>"
+expected_buffer = "y\ny\nx\n"

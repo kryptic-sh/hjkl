@@ -15,9 +15,14 @@
 //!   ERE syntax by default. Most ERE patterns work, but vim-specific
 //!   extensions (`\<`, `\>`, `\s`, `\+`) may not. Use POSIX ERE
 //!   equivalents or the `regex` crate's syntax.
-//! - Capture-group references use vim notation (`\0`…`\9`, `&`); the parser
-//!   translates them to braced `${0}`…`${9}` for the `regex` crate, escapes a
-//!   literal `$` to `$$`, and maps `\r`/`\t`/`\n` to a line break / tab / NUL.
+//! - The replacement is kept in raw vim notation and expanded per match by
+//!   [`expand_replacement`]: capture refs (`&`, `\0`…`\9`), case escapes
+//!   (`\u`/`\l`/`\U`/`\L`/`\E`), control chars (`\r`/`\t`/`\n`), and `~` (the
+//!   previous replacement). A plain `$` is literal.
+//! - Flags: `g` (all), `i`/`I` (case), `c` (confirm), `n` (report count only,
+//!   no change), `e` (accepted — hjkl already succeeds on no match), and
+//!   `p`/`#`/`l` (print — parsed/accepted). A trailing `[count]` operates on
+//!   `count` lines from the range's last line.
 //!
 //! See vim's `:help :substitute` for the full spec.
 
@@ -36,11 +41,15 @@ pub struct SubstituteCmd {
     /// The literal pattern string. `None` means "reuse `last_search`
     /// from the editor" (the user typed `:s//replacement/`).
     pub pattern: Option<String>,
-    /// The replacement string in vim notation (`&`, `\1`…`\9`).
-    /// Empty string deletes the match.
+    /// The replacement string in **raw vim notation** (`&`, `~`, `\0`…`\9`,
+    /// `\u`/`\U`/`\l`/`\L`/`\E`, `\r`/`\t`/`\n`). Expanded per match by
+    /// [`expand_replacement`]. Empty string deletes the match.
     pub replacement: String,
     /// Parsed flags.
     pub flags: SubstFlags,
+    /// Optional trailing `[count]` (`:s/a/b/g 3`): operate on `count` lines
+    /// starting at the range's last line (vim semantics). `None` = no count.
+    pub count: Option<usize>,
 }
 
 /// Flags for the substitute command.
@@ -56,6 +65,21 @@ pub struct SubstFlags {
     /// and the caller must use [`collect_substitute_matches`] +
     /// [`apply_collected_matches`] for interactive replacement.
     pub confirm: bool,
+    /// `n` — report the match count only; do not modify the buffer or move
+    /// the cursor. [`apply_substitute`] counts matches and returns without
+    /// mutating.
+    pub report_only: bool,
+    /// `e` — do not treat "pattern not found" as an error. hjkl already
+    /// returns success on no match, so this is accepted for compatibility.
+    pub no_error: bool,
+    /// `p` / `#` / `l` — print the last changed line (optionally with line
+    /// number `#` or `:list`-style `l`). Parsed and accepted; the print
+    /// itself is surfaced by the ex/host layer.
+    pub print: bool,
+    /// `#` — print with line number (implies `print`).
+    pub print_num: bool,
+    /// `l` — print `:list`-style (implies `print`).
+    pub print_list: bool,
 }
 
 /// Result of [`apply_substitute`].
@@ -118,17 +142,45 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
         Some(raw_pattern.clone())
     };
 
-    // Translate vim replacement notation to regex crate notation.
-    let replacement = translate_replacement(raw_replacement);
+    // Keep the replacement in raw vim notation; `expand_replacement` resolves
+    // capture refs, case escapes, and `~` per match.
+    let replacement = raw_replacement.clone();
 
+    // The flags segment is `[flag-chars][ optional trailing count]`, e.g.
+    // `g 3`. Parse the leading flag characters, then an optional numeric count.
     let mut flags = SubstFlags::default();
-    for ch in raw_flags.chars() {
+    let mut count: Option<usize> = None;
+    let mut chars = raw_flags.chars().peekable();
+    while let Some(&ch) = chars.peek() {
         match ch {
             'g' => flags.all = true,
             'i' => flags.ignore_case = true,
             'I' => flags.case_sensitive = true,
-            'c' => flags.confirm = true, // parsed, silently ignored
+            'c' => flags.confirm = true,
+            'n' => flags.report_only = true,
+            'e' => flags.no_error = true,
+            'p' => flags.print = true,
+            '#' => {
+                flags.print = true;
+                flags.print_num = true;
+            }
+            'l' => {
+                flags.print = true;
+                flags.print_list = true;
+            }
+            ' ' | '\t' => {}
+            c if c.is_ascii_digit() => break, // trailing count begins
             other => return Err(format!("unknown flag '{other}' in substitute")),
+        }
+        chars.next();
+    }
+    // Trailing count: the remainder (after any whitespace) must be a number.
+    let rest: String = chars.collect();
+    let rest = rest.trim();
+    if !rest.is_empty() {
+        match rest.parse::<usize>() {
+            Ok(n) if n > 0 => count = Some(n),
+            _ => return Err(format!("trailing characters in substitute: {rest:?}")),
         }
     }
 
@@ -136,6 +188,7 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
         pattern,
         replacement,
         flags,
+        count,
     })
 }
 
@@ -210,6 +263,14 @@ pub fn apply_substitute<H: crate::types::Host>(
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
 
+    // `~` in the replacement expands to the previous substitute's replacement,
+    // which is the currently-stored `last_substitute` (this command is stored
+    // only after it succeeds).
+    let prev_replacement = ed
+        .last_substitute()
+        .map(|c| c.replacement.clone())
+        .unwrap_or_default();
+
     ed.push_undo();
 
     let start = *line_range.start() as usize;
@@ -225,7 +286,13 @@ pub fn apply_substitute<H: crate::types::Host>(
 
     if start <= clamp_end {
         for (row, line) in new_lines[start..=clamp_end].iter_mut().enumerate() {
-            let (replaced, n) = do_replace(&regex, line, &cmd.replacement, cmd.flags.all);
+            let (replaced, n) = do_replace(
+                &regex,
+                line,
+                &cmd.replacement,
+                &prev_replacement,
+                cmd.flags.all,
+            );
             if n > 0 {
                 *line = replaced;
                 replacements += n;
@@ -240,6 +307,17 @@ pub fn apply_substitute<H: crate::types::Host>(
         return Ok(SubstituteOutcome {
             replacements: 0,
             lines_changed: 0,
+        });
+    }
+
+    // `n` flag: report the match count without touching the buffer or cursor.
+    // Still refresh `last_search` so `n`/`N` can repeat the pattern.
+    if cmd.flags.report_only {
+        ed.pop_last_undo();
+        ed.set_last_search(Some(pattern_str), true);
+        return Ok(SubstituteOutcome {
+            replacements,
+            lines_changed,
         });
     }
 
@@ -338,6 +416,11 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
 
+    let prev_replacement = ed
+        .last_substitute()
+        .map(|c| c.replacement.clone())
+        .unwrap_or_default();
+
     let start = *line_range.start() as usize;
     let end = *line_range.end() as usize;
     let rope = crate::types::Query::rope(ed.buffer());
@@ -345,6 +428,16 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
     let clamp_end = end.min(total.saturating_sub(1));
 
     let mut matches: Vec<SubstituteMatch> = Vec::new();
+
+    // Expand the raw vim replacement against the match at `m.start()`. Capture
+    // against the whole line (not the isolated substring) so anchors /
+    // lookaround keep their context and group expansion matches what was found.
+    let expand = |line: &str, start: usize| {
+        regex
+            .captures_at(line, start)
+            .map(|caps| expand_replacement(&cmd.replacement, &caps, &prev_replacement))
+            .unwrap_or_default()
+    };
 
     if start <= clamp_end {
         for row in start..=clamp_end {
@@ -354,48 +447,21 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
 
             if cmd.flags.all {
                 for m in regex.find_iter(line) {
-                    // Expand capture groups into the literal replacement text.
-                    // Capture against the whole line at the match position, not
-                    // the isolated substring, so anchors / lookaround keep their
-                    // context and group expansion matches what was found.
-                    let replacement = regex
-                        .captures_at(line, m.start())
-                        .map(|caps| {
-                            let mut rep = String::new();
-                            caps.expand(&cmd.replacement, &mut rep);
-                            rep
-                        })
-                        .unwrap_or_else(|| cmd.replacement.clone());
-
                     matches.push(SubstituteMatch {
                         row: row as u32,
                         byte_start: m.start() as u32,
                         byte_end: m.end() as u32,
-                        replacement,
+                        replacement: expand(line, m.start()),
                     });
                 }
-            } else {
+            } else if let Some(m) = regex.find(line) {
                 // First match per line only.
-                if let Some(m) = regex.find(line) {
-                    // Capture against the whole line at the match position, not
-                    // the isolated substring, so anchors / lookaround keep their
-                    // context and group expansion matches what was found.
-                    let replacement = regex
-                        .captures_at(line, m.start())
-                        .map(|caps| {
-                            let mut rep = String::new();
-                            caps.expand(&cmd.replacement, &mut rep);
-                            rep
-                        })
-                        .unwrap_or_else(|| cmd.replacement.clone());
-
-                    matches.push(SubstituteMatch {
-                        row: row as u32,
-                        byte_start: m.start() as u32,
-                        byte_end: m.end() as u32,
-                        replacement,
-                    });
-                }
+                matches.push(SubstituteMatch {
+                    row: row as u32,
+                    byte_start: m.start() as u32,
+                    byte_end: m.end() as u32,
+                    replacement: expand(line, m.start()),
+                });
             }
         }
     }
@@ -530,58 +596,124 @@ fn split_on_slash(s: &str) -> Vec<String> {
     out
 }
 
-/// Translate vim-style replacement tokens to regex-crate syntax.
-///
-/// The result is fed to the `regex` crate's `$`-based expansion, so capture
-/// refs are emitted BRACED (`${1}`) — unbraced `$1abc` would be parsed as the
-/// group name `1abc` — and any literal `$` the user typed is escaped to `$$`.
-///
-/// - `&` → `${0}` (whole match); `\&` → literal `&`
-/// - `\0`…`\9` → `${0}`…`${9}` (capture groups; `\0` is the whole match)
-/// - `\r` → line break, `\t` → tab, `\n` → NUL (vim `:h sub-replace-special`)
-/// - `\\` → `\` (literal backslash)
-/// - literal `$` → `$$` (so the regex crate treats it as a literal)
-/// - Any other `\x` → `x` (drop the backslash)
-fn translate_replacement(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '&' => out.push_str("${0}"),
-            // A literal `$` in the vim replacement — escape so the regex crate
-            // does not treat it as a capture-group sigil.
-            '$' => out.push_str("$$"),
-            '\\' => match chars.next() {
-                Some('&') => out.push('&'),   // \& → literal &
-                Some('\\') => out.push('\\'), // \\ → literal \
-                Some('r') => out.push('\n'),  // \r → line break
-                Some('t') => out.push('\t'),  // \t → tab
-                Some('n') => out.push('\0'),  // \n → NUL
-                Some(d @ '0'..='9') => {
-                    out.push_str("${");
-                    out.push(d);
-                    out.push('}');
-                }
-                Some(other) => out.push(other), // drop backslash
-                None => {}                      // trailing \ ignored
-            },
-            _ => out.push(c),
+/// Active case transformation while expanding a replacement.
+#[derive(Clone, Copy, PartialEq)]
+enum CaseState {
+    None,
+    /// `\u` — uppercase the next char, then reset.
+    OneUpper,
+    /// `\l` — lowercase the next char, then reset.
+    OneLower,
+    /// `\U` — uppercase until `\E`.
+    AllUpper,
+    /// `\L` — lowercase until `\E`.
+    AllLower,
+}
+
+/// Push `ch` into `out`, applying (and, for the one-shot modes, consuming) the
+/// active case state.
+fn push_cased(out: &mut String, case: &mut CaseState, ch: char) {
+    match *case {
+        CaseState::None => out.push(ch),
+        CaseState::OneUpper => {
+            out.extend(ch.to_uppercase());
+            *case = CaseState::None;
         }
+        CaseState::OneLower => {
+            out.extend(ch.to_lowercase());
+            *case = CaseState::None;
+        }
+        CaseState::AllUpper => out.extend(ch.to_uppercase()),
+        CaseState::AllLower => out.extend(ch.to_lowercase()),
     }
+}
+
+/// Expand a raw vim replacement string against a single regex match.
+///
+/// Handles vim's `:h sub-replace-special` tokens:
+/// - `&` / `\0` — whole match; `\1`…`\9` — capture groups; `\&` — literal `&`.
+/// - `\r` — line break, `\t` — tab, `\n` — NUL.
+/// - `\u`/`\l` — upper/lowercase the next char; `\U`/`\L` … `\E`/`\e` — upper/
+///   lowercase a run.
+/// - `~` — the previous replacement string (`prev`), re-expanded against this
+///   match; `\~` — literal `~`.
+/// - `\\` — literal backslash; any other `\x` — literal `x`.
+///
+/// A plain `$` is literal (unlike the regex crate's `$`-expansion, which this
+/// deliberately does not use).
+fn expand_replacement(raw: &str, caps: &regex::Captures, prev: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    expand_into(&mut out, raw, caps, prev, true);
     out
 }
 
-/// Replace first or all occurrences of `regex` in `text` using the
-/// already-translated `replacement` string. Returns `(new_text, count)`.
-fn do_replace(regex: &Regex, text: &str, replacement: &str, all: bool) -> (String, usize) {
+fn expand_into(out: &mut String, raw: &str, caps: &regex::Captures, prev: &str, allow_tilde: bool) {
+    let mut case = CaseState::None;
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '&' => {
+                let g = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+                for ch in g.chars() {
+                    push_cased(out, &mut case, ch);
+                }
+            }
+            '~' if allow_tilde => {
+                // Previous replacement, re-expanded against this match. A `~`
+                // nested inside `prev` is treated literally to avoid recursion.
+                let mut tmp = String::new();
+                expand_into(&mut tmp, prev, caps, "", false);
+                for ch in tmp.chars() {
+                    push_cased(out, &mut case, ch);
+                }
+            }
+            '\\' => match chars.next() {
+                Some('&') => push_cased(out, &mut case, '&'),
+                Some('~') => push_cased(out, &mut case, '~'),
+                Some('\\') => push_cased(out, &mut case, '\\'),
+                // Control chars ignore case state (nothing to case).
+                Some('r') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('n') => out.push('\0'),
+                Some(d @ '0'..='9') => {
+                    let idx = d as usize - '0' as usize;
+                    let g = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
+                    for ch in g.chars() {
+                        push_cased(out, &mut case, ch);
+                    }
+                }
+                Some('u') => case = CaseState::OneUpper,
+                Some('l') => case = CaseState::OneLower,
+                Some('U') => case = CaseState::AllUpper,
+                Some('L') => case = CaseState::AllLower,
+                Some('e') | Some('E') => case = CaseState::None,
+                Some(other) => push_cased(out, &mut case, other),
+                None => {} // trailing backslash ignored
+            },
+            _ => push_cased(out, &mut case, c),
+        }
+    }
+}
+
+/// Replace the first or all occurrences of `regex` in `text`, expanding the
+/// raw vim `replacement` (with `prev` for `~`) per match. Returns
+/// `(new_text, count)`.
+fn do_replace(
+    regex: &Regex,
+    text: &str,
+    replacement: &str,
+    prev: &str,
+    all: bool,
+) -> (String, usize) {
     let matches = regex.find_iter(text).count();
     if matches == 0 {
         return (text.to_string(), 0);
     }
+    let rep = |caps: &regex::Captures| expand_replacement(replacement, caps, prev);
     let replaced = if all {
-        regex.replace_all(text, replacement).into_owned()
+        regex.replace_all(text, rep).into_owned()
     } else {
-        regex.replace(text, replacement).into_owned()
+        regex.replace(text, rep).into_owned()
     };
     let count = if all { matches } else { 1 };
     (replaced, count)
@@ -684,28 +816,14 @@ mod tests {
         assert_eq!(cmd.replacement, "b/c");
     }
 
+    // The parser stores the replacement in RAW vim notation; expansion (below)
+    // resolves `&` / `\1` / `\&` etc. per match.
     #[test]
-    fn parse_ampersand_becomes_dollar_zero() {
-        let cmd = parse_substitute("/foo/[&]/").unwrap();
-        assert_eq!(cmd.replacement, "[${0}]");
-    }
-
-    #[test]
-    fn parse_escaped_ampersand_is_literal() {
-        let cmd = parse_substitute("/foo/\\&/").unwrap();
-        assert_eq!(cmd.replacement, "&");
-    }
-
-    #[test]
-    fn parse_group_ref_translates() {
-        let cmd = parse_substitute("/(foo)/\\1/").unwrap();
-        assert_eq!(cmd.replacement, "${1}");
-    }
-
-    #[test]
-    fn parse_group_ref_nine() {
-        let cmd = parse_substitute("/(x)/\\9/").unwrap();
-        assert_eq!(cmd.replacement, "${9}");
+    fn parse_keeps_replacement_raw() {
+        assert_eq!(parse_substitute("/foo/[&]/").unwrap().replacement, "[&]");
+        assert_eq!(parse_substitute("/foo/\\&/").unwrap().replacement, "\\&");
+        assert_eq!(parse_substitute("/(foo)/\\1/").unwrap().replacement, "\\1");
+        assert_eq!(parse_substitute("/(x)/\\9/").unwrap().replacement, "\\9");
     }
 
     #[test]
@@ -900,6 +1018,73 @@ mod tests {
         let cmd = parse_substitute("/(.)/\\11/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(buf_line(&e, 0), "a1b1");
+    }
+
+    // ── expand_replacement: case escapes + ~ ──────────────────────────────────
+
+    fn expand(raw: &str, pat: &str, text: &str, prev: &str) -> String {
+        let re = Regex::new(pat).unwrap();
+        let caps = re.captures(text).unwrap();
+        expand_replacement(raw, &caps, prev)
+    }
+
+    #[test]
+    fn expand_case_upper_run_and_end() {
+        // `\U…\E` uppercases a run; text after `\E` is unaffected.
+        assert_eq!(expand("\\U\\0\\Ex", "foo", "foo", ""), "FOOx");
+        assert_eq!(expand("\\L&\\E", "FOO", "FOO", ""), "foo");
+    }
+
+    #[test]
+    fn expand_case_one_shot() {
+        // `\u` / `\l` affect only the next char.
+        assert_eq!(expand("\\u\\0", "foo", "foo", ""), "Foo");
+        assert_eq!(expand("\\l\\0", "FOO", "FOO", ""), "fOO");
+    }
+
+    #[test]
+    fn expand_case_applies_to_group() {
+        // Case escape applied across a capture group and a following literal.
+        assert_eq!(expand("\\U\\1-y\\E", "(f)oo", "foo", ""), "F-Y");
+    }
+
+    #[test]
+    fn expand_literal_dollar_and_amp() {
+        assert_eq!(expand("$\\0", "x", "x", ""), "$x");
+        assert_eq!(expand("[&]", "foo", "foo", ""), "[foo]");
+        assert_eq!(expand("\\&", "foo", "foo", ""), "&");
+    }
+
+    #[test]
+    fn expand_tilde_uses_previous_replacement() {
+        // `~` expands to the previous replacement, re-evaluated against caps.
+        assert_eq!(expand("~!", "x", "x", "PREV"), "PREV!");
+        assert_eq!(expand("~", "(.)", "a", "[\\1]"), "[a]");
+        // `\~` is a literal tilde.
+        assert_eq!(expand("\\~", "x", "x", "PREV"), "~");
+    }
+
+    // ── `n` flag: report count, no mutation ───────────────────────────────────
+
+    #[test]
+    fn apply_report_only_counts_without_mutating() {
+        let mut e = editor_with("foo foo foo");
+        let cmd = parse_substitute("/foo/bar/gn").unwrap();
+        assert!(cmd.flags.report_only);
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 3);
+        // Buffer is untouched.
+        assert_eq!(buf_line(&e, 0), "foo foo foo");
+    }
+
+    // ── case escapes through the full apply path ──────────────────────────────
+
+    #[test]
+    fn apply_upper_run() {
+        let mut e = editor_with("hello world");
+        let cmd = parse_substitute("/world/\\U&\\E/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "hello WORLD");
     }
 
     // ── smartcase + \c/\C tests ───────────────────────────────────────────────

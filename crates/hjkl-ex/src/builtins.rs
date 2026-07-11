@@ -846,7 +846,7 @@ fn substitute_handler<H: Host>(
 
     // Resolve range to 0-based inclusive u32 bounds.
     // No range → current cursor line (cursor() returns 0-based (row, col)).
-    let r = match range {
+    let mut r = match range {
         Some(lr) => {
             let start = lr.start_one_based().saturating_sub(1) as u32;
             let end = lr.end_one_based().saturating_sub(1) as u32;
@@ -857,6 +857,15 @@ fn substitute_handler<H: Host>(
             row..=row
         }
     };
+
+    // Trailing `[count]` (`:s/a/b/g 3`): operate on `count` lines starting at
+    // the range's last line (vim semantics). apply_substitute clamps the end
+    // to the buffer, so a huge count is harmless.
+    if let Some(n) = cmd.count {
+        let start = *r.end();
+        let end = start.saturating_add(n as u32 - 1);
+        r = start..=end;
+    }
 
     // `/c` flag: collect matches without mutating buffer; let the host prompt.
     if cmd.flags.confirm {
