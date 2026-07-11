@@ -100,9 +100,14 @@ pub fn longest_common_prefix(candidates: &[String]) -> String {
 pub fn complete_command_from_names(line: &str, caret: usize, available: &[String]) -> Completions {
     let caret = caret.min(line.len());
     if line.is_empty() {
+        // Sort + dedup like the non-empty path so direct callers get the
+        // documented alphabetical order regardless of `available`'s order.
+        let mut candidates = available.to_vec();
+        candidates.sort();
+        candidates.dedup();
         return Completions {
             replace_range: 0..0,
-            candidates: available.to_vec(),
+            candidates,
             kind: CompletionKind::Command,
         };
     }
