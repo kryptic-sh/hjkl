@@ -1584,7 +1584,12 @@ fn receive_from_offer(
     data
 }
 
-/// Read all available bytes from `fd` until EOF.
+/// Cap on a single paste read so a hostile or buggy selection owner cannot
+/// stream unbounded data into memory. Generous — large images legitimately
+/// reach tens of MiB.
+const MAX_PASTE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Read all available bytes from `fd` until EOF, capped at [`MAX_PASTE_BYTES`].
 fn read_fd_to_end(fd: c_int) -> Result<Vec<u8>, ClipboardError> {
     let mut result = Vec::new();
     let mut buf = [0u8; 4096];
@@ -1602,6 +1607,11 @@ fn read_fd_to_end(fd: c_int) -> Result<Vec<u8>, ClipboardError> {
             break; // EOF
         }
         result.extend_from_slice(&buf[..n as usize]);
+        if result.len() > MAX_PASTE_BYTES {
+            return Err(ClipboardError::io(std::io::Error::other(
+                "clipboard paste exceeds size limit",
+            )));
+        }
     }
     Ok(result)
 }

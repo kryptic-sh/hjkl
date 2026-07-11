@@ -69,6 +69,10 @@ const SELECTION_NOTIFY_TIMEOUT_SECS: u64 = 5;
 const INCR_RECV_CHUNK_TIMEOUT_SECS: u64 = 30;
 /// INCR receive: total timeout across all chunks.
 const INCR_RECV_TOTAL_TIMEOUT_SECS: u64 = 60;
+/// INCR receive: cap on the accumulated payload so a hostile selection owner
+/// can't stream unbounded data into memory over the timeout window. Generous —
+/// large images legitimately reach tens of MiB.
+const MAX_INCR_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 /// SAVE_TARGETS handshake: how long to wait for the manager's initial
 /// SELECTION_NOTIFY before giving up silently.
 const SAVE_TARGETS_TIMEOUT_SECS: u64 = 5;
@@ -1341,6 +1345,11 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
         }
 
         accumulator.extend_from_slice(&chunk);
+        if accumulator.len() > MAX_INCR_TOTAL_BYTES {
+            return Err(ClipboardError::io_other(
+                "INCR receive exceeded size limit",
+            ));
+        }
 
         if Instant::now() >= total_deadline {
             return Err(ClipboardError::io_other(
