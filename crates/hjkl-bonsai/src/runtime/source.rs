@@ -125,6 +125,11 @@ impl SourceCache {
     /// `dest.exists()` and return the winner's result with no duplicate
     /// work. Calls for different grammars still run in parallel.
     pub fn acquire(&self, name: &str, spec: &LangSpec) -> Result<PathBuf> {
+        // `name` is joined into the cache path (`<base>/<name>-<rev>`); reject
+        // anything that isn't a single safe component so it can't escape.
+        if !is_safe_component(name) {
+            bail!("unsafe grammar name {name:?}: must be a single path component");
+        }
         let dest = self.source_dir(name, spec);
         if dest.exists() {
             return Ok(grammar_root(&dest, spec));
@@ -169,6 +174,15 @@ impl SourceCache {
             }
         }
     }
+}
+
+/// True if `s` is a single, safe path component: non-empty, not `.`/`..`, and
+/// free of path separators or a root/prefix. Grammar names and `; inherits:`
+/// targets are joined into cache and query-repo paths, so a value like
+/// `../../etc` or `foo/bar` must be rejected before it can escape those dirs.
+pub(crate) fn is_safe_component(s: &str) -> bool {
+    let mut comps = Path::new(s).components();
+    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
 }
 
 pub(crate) fn short_rev(rev: &str) -> &str {
@@ -292,6 +306,11 @@ impl QuerySourceCache {
         lang_name: &str,
         query_subdir: Option<&str>,
     ) -> Result<PathBuf> {
+        // `lang_name` is interpolated into the resolved-query cache filename;
+        // reject traversal before it can escape the cache dir.
+        if !is_safe_component(lang_name) {
+            bail!("unsafe grammar name {lang_name:?}: must be a single path component");
+        }
         let repo_root = self.acquire_source(source, meta)?;
         let prefix = source.query_prefix();
         let subdir = query_subdir.unwrap_or(lang_name);
@@ -359,6 +378,13 @@ fn resolve_inherits(
     lang: &str,
     visited: &mut Vec<String>,
 ) -> Result<String> {
+    // `lang` is joined into the query-repo path (both the requested subdir and
+    // every `; inherits:` target recurse through here). Reject traversal so a
+    // crafted name / inherits directive can't read `highlights.scm` outside
+    // the query repo.
+    if !is_safe_component(lang) {
+        bail!("unsafe inherits/lang target {lang:?}: must be a single path component");
+    }
     if visited.iter().any(|v| v == lang) {
         return Ok(String::new());
     }
@@ -605,6 +631,78 @@ mod tests {
         let parent_pos = result.find("(injection.foo)").unwrap();
         let child_pos = result.find("(typescript.bar)").unwrap();
         assert!(parent_pos < child_pos, "parent must precede child");
+    }
+
+    #[test]
+    fn is_safe_component_accepts_names_rejects_traversal() {
+        for ok in ["rust", "c-sharp", "lua_ls", "_typescript", "ecma", "c++"] {
+            assert!(is_safe_component(ok), "{ok:?} should be safe");
+        }
+        // Note: `\` is only a separator on Windows, so it's intentionally not
+        // asserted here — `Path::components` handles that per-platform.
+        for bad in ["", ".", "..", "a/b", "../evil", "/abs", "foo/.."] {
+            assert!(!is_safe_component(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn acquire_rejects_unsafe_name() {
+        let cache = SourceCache::new(PathBuf::from("/tmp/cache"));
+        let spec = dummy_spec("0123456789abcdef00112233", None);
+        // Must fail before any clone/IO — no network touched.
+        assert!(cache.acquire("../evil", &spec).is_err());
+        assert!(cache.acquire("a/b", &spec).is_err());
+        assert!(cache.acquire("..", &spec).is_err());
+    }
+
+    #[test]
+    fn resolve_inherits_rejects_traversal_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let prefix = "runtime/queries";
+        std::fs::create_dir_all(repo.join(prefix).join("rust")).unwrap();
+        std::fs::write(
+            repo.join(prefix).join("rust").join("highlights.scm"),
+            "(rust.id)\n",
+        )
+        .unwrap();
+
+        // A directly-requested traversal target must error, not read outside.
+        let mut visited = vec![];
+        assert!(resolve_inherits(&repo, prefix, "../../../etc", &mut visited).is_err());
+    }
+
+    #[test]
+    fn resolve_inherits_skips_traversal_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let prefix = "runtime/queries";
+        let ts_dir = repo.join(prefix).join("typescript");
+        std::fs::create_dir_all(&ts_dir).unwrap();
+        // A hostile `; inherits:` directive pointing outside the query subtree.
+        std::fs::write(
+            ts_dir.join("highlights.scm"),
+            "; inherits: ../secret\n(typescript.bar)\n",
+        )
+        .unwrap();
+        // Plant a file at the escape target: repo/prefix/../secret/highlights.scm.
+        // Without the traversal guard, `../secret` would resolve and its body
+        // would be concatenated into the result.
+        let secret_dir = repo.join(prefix).parent().unwrap().join("secret");
+        std::fs::create_dir_all(&secret_dir).unwrap();
+        std::fs::write(secret_dir.join("highlights.scm"), "(SECRET_LEAKED)\n").unwrap();
+
+        let mut visited = vec![];
+        let result = resolve_inherits(&repo, prefix, "typescript", &mut visited).unwrap();
+        // The traversal parent is skipped; only the child's own content remains.
+        assert!(
+            result.contains("(typescript.bar)"),
+            "child missing: {result}"
+        );
+        assert!(
+            !result.contains("SECRET_LEAKED"),
+            "traversal target file must NOT be read: {result}"
+        );
     }
 
     #[test]

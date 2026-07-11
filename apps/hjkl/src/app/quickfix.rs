@@ -28,6 +28,24 @@ impl QfWhich {
     }
 }
 
+/// Resolve the program + argument vector for `:make`.
+///
+/// The executable is always the first whitespace-delimited token of `makeprg`;
+/// the user's `:make` args (`extra`) are only appended as trailing arguments.
+/// This means `extra` can add flags/targets (matching vim's `:make {args}`),
+/// but can never promote itself to the program that runs — not even when
+/// `makeprg` is empty. Returns `None` when `makeprg` contains no program token.
+///
+/// The caller runs the result via `Command::args` (argv, no shell), so there
+/// is also no shell-metacharacter injection from either `makeprg` or `extra`.
+fn resolve_make_argv(makeprg: &str, extra: &str) -> Option<(String, Vec<String>)> {
+    let mut make_tokens = makeprg.split_whitespace().map(str::to_string);
+    let program = make_tokens.next()?;
+    let mut rest: Vec<String> = make_tokens.collect();
+    rest.extend(extra.split_whitespace().map(str::to_string));
+    Some((program, rest))
+}
+
 impl crate::app::App {
     // ── list accessors ──────────────────────────────────────────────────────
 
@@ -381,16 +399,14 @@ impl crate::app::App {
     fn qf_run_make(&mut self, w: QfWhich, extra: &str) {
         const MAX_ENTRIES: usize = 10_000;
         let makeprg = self.active_editor().settings().makeprg.clone();
-        let mut argv: Vec<String> = makeprg.split_whitespace().map(str::to_string).collect();
-        argv.extend(extra.split_whitespace().map(str::to_string));
-        let Some((program, rest)) = argv.split_first() else {
+        let Some((program, rest)) = resolve_make_argv(&makeprg, extra) else {
             self.bus.error("makeprg is empty");
             return;
         };
 
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let output = std::process::Command::new(program)
-            .args(rest)
+        let output = std::process::Command::new(&program)
+            .args(&rest)
             .current_dir(&root)
             .output();
         let out = match output {
@@ -689,5 +705,32 @@ fn parse_expr_text(text: &str) -> String {
         out
     } else {
         text.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_make_argv;
+
+    #[test]
+    fn make_argv_appends_extra_after_makeprg() {
+        let (prog, args) = resolve_make_argv("cargo check", "--offline -j4").unwrap();
+        assert_eq!(prog, "cargo");
+        assert_eq!(args, vec!["check", "--offline", "-j4"]);
+    }
+
+    #[test]
+    fn make_argv_program_always_from_makeprg_not_extra() {
+        // Even a hostile `extra` cannot change which binary runs.
+        let (prog, args) = resolve_make_argv("make", "/tmp/evil --do-bad").unwrap();
+        assert_eq!(prog, "make", "program must come from makeprg");
+        assert_eq!(args, vec!["/tmp/evil", "--do-bad"]);
+    }
+
+    #[test]
+    fn make_argv_empty_makeprg_is_none_even_with_extra() {
+        // With an empty makeprg, extra must NOT be promoted to the program.
+        assert!(resolve_make_argv("", "/tmp/evil").is_none());
+        assert!(resolve_make_argv("   ", "evilprog arg").is_none());
     }
 }

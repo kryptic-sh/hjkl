@@ -44,7 +44,7 @@ use crate::query_sanitize::sanitize_highlights;
 
 use super::compile::{GrammarCompiler, shared_lib_ext};
 use super::manifest::{LangSpec, ManifestMeta};
-use super::source::{QuerySourceCache, SourceCache, short_rev};
+use super::source::{QuerySourceCache, SourceCache, is_safe_component, short_rev};
 use super::xdg;
 
 /// Configurable grammar resolver. Construct once, reuse across lookups.
@@ -121,6 +121,12 @@ impl GrammarLoader {
     /// you trust. Use [`Self::lookup_only`] to resolve without ever fetching
     /// or building.
     pub fn load(&self, name: &str, spec: &LangSpec, meta: &ManifestMeta) -> Result<PathBuf> {
+        // `name` is joined into system/user/cache paths (`<name>.so`, `<name>.scm`,
+        // `<name>.rev`, the source clone dir); reject traversal up front so an
+        // untrusted manifest key can't escape those directories.
+        if !is_safe_component(name) {
+            bail!("unsafe grammar name {name:?}: must be a single path component");
+        }
         if let Some(p) = self.lookup_fresh(name, spec, meta) {
             return Ok(p);
         }
