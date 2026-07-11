@@ -68,7 +68,7 @@ impl PreviewSpans {
                     break;
                 }
                 let local_start = span_start.saturating_sub(row_byte_start);
-                let local_end = span_end.min(row_byte_end) - row_byte_start;
+                let local_end = span_end.min(row_byte_end).saturating_sub(row_byte_start);
                 if local_end > local_start {
                     by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
                 }
@@ -133,7 +133,7 @@ where
                 break;
             }
             let local_start = span_start.saturating_sub(row_byte_start);
-            let local_end = span_end.min(row_byte_end) - row_byte_start;
+            let local_end = span_end.min(row_byte_end).saturating_sub(row_byte_start);
             if local_end > local_start {
                 by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
             }
