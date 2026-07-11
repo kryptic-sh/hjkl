@@ -137,13 +137,17 @@ impl HoverState {
 
     /// Scroll the popup by `n` lines (positive = down, negative = up).
     ///
-    /// Scroll is clamped at 0; the upper bound is enforced by the renderer
-    /// against the rendered line count.
+    /// Clamped to `[0, line_count - 1]`. The lower bound stops back-scroll at
+    /// the top; the upper bound stops the model value from running away past
+    /// the content (which would make an equal number of up-presses do nothing
+    /// before the popup visibly moves). The renderer still clamps further
+    /// against the actual viewport height.
     pub fn scroll_lines(&mut self, n: isize) {
+        let max = self.line_count().saturating_sub(1);
         if n < 0 {
             self.scroll = self.scroll.saturating_sub((-n) as usize);
         } else {
-            self.scroll = self.scroll.saturating_add(n as usize);
+            self.scroll = self.scroll.saturating_add(n as usize).min(max);
         }
     }
 
@@ -292,9 +296,19 @@ mod tests {
 
     #[test]
     fn scroll_down() {
-        let mut s = state("x", 0, 0);
+        // 5 content lines → max scroll 4, so scrolling 3 lands at 3.
+        let mut s = state("a\nb\nc\nd\ne", 0, 0);
         s.scroll_lines(3);
         assert_eq!(s.scroll, 3);
+    }
+
+    #[test]
+    fn scroll_clamps_at_line_count() {
+        // 3 lines → model scroll must not exceed line_count - 1 = 2, so a
+        // huge scroll-down doesn't run away (keeping back-scroll symmetric).
+        let mut s = state("a\nb\nc", 0, 0);
+        s.scroll_lines(100);
+        assert_eq!(s.scroll, 2);
     }
 
     #[test]

@@ -657,6 +657,14 @@ impl LayoutTree {
 fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRect, LayoutRect) {
     match dir.axis() {
         Axis::Row => {
+            // A zero-height parent can't be split; the clamp below would
+            // otherwise force a size-1 child that overflows the parent.
+            if area.h == 0 {
+                return (
+                    LayoutRect::new(area.x, area.y, area.w, 0),
+                    LayoutRect::new(area.x, area.y, area.w, 0),
+                );
+            }
             // Horizontal split: divide height.
             let a_h = ((area.h as f32) * ratio).round() as u16;
             let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
@@ -670,6 +678,13 @@ fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRe
             (rect_a, rect_b)
         }
         Axis::Col => {
+            // A zero-width parent can't be split; see the Row branch.
+            if area.w == 0 {
+                return (
+                    LayoutRect::new(area.x, area.y, 0, area.h),
+                    LayoutRect::new(area.x, area.y, 0, area.h),
+                );
+            }
             // Vertical split: divide width.
             let a_w = ((area.w as f32) * ratio).round() as u16;
             let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
@@ -775,6 +790,17 @@ mod tests {
     fn layout_rect_default_is_zero() {
         let r = LayoutRect::default();
         assert_eq!(r, LayoutRect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn headless_split_zero_size_parent_does_not_overflow() {
+        // A zero-height parent must yield zero-height children, not a size-1
+        // child that exceeds the parent.
+        let (a, b) = headless_split_rect(LayoutRect::new(0, 0, 10, 0), SplitDir::Horizontal, 0.5);
+        assert_eq!((a.h, b.h), (0, 0), "row split of h=0 must stay 0");
+        // Same for a zero-width parent under a vertical split.
+        let (a, b) = headless_split_rect(LayoutRect::new(0, 0, 0, 10), SplitDir::Vertical, 0.5);
+        assert_eq!((a.w, b.w), (0, 0), "col split of w=0 must stay 0");
     }
 
     // ── Tab ───────────────────────────────────────────────────────────────────

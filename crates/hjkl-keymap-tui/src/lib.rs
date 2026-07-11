@@ -98,6 +98,22 @@ fn ct_mods_to_keymap(mods: CtKeyMods) -> KeyModifiers {
 /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
 /// for replaying unbound sequences or user maps to the engine.
 pub fn to_crossterm(ev: &KeyEvent) -> CtKeyEvent {
+    // `<S-Tab>` is represented internally as `Tab` + SHIFT (see
+    // `from_crossterm`), but crossterm's canonical form is `BackTab`. Emit that
+    // so a replayed unbound Shift-Tab matches what the terminal actually
+    // delivers (and round-trips through `from_crossterm`) instead of the
+    // never-emitted `Tab` + SHIFT.
+    if ev.code == KeyCode::Tab && ev.modifiers.contains(KeyModifiers::SHIFT) {
+        let mut mods = CtKeyMods::NONE;
+        if ev.modifiers.contains(KeyModifiers::CTRL) {
+            mods |= CtKeyMods::CONTROL;
+        }
+        mods |= CtKeyMods::SHIFT;
+        if ev.modifiers.contains(KeyModifiers::ALT) {
+            mods |= CtKeyMods::ALT;
+        }
+        return CtKeyEvent::new(CtKeyCode::BackTab, mods);
+    }
     let code = match ev.code {
         KeyCode::Char(c) => CtKeyCode::Char(c),
         KeyCode::Enter => CtKeyCode::Enter,
@@ -181,6 +197,26 @@ mod tests {
 
         let ev = from_crossterm(&ct_key(CK::BackTab, CM::SHIFT)).unwrap();
         assert_eq!(ev, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn shift_tab_serializes_back_to_backtab() {
+        // Internally <S-Tab> is Tab+SHIFT; converting back to crossterm must
+        // yield the canonical BackTab (what the terminal emits), not Tab+SHIFT.
+        let ev = KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT);
+        let ct = to_crossterm(&ev);
+        assert_eq!(ct.code, CK::BackTab, "Shift-Tab must serialize to BackTab");
+        assert!(ct.modifiers.contains(CM::SHIFT));
+        // Round-trips: BackTab → Tab+SHIFT → BackTab.
+        assert_eq!(from_crossterm(&ct).unwrap(), ev);
+    }
+
+    #[test]
+    fn plain_tab_serializes_to_tab() {
+        let ev = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let ct = to_crossterm(&ev);
+        assert_eq!(ct.code, CK::Tab);
+        assert!(!ct.modifiers.contains(CM::SHIFT));
     }
 
     #[test]

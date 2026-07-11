@@ -89,6 +89,12 @@ impl Form {
         }
         if moved {
             if prev != self.focused {
+                // Blur: force the previous text field back to Normal so it
+                // isn't left stuck in Visual (e.g. after `v`/`V`) or Insert
+                // when the user navigates away with j/k.
+                if let Field::SingleLineText(f) | Field::MultiLineText(f) = &mut self.fields[prev] {
+                    f.enter_normal();
+                }
                 // Run blur validator on the previous field.
                 validate_field(&mut self.fields[prev]);
                 self.bump_dirty();
@@ -300,6 +306,37 @@ mod tests {
         let mut form = make_form();
         form.handle_input(key('j'));
         assert_eq!(form.focused(), 1);
+    }
+
+    #[test]
+    fn blur_resets_field_from_visual_to_normal() {
+        let mut form = make_form();
+        // Enter Visual on the focused (field 0) text editor.
+        form.handle_input(key('v'));
+        let in_visual = matches!(
+            &form.fields[0],
+            Field::SingleLineText(f) | Field::MultiLineText(f) if f.vim_mode() != VimMode::Normal
+        );
+        assert!(
+            in_visual,
+            "`v` must put the field editor in a non-Normal mode"
+        );
+
+        // Navigate away with `j`.
+        form.handle_input(key('j'));
+        assert_eq!(form.focused(), 1);
+
+        // The blurred field must be reset to Normal, not left in Visual.
+        match &form.fields[0] {
+            Field::SingleLineText(f) | Field::MultiLineText(f) => {
+                assert_eq!(
+                    f.vim_mode(),
+                    VimMode::Normal,
+                    "blurred field must reset to Normal"
+                );
+            }
+            _ => panic!("field 0 must be a text field"),
+        }
     }
 
     #[test]

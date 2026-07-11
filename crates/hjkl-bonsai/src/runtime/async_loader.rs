@@ -200,11 +200,23 @@ fn worker_loop(loader: Arc<GrammarLoader>, in_flight: InFlight, rx: Arc<Mutex<Re
         };
 
         let name = job.name.clone();
-        let result: Result<PathBuf, LoadError> = loader
-            .load(&job.name, &job.spec, &job.meta)
-            .map_err(|e| LoadError::Failed(format!("{e:#}")));
+        // Guard the load with `catch_unwind`: a panic inside `loader.load`
+        // (e.g. a grammar with a pathological query) must NOT kill the worker
+        // thread or leave the in-flight entry stuck in the map forever —
+        // subscribers would then wait on a job no live worker will ever
+        // complete. Convert a panic into a `Failed` result and carry on.
+        let result: Result<PathBuf, LoadError> =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                loader.load(&job.name, &job.spec, &job.meta)
+            })) {
+                Ok(r) => r.map_err(|e| LoadError::Failed(format!("{e:#}"))),
+                Err(_) => Err(LoadError::Failed(format!(
+                    "grammar loader panicked while loading `{name}`"
+                ))),
+            };
 
-        // Drain the subscriber list and broadcast.
+        // Drain the subscriber list and broadcast (always runs, even after a
+        // panic above, so the in-flight entry is removed).
         let senders: Vec<Sender<Result<PathBuf, LoadError>>> = {
             let mut map = in_flight.lock().expect("in_flight mutex poisoned");
             map.remove(&name).unwrap_or_default()
@@ -334,10 +346,17 @@ mod tests {
                         };
                         loader_clone.call_count.fetch_add(1, Ordering::SeqCst);
                         let name = job.name.clone();
-                        let result = loader_clone
-                            .backend
-                            .load(&job.name, &job.spec, &job.meta)
-                            .map_err(|e| LoadError::Failed(format!("{e:#}")));
+                        // Mirror the production worker: a panic in the backend
+                        // must not kill the worker or leak the in-flight entry.
+                        let result =
+                            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                loader_clone.backend.load(&job.name, &job.spec, &job.meta)
+                            })) {
+                                Ok(r) => r.map_err(|e| LoadError::Failed(format!("{e:#}"))),
+                                Err(_) => {
+                                    Err(LoadError::Failed(format!("panicked loading `{name}`")))
+                                }
+                            };
 
                         let senders: Vec<_> = {
                             let mut map = in_flight_clone.lock().unwrap();
@@ -435,6 +454,20 @@ mod tests {
         }
     }
 
+    /// Panicking backend: models a load that blows up mid-flight.
+    struct PanicBackend;
+
+    impl LoaderBackend for PanicBackend {
+        fn load(
+            &self,
+            _name: &str,
+            _spec: &LangSpec,
+            _meta: &ManifestMeta,
+        ) -> anyhow::Result<PathBuf> {
+            panic!("boom in grammar loader");
+        }
+    }
+
     /// Slow backend: sleeps before returning to let tests observe the
     /// in-flight window.
     struct SlowBackend {
@@ -455,6 +488,39 @@ mod tests {
     }
 
     // ── tests ──────────────────────────────────────────────────────────────
+
+    /// A panic inside the loader must resolve the handle to `Failed` (not a
+    /// disconnected `Cancelled`) and must remove the in-flight entry rather
+    /// than leaking it forever.
+    #[test]
+    fn worker_backend_panic_reports_failed_and_clears_in_flight() {
+        // Silence the default panic hook so the deliberate panic doesn't spew
+        // a backtrace to the test log. nextest isolates tests per process.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let loader = TestAsyncLoader::new(MockLoader::new(PanicBackend));
+        let handle = loader.load_async("boom".into(), dummy_spec(), dummy_meta());
+        let res = handle.recv_blocking();
+
+        std::panic::set_hook(prev);
+
+        assert!(
+            matches!(res, Err(LoadError::Failed(_))),
+            "panic must surface as Failed, got {res:?}"
+        );
+        // The worker removes the in-flight entry before broadcasting, so it
+        // should already be gone; poll briefly to avoid a race.
+        let mut cleared = false;
+        for _ in 0..100 {
+            if loader.in_flight.lock().unwrap().is_empty() {
+                cleared = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(cleared, "in-flight entry leaked after a loader panic");
+    }
 
     /// Five concurrent requests for the same grammar name must trigger exactly
     /// one underlying `load()` call.

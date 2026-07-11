@@ -88,8 +88,11 @@ impl Chord {
 
 impl fmt::Display for Chord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Display uses a placeholder leader char since we don't have context.
-        write!(f, "{}", self.to_notation(' '))
+        // Display has no leader context. Use `'\0'` as the placeholder — no
+        // real key event is `Char('\0')`, so the `<leader>` special-case never
+        // fires spuriously. (Passing `' '` here rendered a literal Space key as
+        // `<leader>` instead of `<Space>`.)
+        write!(f, "{}", self.to_notation('\0'))
     }
 }
 
@@ -413,6 +416,15 @@ mod tests {
         let chord = Chord::parse(input, leader).unwrap();
         let output = chord.to_notation(leader);
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn display_renders_space_key_not_as_leader() {
+        // A literal Space key in a chord must Display as `<Space>`, not
+        // `<leader>` (Display has no leader context and must not assume space
+        // is the leader).
+        let chord = Chord(vec![KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)]);
+        assert_eq!(chord.to_string(), "<Space>");
     }
 
     #[test]
