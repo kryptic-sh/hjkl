@@ -61,3 +61,44 @@ initial_cursor = [0, 0]
 keys = ":s/foo/bar/i<CR>"
 expected_buffer = "bar\n"
 expected_cursor = [0, 0]
+
+# `\r` in the replacement inserts a line break (split-on-delimiter idiom).
+[[cases]]
+name = "subst_backslash_r_splits_lines"
+initial_buffer = "a,b,c\n"
+initial_cursor = [0, 0]
+keys = ":s/,/\\r/g<CR>"
+expected_buffer = "a\nb\nc\n"
+
+# `\t` in the replacement inserts a tab.
+[[cases]]
+name = "subst_backslash_t_inserts_tab"
+initial_buffer = "a,b\n"
+initial_cursor = [0, 0]
+keys = ":s/,/\\t/<CR>"
+expected_buffer = "a\tb\n"
+
+# A literal `$` in the replacement stays literal (vim uses `\1` for captures).
+[[cases]]
+name = "subst_literal_dollar_stays_literal"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = ":s/x/$5/<CR>"
+expected_buffer = "$5\n"
+
+# `\0` is the whole match (like `&`).
+[[cases]]
+name = "subst_backslash_zero_whole_match"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/[\\0]/<CR>"
+expected_buffer = "[foo]\n"
+
+# After `:s`, the cursor lands on the first non-blank of the changed line.
+[[cases]]
+name = "subst_cursor_first_non_blank"
+initial_buffer = "  x\n"
+initial_cursor = [0, 2]
+keys = ":s/x/y/<CR>"
+expected_buffer = "  y\n"
+expected_cursor = [0, 2]

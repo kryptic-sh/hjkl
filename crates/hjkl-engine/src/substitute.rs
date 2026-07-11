@@ -15,8 +15,9 @@
 //!   ERE syntax by default. Most ERE patterns work, but vim-specific
 //!   extensions (`\<`, `\>`, `\s`, `\+`) may not. Use POSIX ERE
 //!   equivalents or the `regex` crate's syntax.
-//! - Capture-group references use vim notation (`\1`…`\9`, `&`); the
-//!   parser translates them to `$1`…`$9`, `$0` for the `regex` crate.
+//! - Capture-group references use vim notation (`\0`…`\9`, `&`); the parser
+//!   translates them to braced `${0}`…`${9}` for the `regex` crate, escapes a
+//!   literal `$` to `$$`, and maps `\r`/`\t`/`\n` to a line break / tab / NUL.
 //!
 //! See vim's `:help :substitute` for the full spec.
 
@@ -154,9 +155,9 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
 ///
 /// # Cursor
 ///
-/// After a successful substitution the cursor is placed at column 0 of the
-/// **last line that changed**, matching vim semantics. When no replacements
-/// are made the cursor is left unchanged.
+/// After a successful substitution the cursor is placed on the first
+/// non-blank of the **last line that changed**, matching vim semantics. When
+/// no replacements are made the cursor is left unchanged.
 ///
 /// # Undo
 ///
@@ -245,9 +246,22 @@ pub fn apply_substitute<H: crate::types::Host>(
     // Apply the new content in one shot.
     ed.buffer_mut().replace_all(&new_lines.join("\n"));
 
-    // Cursor lands on the start of the last changed line.
+    // Cursor lands on the first non-blank of the last changed line (vim). Clamp
+    // the row in case a replacement inserted line breaks (e.g. `\r`).
+    let final_total = crate::types::Query::rope(ed.buffer()).len_lines();
+    let cursor_row = last_changed_row.min(final_total.saturating_sub(1));
+    let first_non_blank = crate::buf_helpers::buf_line(ed.buffer(), cursor_row)
+        .unwrap_or_default()
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .count();
+    let line_len = crate::buf_helpers::buf_line(ed.buffer(), cursor_row)
+        .unwrap_or_default()
+        .chars()
+        .count();
+    let cursor_col = first_non_blank.min(line_len.saturating_sub(1));
     ed.buffer_mut()
-        .set_cursor(hjkl_buffer::Position::new(last_changed_row, 0));
+        .set_cursor(hjkl_buffer::Position::new(cursor_row, cursor_col));
 
     ed.mark_content_dirty();
 
@@ -518,30 +532,40 @@ fn split_on_slash(s: &str) -> Vec<String> {
 
 /// Translate vim-style replacement tokens to regex-crate syntax.
 ///
-/// - `&` → `$0` (whole match)
-/// - `\&` → literal `&`
-/// - `\1`…`\9` → `$1`…`$9` (capture groups)
+/// The result is fed to the `regex` crate's `$`-based expansion, so capture
+/// refs are emitted BRACED (`${1}`) — unbraced `$1abc` would be parsed as the
+/// group name `1abc` — and any literal `$` the user typed is escaped to `$$`.
+///
+/// - `&` → `${0}` (whole match); `\&` → literal `&`
+/// - `\0`…`\9` → `${0}`…`${9}` (capture groups; `\0` is the whole match)
+/// - `\r` → line break, `\t` → tab, `\n` → NUL (vim `:h sub-replace-special`)
 /// - `\\` → `\` (literal backslash)
+/// - literal `$` → `$$` (so the regex crate treats it as a literal)
 /// - Any other `\x` → `x` (drop the backslash)
 fn translate_replacement(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '&' {
-            out.push_str("$0");
-        } else if c == '\\' {
-            match chars.next() {
+        match c {
+            '&' => out.push_str("${0}"),
+            // A literal `$` in the vim replacement — escape so the regex crate
+            // does not treat it as a capture-group sigil.
+            '$' => out.push_str("$$"),
+            '\\' => match chars.next() {
                 Some('&') => out.push('&'),   // \& → literal &
                 Some('\\') => out.push('\\'), // \\ → literal \
-                Some(d @ '1'..='9') => {
-                    out.push('$');
+                Some('r') => out.push('\n'),  // \r → line break
+                Some('t') => out.push('\t'),  // \t → tab
+                Some('n') => out.push('\0'),  // \n → NUL
+                Some(d @ '0'..='9') => {
+                    out.push_str("${");
                     out.push(d);
+                    out.push('}');
                 }
                 Some(other) => out.push(other), // drop backslash
                 None => {}                      // trailing \ ignored
-            }
-        } else {
-            out.push(c);
+            },
+            _ => out.push(c),
         }
     }
     out
@@ -663,7 +687,7 @@ mod tests {
     #[test]
     fn parse_ampersand_becomes_dollar_zero() {
         let cmd = parse_substitute("/foo/[&]/").unwrap();
-        assert_eq!(cmd.replacement, "[$0]");
+        assert_eq!(cmd.replacement, "[${0}]");
     }
 
     #[test]
@@ -675,13 +699,13 @@ mod tests {
     #[test]
     fn parse_group_ref_translates() {
         let cmd = parse_substitute("/(foo)/\\1/").unwrap();
-        assert_eq!(cmd.replacement, "$1");
+        assert_eq!(cmd.replacement, "${1}");
     }
 
     #[test]
     fn parse_group_ref_nine() {
         let cmd = parse_substitute("/(x)/\\9/").unwrap();
-        assert_eq!(cmd.replacement, "$9");
+        assert_eq!(cmd.replacement, "${9}");
     }
 
     #[test]
@@ -828,6 +852,54 @@ mod tests {
         let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
+    }
+
+    #[test]
+    fn apply_backslash_r_splits_line() {
+        // `\r` in the replacement inserts a line break (the split-on-delimiter
+        // idiom): `:s/,/\r/g` turns one line into three.
+        let mut e = editor_with("a,b,c");
+        let cmd = parse_substitute("/,/\\r/g").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "a");
+        assert_eq!(buf_line(&e, 1), "b");
+        assert_eq!(buf_line(&e, 2), "c");
+    }
+
+    #[test]
+    fn apply_backslash_t_inserts_tab() {
+        let mut e = editor_with("a,b");
+        let cmd = parse_substitute("/,/\\t/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "a\tb");
+    }
+
+    #[test]
+    fn apply_literal_dollar_in_replacement() {
+        // A literal `$` in the replacement stays literal (vim uses `\1` for
+        // groups, so `$5` is not a capture ref).
+        let mut e = editor_with("x");
+        let cmd = parse_substitute("/x/$5/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "$5");
+    }
+
+    #[test]
+    fn apply_backslash_zero_is_whole_match() {
+        // `\0` is the whole match (like `&`).
+        let mut e = editor_with("foo");
+        let cmd = parse_substitute("/foo/[\\0]/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "[foo]");
+    }
+
+    #[test]
+    fn apply_group_ref_then_literal_digits() {
+        // Braced capture refs let a digit follow a group ref: `\1` then `1`.
+        let mut e = editor_with("ab");
+        let cmd = parse_substitute("/(.)/\\11/g").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "a1b1");
     }
 
     // ── smartcase + \c/\C tests ───────────────────────────────────────────────
