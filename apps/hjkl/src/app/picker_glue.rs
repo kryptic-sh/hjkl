@@ -202,7 +202,8 @@ impl App {
             }
         };
         self.picker = None;
-        let s = path.to_string_lossy().to_string();
+        // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
+        let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("split {s}"));
     }
 
@@ -220,7 +221,8 @@ impl App {
             }
         };
         self.picker = None;
-        let s = path.to_string_lossy().to_string();
+        // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
+        let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("vsplit {s}"));
     }
 
@@ -238,7 +240,8 @@ impl App {
             }
         };
         self.picker = None;
-        let s = path.to_string_lossy().to_string();
+        // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
+        let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("tabnew {s}"));
     }
 

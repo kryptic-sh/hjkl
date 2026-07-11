@@ -1179,8 +1179,11 @@ impl App {
             if !self.slots[i].dirty {
                 continue;
             }
-            self.save_slot(i, None, false);
-            written += 1;
+            // Only count saves that actually succeeded — an IO/E45 failure
+            // must not be reported as "written".
+            if self.save_slot(i, None, false) {
+                written += 1;
+            }
         }
         self.bus
             .info(format!("{written} buffer(s) written, {skipped} skipped"));
@@ -1801,18 +1804,18 @@ impl App {
             self.reload_current(force);
             return;
         }
-        let path_str = if arg.contains('%') {
-            let curr = match self.active().filename.as_ref().and_then(|p| p.to_str()) {
-                Some(s) => s,
-                None => {
-                    self.bus.error("E499: Empty file name for '%'");
-                    return;
-                }
-            };
-            arg.replace('%', curr)
-        } else {
-            arg.to_string()
-        };
+        // `%` expansion already happened ONCE in `dispatch_ex` (via
+        // `hjkl_ex::expand_args`), so an arg arriving here may legitimately
+        // contain literal `%` characters — e.g. a file named `100%.txt`
+        // opened from the picker / quickfix / explorer, or a current
+        // filename that itself contains `%`. Re-expanding here corrupted
+        // such paths (double expansion). The only bare `%` that survives
+        // expansion is the "no current file" case → vim's E499.
+        if arg == "%" {
+            self.bus.error("E499: Empty file name for '%'");
+            return;
+        }
+        let path_str = arg.to_string();
         let path = PathBuf::from(&path_str);
         let target = super::canon_for_match(&path);
 
@@ -2827,6 +2830,15 @@ fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
         cwword: None,
         cwd: None,
     }
+}
+
+/// Escape a literal path for interpolation into an ex command line
+/// (`dispatch_ex`): unescaped `%` / `#` would otherwise be rewritten to the
+/// current / alternate filename by `hjkl_ex::expand_args`, silently opening
+/// the wrong file for names like `100%.txt`. Backslash-escaping makes
+/// `expand_args` emit them verbatim.
+pub(crate) fn escape_ex_path(s: &str) -> String {
+    s.replace('%', "\\%").replace('#', "\\#")
 }
 
 /// Build a comma-separated list of capability names present in an LSP

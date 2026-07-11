@@ -78,6 +78,53 @@ fn edit_percent_reloads_current_file() {
 }
 
 #[test]
+fn edit_literal_percent_filename_not_reexpanded() {
+    // Regression: a path containing a literal `%` (as handed to `do_edit` by
+    // the picker / quickfix / explorer) must be opened verbatim. `do_edit`
+    // used to re-run `%` → current-filename expansion on top of the one
+    // `dispatch_ex` already performs, mangling names like `100%.txt`.
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("hjkl_pct_first.txt");
+    std::fs::write(&first, "first\n").unwrap();
+    let pct = dir.path().join("100%.txt");
+    std::fs::write(&pct, "pct-content\n").unwrap();
+    let mut app = App::new(Some(first.clone()), false, None, None).unwrap();
+    app.do_edit(pct.to_str().unwrap(), false);
+    let active = app
+        .active()
+        .filename
+        .clone()
+        .expect("a file must be active after do_edit");
+    assert!(
+        active.to_string_lossy().ends_with("100%.txt"),
+        "literal-% path must open verbatim; got {active:?}"
+    );
+}
+
+#[test]
+fn escape_ex_path_roundtrips_through_dispatch_ex() {
+    // Opening a %-named file through the ex layer (explorer / picker route)
+    // must land on that file, not expand `%` to the current filename.
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("hjkl_pct_dispatch_first.txt");
+    std::fs::write(&first, "first\n").unwrap();
+    let pct = dir.path().join("pct%name.txt");
+    std::fs::write(&pct, "via-dispatch\n").unwrap();
+    let mut app = App::new(Some(first.clone()), false, None, None).unwrap();
+    let escaped = crate::app::ex_dispatch::escape_ex_path(&pct.to_string_lossy());
+    app.dispatch_ex(&format!("edit {escaped}"));
+    let active = app
+        .active()
+        .filename
+        .clone()
+        .expect("a file must be active after :edit");
+    assert!(
+        active.to_string_lossy().ends_with("pct%name.txt"),
+        "escaped %-path must open verbatim through dispatch_ex; got {active:?}"
+    );
+}
+
+#[test]
 fn edit_no_arg_reloads_current_file() {
     let path = std::env::temp_dir().join("hjkl_edit_noarg_reload.txt");
     std::fs::write(&path, "v1\n").unwrap();

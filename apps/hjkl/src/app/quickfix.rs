@@ -323,7 +323,10 @@ impl crate::app::App {
                 .args(["-rnH", "--", pat, root_str])
                 .output(),
             GrepBackend::Findstr => std::process::Command::new("findstr")
-                .args(["/s", "/n", pat, "*"])
+                // `/c:` binds the pattern as the search string so a pattern
+                // starting with `/` can't be parsed as a findstr option;
+                // `/r` keeps regex semantics (findstr's default).
+                .args(["/s", "/n", "/r", &format!("/c:{pat}"), "*"])
                 .output(),
             GrepBackend::Neither => {
                 self.bus.error("no search backend found (install ripgrep)");

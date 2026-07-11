@@ -1645,12 +1645,15 @@ impl super::App {
     /// instead of showing absolute paths in the picker / buffer line), else
     /// absolute.
     fn explorer_open_arg(path: &Path) -> String {
+        // Escape `%` / `#` — the returned string is interpolated into an ex
+        // command line, where `dispatch_ex` would otherwise expand them to the
+        // current / alternate filename (opening the wrong file).
         if let Ok(cwd) = std::env::current_dir()
             && let Ok(rel) = path.strip_prefix(&cwd)
         {
-            return rel.to_string_lossy().into_owned();
+            return super::ex_dispatch::escape_ex_path(&rel.to_string_lossy());
         }
-        path.to_string_lossy().into_owned()
+        super::ex_dispatch::escape_ex_path(&path.to_string_lossy())
     }
 
     // ── Refresh / hidden / root ───────────────────────────────────────────────
