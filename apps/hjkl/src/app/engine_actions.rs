@@ -33,9 +33,15 @@ impl App {
             AppAction::DotRepeat {
                 count: action_count,
             } => {
-                // `.` dot-repeat. Combine pending count prefix with action count.
+                // `.` dot-repeat. vim `[count].` *replaces* the change's stored
+                // count (`:h .`); a plain `.` reuses it. The `.` keybinding
+                // always carries `action_count == 1`, so an explicit count only
+                // arrives via the typed count prefix — pass 0 when there is none
+                // so the engine keeps the original count.
+                let had_count = !self.pending_count.is_empty() || action_count > 1;
                 let n = self.pending_count.take_or(action_count) as usize;
-                self.active_editor_mut().replay_last_change(n.max(1));
+                self.active_editor_mut()
+                    .replay_last_change(if had_count { n.max(1) } else { 0 });
                 self.sync_after_engine_mutation();
             }
             AppAction::Motion {

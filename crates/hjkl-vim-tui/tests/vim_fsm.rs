@@ -274,6 +274,26 @@ fn dot_repeats_x() {
 }
 
 #[test]
+fn dot_repeat_count_replaces_not_multiplies() {
+    // vim `[count].` replaces the stored count (`:h .`), it does not multiply.
+    let mut e = editor_with("abcdefghij");
+    run_keys(&mut e, "3x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "defghij");
+    run_keys(&mut e, "2.");
+    // 2 more chars deleted, not 3*2=6.
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fghij");
+}
+
+#[test]
+fn dot_repeat_plain_reuses_stored_count() {
+    // A plain `.` reuses the change's original count (3), not 1.
+    let mut e = editor_with("abcdefghij");
+    run_keys(&mut e, "3x");
+    run_keys(&mut e, ".");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ghij");
+}
+
+#[test]
 fn count_operator_motion_compose() {
     let mut e = editor_with("one two three four five");
     run_keys(&mut e, "d3w");

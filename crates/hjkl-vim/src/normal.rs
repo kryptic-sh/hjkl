@@ -345,6 +345,16 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
+    // `.` dot-repeat: vim *replaces* the stored count with an explicit
+    // `[count].` (`:h .`) — `3x` then `2.` deletes 2, not 6. Pass 0 when the
+    // user typed no count so the engine reuses the change's original count.
+    // Handled here (not in `handle_normal_only`) because that helper only
+    // sees the count-defaulted-to-1 value and loses `had_explicit_count`.
+    if ed.fsm_mode() == FsmMode::Normal && !input.ctrl && input.key == Key::Char('.') {
+        ed.replay_last_change(if had_explicit_count { count } else { 0 });
+        return true;
+    }
+
     // Mode transitions + pure normal-mode commands (not applicable in visual).
     if ed.fsm_mode() == FsmMode::Normal && handle_normal_only(ed, &input, count) {
         return true;
@@ -604,10 +614,6 @@ fn handle_normal_only<H: Host>(
         }
         Key::Char('?') => {
             ed.enter_search(false);
-            true
-        }
-        Key::Char('.') => {
-            ed.replay_last_change(count);
             true
         }
         _ => false,

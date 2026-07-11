@@ -8724,11 +8724,17 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
         return;
     };
     ed.vim.replaying = true;
-    let scale = if outer_count > 0 { outer_count } else { 1 };
-    // Dot-repeat multiplies the stored count by the `.`-prefix count; both
-    // are individually capped, but their product must re-clamp at vim's
-    // count ceiling (`:h count`) so replay loops stay bounded.
-    let scaled = |c: usize| c.saturating_mul(scale).min(MAX_COUNT);
+    // Dot-repeat with an explicit `[count].` *replaces* the change's stored
+    // count (`:h .`): `3x` then `2.` deletes 2, not 6. `outer_count == 0`
+    // means the user typed no count, so the original stored count is reused.
+    // Both counts are individually capped; re-clamp at vim's ceiling
+    // (`:h count`) so replay loops stay bounded.
+    let explicit = if outer_count > 0 {
+        Some(outer_count.min(MAX_COUNT))
+    } else {
+        None
+    };
+    let scaled = |c: usize| explicit.unwrap_or(c).min(MAX_COUNT);
     match change {
         LastChange::OpMotion {
             op,

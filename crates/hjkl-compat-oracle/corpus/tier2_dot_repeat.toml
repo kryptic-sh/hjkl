@@ -68,3 +68,24 @@ initial_cursor = [0, 0]
 keys = "~."
 expected_buffer = "abCD\n"
 expected_cursor = [0, 2]
+
+# `[count].` REPLACES the stored count (`:h .`), it does not multiply it.
+# `3x` deletes "abc"; `2.` then deletes 2 more ("de"), leaving "fghij" — NOT
+# 6 (`3*2`) which would leave "j".
+[[cases]]
+name = "dot_repeat_count_replaces_not_multiplies"
+initial_buffer = "abcdefghij\n"
+initial_cursor = [0, 0]
+keys = "3x2."
+expected_buffer = "fghij\n"
+expected_cursor = [0, 0]
+
+# A plain `.` (no count) reuses the change's original count: `3x` then `.`
+# deletes 3 more, leaving "ghij" (guards against the fix forcing count=1).
+[[cases]]
+name = "dot_repeat_plain_reuses_stored_count"
+initial_buffer = "abcdefghij\n"
+initial_cursor = [0, 0]
+keys = "3x."
+expected_buffer = "ghij\n"
+expected_cursor = [0, 0]

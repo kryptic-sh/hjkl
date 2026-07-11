@@ -4677,8 +4677,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// `.` dot-repeat: replay the last buffered change at the current cursor.
-    /// `count` scales repeats (e.g. `3.` runs the last change 3 times). When
-    /// `count` is 0, defaults to 1. No-op when no change has been buffered yet.
+    /// A non-zero `count` *replaces* the change's stored count (`:h .` — `3x`
+    /// then `2.` deletes 2, not 6). `count == 0` means no explicit count was
+    /// typed, so the change's original count is reused. No-op when no change
+    /// has been buffered yet.
     ///
     /// Storage of `LastChange` stays inside engine for now; Phase 5c of
     /// kryptic-sh/hjkl#71 just lifts the `.` chord binding into the app
