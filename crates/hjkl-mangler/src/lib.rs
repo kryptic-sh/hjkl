@@ -613,6 +613,26 @@ fn run_formatter(
     source: &str,
     project_root: &Path,
 ) -> Result<String, FormatError> {
+    run_formatter_with_timeout(
+        tool_name,
+        static_args,
+        extra_args,
+        source,
+        project_root,
+        FORMAT_TIMEOUT,
+    )
+}
+
+/// [`run_formatter`] with an explicit timeout — split out so tests can
+/// exercise the timeout path without waiting the full [`FORMAT_TIMEOUT`].
+fn run_formatter_with_timeout(
+    tool_name: &str,
+    static_args: &[&str],
+    extra_args: &[&str],
+    source: &str,
+    project_root: &Path,
+    timeout: Duration,
+) -> Result<String, FormatError> {
     let (program, rest) = match static_args {
         [] => {
             return Err(FormatError::Io(std::io::Error::new(
@@ -674,40 +694,68 @@ fn run_formatter(
         Ok(buf)
     });
 
-    // Write source to stdin, then close it so the formatter sees EOF.
+    // Write source to stdin in a background thread, then close it so the
+    // formatter sees EOF.
+    //
+    // CRITICAL: the write must not happen on this thread. A hung formatter
+    // that never reads stdin leaves `write_all` blocked forever once `source`
+    // exceeds the OS pipe buffer (typically 64 KiB on Linux) — and that block
+    // would happen *before* the timeout loop below ever starts, wedging the
+    // caller permanently.
+    //
     // Tolerate `BrokenPipe` — the child may have already errored and closed
     // its end before we finished writing (e.g. rustfmt rejecting a bad flag,
     // shfmt parser hitting an error mid-stream). The real error is in stderr;
-    // the reader threads will surface it.
-    if let Some(mut stdin) = child.stdin.take() {
-        match stdin.write_all(source.as_bytes()) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                tracing::debug!(
-                    tool = tool_name,
-                    "stdin closed early; child likely errored — reading stderr"
-                );
+    // the reader threads will surface it. Other write errors are logged and
+    // the child's exit status decides the outcome.
+    let stdin_handle = child.stdin.take().map(|mut stdin| {
+        let source = source.as_bytes().to_vec();
+        let tool = tool_name.to_owned();
+        std::thread::spawn(move || {
+            match stdin.write_all(&source) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    tracing::debug!(
+                        tool = %tool,
+                        "stdin closed early; child likely errored — reading stderr"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(tool = %tool, error = %e, "stdin write failed");
+                }
             }
-            Err(e) => return Err(FormatError::Io(e)),
-        }
-        // Drop closes the handle — formatter sees EOF.
-    }
+            // Drop closes the handle — formatter sees EOF.
+        })
+    });
 
     // Poll for child exit with deadline. Reader threads drain pipes the
     // whole time so the child can never block on a full stdout buffer.
-    let deadline = Instant::now() + FORMAT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait().map_err(FormatError::Io)? {
-            Some(s) => break s,
+            Some(s) => break Some(s),
             None => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    tracing::warn!(tool = tool_name, "formatter timed out");
-                    return Err(FormatError::Timeout);
+                    // Reap the killed child — `kill()` alone leaves a zombie
+                    // process until the editor exits.
+                    let _ = child.wait();
+                    break None;
                 }
                 std::thread::sleep(POLL_INTERVAL);
             }
         }
+    };
+
+    // The child is dead (exited or killed + reaped), so its stdin read end is
+    // closed and the writer thread unblocks promptly (EPIPE at worst).
+    if let Some(h) = stdin_handle {
+        let _ = h.join();
+    }
+
+    let Some(status) = status else {
+        tracing::warn!(tool = tool_name, "formatter timed out");
+        return Err(FormatError::Timeout);
     };
 
     // Child exited — join reader threads to get the bytes.
@@ -1067,6 +1115,35 @@ mod tests {
             "empty project_root must not be misreported as NotInstalled: {out:?}"
         );
         assert_eq!(out.unwrap(), "hello\n", "cat echoes stdin → stdout");
+    }
+
+    /// Regression: a hung formatter that never reads stdin must not defeat
+    /// the timeout. `sleep` reads nothing from stdin; with a source larger
+    /// than the OS pipe buffer (64 KiB on Linux) the old code blocked in
+    /// `write_all` on the calling thread *before* the timeout loop started,
+    /// hanging the format worker until the child happened to exit.
+    #[test]
+    #[cfg(unix)]
+    fn hung_formatter_that_ignores_stdin_times_out() {
+        let big = "x".repeat(1 << 20); // 1 MiB ≫ pipe buffer
+        let start = Instant::now();
+        let out = run_formatter_with_timeout(
+            "sleep",
+            &["sleep", "5"],
+            &[],
+            &big,
+            Path::new("."),
+            Duration::from_millis(300),
+        );
+        assert!(
+            matches!(out, Err(FormatError::Timeout)),
+            "expected Timeout, got {out:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timeout did not fire promptly (took {:?})",
+            start.elapsed()
+        );
     }
 
     #[test]
