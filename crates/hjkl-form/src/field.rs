@@ -145,9 +145,16 @@ impl TextFieldEditor {
     }
 
     /// Snapshot the buffer's current text. Multi-line buffers join with
-    /// `'\n'`.
+    /// `'\n'`. A single-line field returns only its first (visible) line, so a
+    /// newline slipped in via `o`/`O`/paste can't submit hidden multi-line data
+    /// that the renderer never showed.
     pub fn text(&self) -> String {
-        self.editor.buffer().as_string()
+        let s = self.editor.buffer().as_string();
+        if self.single_line {
+            s.split('\n').next().unwrap_or("").to_string()
+        } else {
+            s
+        }
     }
 
     /// Replace contents wholesale, e.g. when opening a prompt with a
@@ -373,6 +380,18 @@ mod standalone_tests {
     fn with_text_constructor_pre_populates() {
         let f = TextFieldEditor::with_text("abc", true);
         assert_eq!(f.text(), "abc");
+    }
+
+    #[test]
+    fn single_line_text_strips_injected_newline() {
+        // set_text / o / O / paste can slip a newline into a single-line
+        // buffer; text() must surface only the visible first line, never the
+        // hidden remainder.
+        let f = TextFieldEditor::with_text("visible\nhidden", true);
+        assert_eq!(f.text(), "visible");
+        // A multi-line field is unchanged.
+        let g = TextFieldEditor::with_text("a\nb", false);
+        assert_eq!(g.text(), "a\nb");
     }
 
     #[test]
