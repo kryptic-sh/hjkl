@@ -144,13 +144,21 @@ pub async fn run_case_via_nvim_api(case: &OracleCase) -> anyhow::Result<HjklOutc
 
     let mut cmd = Command::new(&bin);
     cmd.arg("--nvim-api");
+    // Reap the child even if this future is cancelled mid-case.
+    cmd.kill_on_drop(true);
     let (nvim, _io_handle, mut child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
 
     let result = run_case_via_nvim_api_inner(&nvim, case).await;
 
-    // Shut down hjkl gracefully.
+    // Shut down hjkl gracefully. If it ignores `qa!` (e.g. a desynced RPC
+    // stream), don't hang the test run on `wait()` — kill.
     let _ = nvim.command("qa!").await;
-    let _ = child.wait().await;
+    if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
 
     result
 }
@@ -247,9 +255,10 @@ async fn run_case_via_nvim_api_inner(
         buf_str.push('\n');
     }
 
-    // 5. Read back cursor (convert from 1-based row to 0-based).
+    // 5. Read back cursor (convert from 1-based row to 0-based). Clamp at 0
+    //    so malformed RPC values can't wrap to huge usize garbage.
     let (nvim_row, nvim_col) = cur_win.get_cursor().await?;
-    let cursor = ((nvim_row - 1) as usize, nvim_col as usize);
+    let cursor = ((nvim_row - 1).max(0) as usize, nvim_col.max(0) as usize);
 
     // 6. Read back mode.
     let mode_pairs = nvim.get_mode().await?;

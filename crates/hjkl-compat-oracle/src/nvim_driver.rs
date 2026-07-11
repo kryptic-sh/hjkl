@@ -39,7 +39,7 @@ pub fn nvim_available() -> bool {
     std::process::Command::new("nvim")
         .arg("--version")
         .output()
-        .is_ok()
+        .is_ok_and(|out| out.status.success())
 }
 
 /// Run `case` through a freshly-spawned headless neovim and return the state.
@@ -63,13 +63,21 @@ pub async fn run_case(case: &OracleCase) -> anyhow::Result<NvimOutcome> {
         "--cmd",
         "set modeline modelines=5",
     ]);
+    // Reap the child even if this future is cancelled mid-case.
+    cmd.kill_on_drop(true);
     let (nvim, _io_handle, mut child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
 
     let result = run_case_inner(&nvim, case).await;
 
-    // Cleanly quit nvim; ignore shutdown errors.
+    // Cleanly quit nvim; ignore shutdown errors. If nvim ignores `qa!` (e.g.
+    // a desynced RPC stream), don't hang the test run on `wait()` — kill.
     let _ = nvim.command("qa!").await;
-    let _ = child.wait().await;
+    if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
 
     result
 }
@@ -157,9 +165,10 @@ async fn run_case_inner(
         buf_str.push('\n');
     }
 
-    // 7. Read back cursor (convert from 1-based row to 0-based).
+    // 7. Read back cursor (convert from 1-based row to 0-based). Clamp at 0
+    //    so malformed RPC values can't wrap to huge usize garbage.
     let (nvim_row, nvim_col) = cur_win.get_cursor().await?;
-    let cursor = ((nvim_row - 1) as usize, nvim_col as usize);
+    let cursor = ((nvim_row - 1).max(0) as usize, nvim_col.max(0) as usize);
 
     // 8. Read back mode.
     let mode_pairs = nvim.get_mode().await?;
@@ -221,7 +230,9 @@ fn escape_literal_lt(keys: &str) -> String {
 
 /// If `s` starts with a valid `<Name>` token, return its byte length (including
 /// the angle brackets); otherwise `None`. `Name` must start with a letter and
-/// contain only `[A-Za-z0-9_-]`.
+/// contain only `[A-Za-z0-9_-]`, except that a modifier prefix may be followed
+/// by a single punctuation key (`<C-]>`, `<C-\>`, `<M-.>`, ...) — i.e. one
+/// printable ASCII char right after a `-` and right before the closing `>`.
 fn token_end(s: &[u8]) -> Option<usize> {
     debug_assert_eq!(s[0], b'<');
     if s.len() < 3 || !s[1].is_ascii_alphabetic() {
@@ -232,6 +243,12 @@ fn token_end(s: &[u8]) -> Option<usize> {
         match s[j] {
             b'>' => return Some(j + 1),
             c if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' => j += 1,
+            // Modifier + punctuation key, e.g. the `]` of `<C-]>`: accepted
+            // only when immediately closed by `>`, so it can never leave an
+            // unterminated `<...` for nvim_input to block on.
+            c if c.is_ascii_graphic() && s[j - 1] == b'-' && s.get(j + 1) == Some(&b'>') => {
+                return Some(j + 2);
+            }
             _ => return None,
         }
     }
@@ -286,5 +303,21 @@ mod escape_tests {
     #[test]
     fn mixed_token_and_literal() {
         assert_eq!(escape_literal_lt("<Esc>2<<"), "<Esc>2<lt><lt>");
+    }
+
+    #[test]
+    fn modifier_punctuation_tokens_pass_through() {
+        // nvim key notation allows a single punctuation key after a modifier.
+        assert_eq!(escape_literal_lt("i<C-]>x"), "i<C-]>x");
+        assert_eq!(escape_literal_lt("<C-\\>"), "<C-\\>");
+        assert_eq!(escape_literal_lt("<M-.>"), "<M-.>");
+        // ...but an unterminated modifier+punct is still escaped.
+        assert_eq!(escape_literal_lt("<C-]"), "<lt>C-]");
+    }
+
+    #[test]
+    fn non_ascii_input_is_preserved() {
+        assert_eq!(escape_literal_lt("é<é"), "é<lt>é");
+        assert_eq!(escape_literal_lt("aé<Esc>"), "aé<Esc>");
     }
 }

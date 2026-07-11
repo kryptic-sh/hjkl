@@ -18,7 +18,7 @@ hjkl-engine.workspace = true
 hjkl-vim.workspace = true
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros", "time"] }
 toml = "1"
 
 [dev-dependencies]
