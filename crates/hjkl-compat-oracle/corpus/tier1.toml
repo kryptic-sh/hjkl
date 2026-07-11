@@ -122,6 +122,44 @@ keys = "%"
 expected_buffer = "foo(bar)\n"
 expected_cursor = [0, 7]
 
+# `%` does not require the cursor to be ON a bracket: it scans forward on the
+# line to the first bracket at/after the cursor, then jumps to its match.
+[[cases]]
+name = "motion_percent_scans_forward_to_bracket"
+initial_buffer = "foo(bar)\n"
+initial_cursor = [0, 0]
+keys = "%"
+expected_buffer = "foo(bar)\n"
+expected_cursor = [0, 7]
+
+# From the matched closer, `%` jumps back to the opener (cursor already on `)`).
+[[cases]]
+name = "motion_percent_from_closer_back_to_opener"
+initial_buffer = "foo(bar)\n"
+initial_cursor = [0, 7]
+keys = "%"
+expected_buffer = "foo(bar)\n"
+expected_cursor = [0, 3]
+
+# `%` is a no-op when the rest of the line holds no bracket.
+[[cases]]
+name = "motion_percent_no_bracket_noop"
+initial_buffer = "foobar baz\n"
+initial_cursor = [0, 0]
+keys = "%"
+expected_buffer = "foobar baz\n"
+expected_cursor = [0, 0]
+
+# `d%` with the cursor before the bracket scans forward, matches, and deletes
+# the inclusive range from the cursor through the matching bracket.
+[[cases]]
+name = "operator_d_percent_scans_forward"
+initial_buffer = "foo(bar)baz\n"
+initial_cursor = [0, 0]
+keys = "d%"
+expected_buffer = "baz\n"
+expected_cursor = [0, 0]
+
 # ─── Operators × motions ──────────────────────────────────────────────────────
 
 [[cases]]

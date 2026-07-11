@@ -600,9 +600,30 @@ pub fn matching_bracket_pos<B: Cursor + Query>(
 /// `%` — jump to the matching bracket. Walks the buffer
 /// counting nesting depth so nested pairs resolve correctly.
 /// Returns `true` when the cursor moved.
+///
+/// Vim `%` does not require the cursor to sit on a bracket: it first scans
+/// forward on the current line to the first bracket at or after the cursor,
+/// then jumps to that bracket's match. It is a no-op when the rest of the
+/// line holds no bracket.
 pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
     let cursor = read_cursor(buf);
-    match matching_bracket_pos(buf, cursor.row, cursor.col) {
+    let Some(line) = read_line_opt(buf, cursor.row) else {
+        return false;
+    };
+    // Scan for the default `matchpairs` brackets only (`(:)`, `[:]`, `{:}`).
+    // vim excludes `<:>` from the default set, so `%` neither scans to nor
+    // jumps on angle brackets here. (`matching_bracket_pos` still resolves
+    // `<>` for its other callers, e.g. matching-pair highlight.)
+    let start_col = line
+        .chars()
+        .enumerate()
+        .skip(cursor.col)
+        .find(|(_, c)| matches!(c, '(' | ')' | '[' | ']' | '{' | '}'))
+        .map(|(i, _)| i);
+    let Some(start_col) = start_col else {
+        return false;
+    };
+    match matching_bracket_pos(buf, cursor.row, start_col) {
         Some((r, c)) => {
             write_cursor(buf, Position::new(r, c));
             true
@@ -1491,6 +1512,32 @@ mod tests {
         // Ensure backward scan from a closer correctly returns the opener.
         let b = Buffer::from_str("[hello]");
         assert_eq!(matching_bracket_pos(&b, 0, 6), Some((0, 0)));
+    }
+
+    #[test]
+    fn match_bracket_scans_forward_on_line() {
+        // vim `%` doesn't need the cursor on a bracket: it scans forward on
+        // the line to the first bracket, then jumps to its match.
+        let mut b = Buffer::from_str("foo(bar)");
+        assert_eq!(at(&b), Position::new(0, 0));
+        assert!(match_bracket(&mut b));
+        assert_eq!(at(&b), Position::new(0, 7));
+    }
+
+    #[test]
+    fn match_bracket_noop_when_no_bracket_on_line() {
+        let mut b = Buffer::from_str("foobar baz");
+        assert!(!match_bracket(&mut b));
+        assert_eq!(at(&b), Position::new(0, 0));
+    }
+
+    #[test]
+    fn match_bracket_ignores_angle_brackets() {
+        // Default `matchpairs` excludes `<:>`, so `%` does not scan to or jump
+        // on angle brackets.
+        let mut b = Buffer::from_str("a<b>");
+        assert!(!match_bracket(&mut b));
+        assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]
