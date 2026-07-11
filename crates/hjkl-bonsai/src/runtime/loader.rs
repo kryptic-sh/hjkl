@@ -1,15 +1,27 @@
 //! Grammar loader — walks the lookup chain to resolve a language name to a
 //! ready-to-`dlopen` parser, installing the highlights query alongside.
 //!
+//! # ⚠️ Security: step 3 downloads and compiles remote code
+//!
+//! The **build-on-demand** step below clones an upstream repository over the
+//! network and compiles its C/C++ with the system compiler; the resulting
+//! shared library is later `dlopen`ed and executed in-process. Both the
+//! compile and the load run **arbitrary native code with the caller's
+//! privileges** and are not sandboxed. Steps 1 and 2 (system / user dirs) do
+//! not fetch or build — they load a `.so` that is already on disk. Use
+//! [`GrammarLoader::lookup_only`] when a caller must never trigger the fetch
+//! + build path. See the crate-root docs for the full trust model.
+//!
 //! Lookup order:
 //!   1. **System**: `<system_dir>/<name><ext>` — distro-shipped, never built.
 //!   2. **User**: `<user_dir>/<name><ext>` — durable user-data layer; this
 //!      is also where on-demand builds get installed to so they survive
 //!      across runs.
-//!   3. **Build on demand**: clone source via [`SourceCache`], compile via
-//!      [`GrammarCompiler`] (which writes `<source_root>/<name><ext>`),
-//!      then install the parser + resolved `highlights.scm` into
-//!      `<user_dir>/<name><ext>` + `<user_dir>/<name>.scm`.
+//!   3. **Build on demand**: clone source via [`SourceCache`] (network),
+//!      compile via [`GrammarCompiler`] (runs the system C/C++ compiler on the
+//!      downloaded source, writing `<source_root>/<name><ext>`), then install
+//!      the parser + resolved `highlights.scm` into `<user_dir>/<name><ext>` +
+//!      `<user_dir>/<name>.scm`.
 //!
 //! Layout written by the install step (and expected by [`Grammar::load`]):
 //! - `<user_dir>/<name><ext>` — parser
@@ -101,6 +113,13 @@ impl GrammarLoader {
     /// artifact exists. A user-dir hit whose `<name>.rev` sidecar
     /// disagrees with `spec.git_rev` / current ABI is treated as stale
     /// and recompiled (overwriting in place).
+    ///
+    /// ⚠️ **Security:** on a cache miss this clones the upstream repo over
+    /// the network and compiles its C/C++ with the system compiler — i.e. it
+    /// **downloads and builds remote code** that is subsequently `dlopen`ed
+    /// and run in-process. Only call this for grammars whose manifest entry
+    /// you trust. Use [`Self::lookup_only`] to resolve without ever fetching
+    /// or building.
     pub fn load(&self, name: &str, spec: &LangSpec, meta: &ManifestMeta) -> Result<PathBuf> {
         if let Some(p) = self.lookup_fresh(name, spec, meta) {
             return Ok(p);
@@ -175,6 +194,11 @@ impl GrammarLoader {
     /// `<name><ext>` found under any lookup dir even if it's stale. Use
     /// this when you want to know "is anything installed at all" rather
     /// than "is there something we can use right now."
+    ///
+    /// This is the **fetch-free** resolution path: it only inspects
+    /// already-installed files and never clones or compiles remote code.
+    /// Prefer it (over [`Self::load`]) in contexts that must not download and
+    /// build untrusted grammars; treat a `None` as "no highlighting."
     pub fn lookup_only(&self, name: &str) -> Option<PathBuf> {
         let flat = format!("{name}{}", shared_lib_ext());
         for dir in self

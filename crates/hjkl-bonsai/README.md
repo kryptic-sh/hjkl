@@ -30,6 +30,39 @@ The release rlib is **~720 KB** because no grammars are baked in. The first edit
 of an unknown language pays a one-time clone+compile cost; everything after that
 is a `dlopen`.
 
+## ⚠️ Security: on-demand loading downloads and executes remote code
+
+When a grammar is not already installed under a system or user directory,
+resolution step 3 above happens **automatically, with the current user's
+privileges**:
+
+1. **Download** — bonsai shells out to `git` to clone the upstream grammar
+   repository (and the curated helix / nvim-treesitter query repos) named in the
+   manifest.
+2. **Compile** — it runs the system C/C++ compiler (`$CC` / `$CXX`, else `cc` /
+   `c++`) over that freshly-downloaded source.
+3. **Load & run** — it `dlopen`s the resulting shared library and calls into it
+   to parse your buffers.
+
+Steps 2 and 3 both execute **arbitrary native code** from the downloaded source,
+**in-process and unsandboxed**. A malicious or compromised grammar repo can run
+anything the compiler or the loaded `.so` chooses to. This is inherent to the
+tree-sitter grammar model — helix, neovim, and every other tree-sitter host
+behave the same way.
+
+The trust boundary is:
+
+- the embedded **manifest** and the git remotes / revisions it pins,
+- the transport security of `git` (use HTTPS or SSH remotes),
+- the integrity of the local source and artifact caches.
+
+**To avoid on-demand fetching + compilation entirely,** ship pre-built, vetted
+`.so` + `.scm` pairs under a system directory (see
+[Distro packagers](#distro-packagers)). System-dir grammars are loaded as-is and
+never trigger a clone or compile. Callers that must never fetch untrusted code
+should resolve only via `GrammarLoader::lookup_only` and treat a miss as "no
+highlighting" rather than falling back to the build path.
+
 ## API
 
 `GrammarLoader::load` is synchronous and suitable for blocking contexts (xtask,

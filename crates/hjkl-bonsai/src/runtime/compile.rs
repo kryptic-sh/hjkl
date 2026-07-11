@@ -1,5 +1,13 @@
 //! Compile a tree-sitter grammar's C/C++ sources into a shared library.
 //!
+//! ⚠️ **Security:** this module runs the system C/C++ compiler over source
+//! that the loader just cloned from a remote repository. Compiling untrusted
+//! source is itself arbitrary-code-execution (compilers run `#pragma`s,
+//! `#include`s, and — via any build tooling — can touch the filesystem and
+//! network), and the artifact it produces is later `dlopen`ed and run
+//! in-process. Only compile grammars whose source you trust; see the crate
+//! root docs for the trust model.
+//!
 //! Honors `$CC` / `$CXX` if set, otherwise falls back to `cc` / `c++` on
 //! `PATH`. The compiled `<name>.{so|dylib|dll}` is written **in-place
 //! inside the source clone** (e.g.
@@ -42,6 +50,11 @@ impl GrammarCompiler {
     /// Compile the grammar at `source_root` into a shared library at
     /// `<source_root>/<name>.<ext>`. Idempotent — returns the existing
     /// artifact path on a hit.
+    ///
+    /// ⚠️ **Security:** invokes the system C/C++ compiler on `source_root`,
+    /// which for on-demand loads holds source freshly cloned from a remote
+    /// repo. Compiling and (later) `dlopen`ing that output executes untrusted
+    /// native code in-process. Only compile trusted grammar sources.
     pub fn compile(&self, name: &str, spec: &LangSpec, source_root: &Path) -> Result<PathBuf> {
         let dest = self.artifact_path(name, source_root);
         if dest.exists() {

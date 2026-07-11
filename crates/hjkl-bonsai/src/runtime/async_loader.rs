@@ -4,6 +4,11 @@
 //! in `AsyncGrammarLoader` and call `load_async` to get a `LoadHandle` they
 //! poll each tick / await.
 //!
+//! ⚠️ **Security:** this is only a threading wrapper — it performs the exact
+//! same **download + compile + `dlopen`** of remote grammar code as the
+//! synchronous [`GrammarLoader::load`], just on a worker thread. All the trust
+//! caveats in the crate-root and `loader` docs apply unchanged.
+//!
 //! ## When to use vs sync
 //!
 //! Use `AsyncGrammarLoader` when:
@@ -135,6 +140,10 @@ impl AsyncGrammarLoader {
     }
 
     /// Kick off (or subscribe to) a background load for `name`.
+    ///
+    /// ⚠️ **Security:** on a cache miss the worker **downloads, compiles, and
+    /// `dlopen`s remote grammar code** (same as [`GrammarLoader::load`]). Only
+    /// request names whose manifest entry you trust.
     ///
     /// If another caller already requested the same `name` and the job hasn't
     /// completed yet, the returned `LoadHandle` subscribes to the same in-flight

@@ -4,6 +4,12 @@
 //! library) with the `.scm` query strings the highlighter needs. Field order
 //! matters: `tree_sitter::Language` references data inside `_lib`, so `_lib`
 //! must outlive it. Rust drops fields top-down, so `_lib` stays last.
+//!
+//! ⚠️ **Security:** loading a grammar `dlopen`s a shared library and calls its
+//! `tree_sitter_<lang>()` entry point — i.e. it runs **native code from a
+//! `.so`** in-process, unsandboxed. When paired with the on-demand loader that
+//! `.so` was just downloaded and compiled from a remote repo. Only load
+//! grammars you trust; see the crate-root docs for the full trust model.
 
 use anyhow::{Context, Result};
 use libloading::Library;
@@ -54,6 +60,12 @@ impl Grammar {
     /// The highlights query is read from `<so_parent>/<name>.scm`.
     /// The injections query is read from `<so_parent>/<name>.injections.scm`
     /// when present (absent = no injections, not an error).
+    ///
+    /// ⚠️ **Security:** on a cache miss the loader **downloads and compiles
+    /// remote code**, and this function then `dlopen`s and runs the resulting
+    /// `.so` in-process. Only call this for trusted grammar names. To load
+    /// strictly from already-installed artifacts, resolve the path yourself
+    /// via [`GrammarLoader::lookup_only`] and use [`Self::load_from_path`].
     pub fn load(
         name: &str,
         spec: &LangSpec,
@@ -119,6 +131,10 @@ impl Grammar {
     /// `<name>.scm`, and optional `<name>.injections.scm` are already on disk
     /// next to each other, so we skip the `GrammarLoader` chain entirely and
     /// go straight to `dlopen` + query reads.
+    ///
+    /// ⚠️ **Security:** `dlopen`s and runs native code from `so` in-process.
+    /// The caller is responsible for having obtained `so` from a trusted
+    /// source (a vetted system dir, or a build of a trusted grammar).
     pub fn load_from_path(name: &str, so: &std::path::Path) -> Result<Self> {
         let lib =
             unsafe { Library::new(so) }.with_context(|| format!("dlopen {}", so.display()))?;

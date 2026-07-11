@@ -8,6 +8,13 @@
 //! Strategy mirrors helix's `helix-loader`: shell out to `git`. Avoids
 //! dragging in libgit2 and matches the assumption that bonsai consumers have
 //! a developer toolchain installed.
+//!
+//! ⚠️ **Security:** this module **downloads remote code** — it runs `git` to
+//! clone the URLs / revisions named in the manifest. That source is then
+//! compiled and `dlopen`ed downstream (see [`super::compile`] and
+//! [`super::grammar`]), so the manifest's remotes and the transport security
+//! of `git` (prefer HTTPS/SSH) are part of the crate's trust boundary. See
+//! the crate-root docs for the full model.
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -68,8 +75,8 @@ impl SourceCache {
     ///
     /// Each cloned grammar lives under `<base>/<name>-<short-rev>/`. The
     /// compiled `<name>.{so|dylib|dll}` is built **in-place** inside the
-    /// same dir (see [`GrammarCompiler`]) and then installed to the
-    /// durable user-data layer (see [`GrammarLoader`]).
+    /// same dir (see [`super::compile::GrammarCompiler`]) and then installed
+    /// to the durable user-data layer (see [`super::loader::GrammarLoader`]).
     pub fn user_default() -> Result<Self> {
         let p = xdg::cache_home()?.join("bonsai/grammars");
         Ok(Self::new(p))
