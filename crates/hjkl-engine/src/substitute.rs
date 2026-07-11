@@ -341,8 +341,11 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
             if cmd.flags.all {
                 for m in regex.find_iter(line) {
                     // Expand capture groups into the literal replacement text.
+                    // Capture against the whole line at the match position, not
+                    // the isolated substring, so anchors / lookaround keep their
+                    // context and group expansion matches what was found.
                     let replacement = regex
-                        .captures(m.as_str())
+                        .captures_at(line, m.start())
                         .map(|caps| {
                             let mut rep = String::new();
                             caps.expand(&cmd.replacement, &mut rep);
@@ -360,8 +363,11 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
             } else {
                 // First match per line only.
                 if let Some(m) = regex.find(line) {
+                    // Capture against the whole line at the match position, not
+                    // the isolated substring, so anchors / lookaround keep their
+                    // context and group expansion matches what was found.
                     let replacement = regex
-                        .captures(m.as_str())
+                        .captures_at(line, m.start())
                         .map(|caps| {
                             let mut rep = String::new();
                             caps.expand(&cmd.replacement, &mut rep);
