@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Context-aware backend selection in `Clipboard::new()`. An SSH session
+  (`SSH_TTY` / `SSH_CONNECTION` / `SSH_CLIENT`) now selects the OSC 52 backend
+  so writes are relayed by the terminal emulator to the user's **local**
+  clipboard instead of the remote host's native clipboard (tmux passthrough is
+  applied automatically when `TMUX` is set). Local desktop sessions keep the
+  native probe (Wayland → X11 → OSC 52 on Linux; NSPasteboard / Win32
+  elsewhere).
+- `HJKL_CLIPBOARD` now accepts `native`/`auto` (force the local-desktop probe,
+  bypassing the SSH heuristic) and the platform backend names `wayland` / `x11`
+  / `macos` / `windows` in addition to `osc52`. Values are matched
+  case-insensitively; a named native backend that fails to initialize falls
+  through to the context default.
+
 ### Fixed
 
 - `WaylandSocket::next_message` rejects a message header advertising a size

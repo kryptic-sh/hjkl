@@ -1,7 +1,7 @@
 # hjkl-clipboard
 
-Cross-platform clipboard library with rich types, async support, and OSC 52
-fallback for SSH
+Cross-platform clipboard library with rich types, async support, and
+context-aware backend selection (native desktop, OSC 52 over SSH / tmux)
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-clipboard.svg)](https://crates.io/crates/hjkl-clipboard)
@@ -26,6 +26,35 @@ picking a runtime.
 | macOS             | `NSPasteboard` via raw `objc_msgSend`           |
 | Windows           | Win32 `CF_UNICODETEXT`, `CF_DIBV5` + PNG        |
 | OSC 52 (fallback) | SSH sessions, GNOME, any TTY                    |
+
+## Backend selection
+
+`Clipboard::new()` chooses a backend from the current context, in order:
+
+1. **`HJKL_CLIPBOARD` override** (case-insensitive):
+   - `osc52` — force the terminal OSC 52 backend anywhere (useful in headless /
+     CI / PTY environments, or to avoid contending on the single shared macOS
+     pasteboard).
+   - `native` / `auto` — bypass the SSH heuristic and use the local-desktop
+     probe below.
+   - `wayland` / `x11` (Linux), `macos`, `windows` — force a specific native
+     backend. A named backend that can't initialize (e.g. `x11` with no display)
+     falls through to the context default rather than erroring.
+2. **SSH session** (`SSH_TTY`, `SSH_CONNECTION`, or `SSH_CLIENT` set) → **OSC
+   52**. Over SSH the machine's native clipboard belongs to the _remote_ host,
+   not you; the OSC 52 escape is relayed by your terminal emulator to your
+   **local** clipboard. Inside tmux (`TMUX` set) the sequence is wrapped in the
+   DCS passthrough automatically. Relying on SSH X11 forwarding to reach your
+   local clipboard natively? Set `HJKL_CLIPBOARD=x11`.
+3. **Local desktop probe:**
+   - Linux: Wayland → X11 → OSC 52.
+   - macOS: `NSPasteboard` (always available).
+   - Windows: Win32 (always available).
+   - Other: OSC 52.
+
+OSC 52 is write-only, so over SSH `get` returns `UnsupportedMime` and callers
+should fall back to their own register/history (see
+[OSC 52 paste over SSH](#osc-52-paste-over-ssh)).
 
 ## Quick start
 

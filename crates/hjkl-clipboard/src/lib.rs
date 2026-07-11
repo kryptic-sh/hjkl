@@ -1,5 +1,5 @@
-//! Cross-platform clipboard library with rich types, async support, and OSC 52
-//! fallback for SSH.
+//! Cross-platform clipboard library with rich types, async support, and
+//! context-aware backend selection (native desktop, OSC 52 over SSH / tmux).
 //!
 //! # Quick start
 //!
@@ -42,6 +42,17 @@ pub use mime::MimeType;
 pub use selection::Selection;
 pub use uri::Uri;
 
+/// Returns `true` when the process is running inside an SSH session.
+///
+/// Checks the standard variables `sshd` exports into the session environment:
+/// `SSH_TTY` (interactive session with a controlling terminal), `SSH_CONNECTION`,
+/// and `SSH_CLIENT`. Any one being present is treated as "remote".
+pub(crate) fn is_ssh_session() -> bool {
+    std::env::var_os("SSH_TTY").is_some()
+        || std::env::var_os("SSH_CONNECTION").is_some()
+        || std::env::var_os("SSH_CLIENT").is_some()
+}
+
 /// A handle to the system clipboard.
 ///
 /// Internally holds a `Box<dyn Backend>` chosen by [`Clipboard::new`] (probes
@@ -56,34 +67,71 @@ pub struct Clipboard {
 }
 
 impl Clipboard {
-    /// Construct a new clipboard handle, probing for the best available
-    /// backend.
+    /// Construct a new clipboard handle, choosing the backend that fits the
+    /// current context.
     ///
-    /// Probe order:
-    /// - Linux: Wayland → X11 → OSC 52.
-    /// - macOS: NSPasteboard (always available).
-    /// - Windows: Win32 (always available).
-    /// - Other: OSC 52.
+    /// Selection order:
+    /// 1. An explicit `HJKL_CLIPBOARD` override (see [`Self::forced_backend`]).
+    /// 2. **SSH session** (`SSH_TTY` / `SSH_CONNECTION` / `SSH_CLIENT` set) →
+    ///    OSC 52. Over SSH the machine's *native* clipboard belongs to the
+    ///    remote host, not the user; the OSC 52 terminal escape is relayed by
+    ///    the user's terminal emulator to their **local** clipboard (and is
+    ///    wrapped for tmux passthrough automatically when `TMUX` is set).
+    /// 3. Otherwise the local-desktop probe:
+    ///    - Linux: Wayland → X11 → OSC 52.
+    ///    - macOS: NSPasteboard (always available).
+    ///    - Windows: Win32 (always available).
+    ///    - Other: OSC 52.
     ///
-    /// The `HJKL_CLIPBOARD` environment variable overrides the probe: set it to
-    /// `osc52` to force the terminal OSC 52 backend on any platform (useful in
-    /// headless/CI/PTY environments where touching the real system clipboard is
-    /// unwanted — e.g. it avoids cross-process contention on the single shared
-    /// macOS pasteboard).
+    /// The SSH heuristic is overridable: set `HJKL_CLIPBOARD=x11` (or
+    /// `wayland`) when relying on SSH X11 forwarding to reach the local
+    /// clipboard natively, or `HJKL_CLIPBOARD=osc52` to force OSC 52 anywhere.
     pub fn new() -> Result<Self, ClipboardError> {
         if let Some(forced) = Self::forced_backend() {
             return Ok(forced);
+        }
+        // Context-aware default: an SSH session's native clipboard is the
+        // remote host's, so route through OSC 52 to the user's local terminal.
+        if is_ssh_session() {
+            return Ok(Self::with_backend(Box::new(
+                backend::osc52::Osc52Backend::new(),
+            )));
         }
         Self::probe()
     }
 
     /// Honor an explicit `HJKL_CLIPBOARD` backend selection. Returns `None`
-    /// when the variable is unset or holds an unrecognized value (fall through
-    /// to the platform probe).
+    /// when the variable is unset or holds a value that isn't usable on this
+    /// platform (fall through to the context-aware default).
+    ///
+    /// Recognized values (case-insensitive): `osc52`, `native`, and the
+    /// platform backend names `wayland` / `x11` (Linux), `macos`, `windows`.
+    /// `native` forces the platform probe, bypassing the SSH heuristic. A
+    /// named native backend that fails to initialize (e.g. `x11` with no
+    /// display) falls through rather than erroring.
     fn forced_backend() -> Option<Self> {
-        match std::env::var("HJKL_CLIPBOARD").ok()?.trim() {
+        let raw = std::env::var("HJKL_CLIPBOARD").ok()?;
+        match raw.trim().to_ascii_lowercase().as_str() {
             "osc52" => Some(Self::with_backend(Box::new(
                 backend::osc52::Osc52Backend::new(),
+            ))),
+            // Bypass the SSH heuristic and use the local-desktop probe.
+            "native" | "auto" => Self::probe().ok(),
+            #[cfg(target_os = "linux")]
+            "wayland" => backend::wayland_backend::WaylandBackend::new()
+                .ok()
+                .map(|b| Self::with_backend(Box::new(b))),
+            #[cfg(target_os = "linux")]
+            "x11" => backend::x11_backend::X11Backend::new()
+                .ok()
+                .map(|b| Self::with_backend(Box::new(b))),
+            #[cfg(target_os = "macos")]
+            "macos" => Some(Self::with_backend(Box::new(
+                backend::macos::MacosBackend::new(),
+            ))),
+            #[cfg(target_os = "windows")]
+            "windows" => Some(Self::with_backend(Box::new(
+                backend::windows::WindowsBackend::new(),
             ))),
             _ => None,
         }
@@ -318,29 +366,107 @@ mod tests {
         assert!(mimes.is_empty(), "expected empty available from osc52");
     }
 
+    /// Serialize env mutation across all env-touching tests so a parallel
+    /// `cargo test` run can't observe a torn value (nextest already isolates
+    /// per-process).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with `vars` applied (`Some` = set, `None` = remove), restoring
+    /// each variable's prior value afterward. Serialized via [`ENV_LOCK`].
+    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| ((*k).to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            // SAFETY: guarded by ENV_LOCK; restored below.
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+        let result = f();
+        for (k, v) in saved {
+            // SAFETY: same guard.
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(&k, val),
+                    None => std::env::remove_var(&k),
+                }
+            }
+        }
+        result
+    }
+
     /// `HJKL_CLIPBOARD=osc52` must force the OSC 52 backend on every platform,
     /// bypassing the native probe (e.g. the shared macOS pasteboard).
     #[test]
     fn env_override_forces_osc52_backend() {
-        // Serialize env mutation so a parallel `cargo test` run can't observe a
-        // torn value (nextest already isolates per-process).
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let prev = std::env::var("HJKL_CLIPBOARD").ok();
-        // SAFETY: guarded by ENV_LOCK; the previous value is restored below.
-        unsafe { std::env::set_var("HJKL_CLIPBOARD", "osc52") };
-
-        let is_osc = Clipboard::new().expect("clipboard construct").is_osc52();
-
-        // SAFETY: same guard; restore the prior environment.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("HJKL_CLIPBOARD", v),
-                None => std::env::remove_var("HJKL_CLIPBOARD"),
-            }
-        }
-
+        let is_osc = with_env(&[("HJKL_CLIPBOARD", Some("osc52"))], || {
+            Clipboard::new().expect("clipboard construct").is_osc52()
+        });
         assert!(is_osc, "HJKL_CLIPBOARD=osc52 must force the OSC 52 backend");
+    }
+
+    /// An SSH session (no explicit override) selects OSC 52 so writes reach the
+    /// user's local terminal rather than the remote host's clipboard.
+    #[test]
+    fn ssh_session_selects_osc52() {
+        let is_osc = with_env(
+            &[
+                ("HJKL_CLIPBOARD", None),
+                ("SSH_TTY", Some("/dev/pts/0")),
+                ("SSH_CONNECTION", None),
+                ("SSH_CLIENT", None),
+            ],
+            || Clipboard::new().expect("clipboard construct").is_osc52(),
+        );
+        assert!(is_osc, "SSH session should select the OSC 52 backend");
+    }
+
+    /// An explicit `HJKL_CLIPBOARD` override still wins over the SSH heuristic
+    /// (here forcing OSC 52, which is deterministic on every platform).
+    #[test]
+    fn explicit_override_wins_over_ssh_heuristic() {
+        let is_osc = with_env(
+            &[
+                ("HJKL_CLIPBOARD", Some("osc52")),
+                ("SSH_TTY", Some("/dev/pts/1")),
+            ],
+            || Clipboard::new().expect("clipboard construct").is_osc52(),
+        );
+        assert!(is_osc);
+    }
+
+    #[test]
+    fn is_ssh_session_detects_each_variable() {
+        for var in ["SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT"] {
+            let detected = with_env(
+                &[
+                    ("SSH_TTY", None),
+                    ("SSH_CONNECTION", None),
+                    ("SSH_CLIENT", None),
+                    (var, Some("x")),
+                ],
+                is_ssh_session,
+            );
+            assert!(detected, "{var} should mark the session as SSH");
+        }
+    }
+
+    #[test]
+    fn is_ssh_session_false_without_ssh_vars() {
+        let detected = with_env(
+            &[
+                ("SSH_TTY", None),
+                ("SSH_CONNECTION", None),
+                ("SSH_CLIENT", None),
+            ],
+            is_ssh_session,
+        );
+        assert!(!detected, "no SSH vars → not an SSH session");
     }
 }

@@ -83,6 +83,14 @@ fn spawn_sway() -> Option<Sway> {
                     unsafe {
                         std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
                         std::env::set_var("WAYLAND_DISPLAY", &sway.socket);
+                        // Simulate a genuine local desktop: clear any ambient
+                        // SSH markers so the context-aware selector probes the
+                        // native (wayland) backend instead of diverting to
+                        // OSC 52 (which fires under an SSH session, e.g. when
+                        // the test runner itself is remote).
+                        std::env::remove_var("SSH_TTY");
+                        std::env::remove_var("SSH_CONNECTION");
+                        std::env::remove_var("SSH_CLIENT");
                     }
                     // Give sway a beat to finish wiring up globals after
                     // the socket appears.
