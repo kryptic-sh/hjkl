@@ -521,6 +521,144 @@ async fn spawn_kills_child_on_handshake_failure() {
     );
 }
 
+/// A server that never answers `initialize` must not hang the client forever:
+/// the handshake times out (10s, driven here with paused tokio time).
+#[tokio::test(start_paused = true)]
+async fn initialize_handshake_times_out() {
+    let (client_io, driver_io) = duplex(64 * 1024);
+    let (evt_tx, _evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+    let key = ServerKey {
+        language: "rust".to_string(),
+        root: workspace_root("timeout-workspace"),
+    };
+
+    // Keep both driver halves alive so the client sees neither EOF nor a
+    // response — just silence. With paused time, tokio auto-advances the
+    // clock once all tasks are idle, firing the 10s handshake timeout.
+    let (driver_read, driver_write) = tokio::io::split(driver_io);
+    let (client_read, client_write) = tokio::io::split(client_io);
+
+    let result =
+        hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx).await;
+
+    let err = match result {
+        Ok(_) => panic!("handshake against a silent server must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("timed out"),
+        "expected timeout error, got: {err:#}"
+    );
+
+    drop(driver_read);
+    drop(driver_write);
+}
+
+/// Server-initiated requests must be auto-answered with a response echoing
+/// the SAME id — otherwise servers like rust-analyzer block forever.
+#[tokio::test(flavor = "current_thread")]
+async fn server_initiated_requests_are_auto_answered() {
+    tokio::time::timeout(Duration::from_millis(500), async {
+        let (client_io, driver_io) = duplex(64 * 1024);
+        let (evt_tx, _evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+        let key = ServerKey {
+            language: "rust".to_string(),
+            root: workspace_root("autoreply-workspace"),
+        };
+
+        let (driver_read, mut driver_write) = tokio::io::split(driver_io);
+        let mut driver_reader = BufReader::with_capacity(256 * 1024, driver_read);
+        let (client_read, client_write) = tokio::io::split(client_io);
+
+        let server_task = tokio::spawn({
+            let key = key.clone();
+            async move {
+                hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx)
+                    .await
+            }
+        });
+
+        // Complete the initialize handshake.
+        let req = read_json(&mut driver_reader).await;
+        let req_id = req["id"].as_i64().unwrap();
+        write_json(
+            &mut driver_write,
+            &json!({ "jsonrpc": "2.0", "id": req_id, "result": { "capabilities": {} } }),
+        )
+        .await;
+        let _notif = read_json(&mut driver_reader).await; // initialized
+
+        let _server = server_task.await.unwrap().unwrap();
+
+        // workspace/configuration → one null per requested item.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 55,
+                "method": "workspace/configuration",
+                "params": { "items": [{ "section": "rust-analyzer" }, { "section": "other" }] }
+            }),
+        )
+        .await;
+        let resp = read_json(&mut driver_reader).await;
+        assert_eq!(resp["id"], 55, "response must echo the request id");
+        assert_eq!(resp["result"], json!([null, null]));
+
+        // workspace/applyEdit → declined, never applied from the I/O task.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 56,
+                "method": "workspace/applyEdit",
+                "params": { "edit": { "changes": {} } }
+            }),
+        )
+        .await;
+        let resp = read_json(&mut driver_reader).await;
+        assert_eq!(resp["id"], 56);
+        assert_eq!(resp["result"], json!({ "applied": false }));
+
+        // window/workDoneProgress/create → null result.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 57,
+                "method": "window/workDoneProgress/create",
+                "params": { "token": "t" }
+            }),
+        )
+        .await;
+        let resp = read_json(&mut driver_reader).await;
+        assert_eq!(resp["id"], 57);
+        assert_eq!(resp["result"], json!(null));
+
+        // Unknown method → MethodNotFound error, still echoing the id.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 58,
+                "method": "server/madeUpMethod",
+                "params": {}
+            }),
+        )
+        .await;
+        let resp = read_json(&mut driver_reader).await;
+        assert_eq!(resp["id"], 58);
+        assert_eq!(resp["error"]["code"], -32601);
+
+        drop(driver_write);
+        drop(driver_reader);
+    })
+    .await
+    .expect("server_initiated_requests_are_auto_answered timed out");
+}
+
 /// When the mock server replies with a JSON-RPC error, the response arrives
 /// as `LspEvent::Response { result: Err(RpcError { .. }) }`.
 #[tokio::test(flavor = "current_thread")]

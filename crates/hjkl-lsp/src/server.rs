@@ -19,6 +19,14 @@ use crate::event::{LspEvent, RpcError, ServerKey};
 /// when the corresponding response arrives.
 type PendingMap = Arc<Mutex<HashMap<i64, i64>>>;
 
+/// How long to wait for the `initialize` response before giving up. A silent
+/// server would otherwise block the single-threaded dispatch loop forever.
+const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long to wait after `shutdown`/`exit` for the child to exit on its own
+/// before force-killing it.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Wraps an active language-server child process.
 pub struct Server {
     pub key: ServerKey,
@@ -29,6 +37,12 @@ pub struct Server {
     /// Maps JSON-RPC request id → app-allocated request id.
     /// Shared with the stdout dispatch task so responses can be correlated.
     pending: PendingMap,
+    /// Signals the wait task to force-kill the child (graceful shutdown grace
+    /// period expired). `None` for test servers with no real child.
+    kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Handle to the wait task; awaited during shutdown so the child is
+    /// reaped before we return. `None` for test servers with no real child.
+    wait_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Server {
@@ -50,6 +64,7 @@ impl Server {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn LSP server {:?}", cmd.command))?;
 
@@ -97,7 +112,7 @@ impl Server {
         };
 
         // Spawn wait task so ServerExited is emitted when the child exits.
-        spawn_wait_task(child, key.clone(), evt_tx);
+        let (kill_tx, wait_handle) = spawn_wait_task(child, key.clone(), evt_tx);
 
         Ok(Self {
             key,
@@ -105,6 +120,8 @@ impl Server {
             stdin_tx,
             next_request_id: 1,
             pending,
+            kill_tx: Some(kill_tx),
+            wait_handle: Some(wait_handle),
         })
     }
 
@@ -141,7 +158,9 @@ impl Server {
     }
 
     /// Gracefully shut down: send `shutdown` request, then `exit` notification,
-    /// then drop the stdin sender so the stdin task terminates.
+    /// then drop the stdin sender so the stdin task terminates. If the child
+    /// doesn't exit within [`SHUTDOWN_GRACE`], force-kill and reap it so a
+    /// server that ignores `exit` cannot linger as an orphan.
     pub async fn shutdown(mut self) {
         // Use -1 as the app_id for the internal shutdown request — it won't
         // match anything in the app's pending table, which is intentional.
@@ -152,6 +171,22 @@ impl Server {
         // Dropping `stdin_tx` closes the channel; the stdin task will drain
         // remaining messages and exit naturally.
         drop(self.stdin_tx);
+
+        // Wait for the child to exit gracefully; force-kill after the grace
+        // period. Both fields are `None` on the `spawn_from_io` (test) path.
+        if let (Some(mut handle), Some(kill_tx)) = (self.wait_handle.take(), self.kill_tx.take()) {
+            match tokio::time::timeout(SHUTDOWN_GRACE, &mut handle).await {
+                Ok(_) => {} // wait task finished => child exited gracefully
+                Err(_) => {
+                    tracing::warn!(
+                        key = ?self.key,
+                        "LSP server did not exit within {SHUTDOWN_GRACE:?}; force-killing"
+                    );
+                    let _ = kill_tx.send(()); // signal force-kill
+                    let _ = handle.await; // wait for the kill+reap to finish
+                }
+            }
+        }
     }
 
     fn enqueue(&self, msg: Value) {
@@ -244,36 +279,46 @@ async fn initialize_handshake(
     let bytes = serde_json::to_vec(&init_msg)?;
     stdin_tx.send(bytes).ok();
 
-    // Read the initialize response synchronously.
+    // Read the initialize response synchronously, bounded by a timeout so a
+    // silent server cannot block the dispatch loop forever.
     let mut reader = BufReader::with_capacity(256 * 1024, stdout);
-    let capabilities = loop {
-        let raw = codec::read_message(&mut reader)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("server closed stdout before initialize response"))?;
+    let capabilities = tokio::time::timeout(INITIALIZE_TIMEOUT, async {
+        loop {
+            let raw = codec::read_message(&mut reader).await?.ok_or_else(|| {
+                anyhow::anyhow!("server closed stdout before initialize response")
+            })?;
 
-        let val: Value = serde_json::from_slice(&raw)?;
+            let val: Value = serde_json::from_slice(&raw)?;
 
-        // Skip server-initiated requests/notifications before the response.
-        // A response has an `id` and no `method`; the `method` check matters
-        // because a server-initiated *request* may legally also use id 0.
-        if val.get("id").and_then(Value::as_i64) == Some(0) && val.get("method").is_none() {
-            // This is our initialize response.
-            if let Some(err) = val.get("error") {
-                bail!("initialize error: {err}");
+            // Skip server-initiated requests/notifications before the response.
+            // A response has an `id` and no `method`; the `method` check matters
+            // because a server-initiated *request* may legally also use id 0.
+            if val.get("id").and_then(Value::as_i64) == Some(0) && val.get("method").is_none() {
+                // This is our initialize response.
+                if let Some(err) = val.get("error") {
+                    bail!("initialize error: {err}");
+                }
+                let caps = val
+                    .get("result")
+                    .and_then(|r| r.get("capabilities"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                break Ok::<Value, anyhow::Error>(caps);
             }
-            let caps = val
-                .get("result")
-                .and_then(|r| r.get("capabilities"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            break caps;
+            // Server-initiated message before our response — log and skip.
+            tracing::debug!(
+                key = ?key,
+                "received server message before initialize response; ignoring"
+            );
         }
-        // Server-initiated message before our response — log and skip.
-        tracing::debug!(
-            key = ?key,
-            "received server message before initialize response; ignoring"
-        );
-    };
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "initialize handshake timed out after {}s",
+            INITIALIZE_TIMEOUT.as_secs()
+        )
+    })??;
 
     // Send `initialized` notification.
     let init_notif = json!({
@@ -290,9 +335,16 @@ async fn initialize_handshake(
         capabilities: capabilities.clone(),
     });
 
-    // Spawn the stdout dispatch loop with the remaining reader.
+    // Spawn the stdout dispatch loop with the remaining reader. It gets a
+    // clone of the stdin sender so server-initiated requests can be answered.
     let key_clone = key.clone();
-    tokio::spawn(stdout_task(reader, key_clone, evt_tx, pending));
+    tokio::spawn(stdout_task(
+        reader,
+        key_clone,
+        evt_tx,
+        pending,
+        stdin_tx.clone(),
+    ));
 
     Ok(capabilities)
 }
@@ -329,6 +381,8 @@ where
         stdin_tx,
         next_request_id: 1,
         pending,
+        kill_tx: None,
+        wait_handle: None,
     })
 }
 
@@ -343,11 +397,15 @@ async fn stdin_task<W: AsyncWrite + Unpin>(mut rx: mpsc::UnboundedReceiver<Vec<u
 }
 
 /// Task: read framed messages from `stdout`, dispatch to `evt_tx`.
+///
+/// `stdin_tx` is used to answer server-initiated requests so servers that
+/// block on them (e.g. rust-analyzer) don't deadlock.
 async fn stdout_task<R: AsyncRead + Unpin>(
     mut reader: BufReader<R>,
     key: ServerKey,
     evt_tx: Sender<LspEvent>,
     pending: PendingMap,
+    stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
 ) {
     loop {
         let raw = match codec::read_message(&mut reader).await {
@@ -370,12 +428,19 @@ async fn stdout_task<R: AsyncRead + Unpin>(
             }
         };
 
-        dispatch_message(&key, val, &evt_tx, &pending);
+        dispatch_message(&key, val, &evt_tx, &pending, &stdin_tx);
     }
 }
 
-/// Dispatch a decoded JSON-RPC value as either a response or a notification.
-fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>, pending: &PendingMap) {
+/// Dispatch a decoded JSON-RPC value as a response, a server-initiated
+/// request (auto-answered via `stdin_tx`), or a notification.
+fn dispatch_message(
+    key: &ServerKey,
+    val: Value,
+    evt_tx: &Sender<LspEvent>,
+    pending: &PendingMap,
+    stdin_tx: &mpsc::UnboundedSender<Vec<u8>>,
+) {
     let has_id = val.get("id").is_some();
     let has_method = val.get("method").is_some();
 
@@ -415,13 +480,39 @@ fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>, pend
         });
     } else if has_method {
         if has_id {
-            // Server-initiated request (rare, e.g. workspace/applyEdit).
-            // Phase 1: log and ignore.
+            // Server-initiated request (e.g. workspace/configuration). Every
+            // request MUST get a response echoing the same id — servers like
+            // rust-analyzer block waiting for one.
+            let id = val.get("id").cloned().unwrap_or(Value::Null);
             let method = val
                 .get("method")
                 .and_then(Value::as_str)
                 .unwrap_or("<unknown>");
-            tracing::debug!(key = ?key, method, "LSP server-initiated request; ignoring in Phase 1");
+            match method {
+                "workspace/configuration" => {
+                    // One `null` per requested item — "no configuration".
+                    let count = val
+                        .get("params")
+                        .and_then(|p| p.get("items"))
+                        .and_then(Value::as_array)
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    send_response(stdin_tx, id, Value::Array(vec![Value::Null; count]));
+                }
+                "client/registerCapability"
+                | "client/unregisterCapability"
+                | "window/workDoneProgress/create" => {
+                    send_response(stdin_tx, id, Value::Null);
+                }
+                "workspace/applyEdit" => {
+                    // We deliberately do NOT apply edits from the I/O task.
+                    send_response(stdin_tx, id, json!({ "applied": false }));
+                }
+                _ => {
+                    send_error_response(stdin_tx, id, -32601, "method not supported");
+                }
+            }
+            tracing::debug!(key = ?key, method, "LSP server-initiated request auto-answered");
         } else {
             // Push notification (e.g. textDocument/publishDiagnostics).
             let method = val
@@ -439,6 +530,29 @@ fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>, pend
         }
     } else {
         tracing::warn!(key = ?key, "LSP: unrecognized message shape; ignoring");
+    }
+}
+
+/// Enqueue a JSON-RPC success response (used to answer server-initiated
+/// requests from the stdout dispatch task).
+fn send_response(stdin_tx: &mpsc::UnboundedSender<Vec<u8>>, id: Value, result: Value) {
+    let msg = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+    if let Ok(bytes) = serde_json::to_vec(&msg) {
+        let _ = stdin_tx.send(bytes);
+    }
+}
+
+/// Enqueue a JSON-RPC error response (used to answer server-initiated
+/// requests for methods we don't support).
+fn send_error_response(
+    stdin_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    id: Value,
+    code: i64,
+    message: &str,
+) {
+    let msg = json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } });
+    if let Ok(bytes) = serde_json::to_vec(&msg) {
+        let _ = stdin_tx.send(bytes);
     }
 }
 
@@ -477,16 +591,45 @@ async fn stderr_task<R: tokio::io::AsyncRead + Unpin>(stderr: R, lang: String) {
 }
 
 /// Spawn a wait task that emits `ServerExited` when the child exits.
-pub fn spawn_wait_task(mut child: Child, key: ServerKey, evt_tx: Sender<LspEvent>) {
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) => {
-                tracing::info!(key = ?key, ?status, "LSP server exited");
-                let _ = evt_tx.send(LspEvent::ServerExited { key, status });
+///
+/// Returns a oneshot sender that force-kills the child when fired (used by
+/// `Server::shutdown` after the grace period) and the task's join handle so
+/// shutdown can await the kill+reap.
+fn spawn_wait_task(
+    mut child: Child,
+    key: ServerKey,
+    evt_tx: Sender<LspEvent>,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        tokio::select! {
+            res = child.wait() => {
+                match res {
+                    Ok(status) => {
+                        tracing::info!(key = ?key, ?status, "LSP server exited");
+                        let _ = evt_tx.send(LspEvent::ServerExited { key, status });
+                    }
+                    Err(e) => {
+                        tracing::warn!(key = ?key, "error waiting for LSP server: {e}");
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!(key = ?key, "error waiting for LSP server: {e}");
+            _ = kill_rx => {
+                let _ = child.start_kill();
+                match child.wait().await {
+                    Ok(status) => {
+                        tracing::info!(key = ?key, ?status, "LSP server force-killed on shutdown");
+                        let _ = evt_tx.send(LspEvent::ServerExited { key, status });
+                    }
+                    Err(e) => {
+                        tracing::warn!(key = ?key, "error waiting for force-killed LSP server: {e}");
+                    }
+                }
             }
         }
     });
+    (kill_tx, handle)
 }

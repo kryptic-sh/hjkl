@@ -28,6 +28,42 @@ pub fn to_path(u: &url::Url) -> Option<PathBuf> {
     u.to_file_path().ok()
 }
 
+/// Convert a `file://` URL to a path, but only if the resolved path is inside
+/// `root`. Returns `None` when `u` is not a file URL, conversion fails, or the
+/// path escapes `root`. Defense-in-depth against a server returning URIs
+/// outside the workspace.
+pub fn to_path_within(u: &url::Url, root: &Path) -> Option<PathBuf> {
+    let p = to_path(u)?;
+    // Normalize away `.`/`..` lexically (no filesystem access) before the prefix check.
+    let normalized = normalize_lexical(&p);
+    let root_norm = normalize_lexical(root);
+    if normalized.starts_with(&root_norm) {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Lexically normalize a path: fold `..` by popping the previous component,
+/// drop `.`, and keep `Normal`/`RootDir`/`Prefix` components as-is. No
+/// filesystem access (symlinks are not resolved).
+fn normalize_lexical(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
+                out.push(comp.as_os_str());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +125,66 @@ mod tests {
     fn non_file_url_returns_none() {
         let url = url::Url::parse("https://example.com/foo").unwrap();
         assert!(to_path(&url).is_none());
+    }
+
+    #[cfg(unix)]
+    const ROOT: &str = "/tmp/workspace";
+    #[cfg(windows)]
+    const ROOT: &str = r"C:\tmp\workspace";
+
+    #[cfg(unix)]
+    const INSIDE: &str = "/tmp/workspace/src/main.rs";
+    #[cfg(windows)]
+    const INSIDE: &str = r"C:\tmp\workspace\src\main.rs";
+
+    #[cfg(unix)]
+    const SIBLING: &str = "/tmp/workspace-evil/src/main.rs";
+    #[cfg(windows)]
+    const SIBLING: &str = r"C:\tmp\workspace-evil\src\main.rs";
+
+    #[test]
+    fn to_path_within_accepts_path_inside_root() {
+        let url = from_path(Path::new(INSIDE)).unwrap();
+        let p = to_path_within(&url, Path::new(ROOT));
+        assert_eq!(p, Some(PathBuf::from(INSIDE)));
+    }
+
+    #[test]
+    fn to_path_within_rejects_parent_escape() {
+        // `..` segments that resolve outside the root must be rejected.
+        // (The URL parser may fold dot segments itself; either way the
+        // resolved path lands outside `root` and must return None.)
+        let url = url::Url::parse("file:///tmp/workspace/../secrets/key.pem").unwrap();
+        assert!(to_path_within(&url, Path::new("/tmp/workspace")).is_none());
+    }
+
+    #[test]
+    fn to_path_within_rejects_sibling_directory() {
+        // A sibling whose name shares the root as a string prefix must not
+        // pass the containment check (component-wise starts_with).
+        let url = from_path(Path::new(SIBLING)).unwrap();
+        assert!(to_path_within(&url, Path::new(ROOT)).is_none());
+    }
+
+    #[test]
+    fn normalize_lexical_folds_dot_segments() {
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                normalize_lexical(Path::new("/a/b/../c/./d")),
+                PathBuf::from("/a/c/d")
+            );
+            assert_eq!(
+                normalize_lexical(Path::new("/a/../../b")),
+                PathBuf::from("/b")
+            );
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                normalize_lexical(Path::new(r"C:\a\b\..\c\.\d")),
+                PathBuf::from(r"C:\a\c\d")
+            );
+        }
     }
 }
