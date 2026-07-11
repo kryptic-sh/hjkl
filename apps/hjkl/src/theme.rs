@@ -287,7 +287,10 @@ struct RawHop {
 
 fn parse_hex(s: &str) -> Result<Color> {
     let bytes = s.as_bytes();
-    if bytes.len() != 7 || bytes[0] != b'#' {
+    // `!s.is_ascii()` guard: the length check is in BYTES, so a multibyte
+    // string like "#€ab" (7 bytes) would otherwise panic on the mid-char
+    // slices below instead of returning an error.
+    if bytes.len() != 7 || bytes[0] != b'#' || !s.is_ascii() {
         anyhow::bail!("expected #rrggbb hex color, got {s:?}");
     }
     let r = u8::from_str_radix(&s[1..3], 16).with_context(|| format!("bad red byte in {s:?}"))?;
@@ -300,6 +303,16 @@ fn parse_hex(s: &str) -> Result<Color> {
 mod tests {
     use super::*;
     use hjkl_bonsai::Theme;
+
+    #[test]
+    fn parse_hex_rejects_multibyte_without_panicking() {
+        // 7 BYTES but not 7 ASCII chars — '€' is 3 bytes, so slicing byte
+        // ranges would split the char and panic without the is_ascii guard.
+        assert!(parse_hex("#\u{20ac}abc").is_err());
+        assert!(parse_hex("#\u{e9}\u{e9}\u{e9}").is_err());
+        // Sanity: valid input still parses.
+        assert_eq!(parse_hex("#0a0B0c").unwrap(), Color::Rgb(0x0a, 0x0b, 0x0c));
+    }
 
     #[test]
     fn bundled_dark_theme_loads() {

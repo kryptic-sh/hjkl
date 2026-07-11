@@ -250,6 +250,17 @@ pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
     f.read_exact(&mut hlen_buf)?;
     let hlen = u32::from_le_bytes(hlen_buf) as usize;
 
+    // Sanity-cap the header length before allocating: a real header is a
+    // path plus a few integers (well under 1 MiB). A corrupt / hostile
+    // length prefix must not trigger a multi-GiB allocation.
+    const MAX_HEADER_LEN: usize = 1 << 20;
+    if hlen > MAX_HEADER_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("swap: header length {hlen} exceeds {MAX_HEADER_LEN}"),
+        ));
+    }
+
     // Header bytes.
     let mut header_bytes = vec![0u8; hlen];
     f.read_exact(&mut header_bytes)?;
@@ -423,6 +434,20 @@ mod tests {
         let td2 = tempfile::tempdir().unwrap();
         let swp = td2.path().join("bad.swp");
         std::fs::write(&swp, b"XBAD\x00\x00\x00\x00garbage").unwrap();
+        let err = read_swap(&swp).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_swap_rejects_oversized_header_length() {
+        let td2 = tempfile::tempdir().unwrap();
+        let swp = td2.path().join("hostile.swp");
+        // Valid magic + a hostile 0xFFFFFFFF header-length prefix. Must be
+        // rejected with InvalidData BEFORE attempting a 4 GiB allocation.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&SwapHeader::MAGIC);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&swp, &bytes).unwrap();
         let err = read_swap(&swp).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }

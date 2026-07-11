@@ -289,6 +289,9 @@ fn mode_code(editor: &hjkl_engine::Editor<Buffer, TuiHost>) -> &'static str {
 /// Resolve nvim-style [start, end) line indices (end=-1 means to the last
 /// line) into a concrete Rust range over the buffer's lines. Both `start` and
 /// `end` are 0-based. Returns an error string if out of bounds.
+///
+/// Uses saturating arithmetic — extreme negative values from a hostile client
+/// (e.g. `i64::MIN`) must clamp instead of overflowing.
 fn resolve_line_range(
     line_count: usize,
     start: i64,
@@ -296,12 +299,12 @@ fn resolve_line_range(
 ) -> std::result::Result<(usize, usize), String> {
     let n = line_count as i64;
     let s = if start < 0 {
-        (n + start).max(0) as usize
+        n.saturating_add(start).max(0) as usize
     } else {
         start as usize
     };
     let e = if end < 0 {
-        (n + end + 1).max(0) as usize
+        n.saturating_add(end).saturating_add(1).max(0) as usize
     } else {
         end as usize
     };
@@ -312,6 +315,19 @@ fn resolve_line_range(
         ));
     }
     Ok((s, e))
+}
+
+/// Convert an nvim byte-col into a char-col for `line`.
+///
+/// Clamps to the line's byte length, then snaps DOWN to the nearest UTF-8
+/// char boundary — a client-supplied col landing mid-character must not
+/// panic the slice below (RPC input is untrusted).
+fn byte_col_to_char_col(line: &str, col: i64) -> usize {
+    let mut byte_offset = (col as usize).min(line.len());
+    while byte_offset > 0 && !line.is_char_boundary(byte_offset) {
+        byte_offset -= 1;
+    }
+    line[..byte_offset].chars().count()
 }
 
 // ── nvim_call_function helpers ────────────────────────────────────────────────
@@ -380,15 +396,21 @@ fn parse_qf_list(fn_args: &[Value], list_idx: usize, app: &crate::app::App) -> V
                 PathBuf::new()
             };
 
-            // row: lnum (1-based in dict) → 0-based; default 0
+            // row: lnum (1-based in dict) → 0-based; default 0. Clamp
+            // negatives to 0 BEFORE the usize cast so a hostile lnum like -5
+            // can't wrap into a huge row.
             let row = match map_get(map, "lnum") {
-                Some(Value::Integer(n)) => (n.as_i64().unwrap_or(0) as usize).saturating_sub(1),
+                Some(Value::Integer(n)) => {
+                    (n.as_i64().unwrap_or(0).max(0) as usize).saturating_sub(1)
+                }
                 _ => 0,
             };
 
-            // col: col (1-based in dict) → 0-based; default 0
+            // col: col (1-based in dict) → 0-based; default 0. Same clamp.
             let col = match map_get(map, "col") {
-                Some(Value::Integer(n)) => (n.as_i64().unwrap_or(0) as usize).saturating_sub(1),
+                Some(Value::Integer(n)) => {
+                    (n.as_i64().unwrap_or(0).max(0) as usize).saturating_sub(1)
+                }
                 _ => 0,
             };
 
@@ -938,8 +960,9 @@ fn dispatch(
                 Some(Value::Integer(n)) => n.as_i64().unwrap_or(0),
                 _ => return err(stdout, msgid, "cursor col must be integer"),
             };
-            // Convert 1-based nvim row to 0-based engine row.
-            let row = (row_1based - 1).max(0) as usize;
+            // Convert 1-based nvim row to 0-based engine row (saturating —
+            // a hostile row of i64::MIN must not overflow the subtraction).
+            let row = row_1based.saturating_sub(1).max(0) as usize;
             let current_win = app.nvim_current_window_id();
             if win_id == current_win {
                 // Fast path: active editor (oracle-parity path).
@@ -947,8 +970,7 @@ fn dispatch(
                     let rope = app.active_editor().buffer().rope();
                     if row < rope.len_lines() {
                         let line = hjkl_buffer::rope_line_str(&rope, row);
-                        let byte_offset = (col as usize).min(line.len());
-                        line[..byte_offset].chars().count()
+                        byte_col_to_char_col(&line, col)
                     } else {
                         0
                     }
@@ -974,8 +996,7 @@ fn dispatch(
                         };
                         if row < rope.len_lines() {
                             let line = hjkl_buffer::rope_line_str(&rope, row);
-                            let byte_offset = (col as usize).min(line.len());
-                            line[..byte_offset].chars().count()
+                            byte_col_to_char_col(&line, col)
                         } else {
                             0
                         }
@@ -1642,6 +1663,13 @@ fn dispatch(
                     .find(|&i| full.is_char_boundary(i))
                     .unwrap_or(full_len)
             };
+
+            // Reject an inverted range (start after end) like nvim does —
+            // splicing with abs_start > abs_end would silently duplicate the
+            // bytes between the two positions.
+            if abs_start > abs_end {
+                return err(stdout, msgid, "start is higher than end");
+            }
 
             let new_text = replacement.join("\n");
             let new_content = format!("{}{}{}", &full[..abs_start], new_text, &full[abs_end..]);
@@ -4841,5 +4869,175 @@ mod tests {
             "line('.') should be cursor row"
         );
         assert_eq!(call_col(&mut app, "."), 6, "col('.') should be cursor col");
+    }
+
+    // ── malformed-input hardening (untrusted RPC) ─────────────────────────
+
+    /// A byte-col landing in the middle of a multibyte character must not
+    /// panic — it snaps down to the previous char boundary.
+    #[test]
+    fn test_win_set_cursor_mid_multibyte_col_does_not_panic() {
+        let mut app = build_app(None).unwrap();
+        // "héllo" — 'é' occupies bytes 1..3, so byte-col 2 is mid-character.
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("héllo")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let resp = call(
+            &mut app,
+            "nvim_win_set_cursor",
+            vec![
+                Value::Nil,
+                Value::Array(vec![Value::from(1i64), Value::from(2i64)]),
+            ],
+        );
+        assert_ok(resp);
+
+        // Cursor snapped down to the char boundary before 'é' → char-col 1
+        // → byte-col 1 in nvim_win_get_cursor coordinates.
+        let resp = call(&mut app, "nvim_win_get_cursor", vec![Value::Nil]);
+        let got = assert_ok(resp);
+        assert_eq!(
+            got,
+            Value::Array(vec![Value::from(1i64), Value::from(1i64)]),
+            "mid-char byte-col must snap down to the previous boundary"
+        );
+    }
+
+    /// Extreme negative row / line-range values from a hostile client must
+    /// clamp, not overflow (debug builds would panic on `i64::MIN - 1`).
+    #[test]
+    fn test_extreme_negative_values_do_not_overflow() {
+        // resolve_line_range with i64::MIN must not overflow.
+        assert!(resolve_line_range(3, i64::MIN, -1).is_ok());
+        assert!(resolve_line_range(0, i64::MIN, i64::MIN).is_ok());
+
+        // nvim_win_set_cursor with row = i64::MIN must not overflow.
+        let mut app = build_app(None).unwrap();
+        let resp = call(
+            &mut app,
+            "nvim_win_set_cursor",
+            vec![
+                Value::Nil,
+                Value::Array(vec![Value::from(i64::MIN), Value::from(0i64)]),
+            ],
+        );
+        assert_ok(resp);
+    }
+
+    /// setqflist with a negative lnum/col must clamp to line 1 / col 1
+    /// instead of wrapping to a huge row.
+    #[test]
+    fn test_setqflist_negative_lnum_clamps() {
+        let mut app = build_app(None).unwrap();
+        let entry = Value::Map(vec![
+            (Value::from("filename"), Value::from("f.txt")),
+            (Value::from("lnum"), Value::from(-5i64)),
+            (Value::from("col"), Value::from(-9i64)),
+            (Value::from("text"), Value::from("boom")),
+        ]);
+        let resp = call(
+            &mut app,
+            "nvim_call_function",
+            vec![
+                Value::from("setqflist"),
+                Value::Array(vec![Value::Array(vec![entry])]),
+            ],
+        );
+        assert_ok(resp);
+
+        let resp = call(
+            &mut app,
+            "nvim_call_function",
+            vec![Value::from("getqflist"), Value::Array(vec![])],
+        );
+        let got = assert_ok(resp);
+        let Value::Array(list) = got else {
+            panic!("getqflist must return an array");
+        };
+        let Value::Map(m) = &list[0] else {
+            panic!("qf entry must be a map");
+        };
+        assert_eq!(
+            map_get(m, "lnum"),
+            Some(&Value::from(1i64)),
+            "negative lnum must clamp to 1"
+        );
+        assert_eq!(
+            map_get(m, "col"),
+            Some(&Value::from(1i64)),
+            "negative col must clamp to 1"
+        );
+    }
+
+    /// nvim_buf_set_text with start after end must error, not silently
+    /// duplicate the bytes between the two positions.
+    #[test]
+    fn test_buf_set_text_inverted_range_errors() {
+        let mut app = build_app(None).unwrap();
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("abc"), Value::from("def")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_text",
+            vec![
+                Value::Nil,
+                Value::from(1i64), // start_row AFTER end_row
+                Value::from(0i64),
+                Value::from(0i64), // end_row
+                Value::from(0i64),
+                Value::Array(vec![Value::from("X")]),
+            ],
+        );
+        assert_ne!(resp[2], Value::Nil, "inverted range must be an error");
+
+        // Buffer must be untouched.
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+            ],
+        );
+        let got = assert_ok(resp);
+        assert_eq!(
+            got,
+            Value::Array(vec![Value::from("abc"), Value::from("def")]),
+            "buffer must be unchanged after a rejected inverted-range edit"
+        );
+    }
+
+    /// byte_col_to_char_col: boundary snapping and clamping semantics.
+    #[test]
+    fn test_byte_col_to_char_col_snapping() {
+        // "héllo": h=0, é=1..3, l=3, l=4, o=5.
+        assert_eq!(byte_col_to_char_col("héllo", 0), 0);
+        assert_eq!(byte_col_to_char_col("héllo", 1), 1);
+        assert_eq!(byte_col_to_char_col("héllo", 2), 1, "mid-é snaps down");
+        assert_eq!(byte_col_to_char_col("héllo", 3), 2);
+        assert_eq!(byte_col_to_char_col("héllo", 999), 5, "clamps to line end");
     }
 }
