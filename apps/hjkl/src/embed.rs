@@ -4,7 +4,7 @@
 //! Errors follow JSON-RPC 2.0: `{"jsonrpc":"2.0","error":{"code":-32601,"message":"..."},"id":...}`.
 //! See `docs/embed-rpc.md` for the method catalogue.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -54,6 +54,24 @@ fn write_response(stdout: &mut impl Write, v: &Value) -> Result<()> {
     stdout.write_all(b"\n")?;
     stdout.flush()?;
     Ok(())
+}
+
+/// Read and discard bytes through the next `\n` (or EOF) without buffering the
+/// whole line — used to resync after rejecting an oversized request. Bounded
+/// memory (one fill_buf chunk at a time).
+fn drain_to_newline<R: BufRead>(r: &mut R) -> std::io::Result<()> {
+    loop {
+        let avail = r.fill_buf()?;
+        if avail.is_empty() {
+            return Ok(()); // EOF
+        }
+        if let Some(i) = avail.iter().position(|&b| b == b'\n') {
+            r.consume(i + 1);
+            return Ok(());
+        }
+        let n = avail.len();
+        r.consume(n);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -407,14 +425,27 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     let mut stdin_lock = stdin.lock();
     let mut stdout_lock = stdout.lock();
 
+    // Cap a single JSON-RPC line so a peer that never sends a newline can't
+    // grow the buffer without bound (memory DoS). 64 MiB is far larger than any
+    // real request; an oversized line is rejected and its remainder drained so
+    // the stream resyncs on the next newline.
+    const MAX_RPC_LINE: u64 = 64 * 1024 * 1024;
     let mut line = String::new();
 
     loop {
         line.clear();
-        let n = stdin_lock.read_line(&mut line)?;
+        let n = (&mut stdin_lock).take(MAX_RPC_LINE).read_line(&mut line)?;
         if n == 0 {
             // EOF — clean exit.
             break;
+        }
+        if n as u64 == MAX_RPC_LINE && !line.ends_with('\n') {
+            // Hit the cap without a newline → oversized request. Reject and
+            // discard the rest of the line so the next read starts fresh.
+            let resp = error_resp(&Value::Null, ERR_PARSE, "Parse error: request too large");
+            write_response(&mut stdout_lock, &resp)?;
+            drain_to_newline(&mut stdin_lock)?;
+            continue;
         }
 
         let trimmed = line.trim();
