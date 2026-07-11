@@ -3556,10 +3556,17 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
     count: usize,
     as_operator: bool,
 ) {
-    // Folded operator counts (`count1 × count2`) can exceed a single
-    // prefix's cap; re-clamp at vim's count ceiling (`:h count`) where the
-    // count fans out into the per-motion `0..count` loops.
-    let count = count.min(MAX_COUNT);
+    // Clamp the count where it fans out into the per-motion `0..count` walk.
+    // Two bounds:
+    //  - vim's documented ceiling (`:h count`) for folded counts; and
+    //  - the buffer's character count, since a motion can never make progress
+    //    past the end of the buffer — without this a pathological prefix
+    //    (`999999999w`, `<big>dw`) would spin the walk up to ~1e9 times,
+    //    freezing the UI, even though the result is identical to stopping at
+    //    the buffer edge.
+    let count = count
+        .min(MAX_COUNT)
+        .min(ed.buffer.rope().len_chars().saturating_add(1));
     match motion {
         Motion::Left => {
             // `h` — Buffer clamps at col 0 (no wrap), matching vim.
