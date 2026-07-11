@@ -447,3 +447,63 @@ impl Picker {
         self.selected = wrapped as usize;
     }
 }
+
+impl Drop for Picker {
+    /// Signal the in-flight background scan to stop when the picker closes.
+    /// Without this, dropping the picker (Esc / accept) leaves the scan
+    /// thread — and any spawned rg/grep child — running to completion.
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use crate::logic::{PickerAction, PickerLogic};
+
+    struct CancelProbe {
+        seen: Arc<std::sync::Mutex<Option<Arc<AtomicBool>>>>,
+    }
+
+    impl PickerLogic for CancelProbe {
+        fn title(&self) -> &str {
+            "probe"
+        }
+        fn item_count(&self) -> usize {
+            0
+        }
+        fn label(&self, _idx: usize) -> String {
+            String::new()
+        }
+        fn match_text(&self, _idx: usize) -> String {
+            String::new()
+        }
+        fn select(&self, _idx: usize) -> PickerAction {
+            PickerAction::None
+        }
+        fn enumerate(
+            &mut self,
+            _query: Option<&str>,
+            cancel: Arc<AtomicBool>,
+        ) -> Option<JoinHandle<()>> {
+            *self.seen.lock().unwrap() = Some(cancel);
+            None
+        }
+    }
+
+    #[test]
+    fn drop_sets_cancel_flag_for_background_scan() {
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let picker = Picker::new(Box::new(CancelProbe {
+            seen: Arc::clone(&seen),
+        }));
+        let cancel = seen.lock().unwrap().clone().expect("enumerate called");
+        assert!(!cancel.load(Ordering::Acquire));
+        drop(picker);
+        assert!(
+            cancel.load(Ordering::Acquire),
+            "dropping the picker must signal the scan to stop"
+        );
+    }
+}

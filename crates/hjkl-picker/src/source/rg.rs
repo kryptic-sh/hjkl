@@ -424,13 +424,19 @@ impl PickerLogic for RgSource {
 
                         let reader = BufReader::new(stdout);
                         let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+                        let mut total = 0usize;
                         // Cleared atomically on first push so old results
                         // remain visible during rg startup latency.
                         let mut first_push_done = false;
+                        // `--max-count` is per-file; cap the overall total too
+                        // so a broad pattern over a huge tree can't grow the
+                        // item vec without bound (matches GREP_CAP below).
+                        const RG_CAP: usize = 1000;
 
                         for line_result in reader.lines() {
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                             let line = match line_result {
@@ -439,6 +445,7 @@ impl PickerLogic for RgSource {
                             };
                             if let Some(rg_match) = parse_rg_json_line(&line, &root) {
                                 batch.push(rg_match);
+                                total += 1;
                                 if batch.len() >= 32
                                     && let Ok(mut g) = items.lock()
                                 {
@@ -448,27 +455,29 @@ impl PickerLogic for RgSource {
                                     }
                                     g.extend(batch.drain(..));
                                 }
+                                if total >= RG_CAP {
+                                    let _ = child.kill();
+                                    break;
+                                }
                             }
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                         }
-                        // Flush remaining batch.
-                        if !batch.is_empty()
-                            && let Ok(mut g) = items.lock()
+                        // Flush the remaining batch — or clear stale results
+                        // when rg exited with zero matches. Skipped when a
+                        // newer requery superseded this one: `items` belongs
+                        // to the new scan now, so flushing (or clearing)
+                        // would clobber its fresh results.
+                        if let Ok(mut g) = items.lock()
+                            && !cancel.load(Ordering::Acquire)
                         {
                             if !first_push_done {
                                 g.clear();
-                                first_push_done = true;
                             }
                             g.extend(batch.drain(..));
-                        }
-                        // If rg exited with zero matches, clear stale results.
-                        if !first_push_done
-                            && let Ok(mut g) = items.lock()
-                        {
-                            g.clear();
                         }
                         let _ = child.wait();
                     }
@@ -516,6 +525,7 @@ impl PickerLogic for RgSource {
                         for line_result in reader.lines() {
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                             let raw = match line_result {
@@ -549,23 +559,19 @@ impl PickerLogic for RgSource {
                             }
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                         }
-                        // Flush remaining batch.
-                        if !batch.is_empty()
-                            && let Ok(mut g) = items.lock()
+                        // Flush / zero-match clear, skipped when superseded
+                        // (see the Rg arm above for rationale).
+                        if let Ok(mut g) = items.lock()
+                            && !cancel.load(Ordering::Acquire)
                         {
                             if !first_push_done {
                                 g.clear();
-                                first_push_done = true;
                             }
                             g.extend(batch.drain(..));
-                        }
-                        if !first_push_done
-                            && let Ok(mut g) = items.lock()
-                        {
-                            g.clear();
                         }
                         let _ = child.wait();
                     }
@@ -615,6 +621,7 @@ impl PickerLogic for RgSource {
                         for line_result in reader.lines() {
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                             let raw = match line_result {
@@ -643,23 +650,19 @@ impl PickerLogic for RgSource {
                             }
                             if cancel.load(Ordering::Acquire) {
                                 let _ = child.kill();
+                                let _ = child.wait();
                                 return;
                             }
                         }
-                        // Flush remaining batch.
-                        if !batch.is_empty()
-                            && let Ok(mut g) = items.lock()
+                        // Flush / zero-match clear, skipped when superseded
+                        // (see the Rg arm above for rationale).
+                        if let Ok(mut g) = items.lock()
+                            && !cancel.load(Ordering::Acquire)
                         {
                             if !first_push_done {
                                 g.clear();
-                                first_push_done = true;
                             }
                             g.extend(batch.drain(..));
-                        }
-                        if !first_push_done
-                            && let Ok(mut g) = items.lock()
-                        {
-                            g.clear();
                         }
                         let _ = child.wait();
                     }
