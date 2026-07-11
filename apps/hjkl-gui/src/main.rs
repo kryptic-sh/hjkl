@@ -21,7 +21,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use clap::Parser;
 use floem::{
@@ -62,9 +66,18 @@ fn main() {
         }
     };
 
-    // Build buffer from file or empty.
+    // Build buffer from file or empty. A missing file is a new buffer that
+    // will be created on `:w`; any other read failure (permissions, invalid
+    // UTF-8) refuses to open — binding an empty buffer to an existing path
+    // would let `:w` silently overwrite the file (matches the TUI's E484).
     let (buffer, open_path) = if let Some(p) = args.path {
-        let contents = std::fs::read_to_string(&p).unwrap_or_default();
+        let contents = match read_file_to_open(&p) {
+            Ok(contents) => contents.unwrap_or_default(),
+            Err(e) => {
+                eprintln!("hjkl-gui: {e}");
+                std::process::exit(1);
+            }
+        };
         (Buffer::from_str(&contents), Some(p))
     } else {
         (Buffer::new(), None)
@@ -82,6 +95,20 @@ fn main() {
     let save_path = Rc::new(RefCell::new(open_path));
 
     floem::launch(move || app_view(handle, save_path));
+}
+
+/// Read the file to open, separating "new file" from "unreadable file".
+///
+/// Returns `Ok(None)` when the file does not exist yet (open an empty buffer
+/// that `:w` will create) and `Err` for any other failure — permissions,
+/// invalid UTF-8 — so the caller never binds an empty buffer to an existing
+/// file it could not read. Mirrors the TUI's `E484` open contract.
+fn read_file_to_open(p: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(p) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("E484: Can't open file {}: {e}", p.display())),
+    }
 }
 
 // ─── App view ────────────────────────────────────────────────────────────────
@@ -240,5 +267,38 @@ mod tests {
     fn gui_app_builds() {
         let state = super::CmdState::default();
         assert_eq!(state, super::CmdState::Idle);
+    }
+
+    /// A readable file opens with its contents.
+    #[test]
+    fn read_file_to_open_reads_existing_file() {
+        let path = std::env::temp_dir().join(format!("hjkl-gui-open-ok-{}", std::process::id()));
+        std::fs::write(&path, "hello\n").unwrap();
+        let got = super::read_file_to_open(&path);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(got, Ok(Some("hello\n".to_string())));
+    }
+
+    /// A missing file is a legitimate new buffer (`Ok(None)`), created on
+    /// save — not an error.
+    #[test]
+    fn read_file_to_open_missing_file_is_new_buffer() {
+        let path = std::env::temp_dir().join(format!(
+            "hjkl-gui-open-missing-{}-nonexistent",
+            std::process::id()
+        ));
+        assert_eq!(super::read_file_to_open(&path), Ok(None));
+    }
+
+    /// Regression: a file that exists but cannot be decoded must be an error,
+    /// never a silent empty buffer — `:w` would overwrite the real file.
+    #[test]
+    fn read_file_to_open_undecodable_file_is_error() {
+        let path = std::env::temp_dir().join(format!("hjkl-gui-open-bad-{}", std::process::id()));
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let got = super::read_file_to_open(&path);
+        std::fs::remove_file(&path).ok();
+        let err = got.expect_err("undecodable file must not open as empty buffer");
+        assert!(err.starts_with("E484: Can't open file"), "got: {err}");
     }
 }
