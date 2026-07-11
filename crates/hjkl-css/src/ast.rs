@@ -128,7 +128,12 @@ impl Selector {
         let mut remaining_siblings: &[Node<'_>] = prev_siblings;
         for i in (0..n - 1).rev() {
             let part = &self.parts[i];
-            let combinator = self.combinators[i];
+            // `parts.len() == combinators.len() + 1` is upheld by the parser,
+            // but `parts`/`combinators` are public, so a hand-built selector
+            // could violate it. Bail out rather than panic on a bad index.
+            let Some(&combinator) = self.combinators.get(i) else {
+                return false;
+            };
             match combinator {
                 Combinator::Descendant => {
                     let pos = remaining_ancestors
