@@ -1146,7 +1146,11 @@ pub fn build_by_row(
 
         let mut row = start_row;
         while row < row_count {
-            let row_byte_start = row_starts[row];
+            // `row_count` is caller-supplied and may exceed `row_starts.len()`;
+            // stop rather than index out of bounds.
+            let Some(&row_byte_start) = row_starts.get(row) else {
+                break;
+            };
             let row_byte_end = row_starts
                 .get(row + 1)
                 .map(|&s| s.saturating_sub(1))
@@ -1184,21 +1188,31 @@ fn collect_diag_signs_range(
     let rope_len = rope.len_bytes();
     let byte_start = row_starts.get(vp_top).copied().unwrap_or(rope_len);
     let byte_end = row_starts.get(vp_end).copied().unwrap_or(rope_len);
-    // parse_errors_range only needs the source bytes for harvesting error
-    // node snippets in the message string. Materialise just the viewport
-    // window (typically ≪ 100 KB) rather than the whole document.
-    let window: String = if byte_start < byte_end && byte_end <= rope_len {
-        rope.byte_slice(byte_start..byte_end).to_string()
+    // The retained tree stores document-absolute byte offsets, and
+    // `parse_errors_range` both filters nodes against `byte_range` and
+    // harvests snippets by indexing `source` with those absolute offsets.
+    // Materialise only the viewport window (typically ≪ 100 KB), but place
+    // it at its absolute position in a zero-filled buffer so offsets line
+    // up. `vec![0u8; n]` uses `alloc_zeroed`, so the prefix costs no
+    // explicit writes. Passing a window-relative range here previously
+    // reported errors from the wrong document region once scrolled.
+    let source: Vec<u8> = if byte_start < byte_end && byte_end <= rope_len {
+        let mut buf = vec![0u8; byte_end];
+        let mut pos = byte_start;
+        for chunk in rope.byte_slice(byte_start..byte_end).chunks() {
+            buf[pos..pos + chunk.len()].copy_from_slice(chunk.as_bytes());
+            pos += chunk.len();
+        }
+        buf
     } else {
-        String::new()
+        Vec::new()
     };
-    // Translate byte range into window-relative for parse_errors_range.
-    let errors = h.parse_errors_range(window.as_bytes(), 0..(byte_end - byte_start));
+    let errors = h.parse_errors_range(&source, byte_start..byte_end);
     let mut signs: Vec<DiagSign> = Vec::new();
     let mut last_row: Option<usize> = None;
     for err in &errors {
-        // Translate window-relative back to absolute.
-        let abs_start = err.byte_range.start + byte_start;
+        // Error byte ranges are already document-absolute.
+        let abs_start = err.byte_range.start;
         let r = row_starts
             .partition_point(|&rs| rs <= abs_start)
             .saturating_sub(1);
@@ -1351,6 +1365,28 @@ mod tests {
         assert_eq!((bg.r, bg.g, bg.b), (0xbb, 0x9a, 0xf7));
         let fg = style.fg.expect("hex color must set foreground");
         assert_eq!((fg.r, fg.g, fg.b), (0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn build_by_row_row_count_beyond_row_starts_no_panic() {
+        // `row_count` is caller-supplied; when it exceeds `row_starts.len()`
+        // the walk must stop instead of indexing out of bounds.
+        let bytes = b"foo";
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            HEX_BG_KEY.to_string(),
+            MetaValue::Str("#112233".to_string()),
+        );
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 0..3,
+            capture: HEX_COLOR_CAPTURE.to_string(),
+            metadata,
+        };
+        let by_row = build_by_row(&[span], bytes, &[0], 3, &DotFallbackTheme::dark());
+        assert_eq!(by_row.len(), 3);
+        assert_eq!(by_row[0].len(), 1);
+        assert!(by_row[1].is_empty());
+        assert!(by_row[2].is_empty());
     }
 
     #[test]
@@ -1507,6 +1543,34 @@ mod tests {
         assert!(
             out.signs.iter().any(|s| s.row == 1 && s.ch == 'E'),
             "expected an 'E' sign on row 1; got {:?}",
+            out.signs
+        );
+    }
+
+    #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
+    fn diagnostics_signs_correct_when_scrolled() {
+        // Regression: `collect_diag_signs_range` used to pass a
+        // window-relative byte range + window-only source to
+        // `parse_errors_range`, which filters tree nodes by absolute
+        // offsets — so once scrolled it reported errors from the top of
+        // the document and shifted the resulting rows by the window
+        // offset. The error below sits on rows 50–52; the viewport starts
+        // at row 45.
+        let mut src = String::new();
+        for i in 0..50 {
+            src.push_str(&format!("fn f{i}() {{}}\n"));
+        }
+        src.push_str("fn broken() {\nlet x = ;\n}\n");
+        let buf = Buffer::from_str(&src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.rs"));
+        let out = layer.render_viewport(TID, &buf, 45, 20).unwrap();
+        assert!(
+            out.signs
+                .iter()
+                .any(|s| (50..=52).contains(&s.row) && s.ch == 'E'),
+            "expected an 'E' sign on rows 50..=52; got {:?}",
             out.signs
         );
     }

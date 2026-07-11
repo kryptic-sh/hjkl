@@ -37,6 +37,15 @@ pub fn to_ratatui_modifier(m: Modifiers) -> RMod {
     if m.italic {
         out |= RMod::ITALIC;
     }
+    if m.underline {
+        out |= RMod::UNDERLINED;
+    }
+    if m.reverse {
+        out |= RMod::REVERSED;
+    }
+    if m.strikethrough {
+        out |= RMod::CROSSED_OUT;
+    }
     out
 }
 
@@ -197,5 +206,23 @@ mod tests {
         assert!(rs.add_modifier.contains(RMod::BOLD));
         assert!(rs.add_modifier.contains(RMod::ITALIC));
         assert_eq!(rs.fg, Some(RColor::Rgb(0xff, 0x00, 0x00)));
+    }
+
+    #[test]
+    fn to_ratatui_modifier_maps_all_flags() {
+        // Regression: underline/reverse/strikethrough used to be dropped.
+        let m = hjkl_statusline::Modifiers {
+            bold: true,
+            italic: true,
+            underline: true,
+            reverse: true,
+            strikethrough: true,
+        };
+        let rm = to_ratatui_modifier(m);
+        assert!(rm.contains(RMod::BOLD));
+        assert!(rm.contains(RMod::ITALIC));
+        assert!(rm.contains(RMod::UNDERLINED));
+        assert!(rm.contains(RMod::REVERSED));
+        assert!(rm.contains(RMod::CROSSED_OUT));
     }
 }
