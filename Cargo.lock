@@ -2755,6 +2755,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-prompt-gui"
+version = "0.33.5"
+dependencies = [
+ "floem",
+ "hjkl-prompt",
+]
+
+[[package]]
 name = "hjkl-prompt-tui"
 version = "0.33.5"
 dependencies = [
