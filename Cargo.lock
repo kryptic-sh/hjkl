@@ -2633,6 +2633,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-keymap-gui"
+version = "0.33.5"
+dependencies = [
+ "floem",
+ "hjkl-keymap",
+]
+
+[[package]]
 name = "hjkl-keymap-tui"
 version = "0.33.5"
 dependencies = [
