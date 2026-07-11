@@ -164,7 +164,7 @@ pub fn editor_view(handle: EditorHandle) -> impl IntoView {
 
     let text_area = scroll(buf_label).style(|s| {
         s.width_full()
-            .flex_grow(1.0)
+            .flex_grow(1.0_f32)
             .background(Color::rgb8(30, 30, 30))
     });
 
