@@ -83,17 +83,25 @@ pub(crate) fn shell_filter_handler<H: Host>(
         Ok(c) => c,
         Err(e) => return ExEffect::Error(format!("cannot spawn `{cmd}`: {e}")),
     };
-    if let Some(stdin) = child.stdin.as_mut() {
-        match stdin.write_all(payload.as_bytes()) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-            Err(e) => return ExEffect::Error(format!("cannot write to `{cmd}`: {e}")),
-        }
-    }
+    // Feed stdin from a separate thread: writing the whole payload here while
+    // also not draining the child's stdout deadlocks once both pipe buffers
+    // fill (e.g. `:%!cat` on a buffer larger than the pipe capacity).
+    let writer = child
+        .stdin
+        .take()
+        .map(|mut stdin| std::thread::spawn(move || stdin.write_all(payload.as_bytes())));
     let output = match child.wait_with_output() {
         Ok(o) => o,
         Err(e) => return ExEffect::Error(format!("`{cmd}` failed: {e}")),
     };
+    if let Some(handle) = writer {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Ok(Err(e)) => return ExEffect::Error(format!("cannot write to `{cmd}`: {e}")),
+            Err(_) => return ExEffect::Error(format!("stdin writer for `{cmd}` panicked")),
+        }
+    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let trimmed = stderr.trim();
@@ -166,6 +174,25 @@ mod tests {
         let mut editor = make_editor_with_lines(&["hello"]);
         let result = shell_filter_handler(&mut editor, "", None);
         assert!(matches!(result, ExEffect::Error(_)), "got: {result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_filter_large_payload_does_not_deadlock() {
+        if !sh_available() {
+            return;
+        }
+        // Regression: stdin was written on this thread before draining stdout;
+        // once payload + streamed output exceeded the pipe buffers (~64KiB
+        // each), writer and child blocked on each other forever. `cat` streams
+        // 1:1, so a few hundred KiB reliably triggered the deadlock.
+        let line = "x".repeat(64);
+        let lines: Vec<&str> = std::iter::repeat_n(line.as_str(), 8192).collect();
+        let mut editor = make_editor_with_lines(&lines);
+        let range = LineRange::new(1, lines.len());
+        let result = shell_filter_handler(&mut editor, "cat", Some(range));
+        assert_eq!(result, ExEffect::Ok, "got: {result:?}");
+        assert_eq!(editor.buffer().row_count(), lines.len());
     }
 
     #[cfg(unix)]

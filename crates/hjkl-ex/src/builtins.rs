@@ -922,7 +922,9 @@ pub(crate) fn shift_handler<H: Host>(
             Ok(0) | Err(_) => return ExEffect::Error("Trailing characters".into()),
             Ok(n) => {
                 start_row = end_row;
-                end_row = start_row + n - 1;
+                // Saturate: a huge count (e.g. `:2> 18446744073709551615`)
+                // must clamp to the buffer end, not overflow and panic.
+                end_row = start_row.saturating_add(n - 1);
             }
         }
     }
@@ -3153,6 +3155,17 @@ mod tests {
     fn shift_trailing_garbage_errors() {
         let mut ed = shift_editor(&["a", "b"]);
         assert!(matches!(dispatch(&mut ed, "1>x"), Some(ExEffect::Error(_))));
+    }
+
+    #[test]
+    fn shift_huge_trailing_count_does_not_overflow() {
+        // Regression: `start_row + n - 1` overflowed usize when the trailing
+        // count was near usize::MAX and the range started past line 1.
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        let cmd = format!("2> {}", usize::MAX);
+        assert_eq!(dispatch(&mut ed, &cmd), Some(ExEffect::Ok));
+        // Count clamps to the buffer end: lines 2..=3 shifted, line 1 untouched.
+        assert_eq!(buf_lines(&ed), vec!["a", "    b", "    c"]);
     }
 
     // ── quit_handler ─────────────────────────────────────────────────────────

@@ -76,6 +76,12 @@ pub fn longest_common_prefix(candidates: &[String]) -> String {
             return String::new();
         }
     }
+    // `end` counts matching BYTES; back off to a char boundary so candidates
+    // sharing only a partial multibyte prefix (e.g. "à" C3A0 vs "á" C3A1
+    // match on the C3 byte) don't slice mid-char and panic.
+    while !first.is_char_boundary(end) {
+        end -= 1;
+    }
     first[..end].to_string()
 }
 
@@ -511,6 +517,17 @@ mod tests {
     fn lcp_no_common() {
         let candidates = names(&["a", "b"]);
         assert_eq!(longest_common_prefix(&candidates), "");
+    }
+
+    #[test]
+    fn lcp_partial_multibyte_prefix_does_not_panic() {
+        // Regression: "à" (C3 A0) and "á" (C3 A1) share only the C3 lead byte;
+        // slicing at the byte-match count split the char and panicked.
+        let candidates = names(&["à.txt", "á.txt"]);
+        assert_eq!(longest_common_prefix(&candidates), "");
+        // Shared full multibyte prefix must survive intact.
+        let candidates = names(&["日本語", "日本人"]);
+        assert_eq!(longest_common_prefix(&candidates), "日本");
     }
 
     // ── Phase 6 tests ─────────────────────────────────────────────────────────
