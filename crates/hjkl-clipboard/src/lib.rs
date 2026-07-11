@@ -242,8 +242,10 @@ impl Clipboard {
 
     /// Return true if the active backend is OSC 52.
     ///
-    /// Used in tests to verify fallback selection without needing a display.
-    #[cfg(all(test, not(any(target_os = "macos", target_os = "windows"))))]
+    /// Used in tests to verify fallback / forced backend selection without
+    /// needing a display. Available on every platform so the
+    /// `HJKL_CLIPBOARD=osc52` override can be verified on macOS/Windows too.
+    #[cfg(test)]
     pub(crate) fn is_osc52(&self) -> bool {
         self.backend.kind() == BackendKind::Osc52
     }
