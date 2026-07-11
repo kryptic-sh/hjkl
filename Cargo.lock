@@ -2836,6 +2836,14 @@ name = "hjkl-tabs"
 version = "0.33.5"
 
 [[package]]
+name = "hjkl-tabs-gui"
+version = "0.33.5"
+dependencies = [
+ "floem",
+ "hjkl-tabs",
+]
+
+[[package]]
 name = "hjkl-tabs-tui"
 version = "0.33.5"
 dependencies = [
