@@ -237,14 +237,30 @@ fn parse_location(s: &str) -> Option<(String, usize, usize)> {
     Some((path, row.saturating_sub(1), col.saturating_sub(1)))
 }
 
+/// If `s` starts with a Windows drive prefix (`C:\` / `C:/`), return
+/// `("C:", rest)` so the drive's colon isn't mistaken for a field separator;
+/// otherwise `("", s)`.
+fn split_drive_prefix(s: &str) -> (&str, &str) {
+    let b = s.as_bytes();
+    if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/') {
+        (&s[..2], &s[2..])
+    } else {
+        ("", s)
+    }
+}
+
 /// Parse a gcc/clang `path:row:col: level: message` line.
 fn parse_gcc_line(line: &str, root: &Path) -> Option<QfEntry> {
+    // A leading Windows drive letter (`C:\…`) has a colon that must not be
+    // treated as the path/row separator; peel it off and re-attach.
+    let (drive, rest) = split_drive_prefix(line);
     // path : row : col : " level: message"
-    let mut parts = line.splitn(4, ':');
-    let path = parts.next()?.trim();
+    let mut parts = rest.splitn(4, ':');
+    let path_rest = parts.next()?.trim();
     let row: usize = parts.next()?.trim().parse().ok()?;
     let col: usize = parts.next()?.trim().parse().ok()?;
     let tail = parts.next()?.trim();
+    let path = format!("{drive}{path_rest}");
     if path.is_empty() {
         return None;
     }
@@ -253,7 +269,7 @@ fn parse_gcc_line(line: &str, root: &Path) -> Option<QfEntry> {
         None => (QfKind::Error, tail.to_string()),
     };
     Some(QfEntry {
-        path: resolve(root, path),
+        path: resolve(root, &path),
         row: row.saturating_sub(1),
         col: col.saturating_sub(1),
         kind,
@@ -282,6 +298,21 @@ fn resolve(root: &Path, path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gcc_windows_drive_letter_path_parses() {
+        let root = std::path::Path::new(".");
+        let e = parse_gcc_line(r"C:\src\main.rs:10:5: error: boom", root)
+            .expect("drive-letter line must parse, not be dropped");
+        assert_eq!(e.row, 9);
+        assert_eq!(e.col, 4);
+        assert!(
+            e.path.to_string_lossy().contains("main.rs"),
+            "drive-letter path must survive, got {:?}",
+            e.path
+        );
+        assert_eq!(e.message, "boom");
+    }
 
     #[test]
     fn parses_rustc_cargo() {
