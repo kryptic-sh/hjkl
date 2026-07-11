@@ -1885,6 +1885,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         buf_cursor_rc(&self.buffer)
     }
 
+    /// The character under the cursor, or `None` at/after end of line (or on
+    /// an empty line). Used by callers that need vim's on-blank distinctions
+    /// (e.g. `cw` only acts like `ce` when the cursor is on a non-blank).
+    pub fn char_at_cursor(&self) -> Option<char> {
+        let (row, col) = self.cursor();
+        crate::buf_helpers::buf_line(&self.buffer, row).and_then(|l| l.chars().nth(col))
+    }
+
     /// Drain any pending LSP intent raised by the last key. Returns
     /// `None` when no intent is armed.
     pub fn take_lsp_intent(&mut self) -> Option<LspIntent> {

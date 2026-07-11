@@ -125,6 +125,10 @@ pub struct VimState {
     pub count: usize,
     /// Last `f`/`F`/`t`/`T` target, for `;` / `,` repeat.
     pub last_find: Option<(char, bool, bool)>,
+    /// Transient: set while resolving a `;` / `,` repeat so the following
+    /// `t`/`T` find skips an immediately-adjacent match (vim's repeat quirk).
+    /// Read and cleared by the `Motion::Find` cursor dispatch.
+    pub find_repeat_skip: bool,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.
@@ -3265,14 +3269,19 @@ pub(crate) fn execute_motion<H: crate::types::Host>(
         }
         return;
     }
-    // FindRepeat needs the stored direction.
+    // FindRepeat needs the stored direction. A `;`/`,` repeat of a `t`/`T`
+    // find must skip an immediately-adjacent match (vim's repeat quirk); flag
+    // it so the `Motion::Find` dispatch below passes `skip_adjacent`.
     let motion = match motion {
         Motion::FindRepeat { reverse } => match ed.vim.last_find {
-            Some((ch, forward, till)) => Motion::Find {
-                ch,
-                forward: if reverse { !forward } else { forward },
-                till,
-            },
+            Some((ch, forward, till)) => {
+                ed.vim.find_repeat_skip = true;
+                Motion::Find {
+                    ch,
+                    forward: if reverse { !forward } else { forward },
+                    till,
+                }
+            }
             None => return,
         },
         other => other,
@@ -3700,8 +3709,13 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Find { ch, forward, till } => {
-            for _ in 0..count {
-                if !find_char_on_line(ed, *ch, *forward, *till) {
+            // Skip an adjacent target when this is a `;`/`,` repeat, and on the
+            // 2nd..Nth step of a counted `t`/`T` (the cursor lands one cell
+            // short each time, so a naive repeat would stick).
+            let repeat = std::mem::take(&mut ed.vim.find_repeat_skip);
+            for i in 0..count {
+                let skip_adjacent = repeat || i > 0;
+                if !find_char_on_line(ed, *ch, *forward, *till, skip_adjacent) {
                     break;
                 }
             }
@@ -3851,8 +3865,9 @@ fn find_char_on_line<H: crate::types::Host>(
     ch: char,
     forward: bool,
     till: bool,
+    skip_adjacent: bool,
 ) -> bool {
-    let moved = crate::motions::find_char_on_line(&mut ed.buffer, ch, forward, till);
+    let moved = crate::motions::find_char_on_line(&mut ed.buffer, ch, forward, till, skip_adjacent);
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -4044,6 +4059,16 @@ pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
     let Some(motion) = parse_motion(&input) else {
         return;
     };
+    // Vim quirk (`:h cw`): `cw`/`cW` act like `ce`/`cE` — but ONLY when the
+    // cursor is on a non-blank. On whitespace, `cw` behaves like `dw` (changes
+    // just the whitespace up to the next word), so the conversion is skipped.
+    let cursor_on_nonblank = {
+        let (r, c) = ed.cursor();
+        buf_line(&ed.buffer, r)
+            .and_then(|l| l.chars().nth(c))
+            .map(|ch| !ch.is_whitespace())
+            .unwrap_or(false)
+    };
     let motion = match motion {
         Motion::FindRepeat { reverse } => match ed.vim.last_find {
             Some((ch, forward, till)) => Motion::Find {
@@ -4053,9 +4078,8 @@ pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
             },
             None => return,
         },
-        // Vim quirk: `cw` / `cW` → `ce` / `cE`.
-        Motion::WordFwd if op == Operator::Change => Motion::WordEnd,
-        Motion::BigWordFwd if op == Operator::Change => Motion::BigWordEnd,
+        Motion::WordFwd if op == Operator::Change && cursor_on_nonblank => Motion::WordEnd,
+        Motion::BigWordFwd if op == Operator::Change && cursor_on_nonblank => Motion::BigWordEnd,
         m => m,
     };
     apply_op_with_motion(ed, op, &motion, total_count);
@@ -7446,8 +7470,9 @@ fn word_text_object<H: crate::types::Host>(
     // consumers re-interpreted as char columns — `diw` / `viw` acted on
     // the wrong span whenever the line held multibyte text.
     let mut start_col = start;
-    // Exclusive end: char index AFTER the last-included char.
-    let mut end_col = end + 1;
+    // Exclusive end: char index AFTER the last-included char. Assigned in each
+    // branch below (inner / aw-on-whitespace / aw-on-word).
+    let end_col;
     if inner {
         // `Niw` selects N alternating runs (word / punct / whitespace), so
         // extend the end over `count - 1` further runs.
@@ -7462,23 +7487,30 @@ fn word_text_object<H: crate::types::Host>(
         }
         end_col = end + 1;
     } else if cls == 0 {
-        // `aw` with the cursor on whitespace — keep the single-object shape
-        // (count extension for this case is uncommon and left as-is).
-        let mut t = end + 1;
-        let mut included_trailing = false;
-        while t < len && chars[t].is_whitespace() {
-            included_trailing = true;
-            t += 1;
-        }
-        if included_trailing {
-            end_col = t;
-        } else {
-            let mut s = start;
-            while s > 0 && chars[s - 1].is_whitespace() {
-                s -= 1;
+        // `aw` with the cursor on whitespace: vim selects the whitespace run
+        // plus the FOLLOWING word (`:help aw`). `start..end` already covers the
+        // whitespace run; consume `count` following non-blank runs, including
+        // any whitespace between them.
+        let mut e = end;
+        let mut rem = count;
+        while rem > 0 && e + 1 < len {
+            // Skip whitespace to the next word (no-op right after the initial
+            // run, relevant only for count > 1).
+            while e + 1 < len && chars[e + 1].is_whitespace() {
+                e += 1;
             }
-            start_col = s;
+            if e + 1 >= len {
+                break;
+            }
+            // Consume the word (non-blank run).
+            e += 1;
+            let k = classify(chars[e]);
+            while e + 1 < len && classify(chars[e + 1]) == k {
+                e += 1;
+            }
+            rem -= 1;
         }
+        end_col = e + 1;
     } else {
         // `Naw` with the cursor on a word — include N non-blank runs plus the
         // whitespace between them, then the trailing whitespace after the last

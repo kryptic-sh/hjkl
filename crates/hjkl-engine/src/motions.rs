@@ -217,6 +217,10 @@ pub fn move_last_non_blank<B: Cursor + Query>(buf: &mut B) {
 }
 
 /// `{` — previous blank line above the cursor, or row 0.
+///
+/// A run of consecutive blank lines counts as a single paragraph boundary
+/// (matching vim/neovim), so `{` steps over the blank run the cursor sits in
+/// before scanning up through the preceding paragraph to the next boundary.
 pub fn move_paragraph_prev<B: Cursor + Query>(buf: &mut B, count: usize) {
     let mut row = read_cursor(buf).row;
     for _ in 0..count.max(1) {
@@ -238,6 +242,10 @@ pub fn move_paragraph_prev<B: Cursor + Query>(buf: &mut B, count: usize) {
 }
 
 /// `}` — next blank line below the cursor, or last row.
+///
+/// A run of consecutive blank lines counts as a single paragraph boundary
+/// (matching vim/neovim), so `}` steps over the blank run the cursor sits in
+/// before scanning down through the following paragraph to the next boundary.
 pub fn move_paragraph_next<B: Cursor + Query>(buf: &mut B, count: usize) {
     let last = read_row_count(buf).saturating_sub(1);
     let mut row = read_cursor(buf).row;
@@ -635,12 +643,20 @@ pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
 /// `f` / `F` / `t` / `T` — find `ch` on the current row.
 /// `forward = true` searches right of the cursor; `till = true`
 /// stops one cell short of the match (the `t`/`T` semantic).
+///
+/// `skip_adjacent` handles the `t`/`T` repeat quirk: after `t{c}` the cursor
+/// sits one cell before `{c}`, so a naive repeat re-finds the same match and
+/// sticks. When `skip_adjacent` is set (used by `;`/`,` and by the 2nd..Nth
+/// step of a counted `t`/`T`), an immediately-adjacent target is skipped so
+/// the motion advances to the next occurrence. It has no effect on `f`/`F`.
+///
 /// Returns `true` when the cursor moved.
 pub fn find_char_on_line<B: Cursor + Query>(
     buf: &mut B,
     ch: char,
     forward: bool,
     till: bool,
+    skip_adjacent: bool,
 ) -> bool {
     let cursor = read_cursor(buf);
     let line = match read_line_opt(buf, cursor.row) {
@@ -652,14 +668,24 @@ pub fn find_char_on_line<B: Cursor + Query>(
         return false;
     }
     let target_col = if forward {
+        // Skip an immediately-adjacent target for a `t` repeat.
+        let mut from = cursor.col + 1;
+        if skip_adjacent && till && chars.get(from) == Some(&ch) {
+            from += 1;
+        }
         chars
             .iter()
             .enumerate()
-            .skip(cursor.col + 1)
+            .skip(from)
             .find(|(_, c)| **c == ch)
             .map(|(i, _)| if till { i.saturating_sub(1) } else { i })
     } else {
-        (0..cursor.col)
+        // Skip an immediately-adjacent target for a `T` repeat.
+        let mut upto = cursor.col;
+        if skip_adjacent && till && upto > 0 && chars.get(upto - 1) == Some(&ch) {
+            upto -= 1;
+        }
+        (0..upto)
             .rev()
             .find(|&i| chars[i] == ch)
             .map(|i| if till { i + 1 } else { i })
@@ -1341,16 +1367,39 @@ mod tests {
     #[test]
     fn find_char_forward_lands_on_match() {
         let mut b = Buffer::from_str("foo,bar,baz");
-        assert!(find_char_on_line(&mut b, ',', true, false));
+        assert!(find_char_on_line(&mut b, ',', true, false, false));
         assert_eq!(at(&b), Position::new(0, 3));
-        assert!(find_char_on_line(&mut b, ',', true, false));
+        assert!(find_char_on_line(&mut b, ',', true, false, false));
         assert_eq!(at(&b), Position::new(0, 7));
     }
 
     #[test]
     fn find_char_till_stops_one_short() {
         let mut b = Buffer::from_str("foo,bar");
-        assert!(find_char_on_line(&mut b, ',', true, true));
+        assert!(find_char_on_line(&mut b, ',', true, true, false));
+        assert_eq!(at(&b), Position::new(0, 2));
+    }
+
+    #[test]
+    fn find_char_till_repeat_skips_adjacent() {
+        // `t,` lands one cell before the comma; a repeat with `skip_adjacent`
+        // advances to just before the NEXT comma instead of sticking.
+        let mut b = Buffer::from_str("a,b,c");
+        assert!(find_char_on_line(&mut b, ',', true, true, false));
+        assert_eq!(at(&b), Position::new(0, 0));
+        assert!(find_char_on_line(&mut b, ',', true, true, true));
+        assert_eq!(at(&b), Position::new(0, 2));
+    }
+
+    #[test]
+    fn find_char_till_reverse_repeat_skips_adjacent() {
+        // `T,` from the end lands one cell after the comma; a reverse repeat
+        // advances to just after the previous comma.
+        let mut b = Buffer::from_str("a,b,c");
+        b.set_cursor(Position::new(0, 4));
+        assert!(find_char_on_line(&mut b, ',', false, true, false));
+        assert_eq!(at(&b), Position::new(0, 4));
+        assert!(find_char_on_line(&mut b, ',', false, true, true));
         assert_eq!(at(&b), Position::new(0, 2));
     }
 
@@ -1358,14 +1407,14 @@ mod tests {
     fn find_char_backward_lands_on_match() {
         let mut b = Buffer::from_str("foo,bar,baz");
         b.set_cursor(Position::new(0, 10));
-        assert!(find_char_on_line(&mut b, ',', false, false));
+        assert!(find_char_on_line(&mut b, ',', false, false, false));
         assert_eq!(at(&b), Position::new(0, 7));
     }
 
     #[test]
     fn find_char_no_match_returns_false() {
         let mut b = Buffer::from_str("hello");
-        assert!(!find_char_on_line(&mut b, 'z', true, false));
+        assert!(!find_char_on_line(&mut b, 'z', true, false, false));
         assert_eq!(at(&b), Position::new(0, 0));
     }
 

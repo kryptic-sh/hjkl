@@ -873,11 +873,22 @@ fn handle_after_op<H: Host>(
                 },
                 None => return true,
             },
-            // Vim quirk: `cw` / `cW` are `ce` / `cE` — don't include
-            // trailing whitespace so the user's replacement text lands
-            // before the following word's leading space.
-            Motion::WordFwd if op == Operator::Change => Motion::WordEnd,
-            Motion::BigWordFwd if op == Operator::Change => Motion::BigWordEnd,
+            // Vim quirk (`:h cw`): `cw`/`cW` act like `ce`/`cE` — but ONLY when
+            // the cursor is on a non-blank. On whitespace, `cw` behaves like
+            // `dw` (changes just the whitespace up to the next word), so the
+            // conversion is skipped.
+            Motion::WordFwd
+                if op == Operator::Change
+                    && ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()) =>
+            {
+                Motion::WordEnd
+            }
+            Motion::BigWordFwd
+                if op == Operator::Change
+                    && ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()) =>
+            {
+                Motion::BigWordEnd
+            }
             m => m,
         };
         ed.apply_op_with_motion_direct(op, &motion, total);

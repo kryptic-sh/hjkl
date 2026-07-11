@@ -836,3 +836,45 @@ initial_cursor = [0, 0]
 keys = "d5|"
 expected_buffer = "o world\n"
 expected_cursor = [0, 0]
+
+# ── Motion edge cases (cw/aw on whitespace, }/{ blank runs, t/T repeat) ───────
+
+# `cw` with the cursor on whitespace acts like `dw` (changes just the
+# whitespace run), NOT like `ce` (which would eat the following word).
+[[cases]]
+name = "change_cw_on_whitespace_like_dw"
+initial_buffer = "foo   bar\n"
+initial_cursor = [0, 3]
+keys = "cwX<Esc>"
+expected_buffer = "fooXbar\n"
+expected_mode = "normal"
+
+# `daw` with the cursor on whitespace deletes the whitespace run plus the
+# FOLLOWING word.
+[[cases]]
+name = "textobj_daw_on_whitespace_eats_following_word"
+initial_buffer = "foo   bar\n"
+initial_cursor = [0, 3]
+keys = "daw"
+expected_buffer = "foo\n"
+expected_mode = "normal"
+
+# `t,` then `;` repeats past the adjacent match: `t,` sticks one cell before
+# the first comma, and `;` advances to just before the second.
+[[cases]]
+name = "find_till_repeat_semicolon_skips_adjacent"
+initial_buffer = "a,b,c\n"
+initial_cursor = [0, 0]
+keys = "t,;"
+expected_buffer = "a,b,c\n"
+expected_cursor = [0, 2]
+
+# A counted `2t,` reaches just before the second comma (the 2nd step skips the
+# adjacent first comma).
+[[cases]]
+name = "find_till_count_two_skips_adjacent"
+initial_buffer = "a,b,c\n"
+initial_cursor = [0, 0]
+keys = "2t,"
+expected_buffer = "a,b,c\n"
+expected_cursor = [0, 2]

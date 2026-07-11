@@ -274,6 +274,36 @@ fn dot_repeats_x() {
 }
 
 #[test]
+fn cw_on_whitespace_acts_like_dw() {
+    // Cursor on whitespace: `cw` changes just the whitespace run (like `dw`),
+    // not through the following word (which `ce` would do).
+    let mut e = editor_with("foo   bar");
+    run_keys(&mut e, "3l"); // move onto the first space (col 3)
+    run_keys(&mut e, "cwX<Esc>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fooXbar");
+}
+
+#[test]
+fn daw_on_whitespace_eats_following_word() {
+    // `aw` on whitespace = the whitespace run plus the following word.
+    let mut e = editor_with("foo   bar");
+    run_keys(&mut e, "3l");
+    run_keys(&mut e, "daw");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo");
+}
+
+#[test]
+fn till_repeat_semicolon_skips_adjacent() {
+    // `t,` sticks one before the first comma; `;` advances past it to just
+    // before the second comma.
+    let mut e = editor_with("a,b,c");
+    run_keys(&mut e, "t,");
+    assert_eq!(e.cursor(), (0, 0));
+    run_keys(&mut e, ";");
+    assert_eq!(e.cursor(), (0, 2));
+}
+
+#[test]
 fn d2iw_deletes_word_and_following_space() {
     // `2iw` = two inner-word runs: the word plus the following whitespace run.
     let mut e = editor_with("foo bar baz");
