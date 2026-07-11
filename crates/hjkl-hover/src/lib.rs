@@ -165,14 +165,20 @@ pub fn position(state: &HoverState, viewport: HoverViewport) -> HoverRect {
     let ax = state.anchor.col;
     let ay = state.anchor.row;
 
-    // Compute content dimensions from raw text.
+    // Compute content dimensions from raw text. Clamp before the u16 casts:
+    // a pathological LSP payload (a 65k-byte line or 65k lines) would
+    // otherwise overflow on the `+ 2` below.
     let content_w: u16 = state
         .content
         .lines()
-        .map(|l| l.len() as u16)
+        .map(|l| l.len().min(u16::MAX as usize - 2))
         .max()
-        .unwrap_or(8);
-    let content_h: u16 = state.content.lines().count().max(1) as u16;
+        .unwrap_or(8) as u16;
+    let content_h: u16 = state
+        .content
+        .lines()
+        .count()
+        .clamp(1, u16::MAX as usize - 2) as u16;
 
     // Total popup size including border (1 cell each side).
     let popup_w = (content_w + 2)
@@ -185,18 +191,20 @@ pub fn position(state: &HoverState, viewport: HoverViewport) -> HoverRect {
         .min(viewport.height);
 
     // Horizontal: prefer anchor col, shift left if overflowing right edge.
-    let x = if ax + popup_w <= viewport.width {
+    let x = if ax.saturating_add(popup_w) <= viewport.width {
         ax
     } else {
         viewport.width.saturating_sub(popup_w)
     };
 
-    // Vertical: prefer one row below; flip above if no room.
+    // Vertical: prefer one row below; flip above if no room. Clamp so the
+    // rect stays inside the viewport even for an out-of-range anchor.
     let below_y = ay.saturating_add(1);
-    let y = if below_y + popup_h <= viewport.height {
+    let y = if below_y.saturating_add(popup_h) <= viewport.height {
         below_y
     } else {
         ay.saturating_sub(popup_h)
+            .min(viewport.height.saturating_sub(popup_h))
     };
 
     HoverRect {
@@ -248,6 +256,31 @@ mod tests {
         let s = state("short", 0, 0);
         let r = position(&s, vp(80, 24));
         assert!(r.y > 0, "should be below anchor at row 0");
+    }
+
+    #[test]
+    fn huge_payload_does_not_panic() {
+        // Regression: a 65k-byte line / 65k-line payload used to overflow the
+        // `content_w + 2` / `content_h + 2` u16 math in debug builds.
+        let long_line = "x".repeat(65_534);
+        let s = state(&long_line, 0, 0);
+        let r = position(&s, vp(80, 24));
+        assert!(r.x + r.width <= 80);
+        assert!(r.y + r.height <= 24);
+
+        let many_lines = "y\n".repeat(65_534);
+        let s = state(&many_lines, 0, 0);
+        let r = position(&s, vp(80, 24));
+        assert!(r.y + r.height <= 24);
+    }
+
+    #[test]
+    fn out_of_range_anchor_is_clamped() {
+        // Anchor outside the viewport must not produce a rect past its edges.
+        let s = state("line1\nline2\nline3", 200, 200);
+        let r = position(&s, vp(80, 24));
+        assert!(r.x + r.width <= 80, "x={} w={}", r.x, r.width);
+        assert!(r.y + r.height <= 24, "y={} h={}", r.y, r.height);
     }
 
     #[test]

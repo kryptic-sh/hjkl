@@ -206,8 +206,11 @@ pub fn popup(
                 Span::styled(label.clone(), row_style),
             ];
             if let Some(ref detail) = item.detail {
-                // Truncate detail to avoid overflow.
-                let avail = inner.width.saturating_sub(2 + label.len() as u16 + 2) as usize;
+                // Truncate detail to avoid overflow. Compute in usize with
+                // char counts: a 65k-byte label from a hostile LSP server
+                // would overflow the u16 math, and byte lengths over-shrink
+                // the budget for multibyte labels.
+                let avail = (inner.width as usize).saturating_sub(2 + label.chars().count() + 2);
                 let truncated: String = detail.chars().take(avail).collect();
                 if !truncated.is_empty() {
                     spans.push(Span::styled(
@@ -380,6 +383,37 @@ mod tests {
             below_row
         };
         assert_eq!(expected_y, 6, "popup must appear below when room available");
+    }
+
+    /// A pathologically long label + detail from the server must not panic
+    /// (the old `2 + label.len() as u16 + 2` math overflowed in debug builds).
+    #[test]
+    fn huge_label_does_not_panic() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut item = make_item(&"x".repeat(65_534));
+        item.detail = Some("some detail".to_string());
+        let completion = Completion::new(0, 0, vec![item]);
+        let theme = CompletionTheme::default();
+        let anchor = Rect {
+            x: 0,
+            y: 2,
+            width: 1,
+            height: 1,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+
+        terminal
+            .draw(|frame| {
+                popup(frame, &completion, &theme, anchor, viewport);
+            })
+            .unwrap();
     }
 
     /// Directional: popup below → visible[0] (best match) appears on a higher

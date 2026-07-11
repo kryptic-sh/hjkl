@@ -114,10 +114,13 @@ pub fn render_prompt_line(
     let line = prompt_line_spans(&content, prompt.field.vim_mode(), theme, area.width);
     frame.render_widget(Paragraph::new(line), area);
 
-    // Position terminal cursor at the insertion point.
+    // Position terminal cursor at the insertion point, clamped to the bar so
+    // a pathologically long input can't overflow the u16 math.
     let (_, ccol) = prompt.field.cursor();
-    let cursor_col = 1u16 + ccol as u16;
-    frame.set_cursor_position((area.x + cursor_col, area.y));
+    let cursor_col = ccol
+        .saturating_add(1)
+        .min(area.width.saturating_sub(1) as usize) as u16;
+    frame.set_cursor_position((area.x.saturating_add(cursor_col), area.y));
 }
 
 /// Build a ratatui [`Line`] for the given prompt content string and mode.
@@ -192,15 +195,13 @@ pub fn render_wildmenu(frame: &mut Frame, prompt: &PromptState, theme: &PromptTh
         let entry = cand.clone();
         let entry_len = entry.chars().count();
 
-        let remaining = n - i;
-        let suffix = if remaining > 1 {
-            format!("  +{} more", remaining - 1)
-        } else {
-            String::new()
-        };
+        // If we stop before rendering candidate `i`, candidates `i..n` are all
+        // hidden — that is `n - i` of them (not `n - i - 1`).
+        let hidden = n - i;
+        let suffix = format!("  +{hidden} more");
 
         if used + entry_len > width {
-            if !suffix.is_empty() && used + suffix.len() <= width {
+            if used + suffix.len() <= width {
                 spans.push(Span::styled(suffix, normal_style));
             }
             break;
@@ -324,6 +325,57 @@ mod tests {
             0..1,
         ));
         assert!(has_wildmenu(&p));
+    }
+
+    #[test]
+    fn wildmenu_counts_hidden_last_candidate() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        // Regression: when the candidate that fails to fit was the LAST one,
+        // the strip used to render no "+N more" indicator at all (and always
+        // under-counted the hidden candidates by one).
+        let mut p = PromptState::new(PromptKind::Command);
+        p.completion = Some(CommandCompletion::new(
+            "e".into(),
+            vec!["short".into(), "averyverylongcandidatename".into()],
+            0..1,
+        ));
+        let theme = PromptTheme::default();
+
+        let backend = TestBackend::new(20, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 20, 1);
+                render_wildmenu(frame, &p, &theme, area);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let all: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            all.contains("+1 more"),
+            "hidden last candidate must be counted: {all:?}"
+        );
+    }
+
+    #[test]
+    fn render_prompt_line_huge_input_does_not_panic() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        // Regression: a 65535-char prompt line used to overflow the
+        // `1u16 + ccol as u16` cursor math in debug builds.
+        let mut p = PromptState::new(PromptKind::Command);
+        p.apply_history_nav(&["x".repeat(65_535)], Some(0));
+        let theme = PromptTheme::default();
+
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_prompt_line(frame, &p, &theme, Rect::new(0, 0, 80, 1));
+            })
+            .unwrap();
     }
 
     #[test]

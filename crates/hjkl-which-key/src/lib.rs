@@ -172,7 +172,11 @@ pub fn layout(entries: &[Entry], width: u16) -> PopupLayout {
         .iter()
         .map(|e| e.key.len() + 1 + e.desc.len()) // key + space + desc
         .max()
-        .unwrap_or(8) as u16;
+        .unwrap_or(8)
+        // Clamp before the u16 cast: a pathologically long desc would
+        // otherwise wrap (making col_width 0 → division by zero below) or
+        // overflow on `+ 2`.
+        .min(u16::MAX as usize - 2) as u16;
     // Each column: entry_width + 2 padding between columns.
     let col_width = entry_width + 2;
     let available_width = width.saturating_sub(2); // subtract border
@@ -280,6 +284,18 @@ mod tests {
         let l = layout(&entries, 10);
         assert_eq!(l.rows, MAX_POPUP_ROWS);
         assert!(l.visible.len() <= l.cols * l.rows);
+    }
+
+    #[test]
+    fn layout_huge_desc_does_not_panic() {
+        // Regression: a desc whose byte length pushes key+space+desc to
+        // 65534 used to overflow the u16 cast (debug) or wrap col_width to 0
+        // and divide by zero (release).
+        let entries = vec![Entry::new("k", "x".repeat(65_532))];
+        let l = layout(&entries, 80);
+        assert_eq!(l.rows, 1);
+        assert!(l.cols >= 1);
+        assert_eq!(l.visible.len(), 1);
     }
 
     #[test]

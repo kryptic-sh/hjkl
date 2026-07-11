@@ -96,8 +96,14 @@ pub fn render(frame: &mut Frame, state: &HoverState, theme: &HoverTheme, viewpor
     let events = parse(&state.content);
     let lines = to_lines(&events, &theme.md, inner.width);
 
-    // Apply scroll offset.
-    let scrolled: Vec<_> = lines.into_iter().skip(state.scroll).collect();
+    // Apply scroll offset, clamped so scrolling past the end never blanks
+    // the popup (HoverState::scroll_lines has no upper bound; the renderer
+    // is responsible for enforcing it).
+    let max_scroll = lines.len().saturating_sub(inner.height.max(1) as usize);
+    let scrolled: Vec<_> = lines
+        .into_iter()
+        .skip(state.scroll.min(max_scroll))
+        .collect();
 
     let para = Paragraph::new(scrolled)
         .style(Style::default().fg(theme.md.text).bg(theme.background))
@@ -140,6 +146,31 @@ mod tests {
         let scrolled: Vec<_> = lines.into_iter().skip(s.scroll).collect();
         // Should have 2 or fewer lines after skipping 1.
         assert!(scrolled.len() <= 3, "unexpected line count");
+    }
+
+    #[test]
+    fn overscrolled_popup_still_shows_content() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut s = make_state("alpha\nbravo\ncharlie", 0, 0);
+        s.scroll_lines(10_000); // far past the end
+        let theme = HoverTheme::default();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render(frame, &s, &theme, area);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let all: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            all.contains("charlie"),
+            "overscrolled popup must clamp and keep the tail visible"
+        );
     }
 
     #[test]

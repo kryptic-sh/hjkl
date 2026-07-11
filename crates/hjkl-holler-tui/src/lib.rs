@@ -173,6 +173,10 @@ pub fn render_active(
 // ── wrap_text ─────────────────────────────────────────────────────────────────
 
 /// Word-wrap `text` to `max_cols` columns. Returns owned `String` lines.
+///
+/// Words longer than `max_cols` are hard-split at char boundaries so the
+/// line count matches what actually fits — otherwise the popup height is
+/// under-counted and the tail of the notification gets clipped.
 fn wrap_text(text: &str, max_cols: usize) -> Vec<String> {
     if max_cols == 0 {
         return vec![text.to_string()];
@@ -184,15 +188,34 @@ fn wrap_text(text: &str, max_cols: usize) -> Vec<String> {
             continue;
         }
         let mut current = String::new();
+        let mut current_len = 0usize; // chars, not bytes
         for word in paragraph.split_whitespace() {
-            if current.is_empty() {
-                current = word.to_string();
-            } else if current.len() + 1 + word.len() <= max_cols {
+            let word_len = word.chars().count();
+            if word_len > max_cols {
+                // Hard-split an unbreakable word (long path, URL, …).
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    current_len = 0;
+                }
+                for ch in word.chars() {
+                    if current_len == max_cols {
+                        lines.push(std::mem::take(&mut current));
+                        current_len = 0;
+                    }
+                    current.push(ch);
+                    current_len += 1;
+                }
+            } else if current.is_empty() {
+                current.push_str(word);
+                current_len = word_len;
+            } else if current_len + 1 + word_len <= max_cols {
                 current.push(' ');
                 current.push_str(word);
+                current_len += 1 + word_len;
             } else {
                 lines.push(std::mem::take(&mut current));
-                current = word.to_string();
+                current.push_str(word);
+                current_len = word_len;
             }
         }
         if !current.is_empty() {
@@ -259,6 +282,27 @@ mod tests {
             assert!(l.len() <= 10 || !l.contains(' '), "too long: {l:?}");
         }
         assert!(lines.len() >= 2, "should have wrapped");
+    }
+
+    #[test]
+    fn wrap_text_hard_splits_overlong_word() {
+        // Regression: a word longer than max_cols used to land on a single
+        // line, under-counting the popup height and clipping the toast body.
+        let long = "x".repeat(25);
+        let lines = wrap_text(&long, 10);
+        assert_eq!(lines.len(), 3, "25 chars at 10 cols → 3 lines: {lines:?}");
+        for l in &lines {
+            assert!(l.chars().count() <= 10, "too long: {l:?}");
+        }
+        assert_eq!(lines.concat(), long, "no characters may be lost");
+    }
+
+    #[test]
+    fn wrap_text_counts_chars_not_bytes() {
+        // 8 two-byte chars fit in 10 cols on one line.
+        let s = "éééééééé";
+        let lines = wrap_text(s, 10);
+        assert_eq!(lines, vec![s.to_string()]);
     }
 
     #[test]

@@ -523,7 +523,9 @@ impl ContextMenu {
                     .as_deref()
                     .map(|h| h.len() + 2)
                     .unwrap_or(0);
-                (it.label.len() + hint_len) as u16
+                // Clamp before the u16 cast so a pathologically long label
+                // can't wrap around (and overflow on the `+ 4` below).
+                (it.label.len() + hint_len).min(u16::MAX as usize - 4) as u16
             })
             .max()
             .unwrap_or(8);
@@ -531,7 +533,7 @@ impl ContextMenu {
         // +4 = left-pad + right-pad inside the border + 2 border columns.
         let popup_w = content_w + 4;
         // One row per item, +2 for top/bottom border.
-        let popup_h = self.items.len() as u16 + 2;
+        let popup_h = self.items.len().min(u16::MAX as usize - 2) as u16 + 2;
         (popup_w, popup_h)
     }
 
@@ -1119,6 +1121,17 @@ mod tests {
             x < 75,
             "popup must have shifted left from anchor=75; got x={x}"
         );
+    }
+
+    #[test]
+    fn dimensions_huge_label_does_not_panic() {
+        // Regression: a 65k-char label used to overflow the `content_w + 4`
+        // u16 math in debug builds.
+        let items = vec![MenuItem::new("x".repeat(65_534), MenuAction::Paste, None)];
+        let m = ContextMenu::new(items, (0, 0));
+        let (w, h) = m.dimensions();
+        assert_eq!(w, u16::MAX);
+        assert_eq!(h, 3);
     }
 
     #[test]

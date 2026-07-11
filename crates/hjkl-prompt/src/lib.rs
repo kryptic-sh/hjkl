@@ -240,6 +240,18 @@ impl PromptState {
         if state.candidates.is_empty() {
             return;
         }
+        // The replace range must still apply to the current field text — it
+        // goes stale when the text changed underneath the completion (e.g.
+        // history recall while completing). Slicing with a stale or
+        // non-char-boundary start would panic below; drop the completion
+        // cycle instead.
+        let text = self.field.text();
+        if state.replace_range.start > text.len()
+            || !text.is_char_boundary(state.replace_range.start)
+        {
+            self.completion = None;
+            return;
+        }
         let n = state.candidates.len();
         let new_idx = match state.selected {
             None => {
@@ -254,11 +266,7 @@ impl PromptState {
         };
         state.selected = Some(new_idx);
         let candidate = state.candidates[new_idx].clone();
-        let new_text = format!(
-            "{}{}",
-            &self.field.text()[..state.replace_range.start],
-            candidate
-        );
+        let new_text = format!("{}{}", &text[..state.replace_range.start], candidate);
         let new_end = state.replace_range.start + candidate.len();
         state.replace_range = state.replace_range.start..new_end;
         set_field_text(&mut self.field, &new_text);
@@ -469,6 +477,26 @@ mod tests {
         assert_eq!(p.completion.as_ref().unwrap().selected, Some(1));
         p.advance_completion(None, true);
         assert_eq!(p.completion.as_ref().unwrap().selected, Some(0)); // wrap
+    }
+
+    #[test]
+    fn advance_completion_with_stale_range_does_not_panic() {
+        // Regression: install a completion whose replace_range fits the text,
+        // then shrink the text via history recall. Cycling again used to
+        // slice `text[..range.start]` past the end and panic.
+        let mut p = PromptState::with_prefill(PromptKind::Command, "edit some/long/path");
+        let comp = CommandCompletion::new(
+            "edit some/long/path".into(),
+            vec!["some/long/path.rs".into()],
+            5..19,
+        );
+        p.advance_completion(Some(comp), true);
+        let history = vec!["w".to_string()];
+        p.apply_history_nav(&history, Some(0));
+        assert_eq!(p.text(), "w");
+        p.advance_completion(None, true); // must not panic
+        assert!(p.completion.is_none(), "stale completion must be dropped");
+        assert_eq!(p.text(), "w", "text must be left untouched");
     }
 
     #[test]
