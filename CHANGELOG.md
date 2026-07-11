@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.33.5] - 2026-07-12
+
+### Added
+
+- **Context-aware clipboard backend selection** (`hjkl-clipboard`):
+  `Clipboard::new()` now selects OSC 52 in an SSH session (`SSH_TTY` /
+  `SSH_CONNECTION` / `SSH_CLIENT`) so yanks reach the user's **local** terminal
+  clipboard instead of the remote host's native clipboard (tmux DCS passthrough
+  applied automatically when `TMUX` is set). Local desktops keep the native
+  probe. The `HJKL_CLIPBOARD` override is extended (case-insensitive) with
+  `native`/`auto` (force the local-desktop probe) and the backend names
+  `wayland` / `x11` / `macos` / `windows`, alongside `osc52`.
+
 ### Security
 
 - **Blocked ripgrep/grep option injection in `:grep`**: the quickfix `:grep` /
@@ -31,6 +44,33 @@ patch bumps.
 - **Swap files are created owner-only (`0600`)** on Unix, and the swap directory
   `0700`. They hold unsaved buffer contents (potentially credentials or private
   keys) and were previously world-readable in a traversable cache directory.
+- **Vim-parity: register routing.** Added the small-delete register `"-`;
+  sub-line deletes (`x`, `dw`, `de`) now fill `"-` instead of rotating the
+  `"1`–`"9` ring, a named-register delete (`"add`) leaves the ring and `"-`
+  untouched, and yanking into a named register (`"ayy`) no longer clobbers `"0`.
+  `"-` is now a usable paste selector (`"-p`).
+- **Vim-parity: dot-repeat count.** `[count].` now _replaces_ the change's
+  stored count instead of multiplying it (`3x` then `2.` deletes 2, not 6); a
+  bare `.` still reuses the original count.
+- **Vim-parity: word motions.** `w`/`W` now advance off an empty line, and
+  `dw`/`dW`/`yw` on the last word of a line stop at end-of-line instead of
+  eating the newline into the next line (`:h word` special case); counted `d2w`
+  ending mid-line on a later row is unaffected.
+- **Vim-parity: `%`** scans forward on the line to the first bracket at/after
+  the cursor before jumping to its match (was a no-op unless the cursor already
+  sat on a bracket); uses vim's default `matchpairs` (`()`, `[]`, `{}`).
+- **Vim-parity: counted text objects.** `iw`/`aw`/`ip`/`ap`/`is`/`as` now honor
+  the operator count (`d2aw`, `2ip`, `d2as`, …).
+- **Vim-parity: `cw`/`aw`/`t` edge cases.** `cw`/`cW` act like `ce`/`cE` only
+  when the cursor is on a non-blank (on whitespace they behave like `dw`); `aw`
+  on whitespace now includes the following word; and `;`/`,` (and the 2nd..Nth
+  step of a counted `t`/`T`) skip an immediately-adjacent match instead of
+  sticking.
+- **Vim-parity: `:substitute` replacement.** `\r`/`\t`/`\n` now insert a line
+  break / tab / NUL (was the literal letters), a literal `$` stays literal,
+  capture refs are emitted braced (`${1}`) so a digit can follow, `\0` is the
+  whole match, and the cursor lands on the first non-blank of the last changed
+  line.
 
 ### Internal
 
