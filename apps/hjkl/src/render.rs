@@ -2328,7 +2328,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let cursor_col = 1u16 + ccol as u16;
         let theme = prompt_theme(&app.theme.ui);
         return (
-            build_prompt_line(&content, field.vim_mode(), &theme, width),
+            build_prompt_line(&content, field.coarse_mode(), &theme, width),
             Some(cursor_col),
         );
     }
@@ -2342,7 +2342,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let cursor_col = 1u16 + ccol as u16;
         let theme = prompt_theme(&app.theme.ui);
         return (
-            build_prompt_line(&content, field.vim_mode(), &theme, width),
+            build_prompt_line(&content, field.coarse_mode(), &theme, width),
             Some(cursor_col),
         );
     }
@@ -2360,7 +2360,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let cursor_col = 1u16 + ccol as u16;
         let theme = prompt_theme(&app.theme.ui);
         return (
-            build_prompt_line(&content, field.vim_mode(), &theme, width),
+            build_prompt_line(&content, field.coarse_mode(), &theme, width),
             Some(cursor_col),
         );
     }

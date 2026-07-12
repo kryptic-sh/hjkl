@@ -4,7 +4,7 @@
 use crate::field::Field;
 use crate::form::{Form, FormEvent, FormMode};
 use crate::validate::validate_field;
-use hjkl_engine::{Input, Key, VimMode};
+use hjkl_engine::{CoarseMode, Input, Key};
 
 impl Form {
     /// Route a key event through the form. Returns an event if the
@@ -160,7 +160,7 @@ impl Form {
         if let Field::SingleLineText(f) | Field::MultiLineText(f) = &mut self.fields[self.focused] {
             let prev_gen_before = f.editor.buffer().dirty_gen();
             hjkl_vim::dispatch_input(&mut f.editor, input);
-            if f.editor.vim_mode() == VimMode::Insert {
+            if f.editor.coarse_mode() == CoarseMode::Insert {
                 f.enter_gen = prev_gen_before;
                 self.mode = FormMode::Insert;
                 return Some(FormEvent::Changed);
@@ -214,9 +214,9 @@ impl Form {
         if let Field::SingleLineText(f) | Field::MultiLineText(f) = &mut self.fields[self.focused] {
             let before_gen = f.editor.buffer().dirty_gen();
             hjkl_vim::dispatch_input(&mut f.editor, input);
-            let after_mode = f.editor.vim_mode();
+            let after_mode = f.editor.coarse_mode();
             let after_gen = f.editor.buffer().dirty_gen();
-            if after_mode == VimMode::Normal {
+            if after_mode == CoarseMode::Normal {
                 // User pressed Esc — leave insert mode.
                 self.mode = FormMode::Normal;
                 let prev_focus = self.focused;
@@ -315,7 +315,7 @@ mod tests {
         form.handle_input(key('v'));
         let in_visual = matches!(
             &form.fields[0],
-            Field::SingleLineText(f) | Field::MultiLineText(f) if f.vim_mode() != VimMode::Normal
+            Field::SingleLineText(f) | Field::MultiLineText(f) if f.coarse_mode() != CoarseMode::Normal
         );
         assert!(
             in_visual,
@@ -330,8 +330,8 @@ mod tests {
         match &form.fields[0] {
             Field::SingleLineText(f) | Field::MultiLineText(f) => {
                 assert_eq!(
-                    f.vim_mode(),
-                    VimMode::Normal,
+                    f.coarse_mode(),
+                    CoarseMode::Normal,
                     "blurred field must reset to Normal"
                 );
             }
@@ -483,7 +483,7 @@ mod tests {
         }
         // The previous field's inner editor must be back in Normal.
         if let Field::SingleLineText(f) = &form.fields[0] {
-            assert_eq!(f.vim_mode(), VimMode::Normal);
+            assert_eq!(f.coarse_mode(), CoarseMode::Normal);
         } else {
             panic!("expected text field");
         }

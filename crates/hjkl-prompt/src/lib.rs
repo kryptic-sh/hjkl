@@ -14,7 +14,7 @@
 //! assert_eq!(prompt.text(), "");
 //! ```
 
-use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
+use hjkl_engine::{CoarseMode, CursorShape, Input as EngineInput, Key as EngineKey};
 use hjkl_form::TextFieldEditor;
 
 // ── PromptKind ────────────────────────────────────────────────────────────────
@@ -180,9 +180,12 @@ impl PromptState {
         self.field.cursor()
     }
 
-    /// Current vim mode of the inner field.
-    pub fn vim_mode(&self) -> VimMode {
-        self.field.vim_mode()
+    /// Discipline-agnostic coarse mode of the inner field.
+    ///
+    /// A prompt only needs "am I inserting or not" to pick a cursor shape, so
+    /// it reads [`CoarseMode`] rather than naming vim states (#265 / #267).
+    pub fn coarse_mode(&self) -> CoarseMode {
+        self.field.coarse_mode()
     }
 
     /// Resolve the terminal cursor shape for this prompt.
@@ -198,8 +201,8 @@ impl PromptState {
     /// assert_eq!(p.cursor_shape(), CursorShape::Bar);
     /// ```
     pub fn cursor_shape(&self) -> CursorShape {
-        match self.field.vim_mode() {
-            VimMode::Insert => CursorShape::Bar,
+        match self.field.coarse_mode() {
+            CoarseMode::Insert => CursorShape::Bar,
             _ => CursorShape::Block,
         }
     }

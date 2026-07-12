@@ -174,12 +174,14 @@ pub fn editor_view(handle: EditorHandle) -> impl IntoView {
         let _rev = h_status.rev.get();
         h_status.with(|ed| {
             let (row, col) = ed.cursor();
-            let mode = match ed.vim_mode() {
-                hjkl_engine::VimMode::Insert => "INSERT",
-                hjkl_engine::VimMode::Visual => "VISUAL",
-                hjkl_engine::VimMode::VisualLine => "V-LINE",
-                hjkl_engine::VimMode::VisualBlock => "V-BLOCK",
-                hjkl_engine::VimMode::Normal => "NORMAL",
+            // Discipline-agnostic: the status badge only needs the coarse mode,
+            // so the GUI seam never names vim states (#265 / #267).
+            let mode = match ed.coarse_mode() {
+                hjkl_engine::CoarseMode::Insert => "INSERT",
+                hjkl_engine::CoarseMode::Select => "VISUAL",
+                hjkl_engine::CoarseMode::SelectLine => "V-LINE",
+                hjkl_engine::CoarseMode::SelectBlock => "V-BLOCK",
+                hjkl_engine::CoarseMode::Normal => "NORMAL",
             };
             format!(" {mode}  {row}:{col} ")
         })

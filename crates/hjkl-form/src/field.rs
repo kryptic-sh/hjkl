@@ -3,7 +3,7 @@
 use crate::host::FormFieldHost;
 use crate::validate::Validator;
 use hjkl_buffer::Buffer;
-use hjkl_engine::{Editor, Host, Input, Key, Options, VimMode};
+use hjkl_engine::{CoarseMode, Editor, Host, Input, Key, Options};
 
 /// Metadata shared by every field variant. Holds the label,
 /// required-marker, the most recent validator error, and an optional
@@ -183,9 +183,15 @@ impl TextFieldEditor {
         self.editor.cursor()
     }
 
-    /// Current vim mode of the inner editor (Normal / Insert / Visual / ...).
-    pub fn vim_mode(&self) -> VimMode {
-        self.editor.vim_mode()
+    /// Discipline-agnostic coarse mode of the inner editor (Normal / Insert /
+    /// Select / ...).
+    ///
+    /// A form field only ever needs "am I inserting text or not" — it has no
+    /// business naming vim-specific states. Reading [`CoarseMode`] instead of
+    /// `VimMode` keeps this widget usable under any keybinding discipline
+    /// (#265 / #267).
+    pub fn coarse_mode(&self) -> CoarseMode {
+        self.editor.coarse_mode()
     }
 
     /// Force the inner editor into Insert mode at the end of the
@@ -223,7 +229,9 @@ impl TextFieldEditor {
     /// practice; this guard is the belt-and-suspenders.
     pub fn handle_input(&mut self, input: Input) -> bool {
         // Single-line: drop newline-producing Enter in Insert mode.
-        if self.single_line && input.key == Key::Enter && self.editor.vim_mode() == VimMode::Insert
+        if self.single_line
+            && input.key == Key::Enter
+            && self.editor.coarse_mode() == CoarseMode::Insert
         {
             return false;
         }
@@ -398,7 +406,7 @@ mod standalone_tests {
     fn handle_input_i_enters_insert() {
         let mut f = TextFieldEditor::new(true);
         f.handle_input(ki('i'));
-        assert_eq!(f.vim_mode(), VimMode::Insert);
+        assert_eq!(f.coarse_mode(), CoarseMode::Insert);
     }
 
     #[test]
@@ -412,7 +420,7 @@ mod standalone_tests {
             ..Input::default()
         });
         assert_eq!(f.text(), "hi");
-        assert_eq!(f.vim_mode(), VimMode::Normal);
+        assert_eq!(f.coarse_mode(), CoarseMode::Normal);
     }
 
     #[test]
@@ -432,7 +440,7 @@ mod standalone_tests {
         assert_eq!(row, 0);
         // After `A` + Insert mode, cursor is past the last char.
         assert_eq!(col, 3);
-        assert_eq!(f.vim_mode(), VimMode::Insert);
+        assert_eq!(f.coarse_mode(), CoarseMode::Insert);
     }
 
     #[test]

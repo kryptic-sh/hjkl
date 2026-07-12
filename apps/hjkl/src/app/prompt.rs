@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyModifiers};
-use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
+use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey};
 use hjkl_form::TextFieldEditor;
 use hjkl_prompt::{history_next, history_prev, push_history};
 
@@ -159,7 +159,7 @@ impl App {
         if self
             .command_field
             .as_ref()
-            .map(|f| f.vim_mode() != hjkl_form::VimMode::Insert)
+            .map(|f| f.coarse_mode() != hjkl_form::CoarseMode::Insert)
             .unwrap_or(false)
         {
             self.completion = None;
@@ -480,7 +480,7 @@ impl App {
                 self.command_field = None;
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
-            } else if field.vim_mode() == VimMode::Insert {
+            } else if field.coarse_mode() == hjkl_form::CoarseMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;
@@ -670,7 +670,7 @@ impl App {
                 self.cancel_search_prompt();
                 return;
             }
-            if field.vim_mode() == VimMode::Insert {
+            if field.coarse_mode() == hjkl_form::CoarseMode::Insert {
                 field.enter_normal();
             } else {
                 self.prompt_history_index = None;
@@ -807,7 +807,7 @@ impl App {
             if field.text().is_empty() {
                 self.filter_field = None;
                 self.filter_pending_range = None;
-            } else if field.vim_mode() == VimMode::Insert {
+            } else if field.coarse_mode() == hjkl_form::CoarseMode::Insert {
                 field.enter_normal();
             } else {
                 self.filter_field = None;
@@ -849,8 +849,8 @@ impl App {
 /// Resolve the cursor shape for an active prompt field (`command_field` or
 /// `search_field`). Insert mode → Bar; anything else → Block.
 pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
-    match field.vim_mode() {
-        hjkl_form::VimMode::Insert => CursorShape::Bar,
+    match field.coarse_mode() {
+        hjkl_form::CoarseMode::Insert => CursorShape::Bar,
         _ => CursorShape::Block,
     }
 }

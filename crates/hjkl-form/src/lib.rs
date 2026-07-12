@@ -28,7 +28,7 @@ pub use validate::{Validator, validate_field};
 // Convenience re-exports — consumers using `TextFieldEditor` standalone
 // shouldn't need to depend on `hjkl-engine` directly just to talk about
 // inputs and modes.
-pub use hjkl_engine::{Input, Key, VimMode};
+pub use hjkl_engine::{CoarseMode, Input, Key};
 
 #[cfg(test)]
 mod smoke_tests {

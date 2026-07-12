@@ -63,7 +63,7 @@ fn palette_esc_in_insert_drops_to_normal_then_motions_apply() {
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(app.command_field.is_some());
     let f = app.command_field.as_ref().unwrap();
-    assert_eq!(f.vim_mode(), VimMode::Normal);
+    assert_eq!(f.coarse_mode(), hjkl_form::CoarseMode::Normal);
     assert_eq!(f.text(), "xyz");
     app.handle_command_field_key(key(KeyCode::Char('b')));
     app.handle_command_field_key(key(KeyCode::Char('d')));
@@ -137,8 +137,8 @@ fn search_motion_in_normal_edits_prompt_and_updates_highlight() {
     type_search(&mut app, "alpha beta");
     app.handle_search_field_key(key(KeyCode::Esc));
     assert_eq!(
-        app.search_field.as_ref().unwrap().vim_mode(),
-        VimMode::Normal
+        app.search_field.as_ref().unwrap().coarse_mode(),
+        hjkl_form::CoarseMode::Normal
     );
     app.handle_search_field_key(key(KeyCode::Char('b')));
     app.handle_search_field_key(key(KeyCode::Char('d')));
@@ -259,8 +259,8 @@ fn esc_on_nonempty_command_drops_to_normal_then_closes() {
     assert!(app.completion.is_none(), "Esc must dismiss popup");
     assert!(app.command_field.is_some(), "field stays open after Esc");
     assert_eq!(
-        app.command_field.as_ref().unwrap().vim_mode(),
-        VimMode::Normal,
+        app.command_field.as_ref().unwrap().coarse_mode(),
+        hjkl_form::CoarseMode::Normal,
         "single Esc must also leave Insert mode"
     );
     // Esc2: from Normal, close the field.
@@ -541,8 +541,8 @@ fn colon_esc_with_popup_open_clears_popup_and_propagates() {
     let text_before = app.command_field.as_ref().unwrap().text();
     assert!(app.completion.is_some());
     assert_eq!(
-        app.command_field.as_ref().unwrap().vim_mode(),
-        hjkl_form::VimMode::Insert,
+        app.command_field.as_ref().unwrap().coarse_mode(),
+        hjkl_form::CoarseMode::Insert,
         "prompt starts in Insert mode"
     );
     app.handle_command_field_key(key(KeyCode::Esc));
@@ -556,8 +556,8 @@ fn colon_esc_with_popup_open_clears_popup_and_propagates() {
     );
     // Esc propagated: the field left Insert mode (no second Esc needed).
     assert_eq!(
-        app.command_field.as_ref().unwrap().vim_mode(),
-        hjkl_form::VimMode::Normal,
+        app.command_field.as_ref().unwrap().coarse_mode(),
+        hjkl_form::CoarseMode::Normal,
         "Esc must also leave Insert mode, not only dismiss the popup"
     );
     // Text must be unchanged (Esc dismissed popup + changed mode, didn't edit).

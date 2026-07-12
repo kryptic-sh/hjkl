@@ -13,7 +13,7 @@
 //! // frame and area come from your ratatui setup
 //! ```
 
-use hjkl_form::VimMode;
+use hjkl_form::CoarseMode;
 use hjkl_prompt::{PromptKind, PromptState};
 use ratatui::{
     Frame,
@@ -151,7 +151,7 @@ pub fn render_prompt_line(
     let content = format!("{prefix}{display}");
 
     // Body columns available for text (the mode tag reserves the tail).
-    let mode = prompt.field.vim_mode();
+    let mode = prompt.field.coarse_mode();
     let tag_w = mode_tag(mode).width();
     let body_width = (area.width as usize).saturating_sub(tag_w);
 
@@ -178,16 +178,16 @@ pub fn render_prompt_line(
 ///
 /// ```rust
 /// use ratatui::style::Color;
-/// use hjkl_form::VimMode;
+/// use hjkl_form::CoarseMode;
 /// use hjkl_prompt_tui::{PromptTheme, build_prompt_line};
 ///
 /// let theme = PromptTheme::default();
-/// let line = build_prompt_line(":write", VimMode::Insert, &theme, 40);
+/// let line = build_prompt_line(":write", CoarseMode::Insert, &theme, 40);
 /// assert!(!line.spans.is_empty());
 /// ```
 pub fn build_prompt_line(
     content: &str,
-    mode: VimMode,
+    mode: CoarseMode,
     theme: &PromptTheme,
     width: u16,
 ) -> Line<'static> {
@@ -195,21 +195,21 @@ pub fn build_prompt_line(
 }
 
 /// The right-aligned mode tag string for the prompt bar.
-fn mode_tag(mode: VimMode) -> &'static str {
+fn mode_tag(mode: CoarseMode) -> &'static str {
     match mode {
-        VimMode::Insert => " [I]",
+        CoarseMode::Insert => " [I]",
         _ => " [N]",
     }
 }
 
 fn prompt_line_spans(
     content: &str,
-    mode: VimMode,
+    mode: CoarseMode,
     theme: &PromptTheme,
     width: u16,
 ) -> Line<'static> {
     let (bg, tag_fg) = match mode {
-        VimMode::Insert => (theme.insert_bg, theme.tag_insert_fg),
+        CoarseMode::Insert => (theme.insert_bg, theme.tag_insert_fg),
         _ => (theme.normal_bg, theme.tag_normal_fg),
     };
     let tag = mode_tag(mode);
@@ -352,14 +352,14 @@ mod tests {
     #[test]
     fn build_prompt_line_non_empty() {
         let theme = PromptTheme::default();
-        let line = build_prompt_line(":write", VimMode::Insert, &theme, 40);
+        let line = build_prompt_line(":write", CoarseMode::Insert, &theme, 40);
         assert!(!line.spans.is_empty());
     }
 
     #[test]
     fn build_prompt_line_contains_content() {
         let theme = PromptTheme::default();
-        let line = build_prompt_line(":write", VimMode::Insert, &theme, 40);
+        let line = build_prompt_line(":write", CoarseMode::Insert, &theme, 40);
         let all: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(all.contains(":write"), "content not found in: {all:?}");
     }
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn build_prompt_line_insert_has_i_tag() {
         let theme = PromptTheme::default();
-        let line = build_prompt_line(":w", VimMode::Insert, &theme, 20);
+        let line = build_prompt_line(":w", CoarseMode::Insert, &theme, 20);
         let tags: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(tags.contains("[I]"), "expected [I] tag in: {tags:?}");
     }
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn build_prompt_line_normal_has_n_tag() {
         let theme = PromptTheme::default();
-        let line = build_prompt_line(":w", VimMode::Normal, &theme, 20);
+        let line = build_prompt_line(":w", CoarseMode::Normal, &theme, 20);
         let tags: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(tags.contains("[N]"), "expected [N] tag in: {tags:?}");
     }
