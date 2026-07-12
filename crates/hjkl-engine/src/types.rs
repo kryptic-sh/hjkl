@@ -1569,6 +1569,31 @@ impl FoldProvider for NoopFoldProvider {
     }
 }
 
+/// Direction for insert-mode arrow movement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Scroll direction for `scroll_full_page`, `scroll_half_page`, and
+/// `scroll_line` controller methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDir {
+    /// Move forward / downward (toward end of buffer).
+    Down,
+    /// Move backward / upward (toward start of buffer).
+    Up,
+}
+
+pub const SEARCH_HISTORY_MAX: usize = 100;
+pub const CHANGE_LIST_MAX: usize = 100;
+
+/// Max jumplist depth. Matches vim default.
+pub const JUMPLIST_MAX: usize = 100;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -571,7 +571,7 @@ pub struct Editor<
     pub(crate) last_edit_pos: Option<(usize, usize)>,
     /// Bounded ring of recent edit positions (newest at back), maintained by
     /// `mutate_edit`. `g;` walks toward older, `g,` toward newer. Capped at
-    /// [`crate::vim::CHANGE_LIST_MAX`]. Substrate — see [`Editor::last_edit_pos`].
+    /// [`crate::types::CHANGE_LIST_MAX`]. Substrate — see [`Editor::last_edit_pos`].
     pub(crate) change_list: Vec<(usize, usize)>,
     /// Index into `change_list` while walking; `None` outside a walk (any new
     /// edit clears it and trims forward entries). Substrate.
@@ -651,7 +651,7 @@ pub struct Editor<
     // Every editor has find. A vscode/helix discipline needs the pattern,
     // direction and history without depending on hjkl-vim.
     /// Live `/` or `?` prompt while the user is typing a pattern.
-    pub(crate) search_prompt: Option<crate::vim::SearchPrompt>,
+    pub(crate) search_prompt: Option<crate::search::SearchPrompt>,
     /// Last committed search pattern, for `n` / `N` (or Find Next).
     pub(crate) last_search: Option<String>,
     /// Direction of the last committed search.
@@ -683,7 +683,7 @@ pub struct Editor<
     /// matching close char consumes the queued one instead of inserting.
     pub(crate) pending_closes: Vec<(usize, usize, char)>,
     /// Active abbreviation table (insert-mode + cmdline entries).
-    pub(crate) abbrevs: Vec<crate::vim::Abbrev>,
+    pub(crate) abbrevs: Vec<crate::abbrev::Abbrev>,
 
     /// Whether the unnamed register's current content is linewise. This is
     /// register metadata, not vim FSM state — any discipline that yanks and
@@ -2049,8 +2049,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             }
             self.change_list.push(entry);
             let len = self.change_list.len();
-            if len > crate::vim::CHANGE_LIST_MAX {
-                self.change_list.drain(0..len - crate::vim::CHANGE_LIST_MAX);
+            if len > crate::types::CHANGE_LIST_MAX {
+                self.change_list
+                    .drain(0..len - crate::types::CHANGE_LIST_MAX);
             }
         }
         self.change_list_cursor = None;
@@ -2216,22 +2217,22 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // in hjkl-vim.
 
     /// The live `/` or `?` search-prompt state, if a prompt is open.
-    pub fn search_prompt_state(&self) -> Option<&crate::vim::SearchPrompt> {
+    pub fn search_prompt_state(&self) -> Option<&crate::search::SearchPrompt> {
         self.search_prompt.as_ref()
     }
 
     /// Mutable access to the live search-prompt state.
-    pub fn search_prompt_state_mut(&mut self) -> Option<&mut crate::vim::SearchPrompt> {
+    pub fn search_prompt_state_mut(&mut self) -> Option<&mut crate::search::SearchPrompt> {
         self.search_prompt.as_mut()
     }
 
     /// Take (and close) the search-prompt state.
-    pub fn take_search_prompt_state(&mut self) -> Option<crate::vim::SearchPrompt> {
+    pub fn take_search_prompt_state(&mut self) -> Option<crate::search::SearchPrompt> {
         self.search_prompt.take()
     }
 
     /// Install (or clear) the search-prompt state.
-    pub fn set_search_prompt_state(&mut self, prompt: Option<crate::vim::SearchPrompt>) {
+    pub fn set_search_prompt_state(&mut self, prompt: Option<crate::search::SearchPrompt>) {
         self.search_prompt = prompt;
     }
 
@@ -2333,36 +2334,36 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Scroll the cursor by one full viewport height (height − 2 rows,
     /// preserving a two-line overlap). `count` multiplies the step.
-    pub fn scroll_full_page(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+    pub fn scroll_full_page(&mut self, dir: crate::types::ScrollDir, count: usize) {
         self.scroll_anim_hint = true;
         let rows = self.viewport_full_rows(count) as isize;
         match dir {
-            crate::vim::ScrollDir::Down => self.scroll_cursor_rows(rows),
-            crate::vim::ScrollDir::Up => self.scroll_cursor_rows(-rows),
+            crate::types::ScrollDir::Down => self.scroll_cursor_rows(rows),
+            crate::types::ScrollDir::Up => self.scroll_cursor_rows(-rows),
         }
     }
 
     /// Scroll the cursor by half the viewport height. `count` multiplies.
-    pub fn scroll_half_page(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+    pub fn scroll_half_page(&mut self, dir: crate::types::ScrollDir, count: usize) {
         self.scroll_anim_hint = true;
         let rows = self.viewport_half_rows(count) as isize;
         match dir {
-            crate::vim::ScrollDir::Down => self.scroll_cursor_rows(rows),
-            crate::vim::ScrollDir::Up => self.scroll_cursor_rows(-rows),
+            crate::types::ScrollDir::Down => self.scroll_cursor_rows(rows),
+            crate::types::ScrollDir::Up => self.scroll_cursor_rows(-rows),
         }
     }
 
     /// Scroll the viewport `count` lines without moving the cursor (the cursor
     /// is clamped into the new visible region if it would fall outside).
-    pub fn scroll_line(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+    pub fn scroll_line(&mut self, dir: crate::types::ScrollDir, count: usize) {
         let n = count.max(1);
         let total = buf_row_count(&self.buffer);
         let last = total.saturating_sub(1);
         let h = self.viewport_height_value() as usize;
         let cur_top = self.host().viewport().top_row;
         let new_top = match dir {
-            crate::vim::ScrollDir::Down => (cur_top + n).min(last),
-            crate::vim::ScrollDir::Up => cur_top.saturating_sub(n),
+            crate::types::ScrollDir::Down => (cur_top + n).min(last),
+            crate::types::ScrollDir::Up => cur_top.saturating_sub(n),
         };
         self.set_viewport_top(new_top);
         // Clamp cursor to stay within the new visible region.
@@ -2539,7 +2540,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// `None` when we're not in VisualBlock mode.
     /// Read-only view of the live `/` or `?` prompt. `None` outside
     /// search-prompt mode.
-    pub fn search_prompt(&self) -> Option<&crate::vim::SearchPrompt> {
+    pub fn search_prompt(&self) -> Option<&crate::search::SearchPrompt> {
         self.search_prompt.as_ref()
     }
 
@@ -3981,7 +3982,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .retain(|a| a.lhs != lhs || (a.insert && !insert) || (a.cmdline && !cmdline));
         self.abbrevs.insert(
             0,
-            vim::Abbrev {
+            crate::abbrev::Abbrev {
                 lhs: lhs.to_string(),
                 rhs: rhs.to_string(),
                 insert,
@@ -4046,7 +4047,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// forward half, matching vim's "redo-is-lost" semantics.
     pub fn push_jump(&mut self, from: (usize, usize)) {
         self.jump_back.push(from);
-        if self.jump_back.len() > vim::JUMPLIST_MAX {
+        if self.jump_back.len() > crate::types::JUMPLIST_MAX {
             self.jump_back.remove(0);
         }
         self.jump_fwd.clear();
@@ -4064,8 +4065,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         self.search_history.push(pattern.to_string());
         let len = self.search_history.len();
-        if len > vim::SEARCH_HISTORY_MAX {
-            self.search_history.drain(0..len - vim::SEARCH_HISTORY_MAX);
+        if len > crate::types::SEARCH_HISTORY_MAX {
+            self.search_history
+                .drain(0..len - crate::types::SEARCH_HISTORY_MAX);
         }
     }
 
@@ -4572,7 +4574,7 @@ mod scroll_anim_tests {
         ed.host_mut().viewport_mut().height = 20;
         ed.host_mut().viewport_mut().width = 80;
         ed.host_mut().viewport_mut().text_width = 80;
-        ed.scroll_half_page(crate::vim::ScrollDir::Down, 1);
+        ed.scroll_half_page(crate::types::ScrollDir::Down, 1);
         assert!(
             ed.take_scroll_anim_hint(),
             "hint should be set after half-page"
@@ -4590,7 +4592,7 @@ mod scroll_anim_tests {
         ed.host_mut().viewport_mut().height = 20;
         ed.host_mut().viewport_mut().width = 80;
         ed.host_mut().viewport_mut().text_width = 80;
-        ed.scroll_line(crate::vim::ScrollDir::Down, 1);
+        ed.scroll_line(crate::types::ScrollDir::Down, 1);
         assert!(
             !ed.take_scroll_anim_hint(),
             "hint must NOT be set for C-e/C-y"

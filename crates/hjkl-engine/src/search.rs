@@ -23,6 +23,21 @@
 use regex::Regex;
 
 use crate::types::{Cursor, Query, Search};
+use hjkl_vim_types::Operator;
+
+/// Active `/` or `?` search prompt. Text mutations drive the textarea's
+/// live search pattern so matches highlight as the user types.
+#[derive(Debug, Clone)]
+pub struct SearchPrompt {
+    pub text: String,
+    pub cursor: usize,
+    pub forward: bool,
+    /// Operator-pending search (`d/pat`, `c/pat`, `y/pat`): the operator, its
+    /// count, and the cursor position where the operator started. `None` for a
+    /// plain `/` / `?` search. On commit the operator runs over the (exclusive,
+    /// charwise) range from `origin` to the match.
+    pub operator: Option<(Operator, usize, (usize, usize))>,
+}
 
 /// Case-sensitivity policy derived from `:set ignorecase` / `:set smartcase`.
 ///
