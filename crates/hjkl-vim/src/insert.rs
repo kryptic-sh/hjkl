@@ -4,6 +4,7 @@
 //! `Editor::step_input` shim. The engine keeps an in-engine duplicate
 //! body in `vim::step` (`Mode::Insert` arm) for back-compat with the
 //! deprecated shim path until Phase 6.6h.
+use crate::editor_ext::VimEditorExt;
 use hjkl_engine::{Host, Input, Key};
 
 /// Drive the insert-mode FSM for one keystroke.

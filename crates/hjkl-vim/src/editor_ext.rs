@@ -8,8 +8,9 @@
 //! more of the engine's vim accessors move onto this trait; call sites pick
 //! them up with `use hjkl_vim::VimEditorExt`.
 
+use hjkl_engine::input::Input;
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
-use hjkl_engine::vim::{Operator, RangeKind, ScrollDir};
+use hjkl_engine::vim::{LastVisual, Operator, RangeKind, ScrollDir};
 use hjkl_engine::{Editor, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
@@ -494,6 +495,78 @@ pub trait VimEditorExt {
     /// …) which also set up required bookkeeping (anchors, sessions, …). Use
     /// `set_mode` only when you need a raw mode flip without side-effects.
     fn set_mode(&mut self, mode: VimMode);
+
+    // ─── Visual anchors ────────────────────────────────────────────────────
+
+    /// The charwise Visual-mode anchor `(row, col)`.
+    fn visual_anchor(&self) -> (usize, usize);
+    /// Set the charwise Visual-mode anchor.
+    fn set_visual_anchor(&mut self, anchor: (usize, usize));
+    /// The linewise Visual-mode anchor row.
+    fn visual_line_anchor(&self) -> usize;
+    /// Set the linewise Visual-mode anchor row.
+    fn set_visual_line_anchor(&mut self, row: usize);
+    /// The VisualBlock anchor `(row, col)`.
+    fn block_anchor(&self) -> (usize, usize);
+    /// Set the VisualBlock anchor.
+    fn set_block_anchor(&mut self, anchor: (usize, usize));
+    /// The VisualBlock sticky (virtual) column.
+    fn block_vcol(&self) -> usize;
+    /// Set the VisualBlock sticky (virtual) column.
+    fn set_block_vcol(&mut self, vcol: usize);
+
+    // ─── Yank / register staging ───────────────────────────────────────────
+
+    /// Whether the last yank/delete was linewise.
+    fn yank_linewise(&self) -> bool;
+    /// Set the linewise flag for the next register write.
+    fn set_yank_linewise(&mut self, v: bool);
+    /// Set the pending `"r` register selector without consuming it.
+    fn set_pending_register_raw(&mut self, reg: Option<char>);
+    /// Take (and clear) the pending `"r` register selector.
+    fn take_pending_register_raw(&mut self) -> Option<char>;
+
+    // ─── Macro recording / replay ──────────────────────────────────────────
+
+    /// Register currently being recorded into via `q{reg}`, if any.
+    fn recording_macro(&self) -> Option<char>;
+    /// Set (or clear) the register being recorded into.
+    fn set_recording_macro(&mut self, reg: Option<char>);
+    /// Append an input to the in-flight macro recording.
+    fn push_recording_key(&mut self, input: Input);
+    /// Take (and clear) the recorded macro keys.
+    fn take_recording_keys(&mut self) -> Vec<Input>;
+    /// Replace the recorded macro keys wholesale.
+    fn set_recording_keys(&mut self, keys: Vec<Input>);
+    /// Number of keys recorded so far.
+    fn recording_keys_len(&self) -> usize;
+    /// Whether a macro is currently being replayed.
+    fn is_replaying_macro_raw(&self) -> bool;
+    /// Set the macro-replay flag.
+    fn set_replaying_macro_raw(&mut self, v: bool);
+    /// The last macro register played, for `@@`.
+    fn last_macro(&self) -> Option<char>;
+    /// Set the last macro register played.
+    fn set_last_macro(&mut self, reg: Option<char>);
+
+    // ─── Last insert / visual / viewport ───────────────────────────────────
+
+    /// Position where the last insert session ended (`gi`).
+    fn last_insert_pos(&self) -> Option<(usize, usize)>;
+    /// Set the last insert-session end position.
+    fn set_last_insert_pos(&mut self, pos: Option<(usize, usize)>);
+    /// Snapshot of the last visual selection, for `gv`.
+    fn last_visual(&self) -> Option<LastVisual>;
+    /// Set the last-visual snapshot.
+    fn set_last_visual(&mut self, snap: Option<LastVisual>);
+    /// Whether the viewport is pinned (suppresses scroll-follow).
+    fn viewport_pinned(&self) -> bool;
+    /// Set the viewport-pinned flag.
+    fn set_viewport_pinned(&mut self, v: bool);
+    /// Whether `Ctrl-R` is armed and awaiting a register name.
+    fn insert_pending_register(&self) -> bool;
+    /// Set the `Ctrl-R` pending-register flag.
+    fn set_insert_pending_register(&mut self, v: bool);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -970,5 +1043,107 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn set_mode(&mut self, mode: VimMode) {
         hjkl_engine::vim::set_mode_bridge(self, mode);
+    }
+
+    // ─── Visual anchors ────────────────────────────────────────────────────
+
+    fn visual_anchor(&self) -> (usize, usize) {
+        self.vim.visual_anchor
+    }
+    fn set_visual_anchor(&mut self, anchor: (usize, usize)) {
+        self.vim.visual_anchor = anchor;
+    }
+    fn visual_line_anchor(&self) -> usize {
+        self.vim.visual_line_anchor
+    }
+    fn set_visual_line_anchor(&mut self, row: usize) {
+        self.vim.visual_line_anchor = row;
+    }
+    fn block_anchor(&self) -> (usize, usize) {
+        self.vim.block_anchor
+    }
+    fn set_block_anchor(&mut self, anchor: (usize, usize)) {
+        self.vim.block_anchor = anchor;
+    }
+    fn block_vcol(&self) -> usize {
+        self.vim.block_vcol
+    }
+    fn set_block_vcol(&mut self, vcol: usize) {
+        self.vim.block_vcol = vcol;
+    }
+
+    // ─── Yank / register staging ───────────────────────────────────────────
+
+    fn yank_linewise(&self) -> bool {
+        self.vim.yank_linewise
+    }
+    fn set_yank_linewise(&mut self, v: bool) {
+        self.vim.yank_linewise = v;
+    }
+    fn set_pending_register_raw(&mut self, reg: Option<char>) {
+        self.vim.pending_register = reg;
+    }
+    fn take_pending_register_raw(&mut self) -> Option<char> {
+        self.vim.pending_register.take()
+    }
+
+    // ─── Macro recording / replay ──────────────────────────────────────────
+
+    fn recording_macro(&self) -> Option<char> {
+        self.vim.recording_macro
+    }
+    fn set_recording_macro(&mut self, reg: Option<char>) {
+        self.vim.recording_macro = reg;
+    }
+    fn push_recording_key(&mut self, input: Input) {
+        self.vim.recording_keys.push(input);
+    }
+    fn take_recording_keys(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.vim.recording_keys)
+    }
+    fn set_recording_keys(&mut self, keys: Vec<Input>) {
+        self.vim.recording_keys = keys;
+    }
+    fn recording_keys_len(&self) -> usize {
+        self.vim.recording_keys.len()
+    }
+    fn is_replaying_macro_raw(&self) -> bool {
+        self.vim.replaying_macro
+    }
+    fn set_replaying_macro_raw(&mut self, v: bool) {
+        self.vim.replaying_macro = v;
+    }
+    fn last_macro(&self) -> Option<char> {
+        self.vim.last_macro
+    }
+    fn set_last_macro(&mut self, reg: Option<char>) {
+        self.vim.last_macro = reg;
+    }
+
+    // ─── Last insert / visual / viewport ───────────────────────────────────
+
+    fn last_insert_pos(&self) -> Option<(usize, usize)> {
+        self.vim.last_insert_pos
+    }
+    fn set_last_insert_pos(&mut self, pos: Option<(usize, usize)>) {
+        self.vim.last_insert_pos = pos;
+    }
+    fn last_visual(&self) -> Option<LastVisual> {
+        self.vim.last_visual
+    }
+    fn set_last_visual(&mut self, snap: Option<LastVisual>) {
+        self.vim.last_visual = snap;
+    }
+    fn viewport_pinned(&self) -> bool {
+        self.vim.viewport_pinned
+    }
+    fn set_viewport_pinned(&mut self, v: bool) {
+        self.vim.viewport_pinned = v;
+    }
+    fn insert_pending_register(&self) -> bool {
+        self.vim.insert_pending_register
+    }
+    fn set_insert_pending_register(&mut self, v: bool) {
+        self.vim.insert_pending_register = v;
     }
 }

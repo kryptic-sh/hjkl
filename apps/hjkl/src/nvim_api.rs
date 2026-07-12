@@ -27,6 +27,7 @@ use anyhow::Result;
 use hjkl_buffer::Buffer;
 use hjkl_engine::{Host, VimMode};
 use hjkl_quickfix::{QfEntry, QfKind};
+use hjkl_vim::VimEditorExt;
 use rmpv::Value;
 
 use crate::host::TuiHost;
