@@ -111,7 +111,7 @@ pub(crate) fn rot13_str(s: &str) -> String {
 
 // ─── VimState ──────────────────────────────────────────────────────────────
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct VimState {
     /// Internal FSM mode. Kept in sync with `current_mode` after every
     /// `step`. Phase 6.6b: promoted from private to `pub` so the FSM
@@ -277,6 +277,21 @@ impl VimState {
         }
     }
 
+    /// Project the current vim mode onto the discipline-agnostic
+    /// [`crate::CoarseMode`] (the seam app chrome reads — #265 G3 / #267).
+    /// Shared by [`crate::DisciplineState::coarse_mode`] and
+    /// [`crate::Editor::coarse_mode`].
+    pub fn coarse_mode(&self) -> crate::CoarseMode {
+        use crate::CoarseMode;
+        match self.current_mode {
+            VimMode::Normal => CoarseMode::Normal,
+            VimMode::Insert => CoarseMode::Insert,
+            VimMode::Visual => CoarseMode::Select,
+            VimMode::VisualLine => CoarseMode::SelectLine,
+            VimMode::VisualBlock => CoarseMode::SelectBlock,
+        }
+    }
+
     pub fn force_normal(&mut self) {
         self.mode = Mode::Normal;
         self.pending = Pending::None;
@@ -372,6 +387,22 @@ impl VimState {
             // `g?` prefix — doubled as `g??`.
             Operator::Rot13 => '?',
         })
+    }
+}
+
+/// The vim FSM state is the vim discipline's [`crate::DisciplineState`]: the
+/// engine reaches it type-erased and asks only for its [`crate::CoarseMode`]
+/// (#265 G3 / #267). Until `VimState` physically moves into `hjkl-vim`, this
+/// impl lives here alongside the struct.
+impl crate::DisciplineState for VimState {
+    fn coarse_mode(&self) -> crate::CoarseMode {
+        VimState::coarse_mode(self)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

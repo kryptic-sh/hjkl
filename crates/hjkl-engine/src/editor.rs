@@ -2290,14 +2290,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// [`crate::CoarseMode`] (epic #265 G3). Today this projects from the vim
     /// mode; once FSM state is pluggable each discipline supplies its own.
     pub fn coarse_mode(&self) -> crate::CoarseMode {
-        use crate::CoarseMode;
-        match self.vim.current_mode {
-            VimMode::Normal => CoarseMode::Normal,
-            VimMode::Insert => CoarseMode::Insert,
-            VimMode::Visual => CoarseMode::Select,
-            VimMode::VisualLine => CoarseMode::SelectLine,
-            VimMode::VisualBlock => CoarseMode::SelectBlock,
-        }
+        // Delegate to the discipline's projection. Today the vim FSM state is
+        // read directly; at the #267 field flip this becomes
+        // `self.discipline.coarse_mode()` over `Box<dyn DisciplineState>`.
+        crate::DisciplineState::coarse_mode(&self.vim)
     }
 
     /// The active read-only view overlay (see [`crate::ViewMode`]). Independent
