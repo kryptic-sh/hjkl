@@ -412,10 +412,8 @@ impl crate::DisciplineState for VimState {
 /// Open the `/` (forward) or `?` (backward) search prompt. Clears any
 /// live search highlight until the user commits a query. `last_search`
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
-pub(crate) fn enter_search<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    forward: bool,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_search<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, forward: bool) {
     ed.vim.search_prompt = Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
@@ -432,7 +430,8 @@ pub(crate) fn enter_search<H: crate::types::Host>(
 /// `d/pat` / `c/pat` / `y/pat` (and `?` forms) — open the search prompt in
 /// operator-pending mode. On commit the operator runs over the exclusive
 /// charwise range from the current cursor to the match.
-pub(crate) fn enter_search_op<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_search_op<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     op: Operator,
@@ -452,7 +451,8 @@ pub(crate) fn enter_search_op<H: crate::types::Host>(
 /// Apply a pending operator-search over the exclusive charwise range from
 /// `origin` to the current (post-search) cursor. Used by the search-prompt
 /// commit path for `d/` / `c/` / `y/`.
-pub(crate) fn apply_op_search_range<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_search_range<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     origin: (usize, usize),
@@ -924,7 +924,8 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     }
 }
 
-pub(crate) fn begin_insert<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn begin_insert<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
     reason: InsertReason,
@@ -3292,7 +3293,8 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
 
 // ─── Motion execution ──────────────────────────────────────────────────────
 
-pub(crate) fn execute_motion<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn execute_motion<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: Motion,
     count: usize,
@@ -4881,7 +4883,8 @@ pub fn apply_op_text_obj_inner<H: crate::types::Host>(
 }
 
 /// Move `pos` back by one character, clamped to (0, 0).
-pub(crate) fn retreat_one<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn retreat_one<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
@@ -4925,7 +4928,8 @@ fn begin_insert_noundo<H: crate::types::Host>(
 
 // ─── Operator × Motion application ─────────────────────────────────────────
 
-pub(crate) fn apply_op_with_motion<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_with_motion<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     motion: &Motion,
@@ -6383,7 +6387,8 @@ fn execute_line_op<H: crate::types::Host>(
 
 // ─── Visual mode operators ─────────────────────────────────────────────────
 
-pub(crate) fn apply_visual_operator<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_visual_operator<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     count: usize,
@@ -6584,7 +6589,8 @@ fn block_bounds<H: crate::types::Host>(
 /// Horizontal motions sync `block_vcol` to the new cursor column;
 /// vertical / non-h/l motions leave it alone so the intended column
 /// survives clamping to shorter lines.
-pub(crate) fn update_block_vcol<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn update_block_vcol<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
 ) {
@@ -6800,10 +6806,8 @@ fn delete_block_contents<H: crate::types::Host>(
 }
 
 /// Replace each character cell in the block with `ch`.
-pub(crate) fn block_replace<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    ch: char,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn block_replace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, ch: char) {
     let (top, bot, left, right) = block_bounds(ed);
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
@@ -6847,7 +6851,8 @@ type Pos = (usize, usize);
 /// Returns `(start, end, kind)` where `end` is *exclusive* (one past the
 /// last character to act on). `kind` is `Linewise` for line-oriented text
 /// objects like paragraphs and `Exclusive` otherwise.
-pub(crate) fn text_object_range<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_range<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     obj: TextObject,
     inner: bool,
@@ -8164,7 +8169,8 @@ fn do_char_delete<H: crate::types::Host>(
 /// current line, add `delta`, leave the cursor on the last digit of the result.
 /// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
 /// well as signed decimals. No-op if the line has no number to the right.
-pub(crate) fn adjust_number<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn adjust_number<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     delta: i64,
 ) -> bool {

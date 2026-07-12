@@ -10,8 +10,10 @@
 
 use hjkl_engine::input::Input;
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
-use hjkl_engine::vim::{LastVisual, Operator, RangeKind, ScrollDir, SearchPrompt};
-use hjkl_engine::{Editor, VimMode};
+use hjkl_engine::vim::{
+    InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir, SearchPrompt, TextObject,
+};
+use hjkl_engine::{Editor, FsmMode, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
 /// line when at column 0. Clamps at the buffer start `(0, 0)`. Used to render
@@ -623,6 +625,64 @@ pub trait VimEditorExt {
     fn jump_fwd_list(&self) -> &[(usize, usize)];
     /// Mutable access to the jump-forward stack.
     fn jump_fwd_list_mut(&mut self) -> &mut Vec<(usize, usize)>;
+
+    // ─── Visual / motion / search primitives ───────────────────────────────
+    //
+    // Vim *semantics* — motions, operators over selections, block-edge insert,
+    // search entry. These do not belong on a mode-agnostic rope editor; the
+    // engine keeps the raw buffer primitives (cursor, line reads, edits) and
+    // the vim discipline layers meaning on top (#265 / #267).
+
+    /// `true` when the editor is in any visual mode (Visual / VisualLine /
+    /// VisualBlock).
+    fn is_visual(&self) -> bool;
+
+    /// Apply `op` over `motion` with `count` repetitions, taking the full
+    /// vim-quirks path (operator context for `l`, clamping, etc.).
+    fn apply_op_with_motion_direct(&mut self, op: Operator, motion: &Motion, count: usize);
+
+    /// `Ctrl-a` / `Ctrl-x` — adjust the number under or after the cursor.
+    /// `delta = 1` increments, `-1` decrements; larger deltas multiply as in
+    /// vim's `5<C-a>`.
+    fn adjust_number(&mut self, delta: i64);
+
+    /// Open the `/` or `?` search prompt. `forward = true` for `/`.
+    fn enter_search(&mut self, forward: bool);
+
+    /// `d/pat` / `c/pat` / `y/pat` — open the search prompt in operator-pending
+    /// mode so the operator applies over the range to the match on commit.
+    fn enter_search_op(&mut self, forward: bool, op: Operator, count: usize);
+
+    /// Apply a pending operator-search over the exclusive charwise range from
+    /// `origin` to the current cursor (the just-found match position).
+    fn apply_op_search_range(&mut self, op: Operator, origin: (usize, usize));
+
+    /// VisualBlock `I` — enter Insert at the left edge of the block.
+    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize);
+
+    /// VisualBlock `A` — enter Insert at the right edge of the block.
+    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize);
+
+    /// Execute a motion, pushing to the jumplist for big jumps and updating the
+    /// sticky column.
+    fn execute_motion(&mut self, motion: Motion, count: usize);
+
+    /// Update the VisualBlock virtual column after a motion. Horizontal motions
+    /// sync `block_vcol` to the cursor column; vertical motions leave it alone
+    /// so the intended column survives clamping to shorter rows.
+    fn update_block_vcol(&mut self, motion: &Motion);
+
+    /// Apply `op` over the current visual selection (char-wise, linewise, or
+    /// block).
+    fn apply_visual_operator(&mut self, op: Operator, count: usize);
+
+    /// VisualBlock `r<ch>` — replace every character cell in the block with
+    /// `ch`.
+    fn replace_block_char(&mut self, ch: char);
+
+    /// Visual-mode `i<ch>` / `a<ch>` — extend the selection to cover the text
+    /// object identified by `ch`.
+    fn visual_text_obj_extend(&mut self, ch: char, inner: bool);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -1279,5 +1339,97 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
     fn jump_fwd_list_mut(&mut self) -> &mut Vec<(usize, usize)> {
         &mut self.vim.jump_fwd
+    }
+
+    // ─── Visual / motion / search primitives ───────────────────────────────
+
+    fn is_visual(&self) -> bool {
+        matches!(
+            self.vim.mode,
+            FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+        )
+    }
+
+    fn apply_op_with_motion_direct(&mut self, op: Operator, motion: &Motion, count: usize) {
+        hjkl_engine::vim::apply_op_with_motion(self, op, motion, count);
+    }
+
+    fn adjust_number(&mut self, delta: i64) {
+        hjkl_engine::vim::adjust_number(self, delta);
+    }
+
+    fn enter_search(&mut self, forward: bool) {
+        hjkl_engine::vim::enter_search(self, forward);
+    }
+
+    fn enter_search_op(&mut self, forward: bool, op: Operator, count: usize) {
+        hjkl_engine::vim::enter_search_op(self, forward, op, count);
+    }
+
+    fn apply_op_search_range(&mut self, op: Operator, origin: (usize, usize)) {
+        hjkl_engine::vim::apply_op_search_range(self, op, origin);
+    }
+
+    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize) {
+        self.jump_cursor(top, col);
+        self.vim.mode = FsmMode::Normal;
+        hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+    }
+
+    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
+        self.jump_cursor(top, col);
+        self.vim.mode = FsmMode::Normal;
+        hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+    }
+
+    fn execute_motion(&mut self, motion: Motion, count: usize) {
+        hjkl_engine::vim::execute_motion(self, motion, count);
+    }
+
+    fn update_block_vcol(&mut self, motion: &Motion) {
+        hjkl_engine::vim::update_block_vcol(self, motion);
+    }
+
+    fn apply_visual_operator(&mut self, op: Operator, count: usize) {
+        hjkl_engine::vim::apply_visual_operator(self, op, count);
+    }
+
+    fn replace_block_char(&mut self, ch: char) {
+        hjkl_engine::vim::block_replace(self, ch);
+    }
+
+    fn visual_text_obj_extend(&mut self, ch: char, inner: bool) {
+        let obj = match ch {
+            'w' => TextObject::Word { big: false },
+            'W' => TextObject::Word { big: true },
+            '"' | '\'' | '`' => TextObject::Quote(ch),
+            '(' | ')' | 'b' => TextObject::Bracket('('),
+            '[' | ']' => TextObject::Bracket('['),
+            '{' | '}' | 'B' => TextObject::Bracket('{'),
+            '<' | '>' => TextObject::Bracket('<'),
+            'p' => TextObject::Paragraph,
+            't' => TextObject::XmlTag,
+            's' => TextObject::Sentence,
+            _ => return,
+        };
+        let Some((start, end, kind)) = hjkl_engine::vim::text_object_range(self, obj, inner, 1)
+        else {
+            return;
+        };
+        match kind {
+            RangeKind::Linewise => {
+                self.vim.visual_line_anchor = start.0;
+                self.vim.mode = FsmMode::VisualLine;
+                self.vim.current_mode = VimMode::VisualLine;
+                self.jump_cursor(end.0, 0);
+            }
+            _ => {
+                self.vim.mode = FsmMode::Visual;
+                self.vim.current_mode = VimMode::Visual;
+                self.vim.visual_anchor = (start.0, start.1);
+                let (er, ec) = hjkl_engine::vim::retreat_one(self, end);
+                self.jump_cursor(er, ec);
+            }
+        }
     }
 }
