@@ -455,6 +455,45 @@ pub trait VimEditorExt {
     /// Apply an operator over a g-chord motion or case-op linewise form
     /// (`dgg` / `dge` / `dgE` / `dgj` / `dgk` / `gUgU` …).
     fn apply_op_g(&mut self, op: Operator, ch: char, total_count: usize);
+
+    // ─── Mode transitions ──────────────────────────────────────────────────
+    //
+    // Both the FSM and these wrappers write `current_mode`, so `vim_mode()`
+    // returns correct values regardless of which path performed the
+    // transition.
+
+    /// `v` from Normal — enter charwise Visual mode, anchoring the selection
+    /// at the current cursor position.
+    fn enter_visual_char(&mut self);
+
+    /// `V` from Normal — enter linewise Visual mode, anchoring on the current
+    /// line. Motions extend the selection by whole lines.
+    fn enter_visual_line(&mut self);
+
+    /// `<C-v>` from Normal — enter Visual-block mode. The selection is a
+    /// rectangle whose corners are the anchor and the live cursor.
+    fn enter_visual_block(&mut self);
+
+    /// Esc from any visual mode — set `<` / `>` marks, stash the selection for
+    /// `gv` re-entry, then return to Normal mode.
+    fn exit_visual_to_normal(&mut self);
+
+    /// `o` in Visual / VisualLine / VisualBlock — swap the cursor and anchor so
+    /// the user can extend the other end of the selection. Does NOT mutate the
+    /// selection range; only the active endpoint changes.
+    fn visual_o_toggle(&mut self);
+
+    /// `gv` — restore the last visual selection (mode + anchor + cursor
+    /// position). No-op when no visual selection has been exited yet.
+    fn reenter_last_visual(&mut self);
+
+    /// Direct mode-transition entry point. Sets both the internal FSM mode and
+    /// the stable `current_mode` field read by `vim_mode()`.
+    ///
+    /// Prefer the semantic primitives (`enter_visual_char`, `enter_insert_i`,
+    /// …) which also set up required bookkeeping (anchors, sessions, …). Use
+    /// `set_mode` only when you need a raw mode flip without side-effects.
+    fn set_mode(&mut self, mode: VimMode);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -901,5 +940,35 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn apply_op_g(&mut self, op: Operator, ch: char, total_count: usize) {
         hjkl_engine::vim::apply_op_g_inner(self, op, ch, total_count);
+    }
+
+    // ─── Mode transitions ──────────────────────────────────────────────────
+
+    fn enter_visual_char(&mut self) {
+        hjkl_engine::vim::enter_visual_char_bridge(self);
+    }
+
+    fn enter_visual_line(&mut self) {
+        hjkl_engine::vim::enter_visual_line_bridge(self);
+    }
+
+    fn enter_visual_block(&mut self) {
+        hjkl_engine::vim::enter_visual_block_bridge(self);
+    }
+
+    fn exit_visual_to_normal(&mut self) {
+        hjkl_engine::vim::exit_visual_to_normal_bridge(self);
+    }
+
+    fn visual_o_toggle(&mut self) {
+        hjkl_engine::vim::visual_o_toggle_bridge(self);
+    }
+
+    fn reenter_last_visual(&mut self) {
+        hjkl_engine::vim::reenter_last_visual_bridge(self);
+    }
+
+    fn set_mode(&mut self, mode: VimMode) {
+        hjkl_engine::vim::set_mode_bridge(self, mode);
     }
 }

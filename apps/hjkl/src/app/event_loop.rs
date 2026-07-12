@@ -6,6 +6,7 @@ use crossterm::{
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
 use hjkl_keymap::{Chord as KmChord, KeyEvent as KmKeyEvent};
+use hjkl_vim::VimEditorExt;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;

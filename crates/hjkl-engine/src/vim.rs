@@ -2781,7 +2781,8 @@ pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buf
 /// field in one call. Every Phase 6.3 bridge that changes mode calls this so
 /// `vim_mode()` stays correct without going through the FSM's `step()` loop.
 #[inline]
-pub(crate) fn set_vim_mode_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn set_vim_mode_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     mode: Mode,
 ) {
@@ -2792,9 +2793,8 @@ pub(crate) fn set_vim_mode_bridge<H: crate::types::Host>(
 
 /// `v` from Normal — enter charwise Visual mode. Anchors at the current
 /// cursor position; the cursor IS the live end of the selection.
-pub(crate) fn enter_visual_char_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_visual_char_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let cur = ed.cursor();
     ed.vim.visual_anchor = cur;
     set_vim_mode_bridge(ed, Mode::Visual);
@@ -2802,9 +2802,8 @@ pub(crate) fn enter_visual_char_bridge<H: crate::types::Host>(
 
 /// `V` from Normal — enter linewise Visual mode. Anchors the whole line
 /// containing the current cursor; `o` still swaps the anchor row.
-pub(crate) fn enter_visual_line_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_visual_line_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let (row, _) = ed.cursor();
     ed.vim.visual_line_anchor = row;
     set_vim_mode_bridge(ed, Mode::VisualLine);
@@ -2813,9 +2812,8 @@ pub(crate) fn enter_visual_line_bridge<H: crate::types::Host>(
 /// `<C-v>` from Normal — enter Visual-block mode. Anchors at the current
 /// cursor; `block_vcol` is seeded from the cursor column so h/l navigation
 /// preserves the desired virtual column.
-pub(crate) fn enter_visual_block_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_visual_block_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let cur = ed.cursor();
     ed.vim.block_anchor = cur;
     ed.vim.block_vcol = cur.1;
@@ -2826,7 +2824,8 @@ pub(crate) fn enter_visual_block_bridge<H: crate::types::Host>(
 /// selection for `gv` re-entry, and return to Normal. Replicates the
 /// `pre_visual_snapshot` logic in `step()` so callers outside the FSM get
 /// identical behaviour.
-pub(crate) fn exit_visual_to_normal_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     // Build the same snapshot that `step()` captures at pre-step time.
@@ -2903,9 +2902,8 @@ pub(crate) fn exit_visual_to_normal_bridge<H: crate::types::Host>(
 /// to the old anchor and the anchor takes the old cursor. In linewise mode
 /// the anchor *row* swaps with the current cursor row. In block mode the
 /// block corners swap.
-pub(crate) fn visual_o_toggle_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn visual_o_toggle_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     match ed.vim.mode {
         Mode::Visual => {
             let cur = ed.cursor();
@@ -2933,9 +2931,8 @@ pub(crate) fn visual_o_toggle_bridge<H: crate::types::Host>(
 /// `gv` — restore the last visual selection (mode + anchor + cursor).
 /// No-op if no selection was ever stored. Mirrors the `gv` arm in
 /// `handle_normal_g`.
-pub(crate) fn reenter_last_visual_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn reenter_last_visual_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     if let Some(snap) = ed.vim.last_visual {
         match snap.mode {
             Mode::Visual => {
@@ -2962,7 +2959,8 @@ pub(crate) fn reenter_last_visual_bridge<H: crate::types::Host>(
 /// `current_mode`. Use sparingly — prefer the semantic primitives
 /// (`enter_visual_char_bridge`, `enter_insert_i_bridge`, …) which also
 /// set up the required bookkeeping (anchors, sessions, …).
-pub(crate) fn set_mode_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn set_mode_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     mode: crate::VimMode,
 ) {
@@ -4392,9 +4390,11 @@ pub fn apply_after_g<H: crate::types::Host>(
         'M' => execute_motion(ed, Motion::LineMiddle, count),
         // `gm` — middle of the screen line (viewport_width/2, clamped to EOL).
         'm' => execute_motion(ed, Motion::ScreenLineMiddle, count),
-        // `gv` — re-enter the last visual selection.
-        // Phase 6.6a: drive through the public Editor API.
-        'v' => ed.reenter_last_visual(),
+        // `gv` — re-enter the last visual selection. Calls the bridge in this
+        // module directly; routing back out through the `Editor` wrapper was
+        // pure indirection, and that wrapper now lives on
+        // `hjkl_vim::VimEditorExt` (#267).
+        'v' => reenter_last_visual_bridge(ed),
         // `gj` / `gk` — display-line down / up. Walks one screen
         // segment at a time under `:set wrap`; falls back to `j`/`k`
         // when wrap is off (Buffer::move_screen_* handles the branch).

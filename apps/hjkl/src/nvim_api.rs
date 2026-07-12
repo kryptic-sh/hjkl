@@ -2415,6 +2415,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hjkl_vim::VimEditorExt;
     use rmpv::Value;
 
     /// Encode a buffer handle `Value::Ext(BUFFER_EXT, encode_id(id))` suitable
