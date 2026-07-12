@@ -1308,12 +1308,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .filter(|(c, _)| c.is_ascii_lowercase())
     }
 
-    /// Position the cursor was at when the user last jumped via
-    /// `<C-o>` / `g;` / similar. `None` before any jump.
-    pub fn last_jump_back(&self) -> Option<(usize, usize)> {
-        self.vim.jump_back.last().copied()
-    }
-
     /// Position of the last edit (where `.` would replay). `None` if
     /// no edit has happened yet in this session.
     pub fn last_edit_pos(&self) -> Option<(usize, usize)> {
@@ -1541,13 +1535,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Phase 6.5: used by `dispatch_insert_key` in the app crate.
     pub fn clear_insert_register_pending(&mut self) {
         self.vim.insert_pending_register = false;
-    }
-
-    /// Read-only view of the jump-back list (positions pushed on "big"
-    /// motions). Newest entry is at the back — `Ctrl-o` pops from there.
-    #[allow(clippy::type_complexity)]
-    pub fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]) {
-        (&self.vim.jump_back, &self.vim.jump_fwd)
     }
 
     /// Read-only view of the change list (positions of recent edits) plus

@@ -16,6 +16,11 @@ readme = "README.md"
 hjkl-engine.workspace = true
 hjkl-buffer.workspace = true
 hjkl-lang.workspace = true
+# `:jumps` reads the vim jumplist, which lives on the vim discipline rather
+# than the engine core (#267). hjkl-ex implements vim ex-commands (`:jumps`,
+# `:marks`, `:normal`), so depending on the vim discipline is honest layering,
+# not incidental coupling. No cycle: hjkl-vim does not depend on hjkl-ex.
+hjkl-vim.workspace = true
 regex = "1"
 
 [dev-dependencies]

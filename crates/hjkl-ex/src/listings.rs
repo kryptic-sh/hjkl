@@ -1,4 +1,5 @@
 use hjkl_engine::Host;
+use hjkl_vim::VimEditorExt;
 
 // ---- registers -------------------------------------------------------------
 

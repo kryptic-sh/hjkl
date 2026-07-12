@@ -2541,6 +2541,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-lang",
+ "hjkl-vim",
  "regex",
  "tempfile",
 ]

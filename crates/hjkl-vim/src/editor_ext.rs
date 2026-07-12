@@ -89,6 +89,16 @@ pub trait VimEditorExt {
     /// [`VimEditorExt::buffer_selection`] (the legacy `hjkl_buffer::Selection`
     /// shape).
     fn selection_highlight(&self) -> Option<Highlight>;
+
+    /// Read-only view of the jumplist as `(jump_back, jump_fwd)` — positions
+    /// pushed on "big" motions. Newest entry is at the back of each; `Ctrl-o`
+    /// pops from `jump_back` and `Ctrl-i` from `jump_fwd`. Backs `:jumps`.
+    #[allow(clippy::type_complexity)]
+    fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]);
+
+    /// Position the cursor was at when the user last jumped via `<C-o>` /
+    /// `g;` / similar. `None` before any jump.
+    fn last_jump_back(&self) -> Option<(usize, usize)>;
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -249,5 +259,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
             },
             kind: HighlightKind::Selection,
         })
+    }
+
+    fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]) {
+        (&self.vim.jump_back, &self.vim.jump_fwd)
+    }
+
+    fn last_jump_back(&self) -> Option<(usize, usize)> {
+        self.vim.jump_back.last().copied()
     }
 }
