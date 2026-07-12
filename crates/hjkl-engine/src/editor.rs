@@ -2339,6 +2339,87 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.last_input_host_at = d;
     }
 
+    // ── Scrolling (discipline-agnostic seam, #265) ───────────────────────────
+    //
+    // Scrolling a viewport is not a vim concept — every discipline does it.
+    // These carry zero vim FSM state (the one field they used to touch,
+    // `scroll_anim_hint`, now lives on the Editor), so they belong here. The
+    // vim *keybindings* on top (`Ctrl-F`/`Ctrl-B`, `Ctrl-D`/`Ctrl-U`,
+    // `Ctrl-E`/`Ctrl-Y`) stay in hjkl-vim.
+
+    /// Rows spanned by half a viewport, times `count` (min 1).
+    pub(crate) fn viewport_half_rows(&self, count: usize) -> usize {
+        let h = self.viewport_height_value() as usize;
+        (h / 2).max(1).saturating_mul(count.max(1))
+    }
+
+    /// Rows spanned by a full viewport (less a two-line overlap), times
+    /// `count` (min 1).
+    pub(crate) fn viewport_full_rows(&self, count: usize) -> usize {
+        let h = self.viewport_height_value() as usize;
+        h.saturating_sub(2).max(1).saturating_mul(count.max(1))
+    }
+
+    /// Move the cursor `delta` rows (clamped to the buffer), landing on the
+    /// first non-blank of the target row and resetting the sticky column.
+    pub(crate) fn scroll_cursor_rows(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        self.sync_buffer_content_from_textarea();
+        let (row, _) = self.cursor();
+        let last_row = buf_row_count(&self.buffer).saturating_sub(1);
+        let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
+        buf_set_cursor_rc(&mut self.buffer, target, 0);
+        crate::motions::move_first_non_blank(&mut self.buffer);
+        self.push_buffer_cursor_to_textarea();
+        self.sticky_col = Some(buf_cursor_pos(&self.buffer).col);
+    }
+
+    /// Scroll the cursor by one full viewport height (height − 2 rows,
+    /// preserving a two-line overlap). `count` multiplies the step.
+    pub fn scroll_full_page(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+        self.scroll_anim_hint = true;
+        let rows = self.viewport_full_rows(count) as isize;
+        match dir {
+            crate::vim::ScrollDir::Down => self.scroll_cursor_rows(rows),
+            crate::vim::ScrollDir::Up => self.scroll_cursor_rows(-rows),
+        }
+    }
+
+    /// Scroll the cursor by half the viewport height. `count` multiplies.
+    pub fn scroll_half_page(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+        self.scroll_anim_hint = true;
+        let rows = self.viewport_half_rows(count) as isize;
+        match dir {
+            crate::vim::ScrollDir::Down => self.scroll_cursor_rows(rows),
+            crate::vim::ScrollDir::Up => self.scroll_cursor_rows(-rows),
+        }
+    }
+
+    /// Scroll the viewport `count` lines without moving the cursor (the cursor
+    /// is clamped into the new visible region if it would fall outside).
+    pub fn scroll_line(&mut self, dir: crate::vim::ScrollDir, count: usize) {
+        let n = count.max(1);
+        let total = buf_row_count(&self.buffer);
+        let last = total.saturating_sub(1);
+        let h = self.viewport_height_value() as usize;
+        let cur_top = self.host().viewport().top_row;
+        let new_top = match dir {
+            crate::vim::ScrollDir::Down => (cur_top + n).min(last),
+            crate::vim::ScrollDir::Up => cur_top.saturating_sub(n),
+        };
+        self.set_viewport_top(new_top);
+        // Clamp cursor to stay within the new visible region.
+        let (row, col) = self.cursor();
+        let bot = (new_top + h).saturating_sub(1).min(last);
+        let clamped = row.max(new_top).min(bot);
+        if clamped != row {
+            buf_set_cursor_rc(&mut self.buffer, clamped, col);
+            self.push_buffer_cursor_to_textarea();
+        }
+    }
+
     /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
     /// the last call. Each entry corresponds to a single buffer
     /// mutation funnelled through [`Editor::mutate_edit`]; block edits
@@ -4965,7 +5046,7 @@ mod scroll_anim_tests {
         ed.host_mut().viewport_mut().height = 20;
         ed.host_mut().viewport_mut().width = 80;
         ed.host_mut().viewport_mut().text_width = 80;
-        crate::vim::scroll_half_page_bridge(&mut ed, crate::vim::ScrollDir::Down, 1);
+        ed.scroll_half_page(crate::vim::ScrollDir::Down, 1);
         assert!(
             ed.take_scroll_anim_hint(),
             "hint should be set after half-page"
@@ -4983,7 +5064,7 @@ mod scroll_anim_tests {
         ed.host_mut().viewport_mut().height = 20;
         ed.host_mut().viewport_mut().width = 80;
         ed.host_mut().viewport_mut().text_width = 80;
-        crate::vim::scroll_line_bridge(&mut ed, crate::vim::ScrollDir::Down, 1);
+        ed.scroll_line(crate::vim::ScrollDir::Down, 1);
         assert!(
             !ed.take_scroll_anim_hint(),
             "hint must NOT be set for C-e/C-y"

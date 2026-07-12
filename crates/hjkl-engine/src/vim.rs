@@ -2091,7 +2091,7 @@ pub fn insert_pageup_bridge<H: crate::types::Host>(
     viewport_h: u16,
 ) -> bool {
     let rows = viewport_h.saturating_sub(2).max(1) as isize;
-    scroll_cursor_rows(ed, -rows);
+    ed.scroll_cursor_rows(-rows);
     false
 }
 
@@ -2103,7 +2103,7 @@ pub fn insert_pagedown_bridge<H: crate::types::Host>(
     viewport_h: u16,
 ) -> bool {
     let rows = viewport_h.saturating_sub(2).max(1) as isize;
-    scroll_cursor_rows(ed, rows);
+    ed.scroll_cursor_rows(rows);
     false
 }
 
@@ -2659,70 +2659,6 @@ pub fn jump_forward_bridge<H: crate::types::Host>(
     }
 }
 
-// ── Scroll bridges ─────────────────────────────────────────────────────────
-
-/// `<C-f>` / `<C-b>` — scroll the cursor by one full viewport height
-/// (`h - 2` rows to preserve two-line overlap). `count` multiplies.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn scroll_full_page_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    dir: ScrollDir,
-    count: usize,
-) {
-    ed.scroll_anim_hint = true;
-    let rows = viewport_full_rows(ed, count) as isize;
-    match dir {
-        ScrollDir::Down => scroll_cursor_rows(ed, rows),
-        ScrollDir::Up => scroll_cursor_rows(ed, -rows),
-    }
-}
-
-/// `<C-d>` / `<C-u>` — scroll the cursor by half the viewport height.
-/// `count` multiplies.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn scroll_half_page_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    dir: ScrollDir,
-    count: usize,
-) {
-    ed.scroll_anim_hint = true;
-    let rows = viewport_half_rows(ed, count) as isize;
-    match dir {
-        ScrollDir::Down => scroll_cursor_rows(ed, rows),
-        ScrollDir::Up => scroll_cursor_rows(ed, -rows),
-    }
-}
-
-/// `<C-e>` / `<C-y>` — scroll the viewport `count` lines without moving the
-/// cursor (cursor is clamped to the new visible region if it would go
-/// off-screen). `<C-e>` scrolls down; `<C-y>` scrolls up.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn scroll_line_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    dir: ScrollDir,
-    count: usize,
-) {
-    let n = count.max(1);
-    let total = buf_row_count(&ed.buffer);
-    let last = total.saturating_sub(1);
-    let h = ed.viewport_height_value() as usize;
-    let vp = ed.host().viewport();
-    let cur_top = vp.top_row;
-    let new_top = match dir {
-        ScrollDir::Down => (cur_top + n).min(last),
-        ScrollDir::Up => cur_top.saturating_sub(n),
-    };
-    ed.set_viewport_top(new_top);
-    // Clamp cursor to stay within the new visible region.
-    let (row, col) = ed.cursor();
-    let bot = (new_top + h).saturating_sub(1).min(last);
-    let clamped = row.max(new_top).min(bot);
-    if clamped != row {
-        buf_set_cursor_rc(&mut ed.buffer, clamped, col);
-        ed.push_buffer_cursor_to_textarea();
-    }
-}
-
 // ── Search bridges ─────────────────────────────────────────────────────────
 
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
@@ -3205,47 +3141,6 @@ fn is_big_jump(motion: &Motion) -> bool {
 
 // ─── Scroll helpers (Ctrl-d / Ctrl-u / Ctrl-f / Ctrl-b) ────────────────────
 
-/// Half-viewport row count, with a floor of 1 so tiny / un-rendered
-/// viewports still step by a single row. `count` multiplies.
-fn viewport_half_rows<H: crate::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
-    count: usize,
-) -> usize {
-    let h = ed.viewport_height_value() as usize;
-    (h / 2).max(1).saturating_mul(count.max(1))
-}
-
-/// Full-viewport row count. Vim conventionally keeps 2 lines of overlap
-/// between successive `Ctrl-f` pages; we approximate with `h - 2`.
-fn viewport_full_rows<H: crate::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
-    count: usize,
-) -> usize {
-    let h = ed.viewport_height_value() as usize;
-    h.saturating_sub(2).max(1).saturating_mul(count.max(1))
-}
-
-/// Move the cursor by `delta` rows (positive = down, negative = up),
-/// clamp to the document, then land at the first non-blank on the new
-/// row. The textarea viewport auto-scrolls to keep the cursor visible
-/// when the cursor pushes off-screen.
-fn scroll_cursor_rows<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    delta: isize,
-) {
-    if delta == 0 {
-        return;
-    }
-    ed.sync_buffer_content_from_textarea();
-    let (row, _) = ed.cursor();
-    let last_row = buf_row_count(&ed.buffer).saturating_sub(1);
-    let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
-    buf_set_cursor_rc(&mut ed.buffer, target, 0);
-    crate::motions::move_first_non_blank(&mut ed.buffer);
-    ed.push_buffer_cursor_to_textarea();
-    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
-}
-
 // ─── Motion parsing ────────────────────────────────────────────────────────
 
 /// Parse the first key of a normal/visual-mode motion. Returns `None` for
@@ -3537,22 +3432,34 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // `<C-d>` — half page down, count multiplies the distance.
             // Calls scroll_cursor_rows directly rather than adding a Motion enum
             // variant, keeping engine Motion churn minimal.
-            scroll_cursor_rows(ed, viewport_half_rows(ed, count) as isize);
+            {
+                let d = ed.viewport_half_rows(count) as isize;
+                ed.scroll_cursor_rows(d);
+            }
         }
         crate::MotionKind::HalfPageUp => {
             // `<C-u>` — half page up, count multiplies the distance.
             // Direct call mirrors the FSM Ctrl-u arm. No new Motion variant.
-            scroll_cursor_rows(ed, -(viewport_half_rows(ed, count) as isize));
+            {
+                let d = -(ed.viewport_half_rows(count) as isize);
+                ed.scroll_cursor_rows(d);
+            }
         }
         crate::MotionKind::FullPageDown => {
             // `<C-f>` — full page down (2-line overlap), count multiplies.
             // Direct call mirrors the FSM Ctrl-f arm. No new Motion variant.
-            scroll_cursor_rows(ed, viewport_full_rows(ed, count) as isize);
+            {
+                let d = ed.viewport_full_rows(count) as isize;
+                ed.scroll_cursor_rows(d);
+            }
         }
         crate::MotionKind::FullPageUp => {
             // `<C-b>` — full page up (2-line overlap), count multiplies.
             // Direct call mirrors the FSM Ctrl-b arm. No new Motion variant.
-            scroll_cursor_rows(ed, -(viewport_full_rows(ed, count) as isize));
+            {
+                let d = -(ed.viewport_full_rows(count) as isize);
+                ed.scroll_cursor_rows(d);
+            }
         }
         crate::MotionKind::FirstNonBlankLine => {
             execute_motion_with_block_vcol(ed, Motion::FirstNonBlankLine, count);

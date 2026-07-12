@@ -11,8 +11,7 @@
 use hjkl_engine::input::Input;
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
 use hjkl_engine::vim::{
-    AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir,
-    TextObject,
+    AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, TextObject,
 };
 use hjkl_engine::{Editor, FsmMode, MarkJump, VimMode};
 
@@ -403,22 +402,6 @@ pub trait VimEditorExt {
     /// `<C-i>` / `Tab` — redo `count` entries on the forward jumplist stack,
     /// saving the current position on the backward stack.
     fn jump_forward(&mut self, count: usize);
-
-    // ─── Scrolling ─────────────────────────────────────────────────────────
-
-    /// `<C-f>` / `<C-b>` — scroll the cursor by one full viewport height
-    /// (height − 2 rows, preserving two-line overlap). `count` multiplies.
-    /// `dir = Down` for `<C-f>`, `Up` for `<C-b>`.
-    fn scroll_full_page(&mut self, dir: ScrollDir, count: usize);
-
-    /// `<C-d>` / `<C-u>` — scroll the cursor by half the viewport height.
-    /// `count` multiplies the step. `dir = Down` for `<C-d>`, `Up` for `<C-u>`.
-    fn scroll_half_page(&mut self, dir: ScrollDir, count: usize);
-
-    /// `<C-e>` / `<C-y>` — scroll the viewport `count` lines without moving the
-    /// cursor (cursor is clamped to the new visible region if necessary).
-    /// `dir = Down` for `<C-e>` (scroll text up), `Up` for `<C-y>`.
-    fn scroll_line(&mut self, dir: ScrollDir, count: usize);
 
     // ─── Search ────────────────────────────────────────────────────────────
 
@@ -1151,20 +1134,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn jump_forward(&mut self, count: usize) {
         hjkl_engine::vim::jump_forward_bridge(self, count);
-    }
-
-    // ─── Scrolling ─────────────────────────────────────────────────────────
-
-    fn scroll_full_page(&mut self, dir: ScrollDir, count: usize) {
-        hjkl_engine::vim::scroll_full_page_bridge(self, dir, count);
-    }
-
-    fn scroll_half_page(&mut self, dir: ScrollDir, count: usize) {
-        hjkl_engine::vim::scroll_half_page_bridge(self, dir, count);
-    }
-
-    fn scroll_line(&mut self, dir: ScrollDir, count: usize) {
-        hjkl_engine::vim::scroll_line_bridge(self, dir, count);
     }
 
     // ─── Search ────────────────────────────────────────────────────────────
