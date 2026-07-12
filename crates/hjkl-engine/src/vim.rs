@@ -4086,7 +4086,8 @@ fn regex_escape(s: &str) -> String {
 /// - Updates `last_find` and `last_change` per existing conventions.
 ///
 /// No-op when `motion_key` does not produce a known motion.
-pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_motion_key<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     motion_key: char,
@@ -4140,7 +4141,8 @@ pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
 
 /// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`/`gcc`).
 /// Called by `Editor::apply_op_double` (the public controller API).
-pub(crate) fn apply_op_double<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_double<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     total_count: usize,
@@ -4299,7 +4301,8 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
 /// - Otherwise, maps `ch` to a motion (`g`→FileTop, `e`→WordEndBack,
 ///   `E`→BigWordEndBack, `j`→ScreenDown, `k`→ScreenUp) and applies. Unknown
 ///   chars are silently ignored (no-op), matching the engine FSM's behaviour.
-pub(crate) fn apply_op_g_inner<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_g_inner<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -4358,7 +4361,8 @@ pub(crate) fn apply_op_g_inner<H: crate::types::Host>(
 /// given the char `ch` and pre-captured `count`. Called by `Editor::after_g`
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterGChord` without re-entering the FSM.
-pub(crate) fn apply_after_g<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_after_g<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
@@ -4554,7 +4558,8 @@ pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buff
 /// given the char `ch` and pre-captured `count`. Called by `Editor::after_z`
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterZChord` without re-entering the engine FSM.
-pub(crate) fn apply_after_z<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_after_z<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
@@ -4643,7 +4648,8 @@ pub(crate) fn apply_after_z<H: crate::types::Host>(
 /// Called by `Editor::find_char` (the public controller API) so the
 /// hjkl-vim pending-state reducer can dispatch `FindChar` without
 /// re-entering the FSM.
-pub(crate) fn apply_find_char<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_find_char<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     forward: bool,
@@ -4809,7 +4815,8 @@ pub(crate) fn apply_op_sneak<H: crate::types::Host>(
 /// hjkl-vim `PendingState::OpFind` reducer can dispatch `ApplyOpFind` without
 /// re-entering the FSM. `handle_op_find_target` now delegates here to avoid
 /// logic duplication.
-pub(crate) fn apply_op_find_motion<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_find_motion<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -4838,7 +4845,8 @@ pub(crate) fn apply_op_find_motion<H: crate::types::Host>(
 /// `_total_count` is accepted for API symmetry with `apply_op_find_motion` /
 /// `apply_op_motion_key` but is currently unused — text objects don't repeat
 /// in vim's current grammar. Kept for future-proofing.
-pub(crate) fn apply_op_text_obj_inner<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_text_obj_inner<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -8246,7 +8254,8 @@ pub(crate) fn adjust_number<H: crate::types::Host>(
     true
 }
 
-pub(crate) fn replace_char<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn replace_char<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
@@ -9178,7 +9187,7 @@ mod replace_char_tests {
         let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
         // Cursor at (0,0); `3rx` needs 3 chars but the line has 2 — vim aborts
         // the whole command and replaces nothing (not a partial run).
-        ed.replace_char_at('x', 3);
+        super::replace_char(&mut ed, 'x', 3);
         assert_eq!(line(&ed, 0), "ab", "partial replace must not happen");
         assert_eq!(line(&ed, 1), "cd", "must not spill onto the next line");
     }
@@ -9187,7 +9196,7 @@ mod replace_char_tests {
     fn replace_char_count_fitting_replaces_run() {
         let buf = Buffer::from_str("abc");
         let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
-        ed.replace_char_at('x', 2);
+        super::replace_char(&mut ed, 'x', 2);
         assert_eq!(line(&ed, 0), "xxc");
     }
 }

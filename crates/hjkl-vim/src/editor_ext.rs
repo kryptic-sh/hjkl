@@ -411,6 +411,50 @@ pub trait VimEditorExt {
     /// `forward` chooses direction; `whole_word` wraps the pattern in `\b`
     /// anchors (true for `*` / `#`, false for `g*` / `g#`). `count` repeats.
     fn word_search(&mut self, forward: bool, whole_word: bool, count: usize);
+
+    // ─── Chord appliers ────────────────────────────────────────────────────
+    //
+    // Each applies a completed chord with a pre-captured count, so the
+    // pending-state reducers can dispatch without re-entering the engine FSM.
+
+    /// `r<x>` — replace the char under the cursor with `ch`, `count` times.
+    /// Cursor ends on the last replaced char; one undo snapshot at start.
+    fn replace_char_at(&mut self, ch: char, count: usize);
+
+    /// `f`/`F`/`t`/`T` — find `ch` on the current line. `forward` chooses
+    /// direction, `till` stops one char short. Records `last_find` for `;`/`,`.
+    fn find_char(&mut self, ch: char, forward: bool, till: bool, count: usize);
+
+    /// Apply the g-chord effect for `g<ch>` with a pre-captured `count`.
+    fn after_g(&mut self, ch: char, count: usize);
+
+    /// Apply the z-chord effect for `z<ch>` with a pre-captured `count` —
+    /// `zz`/`zt`/`zb` (scroll-cursor), the fold ops, and `zf`.
+    fn after_z(&mut self, ch: char, count: usize);
+
+    // ─── Operator dispatch ─────────────────────────────────────────────────
+
+    /// Apply an operator over a single-key motion (e.g. `dw`, `d$`, `dG`).
+    /// The engine resolves `motion_key` to a `Motion` via `parse_motion`.
+    /// `total_count` is the folded product of prefix and inner counts. No-op
+    /// when `motion_key` is not a known motion (vim cancels the operator).
+    fn apply_op_motion(&mut self, op: Operator, motion_key: char, total_count: usize);
+
+    /// Apply a doubled-letter line op (`dd` / `yy` / `cc` / `>>` / `<<`).
+    fn apply_op_double(&mut self, op: Operator, total_count: usize);
+
+    /// Apply an operator over a find motion (`df<x>` / `dF<x>` / `dt<x>` /
+    /// `dT<x>`). Records `last_find` for `;` / `,` repeat and updates
+    /// `last_change` when `op` is Change (dot-repeat).
+    fn apply_op_find(&mut self, op: Operator, ch: char, forward: bool, till: bool, count: usize);
+
+    /// Apply an operator over a text-object range (`diw` / `daw` / `di"` …).
+    /// Unknown `ch` values are silently ignored, matching the FSM.
+    fn apply_op_text_obj(&mut self, op: Operator, ch: char, inner: bool, total_count: usize);
+
+    /// Apply an operator over a g-chord motion or case-op linewise form
+    /// (`dgg` / `dge` / `dgE` / `dgj` / `dgk` / `gUgU` …).
+    fn apply_op_g(&mut self, op: Operator, ch: char, total_count: usize);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -817,5 +861,45 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn word_search(&mut self, forward: bool, whole_word: bool, count: usize) {
         hjkl_engine::vim::word_search_bridge(self, forward, whole_word, count);
+    }
+
+    // ─── Chord appliers ────────────────────────────────────────────────────
+
+    fn replace_char_at(&mut self, ch: char, count: usize) {
+        hjkl_engine::vim::replace_char(self, ch, count);
+    }
+
+    fn find_char(&mut self, ch: char, forward: bool, till: bool, count: usize) {
+        hjkl_engine::vim::apply_find_char(self, ch, forward, till, count.max(1));
+    }
+
+    fn after_g(&mut self, ch: char, count: usize) {
+        hjkl_engine::vim::apply_after_g(self, ch, count);
+    }
+
+    fn after_z(&mut self, ch: char, count: usize) {
+        hjkl_engine::vim::apply_after_z(self, ch, count);
+    }
+
+    // ─── Operator dispatch ─────────────────────────────────────────────────
+
+    fn apply_op_motion(&mut self, op: Operator, motion_key: char, total_count: usize) {
+        hjkl_engine::vim::apply_op_motion_key(self, op, motion_key, total_count);
+    }
+
+    fn apply_op_double(&mut self, op: Operator, total_count: usize) {
+        hjkl_engine::vim::apply_op_double(self, op, total_count);
+    }
+
+    fn apply_op_find(&mut self, op: Operator, ch: char, forward: bool, till: bool, count: usize) {
+        hjkl_engine::vim::apply_op_find_motion(self, op, ch, forward, till, count);
+    }
+
+    fn apply_op_text_obj(&mut self, op: Operator, ch: char, inner: bool, total_count: usize) {
+        hjkl_engine::vim::apply_op_text_obj_inner(self, op, ch, inner, total_count);
+    }
+
+    fn apply_op_g(&mut self, op: Operator, ch: char, total_count: usize) {
+        hjkl_engine::vim::apply_op_g_inner(self, op, ch, total_count);
     }
 }

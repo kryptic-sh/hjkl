@@ -6,6 +6,7 @@
 
 use super::App;
 use super::keymap_build::engine_input_to_key_event;
+use hjkl_vim::VimEditorExt;
 
 impl App {
     /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
