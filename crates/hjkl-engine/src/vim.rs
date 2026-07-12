@@ -491,7 +491,7 @@ fn walk_change_list<H: crate::types::Host>(
     }
     let idx = idx as usize;
     ed.change_list_cursor = Some(idx);
-    let (row, col) = ed.change_list[idx];
+    let (row, col) = ed.change_list().0[idx];
     ed.jump_cursor(row, col);
 }
 
@@ -521,7 +521,7 @@ fn insert_register_text<H: crate::types::Host>(
         },
     };
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     ed.mutate_edit(Edit::InsertStr {
         at: cursor,
         text: text.clone(),
@@ -538,7 +538,7 @@ fn insert_register_text<H: crate::types::Host>(
             col += 1;
         }
     }
-    buf_set_cursor_rc(&mut ed.buffer, row, col);
+    buf_set_cursor_rc(ed.buffer_mut(), row, col);
     ed.push_buffer_cursor_to_textarea();
     ed.mark_content_dirty();
     if let Some(ref mut session) = ed.vim.insert_session {
@@ -691,14 +691,14 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
 
-    if !ed.settings.smartindent {
+    if !ed.settings().smartindent {
         return false;
     }
     if !matches!(ch, '}' | ')' | ']') {
         return false;
     }
 
-    let line = match buf_line(&ed.buffer, cursor.row) {
+    let line = match buf_line(ed.buffer(), cursor.row) {
         Some(l) => l.to_string(),
         None => return false,
     };
@@ -714,11 +714,11 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
     }
 
     // Compute indent unit.
-    let unit_len: usize = if ed.settings.expandtab {
-        if ed.settings.softtabstop > 0 {
-            ed.settings.softtabstop
+    let unit_len: usize = if ed.settings().expandtab {
+        if ed.settings().softtabstop > 0 {
+            ed.settings().softtabstop
         } else {
-            ed.settings.shiftwidth
+            ed.settings().shiftwidth
         }
     } else {
         // Tab: one literal tab character.
@@ -726,7 +726,7 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
     };
 
     // Check there's at least one full unit to strip.
-    let strip_len = if ed.settings.expandtab {
+    let strip_len = if ed.settings().expandtab {
         // Count leading spaces; need at least `unit_len`.
         let spaces = before.chars().filter(|c| *c == ' ').count();
         if spaces < unit_len {
@@ -763,7 +763,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     let Some(session) = ed.vim.insert_session.take() else {
         return;
     };
-    let after_rope = crate::types::Query::rope(&ed.buffer);
+    let after_rope = crate::types::Query::rope(ed.buffer());
     // Clamp both slices to their respective bounds — the buffer may have
     // grown (Enter splits rows) or shrunk (Backspace joins rows) during
     // the session, so row_max can overshoot either side.
@@ -802,9 +802,9 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             // row-range extract above is unreliable across the open boundary)
             // and stack `count - 1` further lines below it.
             let (start_row, _) = ed.cursor();
-            let typed = buf_line(&ed.buffer, start_row).unwrap_or_default();
+            let typed = buf_line(ed.buffer(), start_row).unwrap_or_default();
             for at_row in start_row..start_row + (session.count - 1) {
-                let end = buf_line_chars(&ed.buffer, at_row);
+                let end = buf_line_chars(ed.buffer(), at_row);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(at_row, end),
                     text: format!("\n{typed}"),
@@ -833,7 +833,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     ) {
         use hjkl_buffer::{Edit, Position};
         for r in (top + 1)..=bot {
-            let line_len = buf_line_chars(&ed.buffer, r);
+            let line_len = buf_line_chars(ed.buffer(), r);
             if col > line_len {
                 let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
                 ed.mutate_edit(Edit::InsertStr {
@@ -853,7 +853,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         // stays at the block-start column (vim leaves cursor there).
         if !inserted.is_empty() && top < bot && !ed.vim.replaying {
             replicate_block_text(ed, &inserted, top, bot, col);
-            buf_set_cursor_rc(&mut ed.buffer, top, col);
+            buf_set_cursor_rc(ed.buffer_mut(), top, col);
             ed.push_buffer_cursor_to_textarea();
         }
         return;
@@ -865,9 +865,9 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         if !inserted.is_empty() && top < bot && !ed.vim.replaying {
             replicate_block_text(ed, &inserted, top, bot, col);
             let ins_chars = inserted.chars().count();
-            let line_len = buf_line_chars(&ed.buffer, top);
+            let line_len = buf_line_chars(ed.buffer(), top);
             let target_col = (col + ins_chars).min(line_len);
-            buf_set_cursor_rc(&mut ed.buffer, top, target_col);
+            buf_set_cursor_rc(ed.buffer_mut(), top, target_col);
             ed.push_buffer_cursor_to_textarea();
         }
         return;
@@ -930,7 +930,7 @@ pub fn begin_insert<H: crate::types::Host>(
     reason: InsertReason,
 ) {
     // `nomodifiable`: silently refuse to enter insert/replace; stay in current mode.
-    if !ed.settings.modifiable {
+    if !ed.settings().modifiable {
         return;
     }
     // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
@@ -952,7 +952,7 @@ pub fn begin_insert<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_rope: crate::types::Query::rope(&ed.buffer),
+        before_rope: crate::types::Query::rope(ed.buffer()),
         reason,
         start_row: row,
         start_col: col,
@@ -980,7 +980,7 @@ pub fn begin_insert<H: crate::types::Host>(
 pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
-    if !ed.settings.undo_break_on_motion {
+    if !ed.settings().undo_break_on_motion {
         return;
     }
     if ed.vim.replaying {
@@ -990,8 +990,8 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
         return;
     }
     ed.push_undo();
-    let before_rope = crate::types::Query::rope(&ed.buffer);
-    let row = crate::types::Cursor::cursor(&ed.buffer).line as usize;
+    let before_rope = crate::types::Query::rope(ed.buffer());
+    let row = crate::types::Cursor::cursor(ed.buffer()).line as usize;
     if let Some(ref mut session) = ed.vim.insert_session {
         session.before_rope = before_rope;
         session.row_min = row;
@@ -1030,7 +1030,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
     use crate::editor::UndoGranularity;
 
     // Fast-path: default (vim) granularity → no-op.
-    if ed.settings.undo_granularity != UndoGranularity::Word {
+    if ed.settings().undo_granularity != UndoGranularity::Word {
         return;
     }
     // No-op during replay or when there is no active insert session.
@@ -1042,7 +1042,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
         None => return,
     };
 
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
 
     // Skip the very first inserted char (begin_insert already snapshotted).
     let is_first_pos = cursor.row == session.start_row && cursor.col == session.start_col;
@@ -1059,7 +1059,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
     } else {
         // Non-whitespace: break only when the char immediately before the
         // cursor is whitespace (entering a word from whitespace territory).
-        let prev_char = buf_line(&ed.buffer, cursor.row)
+        let prev_char = buf_line(ed.buffer(), cursor.row)
             .as_deref()
             .and_then(|line| line.chars().nth(cursor.col.wrapping_sub(1)));
         match prev_char {
@@ -1078,7 +1078,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
         // Reuse the existing mid-session break machinery: push a snapshot
         // and reset session.before_rope + row_min/row_max.
         ed.push_undo();
-        let before_rope = crate::types::Query::rope(&ed.buffer);
+        let before_rope = crate::types::Query::rope(ed.buffer());
         let row = cursor.row;
         if let Some(ref mut session) = ed.vim.insert_session {
             session.before_rope = before_rope;
@@ -1452,11 +1452,11 @@ fn scan_line_tags(chars: &[char], row: usize) -> Vec<TagSpan> {
 pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
-    if !is_html_filetype(&ed.settings.filetype) {
+    if !is_html_filetype(&ed.settings().filetype) {
         return;
     }
     let (row, col) = ed.cursor();
-    let line = match buf_line(&ed.buffer, row) {
+    let line = match buf_line(ed.buffer(), row) {
         Some(l) => l,
         None => return,
     };
@@ -1464,7 +1464,7 @@ pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
         Some(t) => t,
         None => return,
     };
-    let partner = match find_matching_tag(&ed.buffer, &anchor) {
+    let partner = match find_matching_tag(ed.buffer(), &anchor) {
         Some(t) => t,
         None => return,
     };
@@ -1486,7 +1486,7 @@ pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
     });
     // Restore the user's cursor — mutate_edit may have moved it during the
     // partner-side rewrite when the partner is on a row before the cursor.
-    buf_set_cursor_rc(&mut ed.buffer, row, col);
+    buf_set_cursor_rc(ed.buffer_mut(), row, col);
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -1603,7 +1603,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     // `<C-v>` (literal-insert) must bypass this — callers that want literal
     // insertion should NOT call this bridge; they use insert_char_literal.
     if !in_replace && !ed.abbrevs.is_empty() {
-        let iskeyword = ed.settings.iskeyword.clone();
+        let iskeyword = ed.settings().iskeyword.clone();
         if !is_keyword_char(ch, &iskeyword) {
             // Only non-keyword trigger chars fire abbreviation expansion.
             check_and_apply_abbrev(ed, AbbrevTrigger::NonKeyword(ch));
@@ -1617,8 +1617,8 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     maybe_word_undo_break(ed, ch);
 
     // Read cursor (after any abbreviation expansion that may have changed the buffer).
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+    let cursor = buf_cursor_pos(ed.buffer());
+    let line_chars = buf_line_chars(ed.buffer(), cursor.row);
 
     // ── Skip-over: if the typed char matches the top of the pending-closes
     // stack AND the char currently under the cursor IS that close char,
@@ -1635,20 +1635,20 @@ pub fn insert_char_bridge<H: crate::types::Host>(
         && cursor.row == pr
     {
         let char_at_cursor =
-            buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col));
+            buf_line(ed.buffer(), cursor.row).and_then(|l| l.chars().nth(cursor.col));
         if char_at_cursor == Some(ch) {
             ed.pending_closes.pop();
             // For `>` skip-over in HTML/XML: also run tag autoclose.
-            let filetype = ed.settings.filetype.clone();
-            let autoclose_tag = ed.settings.autoclose_tag;
+            let filetype = ed.settings().filetype.clone();
+            let autoclose_tag = ed.settings().autoclose_tag;
             if ch == '>' && autoclose_tag && is_html_filetype(&filetype) {
                 // Skip past the `>` that was auto-inserted.
                 let new_col = cursor.col + 1;
-                buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
                 // Now check for tag autoclose on the line up to new_col.
                 // `new_col.saturating_sub(1)` is a char index; convert to a
                 // byte offset before slicing in scan_tag_opener.
-                if let Some(line) = buf_line(&ed.buffer, cursor.row) {
+                if let Some(line) = buf_line(ed.buffer(), cursor.row) {
                     let char_col = new_col.saturating_sub(1);
                     let byte_col = line
                         .char_indices()
@@ -1663,11 +1663,11 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                             text: close_tag,
                         });
                         // Cursor stays at new_col (between > and </tag>).
-                        buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                        buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
                     }
                 }
             } else {
-                buf_set_cursor_rc(&mut ed.buffer, cursor.row, cursor.col + 1);
+                buf_set_cursor_rc(ed.buffer_mut(), cursor.row, cursor.col + 1);
             }
             ed.push_buffer_cursor_to_textarea();
             return true;
@@ -1685,12 +1685,12 @@ pub fn insert_char_bridge<H: crate::types::Host>(
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     } else if !try_dedent_close_bracket(ed, cursor, ch) {
         // Normal insert. Check autopair first.
-        let autopair = ed.settings.autopair;
-        let filetype = ed.settings.filetype.clone();
-        let autoclose_tag = ed.settings.autoclose_tag;
+        let autopair = ed.settings().autopair;
+        let filetype = ed.settings().filetype.clone();
+        let autoclose_tag = ed.settings().autoclose_tag;
 
         let (prev_char, prev2_char) = {
-            let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+            let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
             let chars: Vec<char> = line.chars().collect();
             let p1 = if cursor.col > 0 {
                 chars.get(cursor.col - 1).copied()
@@ -1719,7 +1719,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                 // After inserting close, buffer cursor is at cursor.col+2.
                 // We want cursor between open and close: cursor.col+1.
                 let between_col = cursor.col + 1;
-                buf_set_cursor_rc(&mut ed.buffer, cursor.row, between_col);
+                buf_set_cursor_rc(ed.buffer_mut(), cursor.row, between_col);
                 // Record the close char for skip-over. We store the row and
                 // the close char; col is not tracked precisely because chars
                 // typed inside the pair shift the close right. The skip-over
@@ -1739,7 +1739,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                 // the char just inserted is at index new_col-1.
                 // `new_col.saturating_sub(1)` is a char index; convert to a
                 // byte offset before slicing in scan_tag_opener.
-                if let Some(line) = buf_line(&ed.buffer, cursor.row) {
+                if let Some(line) = buf_line(ed.buffer(), cursor.row) {
                     let char_col = new_col.saturating_sub(1);
                     let byte_col = line
                         .char_indices()
@@ -1754,7 +1754,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                             text: close_tag,
                         });
                         // Cursor stays at new_col (between `>` and `</tag>`).
-                        buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                        buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
                     }
                 }
                 ed.push_buffer_cursor_to_textarea();
@@ -1796,15 +1796,15 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // abbreviation expansion but before any buffer mutation.
     maybe_word_undo_break(ed, '\n');
 
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let prev_line = buf_line(&ed.buffer, cursor.row)
+    let cursor = buf_cursor_pos(ed.buffer());
+    let prev_line = buf_line(ed.buffer(), cursor.row)
         .unwrap_or_default()
         .to_string();
 
     // Open-pair-newline: if autopair is on and the cursor is between a
     // matching open/close bracket pair, split into two newlines so the
     // close ends up on its own dedented line.
-    if ed.settings.autopair && !ed.pending_closes.is_empty() {
+    if ed.settings().autopair && !ed.pending_closes.is_empty() {
         // Check: char before cursor is an open bracket AND char at cursor
         // is the matching close bracket (from our pending-closes stack).
         let prev_char = if cursor.col > 0 {
@@ -1826,11 +1826,11 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
                 .chars()
                 .take_while(|c| *c == ' ' || *c == '\t')
                 .collect();
-            let inner_indent = if ed.settings.expandtab {
-                let unit = if ed.settings.softtabstop > 0 {
-                    ed.settings.softtabstop
+            let inner_indent = if ed.settings().expandtab {
+                let unit = if ed.settings().softtabstop > 0 {
+                    ed.settings().softtabstop
                 } else {
-                    ed.settings.shiftwidth
+                    ed.settings().shiftwidth
                 };
                 format!("{base_indent}{}", " ".repeat(unit))
             } else {
@@ -1843,7 +1843,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
             // Move cursor to end of first new line (inner_indent line).
             let new_row = cursor.row + 1;
             let new_col = inner_indent.len();
-            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
             return true;
         }
@@ -1857,7 +1857,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // a bare ` ``` ` could just as easily be a closing fence — we'd need
     // full document parity tracking to handle that safely, which v1
     // doesn't have.
-    if ed.settings.autopair
+    if ed.settings().autopair
         && let Some(fence) = detect_code_fence_opener(&prev_line, cursor.col)
     {
         ed.pending_closes.clear();
@@ -1869,14 +1869,14 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
         ed.mutate_edit(Edit::InsertStr { at: cursor, text });
         let new_row = cursor.row + 1;
         let new_col = base_indent.chars().count();
-        buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+        buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
         ed.push_buffer_cursor_to_textarea();
         return true;
     }
 
     // formatoptions `r`: continue comment on Enter in insert mode.
-    let comment_cont = if ed.settings.formatoptions.contains('r') {
-        continue_comment(&ed.buffer, &ed.settings, cursor.row)
+    let comment_cont = if ed.settings().formatoptions.contains('r') {
+        continue_comment(ed.buffer(), ed.settings(), cursor.row)
     } else {
         None
     };
@@ -1889,7 +1889,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
         // baked into the continuation prefix.
         format!("\n{cont}")
     } else {
-        let indent = compute_enter_indent(&ed.settings, &prev_line);
+        let indent = compute_enter_indent(ed.settings(), &prev_line);
         format!("\n{indent}")
     };
     ed.mutate_edit(Edit::InsertStr { at: cursor, text });
@@ -1903,13 +1903,13 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
 pub fn insert_tab_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    if ed.settings.expandtab {
-        let sts = ed.settings.softtabstop;
+    let cursor = buf_cursor_pos(ed.buffer());
+    if ed.settings().expandtab {
+        let sts = ed.settings().softtabstop;
         let n = if sts > 0 {
             sts - (cursor.col % sts)
         } else {
-            ed.settings.tabstop.max(1)
+            ed.settings().tabstop.max(1)
         };
         ed.mutate_edit(Edit::InsertStr {
             at: cursor,
@@ -1941,13 +1941,13 @@ pub fn insert_backspace_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
 
     // Comment-continuation backspace: if the line is just the prefix (with no
     // user content after it), delete the whole prefix in one stroke.
     if cursor.col > 0 {
-        let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
-        if let Some((indent, prefix)) = detect_comment_on_line(&ed.settings.filetype, &line) {
+        let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
+        if let Some((indent, prefix)) = detect_comment_on_line(&ed.settings().filetype, &line) {
             let full_prefix = format!("{indent}{prefix}");
             // The cursor must be at the end of (or within) the prefix with no
             // additional content after — i.e. the line equals the prefix exactly.
@@ -1966,9 +1966,9 @@ pub fn insert_backspace_bridge<H: crate::types::Host>(
         }
     }
 
-    let sts = ed.settings.softtabstop;
+    let sts = ed.settings().softtabstop;
     if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
-        let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+        let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
         let chars: Vec<char> = line.chars().collect();
         let run_start = cursor.col - sts;
         if (run_start..cursor.col).all(|i| chars.get(i).copied() == Some(' ')) {
@@ -1990,13 +1990,13 @@ pub fn insert_backspace_bridge<H: crate::types::Host>(
         true
     } else if cursor.row > 0 {
         let prev_row = cursor.row - 1;
-        let prev_chars = buf_line_chars(&ed.buffer, prev_row);
+        let prev_chars = buf_line_chars(ed.buffer(), prev_row);
         ed.mutate_edit(Edit::JoinLines {
             row: prev_row,
             count: 1,
             with_space: false,
         });
-        buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
+        buf_set_cursor_rc(ed.buffer_mut(), prev_row, prev_chars);
         true
     } else {
         false
@@ -2013,23 +2013,23 @@ pub fn insert_delete_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+    let cursor = buf_cursor_pos(ed.buffer());
+    let line_chars = buf_line_chars(ed.buffer(), cursor.row);
     let result = if cursor.col < line_chars {
         ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
             kind: MotionKind::Char,
         });
-        buf_set_cursor_pos(&mut ed.buffer, cursor);
+        buf_set_cursor_pos(ed.buffer_mut(), cursor);
         true
-    } else if cursor.row + 1 < buf_row_count(&ed.buffer) {
+    } else if cursor.row + 1 < buf_row_count(ed.buffer()) {
         ed.mutate_edit(Edit::JoinLines {
             row: cursor.row,
             count: 1,
             with_space: false,
         });
-        buf_set_cursor_pos(&mut ed.buffer, cursor);
+        buf_set_cursor_pos(ed.buffer_mut(), cursor);
         true
     } else {
         false
@@ -2050,18 +2050,22 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
     ed.pending_closes.clear();
     match dir {
         InsertDir::Left => {
-            crate::motions::move_left(&mut ed.buffer, 1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
         }
         InsertDir::Right => {
-            crate::motions::move_right_to_end(&mut ed.buffer, 1);
+            crate::motions::move_right_to_end(ed.buffer_mut(), 1);
         }
         InsertDir::Up => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+            ed.set_sticky_col(sticky);
         }
         InsertDir::Down => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_down(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky);
+            ed.set_sticky_col(sticky);
         }
     }
     break_undo_group_in_insert(ed);
@@ -2075,7 +2079,7 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
 pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes.clear();
-    crate::motions::move_line_start(&mut ed.buffer);
+    crate::motions::move_line_start(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
     false
@@ -2087,7 +2091,7 @@ pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Bu
 pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes.clear();
-    crate::motions::move_line_end(&mut ed.buffer);
+    crate::motions::move_line_end(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
     false
@@ -2126,16 +2130,17 @@ pub fn insert_ctrl_w_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     if cursor.row == 0 && cursor.col == 0 {
         return true;
     }
-    crate::motions::move_word_back(&mut ed.buffer, false, 1, &ed.settings.iskeyword);
-    let word_start = buf_cursor_pos(&ed.buffer);
+    let iskeyword = ed.settings().iskeyword.clone();
+    crate::motions::move_word_back(ed.buffer_mut(), false, 1, &iskeyword);
+    let word_start = buf_cursor_pos(ed.buffer());
     if word_start == cursor {
         return true;
     }
-    buf_set_cursor_pos(&mut ed.buffer, cursor);
+    buf_set_cursor_pos(ed.buffer_mut(), cursor);
     ed.mutate_edit(Edit::DeleteRange {
         start: word_start,
         end: cursor,
@@ -2153,7 +2158,7 @@ pub fn insert_ctrl_u_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     if cursor.col > 0 {
         ed.mutate_edit(Edit::DeleteRange {
             start: Position::new(cursor.row, 0),
@@ -2174,7 +2179,7 @@ pub fn insert_ctrl_h_bridge<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     if cursor.col > 0 {
         ed.mutate_edit(Edit::DeleteRange {
             start: Position::new(cursor.row, cursor.col - 1),
@@ -2183,13 +2188,13 @@ pub fn insert_ctrl_h_bridge<H: crate::types::Host>(
         });
     } else if cursor.row > 0 {
         let prev_row = cursor.row - 1;
-        let prev_chars = buf_line_chars(&ed.buffer, prev_row);
+        let prev_chars = buf_line_chars(ed.buffer(), prev_row);
         ed.mutate_edit(Edit::JoinLines {
             row: prev_row,
             count: 1,
             with_space: false,
         });
-        buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
+        buf_set_cursor_rc(ed.buffer_mut(), prev_row, prev_chars);
     }
     ed.push_buffer_cursor_to_textarea();
     true
@@ -2215,9 +2220,9 @@ pub fn insert_ctrl_d_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
-    let before_len = buf_line_bytes(&ed.buffer, row);
+    let before_len = buf_line_bytes(ed.buffer(), row);
     outdent_rows(ed, row, row, 1);
-    let after_len = buf_line_bytes(&ed.buffer, row);
+    let after_len = buf_line_bytes(ed.buffer(), row);
     let stripped = before_len.saturating_sub(after_len);
     let new_col = col.saturating_sub(stripped);
     ed.jump_cursor(row, new_col);
@@ -2291,10 +2296,10 @@ pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     let col = ed.cursor().1;
     ed.vim.last_insert_pos = Some(ed.cursor());
     if col > 0 {
-        crate::motions::move_left(&mut ed.buffer, 1);
+        crate::motions::move_left(ed.buffer_mut(), 1);
         ed.push_buffer_cursor_to_textarea();
     }
-    ed.sticky_col = Some(ed.cursor().1);
+    ed.set_sticky_col(Some(ed.cursor().1));
     true
 }
 
@@ -2328,7 +2333,7 @@ pub fn enter_insert_a_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    crate::motions::move_right_to_end(&mut ed.buffer, 1);
+    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::A));
 }
@@ -2339,8 +2344,8 @@ pub fn enter_insert_shift_a_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    crate::motions::move_line_end(&mut ed.buffer);
-    crate::motions::move_right_to_end(&mut ed.buffer, 1);
+    crate::motions::move_line_end(ed.buffer_mut());
+    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::ShiftA));
 }
@@ -2357,13 +2362,13 @@ pub fn open_line_below_bridge<H: crate::types::Host>(
     ed.push_undo();
     begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: false });
     ed.sync_buffer_content_from_textarea();
-    let row = buf_cursor_pos(&ed.buffer).row;
-    let line_chars = buf_line_chars(&ed.buffer, row);
-    let prev_line = buf_line(&ed.buffer, row).unwrap_or_default();
+    let row = buf_cursor_pos(ed.buffer()).row;
+    let line_chars = buf_line_chars(ed.buffer(), row);
+    let prev_line = buf_line(ed.buffer(), row).unwrap_or_default();
 
     // formatoptions `o`: continue comment on open-below.
-    let comment_cont = if ed.settings.formatoptions.contains('o') {
-        continue_comment(&ed.buffer, &ed.settings, row)
+    let comment_cont = if ed.settings().formatoptions.contains('o') {
+        continue_comment(ed.buffer(), ed.settings(), row)
     } else {
         None
     };
@@ -2371,7 +2376,7 @@ pub fn open_line_below_bridge<H: crate::types::Host>(
     let suffix = if let Some(cont) = comment_cont {
         format!("\n{cont}")
     } else {
-        let indent = compute_enter_indent(&ed.settings, &prev_line);
+        let indent = compute_enter_indent(ed.settings(), &prev_line);
         format!("\n{indent}")
     };
     ed.mutate_edit(Edit::InsertStr {
@@ -2393,11 +2398,11 @@ pub fn open_line_above_bridge<H: crate::types::Host>(
     ed.push_undo();
     begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: true });
     ed.sync_buffer_content_from_textarea();
-    let row = buf_cursor_pos(&ed.buffer).row;
+    let row = buf_cursor_pos(ed.buffer()).row;
 
     // formatoptions `o`: continue comment on open-above (current line drives).
-    let comment_cont = if ed.settings.formatoptions.contains('o') {
-        continue_comment(&ed.buffer, &ed.settings, row)
+    let comment_cont = if ed.settings().formatoptions.contains('o') {
+        continue_comment(ed.buffer(), ed.settings(), row)
     } else {
         None
     };
@@ -2413,8 +2418,8 @@ pub fn open_line_above_bridge<H: crate::types::Host>(
         // line above. Using the line above wrongly inherits a deeper child's
         // indent when the cursor is on a shallower line (e.g. explorer tree:
         // `O` on a dir whose preceding row is its own nested child).
-        let cur = buf_line(&ed.buffer, row).unwrap_or_default();
-        let indent = compute_enter_indent(&ed.settings, &cur);
+        let cur = buf_line(ed.buffer(), row).unwrap_or_default();
+        let indent = compute_enter_indent(ed.settings(), &cur);
         let content = indent.clone();
         (format!("{indent}\n"), content)
     };
@@ -2422,10 +2427,12 @@ pub fn open_line_above_bridge<H: crate::types::Host>(
         at: Position::new(row, 0),
         text: insert_text,
     });
-    let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-    crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
-    let new_row = buf_cursor_pos(&ed.buffer).row;
-    buf_set_cursor_rc(&mut ed.buffer, new_row, new_line_content.chars().count());
+    let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+    let mut sticky = ed.sticky_col();
+    crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+    ed.set_sticky_col(sticky);
+    let new_row = buf_cursor_pos(ed.buffer()).row;
+    buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -2484,8 +2491,8 @@ pub fn substitute_char_bridge<H: crate::types::Host>(
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     for _ in 0..count.max(1) {
-        let cursor = buf_cursor_pos(&ed.buffer);
-        let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+        let cursor = buf_cursor_pos(ed.buffer());
+        let line_chars = buf_line_chars(ed.buffer(), cursor.row);
         if cursor.col >= line_chars {
             break;
         }
@@ -2530,7 +2537,7 @@ pub fn substitute_line_bridge<H: crate::types::Host>(
 pub fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     ed.push_undo();
     delete_to_eol(ed);
-    crate::motions::move_left(&mut ed.buffer, 1);
+    crate::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     if !ed.vim.replaying {
         ed.vim.last_change = Some(LastChange::DeleteToEol { inserted: None });
@@ -2687,9 +2694,9 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
     // insert-mode undo group when the toggle is on (vim parity).
     break_undo_group_in_insert(ed);
 
-    let max_row = buf_row_count(&ed.buffer).saturating_sub(1);
+    let max_row = buf_row_count(ed.buffer()).saturating_sub(1);
     let r = row.min(max_row);
-    let line_len = buf_line(&ed.buffer, r)
+    let line_len = buf_line(ed.buffer(), r)
         .map(|l| l.chars().count())
         .unwrap_or(0);
     let cap = if ed.vim.current_mode == crate::VimMode::Insert {
@@ -2698,8 +2705,8 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
         line_len.saturating_sub(1)
     };
     let c = col.min(cap);
-    buf_set_cursor_rc(&mut ed.buffer, r, c);
-    ed.sticky_col = Some(c);
+    buf_set_cursor_rc(ed.buffer_mut(), r, c);
+    ed.set_sticky_col(Some(c));
 }
 
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
@@ -2741,7 +2748,7 @@ pub fn range_for_op_motion_bridge<H: crate::types::Host>(
     apply_motion_cursor_ctx(ed, &motion, total_count, true);
     let end = ed.cursor();
     // Restore cursor.
-    buf_set_cursor_rc(&mut ed.buffer, start.0, start.1);
+    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
     let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
     Some((r0, r1))
 }
@@ -2763,7 +2770,7 @@ pub fn range_for_op_g_bridge<H: crate::types::Host>(
     };
     apply_motion_cursor_ctx(ed, &motion, total_count, true);
     let end = ed.cursor();
-    buf_set_cursor_rc(&mut ed.buffer, start.0, start.1);
+    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
     let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
     Some((r0, r1))
 }
@@ -3113,7 +3120,7 @@ pub fn goto_mark<H: crate::types::Host>(
     let target = match ch {
         'a'..='z' => ed.mark(ch),
         '\'' | '`' => ed.jump_back.last().copied(),
-        '.' => ed.last_edit_pos,
+        '.' => ed.last_edit_pos(),
         '[' | ']' | '<' | '>' => ed.mark(ch),
         _ => None,
     };
@@ -3123,17 +3130,17 @@ pub fn goto_mark<H: crate::types::Host>(
     let pre = ed.cursor();
     let (r, c_clamped) = clamp_pos(ed, (row, col));
     if linewise {
-        buf_set_cursor_rc(&mut ed.buffer, r, 0);
+        buf_set_cursor_rc(ed.buffer_mut(), r, 0);
         ed.push_buffer_cursor_to_textarea();
         move_first_non_whitespace(ed);
     } else {
-        buf_set_cursor_rc(&mut ed.buffer, r, c_clamped);
+        buf_set_cursor_rc(ed.buffer_mut(), r, c_clamped);
         ed.push_buffer_cursor_to_textarea();
     }
     if ed.cursor() != pre {
         ed.push_jump(pre);
     }
-    ed.sticky_col = Some(ed.cursor().1);
+    ed.set_sticky_col(Some(ed.cursor().1));
 }
 
 /// Unified mark-jump entry point that returns a [`crate::editor::MarkJump`]
@@ -3174,17 +3181,17 @@ pub fn try_goto_mark<H: crate::types::Host>(
             let pre = ed.cursor();
             let (r, c_clamped) = clamp_pos(ed, (row, col));
             if linewise {
-                buf_set_cursor_rc(&mut ed.buffer, r, 0);
+                buf_set_cursor_rc(ed.buffer_mut(), r, 0);
                 ed.push_buffer_cursor_to_textarea();
                 move_first_non_whitespace(ed);
             } else {
-                buf_set_cursor_rc(&mut ed.buffer, r, c_clamped);
+                buf_set_cursor_rc(ed.buffer_mut(), r, c_clamped);
                 ed.push_buffer_cursor_to_textarea();
             }
             if ed.cursor() != pre {
                 ed.push_jump(pre);
             }
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             MarkJump::SameBuffer
         }
         'a'..='z' | '\'' | '`' | '.' | '[' | ']' | '<' | '>' => {
@@ -3215,7 +3222,7 @@ fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
     ed.jump_fwd.push(cur);
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.sticky_col = Some(c);
+    ed.set_sticky_col(Some(c));
     true
 }
 
@@ -3233,7 +3240,7 @@ fn jump_forward<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) 
     }
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.sticky_col = Some(c);
+    ed.set_sticky_col(Some(c));
     true
 }
 
@@ -3243,9 +3250,9 @@ fn clamp_pos<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
-    let last_row = buf_row_count(&ed.buffer).saturating_sub(1);
+    let last_row = buf_row_count(ed.buffer()).saturating_sub(1);
     let r = pos.0.min(last_row);
-    let line_len = buf_line_chars(&ed.buffer, r);
+    let line_len = buf_line_chars(ed.buffer(), r);
     let c = pos.1.min(line_len.saturating_sub(1));
     (r, c)
 }
@@ -3459,21 +3466,25 @@ pub fn apply_motion_kind<H: crate::types::Host>(
             // Not a big-jump (no jump-list entry), sticky col set to the
             // landed column (first non-blank). Mirrors scroll_cursor_rows
             // semantics but goes through the fold-aware buffer motion path.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_down(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
-            crate::motions::move_first_non_blank(&mut ed.buffer);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            ed.set_sticky_col(sticky);
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
-            ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+            ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
         crate::MotionKind::FirstNonBlankUp => {
             // `-`: move up `count` lines then land on first non-blank.
             // Same pattern as FirstNonBlankDown, direction reversed.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_up(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
-            crate::motions::move_first_non_blank(&mut ed.buffer);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            ed.set_sticky_col(sticky);
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
-            ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+            ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
         crate::MotionKind::WordForward => {
@@ -3616,25 +3627,25 @@ fn apply_sticky_col<H: crate::types::Host>(
     pre_col: usize,
 ) {
     if is_vertical_motion(motion) {
-        let want = ed.sticky_col.unwrap_or(pre_col);
+        let want = ed.sticky_col().unwrap_or(pre_col);
         // Record the desired column so the next vertical motion sees
         // it even if we currently clamped to a shorter row.
-        ed.sticky_col = Some(want);
+        ed.set_sticky_col(Some(want));
         let (row, _) = ed.cursor();
-        let line_len = buf_line_chars(&ed.buffer, row);
+        let line_len = buf_line_chars(ed.buffer(), row);
         // Clamp to the last char on non-empty lines (vim normal-mode
         // never parks the cursor one past end of line). Empty lines
         // collapse to col 0.
         let max_col = line_len.saturating_sub(1);
         let target = want.min(max_col);
         // raw primitive: this function MUST preserve the un-clamped `want`
-        // already stored in `ed.sticky_col`; `jump_cursor` would overwrite
+        // already stored in `ed.sticky_col()`; `jump_cursor` would overwrite
         // it with the clamped `target`.
-        buf_set_cursor_rc(&mut ed.buffer, row, target);
+        buf_set_cursor_rc(ed.buffer_mut(), row, target);
     } else {
         // Horizontal motion or non-motion: sticky column tracks the
         // new cursor column so the *next* vertical motion aims there.
-        ed.sticky_col = Some(ed.cursor().1);
+        ed.set_sticky_col(Some(ed.cursor().1));
     }
 }
 
@@ -3673,11 +3684,11 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
     //    the buffer edge.
     let count = count
         .min(MAX_COUNT)
-        .min(ed.buffer.rope().len_chars().saturating_add(1));
+        .min(ed.buffer().rope().len_chars().saturating_add(1));
     match motion {
         Motion::Left => {
             // `h` — Buffer clamps at col 0 (no wrap), matching vim.
-            crate::motions::move_left(&mut ed.buffer, count);
+            crate::motions::move_left(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Right => {
@@ -3685,9 +3696,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // one past the last char so the range includes it; cursor
             // context clamps at the last char.
             if as_operator {
-                crate::motions::move_right_to_end(&mut ed.buffer, count);
+                crate::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_right_in_line(&mut ed.buffer, count);
+                crate::motions::move_right_in_line(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3695,9 +3706,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `<Space>` — wraps to next line at EOL in cursor context; mid-line
             // char delete like `l` under an operator (`d<Space>`).
             if as_operator {
-                crate::motions::move_right_to_end(&mut ed.buffer, count);
+                crate::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_space_fwd(&mut ed.buffer, count);
+                crate::motions::move_space_fwd(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3705,9 +3716,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `<BS>` — wraps to prev line's last char at BOL in cursor context;
             // mid-line char move like `h` under an operator (`d<BS>`).
             if as_operator {
-                crate::motions::move_left(&mut ed.buffer, count);
+                crate::motions::move_left(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_backspace_back(&mut ed.buffer, count);
+                crate::motions::move_backspace_back(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3715,84 +3726,95 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // Final col is set by `apply_sticky_col` below — push the
             // post-move row to the textarea and let sticky tracking
             // finish the work.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_up(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_down(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
-            let v = *ed.host.viewport();
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_screen_up(&mut ed.buffer, &folds, &v, count, &mut ed.sticky_col);
+            let v = *ed.host().viewport();
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_screen_up(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
-            let v = *ed.host.viewport();
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_screen_down(&mut ed.buffer, &folds, &v, count, &mut ed.sticky_col);
+            let v = *ed.host().viewport();
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut sticky = ed.sticky_col();
+            crate::motions::move_screen_down(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
-            crate::motions::move_word_fwd(&mut ed.buffer, false, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordBack => {
-            crate::motions::move_word_back(&mut ed.buffer, false, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_back(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEnd => {
-            crate::motions::move_word_end(&mut ed.buffer, false, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_end(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordFwd => {
-            crate::motions::move_word_fwd(&mut ed.buffer, true, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordBack => {
-            crate::motions::move_word_back(&mut ed.buffer, true, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_back(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEnd => {
-            crate::motions::move_word_end(&mut ed.buffer, true, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_end(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEndBack => {
-            crate::motions::move_word_end_back(
-                &mut ed.buffer,
-                false,
-                count,
-                &ed.settings.iskeyword,
-            );
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_end_back(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEndBack => {
-            crate::motions::move_word_end_back(&mut ed.buffer, true, count, &ed.settings.iskeyword);
+            let iskeyword = ed.settings().iskeyword.clone();
+            crate::motions::move_word_end_back(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineStart => {
-            crate::motions::move_line_start(&mut ed.buffer);
+            crate::motions::move_line_start(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlank => {
-            crate::motions::move_first_non_blank(&mut ed.buffer);
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineEnd => {
             // Vim normal-mode `$` lands on the last char, not one past it.
-            crate::motions::move_line_end(&mut ed.buffer);
+            crate::motions::move_line_end(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FileTop => {
             // `count gg` jumps to line `count` (first non-blank);
             // bare `gg` lands at the top.
             if count > 1 {
-                crate::motions::move_bottom(&mut ed.buffer, count);
+                crate::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_top(&mut ed.buffer);
+                crate::motions::move_top(ed.buffer_mut());
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3800,9 +3822,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `count G` jumps to line `count`; bare `G` lands at
             // the buffer bottom (`Buffer::move_bottom(0)`).
             if count > 1 {
-                crate::motions::move_bottom(&mut ed.buffer, count);
+                crate::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_bottom(&mut ed.buffer, 0);
+                crate::motions::move_bottom(ed.buffer_mut(), 0);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3856,26 +3878,26 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
         }
         Motion::ViewportTop => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_top(&mut ed.buffer, &v, count.saturating_sub(1));
+            crate::motions::move_viewport_top(ed.buffer_mut(), &v, count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportMiddle => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_middle(&mut ed.buffer, &v);
+            crate::motions::move_viewport_middle(ed.buffer_mut(), &v);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportBottom => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_bottom(&mut ed.buffer, &v, count.saturating_sub(1));
+            crate::motions::move_viewport_bottom(ed.buffer_mut(), &v, count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LastNonBlank => {
-            crate::motions::move_last_non_blank(&mut ed.buffer);
+            crate::motions::move_last_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineMiddle => {
             let row = ed.cursor().0;
-            let line_chars = buf_line_chars(&ed.buffer, row);
+            let line_chars = buf_line_chars(ed.buffer(), row);
             // Vim's `gM`: column = floor(chars / 2). Empty / single-char
             // lines stay at col 0.
             let target = line_chars / 2;
@@ -3886,16 +3908,16 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `viewport_width / 2`, clamped to the last char of the line.
             let row = ed.cursor().0;
             let width = ed.host().viewport().width as usize;
-            let last = buf_line_chars(&ed.buffer, row).saturating_sub(1);
+            let last = buf_line_chars(ed.buffer(), row).saturating_sub(1);
             let target = (width / 2).min(last);
             ed.jump_cursor(row, target);
         }
         Motion::ParagraphPrev => {
-            crate::motions::move_paragraph_prev(&mut ed.buffer, count);
+            crate::motions::move_paragraph_prev(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ParagraphNext => {
-            crate::motions::move_paragraph_next(&mut ed.buffer, count);
+            crate::motions::move_paragraph_next(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SentencePrev => {
@@ -3913,35 +3935,35 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             }
         }
         Motion::SectionBackward => {
-            crate::motions::move_section_backward(&mut ed.buffer, count);
+            crate::motions::move_section_backward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionForward => {
-            crate::motions::move_section_forward(&mut ed.buffer, count);
+            crate::motions::move_section_forward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndBackward => {
-            crate::motions::move_section_end_backward(&mut ed.buffer, count);
+            crate::motions::move_section_end_backward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndForward => {
-            crate::motions::move_section_end_forward(&mut ed.buffer, count);
+            crate::motions::move_section_end_forward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankNextLine => {
-            crate::motions::move_first_non_blank_next_line(&mut ed.buffer, count);
+            crate::motions::move_first_non_blank_next_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankPrevLine => {
-            crate::motions::move_first_non_blank_prev_line(&mut ed.buffer, count);
+            crate::motions::move_first_non_blank_prev_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankLine => {
-            crate::motions::move_first_non_blank_line(&mut ed.buffer, count);
+            crate::motions::move_first_non_blank_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::GotoColumn => {
-            crate::motions::move_goto_column(&mut ed.buffer, count);
+            crate::motions::move_goto_column(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
     }
@@ -3954,7 +3976,7 @@ fn move_first_non_whitespace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer:
     // across before delegating, then push the result back so the
     // textarea reflects the resolved column too.
     ed.sync_buffer_content_from_textarea();
-    crate::motions::move_first_non_blank(&mut ed.buffer);
+    crate::motions::move_first_non_blank(ed.buffer_mut());
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -3965,7 +3987,8 @@ fn find_char_on_line<H: crate::types::Host>(
     till: bool,
     skip_adjacent: bool,
 ) -> bool {
-    let moved = crate::motions::find_char_on_line(&mut ed.buffer, ch, forward, till, skip_adjacent);
+    let moved =
+        crate::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till, skip_adjacent);
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -3973,7 +3996,7 @@ fn find_char_on_line<H: crate::types::Host>(
 }
 
 fn matching_bracket<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let moved = crate::motions::match_bracket(&mut ed.buffer);
+    let moved = crate::motions::match_bracket(ed.buffer_mut());
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -3994,8 +4017,8 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
         '{' => '}',
         _ => return,
     };
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let rows = buf_row_count(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
+    let rows = buf_row_count(ed.buffer());
     let target = count.max(1);
     let mut found = 0usize;
     let mut depth = 0i32;
@@ -4004,7 +4027,7 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
         let mut r = cursor.row;
         let mut from_col = cursor.col + 1;
         while r < rows {
-            let line: Vec<char> = buf_line(&ed.buffer, r)
+            let line: Vec<char> = buf_line(ed.buffer(), r)
                 .unwrap_or_default()
                 .chars()
                 .collect();
@@ -4017,7 +4040,7 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
                     if depth == 0 {
                         found += 1;
                         if found == target {
-                            buf_set_cursor_rc(&mut ed.buffer, r, ci);
+                            buf_set_cursor_rc(ed.buffer_mut(), r, ci);
                             ed.push_buffer_cursor_to_textarea();
                             return;
                         }
@@ -4036,7 +4059,7 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
         // their last column (`isize::MAX` clamps to `len - 1`).
         let mut from_col = cursor.col as isize - 1;
         while r >= 0 {
-            let line: Vec<char> = buf_line(&ed.buffer, r as usize)
+            let line: Vec<char> = buf_line(ed.buffer(), r as usize)
                 .unwrap_or_default()
                 .chars()
                 .collect();
@@ -4049,7 +4072,7 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
                     if depth == 0 {
                         found += 1;
                         if found == target {
-                            buf_set_cursor_rc(&mut ed.buffer, r as usize, ci as usize);
+                            buf_set_cursor_rc(ed.buffer_mut(), r as usize, ci as usize);
                             ed.push_buffer_cursor_to_textarea();
                             return;
                         }
@@ -4072,7 +4095,7 @@ fn word_at_cursor_search<H: crate::types::Host>(
     count: usize,
 ) {
     let (row, col) = ed.cursor();
-    let line: String = buf_line(&ed.buffer, row).unwrap_or_default();
+    let line: String = buf_line(ed.buffer(), row).unwrap_or_default();
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
         return;
@@ -4163,7 +4186,7 @@ pub fn apply_op_motion_key<H: crate::types::Host>(
     // just the whitespace up to the next word), so the conversion is skipped.
     let cursor_on_nonblank = {
         let (r, c) = ed.cursor();
-        buf_line(&ed.buffer, r)
+        buf_line(ed.buffer(), r)
             .and_then(|l| l.chars().nth(c))
             .map(|ch| !ch.is_whitespace())
             .unwrap_or(false)
@@ -4205,7 +4228,7 @@ pub fn apply_op_double<H: crate::types::Host>(
 ) {
     if op == Operator::Comment {
         // `gcc` / `{N}gcc` — toggle comment on `total_count` lines starting at cursor.
-        let row = buf_cursor_pos(&ed.buffer).row;
+        let row = buf_cursor_pos(ed.buffer()).row;
         let end_row = (row + total_count.max(1) - 1).min(ed.buffer.row_count().saturating_sub(1));
         ed.toggle_comment_range(row, end_row);
         ed.vim.mode = Mode::Normal;
@@ -4238,15 +4261,15 @@ fn gn_find_range<H: crate::types::Host>(
     forward: bool,
 ) -> Option<(crate::types::Pos, crate::types::Pos)> {
     use crate::types::{Cursor, Pos, Search};
-    let cursor = Cursor::cursor(&ed.buffer);
+    let cursor = Cursor::cursor(ed.buffer());
     let contains =
-        Search::find_prev(&ed.buffer, cursor, re).filter(|m| m.start <= cursor && cursor < m.end);
+        Search::find_prev(ed.buffer(), cursor, re).filter(|m| m.start <= cursor && cursor < m.end);
     let range = if let Some(m) = contains {
         m
     } else if forward {
-        Search::find_next(&ed.buffer, cursor, re)?
+        Search::find_next(ed.buffer(), cursor, re)?
     } else {
-        Search::find_prev(&ed.buffer, cursor, re)?
+        Search::find_prev(ed.buffer(), cursor, re)?
     };
     let end_incl = if range.end.col > 0 {
         Pos::new(range.end.line, range.end.col - 1)
@@ -4282,7 +4305,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
     // `[count]gn` walks to the count-th match.
     for _ in 1..count.max(1) {
         let past = Pos::new(range.1.line, range.1.col + 1);
-        Cursor::set_cursor(&mut ed.buffer, past);
+        Cursor::set_cursor(ed.buffer_mut(), past);
         match gn_find_range(ed, &re, forward) {
             Some(r) => range = r,
             None => break,
@@ -4295,7 +4318,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
         None => {
             // Bare `gn` — select the match in Visual mode.
             ed.vim.visual_anchor = start_t;
-            buf_set_cursor_rc(&mut ed.buffer, end_t.0, end_t.1);
+            buf_set_cursor_rc(ed.buffer_mut(), end_t.0, end_t.1);
             ed.vim.mode = Mode::Visual;
             ed.vim.current_mode = crate::VimMode::Visual;
             ed.push_buffer_cursor_to_textarea();
@@ -4335,7 +4358,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
                 let target = ed.vim.pending_register.take();
                 ed.record_yank(text, false, target);
             }
-            buf_set_cursor_rc(&mut ed.buffer, start_t.0, start_t.1);
+            buf_set_cursor_rc(ed.buffer_mut(), start_t.0, start_t.1);
             ed.push_buffer_cursor_to_textarea();
         }
         Some(other @ (Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase)) => {
@@ -4436,7 +4459,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             move_first_non_whitespace(ed);
             // Update sticky_col to the first-non-blank column so j/k after
             // gg aim for the correct column per vim semantics.
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             if ed.cursor() != pre {
                 ed.push_jump(pre);
             }
@@ -4587,7 +4610,7 @@ pub fn apply_after_g<H: crate::types::Host>(
                     return;
                 }
             };
-            let last_row = buf_row_count(&ed.buffer).saturating_sub(1) as u32;
+            let last_row = buf_row_count(ed.buffer()).saturating_sub(1) as u32;
             let r = 0u32..=last_row;
             // apply_substitute moves cursor to last changed line and pushes
             // one undo snapshot — same semantics as `:&&` / `:%s//~/&`.
@@ -4609,7 +4632,7 @@ pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buff
         return;
     };
     cmd.flags = crate::substitute::SubstFlags::default();
-    let row = buf_cursor_pos(&ed.buffer).row as u32;
+    let row = buf_cursor_pos(ed.buffer()).row as u32;
     let _ = crate::substitute::apply_substitute(ed, &cmd, row..=row);
 }
 
@@ -4741,7 +4764,7 @@ pub fn apply_sneak<H: crate::types::Host>(
 ) {
     let count = count.max(1);
     let (start_row, start_col) = ed.cursor();
-    let row_count = buf_row_count(&ed.buffer);
+    let row_count = buf_row_count(ed.buffer());
 
     let result = if forward {
         sneak_scan_forward(ed, start_row, start_col, c1, c2, count)
@@ -4750,7 +4773,7 @@ pub fn apply_sneak<H: crate::types::Host>(
     };
 
     if let Some((row, col)) = result {
-        buf_set_cursor_rc(&mut ed.buffer, row, col);
+        buf_set_cursor_rc(ed.buffer_mut(), row, col);
         ed.push_buffer_cursor_to_textarea();
         let _ = row_count; // suppress unused-variable warning
     }
@@ -4769,10 +4792,10 @@ fn sneak_scan_forward<H: crate::types::Host>(
     c2: char,
     count: usize,
 ) -> Option<(usize, usize)> {
-    let row_count = buf_row_count(&ed.buffer);
+    let row_count = buf_row_count(ed.buffer());
     let mut hits = 0usize;
     for row in start_row..row_count {
-        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
         let chars: Vec<char> = line.chars().collect();
         // On the start row begin scanning one past the current column.
         let col_start = if row == start_row { start_col + 1 } else { 0 };
@@ -4801,12 +4824,12 @@ fn sneak_scan_backward<H: crate::types::Host>(
     c2: char,
     count: usize,
 ) -> Option<(usize, usize)> {
-    let row_count = buf_row_count(&ed.buffer);
+    let row_count = buf_row_count(ed.buffer());
     let mut hits = 0usize;
     // Iterate rows from start_row down to 0.
     let rows_to_scan = (0..row_count).rev().skip(row_count - start_row - 1);
     for row in rows_to_scan {
-        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
         let chars: Vec<char> = line.chars().collect();
         // On the start row end scanning one before the current column.
         let col_end = if row == start_row {
@@ -4951,7 +4974,7 @@ pub fn retreat_one<H: crate::types::Host>(
     if c > 0 {
         (r, c - 1)
     } else if r > 0 {
-        let prev_len = buf_line_bytes(&ed.buffer, r - 1);
+        let prev_len = buf_line_bytes(ed.buffer(), r - 1);
         (r - 1, prev_len)
     } else {
         (0, 0)
@@ -4974,7 +4997,7 @@ fn begin_insert_noundo<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_rope: crate::types::Query::rope(&ed.buffer),
+        before_rope: crate::types::Query::rope(ed.buffer()),
         reason,
         start_row: row,
         start_col: col,
@@ -5046,7 +5069,7 @@ fn last_word_end_before<H: crate::types::Host>(
     end: (usize, usize),
 ) -> Option<(usize, usize)> {
     for r in (start.0..=end.0).rev() {
-        let line = buf_line(&ed.buffer, r).unwrap_or_default();
+        let line = buf_line(ed.buffer(), r).unwrap_or_default();
         let lo = if r == start.0 { start.1 } else { 0 };
         let hi = if r == end.0 {
             end.1
@@ -5094,8 +5117,8 @@ fn apply_op_with_text_object<H: crate::types::Host>(
         && end.1 == 0
     {
         let prev = end.0 - 1;
-        let prev_len = buf_line_chars(&ed.buffer, prev);
-        let fnb = buf_line(&ed.buffer, start.0)
+        let prev_len = buf_line_chars(ed.buffer(), prev);
+        let fnb = buf_line(ed.buffer(), start.0)
             .unwrap_or_default()
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
@@ -5173,13 +5196,13 @@ fn change_linewise_rows<H: crate::types::Host>(
     }
     // Preserve the first row's leading whitespace when autoindent is on;
     // wipe the whole line content otherwise (cursor lands at col 0).
-    let indent_chars = if ed.settings.autoindent {
-        let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(&ed.buffer), top_row);
+    let indent_chars = if ed.settings().autoindent {
+        let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(ed.buffer()), top_row);
         line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
     } else {
         0
     };
-    let line_chars = buf_line_chars(&ed.buffer, top_row);
+    let line_chars = buf_line_chars(ed.buffer(), top_row);
     if line_chars > indent_chars {
         ed.mutate_edit(Edit::DeleteRange {
             start: Position::new(top_row, indent_chars),
@@ -5192,7 +5215,7 @@ fn change_linewise_rows<H: crate::types::Host>(
         let target = ed.vim.pending_register.take();
         ed.record_delete(payload, true, target);
     }
-    buf_set_cursor_rc(&mut ed.buffer, top_row, indent_chars);
+    buf_set_cursor_rc(ed.buffer_mut(), top_row, indent_chars);
     ed.push_buffer_cursor_to_textarea();
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
@@ -5231,7 +5254,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             // edges; charwise uses the actual inclusive endpoint.
             let rbr = match kind {
                 RangeKind::Linewise => {
-                    let last_col = buf_line_chars(&ed.buffer, bot.0).saturating_sub(1);
+                    let last_col = buf_line_chars(ed.buffer(), bot.0).saturating_sub(1);
                     (bot.0, last_col)
                 }
                 RangeKind::Inclusive => (bot.0, bot.1),
@@ -5239,7 +5262,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             };
             ed.set_mark('[', top);
             ed.set_mark(']', rbr);
-            buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
+            buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
             ed.push_buffer_cursor_to_textarea();
         }
         Operator::Delete => {
@@ -5303,7 +5326,7 @@ fn run_operator_over_range<H: crate::types::Host>(
                     closed: true,
                 });
             }
-            buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
+            buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
@@ -5319,9 +5342,9 @@ fn run_operator_over_range<H: crate::types::Host>(
             ed.push_undo();
             let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
             let (new_row, new_col) = reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
-            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
-            ed.sticky_col = Some(new_col);
+            ed.set_sticky_col(Some(new_col));
             ed.vim.mode = Mode::Normal;
         }
         Operator::AutoIndent => {
@@ -5493,9 +5516,9 @@ pub fn delete_block_bridge<H: crate::types::Host>(
     ed.vim.block_anchor = (top_row, left_col);
     ed.vim.block_vcol = right_col;
     // Compute clamped col before the mutable borrow for buf_set_cursor_rc.
-    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
+    let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     // Place cursor at bot_row / right_col so block_bounds resolves correctly.
-    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Delete, 1);
     // Restore — block_anchor/vcol are only meaningful in VisualBlock mode;
     // after the op we're in Normal so restoring is a no-op for the user but
@@ -5519,8 +5542,8 @@ pub fn yank_block_bridge<H: crate::types::Host>(
     let saved_vcol = ed.vim.block_vcol;
     ed.vim.block_anchor = (top_row, left_col);
     ed.vim.block_vcol = right_col;
-    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
-    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
+    buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Yank, 1);
     ed.vim.block_anchor = saved_anchor;
     ed.vim.block_vcol = saved_vcol;
@@ -5542,8 +5565,8 @@ pub fn change_block_bridge<H: crate::types::Host>(
     let saved_vcol = ed.vim.block_vcol;
     ed.vim.block_anchor = (top_row, left_col);
     ed.vim.block_vcol = right_col;
-    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
-    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
+    buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Change, 1);
     ed.vim.block_anchor = saved_anchor;
     ed.vim.block_vcol = saved_vcol;
@@ -5811,7 +5834,7 @@ fn reflow_rows<H: crate::types::Host>(
     bot: usize,
 ) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     if top > bot {
         return;
@@ -5846,7 +5869,7 @@ fn reflow_rows_keep_cursor<H: crate::types::Host>(
     bot: usize,
 ) -> (Vec<String>, Vec<String>) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     if top > bot {
         return (Vec::new(), Vec::new());
@@ -5951,7 +5974,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
     use hjkl_buffer::Edit;
     ed.push_undo();
     let saved_yank = ed.yank().to_string();
-    let saved_yank_linewise = ed.yank_linewise;
+    let saved_yank_linewise = ed.yank_linewise();
     let selection = cut_vim_range(ed, top, bot, kind);
     let transformed = match op {
         Operator::Uppercase => selection.to_uppercase(),
@@ -5961,16 +5984,16 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
         _ => unreachable!(),
     };
     if !transformed.is_empty() {
-        let cursor = buf_cursor_pos(&ed.buffer);
+        let cursor = buf_cursor_pos(ed.buffer());
         ed.mutate_edit(Edit::InsertStr {
             at: cursor,
             text: transformed,
         });
     }
-    buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
+    buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
     ed.push_buffer_cursor_to_textarea();
     ed.set_yank(saved_yank);
-    ed.yank_linewise = saved_yank_linewise;
+    ed.set_yank_linewise(saved_yank_linewise);
     ed.vim.mode = Mode::Normal;
 }
 
@@ -5997,7 +6020,7 @@ fn indent_rows<H: crate::types::Host>(
         let spaces = width % tabstop;
         format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
     };
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         if !line.is_empty() {
@@ -6021,7 +6044,7 @@ fn outdent_rows<H: crate::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         let strip: usize = line
@@ -6148,7 +6171,7 @@ fn auto_indent_rows<H: crate::types::Host>(
         "\t".to_string()
     };
 
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
 
     // Accumulate bracket depth from row 0 up to `top - 1` so we start with
@@ -6238,10 +6261,10 @@ fn order(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize
 /// operator or Esc-from-insert.
 fn clamp_cursor_to_normal_mode<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let (row, col) = ed.cursor();
-    let line_chars = buf_line_chars(&ed.buffer, row);
+    let line_chars = buf_line_chars(ed.buffer(), row);
     let max_col = line_chars.saturating_sub(1);
     if col > max_col {
-        buf_set_cursor_rc(&mut ed.buffer, row, max_col);
+        buf_set_cursor_rc(ed.buffer_mut(), row, max_col);
         ed.push_buffer_cursor_to_textarea();
     }
 }
@@ -6294,7 +6317,7 @@ fn execute_line_op<H: crate::types::Host>(
     // at vim's count ceiling (`:h count`).
     let count = count.min(MAX_COUNT);
     let (row, col) = ed.cursor();
-    let total = buf_row_count(&ed.buffer);
+    let total = buf_row_count(ed.buffer());
     // Vim: `[count]op` for a linewise operator implies a `count_` motion that
     // moves `count - 1` lines down. On the last line that motion can't move at
     // all, so the whole operator aborts (E16) — `2dd`/`2yy`/`5>>`/`5<<` on the
@@ -6304,7 +6327,7 @@ fn execute_line_op<H: crate::types::Host>(
     // A trailing newline is stored as a phantom empty final row, so the last
     // *content* line is one above it; use that as the boundary.
     let last_content_row = if total >= 2
-        && buf_line(&ed.buffer, total - 1)
+        && buf_line(ed.buffer(), total - 1)
             .map(|s| s.is_empty())
             .unwrap_or(false)
     {
@@ -6321,7 +6344,7 @@ fn execute_line_op<H: crate::types::Host>(
     // CLOSED fold operates on the ENTIRE fold, not just the cursor line. Expand
     // the `[row, end_row]` range to cover any closed fold it touches (repeats
     // until stable so nested folds are absorbed too).
-    let (row, end_row) = expand_linewise_over_closed_folds(&ed.buffer, row, end_row);
+    let (row, end_row) = expand_linewise_over_closed_folds(ed.buffer(), row, end_row);
 
     match op {
         Operator::Yank => {
@@ -6334,10 +6357,10 @@ fn execute_line_op<H: crate::types::Host>(
             }
             // Vim `:h '[` / `:h ']`: yy/Nyy — linewise yank; `[` =
             // (top_row, 0), `]` = (bot_row, last_col).
-            let last_col = buf_line_chars(&ed.buffer, end_row).saturating_sub(1);
+            let last_col = buf_line_chars(ed.buffer(), end_row).saturating_sub(1);
             ed.set_mark('[', (row, 0));
             ed.set_mark(']', (end_row, last_col));
-            buf_set_cursor_rc(&mut ed.buffer, row, col);
+            buf_set_cursor_rc(ed.buffer_mut(), row, col);
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
@@ -6348,7 +6371,7 @@ fn execute_line_op<H: crate::types::Host>(
             // Vim's `dd` / `Ndd` leaves the cursor on the *first
             // non-blank* of the line that now occupies `row` — or, if
             // the deletion consumed the last line, the line above it.
-            let total_after = buf_row_count(&ed.buffer);
+            let total_after = buf_row_count(ed.buffer());
             let raw_target = if deleted_through_last {
                 row.saturating_sub(1).min(total_after.saturating_sub(1))
             } else {
@@ -6361,7 +6384,7 @@ fn execute_line_op<H: crate::types::Host>(
             // that the trailing `\n` is a terminator, not a separator.
             let target_row = if raw_target > 0
                 && raw_target + 1 == total_after
-                && buf_line(&ed.buffer, raw_target)
+                && buf_line(ed.buffer(), raw_target)
                     .map(|s| s.is_empty())
                     .unwrap_or(false)
             {
@@ -6369,10 +6392,10 @@ fn execute_line_op<H: crate::types::Host>(
             } else {
                 raw_target
             };
-            buf_set_cursor_rc(&mut ed.buffer, target_row, 0);
+            buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
             ed.push_buffer_cursor_to_textarea();
             move_first_non_whitespace(ed);
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             ed.vim.mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: dd/Ndd — both marks park at the
             // post-delete cursor position (the join point).
@@ -6403,7 +6426,7 @@ fn execute_line_op<H: crate::types::Host>(
             } else {
                 outdent_rows(ed, row, end_row, 1);
             }
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             ed.vim.mode = Mode::Normal;
         }
         // No doubled form — `zfzf` is two consecutive `zf` chords.
@@ -6413,7 +6436,7 @@ fn execute_line_op<H: crate::types::Host>(
             ed.push_undo();
             reflow_rows(ed, row, end_row);
             move_first_non_whitespace(ed);
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             ed.vim.mode = Mode::Normal;
         }
         Operator::ReflowKeepCursor => {
@@ -6423,16 +6446,16 @@ fn execute_line_op<H: crate::types::Host>(
             ed.push_undo();
             let (before, after) = reflow_rows_keep_cursor(ed, row, end_row);
             let (new_row, new_col) = reflow_keep_cursor(row, saved.0, saved.1, &before, &after);
-            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
-            ed.sticky_col = Some(new_col);
+            ed.set_sticky_col(Some(new_col));
             ed.vim.mode = Mode::Normal;
         }
         Operator::AutoIndent => {
             // `==` / `N==` — auto-indent `count` rows starting at cursor.
             ed.push_undo();
             auto_indent_rows(ed, row, end_row);
-            ed.sticky_col = Some(ed.cursor().1);
+            ed.set_sticky_col(Some(ed.cursor().1));
             ed.vim.mode = Mode::Normal;
         }
         Operator::Filter => {
@@ -6460,10 +6483,10 @@ pub fn apply_visual_operator<H: crate::types::Host>(
     let levels = count.max(1);
     match ed.vim.mode {
         Mode::VisualLine => {
-            let cursor_row = buf_cursor_pos(&ed.buffer).row;
+            let cursor_row = buf_cursor_pos(ed.buffer()).row;
             let top = cursor_row.min(ed.vim.visual_line_anchor);
             let bot = cursor_row.max(ed.vim.visual_line_anchor);
-            ed.yank_linewise = true;
+            ed.set_yank_linewise(true);
             match op {
                 Operator::Yank => {
                     let text = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
@@ -6472,7 +6495,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                         let target = ed.vim.pending_register.take();
                         ed.record_yank(text, true, target);
                     }
-                    buf_set_cursor_rc(&mut ed.buffer, top, 0);
+                    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6490,7 +6513,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                 | Operator::Lowercase
                 | Operator::ToggleCase
                 | Operator::Rot13 => {
-                    let bot = buf_cursor_pos(&ed.buffer)
+                    let bot = buf_cursor_pos(ed.buffer())
                         .row
                         .max(ed.vim.visual_line_anchor);
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
@@ -6522,7 +6545,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                     let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
                     let (new_row, new_col) =
                         reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
-                    buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+                    buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6543,7 +6566,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
             }
         }
         Mode::Visual => {
-            ed.yank_linewise = false;
+            ed.set_yank_linewise(false);
             let anchor = ed.vim.visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
@@ -6555,7 +6578,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                         let target = ed.vim.pending_register.take();
                         ed.record_yank(text, false, target);
                     }
-                    buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
+                    buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6608,7 +6631,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                     let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
                     let (new_row, new_col) =
                         reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
-                    buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+                    buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6770,7 +6793,7 @@ fn apply_block_operator<H: crate::types::Host>(
             ed.push_undo();
             let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
             let (new_row, new_col) = reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
-            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
@@ -6799,7 +6822,7 @@ fn transform_block_case<H: crate::types::Host>(
     left: usize,
     right: usize,
 ) {
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -6819,10 +6842,10 @@ fn transform_block_case<H: crate::types::Host>(
         lines[r] = format!("{head}{transformed}{tail}");
     }
     let saved_yank = ed.yank().to_string();
-    let saved_linewise = ed.yank_linewise;
+    let saved_linewise = ed.yank_linewise();
     ed.restore(lines, (top, left));
     ed.set_yank(saved_yank);
-    ed.yank_linewise = saved_linewise;
+    ed.set_yank_linewise(saved_linewise);
 }
 
 fn block_yank<H: crate::types::Host>(
@@ -6832,7 +6855,7 @@ fn block_yank<H: crate::types::Host>(
     left: usize,
     right: usize,
 ) -> String {
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let mut rows: Vec<String> = Vec::new();
     for r in top..=bot {
@@ -6860,7 +6883,7 @@ fn delete_block_contents<H: crate::types::Host>(
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let last_row = bot.min(buf_row_count(&ed.buffer).saturating_sub(1));
+    let last_row = bot.min(buf_row_count(ed.buffer()).saturating_sub(1));
     if last_row < top {
         return;
     }
@@ -6878,7 +6901,7 @@ pub fn block_replace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer,
     let (top, bot, left, right) = block_bounds(ed);
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -6903,8 +6926,8 @@ fn reset_textarea_lines<H: crate::types::Host>(
     lines: Vec<String>,
 ) {
     let cursor = ed.cursor();
-    crate::types::BufferEdit::replace_all(&mut ed.buffer, &lines.join("\n"));
-    buf_set_cursor_rc(&mut ed.buffer, cursor.0, cursor.1);
+    crate::types::BufferEdit::replace_all(ed.buffer_mut(), &lines.join("\n"));
+    buf_set_cursor_rc(ed.buffer_mut(), cursor.0, cursor.1);
     ed.mark_content_dirty();
 }
 
@@ -6950,7 +6973,7 @@ fn sentence_boundary<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7066,7 +7089,7 @@ fn sentence_text_object<H: crate::types::Host>(
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
     let count = count.max(1);
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7199,7 +7222,7 @@ fn tag_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7477,11 +7500,11 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
     use hjkl_buffer::{Edit, Position};
 
     // Collect the data we need without holding borrows.
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     let row = cursor.row;
     let col = cursor.col;
     let line_before: String = {
-        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
         line.chars().take(col).collect()
     };
     let (mincol, on_start_row) = if let Some(ref s) = ed.vim.insert_session {
@@ -7498,7 +7521,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
         return false;
     }
 
-    let iskeyword = ed.settings.iskeyword.clone();
+    let iskeyword = ed.settings().iskeyword.clone();
     let abbrevs = ed.abbrevs.clone();
 
     let Some((lhs_len, rhs)) =
@@ -7528,7 +7551,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
 
     // Move cursor to end of inserted rhs.
     let new_col = lhs_start + rhs.chars().count();
-    buf_set_cursor_rc(&mut ed.buffer, row, new_col);
+    buf_set_cursor_rc(ed.buffer_mut(), row, new_col);
     ed.push_buffer_cursor_to_textarea();
 
     true
@@ -7542,7 +7565,7 @@ fn word_text_object<H: crate::types::Host>(
 ) -> Option<((usize, usize), (usize, usize))> {
     let count = count.max(1);
     let (row, col) = ed.cursor();
-    let line = buf_line(&ed.buffer, row)?;
+    let line = buf_line(ed.buffer(), row)?;
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
         return None;
@@ -7665,7 +7688,7 @@ fn quote_text_object<H: crate::types::Host>(
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
     let (row, col) = ed.cursor();
-    let line = buf_line(&ed.buffer, row)?;
+    let line = buf_line(ed.buffer(), row)?;
     // All columns here are CHAR indices — both the cursor `col` and the
     // returned range. Pre-0.33.5 this scanned BYTE offsets and compared
     // them against the char-indexed cursor, so `di"` / `ci"` picked the
@@ -7747,7 +7770,7 @@ fn bracket_text_object<H: crate::types::Host>(
         _ => return None,
     };
     let (row, col) = ed.cursor();
-    let lines = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let lines = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
     let lines = lines.as_slice();
     // If the cursor sits ON the closing bracket, vim anchors the pair to that
     // bracket: the close is at the cursor and the open is found by scanning
@@ -7982,7 +8005,7 @@ fn paragraph_text_object<H: crate::types::Host>(
 ) -> Option<((usize, usize), (usize, usize))> {
     let count = count.max(1);
     let (row, _) = ed.cursor();
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -8049,7 +8072,7 @@ fn read_vim_range<H: crate::types::Host>(
 ) -> String {
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
-    let rope = crate::types::Query::rope(&ed.buffer);
+    let rope = crate::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     match kind {
         RangeKind::Linewise => {
@@ -8112,13 +8135,13 @@ fn cut_vim_range<H: crate::types::Host>(
             BufKind::Line,
         ),
         RangeKind::Inclusive => {
-            let line_chars = buf_line_chars(&ed.buffer, bot.0);
+            let line_chars = buf_line_chars(ed.buffer(), bot.0);
             // Advance one cell past `bot` so the buffer's exclusive
             // `cut_chars` actually drops the inclusive endpoint. Wrap
             // to the next row when bot already sits on the last char.
             let next = if bot.1 < line_chars {
                 Position::new(bot.0, bot.1 + 1)
-            } else if bot.0 + 1 < buf_row_count(&ed.buffer) {
+            } else if bot.0 + 1 < buf_row_count(ed.buffer()) {
                 Position::new(bot.0 + 1, 0)
             } else {
                 Position::new(bot.0, line_chars)
@@ -8157,8 +8180,8 @@ fn cut_vim_range<H: crate::types::Host>(
 fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+    let cursor = buf_cursor_pos(ed.buffer());
+    let line_chars = buf_line_chars(ed.buffer(), cursor.row);
     if cursor.col >= line_chars {
         return;
     }
@@ -8171,10 +8194,10 @@ fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
         && !text.is_empty()
     {
         ed.record_yank_to_host(text.clone());
-        ed.yank_linewise = false;
+        ed.set_yank_linewise(false);
         ed.set_yank(text);
     }
-    buf_set_cursor_pos(&mut ed.buffer, cursor);
+    buf_set_cursor_pos(ed.buffer_mut(), cursor);
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -8190,8 +8213,8 @@ fn do_char_delete<H: crate::types::Host>(
     // (vim's `x`/`X` populate `"` so that `xp` round-trips the char).
     let mut deleted = String::new();
     for _ in 0..count {
-        let cursor = buf_cursor_pos(&ed.buffer);
-        let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+        let cursor = buf_cursor_pos(ed.buffer());
+        let line_chars = buf_line_chars(ed.buffer(), cursor.row);
         if forward {
             // `x` — delete the char under the cursor. Vim no-ops on
             // an empty line; the buffer would drop a row otherwise.
@@ -8246,9 +8269,9 @@ pub fn adjust_number<H: crate::types::Host>(
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
     let row = cursor.row;
-    let chars: Vec<char> = match buf_line(&ed.buffer, row) {
+    let chars: Vec<char> = match buf_line(ed.buffer(), row) {
         Some(l) => l.chars().collect(),
         None => return false,
     };
@@ -8325,7 +8348,7 @@ pub fn adjust_number<H: crate::types::Host>(
         text: new_s.clone(),
     });
     let new_len = new_s.chars().count();
-    buf_set_cursor_rc(&mut ed.buffer, row, span_start + new_len.saturating_sub(1));
+    buf_set_cursor_rc(ed.buffer_mut(), row, span_start + new_len.saturating_sub(1));
     ed.push_buffer_cursor_to_textarea();
     true
 }
@@ -8341,15 +8364,15 @@ pub fn replace_char<H: crate::types::Host>(
     // Vim aborts `r{count}{char}` entirely — replacing nothing — when fewer
     // than `count` characters remain from the cursor to end-of-line, rather
     // than replacing a partial run. Check before touching undo/the buffer.
-    let start = buf_cursor_pos(&ed.buffer);
-    let start_line_chars = buf_line_chars(&ed.buffer, start.row);
+    let start = buf_cursor_pos(ed.buffer());
+    let start_line_chars = buf_line_chars(ed.buffer(), start.row);
     if count == 0 || start.col + count > start_line_chars {
         return;
     }
     ed.push_undo();
     for _ in 0..count {
-        let cursor = buf_cursor_pos(&ed.buffer);
-        let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+        let cursor = buf_cursor_pos(ed.buffer());
+        let line_chars = buf_line_chars(ed.buffer(), cursor.row);
         if cursor.col >= line_chars {
             break;
         }
@@ -8361,7 +8384,7 @@ pub fn replace_char<H: crate::types::Host>(
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     }
     // Vim leaves the cursor on the last replaced char.
-    crate::motions::move_left(&mut ed.buffer, 1);
+    crate::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -8371,8 +8394,8 @@ pub fn replace_char<H: crate::types::Host>(
 fn toggle_case_at_cursor<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let Some(c) = buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col)) else {
+    let cursor = buf_cursor_pos(ed.buffer());
+    let Some(c) = buf_line(ed.buffer(), cursor.row).and_then(|l| l.chars().nth(cursor.col)) else {
         return false;
     };
     let toggled = if c.is_uppercase() {
@@ -8397,12 +8420,12 @@ fn toggle_case_at_cursor<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
 fn join_line<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
-    let row = buf_cursor_pos(&ed.buffer).row;
-    if row + 1 >= buf_row_count(&ed.buffer) {
+    let row = buf_cursor_pos(ed.buffer()).row;
+    if row + 1 >= buf_row_count(ed.buffer()) {
         return false;
     }
-    let cur_line = buf_line(&ed.buffer, row).unwrap_or_default();
-    let next_raw = buf_line(&ed.buffer, row + 1).unwrap_or_default();
+    let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
+    let next_raw = buf_line(ed.buffer(), row + 1).unwrap_or_default();
     let next_trimmed = next_raw.trim_start();
     let cur_chars = cur_line.chars().count();
     let next_chars = next_raw.chars().count();
@@ -8422,7 +8445,7 @@ fn join_line<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
     // Vim parks the cursor on the inserted space — or at the join
     // point when no space went in (which is the same column either
     // way, since the space sits exactly at `cur_chars`).
-    buf_set_cursor_rc(&mut ed.buffer, row, cur_chars);
+    buf_set_cursor_rc(ed.buffer_mut(), row, cur_chars);
     ed.push_buffer_cursor_to_textarea();
     true
 }
@@ -8433,18 +8456,18 @@ fn join_line<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
 fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
-    let row = buf_cursor_pos(&ed.buffer).row;
-    if row + 1 >= buf_row_count(&ed.buffer) {
+    let row = buf_cursor_pos(ed.buffer()).row;
+    if row + 1 >= buf_row_count(ed.buffer()) {
         return false;
     }
-    let join_col = buf_line_chars(&ed.buffer, row);
+    let join_col = buf_line_chars(ed.buffer(), row);
     ed.mutate_edit(Edit::JoinLines {
         row,
         count: 1,
         with_space: false,
     });
     // Vim leaves the cursor at the join point (end of original line).
-    buf_set_cursor_rc(&mut ed.buffer, row, join_col);
+    buf_set_cursor_rc(ed.buffer_mut(), row, join_col);
     ed.push_buffer_cursor_to_textarea();
     true
 }
@@ -8457,7 +8480,7 @@ pub fn visual_join<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     with_space: bool,
 ) {
-    let cursor_row = buf_cursor_pos(&ed.buffer).row;
+    let cursor_row = buf_cursor_pos(ed.buffer()).row;
     let (top, bot) = match ed.vim.mode {
         Mode::VisualLine => (
             cursor_row.min(ed.vim.visual_line_anchor),
@@ -8477,7 +8500,7 @@ pub fn visual_join<H: crate::types::Host>(
     // line below) like normal-mode `J`.
     let joins = (bot - top).max(1);
     ed.push_undo();
-    buf_set_cursor_rc(&mut ed.buffer, top, 0);
+    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     ed.push_buffer_cursor_to_textarea();
     for _ in 0..joins {
         let joined = if with_space {
@@ -8490,21 +8513,21 @@ pub fn visual_join<H: crate::types::Host>(
         }
     }
     ed.vim.mode = Mode::Normal;
-    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn goto_percent<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, count: usize) {
-    let rows = buf_row_count(&ed.buffer);
+    let rows = buf_row_count(ed.buffer());
     if rows == 0 {
         return;
     }
     // Exclude the phantom trailing empty line (a file ending in `\n` is N lines
     // in vim, not N+1) so the percentage matches nvim.
     let total = if rows >= 2
-        && buf_line(&ed.buffer, rows - 1)
+        && buf_line(ed.buffer(), rows - 1)
             .map(|s| s.is_empty())
             .unwrap_or(false)
     {
@@ -8519,7 +8542,7 @@ pub fn goto_percent<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
     let pre = ed.cursor();
     ed.jump_cursor(line - 1, 0);
     move_first_non_whitespace(ed);
-    ed.sticky_col = Some(ed.cursor().1);
+    ed.set_sticky_col(Some(ed.cursor().1));
     if ed.cursor() != pre {
         ed.push_jump(pre);
     }
@@ -8613,8 +8636,8 @@ fn do_paste<H: crate::types::Host>(
     let original_row_for_linewise_after = if linewise && !before {
         // Fold-aware: `p` on a closed fold pastes after the fold, so the first
         // pasted line is `fold_end + 1`, not `cursor_row + 1`.
-        let r = buf_cursor_pos(&ed.buffer).row;
-        let (_, fold_end) = expand_linewise_over_closed_folds(&ed.buffer, r, r);
+        let r = buf_cursor_pos(ed.buffer()).row;
+        let (_, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), r, r);
         Some(fold_end)
     } else {
         None
@@ -8632,17 +8655,17 @@ fn do_paste<H: crate::types::Host>(
             // (`P`) or below (`p`) the cursor's row. Cursor lands on
             // the first non-blank of the first pasted line.
             let mut text = yank.trim_matches('\n').to_string();
-            let row = buf_cursor_pos(&ed.buffer).row;
+            let row = buf_cursor_pos(ed.buffer()).row;
             // `]p` / `[p` — reindent the pasted block to the current line.
             if reindent {
-                let cur_line = buf_line(&ed.buffer, row).unwrap_or_default();
-                let target_w = indent_width(&cur_line, ed.settings.tabstop.max(1));
-                text = reindent_block(&text, target_w, &ed.settings);
+                let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
+                let target_w = indent_width(&cur_line, ed.settings().tabstop.max(1));
+                text = reindent_block(&text, target_w, ed.settings());
             }
             // Fold-aware: linewise paste lands relative to the whole CLOSED
             // fold, not just the cursor line — `p` after the fold's last row,
             // `P` before its first row (vim behaviour). No fold → unchanged.
-            let (fold_start, fold_end) = expand_linewise_over_closed_folds(&ed.buffer, row, row);
+            let (fold_start, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), row, row);
             let target_row = if before {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(fold_start, 0),
@@ -8650,30 +8673,30 @@ fn do_paste<H: crate::types::Host>(
                 });
                 fold_start
             } else {
-                let line_chars = buf_line_chars(&ed.buffer, fold_end);
+                let line_chars = buf_line_chars(ed.buffer(), fold_end);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(fold_end, line_chars),
                     text: format!("\n{text}"),
                 });
                 fold_end + 1
             };
-            buf_set_cursor_rc(&mut ed.buffer, target_row, 0);
-            crate::motions::move_first_non_blank(&mut ed.buffer);
+            buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
             // Linewise: `[` = (target_row, 0), `]` = (bot_row, last_col).
             let payload_lines = text.lines().count().max(1);
             let bot_row = target_row + payload_lines - 1;
-            let bot_last_col = buf_line_chars(&ed.buffer, bot_row).saturating_sub(1);
+            let bot_last_col = buf_line_chars(ed.buffer(), bot_row).saturating_sub(1);
             paste_mark = Some(((target_row, 0), (bot_row, bot_last_col)));
         } else {
             // Charwise paste. `P` inserts at cursor (shifting cell
             // right); `p` inserts after cursor (advance one cell
             // first, clamped to the end of the line).
-            let cursor = buf_cursor_pos(&ed.buffer);
+            let cursor = buf_cursor_pos(ed.buffer());
             let at = if before {
                 cursor
             } else {
-                let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+                let line_chars = buf_line_chars(ed.buffer(), cursor.row);
                 Position::new(cursor.row, (cursor.col + 1).min(line_chars))
             };
             ed.mutate_edit(Edit::InsertStr {
@@ -8685,7 +8708,7 @@ fn do_paste<H: crate::types::Host>(
             // leaves the cursor just AFTER the pasted text, so skip the
             // step-back there.
             if !cursor_after && ed.cursor().1 > 0 {
-                crate::motions::move_left(&mut ed.buffer, 1);
+                crate::motions::move_left(ed.buffer_mut(), 1);
                 ed.push_buffer_cursor_to_textarea();
             }
             // Charwise: `[` = insert start, `]` = last pasted char.
@@ -8707,9 +8730,9 @@ fn do_paste<H: crate::types::Host>(
     // block (the `]` mark's row + 1), at column 0, clamped to the last row.
     if cursor_after && linewise {
         if let Some((_, (bot_row, _))) = paste_mark {
-            let last_row = buf_row_count(&ed.buffer).saturating_sub(1);
+            let last_row = buf_row_count(ed.buffer()).saturating_sub(1);
             let target = (bot_row + 1).min(last_row);
-            buf_set_cursor_rc(&mut ed.buffer, target, 0);
+            buf_set_cursor_rc(ed.buffer_mut(), target, 0);
             ed.push_buffer_cursor_to_textarea();
         }
     } else if let Some(orig_row) = original_row_for_linewise_after {
@@ -8718,12 +8741,12 @@ fn do_paste<H: crate::types::Host>(
         // moves cursor to each paste's target_row, so without this reset
         // `5p` would land at original_row + 5 instead of original_row + 1.
         let first_target = orig_row.saturating_add(1);
-        buf_set_cursor_rc(&mut ed.buffer, first_target, 0);
-        crate::motions::move_first_non_blank(&mut ed.buffer);
+        buf_set_cursor_rc(ed.buffer_mut(), first_target, 0);
+        crate::motions::move_first_non_blank(ed.buffer_mut());
         ed.push_buffer_cursor_to_textarea();
     }
     // Any paste re-anchors the sticky column to the new cursor position.
-    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
 /// Visual-mode `p` / `P` — replace the active selection with the register.
@@ -8753,32 +8776,32 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
 
     match mode {
         Mode::VisualLine => {
-            let cursor_row = buf_cursor_pos(&ed.buffer).row;
+            let cursor_row = buf_cursor_pos(ed.buffer()).row;
             let top = cursor_row.min(ed.vim.visual_line_anchor);
             let bot = cursor_row.max(ed.vim.visual_line_anchor);
             // Delete the selected lines into the unnamed register.
             cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
             // Insert the register as fresh line(s) where the selection was.
             let text = reg_text.trim_matches('\n').to_string();
-            let line_count = buf_row_count(&ed.buffer);
+            let line_count = buf_row_count(ed.buffer());
             if top >= line_count {
                 // Selection reached the end of the buffer: append below the
                 // (new) last line.
                 let last = line_count.saturating_sub(1);
-                let lc = buf_line_chars(&ed.buffer, last);
+                let lc = buf_line_chars(ed.buffer(), last);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(last, lc),
                     text: format!("\n{text}"),
                 });
-                buf_set_cursor_rc(&mut ed.buffer, last + 1, 0);
+                buf_set_cursor_rc(ed.buffer_mut(), last + 1, 0);
             } else {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(top, 0),
                     text: format!("{text}\n"),
                 });
-                buf_set_cursor_rc(&mut ed.buffer, top, 0);
+                buf_set_cursor_rc(ed.buffer_mut(), top, 0);
             }
-            crate::motions::move_first_non_blank(&mut ed.buffer);
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Mode::Visual | Mode::VisualBlock => {
@@ -8795,13 +8818,13 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
             if reg_linewise {
                 // Linewise register into a charwise hole: open a line below.
                 let text = reg_text.trim_matches('\n').to_string();
-                let lc = buf_line_chars(&ed.buffer, top.0);
+                let lc = buf_line_chars(ed.buffer(), top.0);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(top.0, lc),
                     text: format!("\n{text}"),
                 });
-                buf_set_cursor_rc(&mut ed.buffer, top.0 + 1, 0);
-                crate::motions::move_first_non_blank(&mut ed.buffer);
+                buf_set_cursor_rc(ed.buffer_mut(), top.0 + 1, 0);
+                crate::motions::move_first_non_blank(ed.buffer_mut());
             } else {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(top.0, top.1),
@@ -8810,7 +8833,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
                 // Park the cursor on the last char of the inserted text.
                 let inserted_len = reg_text.chars().count();
                 let last_col = top.1 + inserted_len.saturating_sub(1);
-                buf_set_cursor_rc(&mut ed.buffer, top.0, last_col);
+                buf_set_cursor_rc(ed.buffer_mut(), top.0, last_col);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -8822,7 +8845,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
         ed.registers_mut().unnamed = slot;
     }
     ed.vim.mode = Mode::Normal;
-    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
 /// Visual-mode `<C-a>` / `<C-x>` and `g<C-a>` / `g<C-x>`. Adds `delta` to the
@@ -8838,7 +8861,7 @@ pub fn adjust_number_visual<H: crate::types::Host>(
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let mode = ed.vim.mode;
-    let cursor = buf_cursor_pos(&ed.buffer);
+    let cursor = buf_cursor_pos(ed.buffer());
 
     // Resolve the row range + the per-row start column to scan from.
     let (top, bot, mut scan_col_first, block_left) = match mode {
@@ -8872,7 +8895,7 @@ pub fn adjust_number_visual<H: crate::types::Host>(
                 c
             }
         };
-        let chars: Vec<char> = match buf_line(&ed.buffer, row) {
+        let chars: Vec<char> = match buf_line(ed.buffer(), row) {
             Some(l) => l.chars().collect(),
             None => continue,
         };
@@ -8914,10 +8937,10 @@ pub fn adjust_number_visual<H: crate::types::Host>(
         });
     }
     // Vim leaves the cursor at the start of the selection.
-    buf_set_cursor_rc(&mut ed.buffer, top, block_left.unwrap_or(0));
+    buf_set_cursor_rc(ed.buffer_mut(), top, block_left.unwrap_or(0));
     ed.push_buffer_cursor_to_textarea();
     ed.vim.mode = Mode::Normal;
-    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
 // ─── Dot repeat ────────────────────────────────────────────────────────────
@@ -8938,7 +8961,7 @@ fn replay_insert_and_finish<H: crate::types::Host>(
     });
     if ed.vim.insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
-            crate::motions::move_left(&mut ed.buffer, 1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
         ed.vim.mode = Mode::Normal;
@@ -9046,8 +9069,8 @@ pub fn replay_last_change<H: crate::types::Host>(
             use hjkl_buffer::{Edit, MotionKind, Position};
             ed.push_undo();
             for ch in text.chars() {
-                let cursor = buf_cursor_pos(&ed.buffer);
-                let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+                let cursor = buf_cursor_pos(ed.buffer());
+                let line_chars = buf_line_chars(ed.buffer(), cursor.row);
                 if cursor.col < line_chars {
                     // Overtype the char under the cursor.
                     ed.mutate_edit(Edit::DeleteRange {
@@ -9057,11 +9080,11 @@ pub fn replay_last_change<H: crate::types::Host>(
                     });
                 }
                 ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
-                buf_set_cursor_rc(&mut ed.buffer, cursor.row, cursor.col + 1);
+                buf_set_cursor_rc(ed.buffer_mut(), cursor.row, cursor.col + 1);
             }
             // Esc step-back onto the last overtyped char.
             if ed.cursor().1 > 0 {
-                crate::motions::move_left(&mut ed.buffer, 1);
+                crate::motions::move_left(ed.buffer_mut(), 1);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -9081,16 +9104,18 @@ pub fn replay_last_change<H: crate::types::Host>(
             use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             ed.sync_buffer_content_from_textarea();
-            let row = buf_cursor_pos(&ed.buffer).row;
+            let row = buf_cursor_pos(ed.buffer()).row;
             if above {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(row, 0),
                     text: "\n".to_string(),
                 });
-                let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-                crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+                let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+                let mut sticky = ed.sticky_col();
+                crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+                ed.set_sticky_col(sticky);
             } else {
-                let line_chars = buf_line_chars(&ed.buffer, row);
+                let line_chars = buf_line_chars(ed.buffer(), row);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(row, line_chars),
                     text: "\n".to_string(),
@@ -9114,12 +9139,12 @@ pub fn replay_last_change<H: crate::types::Host>(
                 InsertEntry::I => {}
                 InsertEntry::ShiftI => move_first_non_whitespace(ed),
                 InsertEntry::A => {
-                    crate::motions::move_right_to_end(&mut ed.buffer, 1);
+                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
                 InsertEntry::ShiftA => {
-                    crate::motions::move_line_end(&mut ed.buffer);
-                    crate::motions::move_right_to_end(&mut ed.buffer, 1);
+                    crate::motions::move_line_end(ed.buffer_mut());
+                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
             }
@@ -9300,14 +9325,14 @@ mod comment_continuation_tests {
     #[test]
     fn continue_comment_returns_prefix_for_comment_row() {
         let ed = make_editor_with_lang("rust", "/// hello\n");
-        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        let cont = continue_comment(ed.buffer(), ed.settings(), 0);
         assert_eq!(cont, Some("/// ".to_string()));
     }
 
     #[test]
     fn continue_comment_returns_none_for_non_comment() {
         let ed = make_editor_with_lang("rust", "let x = 1;\n");
-        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        let cont = continue_comment(ed.buffer(), ed.settings(), 0);
         assert!(cont.is_none());
     }
 
@@ -9317,7 +9342,7 @@ mod comment_continuation_tests {
         let host = DefaultHost::new();
         // filetype defaults to "" in Options::default().
         let ed = Editor::new(buf, host, Options::default());
-        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        let cont = continue_comment(ed.buffer(), ed.settings(), 0);
         assert!(cont.is_none());
     }
 }
@@ -9339,7 +9364,7 @@ mod comment_toggle_tests {
     }
 
     fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
-        buf_line(&ed.buffer, row).unwrap_or_default()
+        buf_line(ed.buffer(), row).unwrap_or_default()
     }
 
     // ── gcc: toggle comment on current line ──────────────────────────────────
