@@ -4054,9 +4054,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let top = top_row.min(line_count.saturating_sub(1));
         let bot = bot_row.min(line_count.saturating_sub(1));
         let (top, bot) = (top.min(bot), top.max(bot));
-        let input_text = crate::vim::rope_row_range_str(&rope, top, bot);
+        let input_text = crate::rope_util::rope_row_range_str(&rope, top, bot);
         // Materialized for the splice-back after the command succeeds.
-        let lines = crate::vim::rope_to_lines_vec(&rope);
+        let lines = crate::rope_util::rope_to_lines_vec(&rope);
 
         tracing::debug!(
             top_row = top,

@@ -28,6 +28,7 @@ pub mod input;
 pub mod keymap_motion;
 pub mod motions;
 mod registers;
+mod rope_util;
 pub mod search;
 pub mod substitute;
 pub mod types;

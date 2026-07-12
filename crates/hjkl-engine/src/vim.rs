@@ -79,6 +79,7 @@ pub use hjkl_vim_types::{
 
 use crate::VimMode;
 use crate::input::{Input, Key};
+use crate::rope_util::{rope_line_to_str, rope_row_range_str, rope_to_lines_vec};
 
 use crate::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_bytes, buf_line_chars, buf_row_count, buf_set_cursor_pos,
@@ -5644,51 +5645,6 @@ pub(crate) fn text_object_around_tag_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, false)
-}
-
-// ─── Rope utility helpers ──────────────────────────────────────────────────
-
-/// Return row `r` from a rope as an owned `String`, stripping the
-/// trailing `\n` that ropey includes on non-final lines.
-pub(crate) fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
-    let s = rope.line(r).to_string();
-    // ropey includes the newline; strip it so callers see bare content.
-    if s.ends_with('\n') {
-        s[..s.len() - 1].to_string()
-    } else {
-        s
-    }
-}
-
-/// Join rows `lo..=hi` from a rope into a single `String` separated by
-/// `\n`. Callers must ensure `lo <= hi < rope.len_lines()`.
-pub(crate) fn rope_row_range_str(rope: &ropey::Rope, lo: usize, hi: usize) -> String {
-    let n = rope.len_lines();
-    let lo = lo.min(n.saturating_sub(1));
-    let hi = hi.min(n.saturating_sub(1));
-    if lo > hi {
-        return String::new();
-    }
-    // Use byte-slice to grab the full range in one rope walk.
-    let start_byte = rope.line_to_byte(lo);
-    // End byte: start of line hi+1, minus the newline separator, or
-    // len_bytes() when hi is the last line.
-    let end_byte = if hi + 1 < n {
-        // line_to_byte(hi+1) points at the \n-terminated start of
-        // the next line; step back one byte to drop that trailing \n.
-        rope.line_to_byte(hi + 1).saturating_sub(1)
-    } else {
-        rope.len_bytes()
-    };
-    rope.byte_slice(start_byte..end_byte).to_string()
-}
-
-/// Snapshot all rows from a rope as `Vec<String>` (no trailing `\n`).
-/// Use only when the caller truly needs mutable per-row access; prefer
-/// rope iterators otherwise.
-pub(crate) fn rope_to_lines_vec(rope: &ropey::Rope) -> Vec<String> {
-    let n = rope.len_lines();
-    (0..n).map(|r| rope_line_to_str(rope, r)).collect()
 }
 
 /// Pure greedy word-wrap of a slice of lines to `width` chars.

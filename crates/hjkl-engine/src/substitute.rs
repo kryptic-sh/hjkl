@@ -292,7 +292,7 @@ pub fn apply_substitute<H: crate::types::Host>(
     let total = rope.len_lines();
 
     let clamp_end = end.min(total.saturating_sub(1));
-    let mut new_lines: Vec<String> = crate::vim::rope_to_lines_vec(&rope);
+    let mut new_lines: Vec<String> = crate::rope_util::rope_to_lines_vec(&rope);
     let mut replacements = 0usize;
     let mut lines_changed = 0usize;
     let mut last_changed_row = 0usize;
@@ -523,7 +523,7 @@ pub fn apply_collected_matches<H: crate::types::Host>(
     to_apply.sort_unstable_by(|a, b| b.row.cmp(&a.row).then(b.byte_start.cmp(&a.byte_start)));
 
     let rope = crate::types::Query::rope(ed.buffer());
-    let mut lines_vec: Vec<String> = crate::vim::rope_to_lines_vec(&rope);
+    let mut lines_vec: Vec<String> = crate::rope_util::rope_to_lines_vec(&rope);
     let mut applied = 0usize;
     let mut last_changed_row: Option<usize> = None;
 
