@@ -186,15 +186,12 @@ pub struct VimState {
     /// normal-mode command we return to Insert.
     pub one_shot_normal: bool,
     /// Live `/` or `?` prompt. `None` outside search-prompt mode.
-    pub search_prompt: Option<SearchPrompt>,
     /// Most recent committed search pattern. Surfaced to host apps via
     /// [`Editor::last_search`] so their status line can render a hint
     /// and so `n` / `N` have something to repeat.
-    pub last_search: Option<String>,
     /// Direction of the last committed search. `n` repeats this; `N`
     /// inverts it. Defaults to forward so a never-searched buffer's
     /// `n` still walks downward.
-    pub last_search_forward: bool,
     /// Text of the most recent insert session — vim's `".` register, pasted
     /// via `<C-r>.` in insert mode (and `".p` in normal mode).
     pub last_insert_text: Option<String>,
@@ -217,12 +214,10 @@ pub struct VimState {
     /// Bounded history of committed `/` / `?` search patterns. Newest
     /// entries are at the back; capped at [`SEARCH_HISTORY_MAX`] to
     /// avoid unbounded growth on long sessions.
-    pub search_history: Vec<String>,
     /// Index into `search_history` while the user walks past patterns
     /// in the prompt via `Ctrl-P` / `Ctrl-N`. `None` outside that walk
     /// — typing or backspacing in the prompt resets it so the next
     /// `Ctrl-P` starts from the most recent entry again.
-    pub search_history_cursor: Option<usize>,
     /// Wall-clock instant of the last keystroke. Drives the
     /// `:set timeoutlen` multi-key timeout — if `now() - last_input_at`
     /// exceeds the configured budget, any pending prefix is cleared
@@ -231,11 +226,9 @@ pub struct VimState {
     /// [`crate::types::Host::now`] via `last_input_host_at`. This
     /// `Instant`-flavoured field stays for snapshot tests that still
     /// observe it directly.
-    pub last_input_at: Option<std::time::Instant>,
     /// `Host::now()` reading at the last keystroke. Drives
     /// `:set timeoutlen` so macro replay / headless drivers stay
     /// deterministic regardless of wall-clock skew.
-    pub last_input_host_at: Option<core::time::Duration>,
     /// Canonical current mode. Mirrors `mode` (the FSM-internal field)
     /// AND is written by every Phase 6.3 primitive (`set_mode`,
     /// `enter_visual_char_bridge`, …). Once the FSM is gone this is the
@@ -243,7 +236,6 @@ pub struct VimState {
     /// Initialized to `Normal` via `#[derive(Default)]`.
     pub current_mode: crate::VimMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
-    pub last_substitute: Option<crate::substitute::SubstituteCmd>,
     /// Stack of auto-inserted closing characters awaiting skip-over.
     ///
     /// Each entry `(row, col, ch)` records where autopair placed a close
@@ -411,13 +403,13 @@ impl crate::DisciplineState for VimState {
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn enter_search<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, forward: bool) {
-    ed.vim.search_prompt = Some(SearchPrompt {
+    ed.search_prompt = Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
         forward,
         operator: None,
     });
-    ed.vim.search_history_cursor = None;
+    ed.search_history_cursor = None;
     // 0.0.37: clear via the engine search state (the buffer-side
     // bridge from 0.0.35 was removed in this patch — the `BufferView`
     // renderer reads the pattern from `Editor::search_state()`).
@@ -435,13 +427,13 @@ pub fn enter_search_op<H: crate::types::Host>(
     count: usize,
 ) {
     let origin = ed.cursor();
-    ed.vim.search_prompt = Some(SearchPrompt {
+    ed.search_prompt = Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
         forward,
         operator: Some((op, count.max(1), origin)),
     });
-    ed.vim.search_history_cursor = None;
+    ed.search_history_cursor = None;
     ed.set_search_pattern(None);
 }
 
@@ -505,7 +497,7 @@ fn insert_register_text<H: crate::types::Host>(
     // Special read-only registers: `/` = last search pattern, `.` = last
     // inserted text. Fall back to the register store for everything else.
     let text = match selector {
-        '/' => match &ed.vim.last_search {
+        '/' => match &ed.last_search {
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },
@@ -2741,13 +2733,13 @@ pub fn search_repeat_bridge<H: crate::types::Host>(
     forward: bool,
     count: usize,
 ) {
-    if let Some(pattern) = ed.vim.last_search.clone() {
+    if let Some(pattern) = ed.last_search.clone() {
         ed.push_search_pattern(&pattern);
     }
     if ed.search_state().pattern.is_none() {
         return;
     }
-    let go_forward = ed.vim.last_search_forward == forward;
+    let go_forward = ed.last_search_forward == forward;
     for _ in 0..count.max(1) {
         if go_forward {
             ed.search_advance_forward(true);
@@ -3808,7 +3800,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // Re-push the last query so the buffer's search state is
             // correct even if the host happened to clear it (e.g. while
             // a Visual mode draw was in progress).
-            if let Some(pattern) = ed.vim.last_search.clone() {
+            if let Some(pattern) = ed.last_search.clone() {
                 ed.push_search_pattern(&pattern);
             }
             if ed.search_state().pattern.is_none() {
@@ -3817,7 +3809,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `n` repeats the last search in its committed direction;
             // `N` inverts. So a `?` search makes `n` walk backward and
             // `N` walk forward.
-            let forward = ed.vim.last_search_forward != *reverse;
+            let forward = ed.last_search_forward != *reverse;
             for _ in 0..count.max(1) {
                 if forward {
                     ed.search_advance_forward(true);
@@ -4076,8 +4068,8 @@ fn word_at_cursor_search<H: crate::types::Host>(
         return;
     }
     // Remember the query so `n` / `N` keep working after the jump.
-    ed.vim.last_search = Some(pattern);
-    ed.vim.last_search_forward = forward;
+    ed.last_search = Some(pattern);
+    ed.last_search_forward = forward;
     for _ in 0..count.max(1) {
         if forward {
             ed.search_advance_forward(true);
@@ -4241,7 +4233,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
 ) {
     use crate::types::{Cursor, Pos};
     // Make sure the compiled pattern reflects the last `/` or `*` search.
-    if let Some(p) = ed.vim.last_search.clone() {
+    if let Some(p) = ed.last_search.clone() {
         ed.push_search_pattern(&p);
     }
     let Some(re) = ed.search_state().pattern.clone() else {
@@ -4549,7 +4541,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         // `g&` — repeat last `:s` over the whole buffer (1,$), keeping all
         // original flags. Equivalent to `:%s//~/&` in vim.
         '&' => {
-            let cmd = match ed.vim.last_substitute.clone() {
+            let cmd = match ed.last_substitute.clone() {
                 Some(c) => c,
                 None => {
                     // No prior substitute — mirror the `:&` error path; do
@@ -4566,7 +4558,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             let _ = crate::substitute::apply_substitute(ed, &cmd, r);
             // Update stored substitute so subsequent `g&` sees the same cmd.
             // (apply_substitute doesn't call set_last_substitute itself.)
-            ed.vim.last_substitute = Some(cmd);
+            ed.last_substitute = Some(cmd);
         }
         _ => {}
     }
@@ -4577,7 +4569,7 @@ pub fn apply_after_g<H: crate::types::Host>(
 /// buffer; this is the single-line, flag-less form.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    let Some(mut cmd) = ed.vim.last_substitute.clone() else {
+    let Some(mut cmd) = ed.last_substitute.clone() else {
         return;
     };
     cmd.flags = crate::substitute::SubstFlags::default();

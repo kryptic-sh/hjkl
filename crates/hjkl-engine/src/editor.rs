@@ -646,6 +646,33 @@ pub struct Editor<
     /// One-shot hint that the last scroll should be animated by the renderer.
     pub(crate) scroll_anim_hint: bool,
 
+    // ── Search state (discipline-agnostic, #265) ─────────────────────────────
+    //
+    // Every editor has find. A vscode/helix discipline needs the pattern,
+    // direction and history without depending on hjkl-vim.
+    /// Live `/` or `?` prompt while the user is typing a pattern.
+    pub(crate) search_prompt: Option<crate::vim::SearchPrompt>,
+    /// Last committed search pattern, for `n` / `N` (or Find Next).
+    pub(crate) last_search: Option<String>,
+    /// Direction of the last committed search.
+    pub(crate) last_search_forward: bool,
+    /// Search history, oldest first.
+    pub(crate) search_history: Vec<String>,
+    /// Cursor while walking search history with Up/Down.
+    pub(crate) search_history_cursor: Option<usize>,
+
+    // ── Input timing (discipline-agnostic) ───────────────────────────────────
+    //
+    // Any chorded FSM needs a timeout clock, not just vim.
+    /// Instant of the last input, when the host supplies a monotonic clock.
+    pub(crate) last_input_at: Option<std::time::Instant>,
+    /// Host-supplied elapsed time at the last input (no_std hosts).
+    pub(crate) last_input_host_at: Option<core::time::Duration>,
+
+    /// Last `:s` command, for `:&` / `:&&`. This is ex-command state owned by
+    /// the hjkl-ex seam, not vim FSM state.
+    pub(crate) last_substitute: Option<crate::substitute::SubstituteCmd>,
+
     /// The `buffer_id` this editor instance is currently attached to.
     /// Updated by the host app on every `switch_to` / slot creation so
     /// global-mark writes record the correct id without requiring the app
@@ -1146,6 +1173,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             jump_fwd: Vec::new(),
             viewport_pinned: false,
             scroll_anim_hint: false,
+            search_prompt: None,
+            last_search: None,
+            last_search_forward: true,
+            search_history: Vec::new(),
+            search_history_cursor: None,
+            last_input_at: None,
+            last_input_host_at: None,
+            last_substitute: None,
             current_buffer_id: 0,
             sticky_col: None,
             host,
@@ -2218,6 +2253,92 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.viewport_pinned = v;
     }
 
+    // ── Search state (discipline-agnostic seam, #265) ────────────────────────
+    //
+    // Every editor has find. These live on the engine so a helix/vscode
+    // discipline reaches the pattern, direction and history without depending
+    // on hjkl-vim. The vim *keybindings* on top (`/`, `?`, `n`, `N`, `*`) stay
+    // in hjkl-vim.
+
+    /// The live `/` or `?` search-prompt state, if a prompt is open.
+    pub fn search_prompt_state(&self) -> Option<&crate::vim::SearchPrompt> {
+        self.search_prompt.as_ref()
+    }
+
+    /// Mutable access to the live search-prompt state.
+    pub fn search_prompt_state_mut(&mut self) -> Option<&mut crate::vim::SearchPrompt> {
+        self.search_prompt.as_mut()
+    }
+
+    /// Take (and close) the search-prompt state.
+    pub fn take_search_prompt_state(&mut self) -> Option<crate::vim::SearchPrompt> {
+        self.search_prompt.take()
+    }
+
+    /// Install (or clear) the search-prompt state.
+    pub fn set_search_prompt_state(&mut self, prompt: Option<crate::vim::SearchPrompt>) {
+        self.search_prompt = prompt;
+    }
+
+    /// The last committed search pattern, for `n` / `N` (or Find Next).
+    pub fn last_search_pattern(&self) -> Option<&str> {
+        self.last_search.as_deref()
+    }
+
+    /// Set the last search pattern without touching direction or highlight.
+    pub fn set_last_search_pattern_only(&mut self, pattern: Option<String>) {
+        self.last_search = pattern;
+    }
+
+    /// Set the last search direction without touching the pattern.
+    pub fn set_last_search_forward_only(&mut self, forward: bool) {
+        self.last_search_forward = forward;
+    }
+
+    /// Read-only view of the search history (oldest first).
+    pub fn search_history(&self) -> &[String] {
+        &self.search_history
+    }
+
+    /// Mutable access to the search history.
+    pub fn search_history_mut(&mut self) -> &mut Vec<String> {
+        &mut self.search_history
+    }
+
+    /// Cursor position while walking search history with Up/Down.
+    pub fn search_history_cursor(&self) -> Option<usize> {
+        self.search_history_cursor
+    }
+
+    /// Set the search-history walk cursor.
+    pub fn set_search_history_cursor(&mut self, idx: Option<usize>) {
+        self.search_history_cursor = idx;
+    }
+
+    // ── Input timing (discipline-agnostic seam) ──────────────────────────────
+    //
+    // Any chorded FSM needs a timeout clock, not just vim.
+
+    /// Instant of the last input, when the host supplies a monotonic clock.
+    pub fn last_input_at(&self) -> Option<std::time::Instant> {
+        self.last_input_at
+    }
+
+    /// Set the instant of the last input.
+    pub fn set_last_input_at(&mut self, t: Option<std::time::Instant>) {
+        self.last_input_at = t;
+    }
+
+    /// Host-supplied elapsed time at the last input (no_std hosts).
+    pub fn last_input_host_at(&self) -> Option<core::time::Duration> {
+        self.last_input_host_at
+    }
+
+    /// Set the host-supplied elapsed time at the last input.
+    pub fn set_last_input_host_at(&mut self, d: Option<core::time::Duration>) {
+        self.last_input_host_at = d;
+    }
+
     /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
     /// the last call. Each entry corresponds to a single buffer
     /// mutation funnelled through [`Editor::mutate_edit`]; block edits
@@ -2391,20 +2512,20 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Read-only view of the live `/` or `?` prompt. `None` outside
     /// search-prompt mode.
     pub fn search_prompt(&self) -> Option<&crate::vim::SearchPrompt> {
-        self.vim.search_prompt.as_ref()
+        self.search_prompt.as_ref()
     }
 
     /// Most recent committed search pattern (persists across `n` / `N`
     /// and across prompt exits). `None` before the first search.
     pub fn last_search(&self) -> Option<&str> {
-        self.vim.last_search.as_deref()
+        self.last_search.as_deref()
     }
 
     /// Whether the last committed search was a forward `/` (`true`) or
     /// a backward `?` (`false`). `n` and `N` consult this to honour the
     /// direction the user committed.
     pub fn last_search_forward(&self) -> bool {
-        self.vim.last_search_forward
+        self.last_search_forward
     }
 
     /// Set the most recent committed search text + direction. Used by
@@ -2413,19 +2534,19 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// most recent commit with the right direction. Pass `None` /
     /// `true` to clear.
     pub fn set_last_search(&mut self, text: Option<String>, forward: bool) {
-        self.vim.last_search = text;
-        self.vim.last_search_forward = forward;
+        self.last_search = text;
+        self.last_search_forward = forward;
     }
 
     /// The most recent successful `:s` command. `None` before the first substitute.
     /// Used by `:&` / `:&&` to repeat it.
     pub fn last_substitute(&self) -> Option<&crate::substitute::SubstituteCmd> {
-        self.vim.last_substitute.as_ref()
+        self.last_substitute.as_ref()
     }
 
     /// Store the last successful substitute so `:&` / `:&&` can repeat it.
     pub fn set_last_substitute(&mut self, cmd: crate::substitute::SubstituteCmd) {
-        self.vim.last_substitute = Some(cmd);
+        self.last_substitute = Some(cmd);
     }
 
     /// Force back to normal mode (used when dismissing completions etc.)
@@ -4331,15 +4452,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         if pattern.is_empty() {
             return;
         }
-        if self.vim.search_history.last().map(String::as_str) == Some(pattern) {
+        if self.search_history.last().map(String::as_str) == Some(pattern) {
             return;
         }
-        self.vim.search_history.push(pattern.to_string());
-        let len = self.vim.search_history.len();
+        self.search_history.push(pattern.to_string());
+        let len = self.search_history.len();
         if len > vim::SEARCH_HISTORY_MAX {
-            self.vim
-                .search_history
-                .drain(0..len - vim::SEARCH_HISTORY_MAX);
+            self.search_history.drain(0..len - vim::SEARCH_HISTORY_MAX);
         }
     }
 
@@ -4348,11 +4467,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// (Ctrl-N / Down). Stops at the ends; does nothing if there is no
     /// active search prompt.
     pub fn walk_search_history(&mut self, dir: isize) {
-        if self.vim.search_history.is_empty() || self.vim.search_prompt.is_none() {
+        if self.search_history.is_empty() || self.search_prompt.is_none() {
             return;
         }
-        let len = self.vim.search_history.len();
-        let next_idx = match (self.vim.search_history_cursor, dir) {
+        let len = self.search_history.len();
+        let next_idx = match (self.search_history_cursor, dir) {
             (None, -1) => Some(len - 1),
             (None, 1) => return,
             (Some(i), -1) => i.checked_sub(1),
@@ -4362,9 +4481,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let Some(idx) = next_idx else {
             return;
         };
-        self.vim.search_history_cursor = Some(idx);
-        let text = self.vim.search_history[idx].clone();
-        if let Some(prompt) = self.vim.search_prompt.as_mut() {
+        self.search_history_cursor = Some(idx);
+        let text = self.search_history[idx].clone();
+        if let Some(prompt) = self.search_prompt.as_mut() {
             prompt.cursor = text.chars().count();
             prompt.text = text.clone();
         }

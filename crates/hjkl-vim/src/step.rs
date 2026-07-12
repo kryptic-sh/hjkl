@@ -32,7 +32,7 @@ pub(crate) fn begin_step<H: hjkl_engine::Host>(
     // `:set timeoutlen` chord-timeout handling.
     let now = std::time::Instant::now();
     let host_now = ed.host().now();
-    let timed_out = match ed.vim.last_input_host_at {
+    let timed_out = match ed.last_input_host_at() {
         Some(prev) => host_now.saturating_sub(prev) > ed.settings().timeout_len,
         None => false,
     };
@@ -45,8 +45,8 @@ pub(crate) fn begin_step<H: hjkl_engine::Host>(
             ed.vim.clear_pending_prefix();
         }
     }
-    ed.vim.last_input_at = Some(now);
-    ed.vim.last_input_host_at = Some(host_now);
+    ed.set_last_input_at(Some(now));
+    ed.set_last_input_host_at(Some(host_now));
     // ── Macro-stop: bare `q` outside Insert ends the recording ───────────
     if ed.vim.recording_macro.is_some()
         && !ed.vim.replaying_macro

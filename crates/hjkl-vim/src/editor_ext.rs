@@ -12,7 +12,7 @@ use hjkl_engine::input::Input;
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
 use hjkl_engine::vim::{
     AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir,
-    SearchPrompt, TextObject,
+    TextObject,
 };
 use hjkl_engine::{Editor, FsmMode, MarkJump, VimMode};
 
@@ -590,42 +590,6 @@ pub trait VimEditorExt {
     fn take_change_mark_start(&mut self) -> Option<(usize, usize)>;
     /// Set the stashed `[` mark start.
     fn set_change_mark_start(&mut self, pos: Option<(usize, usize)>);
-
-    // ─── Input timing (for `timeoutlen` chord resolution) ──────────────────
-
-    /// Instant of the last input, when the host supplies a monotonic clock.
-    fn last_input_at(&self) -> Option<std::time::Instant>;
-    /// Set the instant of the last input.
-    fn set_last_input_at(&mut self, t: Option<std::time::Instant>);
-    /// Host-supplied elapsed time at the last input (no_std hosts).
-    fn last_input_host_at(&self) -> Option<core::time::Duration>;
-    /// Set the host-supplied elapsed time at the last input.
-    fn set_last_input_host_at(&mut self, d: Option<core::time::Duration>);
-
-    // ─── Search prompt / history ───────────────────────────────────────────
-
-    /// The live `/` or `?` search-prompt state, if a prompt is open.
-    fn search_prompt_state(&self) -> Option<&SearchPrompt>;
-    /// Mutable access to the live search-prompt state.
-    fn search_prompt_state_mut(&mut self) -> Option<&mut SearchPrompt>;
-    /// Take (and close) the search-prompt state.
-    fn take_search_prompt_state(&mut self) -> Option<SearchPrompt>;
-    /// Install (or clear) the search-prompt state.
-    fn set_search_prompt_state(&mut self, prompt: Option<SearchPrompt>);
-    /// The last search pattern, for `n` / `N`.
-    fn last_search_pattern(&self) -> Option<&str>;
-    /// Set the last search pattern without touching direction or highlight.
-    fn set_last_search_pattern_only(&mut self, pattern: Option<String>);
-    /// Set the last search direction without touching the pattern.
-    fn set_last_search_forward_only(&mut self, forward: bool);
-    /// Read-only view of the `/` search history (oldest first).
-    fn search_history(&self) -> &[String];
-    /// Mutable access to the search history.
-    fn search_history_mut(&mut self) -> &mut Vec<String>;
-    /// Cursor position while walking search history with Up/Down.
-    fn search_history_cursor(&self) -> Option<usize>;
-    /// Set the search-history walk cursor.
-    fn set_search_history_cursor(&mut self, idx: Option<usize>);
 
     // ─── Visual / motion / search primitives ───────────────────────────────
     //
@@ -1389,57 +1353,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
     fn set_change_mark_start(&mut self, pos: Option<(usize, usize)>) {
         self.vim.change_mark_start = pos;
-    }
-
-    // ─── Input timing ──────────────────────────────────────────────────────
-
-    fn last_input_at(&self) -> Option<std::time::Instant> {
-        self.vim.last_input_at
-    }
-    fn set_last_input_at(&mut self, t: Option<std::time::Instant>) {
-        self.vim.last_input_at = t;
-    }
-    fn last_input_host_at(&self) -> Option<core::time::Duration> {
-        self.vim.last_input_host_at
-    }
-    fn set_last_input_host_at(&mut self, d: Option<core::time::Duration>) {
-        self.vim.last_input_host_at = d;
-    }
-
-    // ─── Search prompt / history ───────────────────────────────────────────
-
-    fn search_prompt_state(&self) -> Option<&SearchPrompt> {
-        self.vim.search_prompt.as_ref()
-    }
-    fn search_prompt_state_mut(&mut self) -> Option<&mut SearchPrompt> {
-        self.vim.search_prompt.as_mut()
-    }
-    fn take_search_prompt_state(&mut self) -> Option<SearchPrompt> {
-        self.vim.search_prompt.take()
-    }
-    fn set_search_prompt_state(&mut self, prompt: Option<SearchPrompt>) {
-        self.vim.search_prompt = prompt;
-    }
-    fn last_search_pattern(&self) -> Option<&str> {
-        self.vim.last_search.as_deref()
-    }
-    fn set_last_search_pattern_only(&mut self, pattern: Option<String>) {
-        self.vim.last_search = pattern;
-    }
-    fn set_last_search_forward_only(&mut self, forward: bool) {
-        self.vim.last_search_forward = forward;
-    }
-    fn search_history(&self) -> &[String] {
-        &self.vim.search_history
-    }
-    fn search_history_mut(&mut self) -> &mut Vec<String> {
-        &mut self.vim.search_history
-    }
-    fn search_history_cursor(&self) -> Option<usize> {
-        self.vim.search_history_cursor
-    }
-    fn set_search_history_cursor(&mut self, idx: Option<usize>) {
-        self.vim.search_history_cursor = idx;
     }
 
     // ─── Visual / motion / search primitives ───────────────────────────────
