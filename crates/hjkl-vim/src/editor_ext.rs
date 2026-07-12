@@ -760,6 +760,111 @@ pub trait VimEditorExt {
 
     /// Charwise counterpart of [`VimEditorExt::try_goto_mark_line`].
     fn try_goto_mark_char(&mut self, ch: char) -> MarkJump;
+
+    // ─── Vim FSM state accessors (pending chord, count, mode, macros) ──────
+    //
+    // The FSM in this crate reads and writes VimState through these. They are
+    // pure vim state, so they belong here rather than on the mode-agnostic
+    // engine core (#267).
+
+    /// Return a clone of the current pending chord state.
+    fn pending(&self) -> hjkl_engine::vim::Pending;
+
+    /// Overwrite the pending chord state.
+    fn set_pending(&mut self, p: hjkl_engine::vim::Pending);
+
+    /// Atomically take the pending chord, replacing it with `Pending::None`.
+    fn take_pending(&mut self) -> hjkl_engine::vim::Pending;
+
+    /// Return the raw digit-prefix count (`0` = no prefix typed yet).
+    fn count(&self) -> usize;
+
+    /// Overwrite the digit-prefix count directly. Clamped at
+    /// [`hjkl_engine::vim::MAX_COUNT`] (vim's documented count ceiling, `:h count`).
+    fn set_count(&mut self, c: usize);
+
+    /// Accumulate one more digit into the count prefix (mirrors `count * 10 + digit`).
+    fn accumulate_count_digit(&mut self, digit: usize);
+
+    /// Reset the count prefix to zero (no pending count).
+    fn reset_count(&mut self);
+
+    /// Consume the count and return it; resets to zero. Returns `1` when no
+    /// prefix was typed (mirrors `take_count` in vim.rs).
+    fn take_count(&mut self) -> usize;
+
+    /// Return the FSM-internal mode (Normal / Insert / Visual / …).
+    fn fsm_mode(&self) -> hjkl_engine::vim::Mode;
+
+    /// Overwrite the FSM-internal mode without side-effects. Prefer the
+    /// semantic primitives (`enter_insert_i`, `enter_visual_char`, …).
+    fn set_fsm_mode(&mut self, m: hjkl_engine::vim::Mode);
+
+    /// `true` while the `.` dot-repeat replay is running.
+    fn is_replaying(&self) -> bool;
+
+    /// Set or clear the dot-replay flag.
+    fn set_replaying(&mut self, v: bool);
+
+    /// `true` when we entered Normal from Insert via `Ctrl-o` and will return
+    /// to Insert after the next complete command.
+    fn is_one_shot_normal(&self) -> bool;
+
+    /// Set or clear the Ctrl-o one-shot-normal flag.
+    fn set_one_shot_normal(&mut self, v: bool);
+
+    /// Return the last `f`/`F`/`t`/`T` target as `(char, forward, till)`, or
+    /// `None` before any find command was executed.
+    fn last_find(&self) -> Option<(char, bool, bool)>;
+
+    /// Overwrite the stored last-find target.
+    fn set_last_find(&mut self, target: Option<(char, bool, bool)>);
+
+    /// Perform a vim-sneak style two-char digraph jump. Scans the buffer
+    /// from the current cursor for the `count`-th occurrence of `c1+c2`.
+    /// `forward=true` searches ahead; `forward=false` searches backward.
+    /// Respects `Settings::motion_sneak` — callers (hjkl-vim FSM) should
+    /// already gate on the setting; this method always executes the sneak.
+    fn sneak(&mut self, c1: char, c2: char, forward: bool, count: usize);
+
+    /// Apply an operator over a sneak digraph range. Charwise exclusive —
+    /// deletes from cursor up to (not including) the first char of the match.
+    fn apply_op_sneak(
+        &mut self,
+        op: hjkl_engine::vim::Operator,
+        c1: char,
+        c2: char,
+        forward: bool,
+        total_count: usize,
+    );
+
+    /// Return the last sneak digraph and direction stored after a sneak motion.
+    /// `Some(((c1, c2), forward))` when a sneak has been performed this session;
+    /// `None` before any sneak. Used by `;`/`,` repeat and tests.
+    fn last_sneak(&self) -> Option<((char, char), bool)>;
+
+    /// Return a clone of the last recorded mutating change, or `None` before
+    /// any change has been made.
+    fn last_change(&self) -> Option<hjkl_engine::vim::LastChange>;
+
+    /// Overwrite the stored last-change record.
+    fn set_last_change(&mut self, lc: Option<hjkl_engine::vim::LastChange>);
+
+    /// Borrow the last-change record mutably (e.g. to fill in an `inserted`
+    /// field after the insert session completes).
+    fn last_change_mut(&mut self) -> Option<&mut hjkl_engine::vim::LastChange>;
+
+    /// Borrow the active insert session, or `None` when not in Insert mode.
+    fn insert_session(&self) -> Option<&hjkl_engine::vim::InsertSession>;
+
+    /// Borrow the active insert session mutably.
+    fn insert_session_mut(&mut self) -> Option<&mut hjkl_engine::vim::InsertSession>;
+
+    /// Atomically take the insert session out, leaving `None`.
+    fn take_insert_session(&mut self) -> Option<hjkl_engine::vim::InsertSession>;
+
+    /// Install a new insert session, replacing any existing one.
+    fn set_insert_session(&mut self, s: Option<hjkl_engine::vim::InsertSession>);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -1626,5 +1731,135 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn try_goto_mark_char(&mut self, ch: char) -> MarkJump {
         hjkl_engine::vim::try_goto_mark(self, ch, false)
+    }
+
+    // ─── Vim FSM state accessors ───────────────────────────────────────────
+
+    fn pending(&self) -> hjkl_engine::vim::Pending {
+        self.vim.pending.clone()
+    }
+
+    fn set_pending(&mut self, p: hjkl_engine::vim::Pending) {
+        self.vim.pending = p;
+    }
+
+    fn take_pending(&mut self) -> hjkl_engine::vim::Pending {
+        std::mem::take(&mut self.vim.pending)
+    }
+
+    fn count(&self) -> usize {
+        self.vim.count
+    }
+
+    fn set_count(&mut self, c: usize) {
+        self.vim.count = c.min(hjkl_engine::vim::MAX_COUNT);
+    }
+
+    fn accumulate_count_digit(&mut self, digit: usize) {
+        // Saturate the add too: once the multiply has saturated at
+        // `usize::MAX`, a plain `+ digit` overflows (panic in debug builds)
+        // after ~20 typed digits. Then clamp at vim's documented count
+        // ceiling (`:h count`) so no apply loop can iterate more than
+        // 999,999,999 times regardless of how many digits were typed.
+        self.vim.count = self
+            .vim
+            .count
+            .saturating_mul(10)
+            .saturating_add(digit)
+            .min(hjkl_engine::vim::MAX_COUNT);
+    }
+
+    fn reset_count(&mut self) {
+        self.vim.count = 0;
+    }
+
+    fn take_count(&mut self) -> usize {
+        if self.vim.count > 0 {
+            let n = self.vim.count;
+            self.vim.count = 0;
+            n
+        } else {
+            1
+        }
+    }
+
+    fn fsm_mode(&self) -> hjkl_engine::vim::Mode {
+        self.vim.mode
+    }
+
+    fn set_fsm_mode(&mut self, m: hjkl_engine::vim::Mode) {
+        self.vim.mode = m;
+        self.vim.current_mode = self.vim.public_mode();
+    }
+
+    fn is_replaying(&self) -> bool {
+        self.vim.replaying
+    }
+
+    fn set_replaying(&mut self, v: bool) {
+        self.vim.replaying = v;
+    }
+
+    fn is_one_shot_normal(&self) -> bool {
+        self.vim.one_shot_normal
+    }
+
+    fn set_one_shot_normal(&mut self, v: bool) {
+        self.vim.one_shot_normal = v;
+    }
+
+    fn last_find(&self) -> Option<(char, bool, bool)> {
+        self.vim.last_find
+    }
+
+    fn set_last_find(&mut self, target: Option<(char, bool, bool)>) {
+        self.vim.last_find = target;
+    }
+
+    fn sneak(&mut self, c1: char, c2: char, forward: bool, count: usize) {
+        hjkl_engine::vim::apply_sneak(self, c1, c2, forward, count.max(1));
+    }
+
+    fn apply_op_sneak(
+        &mut self,
+        op: hjkl_engine::vim::Operator,
+        c1: char,
+        c2: char,
+        forward: bool,
+        total_count: usize,
+    ) {
+        hjkl_engine::vim::apply_op_sneak(self, op, c1, c2, forward, total_count);
+    }
+
+    fn last_sneak(&self) -> Option<((char, char), bool)> {
+        self.vim.last_sneak
+    }
+
+    fn last_change(&self) -> Option<hjkl_engine::vim::LastChange> {
+        self.vim.last_change.clone()
+    }
+
+    fn set_last_change(&mut self, lc: Option<hjkl_engine::vim::LastChange>) {
+        self.vim.last_change = lc;
+    }
+
+    fn last_change_mut(&mut self) -> Option<&mut hjkl_engine::vim::LastChange> {
+        self.vim.last_change.as_mut()
+    }
+
+    fn insert_session(&self) -> Option<&hjkl_engine::vim::InsertSession> {
+        self.vim.insert_session.as_ref()
+    }
+
+    fn insert_session_mut(&mut self) -> Option<&mut hjkl_engine::vim::InsertSession> {
+        self.vim.insert_session.as_mut()
+    }
+
+    fn take_insert_session(&mut self) -> Option<hjkl_engine::vim::InsertSession> {
+        self.vim.insert_session.take()
+    }
+
+    fn set_insert_session(&mut self, s: Option<hjkl_engine::vim::InsertSession>) {
+        self.vim.insert_session = s;
     }
 }

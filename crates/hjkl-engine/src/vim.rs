@@ -4598,7 +4598,8 @@ pub fn apply_find_char<H: crate::types::Host>(
 /// When a match is found the cursor jumps to the first char of the digraph.
 /// `last_sneak` and `last_horizontal_motion` are updated so `;`/`,` repeat.
 /// No-op (cursor unchanged) when no match exists.
-pub(crate) fn apply_sneak<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_sneak<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     c1: char,
     c2: char,
@@ -4704,7 +4705,8 @@ fn sneak_scan_backward<H: crate::types::Host>(
 ///
 /// Example: buffer `"foo ab bar\n"`, cursor col 0, `dsab` → deletes `"foo "`
 /// leaving `"ab bar\n"`.
-pub(crate) fn apply_op_sneak<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_op_sneak<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     c1: char,
@@ -9474,7 +9476,7 @@ mod sneak_tests {
     fn sneak_forward_jumps_to_two_char_digraph() {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 0);
-        ed.sneak('b', 'a', true, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', true, 1);
         assert_eq!(ed.cursor(), (0, 4), "cursor should land on 'ba' in 'bar'");
     }
 
@@ -9483,7 +9485,7 @@ mod sneak_tests {
     fn sneak_backward_jumps_to_prior_match() {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 12);
-        ed.sneak('b', 'a', false, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', false, 1);
         assert_eq!(
             ed.cursor(),
             (0, 8),
@@ -9497,7 +9499,7 @@ mod sneak_tests {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 0);
         // First sneak: lands at [0,4]
-        ed.sneak('b', 'a', true, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', true, 1);
         assert_eq!(ed.cursor(), (0, 4));
         // Repeat via execute_motion FindRepeat (which routes through sneak if last was sneak)
         execute_motion(&mut ed, Motion::FindRepeat { reverse: false }, 1);
@@ -9509,7 +9511,7 @@ mod sneak_tests {
     fn sneak_repeat_comma_prev_match() {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 0);
-        ed.sneak('b', 'a', true, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', true, 1);
         assert_eq!(ed.cursor(), (0, 4));
         // Reverse repeat — no "ba" before col 4, so cursor must not move.
         let pre = ed.cursor();
@@ -9526,7 +9528,7 @@ mod sneak_tests {
     fn sneak_s_searches_backward() {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 12);
-        ed.sneak('b', 'a', false, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', false, 1);
         assert_eq!(ed.cursor(), (0, 8));
     }
 
@@ -9535,7 +9537,7 @@ mod sneak_tests {
     fn sneak_with_count_jumps_to_nth() {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 0);
-        ed.sneak('b', 'a', true, 2);
+        super::apply_sneak(&mut ed, 'b', 'a', true, 2);
         assert_eq!(ed.cursor(), (0, 8), "count=2 should jump to 2nd 'ba'");
     }
 
@@ -9545,7 +9547,7 @@ mod sneak_tests {
         let mut ed = make_editor("foo bar baz qux\n");
         ed.jump_cursor(0, 0);
         let pre = ed.cursor();
-        ed.sneak('x', 'x', true, 1);
+        super::apply_sneak(&mut ed, 'x', 'x', true, 1);
         assert_eq!(ed.cursor(), pre, "no match should leave cursor unchanged");
     }
 
@@ -9554,7 +9556,7 @@ mod sneak_tests {
     fn operator_pending_dsab_deletes_to_digraph() {
         let mut ed = make_editor("hello ab world\n");
         ed.jump_cursor(0, 0);
-        ed.apply_op_sneak(Operator::Delete, 'a', 'b', true, 1);
+        super::apply_op_sneak(&mut ed, Operator::Delete, 'a', 'b', true, 1);
         // Buffer content after exclusive delete from [0,0] to [0,6] (start of "ab").
         let content = ed.content();
         assert!(
@@ -9568,7 +9570,7 @@ mod sneak_tests {
     fn sneak_cross_line_match() {
         let mut ed = make_editor("foo\nbar baz\n");
         ed.jump_cursor(0, 0);
-        ed.sneak('b', 'a', true, 1);
+        super::apply_sneak(&mut ed, 'b', 'a', true, 1);
         assert_eq!(ed.cursor(), (1, 0), "sneak should cross line boundary");
     }
 
@@ -9577,8 +9579,8 @@ mod sneak_tests {
     fn sneak_updates_last_sneak_state() {
         let mut ed = make_editor("foo bar baz\n");
         ed.jump_cursor(0, 0);
-        ed.sneak('b', 'a', true, 1);
-        let ls = ed.last_sneak();
+        super::apply_sneak(&mut ed, 'b', 'a', true, 1);
+        let ls = ed.vim.last_sneak;
         assert_eq!(
             ls,
             Some((('b', 'a'), true)),
