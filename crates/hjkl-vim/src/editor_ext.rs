@@ -464,6 +464,9 @@ pub trait VimEditorExt {
     // returns correct values regardless of which path performed the
     // transition.
 
+    /// The current vim mode (Normal / Insert / Visual / VisualLine / VisualBlock).
+    fn vim_mode(&self) -> VimMode;
+
     /// `v` from Normal — enter charwise Visual mode, anchoring the selection
     /// at the current cursor position.
     fn enter_visual_char(&mut self);
@@ -1430,6 +1433,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     // ─── Mode transitions ──────────────────────────────────────────────────
+
+    fn vim_mode(&self) -> VimMode {
+        self.vim.current_mode
+    }
 
     fn enter_visual_char(&mut self) {
         hjkl_engine::vim::enter_visual_char_bridge(self);

@@ -12,6 +12,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_engine::{Editor, VimMode};
+use hjkl_vim::VimEditorExt;
 use proptest::prelude::*;
 
 fn keycode_strategy() -> impl Strategy<Value = KeyCode> {

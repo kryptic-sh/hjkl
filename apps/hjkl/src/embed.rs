@@ -12,6 +12,7 @@ use hjkl_buffer::Buffer;
 use hjkl_editor::buffer::Position;
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options, VimMode};
 use hjkl_ex::ExEffect;
+use hjkl_vim::VimEditorExt;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------

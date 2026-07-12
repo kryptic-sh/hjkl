@@ -40,6 +40,7 @@ use hjkl_app::{config, editorconfig};
 use hjkl_buffer::Buffer;
 use hjkl_editor::runtime::{DefaultHost, Editor, Options};
 use hjkl_editor_gui::{EditorHandle, editor_view, floem_key_to_input};
+use hjkl_vim::VimEditorExt;
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
