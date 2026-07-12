@@ -16,6 +16,7 @@
 use crate::keymap_actions::AppAction;
 
 use super::App;
+use hjkl_vim::VimEditorExt;
 
 impl App {
     /// Dispatch a pending-state-initiating [`AppAction`].
