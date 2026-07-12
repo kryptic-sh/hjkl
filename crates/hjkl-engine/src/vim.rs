@@ -243,16 +243,12 @@ pub struct VimState {
     /// immediately before that position, the engine advances past it
     /// ("skip-over") instead of inserting. The stack is cleared on any
     /// cursor motion, mode change, or out-of-pair edit.
-    pub pending_closes: Vec<(usize, usize, char)>,
     /// Last sneak digraph and direction: `Some(((c1, c2), forward))`.
     /// Used by `;` / `,` sneak-repeat when `last_horizontal_motion == Sneak`.
     pub last_sneak: Option<((char, char), bool)>,
     /// Tracks which kind of horizontal motion was last performed, so `;` / `,`
     /// can dispatch to sneak-repeat vs. find-char-repeat as appropriate.
     pub last_horizontal_motion: LastHorizontalMotion,
-    /// Insert-mode (and cmdline-mode) abbreviations. Populated by `:abbreviate`,
-    /// `:iabbrev`, `:cabbrev`, `:noreabbrev`, etc. Empty by default.
-    pub abbrevs: Vec<Abbrev>,
 }
 
 impl VimState {
@@ -1592,7 +1588,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     // the lhs and insert the rhs, then continue to insert `ch` as normal.
     // `<C-v>` (literal-insert) must bypass this — callers that want literal
     // insertion should NOT call this bridge; they use insert_char_literal.
-    if !in_replace && !ed.vim.abbrevs.is_empty() {
+    if !in_replace && !ed.abbrevs.is_empty() {
         let iskeyword = ed.settings.iskeyword.clone();
         if !is_keyword_char(ch, &iskeyword) {
             // Only non-keyword trigger chars fire abbreviation expansion.
@@ -1619,15 +1615,15 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     // close char shifts right as the user types inside, but the buffer
     // char check always finds it correctly.
     if !in_replace
-        && !ed.vim.pending_closes.is_empty()
-        && let Some(&(pr, _pc, pch)) = ed.vim.pending_closes.last()
+        && !ed.pending_closes.is_empty()
+        && let Some(&(pr, _pc, pch)) = ed.pending_closes.last()
         && ch == pch
         && cursor.row == pr
     {
         let char_at_cursor =
             buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col));
         if char_at_cursor == Some(ch) {
-            ed.vim.pending_closes.pop();
+            ed.pending_closes.pop();
             // For `>` skip-over in HTML/XML: also run tag autoclose.
             let filetype = ed.settings.filetype.clone();
             let autoclose_tag = ed.settings.autoclose_tag;
@@ -1666,7 +1662,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
 
     if in_replace && cursor.col < line_chars {
         // Replace mode: clear pending closes (edit outside the pair).
-        ed.vim.pending_closes.clear();
+        ed.pending_closes.clear();
         ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
@@ -1714,7 +1710,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                 // the close char; col is not tracked precisely because chars
                 // typed inside the pair shift the close right. The skip-over
                 // logic checks the actual buffer char at cursor instead.
-                ed.vim.pending_closes.push((cursor.row, between_col, close));
+                ed.pending_closes.push((cursor.row, between_col, close));
                 ed.push_buffer_cursor_to_textarea();
                 return true;
             }
@@ -1777,7 +1773,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // ── Abbreviation expansion on CR ─────────────────────────────────────────
     // CR triggers expansion for full-id / end-id / non-id abbreviations.
     // We expand BEFORE the newline is inserted; CR is then inserted as normal.
-    if !ed.vim.abbrevs.is_empty() {
+    if !ed.abbrevs.is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Cr);
     }
 
@@ -1794,7 +1790,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // Open-pair-newline: if autopair is on and the cursor is between a
     // matching open/close bracket pair, split into two newlines so the
     // close ends up on its own dedented line.
-    if ed.settings.autopair && !ed.vim.pending_closes.is_empty() {
+    if ed.settings.autopair && !ed.pending_closes.is_empty() {
         // Check: char before cursor is an open bracket AND char at cursor
         // is the matching close bracket (from our pending-closes stack).
         let prev_char = if cursor.col > 0 {
@@ -1810,7 +1806,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
         if is_open_pair {
             // The pending-closes stack refers to the close char at cursor.col.
             // We clear it because the newline expansion moves the close.
-            ed.vim.pending_closes.clear();
+            ed.pending_closes.clear();
             // Compute indents: inner gets one extra unit, close gets base.
             let base_indent: String = prev_line
                 .chars()
@@ -1850,7 +1846,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     if ed.settings.autopair
         && let Some(fence) = detect_code_fence_opener(&prev_line, cursor.col)
     {
-        ed.vim.pending_closes.clear();
+        ed.pending_closes.clear();
         let base_indent: String = prev_line
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
@@ -1872,7 +1868,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     };
 
     // Any Enter clears the pending-closes stack (cursor moved off the pair).
-    ed.vim.pending_closes.clear();
+    ed.pending_closes.clear();
 
     let text = if let Some(cont) = comment_cont {
         // Comment continuation overrides autoindent: the indent is already
@@ -2037,7 +2033,7 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
     dir: InsertDir,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.vim.pending_closes.clear();
+    ed.pending_closes.clear();
     match dir {
         InsertDir::Left => {
             crate::motions::move_left(&mut ed.buffer, 1);
@@ -2064,7 +2060,7 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.vim.pending_closes.clear();
+    ed.pending_closes.clear();
     crate::motions::move_line_start(&mut ed.buffer);
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -2076,7 +2072,7 @@ pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Bu
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.vim.pending_closes.clear();
+    ed.pending_closes.clear();
     crate::motions::move_line_end(&mut ed.buffer);
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -2262,11 +2258,11 @@ pub fn insert_paste_register_bridge<H: crate::types::Host>(
 pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
-    ed.vim.pending_closes.clear();
+    ed.pending_closes.clear();
 
     // ── Abbreviation expansion on Esc ────────────────────────────────────────
     // Esc triggers expansion for all abbreviation types.
-    if !ed.vim.abbrevs.is_empty() {
+    if !ed.abbrevs.is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Esc);
     }
 
@@ -7360,7 +7356,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
     }
 
     let iskeyword = ed.settings.iskeyword.clone();
-    let abbrevs = ed.vim.abbrevs.clone();
+    let abbrevs = ed.abbrevs.clone();
 
     let Some((lhs_len, rhs)) =
         try_abbrev_expand(&abbrevs, &line_before, mincol, trigger, &iskeyword)

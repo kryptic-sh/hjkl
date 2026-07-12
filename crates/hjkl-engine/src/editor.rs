@@ -673,6 +673,18 @@ pub struct Editor<
     /// the hjkl-ex seam, not vim FSM state.
     pub(crate) last_substitute: Option<crate::substitute::SubstituteCmd>,
 
+    // ── Autopair / abbreviations (discipline-agnostic, #265) ─────────────────
+    //
+    // Neither is a vim concept. Autopair is an editor feature gated by
+    // `Settings::autopair` (VSCode has it too), and the abbreviation table is
+    // driven by hjkl-ex's `:abbreviate` / `:iabbrev` — hjkl-ex is in fact the
+    // only caller of the add/remove/clear accessors.
+    /// Close-brackets queued by autopair, as `(row, col, ch)`. Typing the
+    /// matching close char consumes the queued one instead of inserting.
+    pub(crate) pending_closes: Vec<(usize, usize, char)>,
+    /// Active abbreviation table (insert-mode + cmdline entries).
+    pub(crate) abbrevs: Vec<crate::vim::Abbrev>,
+
     /// The `buffer_id` this editor instance is currently attached to.
     /// Updated by the host app on every `switch_to` / slot creation so
     /// global-mark writes record the correct id without requiring the app
@@ -1181,6 +1193,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             last_input_at: None,
             last_input_host_at: None,
             last_substitute: None,
+            pending_closes: Vec::new(),
+            abbrevs: Vec::new(),
             current_buffer_id: 0,
             sticky_col: None,
             host,
@@ -4449,10 +4463,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// take priority (first-match wins in `try_abbrev_expand`).
     pub fn add_abbrev(&mut self, lhs: &str, rhs: &str, insert: bool, cmdline: bool, noremap: bool) {
         // Remove existing entry with same lhs + overlapping mode flags.
-        self.vim
-            .abbrevs
+        self.abbrevs
             .retain(|a| a.lhs != lhs || (a.insert && !insert) || (a.cmdline && !cmdline));
-        self.vim.abbrevs.insert(
+        self.abbrevs.insert(
             0,
             vim::Abbrev {
                 lhs: lhs.to_string(),
@@ -4467,8 +4480,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Remove the abbreviation with the given `lhs`. Only removes entries
     /// whose mode flags overlap with the requested `insert`/`cmdline` flags.
     pub fn remove_abbrev(&mut self, lhs: &str, insert: bool, cmdline: bool) {
-        self.vim
-            .abbrevs
+        self.abbrevs
             .retain(|a| a.lhs != lhs || (!insert || !a.insert) && (!cmdline || !a.cmdline));
     }
 
@@ -4477,7 +4489,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// `insert=true` removes insert-mode abbrevs; `cmdline=true` removes
     /// cmdline-mode abbrevs. Both `true` clears everything.
     pub fn clear_abbrevs(&mut self, insert: bool, cmdline: bool) {
-        self.vim.abbrevs.retain(|a| {
+        self.abbrevs.retain(|a| {
             // Keep entries that do NOT match any of the cleared modes.
             let cleared = (insert && a.insert) || (cmdline && a.cmdline);
             !cleared
