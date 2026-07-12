@@ -147,3 +147,43 @@ fn range_exclusive_empty_returns_none() {
     let r = ed.visual_char_range_exclusive();
     assert_eq!(r, None);
 }
+
+// ── buffer_selection (render path) ────────────────────────────────────────
+
+#[test]
+fn buffer_selection_exclusive_drops_head_cell() {
+    use hjkl_buffer::{Position, Selection};
+    // "hello", caret at col 5, select left to col 3 → exclusive chars [3,5).
+    // The renderer paints row_span inclusively, so buffer_selection must
+    // return head = col 4 (one back) so cols 3..=4 = "lo" highlight.
+    let mut ed = make_ed_exclusive("hello");
+    ed.exit_visual_to_normal();
+    ed.set_cursor_doc(0, 5);
+    ed.enter_visual_char();
+    ed.set_cursor_doc(0, 3);
+    match ed.buffer_selection() {
+        Some(Selection::Char { anchor, head }) => {
+            assert_eq!(anchor, Position::new(0, 3));
+            assert_eq!(head, Position::new(0, 4), "head cell must be dropped");
+        }
+        other => panic!("expected exclusive Char selection, got {other:?}"),
+    }
+}
+
+#[test]
+fn buffer_selection_inclusive_keeps_head_cell() {
+    use hjkl_buffer::{Position, Selection};
+    // Vim default: head stays at the cursor cell (inclusive).
+    let mut ed = make_ed("hello");
+    ed.exit_visual_to_normal();
+    ed.set_cursor_doc(0, 5);
+    ed.enter_visual_char();
+    ed.set_cursor_doc(0, 3);
+    match ed.buffer_selection() {
+        Some(Selection::Char { anchor, head }) => {
+            assert_eq!(anchor, Position::new(0, 5));
+            assert_eq!(head, Position::new(0, 3));
+        }
+        other => panic!("expected Char selection, got {other:?}"),
+    }
+}

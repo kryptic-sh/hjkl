@@ -19,6 +19,11 @@ ratatui = "0.30"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 
 [dev-dependencies]
+# Test-only: the vim visual-selection accessors these tests assert on now live
+# on `hjkl_vim::VimEditorExt` (#267). This crate stays vim-agnostic at build
+# time — the dep is dev-only and no cycle exists (hjkl-vim does not depend on
+# hjkl-engine-tui).
+hjkl-vim.workspace = true
 regex = "1"
 ropey = "1.6"
 

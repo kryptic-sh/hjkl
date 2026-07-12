@@ -2528,6 +2528,7 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
+ "hjkl-vim",
  "ratatui",
  "regex",
  "ropey",

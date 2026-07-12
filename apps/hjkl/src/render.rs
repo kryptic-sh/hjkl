@@ -12,6 +12,7 @@ use hjkl_statusline::{
     dirty_segment, filename_segment, loading_segment, mode_segment, pending_segment,
     search_count_segment, truncate_filename,
 };
+use hjkl_vim::VimEditorExt;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

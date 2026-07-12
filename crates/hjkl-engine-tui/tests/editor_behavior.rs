@@ -18,6 +18,7 @@ use hjkl_engine::{
     Editor, VimMode,
     types::{Attrs, Color, DefaultHost, HighlightKind, Host, SnapshotMode, Style, Viewport},
 };
+use hjkl_vim::VimEditorExt;
 
 #[allow(dead_code)]
 fn key(code: KeyCode) -> KeyEvent {

@@ -2368,92 +2368,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.last_substitute = Some(cmd);
     }
 
-    /// Top/bottom rows of the active VisualLine selection (inclusive).
-    /// `None` when we're not in VisualLine mode.
-    pub fn line_highlight(&self) -> Option<(usize, usize)> {
-        if self.vim_mode() != VimMode::VisualLine {
-            return None;
-        }
-        let anchor = self.vim.visual_line_anchor;
-        let cursor = buf_cursor_row(&self.buffer);
-        Some((anchor.min(cursor), anchor.max(cursor)))
-    }
-
-    /// Active selection in `hjkl_buffer::Selection` shape. `None` when
-    /// not in a Visual mode. Phase 7d-i wiring — the host hands this
-    /// straight to `BufferView` once render flips off textarea
-    /// (Phase 7d-ii drops the `paint_*_overlay` calls on the same
-    /// switch).
-    /// Move a position back by one character, wrapping to the end of the
-    /// previous line when at column 0. Clamps at the buffer start `(0, 0)`.
-    /// Used to render exclusive (VSCode) char selections via the inclusive
-    /// buffer-tui paint path.
-    fn dec_pos_one_char(&self, p: hjkl_buffer::Position) -> hjkl_buffer::Position {
-        use hjkl_buffer::Position;
-        if p.col > 0 {
-            return Position::new(p.row, p.col - 1);
-        }
-        if p.row > 0 {
-            let prev = p.row - 1;
-            let rope = crate::types::Query::rope(&self.buffer);
-            let len = hjkl_buffer::rope_line_str(&rope, prev).chars().count();
-            return Position::new(prev, len);
-        }
-        Position::new(0, 0)
-    }
-
-    pub fn buffer_selection(&self) -> Option<hjkl_buffer::Selection> {
-        use hjkl_buffer::{Position, Selection};
-        match self.vim_mode() {
-            VimMode::Visual => {
-                let (ar, ac) = self.vim.visual_anchor;
-                let head = buf_cursor_pos(&self.buffer);
-                if self.settings.selection_exclusive {
-                    // Exclusive (VSCode bar-caret): render the half-open char set
-                    // [start, end) so the cell under the caret is NOT highlighted.
-                    // The buffer-tui renderer paints `row_span` inclusively, so
-                    // drop one char off the max end. Empty selection → no
-                    // highlight (caller is effectively in Insert).
-                    let anchor_pos = Position::new(ar, ac);
-                    if anchor_pos == head {
-                        return None;
-                    }
-                    let (start, end) = if (ar, ac) <= (head.row, head.col) {
-                        (anchor_pos, head)
-                    } else {
-                        (head, anchor_pos)
-                    };
-                    return Some(Selection::Char {
-                        anchor: start,
-                        head: self.dec_pos_one_char(end),
-                    });
-                }
-                Some(Selection::Char {
-                    anchor: Position::new(ar, ac),
-                    head,
-                })
-            }
-            VimMode::VisualLine => {
-                let anchor_row = self.vim.visual_line_anchor;
-                let head_row = buf_cursor_row(&self.buffer);
-                Some(Selection::Line {
-                    anchor_row,
-                    head_row,
-                })
-            }
-            VimMode::VisualBlock => {
-                let (ar, ac) = self.vim.block_anchor;
-                let cr = buf_cursor_row(&self.buffer);
-                let cc = self.vim.block_vcol;
-                Some(Selection::Block {
-                    anchor: Position::new(ar, ac),
-                    head: Position::new(cr, cc),
-                })
-            }
-            _ => None,
-        }
-    }
-
     /// Force back to normal mode (used when dismissing completions etc.)
     pub fn force_normal(&mut self) {
         self.vim.force_normal();
@@ -2466,6 +2380,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// dispatcher computing buffer-end positions).
     pub fn row_count(&self) -> usize {
         buf_row_count(&self.buffer)
+    }
+
+    /// Row `row` as an owned `String` (no trailing newline), or `None` when
+    /// `row` is out of bounds.
+    ///
+    /// Mode-agnostic buffer read. Hosts and discipline crates (e.g. the vim
+    /// accessors on `hjkl_vim::VimEditorExt`) use this instead of reaching for
+    /// the engine's private `buf_line` helper.
+    pub fn line(&self, row: usize) -> Option<String> {
+        buf_line(&self.buffer, row)
     }
 
     pub fn content(&self) -> String {
@@ -2643,62 +2567,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.trim_trailing_whitespace = opts.trim_trailing_whitespace;
         self.settings.rainbow_brackets = opts.rainbow_brackets;
         self.settings.matchparen = opts.matchparen;
-    }
-
-    /// Active visual selection as a SPEC [`crate::types::Highlight`]
-    /// with [`crate::types::HighlightKind::Selection`].
-    ///
-    /// Returns `None` when the editor isn't in a Visual mode.
-    /// Visual-line and visual-block selections collapse to the
-    /// bounding char range of the selection — the SPEC `Selection`
-    /// kind doesn't carry sub-line info today; hosts that need full
-    /// line / block geometry continue to read [`buffer_selection`]
-    /// (the legacy [`hjkl_buffer::Selection`] shape).
-    pub fn selection_highlight(&self) -> Option<crate::types::Highlight> {
-        use crate::types::{Highlight, HighlightKind, Pos};
-        let sel = self.buffer_selection()?;
-        let (start, end) = match sel {
-            hjkl_buffer::Selection::Char { anchor, head } => {
-                let a = (anchor.row, anchor.col);
-                let h = (head.row, head.col);
-                if a <= h { (a, h) } else { (h, a) }
-            }
-            hjkl_buffer::Selection::Line {
-                anchor_row,
-                head_row,
-            } => {
-                let (top, bot) = if anchor_row <= head_row {
-                    (anchor_row, head_row)
-                } else {
-                    (head_row, anchor_row)
-                };
-                let last_col = buf_line(&self.buffer, bot).map(|l| l.len()).unwrap_or(0);
-                ((top, 0), (bot, last_col))
-            }
-            hjkl_buffer::Selection::Block { anchor, head } => {
-                let (top, bot) = if anchor.row <= head.row {
-                    (anchor.row, head.row)
-                } else {
-                    (head.row, anchor.row)
-                };
-                let (left, right) = if anchor.col <= head.col {
-                    (anchor.col, head.col)
-                } else {
-                    (head.col, anchor.col)
-                };
-                ((top, left), (bot, right))
-            }
-        };
-        Some(Highlight {
-            range: Pos {
-                line: start.0 as u32,
-                col: start.1 as u32,
-            }..Pos {
-                line: end.0 as u32,
-                col: end.1 as u32,
-            },
-            kind: HighlightKind::Selection,
-        })
     }
 
     /// SPEC-typed highlights for `line`.
@@ -6970,71 +6838,6 @@ mod scroll_anim_tests {
             !ed.take_scroll_anim_hint(),
             "hint must NOT be set for C-e/C-y"
         );
-    }
-}
-
-// ── char_highlight exclusive-mode unit tests ──────────────────────────────────
-
-#[cfg(test)]
-mod char_highlight_exclusive_tests {
-    use super::*;
-    use crate::types::{DefaultHost, Options};
-    use hjkl_buffer::Buffer;
-
-    /// Helper: create an editor in Insert mode with `content`.
-    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
-        let mut ed = Editor::new(buf, DefaultHost::default(), Options::default());
-        ed.enter_insert_i(1);
-        ed
-    }
-
-    /// Helper: create an editor with `selection_exclusive = true` in Insert
-    /// mode.
-    fn make_ed_exclusive(content: &str) -> Editor<Buffer, DefaultHost> {
-        let mut ed = make_ed(content);
-        ed.settings_mut().selection_exclusive = true;
-        ed
-    }
-
-    // ── buffer_selection (render path) ────────────────────────────────────────
-
-    #[test]
-    fn buffer_selection_exclusive_drops_head_cell() {
-        use hjkl_buffer::{Position, Selection};
-        // "hello", caret at col 5, select left to col 3 → exclusive chars [3,5).
-        // The renderer paints row_span inclusively, so buffer_selection must
-        // return head = col 4 (one back) so cols 3..=4 = "lo" highlight.
-        let mut ed = make_ed_exclusive("hello");
-        ed.exit_visual_to_normal();
-        ed.set_cursor_doc(0, 5);
-        ed.enter_visual_char();
-        ed.set_cursor_doc(0, 3);
-        match ed.buffer_selection() {
-            Some(Selection::Char { anchor, head }) => {
-                assert_eq!(anchor, Position::new(0, 3));
-                assert_eq!(head, Position::new(0, 4), "head cell must be dropped");
-            }
-            other => panic!("expected exclusive Char selection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn buffer_selection_inclusive_keeps_head_cell() {
-        use hjkl_buffer::{Position, Selection};
-        // Vim default: head stays at the cursor cell (inclusive).
-        let mut ed = make_ed("hello");
-        ed.exit_visual_to_normal();
-        ed.set_cursor_doc(0, 5);
-        ed.enter_visual_char();
-        ed.set_cursor_doc(0, 3);
-        match ed.buffer_selection() {
-            Some(Selection::Char { anchor, head }) => {
-                assert_eq!(anchor, Position::new(0, 5));
-                assert_eq!(head, Position::new(0, 3));
-            }
-            other => panic!("expected Char selection, got {other:?}"),
-        }
     }
 }
 
