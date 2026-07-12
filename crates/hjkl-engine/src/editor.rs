@@ -3413,17 +3413,80 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         (Query::rope(&self.buffer), rc)
     }
 
+    // ── Undo / redo (discipline-agnostic, #265) ──────────────────────────────
+    //
+    // The rope-level work is generic — every discipline undoes. The only
+    // discipline-specific part is what state the editor is left in afterwards,
+    // which goes through `DisciplineState::reset_to_idle` plus a coarse cursor
+    // clamp, so the engine never names vim.
+
+    /// Rope-level undo, then return the discipline to idle.
+    fn undo_core(&mut self) {
+        if let Some(entry) = self.buffer.pop_undo_entry() {
+            let (cur_rope, cur_cursor) = self.snapshot();
+            self.buffer.push_redo_entry(hjkl_buffer::UndoEntry {
+                rope: cur_rope,
+                cursor: cur_cursor,
+                timestamp: entry.timestamp,
+            });
+            self.restore_rope(entry.rope, entry.cursor);
+        }
+        self.settle_after_history_jump();
+    }
+
+    /// Rope-level redo, then return the discipline to idle.
+    fn redo_core(&mut self) {
+        if let Some(entry) = self.buffer.pop_redo_entry() {
+            let (cur_rope, cur_cursor) = self.snapshot();
+            let before = cur_rope.clone();
+            self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
+                rope: cur_rope,
+                cursor: cur_cursor,
+                timestamp: entry.timestamp,
+            });
+            self.cap_undo();
+            self.restore_rope(entry.rope, entry.cursor);
+            // Park the cursor at the START of the reapplied change rather than
+            // the end-of-insert position stored in the redo snapshot (vim
+            // parity). Recompute from the first differing character.
+            let after = crate::types::Query::rope(&self.buffer);
+            if let Some((row, col)) = first_diff_pos(&before, &after) {
+                buf_set_cursor_rc(&mut self.buffer, row, col);
+                self.push_buffer_cursor_to_textarea();
+            }
+        }
+        self.settle_after_history_jump();
+    }
+
+    /// Leave the editor in a known resting state after jumping through history
+    /// (undo / redo) or after a `:!` filter rewrote the buffer.
+    ///
+    /// Asks the installed discipline to put its *mode* back to idle — without
+    /// discarding an open insert session, which vscode-mode undo depends on —
+    /// then clamps the cursor to a valid column.
+    pub(crate) fn settle_after_history_jump(&mut self) {
+        crate::DisciplineState::reset_mode_after_history(&mut self.vim);
+        // Unconditional clamp: the restored cursor came from a snapshot that may
+        // have been taken mid-insert and can sit one past the last valid column.
+        let (row, col) = self.cursor();
+        let max_col = buf_line_chars(&self.buffer, row).saturating_sub(1);
+        if col > max_col {
+            buf_set_cursor_rc(&mut self.buffer, row, max_col);
+            self.push_buffer_cursor_to_textarea();
+        }
+    }
+
     /// Walk one step back through the undo history. Equivalent to the
     /// user pressing `u` in normal mode. Drains the most recent undo
     /// entry and pushes it onto the redo stack.
     pub fn undo(&mut self) {
-        crate::vim::do_undo(self);
+        self.undo_core();
     }
 
     /// Walk one step forward through the redo history. Equivalent to
     /// `<C-r>` in normal mode.
     pub fn redo(&mut self) {
-        crate::vim::do_redo(self);
+        self.redo_core();
     }
 
     /// Undo `n` steps. Returns the number of steps actually applied
@@ -3434,7 +3497,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             if self.buffer.undo_stack_is_empty() {
                 break;
             }
-            crate::vim::do_undo(self);
+            self.undo_core();
             count += 1;
         }
         count
@@ -3448,7 +3511,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             if self.buffer.redo_stack_is_empty() {
                 break;
             }
-            crate::vim::do_redo(self);
+            self.redo_core();
             count += 1;
         }
         count
@@ -3470,7 +3533,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                     }
                 }
             }
-            crate::vim::do_undo(self);
+            self.undo_core();
             count += 1;
         }
         count
@@ -3491,7 +3554,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                     }
                 }
             }
-            crate::vim::do_redo(self);
+            self.redo_core();
             count += 1;
         }
         count
@@ -3787,14 +3850,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
         self.push_undo();
         self.restore(all_lines, (top, 0));
-        // Leave mode as Normal after a successful filter operation (vim parity).
-        //
-        // FLIP BLOCKER (#267): this is engine core reaching into the discipline
-        // to reset its mode. At the field flip it must become a
-        // `DisciplineState::reset_to_normal()` hook, so the engine asks whatever
-        // discipline is installed to return to its idle state rather than naming
-        // vim. In-crate call for now.
-        crate::vim::force_normal_bridge(self);
+        // Leave the editor idle after a successful filter (vim parity: Normal).
+        // Goes through the discipline hook, so the engine does not name vim.
+        crate::DisciplineState::reset_to_idle(&mut self.vim);
 
         Ok(())
     }
@@ -4111,6 +4169,33 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn line_char_count(&self, row: usize) -> usize {
         buf_line_chars(&self.buffer, row)
     }
+}
+
+/// First `(row, col)` where two ropes differ, or `None` if identical. Used to
+/// place the cursor at the start of a redone change (vim parity).
+fn first_diff_pos(a: &ropey::Rope, b: &ropey::Rope) -> Option<(usize, usize)> {
+    let rows = a.len_lines().max(b.len_lines());
+    for r in 0..rows {
+        let la = if r < a.len_lines() {
+            hjkl_buffer::rope_line_str(a, r)
+        } else {
+            String::new()
+        };
+        let lb = if r < b.len_lines() {
+            hjkl_buffer::rope_line_str(b, r)
+        } else {
+            String::new()
+        };
+        if la != lb {
+            let col = la
+                .chars()
+                .zip(lb.chars())
+                .take_while(|(x, y)| x == y)
+                .count();
+            return Some((r, col));
+        }
+    }
+    None
 }
 
 /// Visual column of the character at `char_col` in `line`, treating `\t`

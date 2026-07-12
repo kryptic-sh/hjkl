@@ -29,6 +29,27 @@ pub trait DisciplineState: std::any::Any + std::fmt::Debug {
 
     /// Mutable upcast — see [`DisciplineState::as_any`].
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// Return the discipline to its idle / command-ready state, discarding any
+    /// in-flight input (pending chords, counts, insert sessions).
+    ///
+    /// The engine calls this when an operation must leave the editor in a known
+    /// resting state regardless of which discipline is installed — after undo /
+    /// redo, and after a `:!` filter rewrites the buffer. Without this hook the
+    /// engine core would have to name vim to reset vim (#267).
+    ///
+    /// For vim this is Normal mode; a non-modal discipline may treat it as a
+    /// no-op.
+    fn reset_to_idle(&mut self);
+
+    /// Put the discipline's *mode* back to idle after undo / redo rewound the
+    /// buffer, WITHOUT discarding in-flight session state.
+    ///
+    /// Deliberately weaker than [`DisciplineState::reset_to_idle`]: undo must
+    /// not clear an open insert session, because non-modal disciplines (vscode)
+    /// live inside one permanently and rely on it for undo granularity. Getting
+    /// this wrong silently breaks vscode-mode undo while leaving vim green.
+    fn reset_mode_after_history(&mut self);
 }
 
 /// Default discipline for an [`Editor`] that has not had a real discipline
@@ -44,6 +65,10 @@ impl DisciplineState for NoDiscipline {
     fn coarse_mode(&self) -> CoarseMode {
         CoarseMode::Normal
     }
+    /// No FSM state to discard.
+    fn reset_to_idle(&mut self) {}
+    /// No FSM mode to reset.
+    fn reset_mode_after_history(&mut self) {}
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

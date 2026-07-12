@@ -388,6 +388,16 @@ impl crate::DisciplineState for VimState {
     fn coarse_mode(&self) -> crate::CoarseMode {
         VimState::coarse_mode(self)
     }
+    /// Vim's idle state is Normal mode with no pending chord, count or insert
+    /// session — exactly what `force_normal` establishes.
+    fn reset_to_idle(&mut self) {
+        self.force_normal();
+    }
+    /// Only the FSM mode — `current_mode`, `pending`, `count` and any open
+    /// insert session are deliberately left alone (see the trait docs).
+    fn reset_mode_after_history(&mut self) {
+        self.mode = Mode::Normal;
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -2777,14 +2787,6 @@ pub fn word_search_bridge<H: crate::types::Host>(
 }
 
 // ── Undo / redo confirmation wrappers (already public on Editor) ───────────
-
-/// `u` bridge — identical to `do_undo`; retained for Phase 6.6b audit.
-/// The FSM now calls `ed.undo()` directly (Phase 6.6a).
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn do_undo_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    do_undo(ed);
-}
 
 // ─── Phase 6.3: visual-mode primitive bridges ──────────────────────────────
 //
@@ -8867,74 +8869,6 @@ pub fn adjust_number_visual<H: crate::types::Host>(
     ed.push_buffer_cursor_to_textarea();
     ed.vim.mode = Mode::Normal;
     ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
-}
-
-pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some(entry) = ed.buffer.pop_undo_entry() {
-        let (cur_rope, cur_cursor) = ed.snapshot();
-        ed.buffer.push_redo_entry(hjkl_buffer::UndoEntry {
-            rope: cur_rope,
-            cursor: cur_cursor,
-            timestamp: entry.timestamp,
-        });
-        ed.restore_rope(entry.rope, entry.cursor);
-    }
-    ed.vim.mode = Mode::Normal;
-    // The restored cursor came from a snapshot taken in insert mode
-    // (before the insert started) and may be past the last valid
-    // normal-mode column. Clamp it now, same as Esc-from-insert does.
-    clamp_cursor_to_normal_mode(ed);
-}
-
-pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some(entry) = ed.buffer.pop_redo_entry() {
-        let (cur_rope, cur_cursor) = ed.snapshot();
-        let before = cur_rope.clone();
-        ed.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
-            rope: cur_rope,
-            cursor: cur_cursor,
-            timestamp: entry.timestamp,
-        });
-        ed.cap_undo();
-        ed.restore_rope(entry.rope, entry.cursor);
-        // vim parks the cursor at the START of the reapplied change, not the
-        // end-of-insert position stored in the redo snapshot. Recompute it from
-        // the first character that differs between the pre- and post-redo text.
-        let after = crate::types::Query::rope(&ed.buffer);
-        if let Some((row, col)) = first_diff_pos(&before, &after) {
-            buf_set_cursor_rc(&mut ed.buffer, row, col);
-            ed.push_buffer_cursor_to_textarea();
-        }
-    }
-    ed.vim.mode = Mode::Normal;
-    clamp_cursor_to_normal_mode(ed);
-}
-
-/// First `(row, col)` where two ropes differ, or `None` if identical. Used to
-/// place the cursor at the start of a redone change (vim parity).
-fn first_diff_pos(a: &ropey::Rope, b: &ropey::Rope) -> Option<(usize, usize)> {
-    let rows = a.len_lines().max(b.len_lines());
-    for r in 0..rows {
-        let la = if r < a.len_lines() {
-            hjkl_buffer::rope_line_str(a, r)
-        } else {
-            String::new()
-        };
-        let lb = if r < b.len_lines() {
-            hjkl_buffer::rope_line_str(b, r)
-        } else {
-            String::new()
-        };
-        if la != lb {
-            let col = la
-                .chars()
-                .zip(lb.chars())
-                .take_while(|(x, y)| x == y)
-                .count();
-            return Some((r, col));
-        }
-    }
-    None
 }
 
 // ─── Dot repeat ────────────────────────────────────────────────────────────
