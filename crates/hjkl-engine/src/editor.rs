@@ -685,6 +685,11 @@ pub struct Editor<
     /// Active abbreviation table (insert-mode + cmdline entries).
     pub(crate) abbrevs: Vec<crate::vim::Abbrev>,
 
+    /// Whether the unnamed register's current content is linewise. This is
+    /// register metadata, not vim FSM state — any discipline that yanks and
+    /// pastes needs it (#265).
+    pub(crate) yank_linewise: bool,
+
     /// The `buffer_id` this editor instance is currently attached to.
     /// Updated by the host app on every `switch_to` / slot creation so
     /// global-mark writes record the correct id without requiring the app
@@ -1195,6 +1200,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             last_substitute: None,
             pending_closes: Vec::new(),
             abbrevs: Vec::new(),
+            yank_linewise: false,
             current_buffer_id: 0,
             sticky_col: None,
             host,
@@ -1546,16 +1552,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// code uses [`record_yank`] / [`record_delete`].
     pub fn set_yank(&mut self, text: impl Into<String>) {
         let text = text.into();
-        let linewise = self.vim.yank_linewise;
+        let linewise = self.yank_linewise;
         self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
     }
 
     /// Record a yank into `"` and `"0`, plus the named target if the
     /// user prefixed `"reg`. Updates `vim.yank_linewise` for the
     /// paste path.
-    pub(crate) fn record_yank(&mut self, text: String, linewise: bool) {
-        self.vim.yank_linewise = linewise;
-        let target = self.vim.pending_register.take();
+    pub(crate) fn record_yank(&mut self, text: String, linewise: bool, target: Option<char>) {
+        self.yank_linewise = linewise;
         self.registers
             .lock()
             .unwrap()
@@ -1581,9 +1586,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Record a delete / change into `"` and, by size, the `"1`–`"9`
     /// ring or the `"-` small-delete register. Honours the active
     /// named-register prefix.
-    pub(crate) fn record_delete(&mut self, text: String, linewise: bool) {
-        self.vim.yank_linewise = linewise;
-        let target = self.vim.pending_register.take();
+    pub(crate) fn record_delete(&mut self, text: String, linewise: bool, target: Option<char>) {
+        self.yank_linewise = linewise;
         self.registers
             .lock()
             .unwrap()
@@ -2194,6 +2198,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.viewport_pinned = v;
     }
 
+    /// Whether the unnamed register's content is linewise.
+    pub fn yank_linewise(&self) -> bool {
+        self.yank_linewise
+    }
+
+    /// Set the linewise flag for the unnamed register.
+    pub fn set_yank_linewise(&mut self, v: bool) {
+        self.yank_linewise = v;
+    }
+
     // ── Search state (discipline-agnostic seam, #265) ────────────────────────
     //
     // Every editor has find. These live on the engine so a helix/vscode
@@ -2561,11 +2575,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Store the last successful substitute so `:&` / `:&&` can repeat it.
     pub fn set_last_substitute(&mut self, cmd: crate::substitute::SubstituteCmd) {
         self.last_substitute = Some(cmd);
-    }
-
-    /// Force back to normal mode (used when dismissing completions etc.)
-    pub fn force_normal(&mut self) {
-        self.vim.force_normal();
     }
 
     /// Number of rows (lines) in the buffer.
@@ -2975,7 +2984,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// shape their payload.
     pub fn seed_yank(&mut self, text: String) {
         let linewise = text.ends_with('\n');
-        self.vim.yank_linewise = linewise;
+        self.yank_linewise = linewise;
         self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
     }
 
@@ -3348,52 +3357,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         buf_set_cursor_rc(&mut self.buffer, r, c);
     }
 
-    /// Handle a left-button click at doc-space `(row, col)`.
-    ///
-    /// Exits Visual mode if active, breaks the insert-mode undo group (Vim
-    /// parity for `undo_break_on_motion`), then moves the cursor. The host
-    /// performs cell→doc or pixel→doc translation before calling this.
-    ///
-    /// Mode-aware EOL clamp (neovim parity): in Normal / Visual modes the
-    /// cursor lives on chars and never on the implicit `\n` — `col` is
-    /// capped at `line.chars().count().saturating_sub(1)`. Insert mode
-    /// allows the one-past-EOL insert position (`col == chars().count()`).
-    ///
-    /// Resets `sticky_col` to the clicked column so the next `j`/`k`
-    /// motion uses the clicked column as the intended visual column
-    /// (otherwise the cursor would snap back to the keyboard-tracked
-    /// column on the first vertical motion after a click).
-    pub fn mouse_click_doc(&mut self, row: usize, col: usize) {
-        if self.vim.is_visual() {
-            self.vim.force_normal();
-        }
-        // Mouse-position click counts as a motion — break the active
-        // insert-mode undo group when the toggle is on (vim parity).
-        crate::vim::break_undo_group_in_insert(self);
-
-        let max_row = buf_row_count(&self.buffer).saturating_sub(1);
-        let r = row.min(max_row);
-        let line_len = buf_line(&self.buffer, r)
-            .map(|l| l.chars().count())
-            .unwrap_or(0);
-        let cap = if self.vim.current_mode == crate::VimMode::Insert {
-            line_len
-        } else {
-            line_len.saturating_sub(1)
-        };
-        let c = col.min(cap);
-        buf_set_cursor_rc(&mut self.buffer, r, c);
-        self.sticky_col = Some(c);
-    }
-
-    /// Begin a mouse-drag selection: anchor at the current cursor and enter
-    /// Visual-char mode. Idempotent if already in Visual-char mode.
-    pub fn mouse_begin_drag(&mut self) {
-        if !self.vim.is_visual_char() {
-            vim::enter_visual_char_bridge(self);
-        }
-    }
-
     /// Extend an in-progress mouse drag to doc-space `(row, col)`.
     ///
     /// Moves the live cursor; the Visual anchor stays where
@@ -3622,52 +3585,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     // ─── Range-query helpers for partial-format dispatch (#119) ─────────────
 
-    /// Dry-run `motion_key` and return `(min_row, max_row)` between the cursor
-    /// row and the motion's target row. Used by the app layer to compute the
-    /// [`hjkl_mangler::RangeSpec`] for `=<motion>` before submitting the async
-    /// format job.
-    ///
-    /// Returns `None` when `motion_key` does not map to a known motion (same
-    /// condition that makes `apply_op_motion` a no-op).
-    ///
-    /// The cursor is restored to its original position after the probe —
-    /// the buffer content is not touched.
-    pub fn range_for_op_motion(
-        &mut self,
-        motion_key: char,
-        total_count: usize,
-    ) -> Option<(usize, usize)> {
-        let start = self.cursor();
-        // Reuse the same logic as apply_op_motion_key but only read the
-        // target row — we parse the motion, apply it to move the cursor,
-        // then immediately restore.
-        let input = crate::input::Input {
-            key: crate::input::Key::Char(motion_key),
-            ctrl: false,
-            alt: false,
-            shift: false,
-        };
-        let motion = vim::parse_motion(&input)?;
-        // Resolve FindRepeat and cw/cW quirks just like apply_op_motion_key.
-        let motion = match motion {
-            vim::Motion::FindRepeat { reverse } => match self.vim.last_find {
-                Some((ch, forward, till)) => vim::Motion::Find {
-                    ch,
-                    forward: if reverse { !forward } else { forward },
-                    till,
-                },
-                None => return None,
-            },
-            m => m,
-        };
-        vim::apply_motion_cursor_ctx(self, &motion, total_count, true);
-        let end = self.cursor();
-        // Restore cursor.
-        buf_set_cursor_rc(&mut self.buffer, start.0, start.1);
-        let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
-        Some((r0, r1))
-    }
-
     /// Dry-run a `g`-prefixed motion and return `(min_row, max_row)`. Used for
     /// `=gg` / `=gj` etc. Returns `None` for unknown `ch` values or case-op
     /// linewise forms that don't map to a row range.
@@ -3870,7 +3787,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.push_undo();
         self.restore(all_lines, (top, 0));
         // Leave mode as Normal after a successful filter operation (vim parity).
-        self.force_normal();
+        //
+        // FLIP BLOCKER (#267): this is engine core reaching into the discipline
+        // to reset its mode. At the field flip it must become a
+        // `DisciplineState::reset_to_normal()` hook, so the engine asks whatever
+        // discipline is installed to return to its idle state rather than naming
+        // vim. In-crate call for now.
+        crate::vim::force_normal_bridge(self);
 
         Ok(())
     }

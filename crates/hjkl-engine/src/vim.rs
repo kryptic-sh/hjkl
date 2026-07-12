@@ -150,7 +150,6 @@ pub struct VimState {
     /// computations. Updated by h/l only.
     pub block_vcol: usize,
     /// Track whether the last yank/cut was linewise (drives `p`/`P` layout).
-    pub yank_linewise: bool,
     /// Active register selector — set by `"reg` prefix, consumed by
     /// the next y / d / c / p. `None` falls back to the unnamed `"`.
     pub pending_register: Option<char>,
@@ -2658,6 +2657,83 @@ pub fn jump_forward_bridge<H: crate::types::Host>(
     }
 }
 
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn force_normal_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    ed.vim.force_normal();
+}
+
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn mouse_click_doc_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    row: usize,
+    col: usize,
+) {
+    if ed.vim.is_visual() {
+        ed.vim.force_normal();
+    }
+    // Mouse-position click counts as a motion — break the active
+    // insert-mode undo group when the toggle is on (vim parity).
+    break_undo_group_in_insert(ed);
+
+    let max_row = buf_row_count(&ed.buffer).saturating_sub(1);
+    let r = row.min(max_row);
+    let line_len = buf_line(&ed.buffer, r)
+        .map(|l| l.chars().count())
+        .unwrap_or(0);
+    let cap = if ed.vim.current_mode == crate::VimMode::Insert {
+        line_len
+    } else {
+        line_len.saturating_sub(1)
+    };
+    let c = col.min(cap);
+    buf_set_cursor_rc(&mut ed.buffer, r, c);
+    ed.sticky_col = Some(c);
+}
+
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn mouse_begin_drag_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    if !ed.vim.is_visual_char() {
+        enter_visual_char_bridge(ed);
+    }
+}
+
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn range_for_op_motion_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    motion_key: char,
+    total_count: usize,
+) -> Option<(usize, usize)> {
+    let start = ed.cursor();
+    // Reuse the same logic as apply_op_motion_key but only read the
+    // target row — we parse the motion, apply it to move the cursor,
+    // then immediately restore.
+    let input = crate::input::Input {
+        key: crate::input::Key::Char(motion_key),
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
+    let motion = parse_motion(&input)?;
+    // Resolve FindRepeat and cw/cW quirks just like apply_op_motion_key.
+    let motion = match motion {
+        Motion::FindRepeat { reverse } => match ed.vim.last_find {
+            Some((ch, forward, till)) => Motion::Find {
+                ch,
+                forward: if reverse { !forward } else { forward },
+                till,
+            },
+            None => return None,
+        },
+        m => m,
+    };
+    apply_motion_cursor_ctx(ed, &motion, total_count, true);
+    let end = ed.cursor();
+    // Restore cursor.
+    buf_set_cursor_rc(&mut ed.buffer, start.0, start.1);
+    let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
+    Some((r0, r1))
+}
+
 // ── Search bridges ─────────────────────────────────────────────────────────
 
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
@@ -4203,7 +4279,8 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
             let text = read_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                ed.record_yank(text, false);
+                let target = ed.vim.pending_register.take();
+                ed.record_yank(text, false, target);
             }
             buf_set_cursor_rc(&mut ed.buffer, start_t.0, start_t.1);
             ed.push_buffer_cursor_to_textarea();
@@ -5059,7 +5136,8 @@ fn change_linewise_rows<H: crate::types::Host>(
     }
     if !payload.is_empty() {
         ed.record_yank_to_host(payload.clone());
-        ed.record_delete(payload, true);
+        let target = ed.vim.pending_register.take();
+        ed.record_delete(payload, true, target);
     }
     buf_set_cursor_rc(&mut ed.buffer, top_row, indent_chars);
     ed.push_buffer_cursor_to_textarea();
@@ -5092,7 +5170,8 @@ fn run_operator_over_range<H: crate::types::Host>(
             let text = read_vim_range(ed, top, bot, kind);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                ed.record_yank(text, matches!(kind, RangeKind::Linewise));
+                let target = ed.vim.pending_register.take();
+                ed.record_yank(text, matches!(kind, RangeKind::Linewise), target);
             }
             // Vim `:h '[` / `:h ']`: after a yank `[` = first yanked char,
             // `]` = last yanked char. Mode-aware: linewise snaps to line
@@ -5819,7 +5898,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
     use hjkl_buffer::Edit;
     ed.push_undo();
     let saved_yank = ed.yank().to_string();
-    let saved_yank_linewise = ed.vim.yank_linewise;
+    let saved_yank_linewise = ed.yank_linewise;
     let selection = cut_vim_range(ed, top, bot, kind);
     let transformed = match op {
         Operator::Uppercase => selection.to_uppercase(),
@@ -5838,7 +5917,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
     buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
     ed.push_buffer_cursor_to_textarea();
     ed.set_yank(saved_yank);
-    ed.vim.yank_linewise = saved_yank_linewise;
+    ed.yank_linewise = saved_yank_linewise;
     ed.vim.mode = Mode::Normal;
 }
 
@@ -6197,7 +6276,8 @@ fn execute_line_op<H: crate::types::Host>(
             let text = read_vim_range(ed, (row, col), (end_row, 0), RangeKind::Linewise);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                ed.record_yank(text, true);
+                let target = ed.vim.pending_register.take();
+                ed.record_yank(text, true, target);
             }
             // Vim `:h '[` / `:h ']`: yy/Nyy — linewise yank; `[` =
             // (top_row, 0), `]` = (bot_row, last_col).
@@ -6330,13 +6410,14 @@ pub fn apply_visual_operator<H: crate::types::Host>(
             let cursor_row = buf_cursor_pos(&ed.buffer).row;
             let top = cursor_row.min(ed.vim.visual_line_anchor);
             let bot = cursor_row.max(ed.vim.visual_line_anchor);
-            ed.vim.yank_linewise = true;
+            ed.yank_linewise = true;
             match op {
                 Operator::Yank => {
                     let text = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
                     if !text.is_empty() {
                         ed.record_yank_to_host(text.clone());
-                        ed.record_yank(text, true);
+                        let target = ed.vim.pending_register.take();
+                        ed.record_yank(text, true, target);
                     }
                     buf_set_cursor_rc(&mut ed.buffer, top, 0);
                     ed.push_buffer_cursor_to_textarea();
@@ -6409,7 +6490,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
             }
         }
         Mode::Visual => {
-            ed.vim.yank_linewise = false;
+            ed.yank_linewise = false;
             let anchor = ed.vim.visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
@@ -6418,7 +6499,8 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                     let text = read_vim_range(ed, top, bot, RangeKind::Inclusive);
                     if !text.is_empty() {
                         ed.record_yank_to_host(text.clone());
-                        ed.record_yank(text, false);
+                        let target = ed.vim.pending_register.take();
+                        ed.record_yank(text, false, target);
                     }
                     buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
                     ed.push_buffer_cursor_to_textarea();
@@ -6566,7 +6648,8 @@ fn apply_block_operator<H: crate::types::Host>(
         Operator::Yank => {
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                ed.record_yank(yank, false);
+                let target = ed.vim.pending_register.take();
+                ed.record_yank(yank, false, target);
             }
             ed.vim.mode = Mode::Normal;
             ed.jump_cursor(top, left);
@@ -6576,7 +6659,8 @@ fn apply_block_operator<H: crate::types::Host>(
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                ed.record_delete(yank, false);
+                let target = ed.vim.pending_register.take();
+                ed.record_delete(yank, false, target);
             }
             ed.vim.mode = Mode::Normal;
             ed.jump_cursor(top, left);
@@ -6586,7 +6670,8 @@ fn apply_block_operator<H: crate::types::Host>(
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                ed.record_delete(yank, false);
+                let target = ed.vim.pending_register.take();
+                ed.record_delete(yank, false, target);
             }
             ed.jump_cursor(top, left);
             begin_insert_noundo(
@@ -6681,10 +6766,10 @@ fn transform_block_case<H: crate::types::Host>(
         lines[r] = format!("{head}{transformed}{tail}");
     }
     let saved_yank = ed.yank().to_string();
-    let saved_linewise = ed.vim.yank_linewise;
+    let saved_linewise = ed.yank_linewise;
     ed.restore(lines, (top, left));
     ed.set_yank(saved_yank);
-    ed.vim.yank_linewise = saved_linewise;
+    ed.yank_linewise = saved_linewise;
 }
 
 fn block_yank<H: crate::types::Host>(
@@ -8004,7 +8089,8 @@ fn cut_vim_range<H: crate::types::Host>(
     };
     if !text.is_empty() {
         ed.record_yank_to_host(text.clone());
-        ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise));
+        let target = ed.vim.pending_register.take();
+        ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
     }
     ed.push_buffer_cursor_to_textarea();
     text
@@ -8032,7 +8118,7 @@ fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
         && !text.is_empty()
     {
         ed.record_yank_to_host(text.clone());
-        ed.vim.yank_linewise = false;
+        ed.yank_linewise = false;
         ed.set_yank(text);
     }
     buf_set_cursor_pos(&mut ed.buffer, cursor);
@@ -8090,7 +8176,8 @@ fn do_char_delete<H: crate::types::Host>(
     }
     if !deleted.is_empty() {
         ed.record_yank_to_host(deleted.clone());
-        ed.record_delete(deleted, false);
+        let target = ed.vim.pending_register.take();
+        ed.record_delete(deleted, false, target);
     }
     ed.push_buffer_cursor_to_textarea();
 }

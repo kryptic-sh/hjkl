@@ -521,10 +521,6 @@ pub trait VimEditorExt {
 
     // ─── Yank / register staging ───────────────────────────────────────────
 
-    /// Whether the last yank/delete was linewise.
-    fn yank_linewise(&self) -> bool;
-    /// Set the linewise flag for the next register write.
-    fn set_yank_linewise(&mut self, v: bool);
     /// Set the pending `"r` register selector without consuming it.
     fn set_pending_register_raw(&mut self, reg: Option<char>);
     /// Take (and clear) the pending `"r` register selector.
@@ -1006,6 +1002,31 @@ pub trait VimEditorExt {
     /// keystrokes captured through the app-level chord path are recorded
     /// (rather than relying solely on the engine FSM's in-step hook).
     fn record_input(&mut self, input: hjkl_engine::input::Input);
+
+    // ─── Mode reset / mouse-driven selection / operator range probe ────────
+
+    /// Force back to Normal mode (used when dismissing completions etc.).
+    fn force_normal(&mut self);
+
+    /// Handle a left-button click at doc-space `(row, col)`. Exits Visual mode
+    /// if active, breaks the insert-mode undo group (vim parity for
+    /// `undo_break_on_motion`), then moves the cursor. The EOL clamp is
+    /// mode-aware (neovim parity): Normal/Visual cap at `len - 1`, Insert
+    /// allows the one-past-EOL position.
+    fn mouse_click_doc(&mut self, row: usize, col: usize);
+
+    /// Begin a mouse-drag selection: anchor at the cursor and enter
+    /// Visual-char mode. Idempotent if already in Visual-char.
+    fn mouse_begin_drag(&mut self);
+
+    /// Dry-run `motion_key` and return the `(min_row, max_row)` span between
+    /// the cursor row and the motion's target row, restoring the cursor
+    /// afterwards. `None` when `motion_key` is not a known motion.
+    fn range_for_op_motion(
+        &mut self,
+        motion_key: char,
+        total_count: usize,
+    ) -> Option<(usize, usize)>;
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -1495,12 +1516,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     // ─── Yank / register staging ───────────────────────────────────────────
 
-    fn yank_linewise(&self) -> bool {
-        self.vim.yank_linewise
-    }
-    fn set_yank_linewise(&mut self, v: bool) {
-        self.vim.yank_linewise = v;
-    }
     fn set_pending_register_raw(&mut self, reg: Option<char>) {
         self.vim.pending_register = reg;
     }
@@ -2121,5 +2136,27 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if self.vim.recording_macro.is_some() && !self.vim.replaying_macro {
             self.vim.recording_keys.push(input);
         }
+    }
+
+    // ─── Mode reset / mouse-driven selection / operator range probe ────────
+
+    fn force_normal(&mut self) {
+        hjkl_engine::vim::force_normal_bridge(self);
+    }
+
+    fn mouse_click_doc(&mut self, row: usize, col: usize) {
+        hjkl_engine::vim::mouse_click_doc_bridge(self, row, col);
+    }
+
+    fn mouse_begin_drag(&mut self) {
+        hjkl_engine::vim::mouse_begin_drag_bridge(self);
+    }
+
+    fn range_for_op_motion(
+        &mut self,
+        motion_key: char,
+        total_count: usize,
+    ) -> Option<(usize, usize)> {
+        hjkl_engine::vim::range_for_op_motion_bridge(self, motion_key, total_count)
     }
 }
