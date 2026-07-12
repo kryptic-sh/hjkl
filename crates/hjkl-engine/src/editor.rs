@@ -712,7 +712,7 @@ pub struct Editor<
     /// [`Editor::emit_cursor_shape_if_changed`] so `Host::emit_cursor_shape`
     /// fires exactly once per mode transition without sprinkling the
     /// call across every `vim.mode = ...` site.
-    pub(crate) last_emitted_mode: crate::VimMode,
+    pub(crate) last_emitted_mode: crate::CoarseMode,
     /// Search FSM state (pattern + per-row match cache + wrapscan).
     /// 0.0.35: relocated out of `hjkl_buffer::Buffer` per
     /// `DESIGN_33_METHOD_CLASSIFICATION.md` step 1.
@@ -1198,7 +1198,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             current_buffer_id: 0,
             sticky_col: None,
             host,
-            last_emitted_mode: crate::VimMode::Normal,
+            last_emitted_mode: crate::CoarseMode::Normal,
             search_state: crate::search::SearchState::new(),
             buffer_spans: Vec::new(),
             last_indent_range: None,
@@ -1245,15 +1245,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// step so mode transitions surface to the host without sprinkling
     /// the call across every `vim.mode = ...` site.
     pub fn emit_cursor_shape_if_changed(&mut self) {
-        let mode = self.vim_mode();
+        // Coarse, not vim: the engine emits render chrome for whatever
+        // discipline is installed (#265).
+        let mode = self.coarse_mode();
         if mode == self.last_emitted_mode {
             return;
         }
         let exclusive = self.settings.selection_exclusive;
         let shape = match mode {
-            crate::VimMode::Insert => crate::types::CursorShape::Bar,
+            crate::CoarseMode::Insert => crate::types::CursorShape::Bar,
             // VSCode: exclusive-visual also uses a bar caret (caret between chars).
-            crate::VimMode::Visual if exclusive => crate::types::CursorShape::Bar,
+            crate::CoarseMode::Select if exclusive => crate::types::CursorShape::Bar,
             _ => crate::types::CursorShape::Block,
         };
         self.host.emit_cursor_shape(shape);
@@ -2862,12 +2864,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn render_frame(&self) -> crate::types::RenderFrame {
         use crate::types::{CursorShape, RenderFrame, SnapshotMode};
         let (cursor_row, cursor_col) = self.cursor();
-        let (mode, shape) = match self.vim_mode() {
-            crate::VimMode::Normal => (SnapshotMode::Normal, CursorShape::Block),
-            crate::VimMode::Insert => (SnapshotMode::Insert, CursorShape::Bar),
-            crate::VimMode::Visual => (SnapshotMode::Visual, CursorShape::Block),
-            crate::VimMode::VisualLine => (SnapshotMode::VisualLine, CursorShape::Block),
-            crate::VimMode::VisualBlock => (SnapshotMode::VisualBlock, CursorShape::Block),
+        // Coarse, not vim: render output must not depend on which discipline
+        // is installed (#265). CoarseMode is a bijection with SnapshotMode.
+        let (mode, shape) = match self.coarse_mode() {
+            crate::CoarseMode::Normal => (SnapshotMode::Normal, CursorShape::Block),
+            crate::CoarseMode::Insert => (SnapshotMode::Insert, CursorShape::Bar),
+            crate::CoarseMode::Select => (SnapshotMode::Visual, CursorShape::Block),
+            crate::CoarseMode::SelectLine => (SnapshotMode::VisualLine, CursorShape::Block),
+            crate::CoarseMode::SelectBlock => (SnapshotMode::VisualBlock, CursorShape::Block),
         };
         RenderFrame {
             mode,
@@ -2893,12 +2897,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// persistence goes through this one.
     pub fn take_snapshot(&self) -> crate::types::EditorSnapshot {
         use crate::types::{EditorSnapshot, SnapshotMode};
-        let mode = match self.vim_mode() {
-            crate::VimMode::Normal => SnapshotMode::Normal,
-            crate::VimMode::Insert => SnapshotMode::Insert,
-            crate::VimMode::Visual => SnapshotMode::Visual,
-            crate::VimMode::VisualLine => SnapshotMode::VisualLine,
-            crate::VimMode::VisualBlock => SnapshotMode::VisualBlock,
+        let mode = match self.coarse_mode() {
+            crate::CoarseMode::Normal => SnapshotMode::Normal,
+            crate::CoarseMode::Insert => SnapshotMode::Insert,
+            crate::CoarseMode::Select => SnapshotMode::Visual,
+            crate::CoarseMode::SelectLine => SnapshotMode::VisualLine,
+            crate::CoarseMode::SelectBlock => SnapshotMode::VisualBlock,
         };
         let cursor = self.cursor();
         let cursor = (cursor.0 as u32, cursor.1 as u32);
