@@ -71,10 +71,12 @@
 //!   The plan calls for moving them into the editor (so the editor owns
 //!   `last_search_pattern` rather than the TUI loop). Safe to defer.
 
+pub use crate::abbrev::{Abbrev, AbbrevKind, AbbrevTrigger};
+pub use crate::search::SearchPrompt;
+pub use crate::types::{CHANGE_LIST_MAX, InsertDir, JUMPLIST_MAX, SEARCH_HISTORY_MAX, ScrollDir};
 pub use hjkl_vim_types::{
-    Abbrev, AbbrevKind, AbbrevTrigger, CHANGE_LIST_MAX, InsertDir, InsertEntry, InsertReason,
-    InsertSession, JUMPLIST_MAX, LastChange, LastHorizontalMotion, LastVisual, Mode, Motion,
-    Operator, Pending, RangeKind, SEARCH_HISTORY_MAX, ScrollDir, SearchPrompt, TextObject,
+    InsertEntry, InsertReason, InsertSession, LastChange, LastHorizontalMotion, LastVisual, Mode,
+    Motion, Operator, Pending, RangeKind, TextObject,
 };
 
 use crate::VimMode;

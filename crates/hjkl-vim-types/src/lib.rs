@@ -379,54 +379,6 @@ pub enum LastHorizontalMotion {
     Sneak,
 }
 
-/// A single abbreviation entry (insert-mode or cmdline-mode, recursive or noremap).
-///
-/// Mode flags: `insert` = expand in Insert mode, `cmdline` = expand in Cmdline mode.
-/// `noremap` stores whether the definition was made with `noreabbrev`; expansion
-/// is always literal text regardless of this flag, but it is preserved for future use.
-///
-/// NOTE: Abbreviations are currently per-editor (global in vim would share across
-/// buffers; per-editor is equivalent for single-buffer use and is acceptable for
-/// now — cross-buffer global behaviour is a follow-up).
-#[derive(Debug, Clone)]
-pub struct Abbrev {
-    pub lhs: String,
-    pub rhs: String,
-    pub insert: bool,
-    pub cmdline: bool,
-    pub noremap: bool,
-}
-
-/// Trigger kind for abbreviation expansion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AbbrevTrigger {
-    /// A non-keyword character was typed (e.g. space, punctuation).
-    NonKeyword(char),
-    /// `<C-]>` was pressed — expand without inserting any character.
-    CtrlBracket,
-    /// `<CR>` (Enter) was pressed.
-    Cr,
-    /// `<Esc>` was pressed to leave insert mode.
-    Esc,
-}
-
-pub const SEARCH_HISTORY_MAX: usize = 100;
-pub const CHANGE_LIST_MAX: usize = 100;
-
-/// Active `/` or `?` search prompt. Text mutations drive the textarea's
-/// live search pattern so matches highlight as the user types.
-#[derive(Debug, Clone)]
-pub struct SearchPrompt {
-    pub text: String,
-    pub cursor: usize,
-    pub forward: bool,
-    /// Operator-pending search (`d/pat`, `c/pat`, `y/pat`): the operator, its
-    /// count, and the cursor position where the operator started. `None` for a
-    /// plain `/` / `?` search. On commit the operator runs over the (exclusive,
-    /// charwise) range from `origin` to the match.
-    pub operator: Option<(Operator, usize, (usize, usize))>,
-}
-
 #[derive(Debug, Clone)]
 pub struct InsertSession {
     pub count: usize,
@@ -491,41 +443,4 @@ pub struct LastVisual {
     pub anchor: (usize, usize),
     pub cursor: (usize, usize),
     pub block_vcol: usize,
-}
-
-/// Direction for insert-mode arrow movement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertDir {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-/// Scroll direction for `scroll_full_page`, `scroll_half_page`, and
-/// `scroll_line` controller methods.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollDir {
-    /// Move forward / downward (toward end of buffer).
-    Down,
-    /// Move backward / upward (toward start of buffer).
-    Up,
-}
-
-/// Max jumplist depth. Matches vim default.
-pub const JUMPLIST_MAX: usize = 100;
-
-/// Classify a vim abbreviation lhs into its type.
-///
-/// - **Full**: every char in `lhs` is a keyword char (full-id).
-/// - **End**: the last char is a keyword char, at least one other is not (end-id).
-/// - **None**: the last char is a non-keyword char (non-id).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AbbrevKind {
-    /// All keyword chars (full-id).
-    Full,
-    /// Last char keyword, others include non-keyword (end-id).
-    End,
-    /// Last char is non-keyword (non-id).
-    NonKw,
 }
