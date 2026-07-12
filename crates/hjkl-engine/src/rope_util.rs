@@ -8,7 +8,7 @@
 
 /// Return row `r` from a rope as an owned `String`, stripping the
 /// trailing `\n` that ropey includes on non-final lines.
-pub(crate) fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
+pub fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
     let s = rope.line(r).to_string();
     // ropey includes the newline; strip it so callers see bare content.
     if s.ends_with('\n') {
@@ -20,7 +20,7 @@ pub(crate) fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
 
 /// Join rows `lo..=hi` from a rope into a single `String` separated by
 /// `\n`. Callers must ensure `lo <= hi < rope.len_lines()`.
-pub(crate) fn rope_row_range_str(rope: &ropey::Rope, lo: usize, hi: usize) -> String {
+pub fn rope_row_range_str(rope: &ropey::Rope, lo: usize, hi: usize) -> String {
     let n = rope.len_lines();
     let lo = lo.min(n.saturating_sub(1));
     let hi = hi.min(n.saturating_sub(1));
@@ -44,7 +44,7 @@ pub(crate) fn rope_row_range_str(rope: &ropey::Rope, lo: usize, hi: usize) -> St
 /// Snapshot all rows from a rope as `Vec<String>` (no trailing `\n`).
 /// Use only when the caller truly needs mutable per-row access; prefer
 /// rope iterators otherwise.
-pub(crate) fn rope_to_lines_vec(rope: &ropey::Rope) -> Vec<String> {
+pub fn rope_to_lines_vec(rope: &ropey::Rope) -> Vec<String> {
     let n = rope.len_lines();
     (0..n).map(|r| rope_line_to_str(rope, r)).collect()
 }

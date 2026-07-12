@@ -1271,7 +1271,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Record a yank/cut payload. Forwards the text to
     /// [`crate::types::Host::write_clipboard`] so the platform-clipboard
     /// integration can store or transmit it.
-    pub(crate) fn record_yank_to_host(&mut self, text: String) {
+    pub fn record_yank_to_host(&mut self, text: String) {
         self.host.write_clipboard(text);
     }
 
@@ -1559,7 +1559,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Record a yank into `"` and `"0`, plus the named target if the
     /// user prefixed `"reg`. Updates `vim.yank_linewise` for the
     /// paste path.
-    pub(crate) fn record_yank(&mut self, text: String, linewise: bool, target: Option<char>) {
+    pub fn record_yank(&mut self, text: String, linewise: bool, target: Option<char>) {
         self.yank_linewise = linewise;
         self.registers
             .lock()
@@ -1586,7 +1586,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Record a delete / change into `"` and, by size, the `"1`–`"9`
     /// ring or the `"-` small-delete register. Honours the active
     /// named-register prefix.
-    pub(crate) fn record_delete(&mut self, text: String, linewise: bool, target: Option<char>) {
+    pub fn record_delete(&mut self, text: String, linewise: bool, target: Option<char>) {
         self.yank_linewise = linewise;
         self.registers
             .lock()
@@ -2199,6 +2199,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.viewport_pinned = v;
     }
 
+    /// Autopair's queued close-brackets, as `(row, col, ch)`. A discipline's
+    /// insert path consumes a queued close when the user types the matching
+    /// character instead of inserting a second one.
+    pub fn pending_closes(&self) -> &[(usize, usize, char)] {
+        &self.pending_closes
+    }
+
+    /// Mutable access to autopair's queued close-brackets.
+    pub fn pending_closes_mut(&mut self) -> &mut Vec<(usize, usize, char)> {
+        &mut self.pending_closes
+    }
+
     /// Whether the unnamed register's content is linewise.
     pub fn yank_linewise(&self) -> bool {
         self.yank_linewise
@@ -2304,21 +2316,21 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // `Ctrl-E`/`Ctrl-Y`) stay in hjkl-vim.
 
     /// Rows spanned by half a viewport, times `count` (min 1).
-    pub(crate) fn viewport_half_rows(&self, count: usize) -> usize {
+    pub fn viewport_half_rows(&self, count: usize) -> usize {
         let h = self.viewport_height_value() as usize;
         (h / 2).max(1).saturating_mul(count.max(1))
     }
 
     /// Rows spanned by a full viewport (less a two-line overlap), times
     /// `count` (min 1).
-    pub(crate) fn viewport_full_rows(&self, count: usize) -> usize {
+    pub fn viewport_full_rows(&self, count: usize) -> usize {
         let h = self.viewport_height_value() as usize;
         h.saturating_sub(2).max(1).saturating_mul(count.max(1))
     }
 
     /// Move the cursor `delta` rows (clamped to the buffer), landing on the
     /// first non-blank of the target row and resetting the sticky column.
-    pub(crate) fn scroll_cursor_rows(&mut self, delta: isize) {
+    pub fn scroll_cursor_rows(&mut self, delta: isize) {
         if delta == 0 {
             return;
         }

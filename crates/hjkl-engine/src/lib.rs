@@ -21,7 +21,7 @@
 //! - [`ex::run`] / [`ex::ExEffect`] — drive ex-mode commands.
 
 pub mod abbrev;
-mod buf_helpers;
+pub mod buf_helpers;
 mod buffer_impl;
 mod discipline;
 mod editor;
@@ -29,7 +29,7 @@ pub mod input;
 pub mod keymap_motion;
 pub mod motions;
 mod registers;
-mod rope_util;
+pub mod rope_util;
 pub mod search;
 pub mod substitute;
 pub mod types;

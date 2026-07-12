@@ -19,28 +19,28 @@ use crate::types::{Cursor, Query};
 /// editor / vim free fn body expects. One inline cast at the trait
 /// boundary.
 #[inline]
-pub(crate) fn buf_cursor_rc<B: Cursor + ?Sized>(b: &B) -> (usize, usize) {
+pub fn buf_cursor_rc<B: Cursor + ?Sized>(b: &B) -> (usize, usize) {
     let p = Cursor::cursor(b);
     (p.line as usize, p.col as usize)
 }
 
 /// Read the cursor row.
 #[inline]
-pub(crate) fn buf_cursor_row<B: Cursor + ?Sized>(b: &B) -> usize {
+pub fn buf_cursor_row<B: Cursor + ?Sized>(b: &B) -> usize {
     Cursor::cursor(b).line as usize
 }
 
 /// Read the cursor as an `hjkl_buffer::Position` — the shape the
 /// concrete-buffer call sites consumed before the trait routing.
 #[inline]
-pub(crate) fn buf_cursor_pos<B: Cursor + ?Sized>(b: &B) -> hjkl_buffer::Position {
+pub fn buf_cursor_pos<B: Cursor + ?Sized>(b: &B) -> hjkl_buffer::Position {
     let p = Cursor::cursor(b);
     hjkl_buffer::Position::new(p.line as usize, p.col as usize)
 }
 
 /// Set the cursor from `(row, col)` `usize` coordinates.
 #[inline]
-pub(crate) fn buf_set_cursor_rc<B: Cursor + ?Sized>(b: &mut B, row: usize, col: usize) {
+pub fn buf_set_cursor_rc<B: Cursor + ?Sized>(b: &mut B, row: usize, col: usize) {
     Cursor::set_cursor(
         b,
         crate::types::Pos {
@@ -55,13 +55,13 @@ pub(crate) fn buf_set_cursor_rc<B: Cursor + ?Sized>(b: &mut B, row: usize, col: 
 /// `vim.rs` through the trait surface without a dedicated helper at
 /// each site.
 #[inline]
-pub(crate) fn buf_set_cursor_pos<B: Cursor + ?Sized>(b: &mut B, pos: hjkl_buffer::Position) {
+pub fn buf_set_cursor_pos<B: Cursor + ?Sized>(b: &mut B, pos: hjkl_buffer::Position) {
     buf_set_cursor_rc(b, pos.row, pos.col);
 }
 
 /// Number of rows.
 #[inline]
-pub(crate) fn buf_row_count<B: Query + ?Sized>(b: &B) -> usize {
+pub fn buf_row_count<B: Query + ?Sized>(b: &B) -> usize {
     Query::line_count(b) as usize
 }
 
@@ -69,7 +69,7 @@ pub(crate) fn buf_row_count<B: Query + ?Sized>(b: &B) -> usize {
 /// `Query::line` returns owned data; callers that only need `&str` should
 /// deref the result with `as_deref()`.
 #[inline]
-pub(crate) fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
+pub fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
     let n = Query::line_count(b) as usize;
     if row >= n {
         return None;
@@ -82,7 +82,7 @@ pub(crate) fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
 /// `buf.line(r).map(|l| l.chars().count()).unwrap_or(0)` collapse to
 /// one call.
 #[inline]
-pub(crate) fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
+pub fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
     buf_line(b, row).map(|l| l.chars().count()).unwrap_or(0)
 }
 
@@ -93,7 +93,7 @@ pub(crate) fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// Delegates to [`Query::line_bytes`] so backends with row-indexed
 /// storage skip the per-row `String` clone the default walk would do.
 #[inline]
-pub(crate) fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
+pub fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
     Query::line_bytes(b, row)
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// with `type Edit;` so backends pick their own edit enum. This free
 /// fn forwards there once that lands.
 #[inline]
-pub(crate) fn apply_buffer_edit(
+pub fn apply_buffer_edit(
     buf: &mut hjkl_buffer::Buffer,
     edit: hjkl_buffer::Edit,
 ) -> hjkl_buffer::Edit {
