@@ -7,7 +7,7 @@
 //! exposed via `pub(super)` fields and helper methods.
 
 use crate::KeybindingMode;
-use crate::vim::{self, VimState};
+use crate::vim::VimState;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::SystemTime;
 
@@ -3649,57 +3649,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     // ─── Range-query helpers for partial-format dispatch (#119) ─────────────
 
-    /// Dry-run a `g`-prefixed motion and return `(min_row, max_row)`. Used for
-    /// `=gg` / `=gj` etc. Returns `None` for unknown `ch` values or case-op
-    /// linewise forms that don't map to a row range.
-    ///
-    /// The cursor is restored after the probe.
-    pub fn range_for_op_g(&mut self, ch: char, total_count: usize) -> Option<(usize, usize)> {
-        let start = self.cursor();
-        let motion = match ch {
-            'g' => vim::Motion::FileTop,
-            'e' => vim::Motion::WordEndBack,
-            'E' => vim::Motion::BigWordEndBack,
-            'j' => vim::Motion::ScreenDown,
-            'k' => vim::Motion::ScreenUp,
-            _ => return None,
-        };
-        vim::apply_motion_cursor_ctx(self, &motion, total_count, true);
-        let end = self.cursor();
-        buf_set_cursor_rc(&mut self.buffer, start.0, start.1);
-        let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
-        Some((r0, r1))
-    }
-
-    /// Dry-run a text-object lookup and return `(min_row, max_row)` for the
-    /// matched region. Returns `None` when `ch` is not a known text-object
-    /// kind or the text object could not be resolved (e.g. no enclosing bracket).
-    ///
-    /// The buffer is not mutated.
-    pub fn range_for_op_text_obj(
-        &self,
-        ch: char,
-        inner: bool,
-        total_count: usize,
-    ) -> Option<(usize, usize)> {
-        let obj = match ch {
-            'w' => vim::TextObject::Word { big: false },
-            'W' => vim::TextObject::Word { big: true },
-            '"' | '\'' | '`' => vim::TextObject::Quote(ch),
-            '(' | ')' | 'b' => vim::TextObject::Bracket('('),
-            '[' | ']' => vim::TextObject::Bracket('['),
-            '{' | '}' | 'B' => vim::TextObject::Bracket('{'),
-            '<' | '>' => vim::TextObject::Bracket('<'),
-            'p' => vim::TextObject::Paragraph,
-            't' => vim::TextObject::XmlTag,
-            's' => vim::TextObject::Sentence,
-            _ => return None,
-        };
-        let (start, end, _kind) = vim::text_object_range(self, obj, inner, total_count.max(1))?;
-        let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
-        Some((r0, r1))
-    }
-
     /// Drain the row range set by the most recent auto-indent operation.
     ///
     /// Returns `Some((top_row, bot_row))` (inclusive) on the first call after
@@ -3985,25 +3934,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         all.extend(new_lines);
         all.extend(all_after);
         self.restore(all, (top, 0));
-    }
-
-    /// Execute a named cursor motion `kind` repeated `count` times.
-    ///
-    /// Maps the keymap-layer `crate::MotionKind` to the engine's internal
-    /// motion primitives, bypassing the engine FSM. Identical cursor semantics
-    /// to the FSM path — sticky column, scroll sync, and big-jump tracking are
-    /// all applied via `vim::execute_motion` (for Down/Up) or the same helpers
-    /// used by the FSM arms.
-    ///
-    /// Introduced in 0.6.1 as the host entry point for Phase 3a of
-    /// kryptic-sh/hjkl#69: the app keymap dispatches `AppAction::Motion` and
-    /// calls this method rather than re-entering the engine FSM.
-    ///
-    /// Engine FSM arms for `h`/`j`/`k`/`l`/`<BS>`/`<Space>`/`+`/`-` remain
-    /// intact for macro-replay coverage (macros re-feed raw keys through the
-    /// FSM). This method is the keymap / controller path only.
-    pub fn apply_motion(&mut self, kind: crate::MotionKind, count: usize) {
-        vim::apply_motion_kind(self, kind, count);
     }
 
     // ─── Phase 6.1: public insert-mode primitives (kryptic-sh/hjkl#87) ────────

@@ -13,7 +13,7 @@ use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
 use hjkl_engine::vim::{
     AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, TextObject,
 };
-use hjkl_engine::{Editor, FsmMode, MarkJump, VimMode};
+use hjkl_engine::{Editor, FsmMode, MarkJump, MotionKind, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
 /// line when at column 0. Clamps at the buffer start `(0, 0)`. Used to render
@@ -1025,6 +1025,27 @@ pub trait VimEditorExt {
     fn range_for_op_motion(
         &mut self,
         motion_key: char,
+        total_count: usize,
+    ) -> Option<(usize, usize)>;
+
+    // ─── Motion dispatch / operator range probes ───────────────────────────
+
+    /// Execute a named cursor motion `kind`, repeated `count` times. Maps the
+    /// keymap-layer `MotionKind` onto the vim motion primitives, bypassing the
+    /// FSM. Identical cursor semantics to the FSM path — sticky column, scroll
+    /// sync and big-jump tracking all apply.
+    fn apply_motion(&mut self, kind: MotionKind, count: usize);
+
+    /// Dry-run a `g`-prefixed motion and return `(min_row, max_row)` — for
+    /// `=gg` / `=gj` etc. `None` for unknown `ch`. The cursor is restored.
+    fn range_for_op_g(&mut self, ch: char, total_count: usize) -> Option<(usize, usize)>;
+
+    /// Dry-run a text object and return `(min_row, max_row)` — for `=iw` /
+    /// `=ap` etc. `None` for unknown `ch`.
+    fn range_for_op_text_obj(
+        &self,
+        ch: char,
+        inner: bool,
         total_count: usize,
     ) -> Option<(usize, usize)>;
 }
@@ -2158,5 +2179,24 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         total_count: usize,
     ) -> Option<(usize, usize)> {
         hjkl_engine::vim::range_for_op_motion_bridge(self, motion_key, total_count)
+    }
+
+    // ─── Motion dispatch / operator range probes ───────────────────────────
+
+    fn apply_motion(&mut self, kind: MotionKind, count: usize) {
+        hjkl_engine::vim::apply_motion_kind(self, kind, count);
+    }
+
+    fn range_for_op_g(&mut self, ch: char, total_count: usize) -> Option<(usize, usize)> {
+        hjkl_engine::vim::range_for_op_g_bridge(self, ch, total_count)
+    }
+
+    fn range_for_op_text_obj(
+        &self,
+        ch: char,
+        inner: bool,
+        total_count: usize,
+    ) -> Option<(usize, usize)> {
+        hjkl_engine::vim::range_for_op_text_obj_bridge(self, ch, inner, total_count)
     }
 }

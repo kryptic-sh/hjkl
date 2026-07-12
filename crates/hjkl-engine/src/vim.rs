@@ -2746,6 +2746,53 @@ pub fn range_for_op_motion_bridge<H: crate::types::Host>(
     Some((r0, r1))
 }
 
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn range_for_op_g_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    total_count: usize,
+) -> Option<(usize, usize)> {
+    let start = ed.cursor();
+    let motion = match ch {
+        'g' => Motion::FileTop,
+        'e' => Motion::WordEndBack,
+        'E' => Motion::BigWordEndBack,
+        'j' => Motion::ScreenDown,
+        'k' => Motion::ScreenUp,
+        _ => return None,
+    };
+    apply_motion_cursor_ctx(ed, &motion, total_count, true);
+    let end = ed.cursor();
+    buf_set_cursor_rc(&mut ed.buffer, start.0, start.1);
+    let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
+    Some((r0, r1))
+}
+
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn range_for_op_text_obj_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    inner: bool,
+    total_count: usize,
+) -> Option<(usize, usize)> {
+    let obj = match ch {
+        'w' => TextObject::Word { big: false },
+        'W' => TextObject::Word { big: true },
+        '"' | '\'' | '`' => TextObject::Quote(ch),
+        '(' | ')' | 'b' => TextObject::Bracket('('),
+        '[' | ']' => TextObject::Bracket('['),
+        '{' | '}' | 'B' => TextObject::Bracket('{'),
+        '<' | '>' => TextObject::Bracket('<'),
+        'p' => TextObject::Paragraph,
+        't' => TextObject::XmlTag,
+        's' => TextObject::Sentence,
+        _ => return None,
+    };
+    let (start, end, _kind) = text_object_range(ed, obj, inner, total_count.max(1))?;
+    let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
+    Some((r0, r1))
+}
+
 // ── Search bridges ─────────────────────────────────────────────────────────
 
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
@@ -3387,7 +3434,8 @@ fn execute_motion_with_block_vcol<H: crate::types::Host>(
 /// mark update in `step()` fires only on visual→normal transition, not after
 /// each motion.  There are **no further sync gaps** beyond the `block_vcol`
 /// fix already applied above.
-pub(crate) fn apply_motion_kind<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_motion_kind<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     kind: crate::MotionKind,
     count: usize,
@@ -3608,7 +3656,8 @@ fn apply_motion_cursor<H: crate::types::Host>(
     apply_motion_cursor_ctx(ed, motion, count, false)
 }
 
-pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
     count: usize,
