@@ -26,6 +26,28 @@ pub trait VimEditorExt {
     /// The VisualBlock highlight rectangle `(top, bot, left, right)`, or
     /// `None` when the editor is not in VisualBlock mode.
     fn block_highlight(&self) -> Option<(usize, usize, usize, usize)>;
+
+    /// Start/end `(row, col)` of the active char-wise Visual selection,
+    /// positionally ordered. `None` when not in Visual mode.
+    ///
+    /// When [`hjkl_engine::editor::Settings::selection_exclusive`] is `false`
+    /// (default, vim behaviour): both endpoints are **inclusive** — the cells
+    /// at `start` and `end` are both selected.
+    ///
+    /// When it is `true` (VSCode bar-cursor behaviour): the range is
+    /// **half-open** — `start` is included but `end` is the first cell that is
+    /// NOT selected (the caret sits before it). If the selection is empty
+    /// (`anchor == cursor`) `None` is returned so callers do not need to check
+    /// for zero-length ranges.
+    fn char_highlight(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Return the half-open exclusive char-visual range `(start, end)` where
+    /// `end` is the first cell NOT selected (the caret position). `None`
+    /// when not in Visual mode or the selection is empty.
+    ///
+    /// Convenience accessor for the VSCode dispatcher; avoids duplicating
+    /// the anchor/cursor ordering logic at the call site.
+    fn visual_char_range_exclusive(&self) -> Option<((usize, usize), (usize, usize))>;
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -44,5 +66,45 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         let cr = self.cursor().0;
         let cc = self.vim.block_vcol;
         Some((ar.min(cr), ar.max(cr), ac.min(cc), ac.max(cc)))
+    }
+
+    fn char_highlight(&self) -> Option<((usize, usize), (usize, usize))> {
+        if self.vim_mode() != VimMode::Visual {
+            return None;
+        }
+        let anchor = self.vim.visual_anchor;
+        let cursor = self.cursor();
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+        if self.settings().selection_exclusive {
+            // Half-open: start..end (end excluded). Empty when start == end.
+            if start == end {
+                return None;
+            }
+            Some((start, end))
+        } else {
+            // Inclusive (vim default): both endpoints are selected.
+            Some((start, end))
+        }
+    }
+
+    fn visual_char_range_exclusive(&self) -> Option<((usize, usize), (usize, usize))> {
+        if self.vim_mode() != VimMode::Visual {
+            return None;
+        }
+        let anchor = self.vim.visual_anchor;
+        let cursor = self.cursor();
+        if anchor == cursor {
+            return None;
+        }
+        let (start, end) = if anchor <= cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+        Some((start, end))
     }
 }

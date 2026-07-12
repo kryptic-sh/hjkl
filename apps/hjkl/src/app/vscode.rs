@@ -39,6 +39,7 @@
 use super::{App, SearchDir};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{BufferEdit, Host, InsertDir, Motion, Pos, VimMode};
+use hjkl_vim::VimEditorExt;
 
 impl App {
     /// VSCode-discipline early key intercept — the single routing choke point
