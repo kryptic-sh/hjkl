@@ -14,7 +14,7 @@ use hjkl_engine::vim::{
     AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir,
     SearchPrompt, TextObject,
 };
-use hjkl_engine::{Editor, FsmMode, VimMode};
+use hjkl_engine::{Editor, FsmMode, MarkJump, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
 /// line when at column 0. Clamps at the buffer start `(0, 0)`. Used to render
@@ -801,6 +801,43 @@ pub trait VimEditorExt {
     fn join_line(&mut self, count: usize);
     /// `~` — toggle case of `count` chars, advancing right.
     fn toggle_case_at_cursor(&mut self, count: usize);
+
+    // ─── Vim mark commands ─────────────────────────────────────────────────
+    //
+    // Mark *storage* (`Editor::mark` / `set_mark` / `marks()` / `file_marks()`
+    // / the global-mark map) stays on the engine: a mark is a positional
+    // bookmark, which is an editor concern that other seams already consume
+    // (hjkl-ex backs `:marks` and `'a` line addressing with it, and LSP /
+    // quickfix / bookmark features could too).
+    //
+    // What lives here is the vim *command* layer on top of that storage — the
+    // `m` / `'` / `` ` `` keybindings, which decide linewise vs charwise jump
+    // and push the jumplist. That is vim semantics, not bookmark storage.
+
+    /// `.` — dot-repeat: replay the last buffered change at the cursor. A
+    /// non-zero `count` *replaces* the change's stored count (`:h .` — `3x`
+    /// then `2.` deletes 2, not 6); `count == 0` means no explicit count.
+    fn replay_last_change(&mut self, count: usize);
+
+    /// `m{ch}` — record a mark named `ch` at the current cursor position.
+    /// Invalid chars are silently ignored.
+    fn set_mark_at_cursor(&mut self, ch: char);
+
+    /// `'{ch}` — jump to mark `ch`, linewise (row, first non-blank). Pushes the
+    /// pre-jump position onto the jumplist if the cursor actually moved.
+    fn goto_mark_line(&mut self, ch: char);
+
+    /// `` `{ch} `` — jump to mark `ch`, charwise (exact row + col). Pushes the
+    /// pre-jump position onto the jumplist if the cursor actually moved.
+    fn goto_mark_char(&mut self, ch: char);
+
+    /// Like [`VimEditorExt::goto_mark_line`], but reports cross-buffer jumps:
+    /// uppercase marks (`'A'`–`'Z'`) living in another buffer return
+    /// [`MarkJump::CrossBuffer`] so the app can switch slots first.
+    fn try_goto_mark_line(&mut self, ch: char) -> MarkJump;
+
+    /// Charwise counterpart of [`VimEditorExt::try_goto_mark_line`].
+    fn try_goto_mark_char(&mut self, ch: char) -> MarkJump;
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -1735,5 +1772,31 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn toggle_case_at_cursor(&mut self, count: usize) {
         hjkl_engine::vim::toggle_case_at_cursor_bridge(self, count);
+    }
+
+    // ─── Vim mark commands ─────────────────────────────────────────────────
+
+    fn replay_last_change(&mut self, count: usize) {
+        hjkl_engine::vim::replay_last_change(self, count);
+    }
+
+    fn set_mark_at_cursor(&mut self, ch: char) {
+        hjkl_engine::vim::set_mark_at_cursor(self, ch);
+    }
+
+    fn goto_mark_line(&mut self, ch: char) {
+        hjkl_engine::vim::goto_mark(self, ch, true);
+    }
+
+    fn goto_mark_char(&mut self, ch: char) {
+        hjkl_engine::vim::goto_mark(self, ch, false);
+    }
+
+    fn try_goto_mark_line(&mut self, ch: char) -> MarkJump {
+        hjkl_engine::vim::try_goto_mark(self, ch, true)
+    }
+
+    fn try_goto_mark_char(&mut self, ch: char) -> MarkJump {
+        hjkl_engine::vim::try_goto_mark(self, ch, false)
     }
 }

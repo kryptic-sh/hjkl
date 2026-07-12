@@ -3023,7 +3023,8 @@ pub fn set_mode_bridge<H: crate::types::Host>(
 /// so the hjkl-vim `PendingState::SetMark` reducer can dispatch
 /// `EngineCmd::SetMark` without re-entering the engine FSM.
 /// `handle_set_mark` delegates here to avoid logic duplication.
-pub(crate) fn set_mark_at_cursor<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn set_mark_at_cursor<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
 ) {
@@ -3053,7 +3054,8 @@ pub(crate) fn set_mark_at_cursor<H: crate::types::Host>(
 ///
 /// Uppercase marks are handled by [`try_goto_mark`] which can return a
 /// `MarkJump::CrossBuffer` for cross-buffer jumps.
-pub(crate) fn goto_mark<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn goto_mark<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     linewise: bool,
@@ -3092,7 +3094,8 @@ pub(crate) fn goto_mark<H: crate::types::Host>(
 ///   `CrossBuffer`. Same-buffer uppercase marks execute the jump normally.
 /// - All other legal mark chars delegate to [`goto_mark`] and return
 ///   `SameBuffer`.
-pub(crate) fn try_goto_mark<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn try_goto_mark<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     linewise: bool,
@@ -8974,7 +8977,8 @@ fn replay_insert_and_finish<H: crate::types::Host>(
     }
 }
 
-pub(crate) fn replay_last_change<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn replay_last_change<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     outer_count: usize,
 ) {
