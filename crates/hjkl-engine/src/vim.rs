@@ -413,13 +413,13 @@ impl crate::DisciplineState for VimState {
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn enter_search<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, forward: bool) {
-    ed.search_prompt = Some(SearchPrompt {
+    ed.set_search_prompt_state(Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
         forward,
         operator: None,
-    });
-    ed.search_history_cursor = None;
+    }));
+    ed.set_search_history_cursor(None);
     // 0.0.37: clear via the engine search state (the buffer-side
     // bridge from 0.0.35 was removed in this patch — the `BufferView`
     // renderer reads the pattern from `Editor::search_state()`).
@@ -437,13 +437,13 @@ pub fn enter_search_op<H: crate::types::Host>(
     count: usize,
 ) {
     let origin = ed.cursor();
-    ed.search_prompt = Some(SearchPrompt {
+    ed.set_search_prompt_state(Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
         forward,
         operator: Some((op, count.max(1), origin)),
-    });
-    ed.search_history_cursor = None;
+    }));
+    ed.set_search_history_cursor(None);
     ed.set_search_pattern(None);
 }
 
@@ -468,11 +468,11 @@ fn walk_change_list<H: crate::types::Host>(
     dir: isize,
     count: usize,
 ) {
-    if ed.change_list.is_empty() {
+    if ed.change_list().0.is_empty() {
         return;
     }
-    let len = ed.change_list.len();
-    let mut idx: isize = match (ed.change_list_cursor, dir) {
+    let len = ed.change_list().0.len();
+    let mut idx: isize = match (ed.change_list_cursor(), dir) {
         (None, -1) => len as isize - 1,
         (None, 1) => return, // already past the newest entry
         (Some(i), -1) => i as isize - 1,
@@ -490,7 +490,7 @@ fn walk_change_list<H: crate::types::Host>(
         return;
     }
     let idx = idx as usize;
-    ed.change_list_cursor = Some(idx);
+    ed.set_change_list_cursor(Some(idx));
     let (row, col) = ed.change_list().0[idx];
     ed.jump_cursor(row, col);
 }
@@ -507,7 +507,7 @@ fn insert_register_text<H: crate::types::Host>(
     // Special read-only registers: `/` = last search pattern, `.` = last
     // inserted text. Fall back to the register store for everything else.
     let text = match selector {
-        '/' => match &ed.last_search {
+        '/' => match &ed.last_search_pattern().map(str::to_string) {
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },
@@ -934,8 +934,8 @@ pub fn begin_insert<H: crate::types::Host>(
         return;
     }
     // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
-    if ed.view == crate::ViewMode::Blame {
-        ed.view = crate::ViewMode::Normal;
+    if ed.view_mode() == crate::ViewMode::Blame {
+        ed.set_view_mode(crate::ViewMode::Normal);
         return;
     }
     let record = !matches!(reason, InsertReason::ReplayOnly);
@@ -1602,7 +1602,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     // the lhs and insert the rhs, then continue to insert `ch` as normal.
     // `<C-v>` (literal-insert) must bypass this — callers that want literal
     // insertion should NOT call this bridge; they use insert_char_literal.
-    if !in_replace && !ed.abbrevs.is_empty() {
+    if !in_replace && !ed.abbrevs().is_empty() {
         let iskeyword = ed.settings().iskeyword.clone();
         if !is_keyword_char(ch, &iskeyword) {
             // Only non-keyword trigger chars fire abbreviation expansion.
@@ -1629,15 +1629,15 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     // close char shifts right as the user types inside, but the buffer
     // char check always finds it correctly.
     if !in_replace
-        && !ed.pending_closes.is_empty()
-        && let Some(&(pr, _pc, pch)) = ed.pending_closes.last()
+        && !ed.pending_closes().is_empty()
+        && let Some(&(pr, _pc, pch)) = ed.pending_closes().last()
         && ch == pch
         && cursor.row == pr
     {
         let char_at_cursor =
             buf_line(ed.buffer(), cursor.row).and_then(|l| l.chars().nth(cursor.col));
         if char_at_cursor == Some(ch) {
-            ed.pending_closes.pop();
+            ed.pending_closes_mut().pop();
             // For `>` skip-over in HTML/XML: also run tag autoclose.
             let filetype = ed.settings().filetype.clone();
             let autoclose_tag = ed.settings().autoclose_tag;
@@ -1676,7 +1676,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
 
     if in_replace && cursor.col < line_chars {
         // Replace mode: clear pending closes (edit outside the pair).
-        ed.pending_closes.clear();
+        ed.pending_closes_mut().clear();
         ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
@@ -1724,7 +1724,8 @@ pub fn insert_char_bridge<H: crate::types::Host>(
                 // the close char; col is not tracked precisely because chars
                 // typed inside the pair shift the close right. The skip-over
                 // logic checks the actual buffer char at cursor instead.
-                ed.pending_closes.push((cursor.row, between_col, close));
+                ed.pending_closes_mut()
+                    .push((cursor.row, between_col, close));
                 ed.push_buffer_cursor_to_textarea();
                 return true;
             }
@@ -1787,7 +1788,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // ── Abbreviation expansion on CR ─────────────────────────────────────────
     // CR triggers expansion for full-id / end-id / non-id abbreviations.
     // We expand BEFORE the newline is inserted; CR is then inserted as normal.
-    if !ed.abbrevs.is_empty() {
+    if !ed.abbrevs().is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Cr);
     }
 
@@ -1804,7 +1805,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     // Open-pair-newline: if autopair is on and the cursor is between a
     // matching open/close bracket pair, split into two newlines so the
     // close ends up on its own dedented line.
-    if ed.settings().autopair && !ed.pending_closes.is_empty() {
+    if ed.settings().autopair && !ed.pending_closes().is_empty() {
         // Check: char before cursor is an open bracket AND char at cursor
         // is the matching close bracket (from our pending-closes stack).
         let prev_char = if cursor.col > 0 {
@@ -1820,7 +1821,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
         if is_open_pair {
             // The pending-closes stack refers to the close char at cursor.col.
             // We clear it because the newline expansion moves the close.
-            ed.pending_closes.clear();
+            ed.pending_closes_mut().clear();
             // Compute indents: inner gets one extra unit, close gets base.
             let base_indent: String = prev_line
                 .chars()
@@ -1860,7 +1861,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     if ed.settings().autopair
         && let Some(fence) = detect_code_fence_opener(&prev_line, cursor.col)
     {
-        ed.pending_closes.clear();
+        ed.pending_closes_mut().clear();
         let base_indent: String = prev_line
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
@@ -1882,7 +1883,7 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
     };
 
     // Any Enter clears the pending-closes stack (cursor moved off the pair).
-    ed.pending_closes.clear();
+    ed.pending_closes_mut().clear();
 
     let text = if let Some(cont) = comment_cont {
         // Comment continuation overrides autoindent: the indent is already
@@ -2047,7 +2048,7 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
     dir: InsertDir,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.pending_closes.clear();
+    ed.pending_closes_mut().clear();
     match dir {
         InsertDir::Left => {
             crate::motions::move_left(ed.buffer_mut(), 1);
@@ -2078,7 +2079,7 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.pending_closes.clear();
+    ed.pending_closes_mut().clear();
     crate::motions::move_line_start(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -2090,7 +2091,7 @@ pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Bu
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
-    ed.pending_closes.clear();
+    ed.pending_closes_mut().clear();
     crate::motions::move_line_end(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -2277,11 +2278,11 @@ pub fn insert_paste_register_bridge<H: crate::types::Host>(
 pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
-    ed.pending_closes.clear();
+    ed.pending_closes_mut().clear();
 
     // ── Abbreviation expansion on Esc ────────────────────────────────────────
     // Esc triggers expansion for all abbreviation types.
-    if !ed.abbrevs.is_empty() {
+    if !ed.abbrevs().is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Esc);
     }
 
@@ -2810,13 +2811,13 @@ pub fn search_repeat_bridge<H: crate::types::Host>(
     forward: bool,
     count: usize,
 ) {
-    if let Some(pattern) = ed.last_search.clone() {
+    if let Some(pattern) = ed.last_search_pattern().map(str::to_string) {
         ed.push_search_pattern(&pattern);
     }
     if ed.search_state().pattern.is_none() {
         return;
     }
-    let go_forward = ed.last_search_forward == forward;
+    let go_forward = ed.last_search_forward() == forward;
     for _ in 0..count.max(1) {
         if go_forward {
             ed.search_advance_forward(true);
@@ -2861,7 +2862,7 @@ pub fn word_search_bridge<H: crate::types::Host>(
 #[inline]
 pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     if ed.vim.current_mode != crate::VimMode::Normal {
-        ed.view = crate::ViewMode::Normal;
+        ed.set_view_mode(crate::ViewMode::Normal);
     }
 }
 
@@ -3119,7 +3120,7 @@ pub fn goto_mark<H: crate::types::Host>(
 ) {
     let target = match ch {
         'a'..='z' => ed.mark(ch),
-        '\'' | '`' => ed.jump_back.last().copied(),
+        '\'' | '`' => ed.jump_back_list().last().copied(),
         '.' => ed.last_edit_pos(),
         '[' | ']' | '<' | '>' => ed.mark(ch),
         _ => None,
@@ -3215,11 +3216,11 @@ pub fn op_is_change(op: Operator) -> bool {
 /// the current cursor onto the forward stack so `Ctrl-i` can return.
 /// Returns `false` when the back stack is empty so counted loops stop.
 fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let Some(target) = ed.jump_back.pop() else {
+    let Some(target) = ed.jump_back_list_mut().pop() else {
         return false;
     };
     let cur = ed.cursor();
-    ed.jump_fwd.push(cur);
+    ed.jump_fwd_list_mut().push(cur);
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
     ed.set_sticky_col(Some(c));
@@ -3230,13 +3231,13 @@ fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
 /// onto the back stack.
 /// Returns `false` when the forward stack is empty so counted loops stop.
 fn jump_forward<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let Some(target) = ed.jump_fwd.pop() else {
+    let Some(target) = ed.jump_fwd_list_mut().pop() else {
         return false;
     };
     let cur = ed.cursor();
-    ed.jump_back.push(cur);
-    if ed.jump_back.len() > JUMPLIST_MAX {
-        ed.jump_back.remove(0);
+    ed.jump_back_list_mut().push(cur);
+    if ed.jump_back_list().len() > JUMPLIST_MAX {
+        ed.jump_back_list_mut().remove(0);
     }
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
@@ -3857,7 +3858,7 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // Re-push the last query so the buffer's search state is
             // correct even if the host happened to clear it (e.g. while
             // a Visual mode draw was in progress).
-            if let Some(pattern) = ed.last_search.clone() {
+            if let Some(pattern) = ed.last_search_pattern().map(str::to_string) {
                 ed.push_search_pattern(&pattern);
             }
             if ed.search_state().pattern.is_none() {
@@ -3866,7 +3867,7 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `n` repeats the last search in its committed direction;
             // `N` inverts. So a `?` search makes `n` walk backward and
             // `N` walk forward.
-            let forward = ed.last_search_forward != *reverse;
+            let forward = ed.last_search_forward() != *reverse;
             for _ in 0..count.max(1) {
                 if forward {
                     ed.search_advance_forward(true);
@@ -4126,8 +4127,8 @@ fn word_at_cursor_search<H: crate::types::Host>(
         return;
     }
     // Remember the query so `n` / `N` keep working after the jump.
-    ed.last_search = Some(pattern);
-    ed.last_search_forward = forward;
+    ed.set_last_search_pattern_only(Some(pattern));
+    ed.set_last_search_forward_only(forward);
     for _ in 0..count.max(1) {
         if forward {
             ed.search_advance_forward(true);
@@ -4229,7 +4230,7 @@ pub fn apply_op_double<H: crate::types::Host>(
     if op == Operator::Comment {
         // `gcc` / `{N}gcc` — toggle comment on `total_count` lines starting at cursor.
         let row = buf_cursor_pos(ed.buffer()).row;
-        let end_row = (row + total_count.max(1) - 1).min(ed.buffer.row_count().saturating_sub(1));
+        let end_row = (row + total_count.max(1) - 1).min(ed.buffer().row_count().saturating_sub(1));
         ed.toggle_comment_range(row, end_row);
         ed.vim.mode = Mode::Normal;
         if !ed.vim.replaying {
@@ -4291,7 +4292,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
 ) {
     use crate::types::{Cursor, Pos};
     // Make sure the compiled pattern reflects the last `/` or `*` search.
-    if let Some(p) = ed.last_search.clone() {
+    if let Some(p) = ed.last_search_pattern().map(str::to_string) {
         ed.push_search_pattern(&p);
     }
     let Some(re) = ed.search_state().pattern.clone() else {
@@ -4545,7 +4546,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             // itself; raise an intent the host drains and routes to
             // `sqls`. The cursor stays put here — the host moves it
             // once it has the target location.
-            ed.pending_lsp = Some(crate::editor::LspIntent::GotoDefinition);
+            ed.set_pending_lsp(Some(crate::editor::LspIntent::GotoDefinition));
         }
         // `gi` — go to last-insert position and re-enter insert mode.
         // Matches vim's `:h gi`: moves to the `'^` mark position (the
@@ -4600,7 +4601,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         // `g&` — repeat last `:s` over the whole buffer (1,$), keeping all
         // original flags. Equivalent to `:%s//~/&` in vim.
         '&' => {
-            let cmd = match ed.last_substitute.clone() {
+            let cmd = match ed.last_substitute().cloned() {
                 Some(c) => c,
                 None => {
                     // No prior substitute — mirror the `:&` error path; do
@@ -4617,7 +4618,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             let _ = crate::substitute::apply_substitute(ed, &cmd, r);
             // Update stored substitute so subsequent `g&` sees the same cmd.
             // (apply_substitute doesn't call set_last_substitute itself.)
-            ed.last_substitute = Some(cmd);
+            ed.set_last_substitute(cmd);
         }
         _ => {}
     }
@@ -4628,7 +4629,7 @@ pub fn apply_after_g<H: crate::types::Host>(
 /// buffer; this is the single-line, flag-less form.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    let Some(mut cmd) = ed.last_substitute.clone() else {
+    let Some(mut cmd) = ed.last_substitute().cloned() else {
         return;
     };
     cmd.flags = crate::substitute::SubstFlags::default();
@@ -4651,18 +4652,18 @@ pub fn apply_after_z<H: crate::types::Host>(
     match ch {
         'z' => {
             ed.scroll_cursor_to(CursorScrollTarget::Center);
-            ed.viewport_pinned = true;
-            ed.scroll_anim_hint = true;
+            ed.set_viewport_pinned(true);
+            ed.set_scroll_anim_hint(true);
         }
         't' => {
             ed.scroll_cursor_to(CursorScrollTarget::Top);
-            ed.viewport_pinned = true;
-            ed.scroll_anim_hint = true;
+            ed.set_viewport_pinned(true);
+            ed.set_scroll_anim_hint(true);
         }
         'b' => {
             ed.scroll_cursor_to(CursorScrollTarget::Bottom);
-            ed.viewport_pinned = true;
-            ed.scroll_anim_hint = true;
+            ed.set_viewport_pinned(true);
+            ed.set_scroll_anim_hint(true);
         }
         // Folds — operate on the fold under the cursor (or the
         // whole buffer for `R` / `M`). Routed through
@@ -6234,7 +6235,7 @@ fn auto_indent_rows<H: crate::types::Host>(
     ed.restore(lines, (top, 0));
     move_first_non_whitespace(ed);
     // Record the touched row range so the host can display a visual flash.
-    ed.last_indent_range = Some((top, bot));
+    ed.set_last_indent_range(Some((top, bot)));
 }
 
 fn toggle_case_str(s: &str) -> String {
@@ -7522,7 +7523,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
     }
 
     let iskeyword = ed.settings().iskeyword.clone();
-    let abbrevs = ed.abbrevs.clone();
+    let abbrevs = ed.abbrevs().to_vec();
 
     let Some((lhs_len, rhs)) =
         try_abbrev_expand(&abbrevs, &line_before, mincol, trigger, &iskeyword)

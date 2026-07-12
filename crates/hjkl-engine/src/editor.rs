@@ -2199,6 +2199,43 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.viewport_pinned = v;
     }
 
+    /// Queue an LSP intent for the host to service on the next tick.
+    pub fn set_pending_lsp(&mut self, intent: Option<crate::editor::LspIntent>) {
+        self.pending_lsp = intent;
+    }
+
+    /// Record the row range touched by the most recent auto-indent, for the
+    /// host to pick up via `take_last_indent_range`.
+    pub fn set_last_indent_range(&mut self, range: Option<(usize, usize)>) {
+        self.last_indent_range = range;
+    }
+
+    /// Walk cursor into the change list (`g;` / `g,`), or `None` when not
+    /// walking.
+    pub fn change_list_cursor(&self) -> Option<usize> {
+        self.change_list_cursor
+    }
+
+    /// Set the change-list walk cursor.
+    pub fn set_change_list_cursor(&mut self, idx: Option<usize>) {
+        self.change_list_cursor = idx;
+    }
+
+    /// Arm the one-shot hint that the next scroll should be animated.
+    pub fn set_scroll_anim_hint(&mut self, v: bool) {
+        self.scroll_anim_hint = v;
+    }
+
+    /// Set the read-only view overlay (Normal / Blame).
+    pub fn set_view_mode(&mut self, v: crate::ViewMode) {
+        self.view = v;
+    }
+
+    /// The active abbreviation table.
+    pub fn abbrevs(&self) -> &[crate::abbrev::Abbrev] {
+        &self.abbrevs
+    }
+
     /// Autopair's queued close-brackets, as `(row, col, ch)`. A discipline's
     /// insert path consumes a queued close when the user types the matching
     /// character instead of inserting a second one.
