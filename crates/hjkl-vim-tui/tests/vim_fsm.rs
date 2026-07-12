@@ -4,6 +4,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Editor, Host, VimMode};
+use hjkl_vim::VimEditorExt;
 
 fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, keys: &str) {
     // Minimal notation:

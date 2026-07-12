@@ -1,6 +1,7 @@
 pub mod cmd;
 pub mod count;
 pub mod descriptors;
+pub mod editor_ext;
 pub mod insert;
 pub mod motion;
 pub mod normal;
@@ -11,6 +12,7 @@ mod step;
 
 pub use cmd::EngineCmd;
 pub use count::CountAccumulator;
+pub use editor_ext::VimEditorExt;
 // MotionKind moved to hjkl-engine (Phase 6.6 cycle-break); re-exported here for back-compat.
 pub use hjkl_engine::MotionKind;
 pub use operator::OperatorKind;

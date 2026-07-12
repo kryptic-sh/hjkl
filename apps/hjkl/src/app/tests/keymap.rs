@@ -1,4 +1,5 @@
 use super::*;
+use hjkl_vim::VimEditorExt;
 
 // ── Runtime map tests ──────────────────────────────────────────────────
 

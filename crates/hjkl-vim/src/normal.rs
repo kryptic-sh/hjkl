@@ -14,6 +14,8 @@ use hjkl_engine::{
 // Re-export sneak variants for shorter usage in this module.
 use hjkl_engine::Pending::{OpSneakFirst, OpSneakSecond, SneakFirst, SneakSecond};
 
+use crate::VimEditorExt;
+
 // ─── Public entry point ────────────────────────────────────────────────────
 
 /// Drive the normal / visual / operator-pending FSM for one keystroke.

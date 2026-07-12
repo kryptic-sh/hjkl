@@ -2437,20 +2437,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         Some((anchor.min(cursor), anchor.max(cursor)))
     }
 
-    pub fn block_highlight(&self) -> Option<(usize, usize, usize, usize)> {
-        if self.vim_mode() != VimMode::VisualBlock {
-            return None;
-        }
-        let (ar, ac) = self.vim.block_anchor;
-        let cr = buf_cursor_row(&self.buffer);
-        let cc = self.vim.block_vcol;
-        let top = ar.min(cr);
-        let bot = ar.max(cr);
-        let left = ac.min(cc);
-        let right = ac.max(cc);
-        Some((top, bot, left, right))
-    }
-
     /// Active selection in `hjkl_buffer::Selection` shape. `None` when
     /// not in a Visual mode. Phase 7d-i wiring — the host hands this
     /// straight to `BufferView` once render flips off textarea
@@ -6025,17 +6011,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted in Phase 6.6e so `hjkl-vim::normal` can compute the block
     /// extents needed for VisualBlock `I` / `A` / `r` without accessing
     /// engine-private helpers.
-    pub fn visual_block_bounds(&self) -> (usize, usize, usize, usize) {
-        let (ar, ac) = self.vim.block_anchor;
-        let (cr, _) = self.cursor();
-        let cc = self.vim.block_vcol;
-        let top = ar.min(cr);
-        let bot = ar.max(cr);
-        let left = ac.min(cc);
-        let right = ac.max(cc);
-        (top, bot, left, right)
-    }
-
     /// Return the character count (code-point count) of line `row`, or `0`
     /// when `row` is out of range. Used by hjkl-vim::normal for VisualBlock
     /// I / A column computations.

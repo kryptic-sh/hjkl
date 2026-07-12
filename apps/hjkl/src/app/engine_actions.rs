@@ -19,6 +19,7 @@
 //!   - Replay
 
 use crate::keymap_actions::AppAction;
+use hjkl_vim::VimEditorExt;
 
 use super::{App, IndentFlash};
 

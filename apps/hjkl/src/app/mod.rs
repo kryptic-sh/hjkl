@@ -8,6 +8,7 @@ use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_form::TextFieldEditor;
 use hjkl_holler::HollerBus;
 use hjkl_keymap::Keymap;
+use hjkl_vim::VimEditorExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
