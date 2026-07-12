@@ -6,8 +6,8 @@
 //! [`vim`] and communicates with Editor through a small internal API
 //! exposed via `pub(super)` fields and helper methods.
 
+use crate::KeybindingMode;
 use crate::vim::{self, VimState};
-use crate::{KeybindingMode, VimMode};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::SystemTime;
 
@@ -2476,14 +2476,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             return None;
         }
         Some((area_x + gutter_total + dx, area_y + dy))
-    }
-
-    /// Returns the current vim mode. Phase 6.3: reads from the stable
-    /// `current_mode` field (kept in sync by both the FSM step loop and
-    /// the Phase 6.3 primitive bridges) rather than deriving from the
-    /// FSM-internal `mode` field via `public_mode()`.
-    pub fn vim_mode(&self) -> VimMode {
-        self.vim.current_mode
     }
 
     /// Discipline-agnostic coarse mode for app chrome (status badge, cursor

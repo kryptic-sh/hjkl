@@ -11,6 +11,7 @@
 
 use hjkl_buffer::is_keyword_char;
 use hjkl_engine::{Host, VimMode};
+use hjkl_vim::VimEditorExt;
 
 use crate::app::window::WindowId;
 

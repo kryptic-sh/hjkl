@@ -9,6 +9,7 @@
 
 use crate::{OracleCase, test_host::TestHost};
 use hjkl_engine::{Editor, Options, VimMode, decode_macro};
+use hjkl_vim::VimEditorExt;
 
 /// State snapshot produced after replaying a case's keystrokes through the
 /// hjkl engine.

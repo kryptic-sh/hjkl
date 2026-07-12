@@ -2050,6 +2050,7 @@ impl App {
 
         // Guard: discard if user left insert mode or switched buffer.
         use hjkl_engine::VimMode;
+        use hjkl_vim::VimEditorExt;
         if self.active_editor().vim_mode() != VimMode::Insert {
             return;
         }
