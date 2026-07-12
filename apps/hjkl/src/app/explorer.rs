@@ -675,6 +675,7 @@ fn roll_up_dir_status(nodes: &mut [ExplorerNode]) {
 // ── App methods ────────────────────────────────────────────────────────────────
 
 use hjkl_engine::Host;
+use hjkl_vim::VimEditorExt;
 
 impl super::App {
     /// `true` when the focused window's slot is the explorer buffer.

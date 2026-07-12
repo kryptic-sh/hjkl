@@ -2570,7 +2570,8 @@ pub(crate) fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
 /// `p` — paste the unnamed register (or `"reg` register) after the cursor.
 /// Linewise yanks open a new line below; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
-pub(crate) fn paste_after_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn paste_after_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2580,7 +2581,8 @@ pub(crate) fn paste_after_bridge<H: crate::types::Host>(
 /// `P` — paste the unnamed register (or `"reg` register) before the cursor.
 /// Linewise yanks open a new line above; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
-pub(crate) fn paste_before_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn paste_before_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2589,7 +2591,8 @@ pub(crate) fn paste_before_bridge<H: crate::types::Host>(
 
 /// Shared paste entry for `p`/`P`, `gp`/`gP` (`cursor_after`), and
 /// `]p`/`[p` (`reindent`). Records `LastChange::Paste` for dot-repeat.
-pub(crate) fn paste_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn paste_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     before: bool,
     count: usize,
@@ -2611,7 +2614,8 @@ pub(crate) fn paste_bridge<H: crate::types::Host>(
 
 /// `<C-o>` — jump back `count` entries in the jumplist, saving the current
 /// position on the forward stack so `<C-i>` can return.
-pub(crate) fn jump_back_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn jump_back_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2624,7 +2628,8 @@ pub(crate) fn jump_back_bridge<H: crate::types::Host>(
 
 /// `<C-i>` / `Tab` — redo `count` jumps on the forward stack, saving the
 /// current position on the backward stack.
-pub(crate) fn jump_forward_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn jump_forward_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2639,7 +2644,8 @@ pub(crate) fn jump_forward_bridge<H: crate::types::Host>(
 
 /// `<C-f>` / `<C-b>` — scroll the cursor by one full viewport height
 /// (`h - 2` rows to preserve two-line overlap). `count` multiplies.
-pub(crate) fn scroll_full_page_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn scroll_full_page_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: ScrollDir,
     count: usize,
@@ -2654,7 +2660,8 @@ pub(crate) fn scroll_full_page_bridge<H: crate::types::Host>(
 
 /// `<C-d>` / `<C-u>` — scroll the cursor by half the viewport height.
 /// `count` multiplies.
-pub(crate) fn scroll_half_page_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn scroll_half_page_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: ScrollDir,
     count: usize,
@@ -2670,7 +2677,8 @@ pub(crate) fn scroll_half_page_bridge<H: crate::types::Host>(
 /// `<C-e>` / `<C-y>` — scroll the viewport `count` lines without moving the
 /// cursor (cursor is clamped to the new visible region if it would go
 /// off-screen). `<C-e>` scrolls down; `<C-y>` scrolls up.
-pub(crate) fn scroll_line_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn scroll_line_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: ScrollDir,
     count: usize,
@@ -2700,7 +2708,8 @@ pub(crate) fn scroll_line_bridge<H: crate::types::Host>(
 
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
 /// repeat in the original search direction; `false` inverts it (like `N`).
-pub(crate) fn search_repeat_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn search_repeat_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     count: usize,
@@ -2725,7 +2734,8 @@ pub(crate) fn search_repeat_bridge<H: crate::types::Host>(
 /// `*` / `#` / `g*` / `g#` — search for the word under the cursor.
 /// `forward` picks search direction; `whole_word` wraps in `\b...\b`.
 /// `count` repeats the advance.
-pub(crate) fn word_search_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn word_search_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     whole_word: bool,
@@ -4530,7 +4540,8 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
 /// Normal-mode `&` — repeat the last `:s` on the current line, dropping the
 /// previous flags (vim: `&` ≡ `:s` with no flags). `g&` keeps flags + whole
 /// buffer; this is the single-line, flag-less form.
-pub(crate) fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let Some(mut cmd) = ed.vim.last_substitute.clone() else {
         return;
     };
@@ -8356,7 +8367,8 @@ fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
 /// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
 /// every line spanned by the selection into one. A single-line selection joins
 /// the current line with the one below (matching normal-mode `J`).
-pub(crate) fn visual_join<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn visual_join<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     with_space: bool,
 ) {
@@ -8398,10 +8410,8 @@ pub(crate) fn visual_join<H: crate::types::Host>(
 
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
-pub(crate) fn goto_percent<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    count: usize,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn goto_percent<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, count: usize) {
     let rows = buf_row_count(&ed.buffer);
     if rows == 0 {
         return;
@@ -8635,10 +8645,8 @@ fn do_paste<H: crate::types::Host>(
 /// With `p` the deleted selection lands in the unnamed register (vim's swap);
 /// with `P` (`before = true`) the source register is preserved so it can be
 /// pasted over multiple selections in turn.
-pub(crate) fn visual_paste<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    before: bool,
-) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, before: bool) {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
 
@@ -8736,7 +8744,8 @@ pub(crate) fn visual_paste<H: crate::types::Host>(
 /// first number on each selected line. When `sequential` is true the increment
 /// grows by `delta` for each successive number found (vim's `g<C-a>`): the
 /// first gets `delta`, the second `2*delta`, and so on.
-pub(crate) fn adjust_number_visual<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn adjust_number_visual<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     delta: i64,
     sequential: bool,

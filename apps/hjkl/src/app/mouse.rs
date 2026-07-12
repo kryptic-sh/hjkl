@@ -19,6 +19,7 @@
 //! separate concern deferred to a later phase.
 
 use hjkl_engine::{Host, Query};
+use hjkl_vim::VimEditorExt;
 use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
 

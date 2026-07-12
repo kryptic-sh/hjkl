@@ -9,7 +9,7 @@
 //! them up with `use hjkl_vim::VimEditorExt`.
 
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
-use hjkl_engine::vim::{Operator, RangeKind};
+use hjkl_engine::vim::{Operator, RangeKind, ScrollDir};
 use hjkl_engine::{Editor, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
@@ -334,6 +334,83 @@ pub trait VimEditorExt {
     /// **v1 limitation**: the bracket scan does not detect brackets inside
     /// string literals or comments.
     fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize));
+
+    // ─── Paste ─────────────────────────────────────────────────────────────
+
+    /// `p` — paste the unnamed register (or the register selected via `"r`)
+    /// after the cursor. Linewise content opens a new line below; charwise
+    /// content is inserted inline. Records `Paste { before: false }` for `.`.
+    fn paste_after(&mut self, count: usize);
+
+    /// `P` — paste the unnamed register (or the `"r` register) before the
+    /// cursor. Linewise content opens a new line above; charwise is inline.
+    /// Records `Paste { before: true }` for dot-repeat.
+    fn paste_before(&mut self, count: usize);
+
+    /// `gp` / `gP` — paste like `p`/`P` but leave the cursor just after the
+    /// pasted text. `before = true` for `gP`.
+    fn paste_cursor_after(&mut self, before: bool, count: usize);
+
+    /// `]p` / `[p` — linewise paste with the pasted block reindented to match
+    /// the current line. `before = true` for `[p`.
+    fn paste_reindent(&mut self, before: bool, count: usize);
+
+    /// Visual-mode `p` / `P` — replace the active selection with the register.
+    /// `before = true` for `P` (preserves the source register).
+    fn visual_paste(&mut self, before: bool);
+
+    // ─── Visual-mode operators ─────────────────────────────────────────────
+
+    /// Visual-mode `<C-a>`/`<C-x>` (uniform) and `g<C-a>`/`g<C-x>`
+    /// (`sequential`) — adjust the first number on each selected line.
+    fn adjust_number_visual(&mut self, delta: i64, sequential: bool);
+
+    /// Normal-mode `&` — repeat the last `:s` on the current line (no flags).
+    fn ampersand_repeat(&mut self);
+
+    /// Visual-mode `J` (`with_space = true`) / `gJ` (`false`) — join the
+    /// selected lines into one.
+    fn visual_join(&mut self, with_space: bool);
+
+    /// `[count]%` — jump to the line at `count` percent of the file.
+    fn goto_percent(&mut self, count: usize);
+
+    // ─── Jumplist motion ───────────────────────────────────────────────────
+
+    /// `<C-o>` — jump back `count` entries in the jumplist, saving the current
+    /// position on the forward stack so `<C-i>` can return.
+    fn jump_back(&mut self, count: usize);
+
+    /// `<C-i>` / `Tab` — redo `count` entries on the forward jumplist stack,
+    /// saving the current position on the backward stack.
+    fn jump_forward(&mut self, count: usize);
+
+    // ─── Scrolling ─────────────────────────────────────────────────────────
+
+    /// `<C-f>` / `<C-b>` — scroll the cursor by one full viewport height
+    /// (height − 2 rows, preserving two-line overlap). `count` multiplies.
+    /// `dir = Down` for `<C-f>`, `Up` for `<C-b>`.
+    fn scroll_full_page(&mut self, dir: ScrollDir, count: usize);
+
+    /// `<C-d>` / `<C-u>` — scroll the cursor by half the viewport height.
+    /// `count` multiplies the step. `dir = Down` for `<C-d>`, `Up` for `<C-u>`.
+    fn scroll_half_page(&mut self, dir: ScrollDir, count: usize);
+
+    /// `<C-e>` / `<C-y>` — scroll the viewport `count` lines without moving the
+    /// cursor (cursor is clamped to the new visible region if necessary).
+    /// `dir = Down` for `<C-e>` (scroll text up), `Up` for `<C-y>`.
+    fn scroll_line(&mut self, dir: ScrollDir, count: usize);
+
+    // ─── Search ────────────────────────────────────────────────────────────
+
+    /// `n` — repeat the last `/` or `?` search `count` times in its original
+    /// direction. `forward = true` keeps the direction; `false` inverts (`N`).
+    fn search_repeat(&mut self, forward: bool, count: usize);
+
+    /// `*` / `#` / `g*` / `g#` — search for the word under the cursor.
+    /// `forward` chooses direction; `whole_word` wraps the pattern in `\b`
+    /// anchors (true for `*` / `#`, false for `g*` / `g#`). `count` repeats.
+    fn word_search(&mut self, forward: bool, whole_word: bool, count: usize);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -666,5 +743,79 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize)) {
         hjkl_engine::vim::auto_indent_range_bridge(self, start, end);
+    }
+
+    // ─── Paste ─────────────────────────────────────────────────────────────
+
+    fn paste_after(&mut self, count: usize) {
+        hjkl_engine::vim::paste_after_bridge(self, count);
+    }
+
+    fn paste_before(&mut self, count: usize) {
+        hjkl_engine::vim::paste_before_bridge(self, count);
+    }
+
+    fn paste_cursor_after(&mut self, before: bool, count: usize) {
+        hjkl_engine::vim::paste_bridge(self, before, count, true, false);
+    }
+
+    fn paste_reindent(&mut self, before: bool, count: usize) {
+        hjkl_engine::vim::paste_bridge(self, before, count, false, true);
+    }
+
+    fn visual_paste(&mut self, before: bool) {
+        hjkl_engine::vim::visual_paste(self, before);
+    }
+
+    // ─── Visual-mode operators ─────────────────────────────────────────────
+
+    fn adjust_number_visual(&mut self, delta: i64, sequential: bool) {
+        hjkl_engine::vim::adjust_number_visual(self, delta, sequential);
+    }
+
+    fn ampersand_repeat(&mut self) {
+        hjkl_engine::vim::ampersand_repeat(self);
+    }
+
+    fn visual_join(&mut self, with_space: bool) {
+        hjkl_engine::vim::visual_join(self, with_space);
+    }
+
+    fn goto_percent(&mut self, count: usize) {
+        hjkl_engine::vim::goto_percent(self, count);
+    }
+
+    // ─── Jumplist motion ───────────────────────────────────────────────────
+
+    fn jump_back(&mut self, count: usize) {
+        hjkl_engine::vim::jump_back_bridge(self, count);
+    }
+
+    fn jump_forward(&mut self, count: usize) {
+        hjkl_engine::vim::jump_forward_bridge(self, count);
+    }
+
+    // ─── Scrolling ─────────────────────────────────────────────────────────
+
+    fn scroll_full_page(&mut self, dir: ScrollDir, count: usize) {
+        hjkl_engine::vim::scroll_full_page_bridge(self, dir, count);
+    }
+
+    fn scroll_half_page(&mut self, dir: ScrollDir, count: usize) {
+        hjkl_engine::vim::scroll_half_page_bridge(self, dir, count);
+    }
+
+    fn scroll_line(&mut self, dir: ScrollDir, count: usize) {
+        hjkl_engine::vim::scroll_line_bridge(self, dir, count);
+    }
+
+    // ─── Search ────────────────────────────────────────────────────────────
+
+    fn search_repeat(&mut self, forward: bool, count: usize) {
+        hjkl_engine::vim::search_repeat_bridge(self, forward, count);
+    }
+
+    fn word_search(&mut self, forward: bool, whole_word: bool, count: usize) {
+        hjkl_engine::vim::word_search_bridge(self, forward, whole_word, count);
     }
 }

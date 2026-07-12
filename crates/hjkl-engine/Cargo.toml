@@ -17,6 +17,11 @@ default = ["serde"]
 serde = ["dep:serde"]
 
 [dev-dependencies]
+# Dev-only: tests/ integration tests exercise vim accessors that now live on
+# hjkl_vim::VimEditorExt (#267). Safe here (unlike inline unit tests) because a
+# tests/ target links hjkl-engine as an external crate, so `Editor` has a single
+# identity and the blanket impl applies. Cargo permits cycles through dev-deps.
+hjkl-vim.workspace = true
 proptest = "1"
 serde_json = "1"
 
