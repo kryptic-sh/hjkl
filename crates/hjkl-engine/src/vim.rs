@@ -5507,7 +5507,8 @@ pub(crate) fn auto_indent_range_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `iw` (inner word) at the current cursor position.
 /// Returns `None` if no word exists at the cursor.
-pub(crate) fn text_object_inner_word_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, false, 1)
@@ -5515,7 +5516,8 @@ pub(crate) fn text_object_inner_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `aw` (around word) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-pub(crate) fn text_object_around_word_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, false, 1)
@@ -5523,7 +5525,8 @@ pub(crate) fn text_object_around_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `iW` (inner WORD) at the current cursor position.
 /// A WORD is any run of non-whitespace characters (no punctuation splitting).
-pub(crate) fn text_object_inner_big_word_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_big_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, true, 1)
@@ -5531,7 +5534,8 @@ pub(crate) fn text_object_inner_big_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `aW` (around WORD) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-pub(crate) fn text_object_around_big_word_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_big_word_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, true, 1)
@@ -5552,7 +5556,8 @@ pub(crate) fn text_object_around_big_word_bridge<H: crate::types::Host>(
 /// Resolve the range of `i<quote>` (inner quote) at the current cursor
 /// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
 /// when the cursor's line contains fewer than two occurrences of `quote`.
-pub(crate) fn text_object_inner_quote_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_quote_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5561,7 +5566,8 @@ pub(crate) fn text_object_inner_quote_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `a<quote>` (around quote) at the current cursor
 /// position. Includes surrounding whitespace on one side per vim semantics.
-pub(crate) fn text_object_around_quote_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_quote_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5575,7 +5581,8 @@ pub(crate) fn text_object_around_quote_bridge<H: crate::types::Host>(
 /// whose content spans more than one line are reported as a charwise range
 /// covering the first content character through the last content character
 /// (RangeKind metadata is stripped — callers receive start/end only).
-pub(crate) fn text_object_inner_bracket_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_bracket_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5585,7 +5592,8 @@ pub(crate) fn text_object_inner_bracket_bridge<H: crate::types::Host>(
 /// Resolve the range of `a<bracket>` (around bracket pair). Includes the
 /// bracket characters themselves. `open` must be one of `'('`, `'{'`, `'['`,
 /// `'<'`.
-pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_bracket_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5596,7 +5604,8 @@ pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `is` (inner sentence) at the cursor. Excludes
 /// trailing whitespace.
-pub(crate) fn text_object_inner_sentence_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_sentence_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, true, 1)
@@ -5604,7 +5613,8 @@ pub(crate) fn text_object_inner_sentence_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `as` (around sentence) at the cursor. Includes
 /// trailing whitespace.
-pub(crate) fn text_object_around_sentence_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_sentence_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, false, 1)
@@ -5614,7 +5624,8 @@ pub(crate) fn text_object_around_sentence_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `ip` (inner paragraph) at the cursor. A paragraph
 /// is a block of non-blank lines bounded by blank lines or buffer edges.
-pub(crate) fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, true, 1)
@@ -5622,7 +5633,8 @@ pub(crate) fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `ap` (around paragraph) at the cursor. Includes one
 /// trailing blank line when present.
-pub(crate) fn text_object_around_paragraph_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_paragraph_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, false, 1)
@@ -5633,7 +5645,8 @@ pub(crate) fn text_object_around_paragraph_bridge<H: crate::types::Host>(
 /// Resolve the range of `it` (inner tag) at the cursor. Matches XML/HTML-style
 /// `<tag>...</tag>` pairs; returns the range of inner content between the open
 /// and close tags.
-pub(crate) fn text_object_inner_tag_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_inner_tag_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, true)
@@ -5641,7 +5654,8 @@ pub(crate) fn text_object_inner_tag_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `at` (around tag) at the cursor. Includes the open
 /// and close tag delimiters themselves.
-pub(crate) fn text_object_around_tag_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn text_object_around_tag_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, false)

@@ -99,6 +99,106 @@ pub trait VimEditorExt {
     /// Position the cursor was at when the user last jumped via `<C-o>` /
     /// `g;` / similar. `None` before any jump.
     fn last_jump_back(&self) -> Option<(usize, usize)>;
+
+    // ─── Text-object resolution (hjkl#70) ──────────────────────────────────
+    //
+    // Pure functions — no cursor mutation, no mode change, no register write.
+    // Each delegates to the `hjkl_engine::vim::text_object_*_bridge` resolvers,
+    // which remain in the engine until vim.rs itself relocates (#267).
+    //
+    // Return value: `Some((start, end))` where both positions are `(row, col)`
+    // char-column pairs and `end` is *exclusive* (one past the last char to act
+    // on), matching the convention used by `delete_range` / `yank_range` / etc.
+    //
+    // Quote methods take the quote char itself (`'"'`, `'\''`, `` '`' ``).
+    // Bracket methods take the OPEN bracket char (`'('`, `'{'`, `'['`, `'<'`);
+    // close-bracket variants are NOT accepted — the grammar layer normalises
+    // close→open before calling these.
+
+    /// Resolve the range of `iw` (inner word) at the cursor.
+    ///
+    /// An inner word is the contiguous run of keyword characters (or
+    /// punctuation characters if the cursor is on punctuation) under the
+    /// cursor, without surrounding whitespace. Whitespace-only positions
+    /// return `None`.
+    fn text_object_inner_word(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `aw` (around word) at the cursor.
+    ///
+    /// Like `iw` but extends the range to include trailing whitespace after
+    /// the word. If no trailing whitespace exists, leading whitespace before
+    /// the word is absorbed instead (vim `:help text-objects` behaviour).
+    fn text_object_around_word(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `iW` (inner WORD) at the cursor.
+    ///
+    /// A WORD is any contiguous run of non-whitespace characters — punctuation
+    /// is not a word boundary.
+    fn text_object_inner_big_word(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `aW` (around WORD) at the cursor.
+    fn text_object_around_big_word(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `i<quote>` (inner quote) at the cursor.
+    ///
+    /// Excludes the quote characters themselves. `None` when the cursor's line
+    /// contains fewer than two occurrences of `quote`, or no matching pair can
+    /// be found around or ahead of the cursor.
+    fn text_object_inner_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `a<quote>` (around quote) at the cursor.
+    ///
+    /// Like `i<quote>` but includes the quote characters plus surrounding
+    /// whitespace on one side: trailing after the closing quote if any exists,
+    /// otherwise leading before the opening quote.
+    fn text_object_around_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `i<bracket>` (inner bracket pair) at the cursor.
+    ///
+    /// The cursor may be anywhere inside the pair or on a bracket character.
+    /// When not inside any pair the resolver falls back to a forward scan
+    /// (targets.vim-style: `ci(` works when the cursor is before `(`).
+    /// Multi-line pairs are supported.
+    fn text_object_inner_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve the range of `a<bracket>` (around bracket pair) at the cursor.
+    ///
+    /// Like `i<bracket>` but includes the bracket characters themselves.
+    fn text_object_around_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `is` (inner sentence) at the cursor.
+    ///
+    /// Excludes trailing whitespace. Sentence boundaries follow vim's `is`
+    /// semantics (period / `?` / `!` followed by whitespace or
+    /// end-of-paragraph).
+    fn text_object_inner_sentence(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `as` (around sentence) at the cursor.
+    ///
+    /// Like `is` but includes trailing whitespace after the terminator.
+    fn text_object_around_sentence(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `ip` (inner paragraph) at the cursor.
+    ///
+    /// A paragraph is a block of non-blank lines bounded by blank lines or
+    /// buffer edges. `None` when the cursor is on a blank line.
+    fn text_object_inner_paragraph(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `ap` (around paragraph) at the cursor.
+    ///
+    /// Like `ip` but includes one trailing blank line when present.
+    fn text_object_around_paragraph(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `it` (inner tag) at the cursor.
+    ///
+    /// Matches XML/HTML-style `<tag>...</tag>` pairs, returning the content
+    /// between the open and close tags (excluding the tags themselves).
+    fn text_object_inner_tag(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    /// Resolve `at` (around tag) at the cursor.
+    ///
+    /// Like `it` but includes the open and close tag delimiters.
+    fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))>;
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -267,5 +367,63 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn last_jump_back(&self) -> Option<(usize, usize)> {
         self.vim.jump_back.last().copied()
+    }
+
+    // ─── Text-object resolution ────────────────────────────────────────────
+
+    fn text_object_inner_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_word_bridge(self)
+    }
+
+    fn text_object_around_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_word_bridge(self)
+    }
+
+    fn text_object_inner_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_big_word_bridge(self)
+    }
+
+    fn text_object_around_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_big_word_bridge(self)
+    }
+
+    fn text_object_inner_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_quote_bridge(self, quote)
+    }
+
+    fn text_object_around_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_quote_bridge(self, quote)
+    }
+
+    fn text_object_inner_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_bracket_bridge(self, open)
+    }
+
+    fn text_object_around_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_bracket_bridge(self, open)
+    }
+
+    fn text_object_inner_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_sentence_bridge(self)
+    }
+
+    fn text_object_around_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_sentence_bridge(self)
+    }
+
+    fn text_object_inner_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_paragraph_bridge(self)
+    }
+
+    fn text_object_around_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_paragraph_bridge(self)
+    }
+
+    fn text_object_inner_tag(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_inner_tag_bridge(self)
+    }
+
+    fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))> {
+        hjkl_engine::vim::text_object_around_tag_bridge(self)
     }
 }
