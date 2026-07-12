@@ -4,6 +4,7 @@ use crate::host::FormFieldHost;
 use crate::validate::Validator;
 use hjkl_buffer::Buffer;
 use hjkl_engine::{CoarseMode, Editor, Host, Input, Key, Options};
+use hjkl_vim::VimEditorExt;
 
 /// Metadata shared by every field variant. Holds the label,
 /// required-marker, the most recent validator error, and an optional

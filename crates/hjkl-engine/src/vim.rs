@@ -322,7 +322,8 @@ impl VimState {
     /// by the Phase 6.1 public `Editor::insert_*` methods after each
     /// mutation so `finish_insert_session` diffs the right range on Esc.
     /// No-op when no insert session is active (e.g. calling from Normal mode).
-    pub(crate) fn widen_insert_row(&mut self, row: usize) {
+    #[doc(hidden)] // #267 shim: temporary pub for hjkl_vim's after_insert_* helpers.
+    pub fn widen_insert_row(&mut self, row: usize) {
         if let Some(ref mut session) = self.insert_session {
             session.row_min = session.row_min.min(row);
             session.row_max = session.row_max.max(row);
@@ -1585,7 +1586,8 @@ fn scan_tag_opener(line: &str, col: usize) -> Option<String> {
 /// (when `InsertSession::reason` is `Replace`) and smart-indent dedent of
 /// closing brackets (}/)]/). Also handles autopair insertion and skip-over.
 /// Returns `true`.
-pub(crate) fn insert_char_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_char_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
 ) -> bool {
@@ -1777,7 +1779,8 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
 /// Also handles open-pair-newline: Enter between `{|}` / `(|)` / `[|]`
 /// produces an indented block with the close on its own line.
 /// Returns `true`.
-pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_newline_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::Edit;
@@ -1898,9 +1901,8 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
 
 /// Insert a tab character (or spaces up to the next softtabstop boundary when
 /// `expandtab` is set). Returns `true`.
-pub(crate) fn insert_tab_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) -> bool {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_tab_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(&ed.buffer);
@@ -1935,7 +1937,8 @@ pub(crate) fn insert_tab_bridge<H: crate::types::Host>(
 ///
 /// Returns `true` when something was deleted, `false` at the very start of the
 /// buffer.
-pub(crate) fn insert_backspace_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_backspace_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2006,7 +2009,8 @@ pub(crate) fn insert_backspace_bridge<H: crate::types::Host>(
 
 /// Delete the character under the cursor (vim `Delete`). Joins with the
 /// next line when at end-of-line. Returns `true` when something was deleted.
-pub(crate) fn insert_delete_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_delete_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2039,7 +2043,8 @@ pub(crate) fn insert_delete_bridge<H: crate::types::Host>(
 /// Move the cursor one step in `dir`, breaking the undo group per
 /// `undo_break_on_motion`. Clears the autopair pending-closes stack (cursor
 /// moved off the pair). Returns `false` (no mutation).
-pub(crate) fn insert_arrow_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_arrow_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: InsertDir,
 ) -> bool {
@@ -2068,9 +2073,8 @@ pub(crate) fn insert_arrow_bridge<H: crate::types::Host>(
 
 /// Move the cursor to the start of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
-pub(crate) fn insert_home_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) -> bool {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.vim.pending_closes.clear();
     crate::motions::move_line_start(&mut ed.buffer);
@@ -2081,9 +2085,8 @@ pub(crate) fn insert_home_bridge<H: crate::types::Host>(
 
 /// Move the cursor to the end of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
-pub(crate) fn insert_end_bridge<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) -> bool {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.vim.pending_closes.clear();
     crate::motions::move_line_end(&mut ed.buffer);
@@ -2094,7 +2097,8 @@ pub(crate) fn insert_end_bridge<H: crate::types::Host>(
 
 /// Scroll up one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
-pub(crate) fn insert_pageup_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_pageup_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     viewport_h: u16,
 ) -> bool {
@@ -2105,7 +2109,8 @@ pub(crate) fn insert_pageup_bridge<H: crate::types::Host>(
 
 /// Scroll down one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
-pub(crate) fn insert_pagedown_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_pagedown_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     viewport_h: u16,
 ) -> bool {
@@ -2117,7 +2122,8 @@ pub(crate) fn insert_pagedown_bridge<H: crate::types::Host>(
 /// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
 /// At col 0, joins with the previous line (vim semantics). Returns `true`
 /// when something was deleted.
-pub(crate) fn insert_ctrl_w_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_w_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind};
@@ -2143,7 +2149,8 @@ pub(crate) fn insert_ctrl_w_bridge<H: crate::types::Host>(
 
 /// Delete from the cursor back to the start of the current line (`Ctrl-U`).
 /// No-op when already at column 0. Returns `true` when something was deleted.
-pub(crate) fn insert_ctrl_u_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_u_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2163,7 +2170,8 @@ pub(crate) fn insert_ctrl_u_bridge<H: crate::types::Host>(
 /// Delete one character backwards (`Ctrl-H`) — alias for Backspace in insert
 /// mode. Joins with the previous line when at col 0. Returns `true` when
 /// something was deleted.
-pub(crate) fn insert_ctrl_h_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_h_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2191,7 +2199,8 @@ pub(crate) fn insert_ctrl_h_bridge<H: crate::types::Host>(
 
 /// Indent the current line by one `shiftwidth` and shift the cursor right by
 /// the same amount (`Ctrl-T`). Returns `true`.
-pub(crate) fn insert_ctrl_t_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_t_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
@@ -2203,7 +2212,8 @@ pub(crate) fn insert_ctrl_t_bridge<H: crate::types::Host>(
 
 /// Outdent the current line by up to one `shiftwidth` and shift the cursor
 /// left by the amount stripped (`Ctrl-D`). Returns `true`.
-pub(crate) fn insert_ctrl_d_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_d_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
@@ -2219,7 +2229,8 @@ pub(crate) fn insert_ctrl_d_bridge<H: crate::types::Host>(
 /// Enter "one-shot normal" mode (`Ctrl-O`): suspend insert for the next
 /// complete normal-mode command, then return to insert. Returns `false`
 /// (no buffer mutation — only mode state changes).
-pub(crate) fn insert_ctrl_o_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_o_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.vim.one_shot_normal = true;
@@ -2232,7 +2243,8 @@ pub(crate) fn insert_ctrl_o_bridge<H: crate::types::Host>(
 /// Arm the register-paste selector (`Ctrl-R`): the next typed character
 /// names the register whose text will be inserted inline. Returns `false`
 /// (no buffer mutation yet — mutation happens when the register char arrives).
-pub(crate) fn insert_ctrl_r_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_ctrl_r_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.vim.insert_pending_register = true;
@@ -2242,7 +2254,8 @@ pub(crate) fn insert_ctrl_r_bridge<H: crate::types::Host>(
 /// Paste the contents of `reg` at the cursor (the body of `Ctrl-R {reg}`).
 /// Unknown or empty registers are a no-op. Returns `true` when text was
 /// inserted.
-pub(crate) fn insert_paste_register_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn insert_paste_register_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     reg: char,
 ) -> bool {
@@ -2257,7 +2270,8 @@ pub(crate) fn insert_paste_register_bridge<H: crate::types::Host>(
 /// column. Clears the autopair pending-closes stack. Returns `true` (always
 /// consumed — even if no buffer mutation, the mode change itself is a
 /// meaningful step).
-pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.vim.pending_closes.clear();
@@ -2292,7 +2306,8 @@ pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
 
 /// `i` — begin Insert at the cursor. `count` is stored in the session for
 /// insert-exit replay. Returns `true`.
-pub(crate) fn enter_insert_i_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_insert_i_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2300,7 +2315,8 @@ pub(crate) fn enter_insert_i_bridge<H: crate::types::Host>(
 }
 
 /// `I` — move to first non-blank then begin Insert. `count` stored for replay.
-pub(crate) fn enter_insert_shift_i_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_insert_shift_i_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2309,7 +2325,8 @@ pub(crate) fn enter_insert_shift_i_bridge<H: crate::types::Host>(
 }
 
 /// `a` — advance past the cursor char then begin Insert. `count` for replay.
-pub(crate) fn enter_insert_a_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_insert_a_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2319,7 +2336,8 @@ pub(crate) fn enter_insert_a_bridge<H: crate::types::Host>(
 }
 
 /// `A` — move to end-of-line then begin Insert. `count` for replay.
-pub(crate) fn enter_insert_shift_a_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_insert_shift_a_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2332,7 +2350,8 @@ pub(crate) fn enter_insert_shift_a_bridge<H: crate::types::Host>(
 /// `o` — open a new line below the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically.
-pub(crate) fn open_line_below_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn open_line_below_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2367,7 +2386,8 @@ pub(crate) fn open_line_below_bridge<H: crate::types::Host>(
 /// `O` — open a new line above the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically on the new line above.
-pub(crate) fn open_line_above_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn open_line_above_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2412,7 +2432,8 @@ pub(crate) fn open_line_above_bridge<H: crate::types::Host>(
 }
 
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.
-pub(crate) fn enter_replace_mode_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn enter_replace_mode_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2424,7 +2445,8 @@ pub(crate) fn enter_replace_mode_bridge<H: crate::types::Host>(
 
 /// `x` — delete `count` chars forward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
-pub(crate) fn delete_char_forward_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn delete_char_forward_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2439,7 +2461,8 @@ pub(crate) fn delete_char_forward_bridge<H: crate::types::Host>(
 
 /// `X` — delete `count` chars backward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
-pub(crate) fn delete_char_backward_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn delete_char_backward_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2454,7 +2477,8 @@ pub(crate) fn delete_char_backward_bridge<H: crate::types::Host>(
 
 /// `s` — substitute `count` chars (delete then enter Insert). Equivalent to
 /// `cl`. Records `LastChange::OpMotion` for dot-repeat.
-pub(crate) fn substitute_char_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn substitute_char_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2487,7 +2511,8 @@ pub(crate) fn substitute_char_bridge<H: crate::types::Host>(
 
 /// `S` — substitute the whole line (delete line contents then enter Insert).
 /// Equivalent to `cc`. Records `LastChange::LineOp` for dot-repeat.
-pub(crate) fn substitute_line_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn substitute_line_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2503,7 +2528,8 @@ pub(crate) fn substitute_line_bridge<H: crate::types::Host>(
 
 /// `D` — delete from the cursor to end-of-line, writing to the unnamed
 /// register. Cursor parks on the new last char. Records for dot-repeat.
-pub(crate) fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     ed.push_undo();
     delete_to_eol(ed);
     crate::motions::move_left(&mut ed.buffer, 1);
@@ -2515,14 +2541,16 @@ pub(crate) fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_b
 
 /// `C` — change from the cursor to end-of-line (delete then enter Insert).
 /// Equivalent to `c$`. Shares the delete path with `D`.
-pub(crate) fn change_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn change_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     ed.push_undo();
     delete_to_eol(ed);
     begin_insert_noundo(ed, 1, InsertReason::DeleteToEol);
 }
 
 /// `Y` — yank from the cursor to end-of-line (same as `y$` in Vim 8 default).
-pub(crate) fn yank_to_eol_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn yank_to_eol_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2531,7 +2559,8 @@ pub(crate) fn yank_to_eol_bridge<H: crate::types::Host>(
 
 /// `J` — join `count` lines (default 2) onto the current one, inserting a
 /// single space between each pair (vim semantics). Records for dot-repeat.
-pub(crate) fn join_line_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn join_line_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2551,7 +2580,8 @@ pub(crate) fn join_line_bridge<H: crate::types::Host>(
 
 /// `~` — toggle the case of `count` chars from the cursor, advancing right.
 /// Records `LastChange::ToggleCase` for dot-repeat.
-pub(crate) fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -7402,7 +7432,8 @@ pub(crate) fn try_abbrev_expand(
 ///
 /// `trigger` is what the user did; the trigger char itself is NOT inserted
 /// here — the caller inserts it (or not, in the case of `C-]`).
-pub(crate) fn check_and_apply_abbrev<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn check_and_apply_abbrev<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     trigger: AbbrevTrigger,
 ) -> bool {
@@ -9993,74 +10024,3 @@ mod abbrev_tests {
 }
 
 // ─── scan_tag_opener / autoclose multibyte tests ──────────────────────────────
-
-#[cfg(test)]
-mod scan_tag_opener_multibyte_tests {
-    use crate::types::Options;
-    use crate::{DefaultHost, Editor};
-    use hjkl_buffer::Buffer;
-
-    fn html_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
-        let host = DefaultHost::new();
-        let mut ed = Editor::new(buf, host, Options::default());
-        ed.settings.filetype = "html".to_string();
-        ed.settings.autoclose_tag = true;
-        ed.settings.autopair = true;
-        ed
-    }
-
-    /// Typing `>` after a multibyte char must not panic.
-    ///
-    /// With "ñ" in the buffer (ñ = 2 UTF-8 bytes), the cursor is at char
-    /// col 1 (one past ñ).  `insert_char('>')` calls `scan_tag_opener` with
-    /// `col = cursor.col = 1`.  Before the fix, `&line[..1]` landed inside
-    /// the 2-byte ñ sequence → panic "byte index 1 is not a char boundary".
-    #[test]
-    fn autoclose_gt_after_multibyte_no_panic() {
-        let mut ed = html_editor("ñ");
-        // Cursor starts at col 0 (on ñ). Enter insert at end-of-line.
-        ed.enter_insert_i(1);
-        // Move to end (col 1, after ñ).
-        ed.jump_cursor(0, 1);
-        // Insert '>' — must not panic.
-        ed.insert_char('>');
-        // The `>` should be in the buffer (no autoclose tag fires for bare ">").
-        let rope = ed.buffer().rope();
-        let line = hjkl_buffer::rope_line_str(&rope, 0);
-        assert!(line.contains('>'), "inserted > must appear in buffer");
-    }
-
-    /// Same repro via the direct tag-autoclose path.
-    ///
-    /// "ä<div" has a multibyte char at the start.  Positioning the cursor
-    /// at char col 5 (after 'v') and inserting '>' exercises the
-    /// scan_tag_opener branch.  Before the fix, `col = cursor.col = 5` and
-    /// `&line[..5]` is byte index 5, which falls inside 'ä' (2 bytes at
-    /// positions 0-1) — wait, 'ä'=2 bytes then '<','d','i','v' are 1 byte
-    /// each, so byte 5 = 'v' (valid boundary).  Use a CJK char (3 bytes)
-    /// to force a panic at a narrower position:
-    ///
-    /// "中<div>": 中 = 3 bytes; after '>', char col 5 → byte index 5.
-    /// Bytes: 中=0,1,2  <=3  d=4  i=5  v=6  >=7.  Char index 4 = 'i', byte 4
-    /// is safe. Need char 2 to map to byte 5 → that's inside '<'.
-    ///
-    /// Simplest panic case: "ñ>" (ñ=2 bytes, >=1 byte):
-    /// char 0=ñ, char 1=>; cursor.col=1, &line[..1] = byte 1 = 0xb1 inside ñ → PANIC.
-    #[test]
-    fn autoclose_gt_direct_after_multibyte_no_panic() {
-        // "ñ>" already in buffer — cursor at char col 1 (the '>').
-        // We'll test by inserting '>' after 'ñ' from scratch.
-        let mut ed = html_editor("ñ");
-        ed.enter_insert_i(1);
-        ed.jump_cursor(0, 1); // char col 1 = one past ñ
-        // Insert '>' — before fix: scan_tag_opener("ñ>", 1) → &"ñ>"[..1] panics.
-        ed.insert_char('>');
-        let rope = ed.buffer().rope();
-        let line = hjkl_buffer::rope_line_str(&rope, 0);
-        assert!(
-            line.contains('>'),
-            "inserted > must appear in buffer, got: {line:?}"
-        );
-    }
-}

@@ -11,7 +11,8 @@
 use hjkl_engine::input::Input;
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
 use hjkl_engine::vim::{
-    InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir, SearchPrompt, TextObject,
+    AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, ScrollDir,
+    SearchPrompt, TextObject,
 };
 use hjkl_engine::{Editor, FsmMode, VimMode};
 
@@ -35,6 +36,31 @@ fn dec_pos_one_char<H: Host>(
         return Position::new(prev, len);
     }
     Position::new(0, 0)
+}
+
+/// Common post-mutation sync for the `insert_*` primitives.
+///
+/// The vim FSM's `step` runs `ensure_cursor_in_scrolloff` at the end of every
+/// normal/visual motion; insert-mode primitives bypass `step` and must
+/// self-correct or the cursor scrolls off the viewport (held Enter, multi-line
+/// backspace at BOL, arrow keys at edge, etc.).
+///
+/// Marks the content dirty, widens the insert row's autoindent tracking, and
+/// re-checks scrolloff. Was `Editor::after_insert_mutation` (#267) — it exists
+/// only to serve the insert primitives, so it moved here with them.
+fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    ed.mark_content_dirty();
+    let (row, _) = ed.cursor();
+    ed.vim.widen_insert_row(row);
+    ed.ensure_cursor_in_scrolloff();
+}
+
+/// Like [`after_insert_mutation`] but for cursor-only insert ops that do not
+/// change content (arrows, Home/End, PageUp/Down). Skips the dirty mark.
+fn after_insert_motion<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    let (row, _) = ed.cursor();
+    ed.vim.widen_insert_row(row);
+    ed.ensure_cursor_in_scrolloff();
 }
 
 /// Vim-discipline read accessors layered onto every `Editor<Buffer, H>`.
@@ -683,6 +709,98 @@ pub trait VimEditorExt {
     /// Visual-mode `i<ch>` / `a<ch>` — extend the selection to cover the text
     /// object identified by `ch`.
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool);
+
+    // ─── Insert-mode primitives ────────────────────────────────────────────
+    //
+    // Each wraps a `hjkl_engine::vim::insert_*_bridge` and, when the bridge
+    // reports a mutation, runs the post-mutation sync (dirty mark, insert-row
+    // widening, scrolloff correction). Callers must ensure the editor is in
+    // Insert (or Replace) mode first.
+
+    /// Insert `ch` at the cursor. In Replace mode, overstrike the cell under
+    /// the cursor instead; at end-of-line, always appends. With `smartindent`,
+    /// closing brackets trigger a one-unit dedent on an otherwise-whitespace
+    /// line.
+    fn insert_char(&mut self, ch: char);
+    /// Insert a newline, applying autoindent / smartindent.
+    fn insert_newline(&mut self);
+    /// Insert a tab (or spaces to the next `softtabstop` boundary under
+    /// `expandtab`).
+    fn insert_tab(&mut self);
+    /// Backspace. Deletes a whole soft-tab run at an aligned boundary under
+    /// `softtabstop`; joins with the previous line at column 0.
+    fn insert_backspace(&mut self);
+    /// Delete the char under the cursor; joins with the next line at EOL.
+    fn insert_delete(&mut self);
+    /// Arrow-key motion in Insert, breaking the undo group per
+    /// `undo_break_on_motion`.
+    fn insert_arrow(&mut self, dir: InsertDir);
+    /// Home in Insert.
+    fn insert_home(&mut self);
+    /// End in Insert.
+    fn insert_end(&mut self);
+    /// PageUp in Insert.
+    fn insert_pageup(&mut self, viewport_h: u16);
+    /// PageDown in Insert.
+    fn insert_pagedown(&mut self, viewport_h: u16);
+    /// `Ctrl-W` — delete the word before the cursor.
+    fn insert_ctrl_w(&mut self);
+    /// `Ctrl-U` — delete to the start of the line.
+    fn insert_ctrl_u(&mut self);
+    /// `Ctrl-H` — backspace equivalent.
+    fn insert_ctrl_h(&mut self);
+    /// `Ctrl-O` — arm a one-shot Normal-mode command.
+    fn insert_ctrl_o_arm(&mut self);
+    /// `Ctrl-R` — arm register paste; the next char names the register.
+    fn insert_ctrl_r_arm(&mut self);
+    /// `Ctrl-T` — indent the current line one `shiftwidth`.
+    fn insert_ctrl_t(&mut self);
+    /// `Ctrl-D` — dedent the current line one `shiftwidth`.
+    fn insert_ctrl_d(&mut self);
+    /// Paste register `reg` at the cursor (the `Ctrl-R` follow-up).
+    fn insert_paste_register(&mut self, reg: char);
+    /// `Ctrl-[` — expand any pending abbreviation (Esc-equivalent trigger).
+    fn insert_ctrl_bracket(&mut self);
+    /// Esc from Insert — end the insert session and return to Normal.
+    fn leave_insert_to_normal(&mut self);
+
+    // ─── Insert-mode entry ─────────────────────────────────────────────────
+
+    /// `i` — insert before the cursor, `count` times on commit.
+    fn enter_insert_i(&mut self, count: usize);
+    /// `I` — insert at the first non-blank of the line.
+    fn enter_insert_shift_i(&mut self, count: usize);
+    /// `a` — append after the cursor.
+    fn enter_insert_a(&mut self, count: usize);
+    /// `A` — append at end-of-line.
+    fn enter_insert_shift_a(&mut self, count: usize);
+    /// `o` — open a new line below and insert.
+    fn open_line_below(&mut self, count: usize);
+    /// `O` — open a new line above and insert.
+    fn open_line_above(&mut self, count: usize);
+    /// `R` — enter Replace mode.
+    fn enter_replace_mode(&mut self, count: usize);
+
+    // ─── Normal-mode edit primitives ───────────────────────────────────────
+
+    /// `x` — delete `count` chars forward.
+    fn delete_char_forward(&mut self, count: usize);
+    /// `X` — delete `count` chars backward.
+    fn delete_char_backward(&mut self, count: usize);
+    /// `s` — substitute `count` chars (delete then insert).
+    fn substitute_char(&mut self, count: usize);
+    /// `S` — substitute whole lines.
+    fn substitute_line(&mut self, count: usize);
+    /// `D` — delete to end-of-line.
+    fn delete_to_eol(&mut self);
+    /// `C` — change to end-of-line.
+    fn change_to_eol(&mut self);
+    /// `Y` — yank to end-of-line.
+    fn yank_to_eol(&mut self, count: usize);
+    /// `J` — join `count` lines.
+    fn join_line(&mut self, count: usize);
+    /// `~` — toggle case of `count` chars, advancing right.
+    fn toggle_case_at_cursor(&mut self, count: usize);
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -1431,5 +1549,191 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
                 self.jump_cursor(er, ec);
             }
         }
+    }
+
+    // ─── Insert-mode primitives ────────────────────────────────────────────
+
+    fn insert_char(&mut self, ch: char) {
+        if hjkl_engine::vim::insert_char_bridge(self, ch) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_newline(&mut self) {
+        if hjkl_engine::vim::insert_newline_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_tab(&mut self) {
+        if hjkl_engine::vim::insert_tab_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_backspace(&mut self) {
+        if hjkl_engine::vim::insert_backspace_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_delete(&mut self) {
+        if hjkl_engine::vim::insert_delete_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_arrow(&mut self, dir: InsertDir) {
+        hjkl_engine::vim::insert_arrow_bridge(self, dir);
+        after_insert_motion(self);
+    }
+
+    fn insert_home(&mut self) {
+        hjkl_engine::vim::insert_home_bridge(self);
+        after_insert_motion(self);
+    }
+
+    fn insert_end(&mut self) {
+        hjkl_engine::vim::insert_end_bridge(self);
+        after_insert_motion(self);
+    }
+
+    fn insert_pageup(&mut self, viewport_h: u16) {
+        hjkl_engine::vim::insert_pageup_bridge(self, viewport_h);
+        after_insert_motion(self);
+    }
+
+    fn insert_pagedown(&mut self, viewport_h: u16) {
+        hjkl_engine::vim::insert_pagedown_bridge(self, viewport_h);
+        after_insert_motion(self);
+    }
+
+    fn insert_ctrl_w(&mut self) {
+        if hjkl_engine::vim::insert_ctrl_w_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_ctrl_u(&mut self) {
+        if hjkl_engine::vim::insert_ctrl_u_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_ctrl_h(&mut self) {
+        if hjkl_engine::vim::insert_ctrl_h_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_ctrl_o_arm(&mut self) {
+        hjkl_engine::vim::insert_ctrl_o_bridge(self);
+    }
+
+    fn insert_ctrl_r_arm(&mut self) {
+        hjkl_engine::vim::insert_ctrl_r_bridge(self);
+    }
+
+    fn insert_ctrl_t(&mut self) {
+        // Indent-only: no scrolloff re-check (the cursor row does not move).
+        let mutated = hjkl_engine::vim::insert_ctrl_t_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    fn insert_ctrl_d(&mut self) {
+        let mutated = hjkl_engine::vim::insert_ctrl_d_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    fn insert_paste_register(&mut self, reg: char) {
+        hjkl_engine::vim::insert_paste_register_bridge(self, reg);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    fn insert_ctrl_bracket(&mut self) {
+        if hjkl_engine::vim::check_and_apply_abbrev(self, AbbrevTrigger::CtrlBracket) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn leave_insert_to_normal(&mut self) {
+        hjkl_engine::vim::leave_insert_to_normal_bridge(self);
+    }
+
+    // ─── Insert-mode entry ─────────────────────────────────────────────────
+
+    fn enter_insert_i(&mut self, count: usize) {
+        hjkl_engine::vim::enter_insert_i_bridge(self, count);
+    }
+
+    fn enter_insert_shift_i(&mut self, count: usize) {
+        hjkl_engine::vim::enter_insert_shift_i_bridge(self, count);
+    }
+
+    fn enter_insert_a(&mut self, count: usize) {
+        hjkl_engine::vim::enter_insert_a_bridge(self, count);
+    }
+
+    fn enter_insert_shift_a(&mut self, count: usize) {
+        hjkl_engine::vim::enter_insert_shift_a_bridge(self, count);
+    }
+
+    fn open_line_below(&mut self, count: usize) {
+        hjkl_engine::vim::open_line_below_bridge(self, count);
+    }
+
+    fn open_line_above(&mut self, count: usize) {
+        hjkl_engine::vim::open_line_above_bridge(self, count);
+    }
+
+    fn enter_replace_mode(&mut self, count: usize) {
+        hjkl_engine::vim::enter_replace_mode_bridge(self, count);
+    }
+
+    // ─── Normal-mode edit primitives ───────────────────────────────────────
+
+    fn delete_char_forward(&mut self, count: usize) {
+        hjkl_engine::vim::delete_char_forward_bridge(self, count);
+    }
+
+    fn delete_char_backward(&mut self, count: usize) {
+        hjkl_engine::vim::delete_char_backward_bridge(self, count);
+    }
+
+    fn substitute_char(&mut self, count: usize) {
+        hjkl_engine::vim::substitute_char_bridge(self, count);
+    }
+
+    fn substitute_line(&mut self, count: usize) {
+        hjkl_engine::vim::substitute_line_bridge(self, count);
+    }
+
+    fn delete_to_eol(&mut self) {
+        hjkl_engine::vim::delete_to_eol_bridge(self);
+    }
+
+    fn change_to_eol(&mut self) {
+        hjkl_engine::vim::change_to_eol_bridge(self);
+    }
+
+    fn yank_to_eol(&mut self, count: usize) {
+        hjkl_engine::vim::yank_to_eol_bridge(self, count);
+    }
+
+    fn join_line(&mut self, count: usize) {
+        hjkl_engine::vim::join_line_bridge(self, count);
+    }
+
+    fn toggle_case_at_cursor(&mut self, count: usize) {
+        hjkl_engine::vim::toggle_case_at_cursor_bridge(self, count);
     }
 }
