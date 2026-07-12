@@ -1,3 +1,4 @@
+use crate::editor_ext::VimEditorExt;
 /// Phase 6.6c: `step_search_prompt` relocated from `hjkl-engine::vim`.
 ///
 /// This module owns the search-prompt FSM arm. It is dispatched by

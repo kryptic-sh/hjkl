@@ -2,6 +2,7 @@
 /// correctly routes the search-prompt FSM through `hjkl-vim` rather than
 /// the deprecated engine shim.
 use hjkl_engine::{Editor, Input, Key};
+use hjkl_vim::VimEditorExt;
 
 fn editor_with(content: &str) -> Editor {
     let opts = hjkl_engine::Options::default();
