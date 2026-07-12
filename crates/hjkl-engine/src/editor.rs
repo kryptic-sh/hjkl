@@ -628,6 +628,24 @@ pub struct Editor<
     /// `(buffer_id, row, col)`. Set by `m{A-Z}`, resolved by
     /// `try_goto_mark_line` / `try_goto_mark_char`.
     pub(crate) global_marks: std::collections::BTreeMap<char, (u64, usize, usize)>,
+
+    // ── Navigation history / viewport (discipline-agnostic, #265) ────────────
+    //
+    // Hoisted off `VimState` because they are not vim concepts: a jumplist is
+    // navigation history (VSCode's Go Back / Go Forward wants the same list),
+    // and the viewport flags are render state. A future helix/vscode
+    // discipline needs these without depending on hjkl-vim, so they live on
+    // the engine seam.
+    /// Positions pushed on "big" motions. Newest at the back — `Ctrl-o` pops
+    /// from here.
+    pub(crate) jump_back: Vec<(usize, usize)>,
+    /// Forward stack, refilled by `Ctrl-o` so `Ctrl-i` can return.
+    pub(crate) jump_fwd: Vec<(usize, usize)>,
+    /// When set, the viewport does not scroll-follow the cursor.
+    pub(crate) viewport_pinned: bool,
+    /// One-shot hint that the last scroll should be animated by the renderer.
+    pub(crate) scroll_anim_hint: bool,
+
     /// The `buffer_id` this editor instance is currently attached to.
     /// Updated by the host app on every `switch_to` / slot creation so
     /// global-mark writes record the correct id without requiring the app
@@ -1124,6 +1142,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             styled_spans: Vec::new(),
             settings,
             global_marks: std::collections::BTreeMap::new(),
+            jump_back: Vec::new(),
+            jump_fwd: Vec::new(),
+            viewport_pinned: false,
+            scroll_anim_hint: false,
             current_buffer_id: 0,
             sticky_col: None,
             host,
@@ -1955,11 +1977,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// machinery, where push_jump fires automatically.
     pub fn record_jump(&mut self, pos: (usize, usize)) {
         const JUMPLIST_MAX: usize = 100;
-        self.vim.jump_back.push(pos);
-        if self.vim.jump_back.len() > JUMPLIST_MAX {
-            self.vim.jump_back.remove(0);
+        self.jump_back.push(pos);
+        if self.jump_back.len() > JUMPLIST_MAX {
+            self.jump_back.remove(0);
         }
-        self.vim.jump_fwd.clear();
+        self.jump_fwd.clear();
     }
 
     /// Host apps call this each draw with the current text area height so
@@ -2110,8 +2132,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 }
             }
         };
-        shift_jumps(&mut self.vim.jump_back);
-        shift_jumps(&mut self.vim.jump_fwd);
+        shift_jumps(&mut self.jump_back);
+        shift_jumps(&mut self.jump_fwd);
     }
 
     /// Reverse-sync helper paired with [`Editor::mutate_edit`]: rebuild
@@ -2140,9 +2162,60 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Drain the one-shot smooth-scroll hint (#195). True if the last step ran
     /// a page/recenter motion the app may animate.
     pub fn take_scroll_anim_hint(&mut self) -> bool {
-        let h = self.vim.scroll_anim_hint;
-        self.vim.scroll_anim_hint = false;
+        let h = self.scroll_anim_hint;
+        self.scroll_anim_hint = false;
         h
+    }
+
+    // ── Jumplist / viewport-pin (discipline-agnostic seam, #265) ─────────────
+    //
+    // Navigation history and viewport pinning are not vim concepts — VSCode's
+    // Go Back / Go Forward wants the same jumplist, and any discipline can pin
+    // the viewport. These accessors live on the engine so a future
+    // helix/vscode discipline reaches them without depending on hjkl-vim. The
+    // vim *keybindings* on top (`Ctrl-o` / `Ctrl-i`) stay in hjkl-vim.
+
+    /// Read-only view of the jumplist as `(jump_back, jump_fwd)`. Newest entry
+    /// is at the back of each. Backs `:jumps`.
+    #[allow(clippy::type_complexity)]
+    pub fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]) {
+        (&self.jump_back, &self.jump_fwd)
+    }
+
+    /// Position the cursor was at when the user last jumped back. `None`
+    /// before any jump.
+    pub fn last_jump_back(&self) -> Option<(usize, usize)> {
+        self.jump_back.last().copied()
+    }
+
+    /// Read-only view of the jump-back stack.
+    pub fn jump_back_list(&self) -> &[(usize, usize)] {
+        &self.jump_back
+    }
+
+    /// Mutable access to the jump-back stack.
+    pub fn jump_back_list_mut(&mut self) -> &mut Vec<(usize, usize)> {
+        &mut self.jump_back
+    }
+
+    /// Read-only view of the jump-forward stack.
+    pub fn jump_fwd_list(&self) -> &[(usize, usize)] {
+        &self.jump_fwd
+    }
+
+    /// Mutable access to the jump-forward stack.
+    pub fn jump_fwd_list_mut(&mut self) -> &mut Vec<(usize, usize)> {
+        &mut self.jump_fwd
+    }
+
+    /// Whether the viewport is pinned (suppresses scroll-follow).
+    pub fn viewport_pinned(&self) -> bool {
+        self.viewport_pinned
+    }
+
+    /// Set the viewport-pinned flag.
+    pub fn set_viewport_pinned(&mut self, v: bool) {
+        self.viewport_pinned = v;
     }
 
     /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
@@ -4244,11 +4317,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// committed `/` or `?`, …). Branching off the history clears the
     /// forward half, matching vim's "redo-is-lost" semantics.
     pub fn push_jump(&mut self, from: (usize, usize)) {
-        self.vim.jump_back.push(from);
-        if self.vim.jump_back.len() > vim::JUMPLIST_MAX {
-            self.vim.jump_back.remove(0);
+        self.jump_back.push(from);
+        if self.jump_back.len() > vim::JUMPLIST_MAX {
+            self.jump_back.remove(0);
         }
-        self.vim.jump_fwd.clear();
+        self.jump_fwd.clear();
     }
 
     /// Push `pattern` onto the committed search history. Skips if the

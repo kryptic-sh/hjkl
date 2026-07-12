@@ -1,6 +1,5 @@
 use hjkl_buffer::Buffer;
 use hjkl_engine::{Editor, Host, MarkJump, Options};
-use hjkl_vim::VimEditorExt;
 use std::path::PathBuf;
 
 use super::{App, DiskState, STATUS_LINE_HEIGHT};

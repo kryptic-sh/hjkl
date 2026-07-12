@@ -1,5 +1,4 @@
 use hjkl_engine::Host;
-use hjkl_vim::VimEditorExt;
 
 // ---- registers -------------------------------------------------------------
 
@@ -156,6 +155,7 @@ pub(crate) fn format_changes<H: Host>(
 mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
+    use hjkl_vim::VimEditorExt;
 
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let buf = hjkl_buffer::Buffer::new();

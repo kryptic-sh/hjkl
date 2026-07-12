@@ -178,10 +178,8 @@ pub struct VimState {
     /// `zz` / `zt` / `zb` set this so the end-of-step scrolloff
     /// pass doesn't override the user's explicit viewport pinning.
     /// Cleared every step.
-    pub viewport_pinned: bool,
     /// Set by the 7 smooth-scrollable motions (C-d/u/f/b, zz/zt/zb) so the
     /// app can animate the viewport jump. Drained via Editor::take_scroll_anim_hint.
-    pub scroll_anim_hint: bool,
     /// Set while replaying `.` / last-change so we don't re-record it.
     pub replaying: bool,
     /// Entered Normal from Insert via `Ctrl-o`; after the next complete
@@ -204,10 +202,8 @@ pub struct VimState {
     /// with the pre-motion cursor when a "big jump" motion fires
     /// (`gg`/`G`, `%`, `*`/`#`, `n`/`N`, `H`/`M`/`L`, committed `/` or
     /// `?`). Capped at 100 entries.
-    pub jump_back: Vec<(usize, usize)>,
     /// Forward half — `Ctrl-i` pops from here. Cleared by any new big
     /// jump, matching vim's "branch off trims forward history" rule.
-    pub jump_fwd: Vec<(usize, usize)>,
     /// Set by `Ctrl-R` in insert mode while waiting for the register
     /// selector. The next typed char names the register; its contents
     /// are inserted inline at the cursor and the flag clears.
@@ -2681,7 +2677,7 @@ pub fn scroll_full_page_bridge<H: crate::types::Host>(
     dir: ScrollDir,
     count: usize,
 ) {
-    ed.vim.scroll_anim_hint = true;
+    ed.scroll_anim_hint = true;
     let rows = viewport_full_rows(ed, count) as isize;
     match dir {
         ScrollDir::Down => scroll_cursor_rows(ed, rows),
@@ -2697,7 +2693,7 @@ pub fn scroll_half_page_bridge<H: crate::types::Host>(
     dir: ScrollDir,
     count: usize,
 ) {
-    ed.vim.scroll_anim_hint = true;
+    ed.scroll_anim_hint = true;
     let rows = viewport_half_rows(ed, count) as isize;
     match dir {
         ScrollDir::Down => scroll_cursor_rows(ed, rows),
@@ -3062,7 +3058,7 @@ pub fn goto_mark<H: crate::types::Host>(
 ) {
     let target = match ch {
         'a'..='z' => ed.mark(ch),
-        '\'' | '`' => ed.vim.jump_back.last().copied(),
+        '\'' | '`' => ed.jump_back.last().copied(),
         '.' => ed.last_edit_pos,
         '[' | ']' | '<' | '>' => ed.mark(ch),
         _ => None,
@@ -3158,11 +3154,11 @@ pub fn op_is_change(op: Operator) -> bool {
 /// the current cursor onto the forward stack so `Ctrl-i` can return.
 /// Returns `false` when the back stack is empty so counted loops stop.
 fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let Some(target) = ed.vim.jump_back.pop() else {
+    let Some(target) = ed.jump_back.pop() else {
         return false;
     };
     let cur = ed.cursor();
-    ed.vim.jump_fwd.push(cur);
+    ed.jump_fwd.push(cur);
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
     ed.sticky_col = Some(c);
@@ -3173,13 +3169,13 @@ fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
 /// onto the back stack.
 /// Returns `false` when the forward stack is empty so counted loops stop.
 fn jump_forward<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let Some(target) = ed.vim.jump_fwd.pop() else {
+    let Some(target) = ed.jump_fwd.pop() else {
         return false;
     };
     let cur = ed.cursor();
-    ed.vim.jump_back.push(cur);
-    if ed.vim.jump_back.len() > JUMPLIST_MAX {
-        ed.vim.jump_back.remove(0);
+    ed.jump_back.push(cur);
+    if ed.jump_back.len() > JUMPLIST_MAX {
+        ed.jump_back.remove(0);
     }
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
@@ -4604,18 +4600,18 @@ pub fn apply_after_z<H: crate::types::Host>(
     match ch {
         'z' => {
             ed.scroll_cursor_to(CursorScrollTarget::Center);
-            ed.vim.viewport_pinned = true;
-            ed.vim.scroll_anim_hint = true;
+            ed.viewport_pinned = true;
+            ed.scroll_anim_hint = true;
         }
         't' => {
             ed.scroll_cursor_to(CursorScrollTarget::Top);
-            ed.vim.viewport_pinned = true;
-            ed.vim.scroll_anim_hint = true;
+            ed.viewport_pinned = true;
+            ed.scroll_anim_hint = true;
         }
         'b' => {
             ed.scroll_cursor_to(CursorScrollTarget::Bottom);
-            ed.vim.viewport_pinned = true;
-            ed.vim.scroll_anim_hint = true;
+            ed.viewport_pinned = true;
+            ed.scroll_anim_hint = true;
         }
         // Folds — operate on the fold under the cursor (or the
         // whole buffer for `R` / `M`). Routed through

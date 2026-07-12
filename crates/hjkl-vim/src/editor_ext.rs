@@ -120,16 +120,6 @@ pub trait VimEditorExt {
     /// shape).
     fn selection_highlight(&self) -> Option<Highlight>;
 
-    /// Read-only view of the jumplist as `(jump_back, jump_fwd)` — positions
-    /// pushed on "big" motions. Newest entry is at the back of each; `Ctrl-o`
-    /// pops from `jump_back` and `Ctrl-i` from `jump_fwd`. Backs `:jumps`.
-    #[allow(clippy::type_complexity)]
-    fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]);
-
-    /// Position the cursor was at when the user last jumped via `<C-o>` /
-    /// `g;` / similar. `None` before any jump.
-    fn last_jump_back(&self) -> Option<(usize, usize)>;
-
     // ─── Text-object resolution (hjkl#70) ──────────────────────────────────
     //
     // Pure functions — no cursor mutation, no mode change, no register write.
@@ -587,10 +577,6 @@ pub trait VimEditorExt {
     fn last_visual(&self) -> Option<LastVisual>;
     /// Set the last-visual snapshot.
     fn set_last_visual(&mut self, snap: Option<LastVisual>);
-    /// Whether the viewport is pinned (suppresses scroll-follow).
-    fn viewport_pinned(&self) -> bool;
-    /// Set the viewport-pinned flag.
-    fn set_viewport_pinned(&mut self, v: bool);
     /// Whether `Ctrl-R` is armed and awaiting a register name.
     fn insert_pending_register(&self) -> bool;
     /// Set the `Ctrl-R` pending-register flag.
@@ -640,17 +626,6 @@ pub trait VimEditorExt {
     fn search_history_cursor(&self) -> Option<usize>;
     /// Set the search-history walk cursor.
     fn set_search_history_cursor(&mut self, idx: Option<usize>);
-
-    // ─── Jumplist storage ──────────────────────────────────────────────────
-
-    /// Read-only view of the jump-back stack.
-    fn jump_back_list(&self) -> &[(usize, usize)];
-    /// Mutable access to the jump-back stack.
-    fn jump_back_list_mut(&mut self) -> &mut Vec<(usize, usize)>;
-    /// Read-only view of the jump-forward stack.
-    fn jump_fwd_list(&self) -> &[(usize, usize)];
-    /// Mutable access to the jump-forward stack.
-    fn jump_fwd_list_mut(&mut self) -> &mut Vec<(usize, usize)>;
 
     // ─── Visual / motion / search primitives ───────────────────────────────
     //
@@ -998,14 +973,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
             },
             kind: HighlightKind::Selection,
         })
-    }
-
-    fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]) {
-        (&self.vim.jump_back, &self.vim.jump_fwd)
-    }
-
-    fn last_jump_back(&self) -> Option<(usize, usize)> {
-        self.vim.jump_back.last().copied()
     }
 
     // ─── Text-object resolution ────────────────────────────────────────────
@@ -1405,12 +1372,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     fn set_last_visual(&mut self, snap: Option<LastVisual>) {
         self.vim.last_visual = snap;
     }
-    fn viewport_pinned(&self) -> bool {
-        self.vim.viewport_pinned
-    }
-    fn set_viewport_pinned(&mut self, v: bool) {
-        self.vim.viewport_pinned = v;
-    }
     fn insert_pending_register(&self) -> bool {
         self.vim.insert_pending_register
     }
@@ -1479,21 +1440,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
     fn set_search_history_cursor(&mut self, idx: Option<usize>) {
         self.vim.search_history_cursor = idx;
-    }
-
-    // ─── Jumplist storage ──────────────────────────────────────────────────
-
-    fn jump_back_list(&self) -> &[(usize, usize)] {
-        &self.vim.jump_back
-    }
-    fn jump_back_list_mut(&mut self) -> &mut Vec<(usize, usize)> {
-        &mut self.vim.jump_back
-    }
-    fn jump_fwd_list(&self) -> &[(usize, usize)] {
-        &self.vim.jump_fwd
-    }
-    fn jump_fwd_list_mut(&mut self) -> &mut Vec<(usize, usize)> {
-        &mut self.vim.jump_fwd
     }
 
     // ─── Visual / motion / search primitives ───────────────────────────────

@@ -163,10 +163,10 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     }
     // ── Content + viewport sync ───────────────────────────────────────────
     ed.sync_buffer_content_from_textarea();
-    if !ed.vim.viewport_pinned {
+    if !ed.viewport_pinned() {
         ed.ensure_cursor_in_scrolloff();
     }
-    ed.vim.viewport_pinned = false;
+    ed.set_viewport_pinned(false);
     // ── Recorder hook ─────────────────────────────────────────────────────
     if ed.vim.recording_macro.is_some()
         && !ed.vim.replaying_macro
