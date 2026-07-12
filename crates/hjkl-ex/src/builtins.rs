@@ -4,6 +4,7 @@ use crate::{
     registry::{ArgKind, ExCommand, Registry},
 };
 use hjkl_engine::Host;
+use hjkl_vim::VimEditorExt;
 
 // ---- folds / global / shell are in their own modules -----------------------
 use crate::folds::{apply_fold_indent, apply_fold_syntax};

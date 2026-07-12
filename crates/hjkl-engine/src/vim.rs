@@ -5275,7 +5275,8 @@ fn run_operator_over_range<H: crate::types::Host>(
 
 /// Delete the range `[start, end)` (interpretation determined by `kind`) and
 /// stash the deleted text in `register`. `'"'` is the unnamed register.
-pub(crate) fn delete_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn delete_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5288,7 +5289,8 @@ pub(crate) fn delete_range_bridge<H: crate::types::Host>(
 
 /// Yank (copy) the range `[start, end)` into `register` without mutating the
 /// buffer. `'"'` is the unnamed register.
-pub(crate) fn yank_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn yank_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5303,7 +5305,8 @@ pub(crate) fn yank_range_bridge<H: crate::types::Host>(
 /// The deleted text is stashed in `register`. Mode transitions to Insert on
 /// return; the caller must not issue further normal-mode ops until the insert
 /// session ends.
-pub(crate) fn change_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn change_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5318,7 +5321,8 @@ pub(crate) fn change_range_bridge<H: crate::types::Host>(
 /// end.0]`. `shiftwidth` overrides the editor's `settings().shiftwidth` for
 /// this call; pass `0` to use the editor setting. The column parts of `start`
 /// / `end` are ignored — indent is always linewise.
-pub(crate) fn indent_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn indent_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5354,7 +5358,8 @@ pub(crate) fn indent_range_bridge<H: crate::types::Host>(
 /// Apply a case transformation (`Uppercase` / `Lowercase` / `ToggleCase`) to
 /// the range `[start, end)`. Only the three case `Operator` variants are valid;
 /// other variants are silently ignored (no-op).
-pub(crate) fn case_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn case_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5389,7 +5394,8 @@ pub(crate) fn case_range_bridge<H: crate::types::Host>(
 /// bounds. Short lines that don't reach `right_col` lose only the chars
 /// that exist (ragged-edge, matching engine FSM). `register` is honoured;
 /// `'"'` selects the unnamed register.
-pub(crate) fn delete_block_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn delete_block_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5415,7 +5421,8 @@ pub(crate) fn delete_block_bridge<H: crate::types::Host>(
 }
 
 /// Yank a rectangular VisualBlock selection into `register`.
-pub(crate) fn yank_block_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn yank_block_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5437,7 +5444,8 @@ pub(crate) fn yank_block_bridge<H: crate::types::Host>(
 
 /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`).
 /// The deleted text is stashed in `register`. Mode is Insert on return.
-pub(crate) fn change_block_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn change_block_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5460,7 +5468,8 @@ pub(crate) fn change_block_bridge<H: crate::types::Host>(
 /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
 /// Column bounds are ignored — vim's block indent is always linewise.
 /// `count == 0` is a no-op.
-pub(crate) fn indent_block_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn indent_block_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5482,7 +5491,8 @@ pub(crate) fn indent_block_bridge<H: crate::types::Host>(
 /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`. Column
 /// parts are ignored — auto-indent is always linewise. See
 /// `auto_indent_rows` for the algorithm and its v1 limitations.
-pub(crate) fn auto_indent_range_bridge<H: crate::types::Host>(
+#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
+pub fn auto_indent_range_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),

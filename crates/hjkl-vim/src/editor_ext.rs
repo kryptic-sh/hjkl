@@ -9,6 +9,7 @@
 //! them up with `use hjkl_vim::VimEditorExt`.
 
 use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
+use hjkl_engine::vim::{Operator, RangeKind};
 use hjkl_engine::{Editor, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
@@ -199,6 +200,140 @@ pub trait VimEditorExt {
     ///
     /// Like `it` but includes the open and close tag delimiters.
     fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))>;
+
+    // ─── Range-mutation primitives (hjkl#70) ───────────────────────────────
+    //
+    // These do not consume input — the caller (the visual-mode operator path)
+    // has already resolved the range from the visual selection before calling
+    // in. Normal-mode op dispatch continues to use `apply_op_motion` /
+    // `apply_op_double` / `apply_op_find` / `apply_op_text_obj`.
+
+    /// Delete the region `[start, end)` and stash the removed text in
+    /// `register`. `'"'` selects the unnamed register (vim default);
+    /// `'a'`–`'z'` select named registers.
+    fn delete_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    );
+
+    /// Yank (copy) the region `[start, end)` into `register` without mutating
+    /// the buffer. `'"'` selects the unnamed register; `'0'` the yank-only
+    /// register; `'a'`–`'z'` select named registers.
+    fn yank_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    );
+
+    /// Delete the region `[start, end)` and transition to Insert mode (vim `c`
+    /// operator). The deleted text is stashed in `register`. On return the
+    /// editor is in Insert mode; the caller must not issue further normal-mode
+    /// ops until the insert session ends.
+    fn change_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    );
+
+    /// Indent (`count > 0`) or outdent (`count < 0`) the row span
+    /// `[start.0, end.0]`. Column components are ignored — indent is always
+    /// linewise. `shiftwidth` overrides the editor's configured shiftwidth for
+    /// this call; pass `0` to use the current editor setting. `count == 0` is
+    /// a no-op.
+    fn indent_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        count: i32,
+        shiftwidth: u32,
+    );
+
+    /// Apply a case transformation (`Operator::Uppercase` /
+    /// `Operator::Lowercase` / `Operator::ToggleCase`) to the region
+    /// `[start, end)`. Other `Operator` variants are silently ignored (no-op).
+    /// Registers are left untouched — vim's case operators do not write to
+    /// registers.
+    fn case_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        op: Operator,
+    );
+
+    // ─── Block-shape range-mutation primitives (hjkl#70) ───────────────────
+    //
+    // Rectangular VisualBlock operations. `top_row`/`bot_row` are inclusive
+    // line indices; `left_col`/`right_col` are inclusive char-column bounds.
+    // Ragged-edge handling (short lines not reaching `right_col`) matches the
+    // engine FSM's `apply_block_operator` path — short lines lose only the
+    // chars that exist. `register` is the target; `'"'` selects unnamed.
+
+    /// Delete a rectangular VisualBlock selection.
+    fn delete_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    );
+
+    /// Yank a rectangular VisualBlock selection into `register` without
+    /// mutating the buffer.
+    fn yank_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    );
+
+    /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`
+    /// operator). Mode is Insert on return.
+    fn change_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    );
+
+    /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
+    /// Column bounds are ignored — vim's block indent is always linewise.
+    /// `count == 0` is a no-op.
+    fn indent_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        count: i32,
+    );
+
+    /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`.
+    /// Column components are ignored — auto-indent is always linewise.
+    ///
+    /// The algorithm is a naive bracket-depth counter: it scans the buffer
+    /// from row 0 to compute the correct depth at `start.0`, then for each
+    /// line in the target range strips existing leading whitespace and
+    /// prepends `depth × indent_unit`. Lines whose first non-whitespace
+    /// character is a close bracket get one fewer indent level. Empty /
+    /// whitespace-only lines are cleared. After the operation the cursor lands
+    /// on the first non-whitespace character of `start_row` (vim parity `==`).
+    ///
+    /// **v1 limitation**: the bracket scan does not detect brackets inside
+    /// string literals or comments.
+    fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize));
 }
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
@@ -425,5 +560,111 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))> {
         hjkl_engine::vim::text_object_around_tag_bridge(self)
+    }
+
+    // ─── Range-mutation primitives ─────────────────────────────────────────
+
+    fn delete_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    ) {
+        hjkl_engine::vim::delete_range_bridge(self, start, end, kind, register);
+    }
+
+    fn yank_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    ) {
+        hjkl_engine::vim::yank_range_bridge(self, start, end, kind, register);
+    }
+
+    fn change_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        register: char,
+    ) {
+        hjkl_engine::vim::change_range_bridge(self, start, end, kind, register);
+    }
+
+    fn indent_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        count: i32,
+        shiftwidth: u32,
+    ) {
+        hjkl_engine::vim::indent_range_bridge(self, start, end, count, shiftwidth);
+    }
+
+    fn case_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: RangeKind,
+        op: Operator,
+    ) {
+        hjkl_engine::vim::case_range_bridge(self, start, end, kind, op);
+    }
+
+    // ─── Block-shape range-mutation primitives ─────────────────────────────
+
+    fn delete_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        hjkl_engine::vim::delete_block_bridge(
+            self, top_row, bot_row, left_col, right_col, register,
+        );
+    }
+
+    fn yank_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        hjkl_engine::vim::yank_block_bridge(self, top_row, bot_row, left_col, right_col, register);
+    }
+
+    fn change_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        hjkl_engine::vim::change_block_bridge(
+            self, top_row, bot_row, left_col, right_col, register,
+        );
+    }
+
+    fn indent_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        _left_col: usize,
+        _right_col: usize,
+        count: i32,
+    ) {
+        hjkl_engine::vim::indent_block_bridge(self, top_row, bot_row, count);
+    }
+
+    fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize)) {
+        hjkl_engine::vim::auto_indent_range_bridge(self, start, end);
     }
 }
