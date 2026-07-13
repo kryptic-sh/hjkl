@@ -87,7 +87,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
         // --- build editor ---
         let host = DefaultHost::new();
-        let mut editor = Editor::new(buffer, host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(buffer, host, Options::default());
 
         // Track current save target. Starts as the source path; `:w <path>`
         // updates it so subsequent `:w` writes to the new location.

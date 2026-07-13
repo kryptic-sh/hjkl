@@ -3131,14 +3131,14 @@ mod tests {
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let buf = hjkl_buffer::Buffer::new();
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let content = lines.join("\n");
         let buf = hjkl_buffer::Buffer::from_str(&content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {
@@ -4344,7 +4344,7 @@ mod tests {
             filetype: "rust".to_string(),
             ..Options::default()
         };
-        Editor::new(buf, host, opts)
+        hjkl_vim::vim_editor(buf, host, opts)
     }
 
     #[test]
@@ -4391,7 +4391,7 @@ mod tests {
             filetype: "rust".to_string(),
             ..Options::default()
         };
-        let mut ed = Editor::new(buf, host, opts);
+        let mut ed = hjkl_vim::vim_editor(buf, host, opts);
         let range = LineRange::new(1, 2);
         let result = uncomment_handler(&mut ed, "", Some(range));
         assert_eq!(result, Some(ExEffect::Ok));
@@ -4412,7 +4412,7 @@ mod tests {
             filetype: "rust".to_string(),
             ..Options::default()
         };
-        let mut ed = Editor::new(buf, host, opts);
+        let mut ed = hjkl_vim::vim_editor(buf, host, opts);
         let range = LineRange::new(1, 5);
         comment_handler(&mut ed, "", Some(range));
         for row in 0..5 {
@@ -4460,7 +4460,7 @@ mod tests {
             tabstop: tabstop as u32,
             ..Options::default()
         };
-        Editor::new(buf, host, opts)
+        hjkl_vim::vim_editor(buf, host, opts)
     }
 
     #[test]

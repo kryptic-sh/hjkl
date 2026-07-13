@@ -100,7 +100,7 @@ fn build_editor(
     }
 
     let host = DefaultHost::new();
-    let editor = Editor::new(buffer, host, Options::default());
+    let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
     Ok((editor, maybe_path.cloned()))
 }
 

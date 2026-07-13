@@ -8,7 +8,7 @@
 //!   Enabled by setting `HJKL_ORACLE_NVIM_API=1`.
 
 use crate::{OracleCase, test_host::TestHost};
-use hjkl_engine::{Editor, Options, VimMode, decode_macro};
+use hjkl_engine::{Options, VimMode, decode_macro};
 use hjkl_vim::VimEditorExt;
 
 /// State snapshot produced after replaying a case's keystrokes through the
@@ -41,7 +41,7 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     let buffer = hjkl_buffer::Buffer::from_str(&case.initial_buffer);
 
     // 2. Construct editor.
-    let mut editor = Editor::new(buffer, TestHost::new(), Options::default());
+    let mut editor = hjkl_vim::vim_editor(buffer, TestHost::new(), Options::default());
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {

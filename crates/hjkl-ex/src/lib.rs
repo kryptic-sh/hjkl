@@ -208,14 +208,14 @@ mod tests {
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let buf = hjkl_buffer::Buffer::new();
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let content = lines.join("\n");
         let buf = hjkl_buffer::Buffer::from_str(&content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {

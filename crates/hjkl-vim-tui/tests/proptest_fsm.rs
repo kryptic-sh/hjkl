@@ -10,8 +10,8 @@
 //! First building block toward a `cargo fuzz` harness.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hjkl_engine::VimMode;
 use hjkl_engine::types::{DefaultHost, Options};
-use hjkl_engine::{Editor, VimMode};
 use hjkl_vim::VimEditorExt;
 use proptest::prelude::*;
 
@@ -80,7 +80,7 @@ proptest! {
     /// settles in a legal mode.
     #[test]
     fn no_panic_on_random_keys(seq in key_sequence_strategy()) {
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello world\nsecond line\n");
         for k in seq {
             let _ = hjkl_vim_tui::handle_key(&mut ed, k);
@@ -92,7 +92,7 @@ proptest! {
     /// regardless of starting state.
     #[test]
     fn esc_returns_to_normal(prefix in key_sequence_strategy()) {
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello\nworld\n");
         for k in prefix {
             let _ = hjkl_vim_tui::handle_key(&mut ed, k);
@@ -107,7 +107,7 @@ proptest! {
 
 #[test]
 fn handle_key_no_panic_baseline() {
-    let mut ed = Editor::new(
+    let mut ed = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         DefaultHost::new(),
         Options::default(),
@@ -131,7 +131,7 @@ proptest! {
     /// preserves the source line text byte-for-byte.
     #[test]
     fn yy_then_p_duplicates_line(text in "[a-z]{1,15}") {
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
         // `yy` then `p`.
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -152,7 +152,7 @@ proptest! {
         line1 in "[a-z]{1,12}",
     ) {
         let original = format!("{line0}\n{line1}");
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&original);
         let before: Vec<String> = ed.buffer().rope().lines().map(|s| { let s = s.to_string(); s.strip_suffix('\n').map(str::to_string).unwrap_or(s) }).collect::<Vec<_>>();
         // `dd` deletes the first line.
@@ -170,7 +170,7 @@ proptest! {
         text in "[a-z]{1,15}",
         edits in 0u32..5,
     ) {
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
         // Enter insert mode, type some chars, exit.
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -210,7 +210,7 @@ proptest! {
         ]),
     ) {
         use hjkl_engine::{Options, WrapMode};
-        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello\n");
         let opts = Options {
             tabstop: ts,

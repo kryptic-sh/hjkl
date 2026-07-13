@@ -618,7 +618,7 @@ mod tests {
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let buf = hjkl_buffer::Buffer::new();
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     // ---- bare :set -----------------------------------------------------------

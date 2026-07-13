@@ -60,7 +60,7 @@ fn editor_with(content: &str) -> Editor {
         shiftwidth: 2,
         ..hjkl_engine::Options::default()
     };
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
@@ -2981,7 +2981,7 @@ fn ctrl_scroll_keys_do_not_panic() {
 /// content across the buffer.
 #[test]
 fn count_insert_with_arrow_nav_does_not_leak_rows() {
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
@@ -3006,7 +3006,7 @@ fn count_insert_with_arrow_nav_does_not_leak_rows() {
 // ─── Viewport scroll / jump tests ─────────────────────────────────
 
 fn editor_with_rows(n: usize, viewport: u16) -> Editor {
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
@@ -3028,7 +3028,7 @@ fn ctrl_d_moves_cursor_half_page_down() {
 }
 
 fn editor_with_wrap_lines(lines: &[&str], viewport: u16, text_width: u16) -> Editor {
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
@@ -4799,7 +4799,7 @@ fn si_editor(content: &str) -> Editor {
         autoindent: true,
         ..hjkl_engine::Options::default()
     };
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
@@ -4847,7 +4847,7 @@ fn smartindent_uses_tab_when_noexpandtab() {
         autoindent: true,
         ..hjkl_engine::Options::default()
     };
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
@@ -5696,7 +5696,7 @@ fn apply_op_g_dgj_deletes_screen_down() {
 // ── set_pending_register unit tests ─────────────────────────────────────
 
 fn blank_editor() -> Editor {
-    Editor::new(
+    hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
@@ -5754,7 +5754,7 @@ fn indent_editor_vim(content: &str) -> Editor {
         expandtab: true,
         ..hjkl_engine::Options::default()
     };
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         opts,

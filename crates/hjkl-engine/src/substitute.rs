@@ -742,7 +742,7 @@ mod tests {
     use hjkl_buffer::Buffer;
 
     fn editor_with(content: &str) -> Editor<Buffer, DefaultHost> {
-        let mut e = Editor::new(Buffer::new(), DefaultHost::new(), Options::default());
+        let mut e = crate::vim::vim_editor(Buffer::new(), DefaultHost::new(), Options::default());
         e.set_content(content);
         e
     }

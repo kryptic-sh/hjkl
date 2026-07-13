@@ -223,7 +223,7 @@ mod tests {
     use hjkl_engine::{Editor, types::DefaultHost};
 
     fn fresh_editor(content: &str) -> Editor {
-        let mut e = Editor::new(
+        let mut e = hjkl_vim::vim_editor(
             hjkl_buffer::Buffer::new(),
             DefaultHost::new(),
             hjkl_engine::types::Options::default(),

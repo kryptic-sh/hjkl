@@ -89,6 +89,36 @@ use crate::buf_helpers::{
 };
 use crate::editor::Editor;
 
+// ─── Discipline install ────────────────────────────────────────────────────
+
+/// Install the vim discipline on `ed`, replacing whatever was there.
+///
+/// [`Editor::new`] leaves the discipline slot at
+/// [`NoDiscipline`](crate::NoDiscipline) — the engine cannot name a concrete
+/// discipline. Every editor that should interpret keys as vim must be handed to
+/// this once at construction; [`vim_editor`] does both in one call.
+///
+/// Dispatching vim input at an editor that skipped this panics on the first
+/// state access (see `hjkl_vim::vim_state`) rather than silently behaving like
+/// a keyboard-less buffer.
+pub fn install<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    ed.set_discipline(Box::new(VimState::default()));
+}
+
+/// Build an [`Editor`] with the vim discipline already installed.
+///
+/// The vim-flavoured counterpart of [`Editor::new`], which yields an editor
+/// with no discipline at all.
+pub fn vim_editor<H: crate::types::Host>(
+    buffer: hjkl_buffer::Buffer,
+    host: H,
+    options: crate::types::Options,
+) -> Editor<hjkl_buffer::Buffer, H> {
+    let mut ed = Editor::new(buffer, host, options);
+    install(&mut ed);
+    ed
+}
+
 // ─── Modes & parser state ───────────────────────────────────────────────────
 
 // ─── Operator / Motion / TextObject ────────────────────────────────────────
@@ -9243,7 +9273,7 @@ mod replace_char_tests {
     #[test]
     fn replace_char_count_exceeding_line_replaces_nothing() {
         let buf = Buffer::from_str("ab\ncd");
-        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         // Cursor at (0,0); `3rx` needs 3 chars but the line has 2 — vim aborts
         // the whole command and replaces nothing (not a partial run).
         super::replace_char(&mut ed, 'x', 3);
@@ -9254,7 +9284,7 @@ mod replace_char_tests {
     #[test]
     fn replace_char_count_fitting_replaces_run() {
         let buf = Buffer::from_str("abc");
-        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         super::replace_char(&mut ed, 'x', 2);
         assert_eq!(line(&ed, 0), "xxc");
     }
@@ -9274,7 +9304,7 @@ mod comment_continuation_tests {
             formatoptions: "ro".to_string(),
             ..Options::default()
         };
-        Editor::new(buf, host, opts)
+        crate::vim::vim_editor(buf, host, opts)
     }
 
     #[test]
@@ -9366,7 +9396,7 @@ mod comment_continuation_tests {
         let buf = Buffer::from_str("// hello\n");
         let host = DefaultHost::new();
         // filetype defaults to "" in Options::default().
-        let ed = Editor::new(buf, host, Options::default());
+        let ed = crate::vim::vim_editor(buf, host, Options::default());
         let cont = continue_comment(ed.buffer(), ed.settings(), 0);
         assert!(cont.is_none());
     }
@@ -9385,7 +9415,7 @@ mod comment_toggle_tests {
             filetype: "rust".to_string(),
             ..Options::default()
         };
-        Editor::new(buf, host, opts)
+        crate::vim::vim_editor(buf, host, opts)
     }
 
     fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
@@ -9484,7 +9514,7 @@ mod comment_toggle_tests {
             filetype: "python".to_string(),
             ..Options::default()
         };
-        let mut ed = Editor::new(buf, host, opts);
+        let mut ed = crate::vim::vim_editor(buf, host, opts);
         ed.toggle_comment_range(0, 1);
         assert_eq!(line(&ed, 0), "# x = 1");
         assert_eq!(line(&ed, 1), "# y = 2");
@@ -9504,7 +9534,7 @@ mod comment_toggle_tests {
             filetype: "rust".to_string(),
             ..Options::default()
         };
-        let mut ed = Editor::new(buf, host, opts);
+        let mut ed = crate::vim::vim_editor(buf, host, opts);
         // Override with a custom marker.
         ed.settings_mut().commentstring = "# %s".to_string();
         ed.toggle_comment_range(0, 0);
@@ -9518,7 +9548,7 @@ mod comment_toggle_tests {
         let buf = Buffer::from_str("hello");
         let host = DefaultHost::new();
         let opts = Options::default(); // filetype = ""
-        let mut ed = Editor::new(buf, host, opts);
+        let mut ed = crate::vim::vim_editor(buf, host, opts);
         ed.toggle_comment_range(0, 0);
         // Should be unchanged — no comment string for "".
         assert_eq!(line(&ed, 0), "hello");
@@ -9536,7 +9566,7 @@ mod g_ampersand_tests {
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        crate::vim::vim_editor(buf, host, Options::default())
     }
 
     fn buf_line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
@@ -9593,7 +9623,7 @@ mod sneak_tests {
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        crate::vim::vim_editor(buf, host, Options::default())
     }
 
     /// `s ba` from [0,0] on "foo bar baz qux\n" → cursor at [0,4] (start of "ba" in "bar").
@@ -9730,7 +9760,7 @@ mod indent_count_tests {
 
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
-        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         ed.settings_mut().expandtab = true;
         ed.settings_mut().shiftwidth = 4;
         ed

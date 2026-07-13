@@ -38,7 +38,7 @@ use floem::{
 };
 use hjkl_app::{config, editorconfig};
 use hjkl_buffer::Buffer;
-use hjkl_editor::runtime::{DefaultHost, Editor, Options};
+use hjkl_editor::runtime::{DefaultHost, Options};
 use hjkl_editor_gui::{EditorHandle, editor_view, floem_key_to_input};
 use hjkl_vim::VimEditorExt;
 
@@ -91,7 +91,7 @@ fn main() {
         editorconfig::overlay_for_path(&mut opts, p);
     }
 
-    let editor = Editor::new(buffer, DefaultHost::new(), opts);
+    let editor = hjkl_vim::vim_editor(buffer, DefaultHost::new(), opts);
     let handle = EditorHandle::new(editor);
     let save_path = Rc::new(RefCell::new(open_path));
 
@@ -250,7 +250,7 @@ fn write_buf(handle: &EditorHandle, save_path: &Rc<RefCell<Option<PathBuf>>>) {
 #[cfg(test)]
 mod tests {
     use hjkl_buffer::Buffer;
-    use hjkl_editor::runtime::{DefaultHost, Editor, Options};
+    use hjkl_editor::runtime::{DefaultHost, Options};
 
     /// Smoke test: constructing an Editor from a string buffer succeeds and
     /// the buffer is non-empty. Ensures the hjkl-gui dependency graph
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn gui_editor_constructs_from_str() {
         let buf = Buffer::from_str("hello\nworld\n");
-        let editor = Editor::new(buf, DefaultHost::new(), Options::default());
+        let editor = hjkl_vim::vim_editor(buf, DefaultHost::new(), Options::default());
         assert!(editor.buffer().row_count() > 0);
     }
 

@@ -29,7 +29,7 @@ fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
         formatoptions: "ro".to_string(),
         ..Options::default()
     };
-    Editor::new(buf, host, opts)
+    hjkl_vim::vim_editor(buf, host, opts)
 }
 
 /// Feed keystrokes through the normal/insert dispatcher.

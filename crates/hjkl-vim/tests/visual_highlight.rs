@@ -12,7 +12,7 @@ use hjkl_vim::VimEditorExt;
 /// Helper: create an editor in Insert mode with `content`.
 fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
     let buf = Buffer::from_str(content);
-    let mut ed = Editor::new(buf, DefaultHost::default(), Options::default());
+    let mut ed = hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default());
     ed.enter_insert_i(1);
     ed
 }

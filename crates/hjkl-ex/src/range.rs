@@ -170,7 +170,7 @@ mod tests {
         let content = lines.join("\n");
         let buf = Buffer::from_str(&content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
@@ -233,10 +233,10 @@ mod tests {
     #[test]
     fn mark_range() {
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{DefaultHost, Editor, Options};
+        use hjkl_engine::{DefaultHost, Options};
         let buf = Buffer::from_str("a\nb\nc\nd\ne");
         let host = DefaultHost::new();
-        let mut editor = Editor::new(buf, host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(buf, host, Options::default());
         // marks are 0-based internally; 1-based in range results
         editor.set_mark('a', (0, 0)); // line 1
         editor.set_mark('b', (2, 0)); // line 3

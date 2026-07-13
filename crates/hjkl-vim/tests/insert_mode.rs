@@ -22,7 +22,7 @@ mod insert_mode_scrolloff_tests {
             .collect::<Vec<_>>()
             .join("\n");
         let buf = Buffer::from_str(&text);
-        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        let mut e = hjkl_vim::vim_editor(buf, DefaultHost::new(), Options::default());
         // Viewport: 20 rows tall, starts at top.
         let vp = e.host_mut().viewport_mut();
         vp.width = 80;
@@ -204,7 +204,7 @@ mod modifiable_readonly_tests {
 
     fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
-        Editor::new(buf, DefaultHost::default(), Options::default())
+        hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
     }
 
     // ── nomodifiable ──────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ mod undo_granularity_tests {
 
     fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
-        Editor::new(buf, DefaultHost::default(), Options::default())
+        hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
     }
 
     /// Helper: type a string char-by-char in insert mode.
@@ -476,7 +476,7 @@ mod scan_tag_opener_multibyte_tests {
     fn html_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
         let host = DefaultHost::new();
-        let mut ed = Editor::new(buf, host, Options::default());
+        let mut ed = hjkl_vim::vim_editor(buf, host, Options::default());
         ed.settings_mut().filetype = "html".to_string();
         ed.settings_mut().autoclose_tag = true;
         ed.settings_mut().autopair = true;

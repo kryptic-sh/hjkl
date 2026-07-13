@@ -22,7 +22,7 @@ fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
         filetype: lang.to_string(),
         ..Options::default()
     };
-    Editor::new(buf, host, opts)
+    hjkl_vim::vim_editor(buf, host, opts)
 }
 
 fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {

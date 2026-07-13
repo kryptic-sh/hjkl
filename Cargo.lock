@@ -2480,6 +2480,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-buffer-tui",
  "hjkl-engine",
+ "hjkl-vim",
 ]
 
 [[package]]

@@ -7,7 +7,6 @@
 //! exposed via `pub(super)` fields and helper methods.
 
 use crate::KeybindingMode;
-use crate::vim::VimState;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::SystemTime;
 
@@ -1175,10 +1174,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let settings = settings_from_options(&options);
         Self {
             keybinding_mode: KeybindingMode::Vim,
-            // #267: the vim discipline is still installed by default while
-            // `VimState` lives in this crate. At the relocation slice this
-            // becomes `Box::new(NoDiscipline)` and `hjkl-vim` installs its own.
-            discipline: Box::new(VimState::default()),
+            // No discipline: the engine cannot name one. Callers that want vim
+            // keys build through `hjkl_vim::vim_editor` (or call
+            // `hjkl_vim::install_vim_discipline`), which fills this slot.
+            discipline: Box::new(crate::NoDiscipline),
             view: crate::ViewMode::default(),
             last_edit_pos: None,
             change_list: Vec::new(),

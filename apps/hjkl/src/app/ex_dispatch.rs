@@ -777,13 +777,13 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{Editor, Options};
+        use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -859,13 +859,13 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{Editor, Options};
+        use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -1341,7 +1341,7 @@ impl App {
         use crate::host::TuiHost;
         use hjkl_app::swap;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{Editor, Options};
+        use hjkl_engine::Options;
 
         let orphans = swap::scan_orphan_scratch_swaps_in(dir);
         let n = orphans.len();
@@ -1354,7 +1354,7 @@ impl App {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -2272,7 +2272,7 @@ impl App {
         use crate::app::window::{LayoutTree, Tab, Window};
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{Editor, Options};
+        use hjkl_engine::Options;
 
         // Save current tab's viewport state before switching.
         self.sync_viewport_from_editor();
@@ -2283,7 +2283,7 @@ impl App {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();

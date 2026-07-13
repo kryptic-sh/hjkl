@@ -6,7 +6,7 @@ use hjkl_vim::VimEditorExt;
 
 fn editor_with(content: &str) -> Editor {
     let opts = hjkl_engine::Options::default();
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         hjkl_engine::DefaultHost::new(),
         opts,

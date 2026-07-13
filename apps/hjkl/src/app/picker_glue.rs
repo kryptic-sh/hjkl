@@ -5,7 +5,7 @@ use crate::picker_action::AppAction;
 
 use git2::{BranchType, ErrorCode, ObjectType};
 use hjkl_buffer::Buffer;
-use hjkl_engine::{BufferEdit, Editor, Host, Options};
+use hjkl_engine::{BufferEdit, Host, Options};
 use hjkl_engine_tui::EditorRatatuiExt;
 
 use super::{App, BufferSlot, DiskState, STATUS_LINE_HEIGHT};
@@ -753,7 +753,7 @@ fn build_scratch_slot(
         readonly: true,
         ..Options::default()
     };
-    let mut editor = Editor::new(buffer, host, opts);
+    let mut editor = hjkl_vim::vim_editor(buffer, host, opts);
     if let Ok(size) = crossterm::terminal::size() {
         let vp = editor.host_mut().viewport_mut();
         vp.width = size.0;

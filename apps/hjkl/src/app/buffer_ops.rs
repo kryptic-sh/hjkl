@@ -1,5 +1,5 @@
 use hjkl_buffer::Buffer;
-use hjkl_engine::{Editor, Host, MarkJump, Options};
+use hjkl_engine::{Host, MarkJump, Options};
 use hjkl_vim::VimEditorExt;
 use std::path::PathBuf;
 
@@ -134,7 +134,7 @@ impl App {
             let new_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
@@ -260,7 +260,7 @@ impl App {
             let new_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
@@ -461,13 +461,13 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{Editor, Options};
+        use hjkl_engine::Options;
         use std::time::Instant;
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
-        let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
         editor.set_current_buffer_id(buffer_id);
         editor.set_registers_arc(self.registers.clone());
         // Mirror the nvim_api build_app viewport (80×24) for headless paths;

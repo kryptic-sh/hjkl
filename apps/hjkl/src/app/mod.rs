@@ -732,7 +732,7 @@ pub(super) fn build_slot(
         let scan_depth = ec_opts.modelines as usize;
         hjkl_app::modeline::overlay_modeline_for_content(&mut ec_opts, content, scan_depth);
     }
-    let mut editor = Editor::new(buffer, host, ec_opts);
+    let mut editor = hjkl_vim::vim_editor(buffer, host, ec_opts);
     // Tag the editor with its stable buffer_id so `mA`–`mZ` global marks
     // record the correct id from the first keystroke.
     editor.set_current_buffer_id(buffer_id);
@@ -1246,7 +1246,7 @@ impl App {
     pub(crate) fn make_view_editor(&self, slot_idx: usize) -> Editor<Buffer, TuiHost> {
         let src = &self.slots[slot_idx].editor;
         let view = Buffer::new_view(src.buffer().content_arc());
-        let mut ed = Editor::new(view, TuiHost::new(), Options::default());
+        let mut ed = hjkl_vim::vim_editor(view, TuiHost::new(), Options::default());
         *ed.settings_mut() = src.settings().clone();
         ed.set_current_buffer_id(self.slots[slot_idx].buffer_id);
         // Inherit the slot editor's cursor so the first view onto a buffer keeps

@@ -26,7 +26,7 @@
 //! use hjkl_editor::buffer;
 //! use hjkl_editor::runtime::{DefaultHost, Editor, Options};
 //!
-//! let mut editor = Editor::new(buffer::Buffer::new(), DefaultHost::new(), Options::default());
+//! let mut editor = hjkl_vim::vim_editor(buffer::Buffer::new(), DefaultHost::new(), Options::default());
 //! editor.set_content("hello world");
 //! ```
 //!
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn editor_constructs() {
-        let _ = runtime::Editor::new(
+        let _ = hjkl_vim::vim_editor(
             buffer::Buffer::new(),
             runtime::DefaultHost::new(),
             runtime::Options::default(),

@@ -221,7 +221,7 @@ mod tests {
     use hjkl_editor::runtime::Options;
 
     fn make_editor() -> Editor<Buffer, DefaultHost> {
-        Editor::new(Buffer::new(), DefaultHost::new(), Options::default())
+        hjkl_vim::vim_editor(Buffer::new(), DefaultHost::new(), Options::default())
     }
 
     #[test]

@@ -28,6 +28,9 @@ hjkl-buffer-tui = { workspace = true, optional = true }
 
 [dev-dependencies]
 crossterm = { version = "0.29.0", features = ["event-stream"] }
+# Tests build a vim-driven editor; the lib itself stays discipline-agnostic
+# (#267), so this is deliberately a dev-dependency only.
+hjkl-vim.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

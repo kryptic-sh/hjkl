@@ -145,7 +145,7 @@ mod tests {
         let content = lines.join("\n");
         let buf = hjkl_buffer::Buffer::from_str(&content);
         let host = DefaultHost::new();
-        Editor::new(buf, host, Options::default())
+        hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
     fn sh_available() -> bool {

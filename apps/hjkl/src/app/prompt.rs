@@ -872,7 +872,7 @@ impl App {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{BufferEdit, Editor, Host, Options};
+        use hjkl_engine::{BufferEdit, Host, Options};
         use std::time::Instant;
 
         if self.cmdline_win.is_some() {
@@ -899,7 +899,7 @@ impl App {
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
-        let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
             {

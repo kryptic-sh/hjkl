@@ -13,7 +13,7 @@ use hjkl_engine::vim::Operator;
 use hjkl_vim::VimEditorExt;
 
 fn ed_with(content: &str) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-    let mut e = Editor::new(
+    let mut e = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         DefaultHost::new(),
         Options::default(),

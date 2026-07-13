@@ -703,7 +703,7 @@ impl super::App {
         use super::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
-        use hjkl_engine::{BufferEdit, Editor, Host, Options};
+        use hjkl_engine::{BufferEdit, Host, Options};
         use std::time::Instant;
 
         // Capture the file the user was editing so we can reveal it.
@@ -729,7 +729,7 @@ impl super::App {
         self.next_buffer_id += 1;
 
         let host = TuiHost::new();
-        let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
         editor.set_registers_arc(self.registers.clone());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);

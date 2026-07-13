@@ -15,7 +15,7 @@ use hjkl_vim::VimEditorExt;
 
 fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
     let buf = Buffer::from_str(content);
-    Editor::new(buf, DefaultHost::default(), Options::default())
+    hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
 }
 
 #[test]

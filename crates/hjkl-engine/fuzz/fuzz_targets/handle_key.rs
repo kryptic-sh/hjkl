@@ -10,7 +10,6 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_engine::Editor;
 use hjkl_engine::types::{DefaultHost, Options};
 use libfuzzer_sys::fuzz_target;
 
@@ -92,7 +91,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let mut ed = Editor::new(
+    let mut ed = hjkl_vim::vim_editor(
         hjkl_buffer::Buffer::new(),
         DefaultHost::new(),
         Options::default(),

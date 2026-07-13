@@ -83,7 +83,7 @@ impl TextFieldEditor {
     pub fn new(single_line: bool) -> Self {
         let buffer = Buffer::new();
         let host = FormFieldHost::new();
-        let editor = Editor::new(buffer, host, Options::default());
+        let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         Self {
             meta: FieldMeta::new(""),
             editor,
@@ -108,7 +108,7 @@ impl TextFieldEditor {
     pub fn with_meta(meta: FieldMeta, rows: u16) -> Self {
         let buffer = Buffer::new();
         let host = FormFieldHost::new();
-        let editor = Editor::new(buffer, host, Options::default());
+        let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         Self {
             meta,
             editor,
@@ -129,7 +129,7 @@ impl TextFieldEditor {
     pub fn with_initial(mut self, text: &str) -> Self {
         let buffer = Buffer::from_str(text);
         let host = FormFieldHost::new();
-        self.editor = Editor::new(buffer, host, Options::default());
+        self.editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         self
     }
 
@@ -164,7 +164,7 @@ impl TextFieldEditor {
     pub fn set_text(&mut self, text: &str) {
         let buffer = Buffer::from_str(text);
         let host = FormFieldHost::new();
-        self.editor = Editor::new(buffer, host, Options::default());
+        self.editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         // Land cursor at end-of-text so `enter_insert_at_end` puts the
         // caret right after the last character.
         let n = self.editor.buffer().row_count();
