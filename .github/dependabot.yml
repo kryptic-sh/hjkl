@@ -12,6 +12,18 @@ updates:
     labels:
       - dependencies
       - rust
+    ignore:
+      # cosmic-text is pinned to whatever version floem resolves to (0.12.x for
+      # floem 0.2). hjkl-syntax-gui hands `Attrs`/`AttrsOwned` values straight to
+      # floem, so two cosmic-text versions in the graph makes those *distinct
+      # types* and the seam stops type-checking.
+      #
+      # A bump here builds green today only because hjkl-syntax-gui has no
+      # consumer yet (#150) — nothing crosses the boundary, so nothing catches
+      # the split. It would break the moment that crate is wired up. See #278.
+      #
+      # Unpin when floem itself upgrades cosmic-text.
+      - dependency-name: cosmic-text
     groups:
       patch:
         update-types:
