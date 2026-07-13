@@ -1371,7 +1371,7 @@ impl App {
             return None;
         }
         let cur = editor.buffer().cursor();
-        let pair = hjkl_engine::vim::matching_tag_pair(editor.buffer(), cur.row, cur.col)?;
+        let pair = hjkl_vim::vim::matching_tag_pair(editor.buffer(), cur.row, cur.col)?;
         let mut cells = Vec::new();
         for (row, start, end) in pair {
             for col in start..end {

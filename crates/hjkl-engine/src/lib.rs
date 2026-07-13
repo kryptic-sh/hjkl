@@ -34,14 +34,13 @@ pub mod search;
 pub mod substitute;
 pub mod types;
 mod viewport_math;
-pub mod vim;
 
 pub use discipline::{DisciplineState, NoDiscipline};
-pub use editor::{Editor, LspIntent, MarkJump, UndoGranularity};
+pub use editor::{CursorScrollTarget, Editor, LspIntent, MarkJump, Settings, UndoGranularity};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};
 
-pub use buffer_impl::{BufferFoldProvider, BufferFoldProviderMut};
+pub use buffer_impl::{BufferFoldProvider, BufferFoldProviderMut, SnapshotFoldProvider};
 pub use keymap_motion::MotionKind;
 pub use substitute::{
     SubstError, SubstFlags, SubstituteCmd, SubstituteMatch, SubstituteOutcome,
@@ -54,10 +53,17 @@ pub use types::{
     Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode,
     SpecialKey, Style, Viewport, WrapMode,
 };
-pub use vim::{
-    Abbrev, AbbrevTrigger, InsertDir, InsertEntry, InsertReason, InsertSession, LastChange,
-    LastVisual, Motion, Operator, Pending, RangeKind, ScrollDir, SearchPrompt, op_is_change,
-    parse_motion,
+// The vim FSM itself now lives in `hjkl-vim` (#267). What stays here is the
+// engine-owned substrate it happens to use — abbreviations, the search prompt,
+// scroll/insert directions — plus the shared vocabulary types from
+// `hjkl-vim-types`, which both crates name and neither owns.
+pub use abbrev::{Abbrev, AbbrevTrigger};
+pub use search::SearchPrompt;
+pub use types::{InsertDir, ScrollDir};
+
+pub use hjkl_vim_types::{
+    InsertEntry, InsertReason, InsertSession, LastChange, LastVisual, Motion, Operator, Pending,
+    RangeKind,
 };
 
 /// The FSM-internal mode discriminator used by `Editor::fsm_mode()` and
@@ -66,7 +72,7 @@ pub use vim::{
 ///
 /// Used by `hjkl-vim::normal` and `hjkl-vim::dispatch_input` for mode
 /// comparisons.
-pub use vim::Mode as FsmMode;
+pub use hjkl_vim_types::Mode as FsmMode;
 
 // 0.0.32 dropped the `#[deprecated]` re-export aliases introduced at
 // 0.0.31 (`SpecBuffer`, `SpecBufferEdit`, `EditOp`, `PlannedViewport`).

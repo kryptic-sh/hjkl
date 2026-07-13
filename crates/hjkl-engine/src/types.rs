@@ -3,8 +3,8 @@
 //! These are introduced alongside the legacy sqeel-vim public API. The
 //! trait extraction (phase 5) progressively rewires the existing FSM and
 //! Editor to operate on `Selection` / `SelectionSet` / `Edit` / `Pos`.
-//! Until that work lands, the legacy types in [`crate::editor`] and
-//! [`crate::vim`] remain authoritative.
+//! Until that work lands, the legacy types in [`crate::editor`] remain
+//! authoritative.
 
 // `Pos`, `Edit` (as `EngineEdit`), `ContentEdit`, and `FoldOp` now live in
 // `hjkl-buffer` so `Content` can own per-buffer engine state without a

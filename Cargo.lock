@@ -2896,8 +2896,11 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-keymap",
+ "hjkl-vim-types",
  "proptest",
  "ratatui",
+ "regex",
+ "tracing",
 ]
 
 [[package]]

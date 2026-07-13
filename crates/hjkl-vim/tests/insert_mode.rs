@@ -73,7 +73,7 @@ mod insert_mode_scrolloff_tests {
         let mut e = ed_with_lines(200);
         e.set_cursor_doc(19, 0);
         for _ in 0..50 {
-            e.insert_arrow(hjkl_engine::vim::InsertDir::Down);
+            e.insert_arrow(hjkl_engine::InsertDir::Down);
         }
         let (cursor_row, _) = e.cursor();
         let vp = e.host().viewport();

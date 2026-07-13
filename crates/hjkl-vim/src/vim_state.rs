@@ -6,9 +6,9 @@
 //! vim FSM reaches its own state back through these two helpers, which are the
 //! *only* place in this crate that performs the downcast.
 
+use crate::vim::VimState;
 use hjkl_engine::Editor;
 use hjkl_engine::types::Host;
-use hjkl_engine::vim::VimState;
 
 /// Borrow the vim FSM state out of `ed`'s discipline slot.
 ///

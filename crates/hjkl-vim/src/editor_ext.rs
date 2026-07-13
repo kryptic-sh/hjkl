@@ -8,11 +8,11 @@
 //! more of the engine's vim accessors move onto this trait; call sites pick
 //! them up with `use hjkl_vim::VimEditorExt`.
 
-use hjkl_engine::input::Input;
-use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
-use hjkl_engine::vim::{
+use crate::vim::{
     AbbrevTrigger, InsertDir, InsertReason, LastVisual, Motion, Operator, RangeKind, TextObject,
 };
+use hjkl_engine::input::Input;
+use hjkl_engine::types::{Highlight, HighlightKind, Host, Pos};
 use hjkl_engine::{Editor, FsmMode, MarkJump, MotionKind, VimMode};
 
 /// Move a position back by one character, wrapping to the end of the previous
@@ -122,7 +122,7 @@ pub trait VimEditorExt {
     // ─── Text-object resolution (hjkl#70) ──────────────────────────────────
     //
     // Pure functions — no cursor mutation, no mode change, no register write.
-    // Each delegates to the `hjkl_engine::vim::text_object_*_bridge` resolvers,
+    // Each delegates to the `crate::vim::text_object_*_bridge` resolvers,
     // which remain in the engine until vim.rs itself relocates (#267).
     //
     // Return value: `Some((start, end))` where both positions are `(row, col)`
@@ -633,7 +633,7 @@ pub trait VimEditorExt {
 
     // ─── Insert-mode primitives ────────────────────────────────────────────
     //
-    // Each wraps a `hjkl_engine::vim::insert_*_bridge` and, when the bridge
+    // Each wraps a `crate::vim::insert_*_bridge` and, when the bridge
     // reports a mutation, runs the post-mutation sync (dirty mark, insert-row
     // widening, scrolloff correction). Callers must ensure the editor is in
     // Insert (or Replace) mode first.
@@ -767,19 +767,19 @@ pub trait VimEditorExt {
     // engine core (#267).
 
     /// Return a clone of the current pending chord state.
-    fn pending(&self) -> hjkl_engine::vim::Pending;
+    fn pending(&self) -> crate::vim::Pending;
 
     /// Overwrite the pending chord state.
-    fn set_pending(&mut self, p: hjkl_engine::vim::Pending);
+    fn set_pending(&mut self, p: crate::vim::Pending);
 
     /// Atomically take the pending chord, replacing it with `Pending::None`.
-    fn take_pending(&mut self) -> hjkl_engine::vim::Pending;
+    fn take_pending(&mut self) -> crate::vim::Pending;
 
     /// Return the raw digit-prefix count (`0` = no prefix typed yet).
     fn count(&self) -> usize;
 
     /// Overwrite the digit-prefix count directly. Clamped at
-    /// [`hjkl_engine::vim::MAX_COUNT`] (vim's documented count ceiling, `:h count`).
+    /// [`crate::vim::MAX_COUNT`] (vim's documented count ceiling, `:h count`).
     fn set_count(&mut self, c: usize);
 
     /// Accumulate one more digit into the count prefix (mirrors `count * 10 + digit`).
@@ -793,11 +793,11 @@ pub trait VimEditorExt {
     fn take_count(&mut self) -> usize;
 
     /// Return the FSM-internal mode (Normal / Insert / Visual / …).
-    fn fsm_mode(&self) -> hjkl_engine::vim::Mode;
+    fn fsm_mode(&self) -> crate::vim::Mode;
 
     /// Overwrite the FSM-internal mode without side-effects. Prefer the
     /// semantic primitives (`enter_insert_i`, `enter_visual_char`, …).
-    fn set_fsm_mode(&mut self, m: hjkl_engine::vim::Mode);
+    fn set_fsm_mode(&mut self, m: crate::vim::Mode);
 
     /// `true` while the `.` dot-repeat replay is running.
     fn is_replaying(&self) -> bool;
@@ -830,7 +830,7 @@ pub trait VimEditorExt {
     /// deletes from cursor up to (not including) the first char of the match.
     fn apply_op_sneak(
         &mut self,
-        op: hjkl_engine::vim::Operator,
+        op: crate::vim::Operator,
         c1: char,
         c2: char,
         forward: bool,
@@ -844,26 +844,26 @@ pub trait VimEditorExt {
 
     /// Return a clone of the last recorded mutating change, or `None` before
     /// any change has been made.
-    fn last_change(&self) -> Option<hjkl_engine::vim::LastChange>;
+    fn last_change(&self) -> Option<crate::vim::LastChange>;
 
     /// Overwrite the stored last-change record.
-    fn set_last_change(&mut self, lc: Option<hjkl_engine::vim::LastChange>);
+    fn set_last_change(&mut self, lc: Option<crate::vim::LastChange>);
 
     /// Borrow the last-change record mutably (e.g. to fill in an `inserted`
     /// field after the insert session completes).
-    fn last_change_mut(&mut self) -> Option<&mut hjkl_engine::vim::LastChange>;
+    fn last_change_mut(&mut self) -> Option<&mut crate::vim::LastChange>;
 
     /// Borrow the active insert session, or `None` when not in Insert mode.
-    fn insert_session(&self) -> Option<&hjkl_engine::vim::InsertSession>;
+    fn insert_session(&self) -> Option<&crate::vim::InsertSession>;
 
     /// Borrow the active insert session mutably.
-    fn insert_session_mut(&mut self) -> Option<&mut hjkl_engine::vim::InsertSession>;
+    fn insert_session_mut(&mut self) -> Option<&mut crate::vim::InsertSession>;
 
     /// Atomically take the insert session out, leaving `None`.
-    fn take_insert_session(&mut self) -> Option<hjkl_engine::vim::InsertSession>;
+    fn take_insert_session(&mut self) -> Option<crate::vim::InsertSession>;
 
     /// Install a new insert session, replacing any existing one.
-    fn set_insert_session(&mut self, s: Option<hjkl_engine::vim::InsertSession>);
+    fn set_insert_session(&mut self, s: Option<crate::vim::InsertSession>);
 
     // ─── Register selection / chord status / macro controller ──────────────
 
@@ -1213,59 +1213,59 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Text-object resolution ────────────────────────────────────────────
 
     fn text_object_inner_word(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_word_bridge(self)
+        crate::vim::text_object_inner_word_bridge(self)
     }
 
     fn text_object_around_word(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_word_bridge(self)
+        crate::vim::text_object_around_word_bridge(self)
     }
 
     fn text_object_inner_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_big_word_bridge(self)
+        crate::vim::text_object_inner_big_word_bridge(self)
     }
 
     fn text_object_around_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_big_word_bridge(self)
+        crate::vim::text_object_around_big_word_bridge(self)
     }
 
     fn text_object_inner_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_quote_bridge(self, quote)
+        crate::vim::text_object_inner_quote_bridge(self, quote)
     }
 
     fn text_object_around_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_quote_bridge(self, quote)
+        crate::vim::text_object_around_quote_bridge(self, quote)
     }
 
     fn text_object_inner_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_bracket_bridge(self, open)
+        crate::vim::text_object_inner_bracket_bridge(self, open)
     }
 
     fn text_object_around_bracket(&self, open: char) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_bracket_bridge(self, open)
+        crate::vim::text_object_around_bracket_bridge(self, open)
     }
 
     fn text_object_inner_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_sentence_bridge(self)
+        crate::vim::text_object_inner_sentence_bridge(self)
     }
 
     fn text_object_around_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_sentence_bridge(self)
+        crate::vim::text_object_around_sentence_bridge(self)
     }
 
     fn text_object_inner_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_paragraph_bridge(self)
+        crate::vim::text_object_inner_paragraph_bridge(self)
     }
 
     fn text_object_around_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_paragraph_bridge(self)
+        crate::vim::text_object_around_paragraph_bridge(self)
     }
 
     fn text_object_inner_tag(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_inner_tag_bridge(self)
+        crate::vim::text_object_inner_tag_bridge(self)
     }
 
     fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))> {
-        hjkl_engine::vim::text_object_around_tag_bridge(self)
+        crate::vim::text_object_around_tag_bridge(self)
     }
 
     // ─── Range-mutation primitives ─────────────────────────────────────────
@@ -1277,7 +1277,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         kind: RangeKind,
         register: char,
     ) {
-        hjkl_engine::vim::delete_range_bridge(self, start, end, kind, register);
+        crate::vim::delete_range_bridge(self, start, end, kind, register);
     }
 
     fn yank_range(
@@ -1287,7 +1287,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         kind: RangeKind,
         register: char,
     ) {
-        hjkl_engine::vim::yank_range_bridge(self, start, end, kind, register);
+        crate::vim::yank_range_bridge(self, start, end, kind, register);
     }
 
     fn change_range(
@@ -1297,7 +1297,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         kind: RangeKind,
         register: char,
     ) {
-        hjkl_engine::vim::change_range_bridge(self, start, end, kind, register);
+        crate::vim::change_range_bridge(self, start, end, kind, register);
     }
 
     fn indent_range(
@@ -1307,7 +1307,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         count: i32,
         shiftwidth: u32,
     ) {
-        hjkl_engine::vim::indent_range_bridge(self, start, end, count, shiftwidth);
+        crate::vim::indent_range_bridge(self, start, end, count, shiftwidth);
     }
 
     fn case_range(
@@ -1317,7 +1317,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         kind: RangeKind,
         op: Operator,
     ) {
-        hjkl_engine::vim::case_range_bridge(self, start, end, kind, op);
+        crate::vim::case_range_bridge(self, start, end, kind, op);
     }
 
     // ─── Block-shape range-mutation primitives ─────────────────────────────
@@ -1330,9 +1330,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         right_col: usize,
         register: char,
     ) {
-        hjkl_engine::vim::delete_block_bridge(
-            self, top_row, bot_row, left_col, right_col, register,
-        );
+        crate::vim::delete_block_bridge(self, top_row, bot_row, left_col, right_col, register);
     }
 
     fn yank_block(
@@ -1343,7 +1341,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         right_col: usize,
         register: char,
     ) {
-        hjkl_engine::vim::yank_block_bridge(self, top_row, bot_row, left_col, right_col, register);
+        crate::vim::yank_block_bridge(self, top_row, bot_row, left_col, right_col, register);
     }
 
     fn change_block(
@@ -1354,9 +1352,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         right_col: usize,
         register: char,
     ) {
-        hjkl_engine::vim::change_block_bridge(
-            self, top_row, bot_row, left_col, right_col, register,
-        );
+        crate::vim::change_block_bridge(self, top_row, bot_row, left_col, right_col, register);
     }
 
     fn indent_block(
@@ -1367,111 +1363,111 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         _right_col: usize,
         count: i32,
     ) {
-        hjkl_engine::vim::indent_block_bridge(self, top_row, bot_row, count);
+        crate::vim::indent_block_bridge(self, top_row, bot_row, count);
     }
 
     fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize)) {
-        hjkl_engine::vim::auto_indent_range_bridge(self, start, end);
+        crate::vim::auto_indent_range_bridge(self, start, end);
     }
 
     // ─── Paste ─────────────────────────────────────────────────────────────
 
     fn paste_after(&mut self, count: usize) {
-        hjkl_engine::vim::paste_after_bridge(self, count);
+        crate::vim::paste_after_bridge(self, count);
     }
 
     fn paste_before(&mut self, count: usize) {
-        hjkl_engine::vim::paste_before_bridge(self, count);
+        crate::vim::paste_before_bridge(self, count);
     }
 
     fn paste_cursor_after(&mut self, before: bool, count: usize) {
-        hjkl_engine::vim::paste_bridge(self, before, count, true, false);
+        crate::vim::paste_bridge(self, before, count, true, false);
     }
 
     fn paste_reindent(&mut self, before: bool, count: usize) {
-        hjkl_engine::vim::paste_bridge(self, before, count, false, true);
+        crate::vim::paste_bridge(self, before, count, false, true);
     }
 
     fn visual_paste(&mut self, before: bool) {
-        hjkl_engine::vim::visual_paste(self, before);
+        crate::vim::visual_paste(self, before);
     }
 
     // ─── Visual-mode operators ─────────────────────────────────────────────
 
     fn adjust_number_visual(&mut self, delta: i64, sequential: bool) {
-        hjkl_engine::vim::adjust_number_visual(self, delta, sequential);
+        crate::vim::adjust_number_visual(self, delta, sequential);
     }
 
     fn ampersand_repeat(&mut self) {
-        hjkl_engine::vim::ampersand_repeat(self);
+        crate::vim::ampersand_repeat(self);
     }
 
     fn visual_join(&mut self, with_space: bool) {
-        hjkl_engine::vim::visual_join(self, with_space);
+        crate::vim::visual_join(self, with_space);
     }
 
     fn goto_percent(&mut self, count: usize) {
-        hjkl_engine::vim::goto_percent(self, count);
+        crate::vim::goto_percent(self, count);
     }
 
     // ─── Jumplist motion ───────────────────────────────────────────────────
 
     fn jump_back(&mut self, count: usize) {
-        hjkl_engine::vim::jump_back_bridge(self, count);
+        crate::vim::jump_back_bridge(self, count);
     }
 
     fn jump_forward(&mut self, count: usize) {
-        hjkl_engine::vim::jump_forward_bridge(self, count);
+        crate::vim::jump_forward_bridge(self, count);
     }
 
     // ─── Search ────────────────────────────────────────────────────────────
 
     fn search_repeat(&mut self, forward: bool, count: usize) {
-        hjkl_engine::vim::search_repeat_bridge(self, forward, count);
+        crate::vim::search_repeat_bridge(self, forward, count);
     }
 
     fn word_search(&mut self, forward: bool, whole_word: bool, count: usize) {
-        hjkl_engine::vim::word_search_bridge(self, forward, whole_word, count);
+        crate::vim::word_search_bridge(self, forward, whole_word, count);
     }
 
     // ─── Chord appliers ────────────────────────────────────────────────────
 
     fn replace_char_at(&mut self, ch: char, count: usize) {
-        hjkl_engine::vim::replace_char(self, ch, count);
+        crate::vim::replace_char(self, ch, count);
     }
 
     fn find_char(&mut self, ch: char, forward: bool, till: bool, count: usize) {
-        hjkl_engine::vim::apply_find_char(self, ch, forward, till, count.max(1));
+        crate::vim::apply_find_char(self, ch, forward, till, count.max(1));
     }
 
     fn after_g(&mut self, ch: char, count: usize) {
-        hjkl_engine::vim::apply_after_g(self, ch, count);
+        crate::vim::apply_after_g(self, ch, count);
     }
 
     fn after_z(&mut self, ch: char, count: usize) {
-        hjkl_engine::vim::apply_after_z(self, ch, count);
+        crate::vim::apply_after_z(self, ch, count);
     }
 
     // ─── Operator dispatch ─────────────────────────────────────────────────
 
     fn apply_op_motion(&mut self, op: Operator, motion_key: char, total_count: usize) {
-        hjkl_engine::vim::apply_op_motion_key(self, op, motion_key, total_count);
+        crate::vim::apply_op_motion_key(self, op, motion_key, total_count);
     }
 
     fn apply_op_double(&mut self, op: Operator, total_count: usize) {
-        hjkl_engine::vim::apply_op_double(self, op, total_count);
+        crate::vim::apply_op_double(self, op, total_count);
     }
 
     fn apply_op_find(&mut self, op: Operator, ch: char, forward: bool, till: bool, count: usize) {
-        hjkl_engine::vim::apply_op_find_motion(self, op, ch, forward, till, count);
+        crate::vim::apply_op_find_motion(self, op, ch, forward, till, count);
     }
 
     fn apply_op_text_obj(&mut self, op: Operator, ch: char, inner: bool, total_count: usize) {
-        hjkl_engine::vim::apply_op_text_obj_inner(self, op, ch, inner, total_count);
+        crate::vim::apply_op_text_obj_inner(self, op, ch, inner, total_count);
     }
 
     fn apply_op_g(&mut self, op: Operator, ch: char, total_count: usize) {
-        hjkl_engine::vim::apply_op_g_inner(self, op, ch, total_count);
+        crate::vim::apply_op_g_inner(self, op, ch, total_count);
     }
 
     // ─── Mode transitions ──────────────────────────────────────────────────
@@ -1481,31 +1477,31 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn enter_visual_char(&mut self) {
-        hjkl_engine::vim::enter_visual_char_bridge(self);
+        crate::vim::enter_visual_char_bridge(self);
     }
 
     fn enter_visual_line(&mut self) {
-        hjkl_engine::vim::enter_visual_line_bridge(self);
+        crate::vim::enter_visual_line_bridge(self);
     }
 
     fn enter_visual_block(&mut self) {
-        hjkl_engine::vim::enter_visual_block_bridge(self);
+        crate::vim::enter_visual_block_bridge(self);
     }
 
     fn exit_visual_to_normal(&mut self) {
-        hjkl_engine::vim::exit_visual_to_normal_bridge(self);
+        crate::vim::exit_visual_to_normal_bridge(self);
     }
 
     fn visual_o_toggle(&mut self) {
-        hjkl_engine::vim::visual_o_toggle_bridge(self);
+        crate::vim::visual_o_toggle_bridge(self);
     }
 
     fn reenter_last_visual(&mut self) {
-        hjkl_engine::vim::reenter_last_visual_bridge(self);
+        crate::vim::reenter_last_visual_bridge(self);
     }
 
     fn set_mode(&mut self, mode: VimMode) {
-        hjkl_engine::vim::set_mode_bridge(self, mode);
+        crate::vim::set_mode_bridge(self, mode);
     }
 
     // ─── Visual anchors ────────────────────────────────────────────────────
@@ -1620,51 +1616,51 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn apply_op_with_motion_direct(&mut self, op: Operator, motion: &Motion, count: usize) {
-        hjkl_engine::vim::apply_op_with_motion(self, op, motion, count);
+        crate::vim::apply_op_with_motion(self, op, motion, count);
     }
 
     fn adjust_number(&mut self, delta: i64) {
-        hjkl_engine::vim::adjust_number(self, delta);
+        crate::vim::adjust_number(self, delta);
     }
 
     fn enter_search(&mut self, forward: bool) {
-        hjkl_engine::vim::enter_search(self, forward);
+        crate::vim::enter_search(self, forward);
     }
 
     fn enter_search_op(&mut self, forward: bool, op: Operator, count: usize) {
-        hjkl_engine::vim::enter_search_op(self, forward, op, count);
+        crate::vim::enter_search_op(self, forward, op, count);
     }
 
     fn apply_op_search_range(&mut self, op: Operator, origin: (usize, usize)) {
-        hjkl_engine::vim::apply_op_search_range(self, op, origin);
+        crate::vim::apply_op_search_range(self, op, origin);
     }
 
     fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize) {
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
-        hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+        crate::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
     }
 
     fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
-        hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+        crate::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
     }
 
     fn execute_motion(&mut self, motion: Motion, count: usize) {
-        hjkl_engine::vim::execute_motion(self, motion, count);
+        crate::vim::execute_motion(self, motion, count);
     }
 
     fn update_block_vcol(&mut self, motion: &Motion) {
-        hjkl_engine::vim::update_block_vcol(self, motion);
+        crate::vim::update_block_vcol(self, motion);
     }
 
     fn apply_visual_operator(&mut self, op: Operator, count: usize) {
-        hjkl_engine::vim::apply_visual_operator(self, op, count);
+        crate::vim::apply_visual_operator(self, op, count);
     }
 
     fn replace_block_char(&mut self, ch: char) {
-        hjkl_engine::vim::block_replace(self, ch);
+        crate::vim::block_replace(self, ch);
     }
 
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool) {
@@ -1681,8 +1677,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
             's' => TextObject::Sentence,
             _ => return,
         };
-        let Some((start, end, kind)) = hjkl_engine::vim::text_object_range(self, obj, inner, 1)
-        else {
+        let Some((start, end, kind)) = crate::vim::text_object_range(self, obj, inner, 1) else {
             return;
         };
         match kind {
@@ -1696,7 +1691,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
                 crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
                 crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
                 crate::vim_state::vim_mut(self).visual_anchor = (start.0, start.1);
-                let (er, ec) = hjkl_engine::vim::retreat_one(self, end);
+                let (er, ec) = crate::vim::retreat_one(self, end);
                 self.jump_cursor(er, ec);
             }
         }
@@ -1705,89 +1700,89 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Insert-mode primitives ────────────────────────────────────────────
 
     fn insert_char(&mut self, ch: char) {
-        if hjkl_engine::vim::insert_char_bridge(self, ch) {
+        if crate::vim::insert_char_bridge(self, ch) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_newline(&mut self) {
-        if hjkl_engine::vim::insert_newline_bridge(self) {
+        if crate::vim::insert_newline_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_tab(&mut self) {
-        if hjkl_engine::vim::insert_tab_bridge(self) {
+        if crate::vim::insert_tab_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_backspace(&mut self) {
-        if hjkl_engine::vim::insert_backspace_bridge(self) {
+        if crate::vim::insert_backspace_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_delete(&mut self) {
-        if hjkl_engine::vim::insert_delete_bridge(self) {
+        if crate::vim::insert_delete_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_arrow(&mut self, dir: InsertDir) {
-        hjkl_engine::vim::insert_arrow_bridge(self, dir);
+        crate::vim::insert_arrow_bridge(self, dir);
         after_insert_motion(self);
     }
 
     fn insert_home(&mut self) {
-        hjkl_engine::vim::insert_home_bridge(self);
+        crate::vim::insert_home_bridge(self);
         after_insert_motion(self);
     }
 
     fn insert_end(&mut self) {
-        hjkl_engine::vim::insert_end_bridge(self);
+        crate::vim::insert_end_bridge(self);
         after_insert_motion(self);
     }
 
     fn insert_pageup(&mut self, viewport_h: u16) {
-        hjkl_engine::vim::insert_pageup_bridge(self, viewport_h);
+        crate::vim::insert_pageup_bridge(self, viewport_h);
         after_insert_motion(self);
     }
 
     fn insert_pagedown(&mut self, viewport_h: u16) {
-        hjkl_engine::vim::insert_pagedown_bridge(self, viewport_h);
+        crate::vim::insert_pagedown_bridge(self, viewport_h);
         after_insert_motion(self);
     }
 
     fn insert_ctrl_w(&mut self) {
-        if hjkl_engine::vim::insert_ctrl_w_bridge(self) {
+        if crate::vim::insert_ctrl_w_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_u(&mut self) {
-        if hjkl_engine::vim::insert_ctrl_u_bridge(self) {
+        if crate::vim::insert_ctrl_u_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_h(&mut self) {
-        if hjkl_engine::vim::insert_ctrl_h_bridge(self) {
+        if crate::vim::insert_ctrl_h_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_o_arm(&mut self) {
-        hjkl_engine::vim::insert_ctrl_o_bridge(self);
+        crate::vim::insert_ctrl_o_bridge(self);
     }
 
     fn insert_ctrl_r_arm(&mut self) {
-        hjkl_engine::vim::insert_ctrl_r_bridge(self);
+        crate::vim::insert_ctrl_r_bridge(self);
     }
 
     fn insert_ctrl_t(&mut self) {
         // Indent-only: no scrolloff re-check (the cursor row does not move).
-        let mutated = hjkl_engine::vim::insert_ctrl_t_bridge(self);
+        let mutated = crate::vim::insert_ctrl_t_bridge(self);
         if mutated {
             self.mark_content_dirty();
             let (row, _) = self.cursor();
@@ -1796,7 +1791,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn insert_ctrl_d(&mut self) {
-        let mutated = hjkl_engine::vim::insert_ctrl_d_bridge(self);
+        let mutated = crate::vim::insert_ctrl_d_bridge(self);
         if mutated {
             self.mark_content_dirty();
             let (row, _) = self.cursor();
@@ -1805,126 +1800,126 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn insert_paste_register(&mut self, reg: char) {
-        hjkl_engine::vim::insert_paste_register_bridge(self, reg);
+        crate::vim::insert_paste_register_bridge(self, reg);
         let (row, _) = self.cursor();
         crate::vim_state::vim_mut(self).widen_insert_row(row);
     }
 
     fn insert_ctrl_bracket(&mut self) {
-        if hjkl_engine::vim::check_and_apply_abbrev(self, AbbrevTrigger::CtrlBracket) {
+        if crate::vim::check_and_apply_abbrev(self, AbbrevTrigger::CtrlBracket) {
             after_insert_mutation(self);
         }
     }
 
     fn leave_insert_to_normal(&mut self) {
-        hjkl_engine::vim::leave_insert_to_normal_bridge(self);
+        crate::vim::leave_insert_to_normal_bridge(self);
     }
 
     // ─── Insert-mode entry ─────────────────────────────────────────────────
 
     fn enter_insert_i(&mut self, count: usize) {
-        hjkl_engine::vim::enter_insert_i_bridge(self, count);
+        crate::vim::enter_insert_i_bridge(self, count);
     }
 
     fn enter_insert_shift_i(&mut self, count: usize) {
-        hjkl_engine::vim::enter_insert_shift_i_bridge(self, count);
+        crate::vim::enter_insert_shift_i_bridge(self, count);
     }
 
     fn enter_insert_a(&mut self, count: usize) {
-        hjkl_engine::vim::enter_insert_a_bridge(self, count);
+        crate::vim::enter_insert_a_bridge(self, count);
     }
 
     fn enter_insert_shift_a(&mut self, count: usize) {
-        hjkl_engine::vim::enter_insert_shift_a_bridge(self, count);
+        crate::vim::enter_insert_shift_a_bridge(self, count);
     }
 
     fn open_line_below(&mut self, count: usize) {
-        hjkl_engine::vim::open_line_below_bridge(self, count);
+        crate::vim::open_line_below_bridge(self, count);
     }
 
     fn open_line_above(&mut self, count: usize) {
-        hjkl_engine::vim::open_line_above_bridge(self, count);
+        crate::vim::open_line_above_bridge(self, count);
     }
 
     fn enter_replace_mode(&mut self, count: usize) {
-        hjkl_engine::vim::enter_replace_mode_bridge(self, count);
+        crate::vim::enter_replace_mode_bridge(self, count);
     }
 
     // ─── Normal-mode edit primitives ───────────────────────────────────────
 
     fn delete_char_forward(&mut self, count: usize) {
-        hjkl_engine::vim::delete_char_forward_bridge(self, count);
+        crate::vim::delete_char_forward_bridge(self, count);
     }
 
     fn delete_char_backward(&mut self, count: usize) {
-        hjkl_engine::vim::delete_char_backward_bridge(self, count);
+        crate::vim::delete_char_backward_bridge(self, count);
     }
 
     fn substitute_char(&mut self, count: usize) {
-        hjkl_engine::vim::substitute_char_bridge(self, count);
+        crate::vim::substitute_char_bridge(self, count);
     }
 
     fn substitute_line(&mut self, count: usize) {
-        hjkl_engine::vim::substitute_line_bridge(self, count);
+        crate::vim::substitute_line_bridge(self, count);
     }
 
     fn delete_to_eol(&mut self) {
-        hjkl_engine::vim::delete_to_eol_bridge(self);
+        crate::vim::delete_to_eol_bridge(self);
     }
 
     fn change_to_eol(&mut self) {
-        hjkl_engine::vim::change_to_eol_bridge(self);
+        crate::vim::change_to_eol_bridge(self);
     }
 
     fn yank_to_eol(&mut self, count: usize) {
-        hjkl_engine::vim::yank_to_eol_bridge(self, count);
+        crate::vim::yank_to_eol_bridge(self, count);
     }
 
     fn join_line(&mut self, count: usize) {
-        hjkl_engine::vim::join_line_bridge(self, count);
+        crate::vim::join_line_bridge(self, count);
     }
 
     fn toggle_case_at_cursor(&mut self, count: usize) {
-        hjkl_engine::vim::toggle_case_at_cursor_bridge(self, count);
+        crate::vim::toggle_case_at_cursor_bridge(self, count);
     }
 
     // ─── Vim mark commands ─────────────────────────────────────────────────
 
     fn replay_last_change(&mut self, count: usize) {
-        hjkl_engine::vim::replay_last_change(self, count);
+        crate::vim::replay_last_change(self, count);
     }
 
     fn set_mark_at_cursor(&mut self, ch: char) {
-        hjkl_engine::vim::set_mark_at_cursor(self, ch);
+        crate::vim::set_mark_at_cursor(self, ch);
     }
 
     fn goto_mark_line(&mut self, ch: char) {
-        hjkl_engine::vim::goto_mark(self, ch, true);
+        crate::vim::goto_mark(self, ch, true);
     }
 
     fn goto_mark_char(&mut self, ch: char) {
-        hjkl_engine::vim::goto_mark(self, ch, false);
+        crate::vim::goto_mark(self, ch, false);
     }
 
     fn try_goto_mark_line(&mut self, ch: char) -> MarkJump {
-        hjkl_engine::vim::try_goto_mark(self, ch, true)
+        crate::vim::try_goto_mark(self, ch, true)
     }
 
     fn try_goto_mark_char(&mut self, ch: char) -> MarkJump {
-        hjkl_engine::vim::try_goto_mark(self, ch, false)
+        crate::vim::try_goto_mark(self, ch, false)
     }
 
     // ─── Vim FSM state accessors ───────────────────────────────────────────
 
-    fn pending(&self) -> hjkl_engine::vim::Pending {
+    fn pending(&self) -> crate::vim::Pending {
         crate::vim_state::vim(self).pending.clone()
     }
 
-    fn set_pending(&mut self, p: hjkl_engine::vim::Pending) {
+    fn set_pending(&mut self, p: crate::vim::Pending) {
         crate::vim_state::vim_mut(self).pending = p;
     }
 
-    fn take_pending(&mut self) -> hjkl_engine::vim::Pending {
+    fn take_pending(&mut self) -> crate::vim::Pending {
         std::mem::take(&mut crate::vim_state::vim_mut(self).pending)
     }
 
@@ -1933,7 +1928,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn set_count(&mut self, c: usize) {
-        crate::vim_state::vim_mut(self).count = c.min(hjkl_engine::vim::MAX_COUNT);
+        crate::vim_state::vim_mut(self).count = c.min(crate::vim::MAX_COUNT);
     }
 
     fn accumulate_count_digit(&mut self, digit: usize) {
@@ -1947,7 +1942,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
             .count
             .saturating_mul(10)
             .saturating_add(digit)
-            .min(hjkl_engine::vim::MAX_COUNT);
+            .min(crate::vim::MAX_COUNT);
     }
 
     fn reset_count(&mut self) {
@@ -1964,11 +1959,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         }
     }
 
-    fn fsm_mode(&self) -> hjkl_engine::vim::Mode {
+    fn fsm_mode(&self) -> crate::vim::Mode {
         crate::vim_state::vim(self).mode
     }
 
-    fn set_fsm_mode(&mut self, m: hjkl_engine::vim::Mode) {
+    fn set_fsm_mode(&mut self, m: crate::vim::Mode) {
         crate::vim_state::vim_mut(self).mode = m;
         crate::vim_state::vim_mut(self).current_mode =
             crate::vim_state::vim_mut(self).public_mode();
@@ -1999,49 +1994,49 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn sneak(&mut self, c1: char, c2: char, forward: bool, count: usize) {
-        hjkl_engine::vim::apply_sneak(self, c1, c2, forward, count.max(1));
+        crate::vim::apply_sneak(self, c1, c2, forward, count.max(1));
     }
 
     fn apply_op_sneak(
         &mut self,
-        op: hjkl_engine::vim::Operator,
+        op: crate::vim::Operator,
         c1: char,
         c2: char,
         forward: bool,
         total_count: usize,
     ) {
-        hjkl_engine::vim::apply_op_sneak(self, op, c1, c2, forward, total_count);
+        crate::vim::apply_op_sneak(self, op, c1, c2, forward, total_count);
     }
 
     fn last_sneak(&self) -> Option<((char, char), bool)> {
         crate::vim_state::vim(self).last_sneak
     }
 
-    fn last_change(&self) -> Option<hjkl_engine::vim::LastChange> {
+    fn last_change(&self) -> Option<crate::vim::LastChange> {
         crate::vim_state::vim(self).last_change.clone()
     }
 
-    fn set_last_change(&mut self, lc: Option<hjkl_engine::vim::LastChange>) {
+    fn set_last_change(&mut self, lc: Option<crate::vim::LastChange>) {
         crate::vim_state::vim_mut(self).last_change = lc;
     }
 
-    fn last_change_mut(&mut self) -> Option<&mut hjkl_engine::vim::LastChange> {
+    fn last_change_mut(&mut self) -> Option<&mut crate::vim::LastChange> {
         crate::vim_state::vim_mut(self).last_change.as_mut()
     }
 
-    fn insert_session(&self) -> Option<&hjkl_engine::vim::InsertSession> {
+    fn insert_session(&self) -> Option<&crate::vim::InsertSession> {
         crate::vim_state::vim(self).insert_session.as_ref()
     }
 
-    fn insert_session_mut(&mut self) -> Option<&mut hjkl_engine::vim::InsertSession> {
+    fn insert_session_mut(&mut self) -> Option<&mut crate::vim::InsertSession> {
         crate::vim_state::vim_mut(self).insert_session.as_mut()
     }
 
-    fn take_insert_session(&mut self) -> Option<hjkl_engine::vim::InsertSession> {
+    fn take_insert_session(&mut self) -> Option<crate::vim::InsertSession> {
         crate::vim_state::vim_mut(self).insert_session.take()
     }
 
-    fn set_insert_session(&mut self, s: Option<hjkl_engine::vim::InsertSession>) {
+    fn set_insert_session(&mut self, s: Option<crate::vim::InsertSession>) {
         crate::vim_state::vim_mut(self).insert_session = s;
     }
 
@@ -2151,7 +2146,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         // Multiply by count (minimum 1). Clamp to vim's count limit
         // (`:h count` — counts are capped at 999999999); an unclamped
         // saturated prefix would overflow `Vec` capacity in `repeat`.
-        keys.repeat(count.clamp(1, hjkl_engine::vim::MAX_COUNT))
+        keys.repeat(count.clamp(1, crate::vim::MAX_COUNT))
     }
 
     fn end_macro_replay(&mut self) {
@@ -2169,15 +2164,15 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Mode reset / mouse-driven selection / operator range probe ────────
 
     fn force_normal(&mut self) {
-        hjkl_engine::vim::force_normal_bridge(self);
+        crate::vim::force_normal_bridge(self);
     }
 
     fn mouse_click_doc(&mut self, row: usize, col: usize) {
-        hjkl_engine::vim::mouse_click_doc_bridge(self, row, col);
+        crate::vim::mouse_click_doc_bridge(self, row, col);
     }
 
     fn mouse_begin_drag(&mut self) {
-        hjkl_engine::vim::mouse_begin_drag_bridge(self);
+        crate::vim::mouse_begin_drag_bridge(self);
     }
 
     fn range_for_op_motion(
@@ -2185,17 +2180,17 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         motion_key: char,
         total_count: usize,
     ) -> Option<(usize, usize)> {
-        hjkl_engine::vim::range_for_op_motion_bridge(self, motion_key, total_count)
+        crate::vim::range_for_op_motion_bridge(self, motion_key, total_count)
     }
 
     // ─── Motion dispatch / operator range probes ───────────────────────────
 
     fn apply_motion(&mut self, kind: MotionKind, count: usize) {
-        hjkl_engine::vim::apply_motion_kind(self, kind, count);
+        crate::vim::apply_motion_kind(self, kind, count);
     }
 
     fn range_for_op_g(&mut self, ch: char, total_count: usize) -> Option<(usize, usize)> {
-        hjkl_engine::vim::range_for_op_g_bridge(self, ch, total_count)
+        crate::vim::range_for_op_g_bridge(self, ch, total_count)
     }
 
     fn range_for_op_text_obj(
@@ -2204,6 +2199,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         inner: bool,
         total_count: usize,
     ) -> Option<(usize, usize)> {
-        hjkl_engine::vim::range_for_op_text_obj_bridge(self, ch, inner, total_count)
+        crate::vim::range_for_op_text_obj_bridge(self, ch, inner, total_count)
     }
 }

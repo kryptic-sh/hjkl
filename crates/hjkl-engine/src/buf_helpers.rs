@@ -1,5 +1,5 @@
-//! Trait-surface cast helpers shared between [`crate::editor`] and
-//! [`crate::vim`].
+//! Trait-surface cast helpers shared between [`crate::editor`] and the
+//! discipline crates (`hjkl-vim`) that drive it.
 //!
 //! Promoted from `editor.rs` in 0.0.42 (Patch C-δ.7) so the vim free
 //! functions can route their `ed.buffer().*` reaches through the

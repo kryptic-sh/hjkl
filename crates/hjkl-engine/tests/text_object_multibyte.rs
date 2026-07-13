@@ -9,8 +9,8 @@
 
 use hjkl_engine::Editor;
 use hjkl_engine::types::{DefaultHost, Options};
-use hjkl_engine::vim::Operator;
 use hjkl_vim::VimEditorExt;
+use hjkl_vim::vim::Operator;
 
 fn ed_with(content: &str) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
     let mut e = hjkl_vim::vim_editor(
@@ -85,7 +85,7 @@ fn count_prefix_digits_clamp_at_vim_max() {
     for _ in 0..40 {
         e.accumulate_count_digit(9);
     }
-    assert_eq!(e.count(), hjkl_engine::vim::MAX_COUNT);
+    assert_eq!(e.count(), hjkl_vim::vim::MAX_COUNT);
     assert_eq!(e.count(), 999_999_999);
     // A count-consuming command with the clamped prefix must not panic.
     let count = e.take_count();

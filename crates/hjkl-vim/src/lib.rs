@@ -9,6 +9,7 @@ pub mod operator;
 pub mod pending;
 pub mod search_prompt;
 mod step;
+pub mod vim;
 mod vim_state;
 
 pub use cmd::EngineCmd;
@@ -20,7 +21,7 @@ pub use editor_ext::VimEditorExt;
 /// `Editor::new` leaves the discipline slot empty (the engine cannot name a
 /// concrete discipline), so an editor built through it ignores vim keys. Every
 /// vim-driven editor goes through one of these two (#267).
-pub use hjkl_engine::vim::{install as install_vim_discipline, vim_editor};
+pub use vim::{install as install_vim_discipline, vim_editor};
 // MotionKind moved to hjkl-engine (Phase 6.6 cycle-break); re-exported here for back-compat.
 pub use hjkl_engine::MotionKind;
 pub use operator::OperatorKind;

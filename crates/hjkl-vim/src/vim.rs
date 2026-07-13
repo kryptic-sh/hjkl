@@ -71,37 +71,39 @@
 //!   The plan calls for moving them into the editor (so the editor owns
 //!   `last_search_pattern` rather than the TUI loop). Safe to defer.
 
-pub use crate::abbrev::{Abbrev, AbbrevKind, AbbrevTrigger};
-pub use crate::search::SearchPrompt;
-pub use crate::types::{CHANGE_LIST_MAX, InsertDir, JUMPLIST_MAX, SEARCH_HISTORY_MAX, ScrollDir};
+pub use hjkl_engine::abbrev::{Abbrev, AbbrevKind, AbbrevTrigger};
+pub use hjkl_engine::search::SearchPrompt;
+pub use hjkl_engine::types::{
+    CHANGE_LIST_MAX, InsertDir, JUMPLIST_MAX, SEARCH_HISTORY_MAX, ScrollDir,
+};
 pub use hjkl_vim_types::{
     InsertEntry, InsertReason, InsertSession, LastChange, LastHorizontalMotion, LastVisual, Mode,
     Motion, Operator, Pending, RangeKind, TextObject,
 };
 
-use crate::VimMode;
-use crate::input::{Input, Key};
-use crate::rope_util::{rope_line_to_str, rope_row_range_str, rope_to_lines_vec};
+use hjkl_engine::VimMode;
+use hjkl_engine::input::{Input, Key};
+use hjkl_engine::rope_util::{rope_line_to_str, rope_row_range_str, rope_to_lines_vec};
 
-use crate::buf_helpers::{
+use hjkl_engine::Editor;
+use hjkl_engine::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_bytes, buf_line_chars, buf_row_count, buf_set_cursor_pos,
     buf_set_cursor_rc,
 };
-use crate::editor::Editor;
 
 // ─── Discipline install ────────────────────────────────────────────────────
 
 /// Install the vim discipline on `ed`, replacing whatever was there.
 ///
 /// [`Editor::new`] leaves the discipline slot at
-/// [`NoDiscipline`](crate::NoDiscipline) — the engine cannot name a concrete
+/// [`NoDiscipline`](hjkl_engine::NoDiscipline) — the engine cannot name a concrete
 /// discipline. Every editor that should interpret keys as vim must be handed to
 /// this once at construction; [`vim_editor`] does both in one call.
 ///
 /// Dispatching vim input at an editor that skipped this panics on the first
 /// state access (see `hjkl_vim::vim_state`) rather than silently behaving like
 /// a keyboard-less buffer.
-pub fn install<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub fn install<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     ed.set_discipline(Box::new(VimState::default()));
 }
 
@@ -109,10 +111,10 @@ pub fn install<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
 ///
 /// The vim-flavoured counterpart of [`Editor::new`], which yields an editor
 /// with no discipline at all.
-pub fn vim_editor<H: crate::types::Host>(
+pub fn vim_editor<H: hjkl_engine::types::Host>(
     buffer: hjkl_buffer::Buffer,
     host: H,
-    options: crate::types::Options,
+    options: hjkl_engine::types::Options,
 ) -> Editor<hjkl_buffer::Buffer, H> {
     let mut ed = Editor::new(buffer, host, options);
     install(&mut ed);
@@ -151,7 +153,7 @@ pub(crate) fn rot13_str(s: &str) -> String {
 /// downcast (#265 G3 / #267). Panics if a *different* discipline is installed —
 /// that is a wiring bug (vim keys dispatched at an editor that never had the
 /// vim discipline installed), not a runtime condition to recover from.
-fn vim<H: crate::types::Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState {
+fn vim<H: hjkl_engine::types::Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState {
     ed.discipline()
         .as_any()
         .downcast_ref::<VimState>()
@@ -159,7 +161,7 @@ fn vim<H: crate::types::Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState 
 }
 
 /// Mutable counterpart of [`vim`].
-fn vim_mut<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> &mut VimState {
+fn vim_mut<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> &mut VimState {
     ed.discipline_mut()
         .as_any_mut()
         .downcast_mut::<VimState>()
@@ -214,10 +216,10 @@ pub struct VimState {
     /// `recording_keys`.
     pub recording_macro: Option<char>,
     /// Keys recorded into the in-progress macro. On `q` finish, these
-    /// are encoded via [`crate::input::encode_macro`] and written to
+    /// are encoded via [`hjkl_engine::input::encode_macro`] and written to
     /// the matching named register slot, so macros and yanks share a
     /// single store.
-    pub recording_keys: Vec<crate::input::Input>,
+    pub recording_keys: Vec<hjkl_engine::input::Input>,
     /// Set during `@reg` replay so the recorder doesn't capture the
     /// replayed keystrokes a second time.
     pub replaying_macro: bool,
@@ -278,7 +280,7 @@ pub struct VimState {
     /// exceeds the configured budget, any pending prefix is cleared
     /// before the new key dispatches. `None` before the first key.
     /// 0.0.29 (Patch B): `:set timeoutlen` math now reads
-    /// [`crate::types::Host::now`] via `last_input_host_at`. This
+    /// [`hjkl_engine::types::Host::now`] via `last_input_host_at`. This
     /// `Instant`-flavoured field stays for snapshot tests that still
     /// observe it directly.
     /// `Host::now()` reading at the last keystroke. Drives
@@ -289,7 +291,7 @@ pub struct VimState {
     /// `enter_visual_char_bridge`, …). Once the FSM is gone this is the
     /// sole source of truth; until then both fields are kept in sync.
     /// Initialized to `Normal` via `#[derive(Default)]`.
-    pub current_mode: crate::VimMode,
+    pub current_mode: hjkl_engine::VimMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
     /// Stack of auto-inserted closing characters awaiting skip-over.
     ///
@@ -318,11 +320,11 @@ impl VimState {
     }
 
     /// Project the current vim mode onto the discipline-agnostic
-    /// [`crate::CoarseMode`] (the seam app chrome reads — #265 G3 / #267).
-    /// Shared by [`crate::DisciplineState::coarse_mode`] and
-    /// [`crate::Editor::coarse_mode`].
-    pub fn coarse_mode(&self) -> crate::CoarseMode {
-        use crate::CoarseMode;
+    /// [`hjkl_engine::CoarseMode`] (the seam app chrome reads — #265 G3 / #267).
+    /// Shared by [`hjkl_engine::DisciplineState::coarse_mode`] and
+    /// [`hjkl_engine::Editor::coarse_mode`].
+    pub fn coarse_mode(&self) -> hjkl_engine::CoarseMode {
+        use hjkl_engine::CoarseMode;
         match self.current_mode {
             VimMode::Normal => CoarseMode::Normal,
             VimMode::Insert => CoarseMode::Insert,
@@ -338,7 +340,7 @@ impl VimState {
         self.count = 0;
         self.insert_session = None;
         // Phase 6.3: keep current_mode in sync for callers that bypass step().
-        self.current_mode = crate::VimMode::Normal;
+        self.current_mode = hjkl_engine::VimMode::Normal;
     }
 
     /// Reset every prefix-tracking field so the next keystroke starts
@@ -361,8 +363,7 @@ impl VimState {
     /// by the Phase 6.1 public `Editor::insert_*` methods after each
     /// mutation so `finish_insert_session` diffs the right range on Esc.
     /// No-op when no insert session is active (e.g. calling from Normal mode).
-    #[doc(hidden)] // #267 shim: temporary pub for hjkl_vim's after_insert_* helpers.
-    pub fn widen_insert_row(&mut self, row: usize) {
+    pub(crate) fn widen_insert_row(&mut self, row: usize) {
         if let Some(ref mut session) = self.insert_session {
             session.row_min = session.row_min.min(row);
             session.row_max = session.row_max.max(row);
@@ -382,8 +383,7 @@ impl VimState {
 
     /// The pending repeat count (typed digits before a motion/operator),
     /// or `None` when no digits are pending. Zero is treated as absent.
-    #[doc(hidden)] // #267 shim: temporary pub for hjkl_vim::VimEditorExt.
-    pub fn pending_count_val(&self) -> Option<u32> {
+    pub(crate) fn pending_count_val(&self) -> Option<u32> {
         if self.count == 0 {
             None
         } else {
@@ -393,16 +393,14 @@ impl VimState {
 
     /// `true` when an in-flight chord is awaiting more keys. Inverse of
     /// `matches!(self.pending, Pending::None)`.
-    #[doc(hidden)] // #267 shim: temporary pub for hjkl_vim::VimEditorExt.
-    pub fn is_chord_pending(&self) -> bool {
+    pub(crate) fn is_chord_pending(&self) -> bool {
         !matches!(self.pending, Pending::None)
     }
 
     /// Return a single char representing the pending operator, if any.
     /// Used by host apps (status line "showcmd" area) to display e.g.
     /// `d`, `y`, `c` while waiting for a motion.
-    #[doc(hidden)] // #267 shim: temporary pub for hjkl_vim::VimEditorExt.
-    pub fn pending_op_char(&self) -> Option<char> {
+    pub(crate) fn pending_op_char(&self) -> Option<char> {
         let op = match &self.pending {
             Pending::Op { op, .. }
             | Pending::OpTextObj { op, .. }
@@ -434,12 +432,12 @@ impl VimState {
     }
 }
 
-/// The vim FSM state is the vim discipline's [`crate::DisciplineState`]: the
-/// engine reaches it type-erased and asks only for its [`crate::CoarseMode`]
+/// The vim FSM state is the vim discipline's [`hjkl_engine::DisciplineState`]: the
+/// engine reaches it type-erased and asks only for its [`hjkl_engine::CoarseMode`]
 /// (#265 G3 / #267). Until `VimState` physically moves into `hjkl-vim`, this
 /// impl lives here alongside the struct.
-impl crate::DisciplineState for VimState {
-    fn coarse_mode(&self) -> crate::CoarseMode {
+impl hjkl_engine::DisciplineState for VimState {
+    fn coarse_mode(&self) -> hjkl_engine::CoarseMode {
         VimState::coarse_mode(self)
     }
     /// Vim's idle state is Normal mode with no pending chord, count or insert
@@ -465,8 +463,10 @@ impl crate::DisciplineState for VimState {
 /// Open the `/` (forward) or `?` (backward) search prompt. Clears any
 /// live search highlight until the user commits a query. `last_search`
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_search<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, forward: bool) {
+pub(crate) fn enter_search<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    forward: bool,
+) {
     ed.set_search_prompt_state(Some(SearchPrompt {
         text: String::new(),
         cursor: 0,
@@ -483,8 +483,7 @@ pub fn enter_search<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
 /// `d/pat` / `c/pat` / `y/pat` (and `?` forms) — open the search prompt in
 /// operator-pending mode. On commit the operator runs over the exclusive
 /// charwise range from the current cursor to the match.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_search_op<H: crate::types::Host>(
+pub(crate) fn enter_search_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     op: Operator,
@@ -504,8 +503,7 @@ pub fn enter_search_op<H: crate::types::Host>(
 /// Apply a pending operator-search over the exclusive charwise range from
 /// `origin` to the current (post-search) cursor. Used by the search-prompt
 /// commit path for `d/` / `c/` / `y/`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_search_range<H: crate::types::Host>(
+pub(crate) fn apply_op_search_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     origin: (usize, usize),
@@ -517,7 +515,7 @@ pub fn apply_op_search_range<H: crate::types::Host>(
 /// `g;` / `g,` body. `dir = -1` walks toward older entries (g;),
 /// `dir = 1` toward newer (g,). `count` repeats the step. Stops at
 /// the ends of the ring; off-ring positions are silently ignored.
-fn walk_change_list<H: crate::types::Host>(
+fn walk_change_list<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: isize,
     count: usize,
@@ -553,7 +551,7 @@ fn walk_change_list<H: crate::types::Host>(
 /// cursor as charwise text. Embedded newlines split lines naturally via
 /// `Edit::InsertStr`. Unknown selectors and empty slots are no-ops so
 /// stray keystrokes don't mutate the buffer.
-fn insert_register_text<H: crate::types::Host>(
+fn insert_register_text<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     selector: char,
 ) {
@@ -619,7 +617,7 @@ fn insert_register_text<H: crate::types::Host>(
 /// when a language has an `indents.scm` query, the engine will route
 /// the same call through that provider and only fall back to this
 /// heuristic when no query matches.
-pub(super) fn compute_enter_indent(settings: &crate::editor::Settings, prev_line: &str) -> String {
+pub(super) fn compute_enter_indent(settings: &hjkl_engine::Settings, prev_line: &str) -> String {
     if !settings.autoindent {
         return String::new();
     }
@@ -718,13 +716,13 @@ pub(crate) fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, 
 /// string after the `\n` they are about to insert.
 pub(crate) fn continue_comment(
     buffer: &hjkl_buffer::Buffer,
-    settings: &crate::editor::Settings,
+    settings: &hjkl_engine::Settings,
     row: usize,
 ) -> Option<String> {
     if settings.filetype.is_empty() {
         return None;
     }
-    let line = crate::buf_helpers::buf_line(buffer, row)?;
+    let line = hjkl_engine::buf_helpers::buf_line(buffer, row)?;
     let (indent, prefix) = detect_comment_on_line(&settings.filetype, &line)?;
     Some(format!("{indent}{prefix}"))
 }
@@ -738,7 +736,7 @@ pub(crate) fn continue_comment(
 ///   - `ch` is `}` / `)` / `]`
 ///   - all bytes BEFORE the cursor on the current line are whitespace
 ///   - there is at least one full indent unit of leading whitespace
-fn try_dedent_close_bracket<H: crate::types::Host>(
+fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     cursor: hjkl_buffer::Position,
     ch: char,
@@ -813,11 +811,11 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
     true
 }
 
-fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
     };
-    let after_rope = crate::types::Query::rope(ed.buffer());
+    let after_rope = hjkl_engine::types::Query::rope(ed.buffer());
     // Clamp both slices to their respective bounds — the buffer may have
     // grown (Enter splits rows) or shrunk (Backspace joins rows) during
     // the session, so row_max can overshoot either side.
@@ -878,7 +876,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     // Helper: replicate `inserted` text across block rows top+1..=bot at `col`,
     // padding short rows to reach `col` first. Returns without touching the
     // cursor — callers position the cursor afterward according to their needs.
-    fn replicate_block_text<H: crate::types::Host>(
+    fn replicate_block_text<H: hjkl_engine::types::Host>(
         ed: &mut Editor<hjkl_buffer::Buffer, H>,
         inserted: &str,
         top: usize,
@@ -977,8 +975,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     }
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn begin_insert<H: crate::types::Host>(
+pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
     reason: InsertReason,
@@ -988,8 +985,8 @@ pub fn begin_insert<H: crate::types::Host>(
         return;
     }
     // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
-    if ed.view_mode() == crate::ViewMode::Blame {
-        ed.set_view_mode(crate::ViewMode::Normal);
+    if ed.view_mode() == hjkl_engine::ViewMode::Blame {
+        ed.set_view_mode(hjkl_engine::ViewMode::Normal);
         return;
     }
     let record = !matches!(reason, InsertReason::ReplayOnly);
@@ -1006,14 +1003,14 @@ pub fn begin_insert<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_rope: crate::types::Query::rope(ed.buffer()),
+        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
         reason,
         start_row: row,
         start_col: col,
     });
     vim_mut(ed).mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    vim_mut(ed).current_mode = crate::VimMode::Insert;
+    vim_mut(ed).current_mode = hjkl_engine::VimMode::Insert;
     drop_blame_if_left_normal(ed);
 }
 
@@ -1031,7 +1028,7 @@ pub fn begin_insert<H: crate::types::Host>(
 ///
 /// During replay we skip the break — replay shouldn't pollute the
 /// undo stack with intra-replay snapshots.
-pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
+pub(crate) fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     if !ed.settings().undo_break_on_motion {
@@ -1044,8 +1041,8 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
         return;
     }
     ed.push_undo();
-    let before_rope = crate::types::Query::rope(ed.buffer());
-    let row = crate::types::Cursor::cursor(ed.buffer()).line as usize;
+    let before_rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let row = hjkl_engine::types::Cursor::cursor(ed.buffer()).line as usize;
     if let Some(ref mut session) = vim_mut(ed).insert_session {
         session.before_rope = before_rope;
         session.row_min = row;
@@ -1053,7 +1050,7 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
     }
 }
 
-/// Word-boundary undo break for [`crate::editor::UndoGranularity::Word`].
+/// Word-boundary undo break for [`hjkl_engine::UndoGranularity::Word`].
 ///
 /// Called from [`insert_char_bridge`] (before inserting `next`) and from
 /// [`insert_newline_bridge`] (pass `next = '\n'`).
@@ -1076,12 +1073,12 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
 ///
 /// When `undo_granularity == InsertSession` this function returns
 /// immediately, adding zero calls to the hot path.
-pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
+pub(crate) fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     next: char,
 ) {
-    use crate::buf_helpers::{buf_cursor_pos, buf_line};
-    use crate::editor::UndoGranularity;
+    use hjkl_engine::UndoGranularity;
+    use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line};
 
     // Fast-path: default (vim) granularity → no-op.
     if ed.settings().undo_granularity != UndoGranularity::Word {
@@ -1132,7 +1129,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
         // Reuse the existing mid-session break machinery: push a snapshot
         // and reset session.before_rope + row_min/row_max.
         ed.push_undo();
-        let before_rope = crate::types::Query::rope(ed.buffer());
+        let before_rope = hjkl_engine::types::Query::rope(ed.buffer());
         let row = cursor.row;
         if let Some(ref mut session) = vim_mut(ed).insert_session {
             session.before_rope = before_rope;
@@ -1503,7 +1500,7 @@ fn scan_line_tags(chars: &[char], row: usize) -> Vec<TagSpan> {
 /// differs, rewrite the paired tag's name to match. Called from
 /// `leave_insert_to_normal_bridge` so the magical sync fires exactly when
 /// the user finishes editing.
-pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
+pub(crate) fn sync_paired_tag_on_exit<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     if !is_html_filetype(&ed.settings().filetype) {
@@ -1638,8 +1635,7 @@ fn scan_tag_opener(line: &str, col: usize) -> Option<String> {
 /// (when `InsertSession::reason` is `Replace`) and smart-indent dedent of
 /// closing brackets (}/)]/). Also handles autopair insertion and skip-over.
 /// Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_char_bridge<H: crate::types::Host>(
+pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
 ) -> bool {
@@ -1832,8 +1828,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
 /// Also handles open-pair-newline: Enter between `{|}` / `(|)` / `[|]`
 /// produces an indented block with the close on its own line.
 /// Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_newline_bridge<H: crate::types::Host>(
+pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::Edit;
@@ -1954,8 +1949,9 @@ pub fn insert_newline_bridge<H: crate::types::Host>(
 
 /// Insert a tab character (or spaces up to the next softtabstop boundary when
 /// `expandtab` is set). Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_tab_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+pub(crate) fn insert_tab_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
@@ -1990,8 +1986,7 @@ pub fn insert_tab_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
 ///
 /// Returns `true` when something was deleted, `false` at the very start of the
 /// buffer.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_backspace_bridge<H: crate::types::Host>(
+pub(crate) fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2062,8 +2057,7 @@ pub fn insert_backspace_bridge<H: crate::types::Host>(
 
 /// Delete the character under the cursor (vim `Delete`). Joins with the
 /// next line when at end-of-line. Returns `true` when something was deleted.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_delete_bridge<H: crate::types::Host>(
+pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2096,8 +2090,7 @@ pub fn insert_delete_bridge<H: crate::types::Host>(
 /// Move the cursor one step in `dir`, breaking the undo group per
 /// `undo_break_on_motion`. Clears the autopair pending-closes stack (cursor
 /// moved off the pair). Returns `false` (no mutation).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_arrow_bridge<H: crate::types::Host>(
+pub(crate) fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: InsertDir,
 ) -> bool {
@@ -2105,21 +2098,21 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
     ed.pending_closes_mut().clear();
     match dir {
         InsertDir::Left => {
-            crate::motions::move_left(ed.buffer_mut(), 1);
+            hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
         }
         InsertDir::Right => {
-            crate::motions::move_right_to_end(ed.buffer_mut(), 1);
+            hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
         }
         InsertDir::Up => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
             ed.set_sticky_col(sticky);
         }
         InsertDir::Down => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky);
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky);
             ed.set_sticky_col(sticky);
         }
     }
@@ -2130,11 +2123,12 @@ pub fn insert_arrow_bridge<H: crate::types::Host>(
 
 /// Move the cursor to the start of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+pub(crate) fn insert_home_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes_mut().clear();
-    crate::motions::move_line_start(ed.buffer_mut());
+    hjkl_engine::motions::move_line_start(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
     false
@@ -2142,11 +2136,12 @@ pub fn insert_home_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Bu
 
 /// Move the cursor to the end of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+pub(crate) fn insert_end_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes_mut().clear();
-    crate::motions::move_line_end(ed.buffer_mut());
+    hjkl_engine::motions::move_line_end(ed.buffer_mut());
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
     false
@@ -2154,8 +2149,7 @@ pub fn insert_end_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
 
 /// Scroll up one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_pageup_bridge<H: crate::types::Host>(
+pub(crate) fn insert_pageup_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     viewport_h: u16,
 ) -> bool {
@@ -2166,8 +2160,7 @@ pub fn insert_pageup_bridge<H: crate::types::Host>(
 
 /// Scroll down one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_pagedown_bridge<H: crate::types::Host>(
+pub(crate) fn insert_pagedown_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     viewport_h: u16,
 ) -> bool {
@@ -2179,8 +2172,7 @@ pub fn insert_pagedown_bridge<H: crate::types::Host>(
 /// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
 /// At col 0, joins with the previous line (vim semantics). Returns `true`
 /// when something was deleted.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_w_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind};
@@ -2190,7 +2182,7 @@ pub fn insert_ctrl_w_bridge<H: crate::types::Host>(
         return true;
     }
     let iskeyword = ed.settings().iskeyword.clone();
-    crate::motions::move_word_back(ed.buffer_mut(), false, 1, &iskeyword);
+    hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, 1, &iskeyword);
     let word_start = buf_cursor_pos(ed.buffer());
     if word_start == cursor {
         return true;
@@ -2207,8 +2199,7 @@ pub fn insert_ctrl_w_bridge<H: crate::types::Host>(
 
 /// Delete from the cursor back to the start of the current line (`Ctrl-U`).
 /// No-op when already at column 0. Returns `true` when something was deleted.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_u_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2228,8 +2219,7 @@ pub fn insert_ctrl_u_bridge<H: crate::types::Host>(
 /// Delete one character backwards (`Ctrl-H`) — alias for Backspace in insert
 /// mode. Joins with the previous line when at col 0. Returns `true` when
 /// something was deleted.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_h_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -2257,8 +2247,7 @@ pub fn insert_ctrl_h_bridge<H: crate::types::Host>(
 
 /// Indent the current line by one `shiftwidth` and shift the cursor right by
 /// the same amount (`Ctrl-T`). Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_t_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_t_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
@@ -2270,8 +2259,7 @@ pub fn insert_ctrl_t_bridge<H: crate::types::Host>(
 
 /// Outdent the current line by up to one `shiftwidth` and shift the cursor
 /// left by the amount stripped (`Ctrl-D`). Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_d_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_d_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
@@ -2287,22 +2275,20 @@ pub fn insert_ctrl_d_bridge<H: crate::types::Host>(
 /// Enter "one-shot normal" mode (`Ctrl-O`): suspend insert for the next
 /// complete normal-mode command, then return to insert. Returns `false`
 /// (no buffer mutation — only mode state changes).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_o_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_o_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     vim_mut(ed).one_shot_normal = true;
     vim_mut(ed).mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    vim_mut(ed).current_mode = crate::VimMode::Normal;
+    vim_mut(ed).current_mode = hjkl_engine::VimMode::Normal;
     false
 }
 
 /// Arm the register-paste selector (`Ctrl-R`): the next typed character
 /// names the register whose text will be inserted inline. Returns `false`
 /// (no buffer mutation yet — mutation happens when the register char arrives).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_ctrl_r_bridge<H: crate::types::Host>(
+pub(crate) fn insert_ctrl_r_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     vim_mut(ed).insert_pending_register = true;
@@ -2312,8 +2298,7 @@ pub fn insert_ctrl_r_bridge<H: crate::types::Host>(
 /// Paste the contents of `reg` at the cursor (the body of `Ctrl-R {reg}`).
 /// Unknown or empty registers are a no-op. Returns `true` when text was
 /// inserted.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn insert_paste_register_bridge<H: crate::types::Host>(
+pub(crate) fn insert_paste_register_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     reg: char,
 ) -> bool {
@@ -2328,8 +2313,7 @@ pub fn insert_paste_register_bridge<H: crate::types::Host>(
 /// column. Clears the autopair pending-closes stack. Returns `true` (always
 /// consumed — even if no buffer mutation, the mode change itself is a
 /// meaningful step).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
+pub(crate) fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.pending_closes_mut().clear();
@@ -2347,11 +2331,11 @@ pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     sync_paired_tag_on_exit(ed);
     vim_mut(ed).mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    vim_mut(ed).current_mode = crate::VimMode::Normal;
+    vim_mut(ed).current_mode = hjkl_engine::VimMode::Normal;
     let col = ed.cursor().1;
     vim_mut(ed).last_insert_pos = Some(ed.cursor());
     if col > 0 {
-        crate::motions::move_left(ed.buffer_mut(), 1);
+        hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
         ed.push_buffer_cursor_to_textarea();
     }
     ed.set_sticky_col(Some(ed.cursor().1));
@@ -2364,8 +2348,7 @@ pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
 
 /// `i` — begin Insert at the cursor. `count` is stored in the session for
 /// insert-exit replay. Returns `true`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_insert_i_bridge<H: crate::types::Host>(
+pub(crate) fn enter_insert_i_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2373,8 +2356,7 @@ pub fn enter_insert_i_bridge<H: crate::types::Host>(
 }
 
 /// `I` — move to first non-blank then begin Insert. `count` stored for replay.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_insert_shift_i_bridge<H: crate::types::Host>(
+pub(crate) fn enter_insert_shift_i_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2383,24 +2365,22 @@ pub fn enter_insert_shift_i_bridge<H: crate::types::Host>(
 }
 
 /// `a` — advance past the cursor char then begin Insert. `count` for replay.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_insert_a_bridge<H: crate::types::Host>(
+pub(crate) fn enter_insert_a_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
+    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::A));
 }
 
 /// `A` — move to end-of-line then begin Insert. `count` for replay.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_insert_shift_a_bridge<H: crate::types::Host>(
+pub(crate) fn enter_insert_shift_a_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    crate::motions::move_line_end(ed.buffer_mut());
-    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
+    hjkl_engine::motions::move_line_end(ed.buffer_mut());
+    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::ShiftA));
 }
@@ -2408,8 +2388,7 @@ pub fn enter_insert_shift_a_bridge<H: crate::types::Host>(
 /// `o` — open a new line below the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn open_line_below_bridge<H: crate::types::Host>(
+pub(crate) fn open_line_below_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2444,8 +2423,7 @@ pub fn open_line_below_bridge<H: crate::types::Host>(
 /// `O` — open a new line above the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically on the new line above.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn open_line_above_bridge<H: crate::types::Host>(
+pub(crate) fn open_line_above_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2482,9 +2460,9 @@ pub fn open_line_above_bridge<H: crate::types::Host>(
         at: Position::new(row, 0),
         text: insert_text,
     });
-    let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+    let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
     let mut sticky = ed.sticky_col();
-    crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+    hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
     ed.set_sticky_col(sticky);
     let new_row = buf_cursor_pos(ed.buffer()).row;
     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());
@@ -2492,8 +2470,7 @@ pub fn open_line_above_bridge<H: crate::types::Host>(
 }
 
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_replace_mode_bridge<H: crate::types::Host>(
+pub(crate) fn enter_replace_mode_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2505,8 +2482,7 @@ pub fn enter_replace_mode_bridge<H: crate::types::Host>(
 
 /// `x` — delete `count` chars forward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn delete_char_forward_bridge<H: crate::types::Host>(
+pub(crate) fn delete_char_forward_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2521,8 +2497,7 @@ pub fn delete_char_forward_bridge<H: crate::types::Host>(
 
 /// `X` — delete `count` chars backward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn delete_char_backward_bridge<H: crate::types::Host>(
+pub(crate) fn delete_char_backward_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2537,8 +2512,7 @@ pub fn delete_char_backward_bridge<H: crate::types::Host>(
 
 /// `s` — substitute `count` chars (delete then enter Insert). Equivalent to
 /// `cl`. Records `LastChange::OpMotion` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn substitute_char_bridge<H: crate::types::Host>(
+pub(crate) fn substitute_char_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2571,8 +2545,7 @@ pub fn substitute_char_bridge<H: crate::types::Host>(
 
 /// `S` — substitute the whole line (delete line contents then enter Insert).
 /// Equivalent to `cc`. Records `LastChange::LineOp` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn substitute_line_bridge<H: crate::types::Host>(
+pub(crate) fn substitute_line_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2588,11 +2561,12 @@ pub fn substitute_line_bridge<H: crate::types::Host>(
 
 /// `D` — delete from the cursor to end-of-line, writing to the unnamed
 /// register. Cursor parks on the new last char. Records for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     ed.push_undo();
     delete_to_eol(ed);
-    crate::motions::move_left(ed.buffer_mut(), 1);
+    hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::DeleteToEol { inserted: None });
@@ -2601,16 +2575,16 @@ pub fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::
 
 /// `C` — change from the cursor to end-of-line (delete then enter Insert).
 /// Equivalent to `c$`. Shares the delete path with `D`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn change_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     ed.push_undo();
     delete_to_eol(ed);
     begin_insert_noundo(ed, 1, InsertReason::DeleteToEol);
 }
 
 /// `Y` — yank from the cursor to end-of-line (same as `y$` in Vim 8 default).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn yank_to_eol_bridge<H: crate::types::Host>(
+pub(crate) fn yank_to_eol_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2619,8 +2593,7 @@ pub fn yank_to_eol_bridge<H: crate::types::Host>(
 
 /// `J` — join `count` lines (default 2) onto the current one, inserting a
 /// single space between each pair (vim semantics). Records for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn join_line_bridge<H: crate::types::Host>(
+pub(crate) fn join_line_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2640,8 +2613,7 @@ pub fn join_line_bridge<H: crate::types::Host>(
 
 /// `~` — toggle the case of `count` chars from the cursor, advancing right.
 /// Records `LastChange::ToggleCase` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
+pub(crate) fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2661,8 +2633,7 @@ pub fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
 /// `p` — paste the unnamed register (or `"reg` register) after the cursor.
 /// Linewise yanks open a new line below; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn paste_after_bridge<H: crate::types::Host>(
+pub(crate) fn paste_after_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2672,8 +2643,7 @@ pub fn paste_after_bridge<H: crate::types::Host>(
 /// `P` — paste the unnamed register (or `"reg` register) before the cursor.
 /// Linewise yanks open a new line above; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn paste_before_bridge<H: crate::types::Host>(
+pub(crate) fn paste_before_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2682,8 +2652,7 @@ pub fn paste_before_bridge<H: crate::types::Host>(
 
 /// Shared paste entry for `p`/`P`, `gp`/`gP` (`cursor_after`), and
 /// `]p`/`[p` (`reindent`). Records `LastChange::Paste` for dot-repeat.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn paste_bridge<H: crate::types::Host>(
+pub(crate) fn paste_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     before: bool,
     count: usize,
@@ -2705,8 +2674,7 @@ pub fn paste_bridge<H: crate::types::Host>(
 
 /// `<C-o>` — jump back `count` entries in the jumplist, saving the current
 /// position on the forward stack so `<C-i>` can return.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn jump_back_bridge<H: crate::types::Host>(
+pub(crate) fn jump_back_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2719,8 +2687,7 @@ pub fn jump_back_bridge<H: crate::types::Host>(
 
 /// `<C-i>` / `Tab` — redo `count` jumps on the forward stack, saving the
 /// current position on the backward stack.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn jump_forward_bridge<H: crate::types::Host>(
+pub(crate) fn jump_forward_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
@@ -2731,13 +2698,13 @@ pub fn jump_forward_bridge<H: crate::types::Host>(
     }
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn force_normal_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn force_normal_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     vim_mut(ed).force_normal();
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn mouse_click_doc_bridge<H: crate::types::Host>(
+pub(crate) fn mouse_click_doc_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     row: usize,
     col: usize,
@@ -2754,7 +2721,7 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
     let line_len = buf_line(ed.buffer(), r)
         .map(|l| l.chars().count())
         .unwrap_or(0);
-    let cap = if vim(ed).current_mode == crate::VimMode::Insert {
+    let cap = if vim(ed).current_mode == hjkl_engine::VimMode::Insert {
         line_len
     } else {
         line_len.saturating_sub(1)
@@ -2764,15 +2731,15 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
     ed.set_sticky_col(Some(c));
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn mouse_begin_drag_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn mouse_begin_drag_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     if !vim(ed).is_visual_char() {
         enter_visual_char_bridge(ed);
     }
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn range_for_op_motion_bridge<H: crate::types::Host>(
+pub(crate) fn range_for_op_motion_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion_key: char,
     total_count: usize,
@@ -2781,8 +2748,8 @@ pub fn range_for_op_motion_bridge<H: crate::types::Host>(
     // Reuse the same logic as apply_op_motion_key but only read the
     // target row — we parse the motion, apply it to move the cursor,
     // then immediately restore.
-    let input = crate::input::Input {
-        key: crate::input::Key::Char(motion_key),
+    let input = hjkl_engine::input::Input {
+        key: hjkl_engine::input::Key::Char(motion_key),
         ctrl: false,
         alt: false,
         shift: false,
@@ -2808,8 +2775,7 @@ pub fn range_for_op_motion_bridge<H: crate::types::Host>(
     Some((r0, r1))
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn range_for_op_g_bridge<H: crate::types::Host>(
+pub(crate) fn range_for_op_g_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     total_count: usize,
@@ -2830,8 +2796,7 @@ pub fn range_for_op_g_bridge<H: crate::types::Host>(
     Some((r0, r1))
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn range_for_op_text_obj_bridge<H: crate::types::Host>(
+pub(crate) fn range_for_op_text_obj_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     inner: bool,
@@ -2859,8 +2824,7 @@ pub fn range_for_op_text_obj_bridge<H: crate::types::Host>(
 
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
 /// repeat in the original search direction; `false` inverts it (like `N`).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn search_repeat_bridge<H: crate::types::Host>(
+pub(crate) fn search_repeat_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     count: usize,
@@ -2885,8 +2849,7 @@ pub fn search_repeat_bridge<H: crate::types::Host>(
 /// `*` / `#` / `g*` / `g#` — search for the word under the cursor.
 /// `forward` picks search direction; `whole_word` wraps in `\b...\b`.
 /// `count` repeats the advance.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn word_search_bridge<H: crate::types::Host>(
+pub(crate) fn word_search_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     whole_word: bool,
@@ -2914,9 +2877,11 @@ pub fn word_search_bridge<H: crate::types::Host>(
 /// Called from every mode-transition funnel so the FSM is the single source of
 /// truth — the host never has to police this.
 #[inline]
-pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if vim(ed).current_mode != crate::VimMode::Normal {
-        ed.set_view_mode(crate::ViewMode::Normal);
+pub fn drop_blame_if_left_normal<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
+    if vim(ed).current_mode != hjkl_engine::VimMode::Normal {
+        ed.set_view_mode(hjkl_engine::ViewMode::Normal);
     }
 }
 
@@ -2924,8 +2889,7 @@ pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buf
 /// field in one call. Every Phase 6.3 bridge that changes mode calls this so
 /// `vim_mode()` stays correct without going through the FSM's `step()` loop.
 #[inline]
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn set_vim_mode_bridge<H: crate::types::Host>(
+pub(crate) fn set_vim_mode_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     mode: Mode,
 ) {
@@ -2936,8 +2900,9 @@ pub fn set_vim_mode_bridge<H: crate::types::Host>(
 
 /// `v` from Normal — enter charwise Visual mode. Anchors at the current
 /// cursor position; the cursor IS the live end of the selection.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_visual_char_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn enter_visual_char_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     let cur = ed.cursor();
     vim_mut(ed).visual_anchor = cur;
     set_vim_mode_bridge(ed, Mode::Visual);
@@ -2945,8 +2910,9 @@ pub fn enter_visual_char_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buff
 
 /// `V` from Normal — enter linewise Visual mode. Anchors the whole line
 /// containing the current cursor; `o` still swaps the anchor row.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_visual_line_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn enter_visual_line_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     let (row, _) = ed.cursor();
     vim_mut(ed).visual_line_anchor = row;
     set_vim_mode_bridge(ed, Mode::VisualLine);
@@ -2955,8 +2921,9 @@ pub fn enter_visual_line_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buff
 /// `<C-v>` from Normal — enter Visual-block mode. Anchors at the current
 /// cursor; `block_vcol` is seeded from the cursor column so h/l navigation
 /// preserves the desired virtual column.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn enter_visual_block_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn enter_visual_block_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     let cur = ed.cursor();
     vim_mut(ed).block_anchor = cur;
     vim_mut(ed).block_vcol = cur.1;
@@ -2967,8 +2934,7 @@ pub fn enter_visual_block_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buf
 /// selection for `gv` re-entry, and return to Normal. Replicates the
 /// `pre_visual_snapshot` logic in `step()` so callers outside the FSM get
 /// identical behaviour.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
+pub(crate) fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     // Build the same snapshot that `step()` captures at pre-step time.
@@ -3045,8 +3011,9 @@ pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
 /// to the old anchor and the anchor takes the old cursor. In linewise mode
 /// the anchor *row* swaps with the current cursor row. In block mode the
 /// block corners swap.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn visual_o_toggle_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn visual_o_toggle_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     match vim(ed).mode {
         Mode::Visual => {
             let cur = ed.cursor();
@@ -3074,8 +3041,9 @@ pub fn visual_o_toggle_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer
 /// `gv` — restore the last visual selection (mode + anchor + cursor).
 /// No-op if no selection was ever stored. Mirrors the `gv` arm in
 /// `handle_normal_g`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn reenter_last_visual_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn reenter_last_visual_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     if let Some(snap) = vim(ed).last_visual {
         match snap.mode {
             Mode::Visual => {
@@ -3102,17 +3070,16 @@ pub fn reenter_last_visual_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_bu
 /// `current_mode`. Use sparingly — prefer the semantic primitives
 /// (`enter_visual_char_bridge`, `enter_insert_i_bridge`, …) which also
 /// set up the required bookkeeping (anchors, sessions, …).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn set_mode_bridge<H: crate::types::Host>(
+pub(crate) fn set_mode_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    mode: crate::VimMode,
+    mode: hjkl_engine::VimMode,
 ) {
     let internal = match mode {
-        crate::VimMode::Normal => Mode::Normal,
-        crate::VimMode::Insert => Mode::Insert,
-        crate::VimMode::Visual => Mode::Visual,
-        crate::VimMode::VisualLine => Mode::VisualLine,
-        crate::VimMode::VisualBlock => Mode::VisualBlock,
+        hjkl_engine::VimMode::Normal => Mode::Normal,
+        hjkl_engine::VimMode::Insert => Mode::Insert,
+        hjkl_engine::VimMode::Visual => Mode::Visual,
+        hjkl_engine::VimMode::VisualLine => Mode::VisualLine,
+        hjkl_engine::VimMode::VisualBlock => Mode::VisualBlock,
     };
     vim_mut(ed).mode = internal;
     vim_mut(ed).current_mode = mode;
@@ -3127,7 +3094,7 @@ pub fn set_mode_bridge<H: crate::types::Host>(
 // `hjkl_vim::dispatch_input` as the entry point.
 //
 // DELETED FUNCTION SIGNATURE (for archaeology):
-// pub(crate) fn step_normal<H: crate::types::Host>(ed: ..., input: Input) -> bool {
+// pub(crate) fn step_normal<H: hjkl_engine::types::Host>(ed: ..., input: Input) -> bool {
 
 /// `m{ch}` — public controller entry point. Validates `ch` (must be
 /// alphanumeric to match vim's mark-name rules) and records the current
@@ -3135,8 +3102,7 @@ pub fn set_mode_bridge<H: crate::types::Host>(
 /// so the hjkl-vim `PendingState::SetMark` reducer can dispatch
 /// `EngineCmd::SetMark` without re-entering the engine FSM.
 /// `handle_set_mark` delegates here to avoid logic duplication.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn set_mark_at_cursor<H: crate::types::Host>(
+pub(crate) fn set_mark_at_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
 ) {
@@ -3166,8 +3132,7 @@ pub fn set_mark_at_cursor<H: crate::types::Host>(
 ///
 /// Uppercase marks are handled by [`try_goto_mark`] which can return a
 /// `MarkJump::CrossBuffer` for cross-buffer jumps.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn goto_mark<H: crate::types::Host>(
+pub(crate) fn goto_mark<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     linewise: bool,
@@ -3198,7 +3163,7 @@ pub fn goto_mark<H: crate::types::Host>(
     ed.set_sticky_col(Some(ed.cursor().1));
 }
 
-/// Unified mark-jump entry point that returns a [`crate::editor::MarkJump`]
+/// Unified mark-jump entry point that returns a [`hjkl_engine::MarkJump`]
 /// so the app layer can decide whether to switch buffers.
 ///
 /// - Uppercase marks (`'A'`–`'Z'`) look in `global_marks`. If the stored
@@ -3206,13 +3171,12 @@ pub fn goto_mark<H: crate::types::Host>(
 ///   `CrossBuffer`. Same-buffer uppercase marks execute the jump normally.
 /// - All other legal mark chars delegate to [`goto_mark`] and return
 ///   `SameBuffer`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn try_goto_mark<H: crate::types::Host>(
+pub(crate) fn try_goto_mark<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     linewise: bool,
-) -> crate::editor::MarkJump {
-    use crate::editor::MarkJump;
+) -> hjkl_engine::MarkJump {
+    use hjkl_engine::MarkJump;
     match ch {
         'A'..='Z' => {
             let Some((bid, row, col)) = ed.global_mark(ch) else {
@@ -3269,7 +3233,7 @@ pub fn op_is_change(op: Operator) -> bool {
 /// `Ctrl-o` — jump back to the most recent pre-jump position. Saves
 /// the current cursor onto the forward stack so `Ctrl-i` can return.
 /// Returns `false` when the back stack is empty so counted loops stop.
-fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+fn jump_back<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     let Some(target) = ed.jump_back_list_mut().pop() else {
         return false;
     };
@@ -3284,7 +3248,7 @@ fn jump_back<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
 /// `Ctrl-i` / `Tab` — redo the last `Ctrl-o`. Saves the current cursor
 /// onto the back stack.
 /// Returns `false` when the forward stack is empty so counted loops stop.
-fn jump_forward<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+fn jump_forward<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     let Some(target) = ed.jump_fwd_list_mut().pop() else {
         return false;
     };
@@ -3301,7 +3265,7 @@ fn jump_forward<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) 
 
 /// Clamp a stored `(row, col)` to the live buffer in case edits
 /// shrunk the document between push and pop.
-fn clamp_pos<H: crate::types::Host>(
+fn clamp_pos<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
@@ -3397,8 +3361,7 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
 
 // ─── Motion execution ──────────────────────────────────────────────────────
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn execute_motion<H: crate::types::Host>(
+pub(crate) fn execute_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: Motion,
     count: usize,
@@ -3457,7 +3420,7 @@ pub fn execute_motion<H: crate::types::Host>(
 /// `update_block_vcol` is only a no-op for vertical / non-horizontal motions
 /// (Up, Down, FileTop, FileBottom, Search), so passing every motion through is
 /// safe — the function's own match arm handles the no-op case.
-fn execute_motion_with_block_vcol<H: crate::types::Host>(
+fn execute_motion_with_block_vcol<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: Motion,
     count: usize,
@@ -3469,7 +3432,7 @@ fn execute_motion_with_block_vcol<H: crate::types::Host>(
     }
 }
 
-/// Execute a `crate::MotionKind` cursor motion. Called by the host's
+/// Execute a `hjkl_engine::MotionKind` cursor motion. Called by the host's
 /// `Editor::apply_motion` controller method — the keymap dispatch path for
 /// Phase 3a of kryptic-sh/hjkl#69.
 ///
@@ -3496,81 +3459,80 @@ fn execute_motion_with_block_vcol<H: crate::types::Host>(
 /// mark update in `step()` fires only on visual→normal transition, not after
 /// each motion.  There are **no further sync gaps** beyond the `block_vcol`
 /// fix already applied above.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_motion_kind<H: crate::types::Host>(
+pub(crate) fn apply_motion_kind<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    kind: crate::MotionKind,
+    kind: hjkl_engine::MotionKind,
     count: usize,
 ) {
     let count = count.max(1);
     match kind {
-        crate::MotionKind::CharLeft => {
+        hjkl_engine::MotionKind::CharLeft => {
             execute_motion_with_block_vcol(ed, Motion::Left, count);
         }
-        crate::MotionKind::CharRight => {
+        hjkl_engine::MotionKind::CharRight => {
             execute_motion_with_block_vcol(ed, Motion::Right, count);
         }
-        crate::MotionKind::LineDown => {
+        hjkl_engine::MotionKind::LineDown => {
             execute_motion_with_block_vcol(ed, Motion::Down, count);
         }
-        crate::MotionKind::LineUp => {
+        hjkl_engine::MotionKind::LineUp => {
             execute_motion_with_block_vcol(ed, Motion::Up, count);
         }
-        crate::MotionKind::FirstNonBlankDown => {
+        hjkl_engine::MotionKind::FirstNonBlankDown => {
             // `+`: move down `count` lines then land on first non-blank.
             // Not a big-jump (no jump-list entry), sticky col set to the
             // landed column (first non-blank). Mirrors scroll_cursor_rows
             // semantics but goes through the fold-aware buffer motion path.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            crate::motions::move_first_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
-        crate::MotionKind::FirstNonBlankUp => {
+        hjkl_engine::MotionKind::FirstNonBlankUp => {
             // `-`: move up `count` lines then land on first non-blank.
             // Same pattern as FirstNonBlankDown, direction reversed.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            crate::motions::move_first_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
-        crate::MotionKind::WordForward => {
+        hjkl_engine::MotionKind::WordForward => {
             execute_motion_with_block_vcol(ed, Motion::WordFwd, count);
         }
-        crate::MotionKind::BigWordForward => {
+        hjkl_engine::MotionKind::BigWordForward => {
             execute_motion_with_block_vcol(ed, Motion::BigWordFwd, count);
         }
-        crate::MotionKind::WordBackward => {
+        hjkl_engine::MotionKind::WordBackward => {
             execute_motion_with_block_vcol(ed, Motion::WordBack, count);
         }
-        crate::MotionKind::BigWordBackward => {
+        hjkl_engine::MotionKind::BigWordBackward => {
             execute_motion_with_block_vcol(ed, Motion::BigWordBack, count);
         }
-        crate::MotionKind::WordEnd => {
+        hjkl_engine::MotionKind::WordEnd => {
             execute_motion_with_block_vcol(ed, Motion::WordEnd, count);
         }
-        crate::MotionKind::BigWordEnd => {
+        hjkl_engine::MotionKind::BigWordEnd => {
             execute_motion_with_block_vcol(ed, Motion::BigWordEnd, count);
         }
-        crate::MotionKind::LineStart => {
+        hjkl_engine::MotionKind::LineStart => {
             // `0` / `<Home>`: first column of the current line.
             // count is ignored — matches vim `0` semantics.
             execute_motion_with_block_vcol(ed, Motion::LineStart, 1);
         }
-        crate::MotionKind::FirstNonBlank => {
+        hjkl_engine::MotionKind::FirstNonBlank => {
             // `^`: first non-blank column on the current line.
             // count is ignored — matches vim `^` semantics.
             execute_motion_with_block_vcol(ed, Motion::FirstNonBlank, 1);
         }
-        crate::MotionKind::GotoLine => {
+        hjkl_engine::MotionKind::GotoLine => {
             // `G`: bare `G` → last line; `count G` → jump to line `count`.
             // apply_motion_kind normalises the raw count to count.max(1)
             // above, so count == 1 means "bare G" (last line) and count > 1
@@ -3581,47 +3543,47 @@ pub fn apply_motion_kind<H: crate::types::Host>(
             // (preserves vcol), so the helper is safe to use.
             execute_motion_with_block_vcol(ed, Motion::FileBottom, count);
         }
-        crate::MotionKind::LineEnd => {
+        hjkl_engine::MotionKind::LineEnd => {
             // `$` / `<End>`: last character on the current line.
             // count is ignored at the keymap-path level (vim `N$` moves
             // down N-1 lines then lands at line-end; not yet wired).
             execute_motion_with_block_vcol(ed, Motion::LineEnd, 1);
         }
-        crate::MotionKind::FindRepeat => {
+        hjkl_engine::MotionKind::FindRepeat => {
             // `;` — repeat last f/F/t/T in the same direction.
             // execute_motion resolves FindRepeat via vim(ed).last_find;
             // no-op if no prior find exists (None arm returns early).
             execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: false }, count);
         }
-        crate::MotionKind::FindRepeatReverse => {
+        hjkl_engine::MotionKind::FindRepeatReverse => {
             // `,` — repeat last f/F/t/T in the reverse direction.
             // execute_motion resolves FindRepeat via vim(ed).last_find;
             // no-op if no prior find exists (None arm returns early).
             execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: true }, count);
         }
-        crate::MotionKind::BracketMatch => {
+        hjkl_engine::MotionKind::BracketMatch => {
             // `%` — jump to the matching bracket.
             // count is passed through; engine-side matching_bracket handles
             // the no-match case as a no-op (cursor stays). Engine FSM arm
             // for `%` in parse_motion is kept intact for macro-replay.
             execute_motion_with_block_vcol(ed, Motion::MatchBracket, count);
         }
-        crate::MotionKind::ViewportTop => {
+        hjkl_engine::MotionKind::ViewportTop => {
             // `H` — cursor to top of visible viewport, then count-1 rows down.
             // Engine FSM arm for `H` in parse_motion is kept intact for macro-replay.
             execute_motion_with_block_vcol(ed, Motion::ViewportTop, count);
         }
-        crate::MotionKind::ViewportMiddle => {
+        hjkl_engine::MotionKind::ViewportMiddle => {
             // `M` — cursor to middle of visible viewport; count ignored.
             // Engine FSM arm for `M` in parse_motion is kept intact for macro-replay.
             execute_motion_with_block_vcol(ed, Motion::ViewportMiddle, count);
         }
-        crate::MotionKind::ViewportBottom => {
+        hjkl_engine::MotionKind::ViewportBottom => {
             // `L` — cursor to bottom of visible viewport, then count-1 rows up.
             // Engine FSM arm for `L` in parse_motion is kept intact for macro-replay.
             execute_motion_with_block_vcol(ed, Motion::ViewportBottom, count);
         }
-        crate::MotionKind::HalfPageDown => {
+        hjkl_engine::MotionKind::HalfPageDown => {
             // `<C-d>` — half page down, count multiplies the distance.
             // Calls scroll_cursor_rows directly rather than adding a Motion enum
             // variant, keeping engine Motion churn minimal.
@@ -3630,7 +3592,7 @@ pub fn apply_motion_kind<H: crate::types::Host>(
                 ed.scroll_cursor_rows(d);
             }
         }
-        crate::MotionKind::HalfPageUp => {
+        hjkl_engine::MotionKind::HalfPageUp => {
             // `<C-u>` — half page up, count multiplies the distance.
             // Direct call mirrors the FSM Ctrl-u arm. No new Motion variant.
             {
@@ -3638,7 +3600,7 @@ pub fn apply_motion_kind<H: crate::types::Host>(
                 ed.scroll_cursor_rows(d);
             }
         }
-        crate::MotionKind::FullPageDown => {
+        hjkl_engine::MotionKind::FullPageDown => {
             // `<C-f>` — full page down (2-line overlap), count multiplies.
             // Direct call mirrors the FSM Ctrl-f arm. No new Motion variant.
             {
@@ -3646,7 +3608,7 @@ pub fn apply_motion_kind<H: crate::types::Host>(
                 ed.scroll_cursor_rows(d);
             }
         }
-        crate::MotionKind::FullPageUp => {
+        hjkl_engine::MotionKind::FullPageUp => {
             // `<C-b>` — full page up (2-line overlap), count multiplies.
             // Direct call mirrors the FSM Ctrl-b arm. No new Motion variant.
             {
@@ -3654,21 +3616,26 @@ pub fn apply_motion_kind<H: crate::types::Host>(
                 ed.scroll_cursor_rows(d);
             }
         }
-        crate::MotionKind::FirstNonBlankLine => {
+        hjkl_engine::MotionKind::FirstNonBlankLine => {
             execute_motion_with_block_vcol(ed, Motion::FirstNonBlankLine, count);
         }
-        crate::MotionKind::SectionBackward => {
+        hjkl_engine::MotionKind::SectionBackward => {
             execute_motion_with_block_vcol(ed, Motion::SectionBackward, count);
         }
-        crate::MotionKind::SectionForward => {
+        hjkl_engine::MotionKind::SectionForward => {
             execute_motion_with_block_vcol(ed, Motion::SectionForward, count);
         }
-        crate::MotionKind::SectionEndBackward => {
+        hjkl_engine::MotionKind::SectionEndBackward => {
             execute_motion_with_block_vcol(ed, Motion::SectionEndBackward, count);
         }
-        crate::MotionKind::SectionEndForward => {
+        hjkl_engine::MotionKind::SectionEndForward => {
             execute_motion_with_block_vcol(ed, Motion::SectionEndForward, count);
         }
+        // `MotionKind` is `#[non_exhaustive]` and now lives in another crate, so
+        // the engine can add a motion this FSM has never heard of. Ignoring it
+        // is the honest response: a discipline cannot execute a motion it has
+        // no binding for. Every variant that exists today is handled above.
+        _ => {}
     }
 }
 
@@ -3676,7 +3643,7 @@ pub fn apply_motion_kind<H: crate::types::Host>(
 /// sync the sticky column to the current column after horizontal ones.
 /// `pre_col` is the cursor column captured *before* the motion — used
 /// to bootstrap the sticky value on the very first motion.
-fn apply_sticky_col<H: crate::types::Host>(
+fn apply_sticky_col<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
     pre_col: usize,
@@ -3714,7 +3681,7 @@ fn is_vertical_motion(motion: &Motion) -> bool {
     )
 }
 
-fn apply_motion_cursor<H: crate::types::Host>(
+fn apply_motion_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
     count: usize,
@@ -3722,8 +3689,7 @@ fn apply_motion_cursor<H: crate::types::Host>(
     apply_motion_cursor_ctx(ed, motion, count, false)
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
+pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
     count: usize,
@@ -3743,7 +3709,7 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
     match motion {
         Motion::Left => {
             // `h` — Buffer clamps at col 0 (no wrap), matching vim.
-            crate::motions::move_left(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_left(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Right => {
@@ -3751,9 +3717,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // one past the last char so the range includes it; cursor
             // context clamps at the last char.
             if as_operator {
-                crate::motions::move_right_to_end(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_right_in_line(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_right_in_line(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3761,9 +3727,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `<Space>` — wraps to next line at EOL in cursor context; mid-line
             // char delete like `l` under an operator (`d<Space>`).
             if as_operator {
-                crate::motions::move_right_to_end(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_space_fwd(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_space_fwd(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3771,9 +3737,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `<BS>` — wraps to prev line's last char at BOL in cursor context;
             // mid-line char move like `h` under an operator (`d<BS>`).
             if as_operator {
-                crate::motions::move_left(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_left(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_backspace_back(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_backspace_back(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3781,95 +3747,95 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // Final col is set by `apply_sticky_col` below — push the
             // post-move row to the textarea and let sticky tracking
             // finish the work.
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
             let v = *ed.host().viewport();
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_screen_up(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            hjkl_engine::motions::move_screen_up(ed.buffer_mut(), &folds, &v, count, &mut sticky);
             ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
             let v = *ed.host().viewport();
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            crate::motions::move_screen_down(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            hjkl_engine::motions::move_screen_down(ed.buffer_mut(), &folds, &v, count, &mut sticky);
             ed.set_sticky_col(sticky);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
+            hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordBack => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_back(ed.buffer_mut(), false, count, &iskeyword);
+            hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEnd => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_end(ed.buffer_mut(), false, count, &iskeyword);
+            hjkl_engine::motions::move_word_end(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
+            hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordBack => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_back(ed.buffer_mut(), true, count, &iskeyword);
+            hjkl_engine::motions::move_word_back(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEnd => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_end(ed.buffer_mut(), true, count, &iskeyword);
+            hjkl_engine::motions::move_word_end(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEndBack => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_end_back(ed.buffer_mut(), false, count, &iskeyword);
+            hjkl_engine::motions::move_word_end_back(ed.buffer_mut(), false, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEndBack => {
             let iskeyword = ed.settings().iskeyword.clone();
-            crate::motions::move_word_end_back(ed.buffer_mut(), true, count, &iskeyword);
+            hjkl_engine::motions::move_word_end_back(ed.buffer_mut(), true, count, &iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineStart => {
-            crate::motions::move_line_start(ed.buffer_mut());
+            hjkl_engine::motions::move_line_start(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlank => {
-            crate::motions::move_first_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineEnd => {
             // Vim normal-mode `$` lands on the last char, not one past it.
-            crate::motions::move_line_end(ed.buffer_mut());
+            hjkl_engine::motions::move_line_end(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FileTop => {
             // `count gg` jumps to line `count` (first non-blank);
             // bare `gg` lands at the top.
             if count > 1 {
-                crate::motions::move_bottom(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_top(ed.buffer_mut());
+                hjkl_engine::motions::move_top(ed.buffer_mut());
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3877,9 +3843,9 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // `count G` jumps to line `count`; bare `G` lands at
             // the buffer bottom (`Buffer::move_bottom(0)`).
             if count > 1 {
-                crate::motions::move_bottom(ed.buffer_mut(), count);
+                hjkl_engine::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                crate::motions::move_bottom(ed.buffer_mut(), 0);
+                hjkl_engine::motions::move_bottom(ed.buffer_mut(), 0);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3933,21 +3899,25 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
         }
         Motion::ViewportTop => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_top(ed.buffer_mut(), &v, count.saturating_sub(1));
+            hjkl_engine::motions::move_viewport_top(ed.buffer_mut(), &v, count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportMiddle => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_middle(ed.buffer_mut(), &v);
+            hjkl_engine::motions::move_viewport_middle(ed.buffer_mut(), &v);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportBottom => {
             let v = *ed.host().viewport();
-            crate::motions::move_viewport_bottom(ed.buffer_mut(), &v, count.saturating_sub(1));
+            hjkl_engine::motions::move_viewport_bottom(
+                ed.buffer_mut(),
+                &v,
+                count.saturating_sub(1),
+            );
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LastNonBlank => {
-            crate::motions::move_last_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_last_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineMiddle => {
@@ -3968,11 +3938,11 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             ed.jump_cursor(row, target);
         }
         Motion::ParagraphPrev => {
-            crate::motions::move_paragraph_prev(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_paragraph_prev(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ParagraphNext => {
-            crate::motions::move_paragraph_next(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_paragraph_next(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SentencePrev => {
@@ -3990,52 +3960,52 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             }
         }
         Motion::SectionBackward => {
-            crate::motions::move_section_backward(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_section_backward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionForward => {
-            crate::motions::move_section_forward(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_section_forward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndBackward => {
-            crate::motions::move_section_end_backward(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_section_end_backward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndForward => {
-            crate::motions::move_section_end_forward(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_section_end_forward(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankNextLine => {
-            crate::motions::move_first_non_blank_next_line(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_first_non_blank_next_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankPrevLine => {
-            crate::motions::move_first_non_blank_prev_line(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_first_non_blank_prev_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankLine => {
-            crate::motions::move_first_non_blank_line(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_first_non_blank_line(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::GotoColumn => {
-            crate::motions::move_goto_column(ed.buffer_mut(), count);
+            hjkl_engine::motions::move_goto_column(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
     }
 }
 
-fn move_first_non_whitespace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn move_first_non_whitespace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     // Some call sites invoke this right after `dd` / `<<` / `>>` etc
     // mutates the textarea content, so the migration buffer hasn't
     // seen the new lines OR new cursor yet. Mirror the full content
     // across before delegating, then push the result back so the
     // textarea reflects the resolved column too.
     ed.sync_buffer_content_from_textarea();
-    crate::motions::move_first_non_blank(ed.buffer_mut());
+    hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
     ed.push_buffer_cursor_to_textarea();
 }
 
-fn find_char_on_line<H: crate::types::Host>(
+fn find_char_on_line<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     forward: bool,
@@ -4043,15 +4013,15 @@ fn find_char_on_line<H: crate::types::Host>(
     skip_adjacent: bool,
 ) -> bool {
     let moved =
-        crate::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till, skip_adjacent);
+        hjkl_engine::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till, skip_adjacent);
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
     moved
 }
 
-fn matching_bracket<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
-    let moved = crate::motions::match_bracket(ed.buffer_mut());
+fn matching_bracket<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+    let moved = hjkl_engine::motions::match_bracket(ed.buffer_mut());
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -4061,7 +4031,7 @@ fn matching_bracket<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
 /// `[(` / `])` / `[{` / `]}` — move to the `count`-th previous (`forward =
 /// false`) / next (`forward = true`) unmatched bracket of the kind given by
 /// `open` (`(` or `{`). Balanced inner pairs are skipped via a depth counter.
-fn goto_unmatched_bracket<H: crate::types::Host>(
+fn goto_unmatched_bracket<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     open: char,
@@ -4143,7 +4113,7 @@ fn goto_unmatched_bracket<H: crate::types::Host>(
     }
 }
 
-fn word_at_cursor_search<H: crate::types::Host>(
+fn word_at_cursor_search<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     whole_word: bool,
@@ -4220,8 +4190,7 @@ fn regex_escape(s: &str) -> String {
 /// - Updates `last_find` and `last_change` per existing conventions.
 ///
 /// No-op when `motion_key` does not produce a known motion.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_motion_key<H: crate::types::Host>(
+pub(crate) fn apply_op_motion_key<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     motion_key: char,
@@ -4275,8 +4244,7 @@ pub fn apply_op_motion_key<H: crate::types::Host>(
 
 /// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`/`gcc`).
 /// Called by `Editor::apply_op_double` (the public controller API).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_double<H: crate::types::Host>(
+pub(crate) fn apply_op_double<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     total_count: usize,
@@ -4310,12 +4278,12 @@ pub fn apply_op_double<H: crate::types::Host>(
 /// When the cursor sits inside a match, that match is the target; otherwise the
 /// next match (forward) or previous match (backward) is used. Returns `None`
 /// when there is no pattern or no match remains.
-fn gn_find_range<H: crate::types::Host>(
+fn gn_find_range<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     re: &regex::Regex,
     forward: bool,
-) -> Option<(crate::types::Pos, crate::types::Pos)> {
-    use crate::types::{Cursor, Pos, Search};
+) -> Option<(hjkl_engine::types::Pos, hjkl_engine::types::Pos)> {
+    use hjkl_engine::types::{Cursor, Pos, Search};
     let cursor = Cursor::cursor(ed.buffer());
     let contains =
         Search::find_prev(ed.buffer(), cursor, re).filter(|m| m.start <= cursor && cursor < m.end);
@@ -4338,13 +4306,13 @@ fn gn_find_range<H: crate::types::Host>(
 /// Visual mode with the match selected; `Some(op)` applies the operator to the
 /// match as a charwise inclusive range. Records `LastChange::GnOp` so `cgn` /
 /// `dgn` are `.`-repeatable.
-pub(crate) fn gn_operate<H: crate::types::Host>(
+pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Option<Operator>,
     forward: bool,
     count: usize,
 ) {
-    use crate::types::{Cursor, Pos};
+    use hjkl_engine::types::{Cursor, Pos};
     // Make sure the compiled pattern reflects the last `/` or `*` search.
     if let Some(p) = ed.last_search_pattern().map(str::to_string) {
         ed.push_search_pattern(&p);
@@ -4375,7 +4343,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
             vim_mut(ed).visual_anchor = start_t;
             buf_set_cursor_rc(ed.buffer_mut(), end_t.0, end_t.1);
             vim_mut(ed).mode = Mode::Visual;
-            vim_mut(ed).current_mode = crate::VimMode::Visual;
+            vim_mut(ed).current_mode = hjkl_engine::VimMode::Visual;
             ed.push_buffer_cursor_to_textarea();
         }
         Some(Operator::Delete) => {
@@ -4436,8 +4404,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
 /// - Otherwise, maps `ch` to a motion (`g`→FileTop, `e`→WordEndBack,
 ///   `E`→BigWordEndBack, `j`→ScreenDown, `k`→ScreenUp) and applies. Unknown
 ///   chars are silently ignored (no-op), matching the engine FSM's behaviour.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_g_inner<H: crate::types::Host>(
+pub(crate) fn apply_op_g_inner<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -4496,8 +4463,7 @@ pub fn apply_op_g_inner<H: crate::types::Host>(
 /// given the char `ch` and pre-captured `count`. Called by `Editor::after_g`
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterGChord` without re-entering the FSM.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_after_g<H: crate::types::Host>(
+pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
@@ -4600,7 +4566,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             // itself; raise an intent the host drains and routes to
             // `sqls`. The cursor stays put here — the host moves it
             // once it has the target location.
-            ed.set_pending_lsp(Some(crate::editor::LspIntent::GotoDefinition));
+            ed.set_pending_lsp(Some(hjkl_engine::LspIntent::GotoDefinition));
         }
         // `gi` — go to last-insert position and re-enter insert mode.
         // Matches vim's `:h gi`: moves to the `'^` mark position (the
@@ -4669,7 +4635,7 @@ pub fn apply_after_g<H: crate::types::Host>(
             let r = 0u32..=last_row;
             // apply_substitute moves cursor to last changed line and pushes
             // one undo snapshot — same semantics as `:&&` / `:%s//~/&`.
-            let _ = crate::substitute::apply_substitute(ed, &cmd, r);
+            let _ = hjkl_engine::substitute::apply_substitute(ed, &cmd, r);
             // Update stored substitute so subsequent `g&` sees the same cmd.
             // (apply_substitute doesn't call set_last_substitute itself.)
             ed.set_last_substitute(cmd);
@@ -4681,27 +4647,27 @@ pub fn apply_after_g<H: crate::types::Host>(
 /// Normal-mode `&` — repeat the last `:s` on the current line, dropping the
 /// previous flags (vim: `&` ≡ `:s` with no flags). `g&` keeps flags + whole
 /// buffer; this is the single-line, flag-less form.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn ampersand_repeat<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     let Some(mut cmd) = ed.last_substitute().cloned() else {
         return;
     };
-    cmd.flags = crate::substitute::SubstFlags::default();
+    cmd.flags = hjkl_engine::substitute::SubstFlags::default();
     let row = buf_cursor_pos(ed.buffer()).row as u32;
-    let _ = crate::substitute::apply_substitute(ed, &cmd, row..=row);
+    let _ = hjkl_engine::substitute::apply_substitute(ed, &cmd, row..=row);
 }
 
 /// Public(crate) entry point for bare `z<x>`. Applies the z-chord effect
 /// given the char `ch` and pre-captured `count`. Called by `Editor::after_z`
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterZChord` without re-entering the engine FSM.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_after_z<H: crate::types::Host>(
+pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
 ) {
-    use crate::editor::CursorScrollTarget;
+    use hjkl_engine::CursorScrollTarget;
     let row = ed.cursor().0;
     match ch {
         'z' => {
@@ -4724,25 +4690,25 @@ pub fn apply_after_z<H: crate::types::Host>(
         // [`Editor::apply_fold_op`] (0.0.38 Patch C-δ.4) so the host
         // can observe / veto each op via [`Editor::take_fold_ops`].
         'o' => {
-            ed.apply_fold_op(crate::types::FoldOp::OpenAt(row));
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::OpenAt(row));
         }
         'c' => {
-            ed.apply_fold_op(crate::types::FoldOp::CloseAt(row));
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::CloseAt(row));
         }
         'a' => {
-            ed.apply_fold_op(crate::types::FoldOp::ToggleAt(row));
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::ToggleAt(row));
         }
         'R' => {
-            ed.apply_fold_op(crate::types::FoldOp::OpenAll);
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::OpenAll);
         }
         'M' => {
-            ed.apply_fold_op(crate::types::FoldOp::CloseAll);
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::CloseAll);
         }
         'E' => {
-            ed.apply_fold_op(crate::types::FoldOp::ClearAll);
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::ClearAll);
         }
         'd' => {
-            ed.apply_fold_op(crate::types::FoldOp::RemoveAt(row));
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::RemoveAt(row));
         }
         'f' => {
             if matches!(
@@ -4759,7 +4725,7 @@ pub fn apply_after_z<H: crate::types::Host>(
                 let cur = ed.cursor().0;
                 let top = anchor_row.min(cur);
                 let bot = anchor_row.max(cur);
-                ed.apply_fold_op(crate::types::FoldOp::Add {
+                ed.apply_fold_op(hjkl_engine::types::FoldOp::Add {
                     start_row: top,
                     end_row: bot,
                     closed: true,
@@ -4785,8 +4751,7 @@ pub fn apply_after_z<H: crate::types::Host>(
 /// Called by `Editor::find_char` (the public controller API) so the
 /// hjkl-vim pending-state reducer can dispatch `FindChar` without
 /// re-entering the FSM.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_find_char<H: crate::types::Host>(
+pub(crate) fn apply_find_char<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     forward: bool,
@@ -4809,8 +4774,7 @@ pub fn apply_find_char<H: crate::types::Host>(
 /// When a match is found the cursor jumps to the first char of the digraph.
 /// `last_sneak` and `last_horizontal_motion` are updated so `;`/`,` repeat.
 /// No-op (cursor unchanged) when no match exists.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_sneak<H: crate::types::Host>(
+pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     c1: char,
     c2: char,
@@ -4839,7 +4803,7 @@ pub fn apply_sneak<H: crate::types::Host>(
 
 /// Scan forward from `(start_row, start_col)` (exclusive — start right after
 /// cursor) for the `count`-th occurrence of `c1+c2`.
-fn sneak_scan_forward<H: crate::types::Host>(
+fn sneak_scan_forward<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     start_row: usize,
     start_col: usize,
@@ -4871,7 +4835,7 @@ fn sneak_scan_forward<H: crate::types::Host>(
 
 /// Scan backward from `(start_row, start_col)` (exclusive — start left of
 /// cursor) for the `count`-th occurrence of `c1+c2`.
-fn sneak_scan_backward<H: crate::types::Host>(
+fn sneak_scan_backward<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     start_row: usize,
     start_col: usize,
@@ -4916,8 +4880,7 @@ fn sneak_scan_backward<H: crate::types::Host>(
 ///
 /// Example: buffer `"foo ab bar\n"`, cursor col 0, `dsab` → deletes `"foo "`
 /// leaving `"ab bar\n"`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_sneak<H: crate::types::Host>(
+pub(crate) fn apply_op_sneak<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     c1: char,
@@ -4954,8 +4917,7 @@ pub fn apply_op_sneak<H: crate::types::Host>(
 /// hjkl-vim `PendingState::OpFind` reducer can dispatch `ApplyOpFind` without
 /// re-entering the FSM. `handle_op_find_target` now delegates here to avoid
 /// logic duplication.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_find_motion<H: crate::types::Host>(
+pub(crate) fn apply_op_find_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -4984,8 +4946,7 @@ pub fn apply_op_find_motion<H: crate::types::Host>(
 /// `_total_count` is accepted for API symmetry with `apply_op_find_motion` /
 /// `apply_op_motion_key` but is currently unused — text objects don't repeat
 /// in vim's current grammar. Kept for future-proofing.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_text_obj_inner<H: crate::types::Host>(
+pub(crate) fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     ch: char,
@@ -5020,8 +4981,7 @@ pub fn apply_op_text_obj_inner<H: crate::types::Host>(
 }
 
 /// Move `pos` back by one character, clamped to (0, 0).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn retreat_one<H: crate::types::Host>(
+pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
@@ -5037,7 +4997,7 @@ pub fn retreat_one<H: crate::types::Host>(
 }
 
 /// Variant of begin_insert that doesn't push_undo (caller already did).
-fn begin_insert_noundo<H: crate::types::Host>(
+fn begin_insert_noundo<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
     reason: InsertReason,
@@ -5052,21 +5012,20 @@ fn begin_insert_noundo<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_rope: crate::types::Query::rope(ed.buffer()),
+        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
         reason,
         start_row: row,
         start_col: col,
     });
     vim_mut(ed).mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    vim_mut(ed).current_mode = crate::VimMode::Insert;
+    vim_mut(ed).current_mode = hjkl_engine::VimMode::Insert;
     drop_blame_if_left_normal(ed);
 }
 
 // ─── Operator × Motion application ─────────────────────────────────────────
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_op_with_motion<H: crate::types::Host>(
+pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     motion: &Motion,
@@ -5118,7 +5077,7 @@ pub fn apply_op_with_motion<H: crate::types::Host>(
 /// landing row itself (before `end.1`), so that row is scanned too — only
 /// columns `[.., end.1)` there — which is what keeps `d2w` ending mid-line
 /// (last word not at EOL, `word_end.0 == end.0`) from being clamped.
-fn last_word_end_before<H: crate::types::Host>(
+fn last_word_end_before<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5144,7 +5103,7 @@ fn last_word_end_before<H: crate::types::Host>(
     None
 }
 
-fn apply_op_with_text_object<H: crate::types::Host>(
+fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     obj: TextObject,
@@ -5229,7 +5188,7 @@ fn motion_kind(motion: &Motion) -> RangeKind {
 /// to the yank + delete registers and sets `change_mark_start` for the
 /// `[`/`]` deferral. Calls `push_undo` internally — callers must NOT also
 /// call it.
-fn change_linewise_rows<H: crate::types::Host>(
+fn change_linewise_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     end_row: usize,
@@ -5252,7 +5211,8 @@ fn change_linewise_rows<H: crate::types::Host>(
     // Preserve the first row's leading whitespace when autoindent is on;
     // wipe the whole line content otherwise (cursor lands at col 0).
     let indent_chars = if ed.settings().autoindent {
-        let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(ed.buffer()), top_row);
+        let line =
+            hjkl_buffer::rope_line_str(&hjkl_engine::types::Query::rope(ed.buffer()), top_row);
         line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
     } else {
         0
@@ -5275,7 +5235,7 @@ fn change_linewise_rows<H: crate::types::Host>(
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
 
-fn run_operator_over_range<H: crate::types::Host>(
+fn run_operator_over_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     start: (usize, usize),
@@ -5375,7 +5335,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             // motion's natural kind. Cursor lands on `top.0` to mirror
             // the visual `zf` path.
             if bot.0 >= top.0 {
-                ed.apply_fold_op(crate::types::FoldOp::Add {
+                ed.apply_fold_op(hjkl_engine::types::FoldOp::Add {
                     start_row: top.0,
                     end_row: bot.0,
                     closed: true,
@@ -5437,8 +5397,7 @@ fn run_operator_over_range<H: crate::types::Host>(
 
 /// Delete the range `[start, end)` (interpretation determined by `kind`) and
 /// stash the deleted text in `register`. `'"'` is the unnamed register.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn delete_range_bridge<H: crate::types::Host>(
+pub(crate) fn delete_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5451,8 +5410,7 @@ pub fn delete_range_bridge<H: crate::types::Host>(
 
 /// Yank (copy) the range `[start, end)` into `register` without mutating the
 /// buffer. `'"'` is the unnamed register.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn yank_range_bridge<H: crate::types::Host>(
+pub(crate) fn yank_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5467,8 +5425,7 @@ pub fn yank_range_bridge<H: crate::types::Host>(
 /// The deleted text is stashed in `register`. Mode transitions to Insert on
 /// return; the caller must not issue further normal-mode ops until the insert
 /// session ends.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn change_range_bridge<H: crate::types::Host>(
+pub(crate) fn change_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5483,8 +5440,7 @@ pub fn change_range_bridge<H: crate::types::Host>(
 /// end.0]`. `shiftwidth` overrides the editor's `settings().shiftwidth` for
 /// this call; pass `0` to use the editor setting. The column parts of `start`
 /// / `end` are ignored — indent is always linewise.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn indent_range_bridge<H: crate::types::Host>(
+pub(crate) fn indent_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5520,8 +5476,7 @@ pub fn indent_range_bridge<H: crate::types::Host>(
 /// Apply a case transformation (`Uppercase` / `Lowercase` / `ToggleCase`) to
 /// the range `[start, end)`. Only the three case `Operator` variants are valid;
 /// other variants are silently ignored (no-op).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn case_range_bridge<H: crate::types::Host>(
+pub(crate) fn case_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5556,8 +5511,7 @@ pub fn case_range_bridge<H: crate::types::Host>(
 /// bounds. Short lines that don't reach `right_col` lose only the chars
 /// that exist (ragged-edge, matching engine FSM). `register` is honoured;
 /// `'"'` selects the unnamed register.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn delete_block_bridge<H: crate::types::Host>(
+pub(crate) fn delete_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5583,8 +5537,7 @@ pub fn delete_block_bridge<H: crate::types::Host>(
 }
 
 /// Yank a rectangular VisualBlock selection into `register`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn yank_block_bridge<H: crate::types::Host>(
+pub(crate) fn yank_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5606,8 +5559,7 @@ pub fn yank_block_bridge<H: crate::types::Host>(
 
 /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`).
 /// The deleted text is stashed in `register`. Mode is Insert on return.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn change_block_bridge<H: crate::types::Host>(
+pub(crate) fn change_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5630,8 +5582,7 @@ pub fn change_block_bridge<H: crate::types::Host>(
 /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
 /// Column bounds are ignored — vim's block indent is always linewise.
 /// `count == 0` is a no-op.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn indent_block_bridge<H: crate::types::Host>(
+pub(crate) fn indent_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top_row: usize,
     bot_row: usize,
@@ -5653,8 +5604,7 @@ pub fn indent_block_bridge<H: crate::types::Host>(
 /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`. Column
 /// parts are ignored — auto-indent is always linewise. See
 /// `auto_indent_rows` for the algorithm and its v1 limitations.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn auto_indent_range_bridge<H: crate::types::Host>(
+pub(crate) fn auto_indent_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -5679,8 +5629,7 @@ pub fn auto_indent_range_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `iw` (inner word) at the current cursor position.
 /// Returns `None` if no word exists at the cursor.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_word_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, false, 1)
@@ -5688,8 +5637,7 @@ pub fn text_object_inner_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `aw` (around word) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_word_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, false, 1)
@@ -5697,8 +5645,7 @@ pub fn text_object_around_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `iW` (inner WORD) at the current cursor position.
 /// A WORD is any run of non-whitespace characters (no punctuation splitting).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_big_word_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_big_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, true, 1)
@@ -5706,8 +5653,7 @@ pub fn text_object_inner_big_word_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `aW` (around WORD) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_big_word_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_big_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, true, 1)
@@ -5728,8 +5674,7 @@ pub fn text_object_around_big_word_bridge<H: crate::types::Host>(
 /// Resolve the range of `i<quote>` (inner quote) at the current cursor
 /// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
 /// when the cursor's line contains fewer than two occurrences of `quote`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_quote_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_quote_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5738,8 +5683,7 @@ pub fn text_object_inner_quote_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `a<quote>` (around quote) at the current cursor
 /// position. Includes surrounding whitespace on one side per vim semantics.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_quote_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_quote_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5753,8 +5697,7 @@ pub fn text_object_around_quote_bridge<H: crate::types::Host>(
 /// whose content spans more than one line are reported as a charwise range
 /// covering the first content character through the last content character
 /// (RangeKind metadata is stripped — callers receive start/end only).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_bracket_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_bracket_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5764,8 +5707,7 @@ pub fn text_object_inner_bracket_bridge<H: crate::types::Host>(
 /// Resolve the range of `a<bracket>` (around bracket pair). Includes the
 /// bracket characters themselves. `open` must be one of `'('`, `'{'`, `'['`,
 /// `'<'`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_bracket_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_bracket_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -5776,8 +5718,7 @@ pub fn text_object_around_bracket_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `is` (inner sentence) at the cursor. Excludes
 /// trailing whitespace.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_sentence_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_sentence_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, true, 1)
@@ -5785,8 +5726,7 @@ pub fn text_object_inner_sentence_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `as` (around sentence) at the cursor. Includes
 /// trailing whitespace.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_sentence_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_sentence_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, false, 1)
@@ -5796,8 +5736,7 @@ pub fn text_object_around_sentence_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `ip` (inner paragraph) at the cursor. A paragraph
 /// is a block of non-blank lines bounded by blank lines or buffer edges.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_paragraph_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, true, 1)
@@ -5805,8 +5744,7 @@ pub fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `ap` (around paragraph) at the cursor. Includes one
 /// trailing blank line when present.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_paragraph_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_paragraph_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, false, 1)
@@ -5817,8 +5755,7 @@ pub fn text_object_around_paragraph_bridge<H: crate::types::Host>(
 /// Resolve the range of `it` (inner tag) at the cursor. Matches XML/HTML-style
 /// `<tag>...</tag>` pairs; returns the range of inner content between the open
 /// and close tags.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_inner_tag_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_inner_tag_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, true)
@@ -5826,8 +5763,7 @@ pub fn text_object_inner_tag_bridge<H: crate::types::Host>(
 
 /// Resolve the range of `at` (around tag) at the cursor. Includes the open
 /// and close tag delimiters themselves.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_around_tag_bridge<H: crate::types::Host>(
+pub(crate) fn text_object_around_tag_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, false)
@@ -5883,13 +5819,13 @@ fn greedy_wrap(original: &[String], width: usize) -> Vec<String> {
 /// preserved. Each paragraph's words are joined with single spaces
 /// before re-wrapping. Cursor lands at `(top, 0)` after the call
 /// (via `ed.restore`).
-fn reflow_rows<H: crate::types::Host>(
+fn reflow_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
 ) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     if top > bot {
         return;
@@ -5918,13 +5854,13 @@ fn reflow_rows<H: crate::types::Host>(
 /// Same reflow as `reflow_rows` but also returns the pre-reflow slice
 /// and the wrapped lines so the caller can compute a character-preserving
 /// cursor position via [`reflow_keep_cursor`].
-fn reflow_rows_keep_cursor<H: crate::types::Host>(
+fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
 ) -> (Vec<String>, Vec<String>) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     if top > bot {
         return (Vec::new(), Vec::new());
@@ -6019,7 +5955,7 @@ fn reflow_keep_cursor(
 /// convention for `gU{motion}` / `gu{motion}` / `g~{motion}`.
 /// Preserves the textarea yank buffer (vim's case operators don't
 /// touch registers).
-fn apply_case_op_to_selection<H: crate::types::Host>(
+fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     top: (usize, usize),
@@ -6056,7 +5992,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
 /// Rows that are empty are skipped (vim leaves blank lines alone when
 /// indenting). `shiftwidth` is read from `editor.settings()` so
 /// `:set shiftwidth=N` takes effect on the next operation.
-fn indent_rows<H: crate::types::Host>(
+fn indent_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
@@ -6075,7 +6011,7 @@ fn indent_rows<H: crate::types::Host>(
         let spaces = width % tabstop;
         format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
     };
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         if !line.is_empty() {
@@ -6091,7 +6027,7 @@ fn indent_rows<H: crate::types::Host>(
 /// Remove up to `count * shiftwidth` leading spaces (or tabs) from
 /// each row in `[top, bot]`. Rows with less leading whitespace have
 /// all their indent stripped, not clipped to zero length.
-fn outdent_rows<H: crate::types::Host>(
+fn outdent_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
@@ -6099,7 +6035,7 @@ fn outdent_rows<H: crate::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         let strip: usize = line
@@ -6212,7 +6148,7 @@ fn bracket_net(line: &str) -> i32 {
 /// inside string literals (`"{"`, `'['`) or comments (`// {`). Code with
 /// such patterns will produce incorrect indent depths. Tree-sitter / LSP
 /// indentation is deferred to a follow-up.
-fn auto_indent_rows<H: crate::types::Host>(
+fn auto_indent_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
@@ -6226,7 +6162,7 @@ fn auto_indent_rows<H: crate::types::Host>(
         "\t".to_string()
     };
 
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
 
     // Accumulate bracket depth from row 0 up to `top - 1` so we start with
@@ -6314,7 +6250,9 @@ fn order(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize
 /// exceed `line.chars().count().saturating_sub(1)` (or 0 on an empty
 /// line). Vim applies this clamp on every return to Normal mode after an
 /// operator or Esc-from-insert.
-fn clamp_cursor_to_normal_mode<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
     let (row, col) = ed.cursor();
     let line_chars = buf_line_chars(ed.buffer(), row);
     let max_col = line_chars.saturating_sub(1);
@@ -6363,7 +6301,7 @@ fn expand_linewise_over_closed_folds(
     (start, end)
 }
 
-fn execute_line_op<H: crate::types::Host>(
+fn execute_line_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     count: usize,
@@ -6527,8 +6465,7 @@ fn execute_line_op<H: crate::types::Host>(
 
 // ─── Visual mode operators ─────────────────────────────────────────────────
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn apply_visual_operator<H: crate::types::Host>(
+pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     count: usize,
@@ -6714,7 +6651,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
 /// VisualBlock selection. Columns are inclusive on both ends. Uses the
 /// tracked virtual column (updated by h/l, preserved across j/k) so
 /// ragged / empty rows don't collapse the block's width.
-fn block_bounds<H: crate::types::Host>(
+fn block_bounds<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> (usize, usize, usize, usize) {
     let (ar, ac) = vim(ed).block_anchor;
@@ -6731,8 +6668,7 @@ fn block_bounds<H: crate::types::Host>(
 /// Horizontal motions sync `block_vcol` to the new cursor column;
 /// vertical / non-h/l motions leave it alone so the intended column
 /// survives clamping to shorter lines.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn update_block_vcol<H: crate::types::Host>(
+pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: &Motion,
 ) {
@@ -6766,7 +6702,7 @@ pub fn update_block_vcol<H: crate::types::Host>(
 /// is stored as one string per row joined with `\n` so pasting reproduces
 /// the block as sequential lines. (Vim's true block-paste reinserts as
 /// columns; we render the content with our char-wise paste path.)
-fn apply_block_operator<H: crate::types::Host>(
+fn apply_block_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     count: usize,
@@ -6869,7 +6805,7 @@ fn apply_block_operator<H: crate::types::Host>(
 /// In-place case transform over the rectangular block
 /// `(top..=bot, left..=right)`. Rows shorter than `left` are left
 /// untouched — vim behaves the same way (ragged blocks).
-fn transform_block_case<H: crate::types::Host>(
+fn transform_block_case<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     top: usize,
@@ -6877,7 +6813,7 @@ fn transform_block_case<H: crate::types::Host>(
     left: usize,
     right: usize,
 ) {
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -6903,14 +6839,14 @@ fn transform_block_case<H: crate::types::Host>(
     ed.set_yank_linewise(saved_linewise);
 }
 
-fn block_yank<H: crate::types::Host>(
+fn block_yank<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
     left: usize,
     right: usize,
 ) -> String {
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let mut rows: Vec<String> = Vec::new();
     for r in top..=bot {
@@ -6929,7 +6865,7 @@ fn block_yank<H: crate::types::Host>(
     rows.join("\n")
 }
 
-fn delete_block_contents<H: crate::types::Host>(
+fn delete_block_contents<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     top: usize,
     bot: usize,
@@ -6951,12 +6887,14 @@ fn delete_block_contents<H: crate::types::Host>(
 }
 
 /// Replace each character cell in the block with `ch`.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn block_replace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, ch: char) {
+pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+) {
     let (top, bot, left, right) = block_bounds(ed);
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -6976,12 +6914,12 @@ pub fn block_replace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer,
 /// Replace buffer content with `lines` while preserving the cursor.
 /// Used by indent / outdent / block_replace to wholesale rewrite
 /// rows without going through the per-edit funnel.
-fn reset_textarea_lines<H: crate::types::Host>(
+fn reset_textarea_lines<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     lines: Vec<String>,
 ) {
     let cursor = ed.cursor();
-    crate::types::BufferEdit::replace_all(ed.buffer_mut(), &lines.join("\n"));
+    hjkl_engine::types::BufferEdit::replace_all(ed.buffer_mut(), &lines.join("\n"));
     buf_set_cursor_rc(ed.buffer_mut(), cursor.0, cursor.1);
     ed.mark_content_dirty();
 }
@@ -6996,8 +6934,7 @@ type Pos = (usize, usize);
 /// Returns `(start, end, kind)` where `end` is *exclusive* (one past the
 /// last character to act on). `kind` is `Linewise` for line-oriented text
 /// objects like paragraphs and `Exclusive` otherwise.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn text_object_range<H: crate::types::Host>(
+pub(crate) fn text_object_range<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     obj: TextObject,
     inner: bool,
@@ -7024,11 +6961,11 @@ pub fn text_object_range<H: crate::types::Host>(
 /// `(` / `)` — walk to the next sentence boundary in `forward` direction.
 /// Returns `(row, col)` of the boundary's first non-whitespace cell, or
 /// `None` when already at the buffer's edge in that direction.
-fn sentence_boundary<H: crate::types::Host>(
+fn sentence_boundary<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7138,13 +7075,13 @@ fn sentence_boundary<H: crate::types::Host>(
 /// whitespace (or end-of-line) as a boundary; runs of consecutive
 /// terminators stay attached to the same sentence. `as` extends to
 /// include trailing whitespace; `is` does not.
-fn sentence_text_object<H: crate::types::Host>(
+fn sentence_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
     let count = count.max(1);
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7273,11 +7210,11 @@ fn sentence_text_object<H: crate::types::Host>(
 /// `it` / `at` — XML tag pair text object. Builds a flat char index of
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
 /// returns the innermost pair containing the cursor.
-fn tag_text_object<H: crate::types::Host>(
+fn tag_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -7547,8 +7484,7 @@ pub(crate) fn try_abbrev_expand(
 ///
 /// `trigger` is what the user did; the trigger char itself is NOT inserted
 /// here — the caller inserts it (or not, in the case of `C-]`).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn check_and_apply_abbrev<H: crate::types::Host>(
+pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     trigger: AbbrevTrigger,
 ) -> bool {
@@ -7612,7 +7548,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
     true
 }
 
-fn word_text_object<H: crate::types::Host>(
+fn word_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
     big: bool,
@@ -7737,7 +7673,7 @@ fn word_text_object<H: crate::types::Host>(
     Some(((row, start_col), (row, end_col)))
 }
 
-fn quote_text_object<H: crate::types::Host>(
+fn quote_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     q: char,
     inner: bool,
@@ -7811,7 +7747,7 @@ fn quote_text_object<H: crate::types::Host>(
     }
 }
 
-fn bracket_text_object<H: crate::types::Host>(
+fn bracket_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
     inner: bool,
@@ -7825,7 +7761,7 @@ fn bracket_text_object<H: crate::types::Host>(
         _ => return None,
     };
     let (row, col) = ed.cursor();
-    let lines = rope_to_lines_vec(&crate::types::Query::rope(ed.buffer()));
+    let lines = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let lines = lines.as_slice();
     // If the cursor sits ON the closing bracket, vim anchors the pair to that
     // bracket: the close is at the cursor and the open is found by scanning
@@ -8053,14 +7989,14 @@ fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usize) {
     }
 }
 
-fn paragraph_text_object<H: crate::types::Host>(
+fn paragraph_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
     let count = count.max(1);
     let (row, _) = ed.cursor();
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     if n_lines == 0 {
         return None;
@@ -8119,7 +8055,7 @@ fn paragraph_text_object<H: crate::types::Host>(
 /// Read the text in a vim-shaped range without mutating. Used by
 /// `Operator::Yank` so we can pipe the same range translation as
 /// [`cut_vim_range`] but skip the delete + inverse extraction.
-fn read_vim_range<H: crate::types::Host>(
+fn read_vim_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -8127,7 +8063,7 @@ fn read_vim_range<H: crate::types::Host>(
 ) -> String {
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
-    let rope = crate::types::Query::rope(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n_lines = rope.len_lines();
     match kind {
         RangeKind::Linewise => {
@@ -8174,7 +8110,7 @@ fn read_vim_range<H: crate::types::Host>(
 /// cell. Pushes the cut text into the clipboard via `record_yank_to_host`
 /// and the textarea yank buffer (still observed by `p`/`P` until the paste
 /// path is ported), and updates `yank_linewise` for linewise cuts.
-fn cut_vim_range<H: crate::types::Host>(
+fn cut_vim_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -8232,7 +8168,7 @@ fn cut_vim_range<H: crate::types::Host>(
 /// and the textarea's yank buffer (still observed by `p`/`P` until the paste
 /// path is ported). Cursor lands at the deletion start so the caller
 /// can decide whether to step it left (`D`) or open insert mode (`C`).
-fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
@@ -8256,7 +8192,7 @@ fn delete_to_eol<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
     ed.push_buffer_cursor_to_textarea();
 }
 
-fn do_char_delete<H: crate::types::Host>(
+fn do_char_delete<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
     count: usize,
@@ -8317,8 +8253,7 @@ fn do_char_delete<H: crate::types::Host>(
 /// current line, add `delta`, leave the cursor on the last digit of the result.
 /// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
 /// well as signed decimals. No-op if the line has no number to the right.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn adjust_number<H: crate::types::Host>(
+pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     delta: i64,
 ) -> bool {
@@ -8408,8 +8343,7 @@ pub fn adjust_number<H: crate::types::Host>(
     true
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn replace_char<H: crate::types::Host>(
+pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,
@@ -8439,14 +8373,16 @@ pub fn replace_char<H: crate::types::Host>(
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     }
     // Vim leaves the cursor on the last replaced char.
-    crate::motions::move_left(ed.buffer_mut(), 1);
+    hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
 }
 
 /// Returns `false` when there is no char under the cursor to toggle
 /// (end of line / empty line) so counted loops can stop instead of
 /// spinning through a saturated count prefix.
-fn toggle_case_at_cursor<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
@@ -8472,7 +8408,7 @@ fn toggle_case_at_cursor<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
 
 /// Returns `false` when the cursor is on the last line (nothing to
 /// join) so counted loops can stop instead of spinning.
-fn join_line<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
@@ -8508,7 +8444,7 @@ fn join_line<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> 
 /// `gJ` — join the next line onto the current one without inserting a
 /// separating space or stripping leading whitespace.
 /// Returns `false` when the cursor is on the last line. See [`join_line`].
-fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
+fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
@@ -8530,8 +8466,7 @@ fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
 /// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
 /// every line spanned by the selection into one. A single-line selection joins
 /// the current line with the one below (matching normal-mode `J`).
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn visual_join<H: crate::types::Host>(
+pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     with_space: bool,
 ) {
@@ -8573,8 +8508,10 @@ pub fn visual_join<H: crate::types::Host>(
 
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn goto_percent<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, count: usize) {
+pub(crate) fn goto_percent<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    count: usize,
+) {
     let rows = buf_row_count(ed.buffer());
     if rows == 0 {
         return;
@@ -8620,7 +8557,7 @@ fn indent_width(s: &str, tabstop: usize) -> usize {
 
 /// Build a leading-whitespace string of `width` columns honoring `expandtab`
 /// (spaces) vs `noexpandtab` (tabs for full `tabstop` runs, spaces remainder).
-fn build_indent(width: usize, settings: &crate::editor::Settings) -> String {
+fn build_indent(width: usize, settings: &hjkl_engine::Settings) -> String {
     if settings.expandtab {
         return " ".repeat(width);
     }
@@ -8632,7 +8569,7 @@ fn build_indent(width: usize, settings: &crate::editor::Settings) -> String {
 
 /// `]p` / `[p` reindent: shift every line of `text` so the FIRST line's indent
 /// matches `target_width` columns; later lines keep their relative offset.
-fn reindent_block(text: &str, target_width: usize, settings: &crate::editor::Settings) -> String {
+fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::Settings) -> String {
     let ts = settings.tabstop.max(1);
     let lines: Vec<&str> = text.split('\n').collect();
     let first_width = lines.first().map(|l| indent_width(l, ts)).unwrap_or(0);
@@ -8653,7 +8590,7 @@ fn reindent_block(text: &str, target_width: usize, settings: &crate::editor::Set
         .join("\n")
 }
 
-fn do_paste<H: crate::types::Host>(
+fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     before: bool,
     count: usize,
@@ -8736,7 +8673,7 @@ fn do_paste<H: crate::types::Host>(
                 fold_end + 1
             };
             buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-            crate::motions::move_first_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
             // Linewise: `[` = (target_row, 0), `]` = (bot_row, last_col).
             let payload_lines = text.lines().count().max(1);
@@ -8763,7 +8700,7 @@ fn do_paste<H: crate::types::Host>(
             // leaves the cursor just AFTER the pasted text, so skip the
             // step-back there.
             if !cursor_after && ed.cursor().1 > 0 {
-                crate::motions::move_left(ed.buffer_mut(), 1);
+                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
                 ed.push_buffer_cursor_to_textarea();
             }
             // Charwise: `[` = insert start, `]` = last pasted char.
@@ -8797,7 +8734,7 @@ fn do_paste<H: crate::types::Host>(
         // `5p` would land at original_row + 5 instead of original_row + 1.
         let first_target = orig_row.saturating_add(1);
         buf_set_cursor_rc(ed.buffer_mut(), first_target, 0);
-        crate::motions::move_first_non_blank(ed.buffer_mut());
+        hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
         ed.push_buffer_cursor_to_textarea();
     }
     // Any paste re-anchors the sticky column to the new cursor position.
@@ -8808,8 +8745,10 @@ fn do_paste<H: crate::types::Host>(
 /// With `p` the deleted selection lands in the unnamed register (vim's swap);
 /// with `P` (`before = true`) the source register is preserved so it can be
 /// pasted over multiple selections in turn.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, before: bool) {
+pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    before: bool,
+) {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
 
@@ -8856,7 +8795,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
                 });
                 buf_set_cursor_rc(ed.buffer_mut(), top, 0);
             }
-            crate::motions::move_first_non_blank(ed.buffer_mut());
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Mode::Visual | Mode::VisualBlock => {
@@ -8879,7 +8818,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
                     text: format!("\n{text}"),
                 });
                 buf_set_cursor_rc(ed.buffer_mut(), top.0 + 1, 0);
-                crate::motions::move_first_non_blank(ed.buffer_mut());
+                hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             } else {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(top.0, top.1),
@@ -8907,8 +8846,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
 /// first number on each selected line. When `sequential` is true the increment
 /// grows by `delta` for each successive number found (vim's `g<C-a>`): the
 /// first gets `delta`, the second `2*delta`, and so on.
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn adjust_number_visual<H: crate::types::Host>(
+pub(crate) fn adjust_number_visual<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     delta: i64,
     sequential: bool,
@@ -9004,7 +8942,7 @@ pub fn adjust_number_visual<H: crate::types::Host>(
 /// edit funnel, then leave insert mode (the original change ended
 /// with Esc, so the dot-repeat must end the same way — including
 /// the cursor step-back vim does on Esc-from-insert).
-fn replay_insert_and_finish<H: crate::types::Host>(
+fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     text: &str,
 ) {
@@ -9016,15 +8954,14 @@ fn replay_insert_and_finish<H: crate::types::Host>(
     });
     if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
-            crate::motions::move_left(ed.buffer_mut(), 1);
+            hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
         vim_mut(ed).mode = Mode::Normal;
     }
 }
 
-#[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
-pub fn replay_last_change<H: crate::types::Host>(
+pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     outer_count: usize,
 ) {
@@ -9139,7 +9076,7 @@ pub fn replay_last_change<H: crate::types::Host>(
             }
             // Esc step-back onto the last overtyped char.
             if ed.cursor().1 > 0 {
-                crate::motions::move_left(ed.buffer_mut(), 1);
+                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -9165,9 +9102,9 @@ pub fn replay_last_change<H: crate::types::Host>(
                     at: Position::new(row, 0),
                     text: "\n".to_string(),
                 });
-                let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(ed.buffer());
+                let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
                 let mut sticky = ed.sticky_col();
-                crate::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+                hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
                 ed.set_sticky_col(sticky);
             } else {
                 let line_chars = buf_line_chars(ed.buffer(), row);
@@ -9194,12 +9131,12 @@ pub fn replay_last_change<H: crate::types::Host>(
                 InsertEntry::I => {}
                 InsertEntry::ShiftI => move_first_non_whitespace(ed),
                 InsertEntry::A => {
-                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
+                    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
                 InsertEntry::ShiftA => {
-                    crate::motions::move_line_end(ed.buffer_mut());
-                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
+                    hjkl_engine::motions::move_line_end(ed.buffer_mut());
+                    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
             }
@@ -9263,8 +9200,8 @@ fn extract_inserted(before: &str, after: &str) -> String {
 
 #[cfg(test)]
 mod replace_char_tests {
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::{Buffer, rope_line_str};
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
         rope_line_str(&ed.buffer().rope(), row)
@@ -9293,8 +9230,8 @@ mod replace_char_tests {
 #[cfg(test)]
 mod comment_continuation_tests {
     use super::*;
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::Buffer;
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn make_editor_with_lang(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
@@ -9405,8 +9342,8 @@ mod comment_continuation_tests {
 #[cfg(test)]
 mod comment_toggle_tests {
     use super::*;
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::Buffer;
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn make_rust_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
@@ -9560,8 +9497,8 @@ mod comment_toggle_tests {
 #[cfg(test)]
 mod g_ampersand_tests {
     use super::*;
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::{Buffer, rope_line_str};
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
@@ -9580,7 +9517,7 @@ mod g_ampersand_tests {
     fn g_ampersand_repeats_last_substitute_on_whole_buffer() {
         let mut ed = make_editor("foo\nfoo bar foo\nbaz");
         // Simulate a prior `:s/foo/bar/` by setting last_substitute directly.
-        let cmd = crate::substitute::parse_substitute("/foo/bar/").unwrap();
+        let cmd = hjkl_engine::substitute::parse_substitute("/foo/bar/").unwrap();
         ed.set_last_substitute(cmd);
         // Cursor on line 0 (to confirm g& operates on ALL lines, not just current).
         apply_after_g(&mut ed, '&', 1);
@@ -9594,7 +9531,7 @@ mod g_ampersand_tests {
     #[test]
     fn g_ampersand_with_g_flag_replaces_all_per_line() {
         let mut ed = make_editor("foo foo\nfoo");
-        let cmd = crate::substitute::parse_substitute("/foo/bar/g").unwrap();
+        let cmd = hjkl_engine::substitute::parse_substitute("/foo/bar/g").unwrap();
         ed.set_last_substitute(cmd);
         apply_after_g(&mut ed, '&', 1);
         assert_eq!(buf_line(&ed, 0), "bar bar");
@@ -9617,8 +9554,8 @@ mod g_ampersand_tests {
 #[cfg(test)]
 mod sneak_tests {
     use super::*;
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::Buffer;
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);
@@ -9755,8 +9692,8 @@ mod sneak_tests {
 #[cfg(test)]
 mod indent_count_tests {
     use super::*;
-    use crate::{DefaultHost, Editor, Options};
     use hjkl_buffer::Buffer;
+    use hjkl_engine::{DefaultHost, Editor, Options};
 
     fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
         let buf = Buffer::from_str(content);

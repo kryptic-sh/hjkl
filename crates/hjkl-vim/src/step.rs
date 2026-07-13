@@ -17,15 +17,15 @@ pub struct StepBookkeeping {
     /// Pre-dispatch visual snapshot. When the FSM body transitions out of
     /// a visual mode the epilogue uses this to set the `<`/`>` marks and
     /// store `last_visual` for `gv`.
-    pub pre_visual_snapshot: Option<hjkl_engine::vim::LastVisual>,
+    pub pre_visual_snapshot: Option<crate::vim::LastVisual>,
 }
 
 pub(crate) fn begin_step<H: hjkl_engine::Host>(
     ed: &mut Editor<H>,
     input: hjkl_engine::Input,
 ) -> Result<StepBookkeeping, bool> {
+    use crate::vim::{Mode, Pending};
     use hjkl_engine::input::Key;
-    use hjkl_engine::vim::{Mode, Pending};
     // ── Timestamps ───────────────────────────────────────────────────────
     // Phase 7f: sync buffer before motion handlers see it.
     ed.sync_buffer_content_from_textarea();
@@ -72,19 +72,19 @@ pub(crate) fn begin_step<H: hjkl_engine::Host>(
     );
     let was_insert = crate::vim_state::vim(ed).mode == Mode::Insert;
     let pre_visual_snapshot = match crate::vim_state::vim(ed).mode {
-        Mode::Visual => Some(hjkl_engine::vim::LastVisual {
+        Mode::Visual => Some(crate::vim::LastVisual {
             mode: Mode::Visual,
             anchor: crate::vim_state::vim(ed).visual_anchor,
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
-        Mode::VisualLine => Some(hjkl_engine::vim::LastVisual {
+        Mode::VisualLine => Some(crate::vim::LastVisual {
             mode: Mode::VisualLine,
             anchor: (crate::vim_state::vim(ed).visual_line_anchor, 0),
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
-        Mode::VisualBlock => Some(hjkl_engine::vim::LastVisual {
+        Mode::VisualBlock => Some(crate::vim::LastVisual {
             mode: Mode::VisualBlock,
             anchor: crate::vim_state::vim(ed).block_anchor,
             cursor: ed.cursor(),
@@ -105,8 +105,8 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     bk: StepBookkeeping,
     consumed: bool,
 ) -> bool {
+    use crate::vim::{Mode, Pending};
     use hjkl_engine::input::Key;
-    use hjkl_engine::vim::{Mode, Pending};
     let StepBookkeeping {
         pending_was_macro_chord,
         was_insert,
@@ -182,6 +182,6 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     crate::vim_state::vim_mut(ed).current_mode = crate::vim_state::vim_mut(ed).public_mode();
     // BLAME is a Normal-only read-only view; any transition out of Normal
     // (a keyboard mode switch, etc.) implicitly leaves it.
-    hjkl_engine::vim::drop_blame_if_left_normal(ed);
+    crate::vim::drop_blame_if_left_normal(ed);
     consumed
 }

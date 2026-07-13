@@ -21,3 +21,8 @@ ratatui = { version = "0.30" }
 hjkl-engine.workspace = true
 hjkl-buffer.workspace = true
 hjkl-keymap.workspace = true
+# Arrived with the vim FSM in #267: the shared mode/operator/motion vocabulary,
+# `:s` pattern compilation, and FSM tracing.
+hjkl-vim-types.workspace = true
+regex = "1"
+tracing = "0.1"

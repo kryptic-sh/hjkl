@@ -505,7 +505,7 @@ fn content_edits_from_buffer_edit(
 /// Where the cursor should land in the viewport after a `z`-family
 /// scroll (`zz` / `zt` / `zb`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CursorScrollTarget {
+pub enum CursorScrollTarget {
     Center,
     Top,
     Bottom,
@@ -3372,7 +3372,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Scroll so the cursor row lands at the given viewport position:
     /// `Center` → middle row, `Top` → first row, `Bottom` → last row.
     /// Cursor stays on its absolute line; only the viewport moves.
-    pub(super) fn scroll_cursor_to(&mut self, pos: CursorScrollTarget) {
+    pub fn scroll_cursor_to(&mut self, pos: CursorScrollTarget) {
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
         if height == 0 {
             return;
