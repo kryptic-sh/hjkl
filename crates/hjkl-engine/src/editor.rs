@@ -549,13 +549,17 @@ pub struct Editor<
     H: crate::types::Host = crate::types::DefaultHost,
 > {
     pub keybinding_mode: KeybindingMode,
-    /// All vim-specific state (mode, pending operator, count, dot-repeat, ...).
-    /// Internal — exposed via Editor accessor methods
-    /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
-    /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
-    /// Transitional pub (#267): hjkl-vim begin/end_step access this directly
-    /// during the lift; becomes the Box<dyn DisciplineState> slot at the final flip.
-    pub vim: VimState,
+    /// The installed keyboard discipline's FSM state, type-erased (#265 G3).
+    ///
+    /// The engine never names the concrete type: it only projects a
+    /// [`CoarseMode`] and asks for idle resets through
+    /// [`DisciplineState`]. The owning discipline crate downcasts through
+    /// [`Editor::discipline_mut`] to reach its own state (e.g. `hjkl-vim`'s
+    /// `VimState`).
+    ///
+    /// [`CoarseMode`]: crate::CoarseMode
+    /// [`DisciplineState`]: crate::DisciplineState
+    discipline: Box<dyn crate::DisciplineState>,
     /// Read-only view overlay (git blame, …) layered over the input mode.
     /// Discipline-agnostic engine substrate (#265 G3): hoisted out of
     /// `VimState` because the core edit funnel (`mutate_edit`) and render/chrome
@@ -1171,7 +1175,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let settings = settings_from_options(&options);
         Self {
             keybinding_mode: KeybindingMode::Vim,
-            vim: VimState::default(),
+            // #267: the vim discipline is still installed by default while
+            // `VimState` lives in this crate. At the relocation slice this
+            // becomes `Box::new(NoDiscipline)` and `hjkl-vim` installs its own.
+            discipline: Box::new(VimState::default()),
             view: crate::ViewMode::default(),
             last_edit_pos: None,
             change_list: Vec::new(),
@@ -2549,10 +2556,30 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// [`crate::CoarseMode`] (epic #265 G3). Today this projects from the vim
     /// mode; once FSM state is pluggable each discipline supplies its own.
     pub fn coarse_mode(&self) -> crate::CoarseMode {
-        // Delegate to the discipline's projection. Today the vim FSM state is
-        // read directly; at the #267 field flip this becomes
-        // `self.discipline.coarse_mode()` over `Box<dyn DisciplineState>`.
-        crate::DisciplineState::coarse_mode(&self.vim)
+        self.discipline.coarse_mode()
+    }
+
+    /// The installed discipline's FSM state, type-erased.
+    ///
+    /// A discipline crate reaches its own concrete state by downcasting:
+    /// `ed.discipline().as_any().downcast_ref::<VimState>()`.
+    pub fn discipline(&self) -> &dyn crate::DisciplineState {
+        &*self.discipline
+    }
+
+    /// Mutable counterpart of [`Editor::discipline`].
+    pub fn discipline_mut(&mut self) -> &mut dyn crate::DisciplineState {
+        &mut *self.discipline
+    }
+
+    /// Install a keyboard discipline, replacing whatever was there.
+    ///
+    /// Host apps call this once at construction (e.g.
+    /// `hjkl_vim::install_vim_discipline(&mut ed)`); an `Editor` that never
+    /// receives discipline input keeps the default
+    /// [`NoDiscipline`](crate::NoDiscipline).
+    pub fn set_discipline(&mut self, discipline: Box<dyn crate::DisciplineState>) {
+        self.discipline = discipline;
     }
 
     /// The active read-only view overlay (see [`crate::ViewMode`]). Independent
@@ -3514,7 +3541,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// discarding an open insert session, which vscode-mode undo depends on —
     /// then clamps the cursor to a valid column.
     pub(crate) fn settle_after_history_jump(&mut self) {
-        crate::DisciplineState::reset_mode_after_history(&mut self.vim);
+        self.discipline.reset_mode_after_history();
         // Unconditional clamp: the restored cursor came from a snapshot that may
         // have been taken mid-insert and can sit one past the last valid column.
         let (row, col) = self.cursor();
@@ -3850,7 +3877,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.restore(all_lines, (top, 0));
         // Leave the editor idle after a successful filter (vim parity: Normal).
         // Goes through the discipline hook, so the engine does not name vim.
-        crate::DisciplineState::reset_to_idle(&mut self.vim);
+        self.discipline.reset_to_idle();
 
         Ok(())
     }

@@ -50,7 +50,7 @@ fn dec_pos_one_char<H: Host>(
 fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     ed.mark_content_dirty();
     let (row, _) = ed.cursor();
-    ed.vim.widen_insert_row(row);
+    crate::vim_state::vim_mut(ed).widen_insert_row(row);
     ed.ensure_cursor_in_scrolloff();
 }
 
@@ -58,7 +58,7 @@ fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
 /// change content (arrows, Home/End, PageUp/Down). Skips the dirty mark.
 fn after_insert_motion<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let (row, _) = ed.cursor();
-    ed.vim.widen_insert_row(row);
+    crate::vim_state::vim_mut(ed).widen_insert_row(row);
     ed.ensure_cursor_in_scrolloff();
 }
 
@@ -1052,9 +1052,9 @@ pub trait VimEditorExt {
 
 impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     fn visual_block_bounds(&self) -> (usize, usize, usize, usize) {
-        let (ar, ac) = self.vim.block_anchor;
+        let (ar, ac) = crate::vim_state::vim(self).block_anchor;
         let (cr, _) = self.cursor();
-        let cc = self.vim.block_vcol;
+        let cc = crate::vim_state::vim(self).block_vcol;
         (ar.min(cr), ar.max(cr), ac.min(cc), ac.max(cc))
     }
 
@@ -1062,9 +1062,9 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if self.vim_mode() != VimMode::VisualBlock {
             return None;
         }
-        let (ar, ac) = self.vim.block_anchor;
+        let (ar, ac) = crate::vim_state::vim(self).block_anchor;
         let cr = self.cursor().0;
-        let cc = self.vim.block_vcol;
+        let cc = crate::vim_state::vim(self).block_vcol;
         Some((ar.min(cr), ar.max(cr), ac.min(cc), ac.max(cc)))
     }
 
@@ -1072,7 +1072,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if self.vim_mode() != VimMode::Visual {
             return None;
         }
-        let anchor = self.vim.visual_anchor;
+        let anchor = crate::vim_state::vim(self).visual_anchor;
         let cursor = self.cursor();
         let (start, end) = if anchor <= cursor {
             (anchor, cursor)
@@ -1095,7 +1095,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if self.vim_mode() != VimMode::Visual {
             return None;
         }
-        let anchor = self.vim.visual_anchor;
+        let anchor = crate::vim_state::vim(self).visual_anchor;
         let cursor = self.cursor();
         if anchor == cursor {
             return None;
@@ -1112,7 +1112,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if self.vim_mode() != VimMode::VisualLine {
             return None;
         }
-        let anchor = self.vim.visual_line_anchor;
+        let anchor = crate::vim_state::vim(self).visual_line_anchor;
         let cursor = self.cursor().0;
         Some((anchor.min(cursor), anchor.max(cursor)))
     }
@@ -1122,7 +1122,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         let (cr, cc) = self.cursor();
         match self.vim_mode() {
             VimMode::Visual => {
-                let (ar, ac) = self.vim.visual_anchor;
+                let (ar, ac) = crate::vim_state::vim(self).visual_anchor;
                 let head = Position::new(cr, cc);
                 if self.settings().selection_exclusive {
                     // Exclusive (VSCode bar-caret): render the half-open char set
@@ -1150,14 +1150,14 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
                 })
             }
             VimMode::VisualLine => Some(Selection::Line {
-                anchor_row: self.vim.visual_line_anchor,
+                anchor_row: crate::vim_state::vim(self).visual_line_anchor,
                 head_row: cr,
             }),
             VimMode::VisualBlock => {
-                let (ar, ac) = self.vim.block_anchor;
+                let (ar, ac) = crate::vim_state::vim(self).block_anchor;
                 Some(Selection::Block {
                     anchor: Position::new(ar, ac),
-                    head: Position::new(cr, self.vim.block_vcol),
+                    head: Position::new(cr, crate::vim_state::vim(self).block_vcol),
                 })
             }
             _ => None,
@@ -1477,7 +1477,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Mode transitions ──────────────────────────────────────────────────
 
     fn vim_mode(&self) -> VimMode {
-        self.vim.current_mode
+        crate::vim_state::vim(self).current_mode
     }
 
     fn enter_visual_char(&mut self) {
@@ -1511,110 +1511,110 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Visual anchors ────────────────────────────────────────────────────
 
     fn visual_anchor(&self) -> (usize, usize) {
-        self.vim.visual_anchor
+        crate::vim_state::vim(self).visual_anchor
     }
     fn set_visual_anchor(&mut self, anchor: (usize, usize)) {
-        self.vim.visual_anchor = anchor;
+        crate::vim_state::vim_mut(self).visual_anchor = anchor;
     }
     fn visual_line_anchor(&self) -> usize {
-        self.vim.visual_line_anchor
+        crate::vim_state::vim(self).visual_line_anchor
     }
     fn set_visual_line_anchor(&mut self, row: usize) {
-        self.vim.visual_line_anchor = row;
+        crate::vim_state::vim_mut(self).visual_line_anchor = row;
     }
     fn block_anchor(&self) -> (usize, usize) {
-        self.vim.block_anchor
+        crate::vim_state::vim(self).block_anchor
     }
     fn set_block_anchor(&mut self, anchor: (usize, usize)) {
-        self.vim.block_anchor = anchor;
+        crate::vim_state::vim_mut(self).block_anchor = anchor;
     }
     fn block_vcol(&self) -> usize {
-        self.vim.block_vcol
+        crate::vim_state::vim(self).block_vcol
     }
     fn set_block_vcol(&mut self, vcol: usize) {
-        self.vim.block_vcol = vcol;
+        crate::vim_state::vim_mut(self).block_vcol = vcol;
     }
 
     // ─── Yank / register staging ───────────────────────────────────────────
 
     fn set_pending_register_raw(&mut self, reg: Option<char>) {
-        self.vim.pending_register = reg;
+        crate::vim_state::vim_mut(self).pending_register = reg;
     }
     fn take_pending_register_raw(&mut self) -> Option<char> {
-        self.vim.pending_register.take()
+        crate::vim_state::vim_mut(self).pending_register.take()
     }
 
     // ─── Macro recording / replay ──────────────────────────────────────────
 
     fn recording_macro(&self) -> Option<char> {
-        self.vim.recording_macro
+        crate::vim_state::vim(self).recording_macro
     }
     fn set_recording_macro(&mut self, reg: Option<char>) {
-        self.vim.recording_macro = reg;
+        crate::vim_state::vim_mut(self).recording_macro = reg;
     }
     fn push_recording_key(&mut self, input: Input) {
-        self.vim.recording_keys.push(input);
+        crate::vim_state::vim_mut(self).recording_keys.push(input);
     }
     fn take_recording_keys(&mut self) -> Vec<Input> {
-        std::mem::take(&mut self.vim.recording_keys)
+        std::mem::take(&mut crate::vim_state::vim_mut(self).recording_keys)
     }
     fn set_recording_keys(&mut self, keys: Vec<Input>) {
-        self.vim.recording_keys = keys;
+        crate::vim_state::vim_mut(self).recording_keys = keys;
     }
     fn recording_keys_len(&self) -> usize {
-        self.vim.recording_keys.len()
+        crate::vim_state::vim(self).recording_keys.len()
     }
     fn is_replaying_macro_raw(&self) -> bool {
-        self.vim.replaying_macro
+        crate::vim_state::vim(self).replaying_macro
     }
     fn set_replaying_macro_raw(&mut self, v: bool) {
-        self.vim.replaying_macro = v;
+        crate::vim_state::vim_mut(self).replaying_macro = v;
     }
     fn last_macro(&self) -> Option<char> {
-        self.vim.last_macro
+        crate::vim_state::vim(self).last_macro
     }
     fn set_last_macro(&mut self, reg: Option<char>) {
-        self.vim.last_macro = reg;
+        crate::vim_state::vim_mut(self).last_macro = reg;
     }
 
     // ─── Last insert / visual / viewport ───────────────────────────────────
 
     fn last_insert_pos(&self) -> Option<(usize, usize)> {
-        self.vim.last_insert_pos
+        crate::vim_state::vim(self).last_insert_pos
     }
     fn set_last_insert_pos(&mut self, pos: Option<(usize, usize)>) {
-        self.vim.last_insert_pos = pos;
+        crate::vim_state::vim_mut(self).last_insert_pos = pos;
     }
     fn last_visual(&self) -> Option<LastVisual> {
-        self.vim.last_visual
+        crate::vim_state::vim(self).last_visual
     }
     fn set_last_visual(&mut self, snap: Option<LastVisual>) {
-        self.vim.last_visual = snap;
+        crate::vim_state::vim_mut(self).last_visual = snap;
     }
     fn insert_pending_register(&self) -> bool {
-        self.vim.insert_pending_register
+        crate::vim_state::vim(self).insert_pending_register
     }
     fn set_insert_pending_register(&mut self, v: bool) {
-        self.vim.insert_pending_register = v;
+        crate::vim_state::vim_mut(self).insert_pending_register = v;
     }
 
     // ─── Change-mark start ─────────────────────────────────────────────────
 
     fn change_mark_start(&self) -> Option<(usize, usize)> {
-        self.vim.change_mark_start
+        crate::vim_state::vim(self).change_mark_start
     }
     fn take_change_mark_start(&mut self) -> Option<(usize, usize)> {
-        self.vim.change_mark_start.take()
+        crate::vim_state::vim_mut(self).change_mark_start.take()
     }
     fn set_change_mark_start(&mut self, pos: Option<(usize, usize)>) {
-        self.vim.change_mark_start = pos;
+        crate::vim_state::vim_mut(self).change_mark_start = pos;
     }
 
     // ─── Visual / motion / search primitives ───────────────────────────────
 
     fn is_visual(&self) -> bool {
         matches!(
-            self.vim.mode,
+            crate::vim_state::vim(self).mode,
             FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
         )
     }
@@ -1641,13 +1641,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
 
     fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize) {
         self.jump_cursor(top, col);
-        self.vim.mode = FsmMode::Normal;
+        crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
         hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
     }
 
     fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
         self.jump_cursor(top, col);
-        self.vim.mode = FsmMode::Normal;
+        crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
         hjkl_engine::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
     }
 
@@ -1687,15 +1687,15 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         };
         match kind {
             RangeKind::Linewise => {
-                self.vim.visual_line_anchor = start.0;
-                self.vim.mode = FsmMode::VisualLine;
-                self.vim.current_mode = VimMode::VisualLine;
+                crate::vim_state::vim_mut(self).visual_line_anchor = start.0;
+                crate::vim_state::vim_mut(self).mode = FsmMode::VisualLine;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::VisualLine;
                 self.jump_cursor(end.0, 0);
             }
             _ => {
-                self.vim.mode = FsmMode::Visual;
-                self.vim.current_mode = VimMode::Visual;
-                self.vim.visual_anchor = (start.0, start.1);
+                crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                crate::vim_state::vim_mut(self).visual_anchor = (start.0, start.1);
                 let (er, ec) = hjkl_engine::vim::retreat_one(self, end);
                 self.jump_cursor(er, ec);
             }
@@ -1791,7 +1791,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if mutated {
             self.mark_content_dirty();
             let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+            crate::vim_state::vim_mut(self).widen_insert_row(row);
         }
     }
 
@@ -1800,14 +1800,14 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if mutated {
             self.mark_content_dirty();
             let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+            crate::vim_state::vim_mut(self).widen_insert_row(row);
         }
     }
 
     fn insert_paste_register(&mut self, reg: char) {
         hjkl_engine::vim::insert_paste_register_bridge(self, reg);
         let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        crate::vim_state::vim_mut(self).widen_insert_row(row);
     }
 
     fn insert_ctrl_bracket(&mut self) {
@@ -1917,23 +1917,23 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     // ─── Vim FSM state accessors ───────────────────────────────────────────
 
     fn pending(&self) -> hjkl_engine::vim::Pending {
-        self.vim.pending.clone()
+        crate::vim_state::vim(self).pending.clone()
     }
 
     fn set_pending(&mut self, p: hjkl_engine::vim::Pending) {
-        self.vim.pending = p;
+        crate::vim_state::vim_mut(self).pending = p;
     }
 
     fn take_pending(&mut self) -> hjkl_engine::vim::Pending {
-        std::mem::take(&mut self.vim.pending)
+        std::mem::take(&mut crate::vim_state::vim_mut(self).pending)
     }
 
     fn count(&self) -> usize {
-        self.vim.count
+        crate::vim_state::vim(self).count
     }
 
     fn set_count(&mut self, c: usize) {
-        self.vim.count = c.min(hjkl_engine::vim::MAX_COUNT);
+        crate::vim_state::vim_mut(self).count = c.min(hjkl_engine::vim::MAX_COUNT);
     }
 
     fn accumulate_count_digit(&mut self, digit: usize) {
@@ -1942,8 +1942,8 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         // after ~20 typed digits. Then clamp at vim's documented count
         // ceiling (`:h count`) so no apply loop can iterate more than
         // 999,999,999 times regardless of how many digits were typed.
-        self.vim.count = self
-            .vim
+        let v = crate::vim_state::vim_mut(self);
+        v.count = v
             .count
             .saturating_mul(10)
             .saturating_add(digit)
@@ -1951,13 +1951,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn reset_count(&mut self) {
-        self.vim.count = 0;
+        crate::vim_state::vim_mut(self).count = 0;
     }
 
     fn take_count(&mut self) -> usize {
-        if self.vim.count > 0 {
-            let n = self.vim.count;
-            self.vim.count = 0;
+        if crate::vim_state::vim(self).count > 0 {
+            let n = crate::vim_state::vim(self).count;
+            crate::vim_state::vim_mut(self).count = 0;
             n
         } else {
             1
@@ -1965,36 +1965,37 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn fsm_mode(&self) -> hjkl_engine::vim::Mode {
-        self.vim.mode
+        crate::vim_state::vim(self).mode
     }
 
     fn set_fsm_mode(&mut self, m: hjkl_engine::vim::Mode) {
-        self.vim.mode = m;
-        self.vim.current_mode = self.vim.public_mode();
+        crate::vim_state::vim_mut(self).mode = m;
+        crate::vim_state::vim_mut(self).current_mode =
+            crate::vim_state::vim_mut(self).public_mode();
     }
 
     fn is_replaying(&self) -> bool {
-        self.vim.replaying
+        crate::vim_state::vim(self).replaying
     }
 
     fn set_replaying(&mut self, v: bool) {
-        self.vim.replaying = v;
+        crate::vim_state::vim_mut(self).replaying = v;
     }
 
     fn is_one_shot_normal(&self) -> bool {
-        self.vim.one_shot_normal
+        crate::vim_state::vim(self).one_shot_normal
     }
 
     fn set_one_shot_normal(&mut self, v: bool) {
-        self.vim.one_shot_normal = v;
+        crate::vim_state::vim_mut(self).one_shot_normal = v;
     }
 
     fn last_find(&self) -> Option<(char, bool, bool)> {
-        self.vim.last_find
+        crate::vim_state::vim(self).last_find
     }
 
     fn set_last_find(&mut self, target: Option<(char, bool, bool)>) {
-        self.vim.last_find = target;
+        crate::vim_state::vim_mut(self).last_find = target;
     }
 
     fn sneak(&mut self, c1: char, c2: char, forward: bool, count: usize) {
@@ -2013,75 +2014,78 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn last_sneak(&self) -> Option<((char, char), bool)> {
-        self.vim.last_sneak
+        crate::vim_state::vim(self).last_sneak
     }
 
     fn last_change(&self) -> Option<hjkl_engine::vim::LastChange> {
-        self.vim.last_change.clone()
+        crate::vim_state::vim(self).last_change.clone()
     }
 
     fn set_last_change(&mut self, lc: Option<hjkl_engine::vim::LastChange>) {
-        self.vim.last_change = lc;
+        crate::vim_state::vim_mut(self).last_change = lc;
     }
 
     fn last_change_mut(&mut self) -> Option<&mut hjkl_engine::vim::LastChange> {
-        self.vim.last_change.as_mut()
+        crate::vim_state::vim_mut(self).last_change.as_mut()
     }
 
     fn insert_session(&self) -> Option<&hjkl_engine::vim::InsertSession> {
-        self.vim.insert_session.as_ref()
+        crate::vim_state::vim(self).insert_session.as_ref()
     }
 
     fn insert_session_mut(&mut self) -> Option<&mut hjkl_engine::vim::InsertSession> {
-        self.vim.insert_session.as_mut()
+        crate::vim_state::vim_mut(self).insert_session.as_mut()
     }
 
     fn take_insert_session(&mut self) -> Option<hjkl_engine::vim::InsertSession> {
-        self.vim.insert_session.take()
+        crate::vim_state::vim_mut(self).insert_session.take()
     }
 
     fn set_insert_session(&mut self, s: Option<hjkl_engine::vim::InsertSession>) {
-        self.vim.insert_session = s;
+        crate::vim_state::vim_mut(self).insert_session = s;
     }
 
     // ─── Register selection / chord status / macro controller ──────────────
 
     fn pending_register(&self) -> Option<char> {
-        self.vim.pending_register
+        crate::vim_state::vim(self).pending_register
     }
 
     fn pending_register_is_clipboard(&self) -> bool {
-        matches!(self.vim.pending_register, Some('+') | Some('*'))
+        matches!(
+            crate::vim_state::vim(self).pending_register,
+            Some('+') | Some('*')
+        )
     }
 
     fn recording_register(&self) -> Option<char> {
-        self.vim.recording_macro
+        crate::vim_state::vim(self).recording_macro
     }
 
     fn pending_count(&self) -> Option<u32> {
-        self.vim.pending_count_val()
+        crate::vim_state::vim(self).pending_count_val()
     }
 
     fn pending_op(&self) -> Option<char> {
-        self.vim.pending_op_char()
+        crate::vim_state::vim(self).pending_op_char()
     }
 
     fn is_chord_pending(&self) -> bool {
-        self.vim.is_chord_pending()
+        crate::vim_state::vim(self).is_chord_pending()
     }
 
     fn is_insert_register_pending(&self) -> bool {
-        self.vim.insert_pending_register
+        crate::vim_state::vim(self).insert_pending_register
     }
 
     fn clear_insert_register_pending(&mut self) {
-        self.vim.insert_pending_register = false;
+        crate::vim_state::vim_mut(self).insert_pending_register = false;
     }
 
     fn set_pending_register(&mut self, reg: char) {
         // `-` is the small-delete register (readable/pasteable, e.g. `"-p`).
         if reg.is_ascii_alphanumeric() || matches!(reg, '"' | '+' | '*' | '_' | '-') {
-            self.vim.pending_register = Some(reg);
+            crate::vim_state::vim_mut(self).pending_register = Some(reg);
         }
         // Invalid chars silently no-op (matches engine FSM behavior).
     }
@@ -2090,7 +2094,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
         if !(reg.is_ascii_alphabetic() || reg.is_ascii_digit()) {
             return;
         }
-        self.vim.recording_macro = Some(reg);
+        crate::vim_state::vim_mut(self).recording_macro = Some(reg);
         if reg.is_ascii_uppercase() {
             // Seed recording_keys with the existing lowercase register's text
             // decoded back to inputs so capital-register append continues from
@@ -2101,32 +2105,33 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
                 .read(lower)
                 .map(|s| s.text.clone())
                 .unwrap_or_default();
-            self.vim.recording_keys = hjkl_engine::input::decode_macro(&text);
+            crate::vim_state::vim_mut(self).recording_keys =
+                hjkl_engine::input::decode_macro(&text);
         } else {
-            self.vim.recording_keys.clear();
+            crate::vim_state::vim_mut(self).recording_keys.clear();
         }
     }
 
     fn stop_macro_record(&mut self) {
-        let Some(reg) = self.vim.recording_macro.take() else {
+        let Some(reg) = crate::vim_state::vim_mut(self).recording_macro.take() else {
             return;
         };
-        let keys = std::mem::take(&mut self.vim.recording_keys);
+        let keys = std::mem::take(&mut crate::vim_state::vim_mut(self).recording_keys);
         let text = hjkl_engine::input::encode_macro(&keys);
         self.set_named_register_text(reg.to_ascii_lowercase(), text);
     }
 
     fn is_recording_macro(&self) -> bool {
-        self.vim.recording_macro.is_some()
+        crate::vim_state::vim(self).recording_macro.is_some()
     }
 
     fn is_replaying_macro(&self) -> bool {
-        self.vim.replaying_macro
+        crate::vim_state::vim(self).replaying_macro
     }
 
     fn play_macro(&mut self, reg: char, count: usize) -> Vec<hjkl_engine::input::Input> {
         let resolved = if reg == '@' {
-            match self.vim.last_macro {
+            match crate::vim_state::vim(self).last_macro {
                 Some(r) => r,
                 None => return vec![],
             }
@@ -2141,8 +2146,8 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
             }
         };
         let keys = hjkl_engine::input::decode_macro(&text);
-        self.vim.last_macro = Some(resolved);
-        self.vim.replaying_macro = true;
+        crate::vim_state::vim_mut(self).last_macro = Some(resolved);
+        crate::vim_state::vim_mut(self).replaying_macro = true;
         // Multiply by count (minimum 1). Clamp to vim's count limit
         // (`:h count` — counts are capped at 999999999); an unclamped
         // saturated prefix would overflow `Vec` capacity in `repeat`.
@@ -2150,12 +2155,14 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn end_macro_replay(&mut self) {
-        self.vim.replaying_macro = false;
+        crate::vim_state::vim_mut(self).replaying_macro = false;
     }
 
     fn record_input(&mut self, input: hjkl_engine::input::Input) {
-        if self.vim.recording_macro.is_some() && !self.vim.replaying_macro {
-            self.vim.recording_keys.push(input);
+        if crate::vim_state::vim(self).recording_macro.is_some()
+            && !crate::vim_state::vim(self).replaying_macro
+        {
+            crate::vim_state::vim_mut(self).recording_keys.push(input);
         }
     }
 

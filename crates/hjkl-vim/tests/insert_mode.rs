@@ -30,7 +30,7 @@ mod insert_mode_scrolloff_tests {
         vp.top_row = 0;
         vp.top_col = 0;
         e.set_viewport_height(20);
-        e.vim.mode = Mode::Insert;
+        e.set_fsm_mode(Mode::Insert);
         e
     }
 

@@ -112,6 +112,30 @@ pub(crate) fn rot13_str(s: &str) -> String {
 
 // ─── Dot-repeat storage ────────────────────────────────────────────────────
 
+// ─── Discipline downcast ───────────────────────────────────────────────────
+
+/// Borrow the vim FSM state out of the editor's type-erased discipline slot.
+///
+/// The engine stores the active discipline as `Box<dyn DisciplineState>` and
+/// never names `VimState`; the vim FSM reaches its own state back through this
+/// downcast (#265 G3 / #267). Panics if a *different* discipline is installed —
+/// that is a wiring bug (vim keys dispatched at an editor that never had the
+/// vim discipline installed), not a runtime condition to recover from.
+fn vim<H: crate::types::Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState {
+    ed.discipline()
+        .as_any()
+        .downcast_ref::<VimState>()
+        .expect("vim discipline not installed on this Editor")
+}
+
+/// Mutable counterpart of [`vim`].
+fn vim_mut<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> &mut VimState {
+    ed.discipline_mut()
+        .as_any_mut()
+        .downcast_mut::<VimState>()
+        .expect("vim discipline not installed on this Editor")
+}
+
 // ─── VimState ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
@@ -511,7 +535,7 @@ fn insert_register_text<H: crate::types::Host>(
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },
-        '.' => match &ed.vim.last_insert_text {
+        '.' => match &vim(ed).last_insert_text {
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },
@@ -541,7 +565,7 @@ fn insert_register_text<H: crate::types::Host>(
     buf_set_cursor_rc(ed.buffer_mut(), row, col);
     ed.push_buffer_cursor_to_textarea();
     ed.mark_content_dirty();
-    if let Some(ref mut session) = ed.vim.insert_session {
+    if let Some(ref mut session) = vim_mut(ed).insert_session {
         session.row_min = session.row_min.min(row);
         session.row_max = session.row_max.max(row);
     }
@@ -760,7 +784,7 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
 }
 
 fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    let Some(session) = ed.vim.insert_session.take() else {
+    let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
     };
     let after_rope = crate::types::Query::rope(ed.buffer());
@@ -790,11 +814,11 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         extract_inserted(&before, &after)
     };
     // vim `".` register — text of the most recent insert.
-    if !ed.vim.replaying && !inserted.is_empty() {
-        ed.vim.last_insert_text = Some(inserted.clone());
+    if !vim(ed).replaying && !inserted.is_empty() {
+        vim_mut(ed).last_insert_text = Some(inserted.clone());
     }
     let open_line = matches!(session.reason, InsertReason::Open { .. });
-    if session.count > 1 && !ed.vim.replaying {
+    if session.count > 1 && !vim(ed).replaying {
         use hjkl_buffer::{Edit, Position};
         if open_line {
             // `[count]o` / `[count]O` open `count` SEPARATE lines, each with the
@@ -851,7 +875,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     if let InsertReason::BlockEdge { top, bot, col } = session.reason {
         // `I` / `A` from VisualBlock: replicate text across rows; cursor
         // stays at the block-start column (vim leaves cursor there).
-        if !inserted.is_empty() && top < bot && !ed.vim.replaying {
+        if !inserted.is_empty() && top < bot && !vim(ed).replaying {
             replicate_block_text(ed, &inserted, top, bot, col);
             buf_set_cursor_rc(ed.buffer_mut(), top, col);
             ed.push_buffer_cursor_to_textarea();
@@ -862,7 +886,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         // `c` from VisualBlock: replicate text across rows; cursor advances
         // to `col + ins_chars` (pre-step-back) so the Esc step-back lands
         // on the last typed char (col + ins_chars - 1), matching nvim.
-        if !inserted.is_empty() && top < bot && !ed.vim.replaying {
+        if !inserted.is_empty() && top < bot && !vim(ed).replaying {
             replicate_block_text(ed, &inserted, top, bot, col);
             let ins_chars = inserted.chars().count();
             let line_len = buf_line_chars(ed.buffer(), top);
@@ -872,19 +896,19 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         }
         return;
     }
-    if ed.vim.replaying {
+    if vim(ed).replaying {
         return;
     }
     match session.reason {
         InsertReason::Enter(entry) => {
-            ed.vim.last_change = Some(LastChange::InsertAt {
+            vim_mut(ed).last_change = Some(LastChange::InsertAt {
                 entry,
                 inserted,
                 count: session.count,
             });
         }
         InsertReason::Open { above } => {
-            ed.vim.last_change = Some(LastChange::OpenLine { above, inserted });
+            vim_mut(ed).last_change = Some(LastChange::OpenLine { above, inserted });
         }
         InsertReason::AfterChange => {
             if let Some(
@@ -892,7 +916,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
                 | LastChange::OpTextObj { inserted: ins, .. }
                 | LastChange::LineOp { inserted: ins, .. }
                 | LastChange::GnOp { inserted: ins, .. },
-            ) = ed.vim.last_change.as_mut()
+            ) = vim_mut(ed).last_change.as_mut()
             {
                 *ins = Some(inserted);
             }
@@ -901,14 +925,14 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             // at Esc time (last inserted char, before the step-back).
             // When nothing was typed cursor still sits at the change
             // start, satisfying vim's "both at start" parity for `c<m><Esc>`.
-            if let Some(start) = ed.vim.change_mark_start.take() {
+            if let Some(start) = vim_mut(ed).change_mark_start.take() {
                 let end = ed.cursor();
                 ed.set_mark('[', start);
                 ed.set_mark(']', end);
             }
         }
         InsertReason::DeleteToEol => {
-            ed.vim.last_change = Some(LastChange::DeleteToEol {
+            vim_mut(ed).last_change = Some(LastChange::DeleteToEol {
                 inserted: Some(inserted),
             });
         }
@@ -918,7 +942,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         InsertReason::Replace => {
             // `R` overstrike: dot-repeat re-overtypes the same text at the
             // cursor (vim parity — not a delete-to-EOL).
-            ed.vim.last_change = Some(LastChange::ReplaceMode { text: inserted });
+            vim_mut(ed).last_change = Some(LastChange::ReplaceMode { text: inserted });
         }
     }
 }
@@ -942,13 +966,13 @@ pub fn begin_insert<H: crate::types::Host>(
     if record {
         ed.push_undo();
     }
-    let reason = if ed.vim.replaying {
+    let reason = if vim(ed).replaying {
         InsertReason::ReplayOnly
     } else {
         reason
     };
     let (row, col) = ed.cursor();
-    ed.vim.insert_session = Some(InsertSession {
+    vim_mut(ed).insert_session = Some(InsertSession {
         count,
         row_min: row,
         row_max: row,
@@ -957,9 +981,9 @@ pub fn begin_insert<H: crate::types::Host>(
         start_row: row,
         start_col: col,
     });
-    ed.vim.mode = Mode::Insert;
+    vim_mut(ed).mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    ed.vim.current_mode = crate::VimMode::Insert;
+    vim_mut(ed).current_mode = crate::VimMode::Insert;
     drop_blame_if_left_normal(ed);
 }
 
@@ -983,16 +1007,16 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
     if !ed.settings().undo_break_on_motion {
         return;
     }
-    if ed.vim.replaying {
+    if vim(ed).replaying {
         return;
     }
-    if ed.vim.insert_session.is_none() {
+    if vim(ed).insert_session.is_none() {
         return;
     }
     ed.push_undo();
     let before_rope = crate::types::Query::rope(ed.buffer());
     let row = crate::types::Cursor::cursor(ed.buffer()).line as usize;
-    if let Some(ref mut session) = ed.vim.insert_session {
+    if let Some(ref mut session) = vim_mut(ed).insert_session {
         session.before_rope = before_rope;
         session.row_min = row;
         session.row_max = row;
@@ -1017,7 +1041,7 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
 /// We detect "first char" by comparing the current cursor position to the
 /// session's `(start_row, start_col)`.
 ///
-/// During replay (`ed.vim.replaying`) or when there is no active insert
+/// During replay (`vim(ed).replaying`) or when there is no active insert
 /// session, this is a complete no-op — the vim path is unchanged.
 ///
 /// When `undo_granularity == InsertSession` this function returns
@@ -1034,10 +1058,10 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
         return;
     }
     // No-op during replay or when there is no active insert session.
-    if ed.vim.replaying {
+    if vim(ed).replaying {
         return;
     }
-    let session = match ed.vim.insert_session.as_ref() {
+    let session = match vim(ed).insert_session.as_ref() {
         Some(s) => s,
         None => return,
     };
@@ -1080,7 +1104,7 @@ pub(crate) fn maybe_word_undo_break<H: crate::types::Host>(
         ed.push_undo();
         let before_rope = crate::types::Query::rope(ed.buffer());
         let row = cursor.row;
-        if let Some(ref mut session) = ed.vim.insert_session {
+        if let Some(ref mut session) = vim_mut(ed).insert_session {
             session.before_rope = before_rope;
             session.row_min = row;
             session.row_max = row;
@@ -1592,7 +1616,7 @@ pub fn insert_char_bridge<H: crate::types::Host>(
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let in_replace = matches!(
-        ed.vim.insert_session.as_ref().map(|s| &s.reason),
+        vim(ed).insert_session.as_ref().map(|s| &s.reason),
         Some(InsertReason::Replace)
     );
 
@@ -2237,10 +2261,10 @@ pub fn insert_ctrl_d_bridge<H: crate::types::Host>(
 pub fn insert_ctrl_o_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
-    ed.vim.one_shot_normal = true;
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).one_shot_normal = true;
+    vim_mut(ed).mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    ed.vim.current_mode = crate::VimMode::Normal;
+    vim_mut(ed).current_mode = crate::VimMode::Normal;
     false
 }
 
@@ -2251,7 +2275,7 @@ pub fn insert_ctrl_o_bridge<H: crate::types::Host>(
 pub fn insert_ctrl_r_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
-    ed.vim.insert_pending_register = true;
+    vim_mut(ed).insert_pending_register = true;
     false
 }
 
@@ -2291,11 +2315,11 @@ pub fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     // left (the move-left is vim's "leave-insert cursor adjustment"; the
     // sync needs the post-insert cursor position to detect the tag name).
     sync_paired_tag_on_exit(ed);
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    ed.vim.current_mode = crate::VimMode::Normal;
+    vim_mut(ed).current_mode = crate::VimMode::Normal;
     let col = ed.cursor().1;
-    ed.vim.last_insert_pos = Some(ed.cursor());
+    vim_mut(ed).last_insert_pos = Some(ed.cursor());
     if col > 0 {
         crate::motions::move_left(ed.buffer_mut(), 1);
         ed.push_buffer_cursor_to_textarea();
@@ -2457,8 +2481,8 @@ pub fn delete_char_forward_bridge<H: crate::types::Host>(
     count: usize,
 ) {
     do_char_delete(ed, true, count.max(1));
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::CharDel {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::CharDel {
             forward: true,
             count: count.max(1),
         });
@@ -2473,8 +2497,8 @@ pub fn delete_char_backward_bridge<H: crate::types::Host>(
     count: usize,
 ) {
     do_char_delete(ed, false, count.max(1));
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::CharDel {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::CharDel {
             forward: false,
             count: count.max(1),
         });
@@ -2505,8 +2529,8 @@ pub fn substitute_char_bridge<H: crate::types::Host>(
     }
     ed.push_buffer_cursor_to_textarea();
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::OpMotion {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::OpMotion {
             op: Operator::Change,
             motion: Motion::Right,
             count: count.max(1),
@@ -2523,8 +2547,8 @@ pub fn substitute_line_bridge<H: crate::types::Host>(
     count: usize,
 ) {
     execute_line_op(ed, Operator::Change, count.max(1));
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::LineOp {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::LineOp {
             op: Operator::Change,
             count: count.max(1),
             inserted: None,
@@ -2540,8 +2564,8 @@ pub fn delete_to_eol_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::
     delete_to_eol(ed);
     crate::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::DeleteToEol { inserted: None });
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::DeleteToEol { inserted: None });
     }
 }
 
@@ -2579,8 +2603,8 @@ pub fn join_line_bridge<H: crate::types::Host>(
             break;
         }
     }
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::JoinLine { count: joins });
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
     }
 }
 
@@ -2597,8 +2621,8 @@ pub fn toggle_case_at_cursor_bridge<H: crate::types::Host>(
             break;
         }
     }
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::ToggleCase {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::ToggleCase {
             count: count.max(1),
         });
     }
@@ -2637,8 +2661,8 @@ pub fn paste_bridge<H: crate::types::Host>(
     reindent: bool,
 ) {
     do_paste(ed, before, count.max(1), cursor_after, reindent);
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::Paste {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::Paste {
             before,
             count: count.max(1),
             cursor_after,
@@ -2679,7 +2703,7 @@ pub fn jump_forward_bridge<H: crate::types::Host>(
 
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn force_normal_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    ed.vim.force_normal();
+    vim_mut(ed).force_normal();
 }
 
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
@@ -2688,8 +2712,8 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
     row: usize,
     col: usize,
 ) {
-    if ed.vim.is_visual() {
-        ed.vim.force_normal();
+    if vim(ed).is_visual() {
+        vim_mut(ed).force_normal();
     }
     // Mouse-position click counts as a motion — break the active
     // insert-mode undo group when the toggle is on (vim parity).
@@ -2700,7 +2724,7 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
     let line_len = buf_line(ed.buffer(), r)
         .map(|l| l.chars().count())
         .unwrap_or(0);
-    let cap = if ed.vim.current_mode == crate::VimMode::Insert {
+    let cap = if vim(ed).current_mode == crate::VimMode::Insert {
         line_len
     } else {
         line_len.saturating_sub(1)
@@ -2712,7 +2736,7 @@ pub fn mouse_click_doc_bridge<H: crate::types::Host>(
 
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn mouse_begin_drag_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if !ed.vim.is_visual_char() {
+    if !vim(ed).is_visual_char() {
         enter_visual_char_bridge(ed);
     }
 }
@@ -2736,7 +2760,7 @@ pub fn range_for_op_motion_bridge<H: crate::types::Host>(
     let motion = parse_motion(&input)?;
     // Resolve FindRepeat and cw/cW quirks just like apply_op_motion_key.
     let motion = match motion {
-        Motion::FindRepeat { reverse } => match ed.vim.last_find {
+        Motion::FindRepeat { reverse } => match vim(ed).last_find {
             Some((ch, forward, till)) => Motion::Find {
                 ch,
                 forward: if reverse { !forward } else { forward },
@@ -2861,7 +2885,7 @@ pub fn word_search_bridge<H: crate::types::Host>(
 /// truth — the host never has to police this.
 #[inline]
 pub fn drop_blame_if_left_normal<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if ed.vim.current_mode != crate::VimMode::Normal {
+    if vim(ed).current_mode != crate::VimMode::Normal {
         ed.set_view_mode(crate::ViewMode::Normal);
     }
 }
@@ -2875,8 +2899,8 @@ pub fn set_vim_mode_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     mode: Mode,
 ) {
-    ed.vim.mode = mode;
-    ed.vim.current_mode = ed.vim.public_mode();
+    vim_mut(ed).mode = mode;
+    vim_mut(ed).current_mode = vim_mut(ed).public_mode();
     drop_blame_if_left_normal(ed);
 }
 
@@ -2885,7 +2909,7 @@ pub fn set_vim_mode_bridge<H: crate::types::Host>(
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn enter_visual_char_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let cur = ed.cursor();
-    ed.vim.visual_anchor = cur;
+    vim_mut(ed).visual_anchor = cur;
     set_vim_mode_bridge(ed, Mode::Visual);
 }
 
@@ -2894,7 +2918,7 @@ pub fn enter_visual_char_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buff
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn enter_visual_line_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let (row, _) = ed.cursor();
-    ed.vim.visual_line_anchor = row;
+    vim_mut(ed).visual_line_anchor = row;
     set_vim_mode_bridge(ed, Mode::VisualLine);
 }
 
@@ -2904,8 +2928,8 @@ pub fn enter_visual_line_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buff
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn enter_visual_block_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     let cur = ed.cursor();
-    ed.vim.block_anchor = cur;
-    ed.vim.block_vcol = cur.1;
+    vim_mut(ed).block_anchor = cur;
+    vim_mut(ed).block_vcol = cur.1;
     set_vim_mode_bridge(ed, Mode::VisualBlock);
 }
 
@@ -2918,31 +2942,31 @@ pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) {
     // Build the same snapshot that `step()` captures at pre-step time.
-    let snap: Option<LastVisual> = match ed.vim.mode {
+    let snap: Option<LastVisual> = match vim(ed).mode {
         Mode::Visual => Some(LastVisual {
             mode: Mode::Visual,
-            anchor: ed.vim.visual_anchor,
+            anchor: vim(ed).visual_anchor,
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
         Mode::VisualLine => Some(LastVisual {
             mode: Mode::VisualLine,
-            anchor: (ed.vim.visual_line_anchor, 0),
+            anchor: (vim(ed).visual_line_anchor, 0),
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
         Mode::VisualBlock => Some(LastVisual {
             mode: Mode::VisualBlock,
-            anchor: ed.vim.block_anchor,
+            anchor: vim(ed).block_anchor,
             cursor: ed.cursor(),
-            block_vcol: ed.vim.block_vcol,
+            block_vcol: vim(ed).block_vcol,
         }),
         _ => None,
     };
     // Transition to Normal first (matches FSM order).
-    ed.vim.pending = Pending::None;
-    ed.vim.count = 0;
-    ed.vim.insert_session = None;
+    vim_mut(ed).pending = Pending::None;
+    vim_mut(ed).count = 0;
+    vim_mut(ed).insert_session = None;
     set_vim_mode_bridge(ed, Mode::Normal);
     // Set `<` / `>` marks and stash `last_visual` — mirrors the post-step
     // logic in `step()` that fires when a visual → non-visual transition
@@ -2982,7 +3006,7 @@ pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
         };
         ed.set_mark('<', lo);
         ed.set_mark('>', hi);
-        ed.vim.last_visual = Some(snap);
+        vim_mut(ed).last_visual = Some(snap);
     }
 }
 
@@ -2993,24 +3017,24 @@ pub fn exit_visual_to_normal_bridge<H: crate::types::Host>(
 /// block corners swap.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn visual_o_toggle_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    match ed.vim.mode {
+    match vim(ed).mode {
         Mode::Visual => {
             let cur = ed.cursor();
-            let anchor = ed.vim.visual_anchor;
-            ed.vim.visual_anchor = cur;
+            let anchor = vim(ed).visual_anchor;
+            vim_mut(ed).visual_anchor = cur;
             ed.jump_cursor(anchor.0, anchor.1);
         }
         Mode::VisualLine => {
             let cur_row = ed.cursor().0;
-            let anchor_row = ed.vim.visual_line_anchor;
-            ed.vim.visual_line_anchor = cur_row;
+            let anchor_row = vim(ed).visual_line_anchor;
+            vim_mut(ed).visual_line_anchor = cur_row;
             ed.jump_cursor(anchor_row, 0);
         }
         Mode::VisualBlock => {
             let cur = ed.cursor();
-            let anchor = ed.vim.block_anchor;
-            ed.vim.block_anchor = cur;
-            ed.vim.block_vcol = anchor.1;
+            let anchor = vim(ed).block_anchor;
+            vim_mut(ed).block_anchor = cur;
+            vim_mut(ed).block_vcol = anchor.1;
             ed.jump_cursor(anchor.0, anchor.1);
         }
         _ => {}
@@ -3022,19 +3046,19 @@ pub fn visual_o_toggle_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer
 /// `handle_normal_g`.
 #[doc(hidden)] // #267 shim: temporary pub so hjkl_vim::VimEditorExt can call in; reverts to private when vim.rs relocates.
 pub fn reenter_last_visual_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some(snap) = ed.vim.last_visual {
+    if let Some(snap) = vim(ed).last_visual {
         match snap.mode {
             Mode::Visual => {
-                ed.vim.visual_anchor = snap.anchor;
+                vim_mut(ed).visual_anchor = snap.anchor;
                 set_vim_mode_bridge(ed, Mode::Visual);
             }
             Mode::VisualLine => {
-                ed.vim.visual_line_anchor = snap.anchor.0;
+                vim_mut(ed).visual_line_anchor = snap.anchor.0;
                 set_vim_mode_bridge(ed, Mode::VisualLine);
             }
             Mode::VisualBlock => {
-                ed.vim.block_anchor = snap.anchor;
-                ed.vim.block_vcol = snap.block_vcol;
+                vim_mut(ed).block_anchor = snap.anchor;
+                vim_mut(ed).block_vcol = snap.block_vcol;
                 set_vim_mode_bridge(ed, Mode::VisualBlock);
             }
             _ => {}
@@ -3060,8 +3084,8 @@ pub fn set_mode_bridge<H: crate::types::Host>(
         crate::VimMode::VisualLine => Mode::VisualLine,
         crate::VimMode::VisualBlock => Mode::VisualBlock,
     };
-    ed.vim.mode = internal;
-    ed.vim.current_mode = mode;
+    vim_mut(ed).mode = internal;
+    vim_mut(ed).current_mode = mode;
     drop_blame_if_left_normal(ed);
 }
 
@@ -3353,9 +3377,9 @@ pub fn execute_motion<H: crate::types::Host>(
     // `;`/`,` smart fallback: if the last horizontal motion was a sneak
     // digraph, repeat via apply_sneak instead of find-char.
     if let Motion::FindRepeat { reverse } = motion
-        && ed.vim.last_horizontal_motion == LastHorizontalMotion::Sneak
+        && vim(ed).last_horizontal_motion == LastHorizontalMotion::Sneak
     {
-        if let Some(((c1, c2), fwd)) = ed.vim.last_sneak {
+        if let Some(((c1, c2), fwd)) = vim(ed).last_sneak {
             let effective_fwd = if reverse { !fwd } else { fwd };
             apply_sneak(ed, c1, c2, effective_fwd, count);
         }
@@ -3365,9 +3389,9 @@ pub fn execute_motion<H: crate::types::Host>(
     // find must skip an immediately-adjacent match (vim's repeat quirk); flag
     // it so the `Motion::Find` dispatch below passes `skip_adjacent`.
     let motion = match motion {
-        Motion::FindRepeat { reverse } => match ed.vim.last_find {
+        Motion::FindRepeat { reverse } => match vim(ed).last_find {
             Some((ch, forward, till)) => {
-                ed.vim.find_repeat_skip = true;
+                vim_mut(ed).find_repeat_skip = true;
                 Motion::Find {
                     ch,
                     forward: if reverse { !forward } else { forward },
@@ -3410,7 +3434,7 @@ fn execute_motion_with_block_vcol<H: crate::types::Host>(
 ) {
     let motion_copy = motion.clone();
     execute_motion(ed, motion, count);
-    if ed.vim.mode == Mode::VisualBlock {
+    if vim(ed).mode == Mode::VisualBlock {
         update_block_vcol(ed, &motion_copy);
     }
 }
@@ -3535,13 +3559,13 @@ pub fn apply_motion_kind<H: crate::types::Host>(
         }
         crate::MotionKind::FindRepeat => {
             // `;` — repeat last f/F/t/T in the same direction.
-            // execute_motion resolves FindRepeat via ed.vim.last_find;
+            // execute_motion resolves FindRepeat via vim(ed).last_find;
             // no-op if no prior find exists (None arm returns early).
             execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: false }, count);
         }
         crate::MotionKind::FindRepeatReverse => {
             // `,` — repeat last f/F/t/T in the reverse direction.
-            // execute_motion resolves FindRepeat via ed.vim.last_find;
+            // execute_motion resolves FindRepeat via vim(ed).last_find;
             // no-op if no prior find exists (None arm returns early).
             execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: true }, count);
         }
@@ -3833,7 +3857,7 @@ pub fn apply_motion_cursor_ctx<H: crate::types::Host>(
             // Skip an adjacent target when this is a `;`/`,` repeat, and on the
             // 2nd..Nth step of a counted `t`/`T` (the cursor lands one cell
             // short each time, so a naive repeat would stick).
-            let repeat = std::mem::take(&mut ed.vim.find_repeat_skip);
+            let repeat = std::mem::take(&mut vim_mut(ed).find_repeat_skip);
             for i in 0..count {
                 let skip_adjacent = repeat || i > 0;
                 if !find_char_on_line(ed, *ch, *forward, *till, skip_adjacent) {
@@ -4193,7 +4217,7 @@ pub fn apply_op_motion_key<H: crate::types::Host>(
             .unwrap_or(false)
     };
     let motion = match motion {
-        Motion::FindRepeat { reverse } => match ed.vim.last_find {
+        Motion::FindRepeat { reverse } => match vim(ed).last_find {
             Some((ch, forward, till)) => Motion::Find {
                 ch,
                 forward: if reverse { !forward } else { forward },
@@ -4207,10 +4231,10 @@ pub fn apply_op_motion_key<H: crate::types::Host>(
     };
     apply_op_with_motion(ed, op, &motion, total_count);
     if let Motion::Find { ch, forward, till } = &motion {
-        ed.vim.last_find = Some((*ch, *forward, *till));
+        vim_mut(ed).last_find = Some((*ch, *forward, *till));
     }
-    if !ed.vim.replaying && op_is_change(op) {
-        ed.vim.last_change = Some(LastChange::OpMotion {
+    if !vim(ed).replaying && op_is_change(op) {
+        vim_mut(ed).last_change = Some(LastChange::OpMotion {
             op,
             motion,
             count: total_count,
@@ -4232,9 +4256,9 @@ pub fn apply_op_double<H: crate::types::Host>(
         let row = buf_cursor_pos(ed.buffer()).row;
         let end_row = (row + total_count.max(1) - 1).min(ed.buffer().row_count().saturating_sub(1));
         ed.toggle_comment_range(row, end_row);
-        ed.vim.mode = Mode::Normal;
-        if !ed.vim.replaying {
-            ed.vim.last_change = Some(LastChange::LineOp {
+        vim_mut(ed).mode = Mode::Normal;
+        if !vim(ed).replaying {
+            vim_mut(ed).last_change = Some(LastChange::LineOp {
                 op,
                 count: total_count,
                 inserted: None,
@@ -4243,8 +4267,8 @@ pub fn apply_op_double<H: crate::types::Host>(
         return;
     }
     execute_line_op(ed, op, total_count);
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::LineOp {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::LineOp {
             op,
             count: total_count,
             inserted: None,
@@ -4318,10 +4342,10 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
     match op {
         None => {
             // Bare `gn` — select the match in Visual mode.
-            ed.vim.visual_anchor = start_t;
+            vim_mut(ed).visual_anchor = start_t;
             buf_set_cursor_rc(ed.buffer_mut(), end_t.0, end_t.1);
-            ed.vim.mode = Mode::Visual;
-            ed.vim.current_mode = crate::VimMode::Visual;
+            vim_mut(ed).mode = Mode::Visual;
+            vim_mut(ed).current_mode = crate::VimMode::Visual;
             ed.push_buffer_cursor_to_textarea();
         }
         Some(Operator::Delete) => {
@@ -4331,8 +4355,8 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
             // char; vim clamps it back onto the line.
             clamp_cursor_to_normal_mode(ed);
             ed.push_buffer_cursor_to_textarea();
-            if !ed.vim.replaying {
-                ed.vim.last_change = Some(LastChange::GnOp {
+            if !vim(ed).replaying {
+                vim_mut(ed).last_change = Some(LastChange::GnOp {
                     op: Operator::Delete,
                     forward,
                     inserted: None,
@@ -4341,10 +4365,10 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
         }
         Some(Operator::Change) => {
             ed.push_undo();
-            ed.vim.change_mark_start = Some(start_t);
+            vim_mut(ed).change_mark_start = Some(start_t);
             cut_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
-            if !ed.vim.replaying {
-                ed.vim.last_change = Some(LastChange::GnOp {
+            if !vim(ed).replaying {
+                vim_mut(ed).last_change = Some(LastChange::GnOp {
                     op: Operator::Change,
                     forward,
                     inserted: None,
@@ -4356,7 +4380,7 @@ pub(crate) fn gn_operate<H: crate::types::Host>(
             let text = read_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_yank(text, false, target);
             }
             buf_set_cursor_rc(ed.buffer_mut(), start_t.0, start_t.1);
@@ -4404,8 +4428,8 @@ pub fn apply_op_g_inner<H: crate::types::Host>(
         };
         if ch == op_char {
             execute_line_op(ed, op, total_count);
-            if !ed.vim.replaying {
-                ed.vim.last_change = Some(LastChange::LineOp {
+            if !vim(ed).replaying {
+                vim_mut(ed).last_change = Some(LastChange::LineOp {
                     op,
                     count: total_count,
                     inserted: None,
@@ -4428,8 +4452,8 @@ pub fn apply_op_g_inner<H: crate::types::Host>(
         _ => return, // Unknown char — no-op.
     };
     apply_op_with_motion(ed, op, &motion, total_count);
-    if !ed.vim.replaying && op_is_change(op) {
-        ed.vim.last_change = Some(LastChange::OpMotion {
+    if !vim(ed).replaying && op_is_change(op) {
+        vim_mut(ed).last_change = Some(LastChange::OpMotion {
             op,
             motion,
             count: total_count,
@@ -4487,26 +4511,26 @@ pub fn apply_after_g<H: crate::types::Host>(
         // so the next input is treated as the motion / text object /
         // shorthand double (`gUU`, `guu`, `g~~`).
         'U' => {
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::Uppercase,
                 count1: count,
             };
         }
         'u' => {
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::Lowercase,
                 count1: count,
             };
         }
         '~' => {
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::ToggleCase,
                 count1: count,
             };
         }
         '?' => {
             // `g?{motion}` — ROT13 operator (`g??` / `g?g?` doubled).
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::Rot13,
                 count1: count,
             };
@@ -4514,7 +4538,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         'q' => {
             // `gq{motion}` — text reflow operator. Subsequent motion
             // / textobj rides the same operator pipeline.
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::Reflow,
                 count1: count,
             };
@@ -4522,7 +4546,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         'w' => {
             // `gw{motion}` — same reflow as `gq` but cursor stays at
             // its pre-reflow position (clamped to new EOL if shorter).
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::ReflowKeepCursor,
                 count1: count,
             };
@@ -4537,8 +4561,8 @@ pub fn apply_after_g<H: crate::types::Host>(
                     break;
                 }
             }
-            if !ed.vim.replaying {
-                ed.vim.last_change = Some(LastChange::JoinLine { count: joins });
+            if !vim(ed).replaying {
+                vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
             }
         }
         'd' => {
@@ -4553,7 +4577,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         // cursor where insert mode was last active, before Esc step-back)
         // and enters insert mode there.
         'i' => {
-            if let Some((row, col)) = ed.vim.last_insert_pos {
+            if let Some((row, col)) = vim(ed).last_insert_pos {
                 ed.jump_cursor(row, col);
             }
             begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
@@ -4563,7 +4587,7 @@ pub fn apply_after_g<H: crate::types::Host>(
         // motion form. The operator is Comment — the app layer (or the
         // doubled-char path in handle_after_op) calls toggle_comment_range.
         'c' => {
-            ed.vim.pending = Pending::Op {
+            vim_mut(ed).pending = Pending::Op {
                 op: Operator::Comment,
                 count1: count,
             };
@@ -4692,15 +4716,15 @@ pub fn apply_after_z<H: crate::types::Host>(
         }
         'f' => {
             if matches!(
-                ed.vim.mode,
+                vim(ed).mode,
                 Mode::Visual | Mode::VisualLine | Mode::VisualBlock
             ) {
                 // `zf` over a Visual selection creates a fold spanning
                 // anchor → cursor.
-                let anchor_row = match ed.vim.mode {
-                    Mode::VisualLine => ed.vim.visual_line_anchor,
-                    Mode::VisualBlock => ed.vim.block_anchor.0,
-                    _ => ed.vim.visual_anchor.0,
+                let anchor_row = match vim(ed).mode {
+                    Mode::VisualLine => vim(ed).visual_line_anchor,
+                    Mode::VisualBlock => vim(ed).block_anchor.0,
+                    _ => vim(ed).visual_anchor.0,
                 };
                 let cur = ed.cursor().0;
                 let top = anchor_row.min(cur);
@@ -4710,13 +4734,13 @@ pub fn apply_after_z<H: crate::types::Host>(
                     end_row: bot,
                     closed: true,
                 });
-                ed.vim.mode = Mode::Normal;
+                vim_mut(ed).mode = Mode::Normal;
             } else {
                 // `zf{motion}` / `zf{textobj}` — route through the
                 // operator pipeline. `Operator::Fold` reuses every
                 // motion / text-object / `g`-prefix branch the other
                 // operators get.
-                ed.vim.pending = Pending::Op {
+                vim_mut(ed).pending = Pending::Op {
                     op: Operator::Fold,
                     count1: count,
                 };
@@ -4740,8 +4764,8 @@ pub fn apply_find_char<H: crate::types::Host>(
     count: usize,
 ) {
     execute_motion(ed, Motion::Find { ch, forward, till }, count.max(1));
-    ed.vim.last_find = Some((ch, forward, till));
-    ed.vim.last_horizontal_motion = LastHorizontalMotion::FindChar;
+    vim_mut(ed).last_find = Some((ch, forward, till));
+    vim_mut(ed).last_horizontal_motion = LastHorizontalMotion::FindChar;
 }
 
 // ─── Sneak motion ──────────────────────────────────────────────────────────
@@ -4779,8 +4803,8 @@ pub fn apply_sneak<H: crate::types::Host>(
         let _ = row_count; // suppress unused-variable warning
     }
 
-    ed.vim.last_sneak = Some(((c1, c2), forward));
-    ed.vim.last_horizontal_motion = LastHorizontalMotion::Sneak;
+    vim_mut(ed).last_sneak = Some(((c1, c2), forward));
+    vim_mut(ed).last_horizontal_motion = LastHorizontalMotion::Sneak;
 }
 
 /// Scan forward from `(start_row, start_col)` (exclusive — start right after
@@ -4886,9 +4910,9 @@ pub fn apply_op_sneak<H: crate::types::Host>(
     let end_cur = ed.cursor();
     ed.jump_cursor(start.0, start.1);
     run_operator_over_range(ed, op, start, end_cur, RangeKind::Exclusive);
-    ed.vim.last_sneak = Some(((c1, c2), forward));
-    ed.vim.last_horizontal_motion = LastHorizontalMotion::Sneak;
-    if !ed.vim.replaying && op_is_change(op) {
+    vim_mut(ed).last_sneak = Some(((c1, c2), forward));
+    vim_mut(ed).last_horizontal_motion = LastHorizontalMotion::Sneak;
+    if !vim(ed).replaying && op_is_change(op) {
         // No dot-repeat motion variant for sneak ops (plugin behavior,
         // not vim-core); record as a Change/Delete line op as a
         // best-effort fallback so `.` at least does something.
@@ -4911,9 +4935,9 @@ pub fn apply_op_find_motion<H: crate::types::Host>(
 ) {
     let motion = Motion::Find { ch, forward, till };
     apply_op_with_motion(ed, op, &motion, total_count);
-    ed.vim.last_find = Some((ch, forward, till));
-    if !ed.vim.replaying && op_is_change(op) {
-        ed.vim.last_change = Some(LastChange::OpMotion {
+    vim_mut(ed).last_find = Some((ch, forward, till));
+    if !vim(ed).replaying && op_is_change(op) {
+        vim_mut(ed).last_change = Some(LastChange::OpMotion {
             op,
             motion,
             count: total_count,
@@ -4954,8 +4978,8 @@ pub fn apply_op_text_obj_inner<H: crate::types::Host>(
         _ => return false,
     };
     apply_op_with_text_object(ed, op, obj, inner, total_count.max(1));
-    if !ed.vim.replaying && op_is_change(op) {
-        ed.vim.last_change = Some(LastChange::OpTextObj {
+    if !vim(ed).replaying && op_is_change(op) {
+        vim_mut(ed).last_change = Some(LastChange::OpTextObj {
             op,
             obj,
             inner,
@@ -4988,13 +5012,13 @@ fn begin_insert_noundo<H: crate::types::Host>(
     count: usize,
     reason: InsertReason,
 ) {
-    let reason = if ed.vim.replaying {
+    let reason = if vim(ed).replaying {
         InsertReason::ReplayOnly
     } else {
         reason
     };
     let (row, col) = ed.cursor();
-    ed.vim.insert_session = Some(InsertSession {
+    vim_mut(ed).insert_session = Some(InsertSession {
         count,
         row_min: row,
         row_max: row,
@@ -5003,9 +5027,9 @@ fn begin_insert_noundo<H: crate::types::Host>(
         start_row: row,
         start_col: col,
     });
-    ed.vim.mode = Mode::Insert;
+    vim_mut(ed).mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    ed.vim.current_mode = crate::VimMode::Insert;
+    vim_mut(ed).current_mode = crate::VimMode::Insert;
     drop_blame_if_left_normal(ed);
 }
 
@@ -5050,7 +5074,7 @@ pub fn apply_op_with_motion<H: crate::types::Host>(
         let top = start.0.min(end.0);
         let bot = start.0.max(end.0);
         ed.toggle_comment_range(top, bot);
-        ed.vim.mode = Mode::Normal;
+        vim_mut(ed).mode = Mode::Normal;
         return;
     }
 
@@ -5182,7 +5206,7 @@ fn change_linewise_rows<H: crate::types::Host>(
 ) {
     use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     // Vim `:h '[`: stash change start for `]` deferral on insert-exit.
-    ed.vim.change_mark_start = Some((top_row, 0));
+    vim_mut(ed).change_mark_start = Some((top_row, 0));
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     // Read the cut payload first so yank reflects every original line.
@@ -5213,7 +5237,7 @@ fn change_linewise_rows<H: crate::types::Host>(
     }
     if !payload.is_empty() {
         ed.record_yank_to_host(payload.clone());
-        let target = ed.vim.pending_register.take();
+        let target = vim_mut(ed).pending_register.take();
         ed.record_delete(payload, true, target);
     }
     buf_set_cursor_rc(ed.buffer_mut(), top_row, indent_chars);
@@ -5235,7 +5259,7 @@ fn run_operator_over_range<H: crate::types::Host>(
     // start inserting without deleting anything.
     if top == bot && !matches!(kind, RangeKind::Linewise) {
         if op == Operator::Change {
-            ed.vim.change_mark_start = Some(top);
+            vim_mut(ed).change_mark_start = Some(top);
             ed.push_undo();
             begin_insert_noundo(ed, 1, InsertReason::AfterChange);
         }
@@ -5247,7 +5271,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             let text = read_vim_range(ed, top, bot, kind);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_yank(text, matches!(kind, RangeKind::Linewise), target);
             }
             // Vim `:h '[` / `:h ']`: after a yank `[` = first yanked char,
@@ -5276,7 +5300,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             if !matches!(kind, RangeKind::Linewise) {
                 clamp_cursor_to_normal_mode(ed);
             }
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: after a delete both marks park at
             // the cursor position where the deletion collapsed (the join
             // point). Set after the cut and clamp so the position is final.
@@ -5296,7 +5320,7 @@ fn run_operator_over_range<H: crate::types::Host>(
                 change_linewise_rows(ed, top.0, bot.0);
             } else {
                 // Charwise change: cut the range and enter insert.
-                ed.vim.change_mark_start = Some(top);
+                vim_mut(ed).change_mark_start = Some(top);
                 ed.push_undo();
                 cut_vim_range(ed, top, bot, kind);
                 begin_insert_noundo(ed, 1, InsertReason::AfterChange);
@@ -5314,7 +5338,7 @@ fn run_operator_over_range<H: crate::types::Host>(
             } else {
                 outdent_rows(ed, top.0, bot.0, 1);
             }
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Fold => {
             // Always linewise — fold the spanned rows regardless of the
@@ -5329,12 +5353,12 @@ fn run_operator_over_range<H: crate::types::Host>(
             }
             buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
             ed.push_buffer_cursor_to_textarea();
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Reflow => {
             ed.push_undo();
             reflow_rows(ed, top.0, bot.0);
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::ReflowKeepCursor => {
             // `gw{motion}` — reflow like `gq` but restore the cursor to the
@@ -5346,13 +5370,13 @@ fn run_operator_over_range<H: crate::types::Host>(
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(new_col));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
             // Always linewise — like Indent/Outdent.
             ed.push_undo();
             auto_indent_rows(ed, top.0, bot.0);
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Filter => {
             // Filter is not dispatched through run_operator_over_range.
@@ -5391,7 +5415,7 @@ pub fn delete_range_bridge<H: crate::types::Host>(
     kind: RangeKind,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
+    vim_mut(ed).pending_register = Some(register);
     run_operator_over_range(ed, Operator::Delete, start, end, kind);
 }
 
@@ -5405,7 +5429,7 @@ pub fn yank_range_bridge<H: crate::types::Host>(
     kind: RangeKind,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
+    vim_mut(ed).pending_register = Some(register);
     run_operator_over_range(ed, Operator::Yank, start, end, kind);
 }
 
@@ -5421,7 +5445,7 @@ pub fn change_range_bridge<H: crate::types::Host>(
     kind: RangeKind,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
+    vim_mut(ed).pending_register = Some(register);
     run_operator_over_range(ed, Operator::Change, start, end, kind);
 }
 
@@ -5460,7 +5484,7 @@ pub fn indent_range_bridge<H: crate::types::Host>(
     if shiftwidth > 0 {
         ed.settings_mut().shiftwidth = original_sw;
     }
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
 }
 
 /// Apply a case transformation (`Uppercase` / `Lowercase` / `ToggleCase`) to
@@ -5511,11 +5535,11 @@ pub fn delete_block_bridge<H: crate::types::Host>(
     right_col: usize,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
-    let saved_anchor = ed.vim.block_anchor;
-    let saved_vcol = ed.vim.block_vcol;
-    ed.vim.block_anchor = (top_row, left_col);
-    ed.vim.block_vcol = right_col;
+    vim_mut(ed).pending_register = Some(register);
+    let saved_anchor = vim(ed).block_anchor;
+    let saved_vcol = vim(ed).block_vcol;
+    vim_mut(ed).block_anchor = (top_row, left_col);
+    vim_mut(ed).block_vcol = right_col;
     // Compute clamped col before the mutable borrow for buf_set_cursor_rc.
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     // Place cursor at bot_row / right_col so block_bounds resolves correctly.
@@ -5524,8 +5548,8 @@ pub fn delete_block_bridge<H: crate::types::Host>(
     // Restore — block_anchor/vcol are only meaningful in VisualBlock mode;
     // after the op we're in Normal so restoring is a no-op for the user but
     // keeps state coherent if the caller inspects fields.
-    ed.vim.block_anchor = saved_anchor;
-    ed.vim.block_vcol = saved_vcol;
+    vim_mut(ed).block_anchor = saved_anchor;
+    vim_mut(ed).block_vcol = saved_vcol;
 }
 
 /// Yank a rectangular VisualBlock selection into `register`.
@@ -5538,16 +5562,16 @@ pub fn yank_block_bridge<H: crate::types::Host>(
     right_col: usize,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
-    let saved_anchor = ed.vim.block_anchor;
-    let saved_vcol = ed.vim.block_vcol;
-    ed.vim.block_anchor = (top_row, left_col);
-    ed.vim.block_vcol = right_col;
+    vim_mut(ed).pending_register = Some(register);
+    let saved_anchor = vim(ed).block_anchor;
+    let saved_vcol = vim(ed).block_vcol;
+    vim_mut(ed).block_anchor = (top_row, left_col);
+    vim_mut(ed).block_vcol = right_col;
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Yank, 1);
-    ed.vim.block_anchor = saved_anchor;
-    ed.vim.block_vcol = saved_vcol;
+    vim_mut(ed).block_anchor = saved_anchor;
+    vim_mut(ed).block_vcol = saved_vcol;
 }
 
 /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`).
@@ -5561,16 +5585,16 @@ pub fn change_block_bridge<H: crate::types::Host>(
     right_col: usize,
     register: char,
 ) {
-    ed.vim.pending_register = Some(register);
-    let saved_anchor = ed.vim.block_anchor;
-    let saved_vcol = ed.vim.block_vcol;
-    ed.vim.block_anchor = (top_row, left_col);
-    ed.vim.block_vcol = right_col;
+    vim_mut(ed).pending_register = Some(register);
+    let saved_anchor = vim(ed).block_anchor;
+    let saved_vcol = vim(ed).block_vcol;
+    vim_mut(ed).block_anchor = (top_row, left_col);
+    vim_mut(ed).block_vcol = right_col;
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Change, 1);
-    ed.vim.block_anchor = saved_anchor;
-    ed.vim.block_vcol = saved_vcol;
+    vim_mut(ed).block_anchor = saved_anchor;
+    vim_mut(ed).block_vcol = saved_vcol;
 }
 
 /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
@@ -5593,7 +5617,7 @@ pub fn indent_block_bridge<H: crate::types::Host>(
     } else {
         outdent_rows(ed, top_row, bot_row, abs);
     }
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
 }
 
 /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`. Column
@@ -5612,7 +5636,7 @@ pub fn auto_indent_range_bridge<H: crate::types::Host>(
     };
     ed.push_undo();
     auto_indent_rows(ed, top_row, bot_row);
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
 }
 
 // ─── Phase 4b pub text-object resolution bridges ───────────────────────────
@@ -5995,7 +6019,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
     ed.push_buffer_cursor_to_textarea();
     ed.set_yank(saved_yank);
     ed.set_yank_linewise(saved_yank_linewise);
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
 }
 
 /// Prepend `count * shiftwidth` spaces to each row in `[top, bot]`.
@@ -6353,7 +6377,7 @@ fn execute_line_op<H: crate::types::Host>(
             let text = read_vim_range(ed, (row, col), (end_row, 0), RangeKind::Linewise);
             if !text.is_empty() {
                 ed.record_yank_to_host(text.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_yank(text, true, target);
             }
             // Vim `:h '[` / `:h ']`: yy/Nyy — linewise yank; `[` =
@@ -6363,7 +6387,7 @@ fn execute_line_op<H: crate::types::Host>(
             ed.set_mark(']', (end_row, last_col));
             buf_set_cursor_rc(ed.buffer_mut(), row, col);
             ed.push_buffer_cursor_to_textarea();
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Delete => {
             ed.push_undo();
@@ -6397,7 +6421,7 @@ fn execute_line_op<H: crate::types::Host>(
             ed.push_buffer_cursor_to_textarea();
             move_first_non_whitespace(ed);
             ed.set_sticky_col(Some(ed.cursor().1));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: dd/Ndd — both marks park at the
             // post-delete cursor position (the join point).
             let pos = ed.cursor();
@@ -6428,7 +6452,7 @@ fn execute_line_op<H: crate::types::Host>(
                 outdent_rows(ed, row, end_row, 1);
             }
             ed.set_sticky_col(Some(ed.cursor().1));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         // No doubled form — `zfzf` is two consecutive `zf` chords.
         Operator::Fold => unreachable!("Fold has no line-op double"),
@@ -6438,7 +6462,7 @@ fn execute_line_op<H: crate::types::Host>(
             reflow_rows(ed, row, end_row);
             move_first_non_whitespace(ed);
             ed.set_sticky_col(Some(ed.cursor().1));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::ReflowKeepCursor => {
             // `gww` / `Ngww` — reflow `count` rows starting at the cursor,
@@ -6450,14 +6474,14 @@ fn execute_line_op<H: crate::types::Host>(
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(new_col));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
             // `==` / `N==` — auto-indent `count` rows starting at cursor.
             ed.push_undo();
             auto_indent_rows(ed, row, end_row);
             ed.set_sticky_col(Some(ed.cursor().1));
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Filter => {
             // Filter is dispatched through Editor::filter_range, not here.
@@ -6482,28 +6506,28 @@ pub fn apply_visual_operator<H: crate::types::Host>(
     // `count` is the number of indent levels for `>` / `<` (vim `2>` = two
     // shiftwidths); other visual operators ignore it.
     let levels = count.max(1);
-    match ed.vim.mode {
+    match vim(ed).mode {
         Mode::VisualLine => {
             let cursor_row = buf_cursor_pos(ed.buffer()).row;
-            let top = cursor_row.min(ed.vim.visual_line_anchor);
-            let bot = cursor_row.max(ed.vim.visual_line_anchor);
+            let top = cursor_row.min(vim(ed).visual_line_anchor);
+            let bot = cursor_row.max(vim(ed).visual_line_anchor);
             ed.set_yank_linewise(true);
             match op {
                 Operator::Yank => {
                     let text = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
                     if !text.is_empty() {
                         ed.record_yank_to_host(text.clone());
-                        let target = ed.vim.pending_register.take();
+                        let target = vim_mut(ed).pending_register.take();
                         ed.record_yank(text, true, target);
                     }
                     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
                     ed.push_buffer_cursor_to_textarea();
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     // Vim `Vc` / `Vjc`: same linewise-change semantics as
@@ -6516,46 +6540,46 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                 | Operator::Rot13 => {
                     let bot = buf_cursor_pos(ed.buffer())
                         .row
-                        .max(ed.vim.visual_line_anchor);
+                        .max(vim(ed).visual_line_anchor);
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
                     move_first_non_whitespace(ed);
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(ed.vim.visual_line_anchor);
+                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     if op == Operator::Indent {
                         indent_rows(ed, top, bot, levels);
                     } else {
                         outdent_rows(ed, top, bot, levels);
                     }
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Reflow => {
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(ed.vim.visual_line_anchor);
+                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     reflow_rows(ed, top, bot);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::ReflowKeepCursor => {
                     let saved = ed.cursor();
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(ed.vim.visual_line_anchor);
+                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
                     let (new_row, new_col) =
                         reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     ed.push_buffer_cursor_to_textarea();
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::AutoIndent => {
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(ed.vim.visual_line_anchor);
+                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     auto_indent_rows(ed, top, bot);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 // Filter is dispatched through Editor::filter_range, not here.
                 Operator::Filter => {}
@@ -6568,7 +6592,7 @@ pub fn apply_visual_operator<H: crate::types::Host>(
         }
         Mode::Visual => {
             ed.set_yank_linewise(false);
-            let anchor = ed.vim.visual_anchor;
+            let anchor = vim(ed).visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
             match op {
@@ -6576,17 +6600,17 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                     let text = read_vim_range(ed, top, bot, RangeKind::Inclusive);
                     if !text.is_empty() {
                         ed.record_yank_to_host(text.clone());
-                        let target = ed.vim.pending_register.take();
+                        let target = vim_mut(ed).pending_register.take();
                         ed.record_yank(text, false, target);
                     }
                     buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
                     ed.push_buffer_cursor_to_textarea();
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     ed.push_undo();
@@ -6598,14 +6622,14 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                 | Operator::ToggleCase
                 | Operator::Rot13 => {
                     // Anchor stays where the visual selection started.
-                    let anchor = ed.vim.visual_anchor;
+                    let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     apply_case_op_to_selection(ed, op, top, bot, RangeKind::Inclusive);
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
-                    let anchor = ed.vim.visual_anchor;
+                    let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     if op == Operator::Indent {
@@ -6613,20 +6637,20 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                     } else {
                         outdent_rows(ed, top.0, bot.0, levels);
                     }
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Reflow => {
                     ed.push_undo();
-                    let anchor = ed.vim.visual_anchor;
+                    let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     reflow_rows(ed, top.0, bot.0);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::ReflowKeepCursor => {
                     let saved = ed.cursor();
                     ed.push_undo();
-                    let anchor = ed.vim.visual_anchor;
+                    let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
@@ -6634,15 +6658,15 @@ pub fn apply_visual_operator<H: crate::types::Host>(
                         reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     ed.push_buffer_cursor_to_textarea();
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::AutoIndent => {
                     ed.push_undo();
-                    let anchor = ed.vim.visual_anchor;
+                    let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     auto_indent_rows(ed, top.0, bot.0);
-                    ed.vim.mode = Mode::Normal;
+                    vim_mut(ed).mode = Mode::Normal;
                 }
                 // Filter is dispatched through Editor::filter_range, not here.
                 Operator::Filter => {}
@@ -6663,9 +6687,9 @@ pub fn apply_visual_operator<H: crate::types::Host>(
 fn block_bounds<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
 ) -> (usize, usize, usize, usize) {
-    let (ar, ac) = ed.vim.block_anchor;
+    let (ar, ac) = vim(ed).block_anchor;
     let (cr, _) = ed.cursor();
-    let cc = ed.vim.block_vcol;
+    let cc = vim(ed).block_vcol;
     let top = ar.min(cr);
     let bot = ar.max(cr);
     let left = ac.min(cc);
@@ -6701,7 +6725,7 @@ pub fn update_block_vcol<H: crate::types::Host>(
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }
         | Motion::MatchBracket => {
-            ed.vim.block_vcol = ed.cursor().1;
+            vim_mut(ed).block_vcol = ed.cursor().1;
         }
         // Up / Down / FileTop / FileBottom / Search — preserve vcol.
         _ => {}
@@ -6725,10 +6749,10 @@ fn apply_block_operator<H: crate::types::Host>(
         Operator::Yank => {
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_yank(yank, false, target);
             }
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
         }
         Operator::Delete => {
@@ -6736,10 +6760,10 @@ fn apply_block_operator<H: crate::types::Host>(
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_delete(yank, false, target);
             }
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
         }
         Operator::Change => {
@@ -6747,7 +6771,7 @@ fn apply_block_operator<H: crate::types::Host>(
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
-                let target = ed.vim.pending_register.take();
+                let target = vim_mut(ed).pending_register.take();
                 ed.record_delete(yank, false, target);
             }
             ed.jump_cursor(top, left);
@@ -6764,7 +6788,7 @@ fn apply_block_operator<H: crate::types::Host>(
         Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {
             ed.push_undo();
             transform_block_case(ed, op, top, bot, left, right);
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
         }
         Operator::Indent | Operator::Outdent => {
@@ -6777,7 +6801,7 @@ fn apply_block_operator<H: crate::types::Host>(
             } else {
                 outdent_rows(ed, top, bot, count.max(1));
             }
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Fold => unreachable!("Visual zf takes its own path"),
         Operator::Reflow => {
@@ -6786,7 +6810,7 @@ fn apply_block_operator<H: crate::types::Host>(
             // sense.
             ed.push_undo();
             reflow_rows(ed, top, bot);
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::ReflowKeepCursor => {
             // `gw` over a block: same fallback as `gq` but restore cursor.
@@ -6796,14 +6820,14 @@ fn apply_block_operator<H: crate::types::Host>(
             let (new_row, new_col) = reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.push_buffer_cursor_to_textarea();
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
             // AutoIndent over the block falls back to linewise
             // auto-indent over the row range.
             ed.push_undo();
             auto_indent_rows(ed, top, bot);
-            ed.vim.mode = Mode::Normal;
+            vim_mut(ed).mode = Mode::Normal;
         }
         // Filter is dispatched through Editor::filter_range, not here.
         Operator::Filter => {}
@@ -6915,7 +6939,7 @@ pub fn block_replace<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer,
         lines[r] = format!("{before}{middle}{after}");
     }
     reset_textarea_lines(ed, lines);
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top, left);
 }
 
@@ -7508,7 +7532,7 @@ pub fn check_and_apply_abbrev<H: crate::types::Host>(
         let line = buf_line(ed.buffer(), row).unwrap_or_default();
         line.chars().take(col).collect()
     };
-    let (mincol, on_start_row) = if let Some(ref s) = ed.vim.insert_session {
+    let (mincol, on_start_row) = if let Some(ref s) = vim(ed).insert_session {
         if row == s.start_row {
             (s.start_col, true)
         } else {
@@ -8166,7 +8190,7 @@ fn cut_vim_range<H: crate::types::Host>(
     };
     if !text.is_empty() {
         ed.record_yank_to_host(text.clone());
-        let target = ed.vim.pending_register.take();
+        let target = vim_mut(ed).pending_register.take();
         ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
     }
     ed.push_buffer_cursor_to_textarea();
@@ -8253,7 +8277,7 @@ fn do_char_delete<H: crate::types::Host>(
     }
     if !deleted.is_empty() {
         ed.record_yank_to_host(deleted.clone());
-        let target = ed.vim.pending_register.take();
+        let target = vim_mut(ed).pending_register.take();
         ed.record_delete(deleted, false, target);
     }
     ed.push_buffer_cursor_to_textarea();
@@ -8482,17 +8506,17 @@ pub fn visual_join<H: crate::types::Host>(
     with_space: bool,
 ) {
     let cursor_row = buf_cursor_pos(ed.buffer()).row;
-    let (top, bot) = match ed.vim.mode {
+    let (top, bot) = match vim(ed).mode {
         Mode::VisualLine => (
-            cursor_row.min(ed.vim.visual_line_anchor),
-            cursor_row.max(ed.vim.visual_line_anchor),
+            cursor_row.min(vim(ed).visual_line_anchor),
+            cursor_row.max(vim(ed).visual_line_anchor),
         ),
         Mode::VisualBlock => {
-            let a = ed.vim.block_anchor.0;
+            let a = vim(ed).block_anchor.0;
             (a.min(cursor_row), a.max(cursor_row))
         }
         Mode::Visual => {
-            let a = ed.vim.visual_anchor.0;
+            let a = vim(ed).visual_anchor.0;
             (a.min(cursor_row), a.max(cursor_row))
         }
         _ => return,
@@ -8513,7 +8537,7 @@ pub fn visual_join<H: crate::types::Host>(
             break;
         }
     }
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
@@ -8612,7 +8636,7 @@ fn do_paste<H: crate::types::Host>(
     // unnamed register otherwise. Read text + linewise from the
     // selected slot rather than the global `vim.yank_linewise` so
     // pasting from `"0` after a delete still uses the yank's layout.
-    let selector = ed.vim.pending_register.take();
+    let selector = vim_mut(ed).pending_register.take();
     let (yank, linewise) = {
         let regs = ed.registers();
         match selector.and_then(|c| regs.read(c)) {
@@ -8761,7 +8785,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
 
     // Resolve the source register (selector or unnamed) BEFORE the delete
     // overwrites the unnamed register with the cut selection.
-    let selector = ed.vim.pending_register.take();
+    let selector = vim_mut(ed).pending_register.take();
     let (reg_text, reg_linewise) = {
         let regs = ed.registers();
         match selector.and_then(|c| regs.read(c)) {
@@ -8772,14 +8796,14 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
     // For `P`, snapshot the unnamed register so we can restore it afterwards.
     let saved_unnamed = before.then(|| ed.registers().unnamed.clone());
 
-    let mode = ed.vim.mode;
+    let mode = vim(ed).mode;
     ed.push_undo();
 
     match mode {
         Mode::VisualLine => {
             let cursor_row = buf_cursor_pos(ed.buffer()).row;
-            let top = cursor_row.min(ed.vim.visual_line_anchor);
-            let bot = cursor_row.max(ed.vim.visual_line_anchor);
+            let top = cursor_row.min(vim(ed).visual_line_anchor);
+            let bot = cursor_row.max(vim(ed).visual_line_anchor);
             // Delete the selected lines into the unnamed register.
             cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
             // Insert the register as fresh line(s) where the selection was.
@@ -8807,9 +8831,9 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
         }
         Mode::Visual | Mode::VisualBlock => {
             let anchor = if mode == Mode::VisualBlock {
-                ed.vim.block_anchor
+                vim(ed).block_anchor
             } else {
-                ed.vim.visual_anchor
+                vim(ed).visual_anchor
             };
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
@@ -8845,7 +8869,7 @@ pub fn visual_paste<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
     if let Some(slot) = saved_unnamed {
         ed.registers_mut().unnamed = slot;
     }
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
@@ -8861,22 +8885,22 @@ pub fn adjust_number_visual<H: crate::types::Host>(
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
-    let mode = ed.vim.mode;
+    let mode = vim(ed).mode;
     let cursor = buf_cursor_pos(ed.buffer());
 
     // Resolve the row range + the per-row start column to scan from.
     let (top, bot, mut scan_col_first, block_left) = match mode {
         Mode::VisualLine => {
-            let t = cursor.row.min(ed.vim.visual_line_anchor);
-            let b = cursor.row.max(ed.vim.visual_line_anchor);
+            let t = cursor.row.min(vim(ed).visual_line_anchor);
+            let b = cursor.row.max(vim(ed).visual_line_anchor);
             (t, b, 0usize, None)
         }
         Mode::Visual => {
-            let (a, c) = order(ed.vim.visual_anchor, (cursor.row, cursor.col));
+            let (a, c) = order(vim(ed).visual_anchor, (cursor.row, cursor.col));
             (a.0, c.0, a.1, None)
         }
         Mode::VisualBlock => {
-            let (a, c) = order(ed.vim.block_anchor, (cursor.row, cursor.col));
+            let (a, c) = order(vim(ed).block_anchor, (cursor.row, cursor.col));
             let left = a.1.min(c.1);
             (a.0, c.0, left, Some(left))
         }
@@ -8940,7 +8964,7 @@ pub fn adjust_number_visual<H: crate::types::Host>(
     // Vim leaves the cursor at the start of the selection.
     buf_set_cursor_rc(ed.buffer_mut(), top, block_left.unwrap_or(0));
     ed.push_buffer_cursor_to_textarea();
-    ed.vim.mode = Mode::Normal;
+    vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }
 
@@ -8960,12 +8984,12 @@ fn replay_insert_and_finish<H: crate::types::Host>(
         at: Position::new(cursor.0, cursor.1),
         text: text.to_string(),
     });
-    if ed.vim.insert_session.take().is_some() {
+    if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
             crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
-        ed.vim.mode = Mode::Normal;
+        vim_mut(ed).mode = Mode::Normal;
     }
 }
 
@@ -8974,10 +8998,10 @@ pub fn replay_last_change<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     outer_count: usize,
 ) {
-    let Some(change) = ed.vim.last_change.clone() else {
+    let Some(change) = vim(ed).last_change.clone() else {
         return;
     };
-    ed.vim.replaying = true;
+    vim_mut(ed).replaying = true;
     // Dot-repeat with an explicit `[count].` *replaces* the change's stored
     // count (`:h .`): `3x` then `2.` deletes 2, not 6. `outer_count == 0`
     // means the user typed no count, so the original stored count is reused.
@@ -9158,7 +9182,7 @@ pub fn replay_last_change<H: crate::types::Host>(
             }
         }
     }
-    ed.vim.replaying = false;
+    vim_mut(ed).replaying = false;
 }
 
 // ─── Extracting inserted text for replay ───────────────────────────────────
@@ -9681,7 +9705,7 @@ mod sneak_tests {
         let mut ed = make_editor("foo bar baz\n");
         ed.jump_cursor(0, 0);
         super::apply_sneak(&mut ed, 'b', 'a', true, 1);
-        let ls = ed.vim.last_sneak;
+        let ls = vim(&ed).last_sneak;
         assert_eq!(
             ls,
             Some((('b', 'a'), true)),

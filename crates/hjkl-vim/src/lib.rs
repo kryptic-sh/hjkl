@@ -9,6 +9,7 @@ pub mod operator;
 pub mod pending;
 pub mod search_prompt;
 mod step;
+mod vim_state;
 
 pub use cmd::EngineCmd;
 pub use count::CountAccumulator;

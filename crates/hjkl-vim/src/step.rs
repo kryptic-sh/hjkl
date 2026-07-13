@@ -37,55 +37,58 @@ pub(crate) fn begin_step<H: hjkl_engine::Host>(
         None => false,
     };
     if timed_out {
-        let chord_in_flight = !matches!(ed.vim.pending, Pending::None)
-            || ed.vim.count != 0
-            || ed.vim.pending_register.is_some()
-            || ed.vim.insert_pending_register;
+        let chord_in_flight = !matches!(crate::vim_state::vim(ed).pending, Pending::None)
+            || crate::vim_state::vim(ed).count != 0
+            || crate::vim_state::vim(ed).pending_register.is_some()
+            || crate::vim_state::vim(ed).insert_pending_register;
         if chord_in_flight {
-            ed.vim.clear_pending_prefix();
+            crate::vim_state::vim_mut(ed).clear_pending_prefix();
         }
     }
     ed.set_last_input_at(Some(now));
     ed.set_last_input_host_at(Some(host_now));
     // ── Macro-stop: bare `q` outside Insert ends the recording ───────────
-    if ed.vim.recording_macro.is_some()
-        && !ed.vim.replaying_macro
-        && matches!(ed.vim.pending, Pending::None)
-        && ed.vim.mode != Mode::Insert
+    if crate::vim_state::vim(ed).recording_macro.is_some()
+        && !crate::vim_state::vim(ed).replaying_macro
+        && matches!(crate::vim_state::vim(ed).pending, Pending::None)
+        && crate::vim_state::vim(ed).mode != Mode::Insert
         && input.key == Key::Char('q')
         && !input.ctrl
         && !input.alt
     {
-        let reg = ed.vim.recording_macro.take().unwrap();
-        let keys = std::mem::take(&mut ed.vim.recording_keys);
+        let reg = crate::vim_state::vim_mut(ed)
+            .recording_macro
+            .take()
+            .unwrap();
+        let keys = std::mem::take(&mut crate::vim_state::vim_mut(ed).recording_keys);
         let text = hjkl_engine::input::encode_macro(&keys);
         ed.set_named_register_text(reg.to_ascii_lowercase(), text);
         return Err(true);
     }
     // ── Snapshots for epilogue ────────────────────────────────────────────
     let pending_was_macro_chord = matches!(
-        ed.vim.pending,
+        crate::vim_state::vim(ed).pending,
         Pending::RecordMacroTarget | Pending::PlayMacroTarget { .. }
     );
-    let was_insert = ed.vim.mode == Mode::Insert;
-    let pre_visual_snapshot = match ed.vim.mode {
+    let was_insert = crate::vim_state::vim(ed).mode == Mode::Insert;
+    let pre_visual_snapshot = match crate::vim_state::vim(ed).mode {
         Mode::Visual => Some(hjkl_engine::vim::LastVisual {
             mode: Mode::Visual,
-            anchor: ed.vim.visual_anchor,
+            anchor: crate::vim_state::vim(ed).visual_anchor,
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
         Mode::VisualLine => Some(hjkl_engine::vim::LastVisual {
             mode: Mode::VisualLine,
-            anchor: (ed.vim.visual_line_anchor, 0),
+            anchor: (crate::vim_state::vim(ed).visual_line_anchor, 0),
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
         Mode::VisualBlock => Some(hjkl_engine::vim::LastVisual {
             mode: Mode::VisualBlock,
-            anchor: ed.vim.block_anchor,
+            anchor: crate::vim_state::vim(ed).block_anchor,
             cursor: ed.cursor(),
-            block_vcol: ed.vim.block_vcol,
+            block_vcol: crate::vim_state::vim(ed).block_vcol,
         }),
         _ => None,
     };
@@ -112,7 +115,7 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     // ── Visual-exit: set `<`/`>` marks and stash `last_visual` ───────────
     if let Some(snap) = pre_visual_snapshot
         && !matches!(
-            ed.vim.mode,
+            crate::vim_state::vim(ed).mode,
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         )
     {
@@ -150,16 +153,16 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
         };
         ed.set_mark('<', lo);
         ed.set_mark('>', hi);
-        ed.vim.last_visual = Some(snap);
+        crate::vim_state::vim_mut(ed).last_visual = Some(snap);
     }
     // ── Ctrl-o one-shot-normal return to Insert ───────────────────────────
     if !was_insert
-        && ed.vim.one_shot_normal
-        && ed.vim.mode == Mode::Normal
-        && matches!(ed.vim.pending, Pending::None)
+        && crate::vim_state::vim(ed).one_shot_normal
+        && crate::vim_state::vim(ed).mode == Mode::Normal
+        && matches!(crate::vim_state::vim(ed).pending, Pending::None)
     {
-        ed.vim.one_shot_normal = false;
-        ed.vim.mode = Mode::Insert;
+        crate::vim_state::vim_mut(ed).one_shot_normal = false;
+        crate::vim_state::vim_mut(ed).mode = Mode::Insert;
     }
     // ── Content + viewport sync ───────────────────────────────────────────
     ed.sync_buffer_content_from_textarea();
@@ -168,15 +171,15 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     }
     ed.set_viewport_pinned(false);
     // ── Recorder hook ─────────────────────────────────────────────────────
-    if ed.vim.recording_macro.is_some()
-        && !ed.vim.replaying_macro
+    if crate::vim_state::vim(ed).recording_macro.is_some()
+        && !crate::vim_state::vim(ed).replaying_macro
         && input.key != Key::Char('q')
         && !pending_was_macro_chord
     {
-        ed.vim.recording_keys.push(input);
+        crate::vim_state::vim_mut(ed).recording_keys.push(input);
     }
     // ── Phase 6.3: current_mode sync ─────────────────────────────────────
-    ed.vim.current_mode = ed.vim.public_mode();
+    crate::vim_state::vim_mut(ed).current_mode = crate::vim_state::vim_mut(ed).public_mode();
     // BLAME is a Normal-only read-only view; any transition out of Normal
     // (a keyboard mode switch, etc.) implicitly leaves it.
     hjkl_engine::vim::drop_blame_if_left_normal(ed);
