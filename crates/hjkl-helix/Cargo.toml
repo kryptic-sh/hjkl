@@ -1,0 +1,22 @@
+[package]
+name = "hjkl-helix"
+description = "Helix-style selection-first keyboard discipline for the hjkl editor stack. Pre-1.0 churn."
+keywords = ["helix", "modal", "editor", "fsm"]
+categories = ["text-editors"]
+version.workspace = true
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-engine.workspace = true
+hjkl-buffer.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

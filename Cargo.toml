@@ -72,6 +72,7 @@ hjkl-tabs-tui = { path = "crates/hjkl-tabs-tui", version = "0.33" }
 hjkl-theme = { path = "crates/hjkl-theme", version = "0.33" }
 hjkl-theme-tui = { path = "crates/hjkl-theme-tui", version = "0.33" }
 hjkl-vim = { path = "crates/hjkl-vim", version = "0.33", default-features = false }
+hjkl-helix = { path = "crates/hjkl-helix", version = "0.33" }
 hjkl-vim-types = { path = "crates/hjkl-vim-types", version = "0.33" }
 hjkl-vim-tui = { path = "crates/hjkl-vim-tui", version = "0.33" }
 hjkl-which-key = { path = "crates/hjkl-which-key", version = "0.33" }

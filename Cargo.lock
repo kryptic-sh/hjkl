@@ -2585,6 +2585,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-helix"
+version = "0.33.5"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine",
+]
+
+[[package]]
 name = "hjkl-holler"
 version = "0.33.5"
 
