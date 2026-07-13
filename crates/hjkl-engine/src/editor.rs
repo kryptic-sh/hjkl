@@ -2624,6 +2624,88 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.extra_cursors.clear();
     }
 
+    /// Apply an edit at **every** cursor — the primary and all secondaries —
+    /// and leave each cursor where its own edit left it (#63).
+    ///
+    /// `make` is handed each cursor's position and returns the edit to apply
+    /// there, so the caller writes the edit once and it fans out:
+    ///
+    /// ```ignore
+    /// ed.edit_at_all_cursors(|at| Edit::InsertStr { at, text: "x".into() });
+    /// ```
+    ///
+    /// Returns the inverse of each applied edit, in application order, so a
+    /// caller can push them as one undo step. This does **not** touch the undo
+    /// stack itself — `mutate_edit` never does, and a multi-cursor keystroke is
+    /// one user action, so the discipline pushes undo once before calling.
+    ///
+    /// # Why the order matters
+    ///
+    /// Edits are applied **bottom-up** (last cursor in the document first). An
+    /// edit at position P only moves positions at or after P, so working
+    /// backwards leaves every not-yet-visited cursor's coordinates still valid.
+    /// Going top-down would invalidate them all after the first edit.
+    ///
+    /// Each cursor that has already been edited is parked in `extra_cursors`,
+    /// so [`Editor::mutate_edit`]'s shift keeps it correct as the remaining
+    /// (earlier) edits land. The bookkeeping is the same machinery, reused.
+    ///
+    /// # Degradation
+    ///
+    /// If any cursor becomes untrackable mid-apply (see `selection_shift`), the
+    /// secondaries are dropped and the editor collapses to the primary rather
+    /// than carrying on with a caret that no longer knows where it is.
+    pub fn edit_at_all_cursors(
+        &mut self,
+        make: impl Fn(hjkl_buffer::Position) -> hjkl_buffer::Edit,
+    ) -> Vec<hjkl_buffer::Edit> {
+        let (pr, pc) = self.cursor();
+        let primary = hjkl_buffer::Position::new(pr, pc);
+
+        let mut all: Vec<hjkl_buffer::Position> = std::iter::once(primary)
+            .chain(self.extra_cursors.iter().copied())
+            .collect();
+        all.sort_by_key(|p| std::cmp::Reverse((p.row, p.col)));
+
+        // Rebuilt as we go: a cursor lands in here the moment its edit is done,
+        // which enrols it in the shift for every later edit.
+        self.extra_cursors.clear();
+
+        let mut inverses = Vec::with_capacity(all.len());
+        let mut primary_idx: Option<usize> = None;
+        let mut lost_a_cursor = false;
+
+        for (i, p) in all.iter().copied().enumerate() {
+            // Every previous iteration should have parked exactly one cursor. If
+            // the count slipped, `mutate_edit` dropped one it could not track.
+            if self.extra_cursors.len() != i {
+                lost_a_cursor = true;
+                break;
+            }
+            self.set_cursor_quiet(p.row, p.col);
+            inverses.push(self.mutate_edit(make(p)));
+            let (nr, nc) = self.cursor();
+            if p == primary && primary_idx.is_none() {
+                primary_idx = Some(self.extra_cursors.len());
+            }
+            self.extra_cursors.push(hjkl_buffer::Position::new(nr, nc));
+        }
+
+        match (lost_a_cursor, primary_idx) {
+            (false, Some(idx)) if idx < self.extra_cursors.len() => {
+                // Pull the primary back out of the parked set; the rest stay.
+                let landed = self.extra_cursors.remove(idx);
+                self.set_cursor_quiet(landed.row, landed.col);
+            }
+            _ => {
+                // Something went untrackable: collapse to a single cursor rather
+                // than leave a caret pointing at text it no longer owns.
+                self.extra_cursors.clear();
+            }
+        }
+        inverses
+    }
+
     /// The installed discipline's FSM state, type-erased.
     ///
     /// A discipline crate reaches its own concrete state by downcasting:

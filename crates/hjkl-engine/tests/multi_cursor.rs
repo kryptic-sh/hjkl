@@ -254,6 +254,126 @@ fn a_secondary_cursor_still_points_at_the_same_char_after_each_edit() {
     }
 }
 
+// ── Applying an edit at every cursor (#63 Phase B) ───────────────────────────
+
+#[test]
+fn insert_at_all_cursors_lands_text_at_every_caret() {
+    let mut e = editor("aaa\nbbb\nccc\n");
+    // primary at (0,0); secondaries on the other two rows.
+    e.add_cursor(pos(1, 0));
+    e.add_cursor(pos(2, 0));
+    e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "X".to_string(),
+    });
+    assert_eq!(e.line(0).as_deref(), Some("Xaaa"));
+    assert_eq!(e.line(1).as_deref(), Some("Xbbb"));
+    assert_eq!(e.line(2).as_deref(), Some("Xccc"));
+}
+
+#[test]
+fn insert_at_several_carets_on_one_row_does_not_smear_them() {
+    // Three carets on the SAME row is the case a naive top-down loop gets wrong:
+    // the first insert shifts the other two, and they end up in the wrong columns.
+    let mut e = editor("abcdef\n");
+    e.add_cursor(pos(0, 2));
+    e.add_cursor(pos(0, 4));
+    // primary is at (0,0).
+    e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "-".to_string(),
+    });
+    assert_eq!(e.line(0).as_deref(), Some("-ab-cd-ef"));
+}
+
+#[test]
+fn every_caret_ends_up_after_its_own_inserted_text() {
+    let mut e = editor("abcdef\n");
+    e.add_cursor(pos(0, 2));
+    e.add_cursor(pos(0, 4));
+    e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "-".to_string(),
+    });
+    // "-ab-cd-ef": carets land just past each dash -> cols 1, 4, 7.
+    let (pr, pc) = e.cursor();
+    let mut all: Vec<Position> = vec![pos(pr, pc)];
+    all.extend_from_slice(e.extra_cursors());
+    all.sort_by_key(|p| (p.row, p.col));
+    assert_eq!(all, [pos(0, 1), pos(0, 4), pos(0, 7)]);
+}
+
+#[test]
+fn the_primary_stays_the_primary_after_a_fan_out() {
+    // The primary must come back out of the parked set, not get swapped for a
+    // secondary — a discipline reads `cursor()` and would otherwise jump.
+    let mut e = editor("abcdef\n");
+    e.add_cursor(pos(0, 4));
+    e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "Z".to_string(),
+    });
+    // primary was (0,0) -> lands at (0,1). The secondary was (0,4) -> (0,6).
+    assert_eq!(e.cursor(), (0, 1));
+    assert_eq!(e.extra_cursors(), [pos(0, 6)]);
+}
+
+#[test]
+fn delete_at_all_cursors_removes_a_char_under_each() {
+    let mut e = editor("axbxcx\n");
+    // Delete the char at each caret: primary (0,1), plus (0,3) and (0,5).
+    e.set_cursor_quiet(0, 1);
+    e.add_cursor(pos(0, 3));
+    e.add_cursor(pos(0, 5));
+    e.edit_at_all_cursors(|at| Edit::DeleteRange {
+        start: at,
+        end: Position::new(at.row, at.col + 1),
+        kind: MotionKind::Char,
+    });
+    assert_eq!(e.line(0).as_deref(), Some("abc"));
+}
+
+#[test]
+fn fan_out_returns_one_inverse_per_caret() {
+    let mut e = editor("abc\n");
+    e.add_cursor(pos(0, 2));
+    let inverses = e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "Q".to_string(),
+    });
+    assert_eq!(
+        inverses.len(),
+        2,
+        "caller needs every inverse to undo as one step"
+    );
+}
+
+#[test]
+fn a_single_cursor_fan_out_is_just_an_ordinary_edit() {
+    let mut e = editor("abc\n");
+    e.edit_at_all_cursors(|at| Edit::InsertStr {
+        at,
+        text: "X".to_string(),
+    });
+    assert_eq!(e.line(0).as_deref(), Some("Xabc"));
+    assert!(e.extra_cursors().is_empty());
+    assert_eq!(e.cursor(), (0, 1));
+}
+
+#[test]
+fn a_fan_out_that_loses_a_caret_collapses_to_the_primary() {
+    // SplitLines is untrackable, so the parked carets cannot survive it. Rather
+    // than keep carets that no longer know where they are, collapse.
+    let mut e = editor("aaa bbb\nccc\n");
+    e.add_cursor(pos(1, 0));
+    e.edit_at_all_cursors(|_| Edit::SplitLines {
+        row: 0,
+        cols: vec![3],
+        inserted_space: true,
+    });
+    assert!(e.extra_cursors().is_empty());
+}
+
 #[test]
 fn clear_extra_cursors_collapses_to_the_primary() {
     let mut e = editor("abcdef\n");
