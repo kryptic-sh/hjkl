@@ -559,6 +559,20 @@ pub struct Editor<
     /// [`CoarseMode`]: crate::CoarseMode
     /// [`DisciplineState`]: crate::DisciplineState
     discipline: Box<dyn crate::DisciplineState>,
+    /// Secondary cursors for multi-cursor editing (#63).
+    ///
+    /// The **primary** cursor is not in here — it stays `Buffer::cursor`, so the
+    /// ~130 places across the engine and the disciplines that move the cursor
+    /// keep working untouched. This holds only the *extra* carets, and
+    /// [`Editor::mutate_edit`] rewrites them against the pre-edit geometry after
+    /// every edit.
+    ///
+    /// Char columns, matching `Buffer::cursor` and [`hjkl_buffer::Edit`] — NOT
+    /// the grapheme columns that `types::Pos` uses.
+    ///
+    /// Empty for a single-cursor editor, which is every editor today: vim drives
+    /// one caret, so this costs an `is_empty()` check per edit and nothing else.
+    extra_cursors: Vec<hjkl_buffer::Position>,
     /// Read-only view overlay (git blame, …) layered over the input mode.
     /// Discipline-agnostic engine substrate (#265 G3): hoisted out of
     /// `VimState` because the core edit funnel (`mutate_edit`) and render/chrome
@@ -1178,6 +1192,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             // keys build through `hjkl_vim::vim_editor` (or call
             // `hjkl_vim::install_vim_discipline`), which fills this slot.
             discipline: Box::new(crate::NoDiscipline),
+            extra_cursors: Vec::new(),
             view: crate::ViewMode::default(),
             last_edit_pos: None,
             change_list: Vec::new(),
@@ -2004,6 +2019,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 text: String::new(),
             };
         }
+        // Multi-cursor (#63): every edit cascades, so the secondary cursors have
+        // to be rewritten against the *pre-edit* geometry or they end up pointing
+        // at the wrong text. This is the single edit funnel, so doing it here
+        // covers every mutation in the engine by construction. A cursor the shift
+        // cannot track exactly is dropped, never guessed — see `selection_shift`.
+        if !self.extra_cursors.is_empty() {
+            let edit_ref = &edit;
+            self.extra_cursors.retain_mut(|c| {
+                match crate::selection_shift::shift_position(*c, edit_ref) {
+                    Some(shifted) => {
+                        *c = shifted;
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
         let pre_row = buf_cursor_row(&self.buffer);
         let pre_rows = buf_row_count(&self.buffer);
         // Capture the pre-edit cursor for the dot mark (`'.` / `` `. ``).
@@ -2556,6 +2588,30 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// mode; once FSM state is pluggable each discipline supplies its own.
     pub fn coarse_mode(&self) -> crate::CoarseMode {
         self.discipline.coarse_mode()
+    }
+
+    /// The secondary cursors, in char columns. Empty for a single-cursor editor.
+    ///
+    /// The primary cursor is [`Editor::cursor`] and is *not* included — see the
+    /// `extra_cursors` field docs for why it stays on the buffer.
+    pub fn extra_cursors(&self) -> &[hjkl_buffer::Position] {
+        &self.extra_cursors
+    }
+
+    /// Add a secondary cursor. Ignores a position that duplicates the primary or
+    /// an existing secondary, so a set never carries two carets at one spot —
+    /// that would apply an edit twice at the same place.
+    pub fn add_cursor(&mut self, pos: hjkl_buffer::Position) {
+        let (row, col) = self.cursor();
+        if pos == hjkl_buffer::Position::new(row, col) || self.extra_cursors.contains(&pos) {
+            return;
+        }
+        self.extra_cursors.push(pos);
+    }
+
+    /// Drop every secondary cursor, collapsing back to the primary.
+    pub fn clear_extra_cursors(&mut self) {
+        self.extra_cursors.clear();
     }
 
     /// The installed discipline's FSM state, type-erased.

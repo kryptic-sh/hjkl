@@ -31,6 +31,7 @@ pub mod motions;
 mod registers;
 pub mod rope_util;
 pub mod search;
+pub mod selection_shift;
 pub mod substitute;
 pub mod tag;
 pub mod types;
