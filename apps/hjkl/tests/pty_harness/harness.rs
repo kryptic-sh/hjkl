@@ -35,6 +35,92 @@ fn spawn_ms() -> u64 {
         .unwrap_or(300)
 }
 
+/// How long to wait for a write (`:w` / `Ctrl+S`) to land on disk. A write is
+/// asynchronous relative to the pty keystrokes that triggered it. Override with
+/// `E2E_WRITE_MS` on a slow machine.
+fn write_timeout() -> Duration {
+    let ms = std::env::var("E2E_WRITE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2000);
+    Duration::from_millis(ms)
+}
+
+// ── Waiting on the on-disk buffer ─────────────────────────────────────────────
+
+/// Wait for `path` to read back as `want`. Panics — loudly, as a *timeout* — if
+/// it never does.
+///
+/// Panicking is the whole point. This used to poll for 2s and then silently
+/// return whatever it last read, leaving the caller to `assert_eq!` on it. When
+/// the editor never wrote (a slow, loaded CI runner), the last read was the
+/// content the test had seeded, so the failure surfaced as
+/// `assertion left == right failed` with the *unmodified input* as `left` —
+/// byte-for-byte identical to what a genuine logic bug would produce. A timing
+/// flake was indistinguishable from a regression, and cost real time to tell
+/// apart (a rerun of the same commit passed).
+///
+/// So: a timeout now says it is a timeout, and shows whether the file changed
+/// at all while we waited. It deliberately does not guess which kind of failure
+/// it is — `last read` is not a computed answer, it is just whatever happened to
+/// be on disk when the clock ran out.
+pub fn wait_for_contents(path: &Path, want: &str) -> String {
+    let timeout = write_timeout();
+    let deadline = std::time::Instant::now() + timeout;
+    let first = std::fs::read_to_string(path).unwrap_or_default();
+    let mut last = first.clone();
+    loop {
+        if last == want {
+            return last;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        last = std::fs::read_to_string(path).unwrap_or_default();
+    }
+    let churn = if last == first {
+        "no — the file never changed while we waited, so the editor most likely \
+         never processed the keys or never ran its write command"
+    } else {
+        "yes — the file was written at least once, but never with the expected content"
+    };
+    panic!(
+        "TIMED OUT after {timeout:?} waiting for the editor to write the expected content.\n\
+         \n  path:      {}\
+         \n  expected:  {want:?}\
+         \n  last read: {last:?}\
+         \n  changed while waiting: {churn}\n\
+         \nThis is a harness timeout, NOT a value comparison. Do not read `last read`\n\
+         as the editor's answer — if nothing was ever written it is just the seeded\n\
+         input, which looks exactly like a wrong result. Re-run before concluding\n\
+         this is a regression; raise E2E_WRITE_MS if the machine is slow.",
+        path.display(),
+    );
+}
+
+/// Poll `path` toward `want`, returning whatever it last read when the deadline
+/// passes instead of panicking.
+///
+/// For the few tests whose real assertion is *weaker* than exact equality (the
+/// content only has to start with something, or be empty-ish). There `want` is a
+/// convergence hint rather than the expected value, so a non-match is not
+/// automatically a failure and the caller must do its own asserting.
+///
+/// Prefer [`wait_for_contents`] everywhere else — it cannot misreport a timeout.
+pub fn poll_contents(path: &Path, want: &str) -> String {
+    let deadline = std::time::Instant::now() + write_timeout();
+    let mut last = std::fs::read_to_string(path).unwrap_or_default();
+    while std::time::Instant::now() < deadline {
+        if last == want {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        last = std::fs::read_to_string(path).unwrap_or_default();
+    }
+    last
+}
+
 // ── TerminalSession ───────────────────────────────────────────────────────────
 
 /// An active hjkl session running under a real pty.
@@ -706,5 +792,91 @@ mod tests {
         assert_eq!(vim_notation_to_bytes("<C-S-Right>"), b"\x1b[1;6C");
         assert_eq!(vim_notation_to_bytes("<C-S-Left>"), b"\x1b[1;6D");
         assert_eq!(vim_notation_to_bytes("<C-Delete>"), b"\x1b[3;5~");
+    }
+
+    // ── Timeout reporting ────────────────────────────────────────────────────
+    //
+    // The harness itself is what misreported: a timeout used to come back as a
+    // value mismatch, so a slow runner was indistinguishable from a regression.
+    // These pin the reporting, not the editor.
+
+    /// Give the file a short write budget so the timeout path runs fast.
+    /// Nextest runs each test in its own process, so this cannot leak.
+    fn short_write_budget() {
+        unsafe { std::env::set_var("E2E_WRITE_MS", "80") };
+    }
+
+    #[test]
+    fn wait_for_contents_timeout_says_it_timed_out() {
+        short_write_budget();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"seeded\n").unwrap();
+        f.flush().unwrap();
+
+        let err = std::panic::catch_unwind(|| wait_for_contents(f.path(), "never happens\n"))
+            .expect_err("must panic rather than return a non-matching value");
+        let msg = err
+            .downcast_ref::<String>()
+            .expect("panic payload should be a String");
+
+        // The whole point: it must announce itself as a timeout, and must not
+        // let the caller mistake the seeded input for the editor's answer.
+        assert!(msg.contains("TIMED OUT"), "got: {msg}");
+        assert!(msg.contains("NOT a value comparison"), "got: {msg}");
+        assert!(
+            msg.contains("never changed while we waited"),
+            "an untouched file must be reported as never written; got: {msg}"
+        );
+        assert!(
+            msg.contains("\"seeded\\n\""),
+            "must show the last read; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn wait_for_contents_reports_a_write_that_landed_wrong() {
+        short_write_budget();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"seeded\n").unwrap();
+        f.flush().unwrap();
+        let path = f.path().to_owned();
+
+        // Something writes, but not what we asked for. That is a real mismatch,
+        // and the message must NOT blame timing for it.
+        std::thread::spawn({
+            let path = path.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(20));
+                std::fs::write(&path, b"wrong\n").unwrap();
+            }
+        });
+
+        let err = std::panic::catch_unwind(move || wait_for_contents(&path, "right\n"))
+            .expect_err("must panic");
+        let msg = err.downcast_ref::<String>().unwrap();
+        assert!(
+            msg.contains("written at least once, but never with the expected content"),
+            "a file that changed must not be reported as never written; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn poll_contents_returns_last_read_instead_of_panicking() {
+        short_write_budget();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"seeded\n").unwrap();
+        f.flush().unwrap();
+
+        // The weaker-assertion escape hatch: no panic, caller gets what is there.
+        assert_eq!(poll_contents(f.path(), "never happens\n"), "seeded\n");
+    }
+
+    #[test]
+    fn wait_for_contents_returns_as_soon_as_it_matches() {
+        short_write_budget();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"done\n").unwrap();
+        f.flush().unwrap();
+        assert_eq!(wait_for_contents(f.path(), "done\n"), "done\n");
     }
 }

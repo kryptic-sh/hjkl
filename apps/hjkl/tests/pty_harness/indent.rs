@@ -8,10 +8,9 @@
 //! config. Expected outputs were captured from `nvim --headless` with the same
 //! settings (see `crates/hjkl-compat-oracle/corpus/tier2_indent_count.toml`).
 
-use super::harness::TerminalSession;
+use super::harness::{TerminalSession, wait_for_contents};
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
 
 /// Create a writable temp file seeded with `content`. The returned
 /// `NamedTempFile` must be kept alive for the path to stay valid.
@@ -24,21 +23,6 @@ fn seed(content: &str) -> (tempfile::NamedTempFile, PathBuf) {
     f.flush().expect("flush temp file");
     let path = f.path().to_owned();
     (f, path)
-}
-
-/// Poll the file until it equals `want` (or time out), returning the last read.
-/// `:w` lands asynchronously relative to the pty write, so retry briefly.
-fn wait_for_contents(path: &Path, want: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        last = std::fs::read_to_string(path).unwrap_or_default();
-        if last == want {
-            return last;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    last
 }
 
 /// Spawn hjkl on `content`, pin indent settings, run `keys`, write, and return

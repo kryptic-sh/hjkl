@@ -3,10 +3,9 @@
 //! Spawns hjkl with `--keybindings vscode` on a temp file, types text, saves
 //! with Ctrl+S, and asserts both the on-disk result and the status badge.
 
-use super::harness::TerminalSession;
+use super::harness::{TerminalSession, poll_contents, wait_for_contents};
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
 
 /// Create a writable temp file seeded with `content`.
 fn seed(content: &str) -> (tempfile::NamedTempFile, PathBuf) {
@@ -18,20 +17,6 @@ fn seed(content: &str) -> (tempfile::NamedTempFile, PathBuf) {
     f.flush().expect("flush temp file");
     let path = f.path().to_owned();
     (f, path)
-}
-
-/// Poll the file until its content equals `want` (or 2 s elapses).
-fn wait_for_contents(path: &Path, want: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        last = std::fs::read_to_string(path).unwrap_or_default();
-        if last == want {
-            return last;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    last
 }
 
 /// Spawn hjkl on an empty temp file in VSCode mode, type text, Ctrl+S to save.
@@ -91,7 +76,7 @@ fn vscode_ctrl_z_undo() {
     s.keys("<C-s>"); // save the empty buffer
 
     // The buffer should be empty again (undo reverted the full insert).
-    let got = wait_for_contents(&path, "");
+    let got = poll_contents(&path, "");
     assert!(
         got.is_empty(),
         "after Ctrl+Z undo of 'hello', disk should be empty; got: {got:?}"
@@ -118,7 +103,7 @@ fn vscode_ctrl_z_undo_word_granularity() {
 
     // After one undo, "bar" should be gone but "foo" (possibly with trailing
     // space) should remain — the whole session was NOT reverted.
-    let got = wait_for_contents(&path, "foo ");
+    let got = poll_contents(&path, "foo ");
     assert!(
         got.starts_with("foo") && !got.contains("bar"),
         "word-granularity undo should leave 'foo[ ]' on disk, not revert all; got: {got:?}"
@@ -716,7 +701,7 @@ fn vim_ctrl_bracket_csi_u_acts_as_esc() {
     s.keys(":wq<Enter>");
 
     // File should be empty (dd deleted the "hello" line).
-    let got = wait_for_contents(&path, "");
+    let got = poll_contents(&path, "");
     assert!(
         got.is_empty() || got == "\n",
         "after dd+:wq the file should be empty or just a newline; got: {got:?}"
@@ -1100,7 +1085,7 @@ fn vscode_undo_word_granularity_two_words() {
     s.keys("<C-z>");
     s.keys("<C-s>");
 
-    let got = wait_for_contents(&path, "one \n");
+    let got = poll_contents(&path, "one \n");
     assert!(
         got.starts_with("one") && !got.contains("two") && !got.contains("three"),
         "two Ctrl+Z presses should remove 'three' then 'two', leaving 'one[ ]'; got: {got:?}"
