@@ -21,7 +21,7 @@ miniz_oxide = "0.9"
 libc = "0.2"
 
 [dev-dependencies]
-pollster = "0.4"
+pollster = "1.0"
 
 [package.metadata.docs.rs]
 all-features = true
