@@ -2026,8 +2026,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // cannot track exactly is dropped, never guessed — see `selection_shift`.
         if !self.extra_cursors.is_empty() {
             let edit_ref = &edit;
+            // `JoinLines` geometry depends on how long each row was *before* the
+            // join, so the metrics have to be read here — after `apply_buffer_edit`
+            // they describe the wrong buffer.
+            let rows = buf_row_count(&self.buffer);
+            let lens: Vec<usize> = (0..rows).map(|r| buf_line_chars(&self.buffer, r)).collect();
             self.extra_cursors.retain_mut(|c| {
-                match crate::selection_shift::shift_position(*c, edit_ref) {
+                match crate::selection_shift::shift_position(
+                    *c,
+                    edit_ref,
+                    |r| lens.get(r).copied().unwrap_or(0),
+                    rows,
+                ) {
                     Some(shifted) => {
                         *c = shifted;
                         true

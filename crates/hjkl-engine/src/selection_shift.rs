@@ -19,10 +19,14 @@
 //! single-cursor, which is visible and harmless; guessing corrupts the buffer,
 //! which is neither.
 //!
-//! Today `None` is returned for the four structural edits — `JoinLines`,
-//! `SplitLines`, `InsertBlock`, `DeleteBlockChunks`. Their geometry is
-//! row-restructuring and needs pre-edit line metrics to model exactly; that is
-//! the next slice, not a silent approximation in this one.
+//! Today `None` is returned only for `SplitLines`, which is the undo-inverse of
+//! a join: it is emitted when history rewinds, not when a user edits, and undo
+//! restores a whole snapshot without preserving secondary carets anyway.
+//!
+//! `JoinLines`, `InsertBlock` and `DeleteBlockChunks` ARE modelled — they mirror
+//! `hjkl_buffer`'s own geometry, and they matter: vim's `J` is a `JoinLines`, and
+//! visual-block `I`/`A` are the block edits, so dropping carets on those would
+//! make multi-cursor collapse under exactly the operations that need it most.
 //!
 //! # Position semantics
 //!
@@ -106,9 +110,85 @@ fn after_delete_block(p: Position, start: Position, end: Position) -> Position {
     }
 }
 
+/// Where `p` lands after `count` rows are joined onto `row`.
+///
+/// Mirrors `hjkl_buffer::Edit::JoinLines` exactly: each step drops the `\n`
+/// ending `row` and inserts a single space **only when both sides are
+/// non-empty**. (It does not strip leading whitespace — vim's `J` does, this
+/// buffer's `JoinLines` does not, and guessing the wrong one here would mis-place
+/// every caret on a joined row.)
+///
+/// `line_len` gives the **pre-edit** char length of a row.
+fn after_join(
+    p: Position,
+    row: usize,
+    count: usize,
+    with_space: bool,
+    line_len: &impl Fn(usize) -> usize,
+    rows: usize,
+) -> Position {
+    if p.row < row {
+        return p;
+    }
+    // Walk the joins, tracking where each joined row's text lands in the merged
+    // row. `start_col[k]` is the column original row `row + k` begins at.
+    let mut cur_len = line_len(row);
+    let mut start_col = Vec::with_capacity(count);
+    let mut joined = 0usize;
+    for k in 1..=count.max(1) {
+        if row + k >= rows {
+            break;
+        }
+        let next_len = line_len(row + k);
+        let space = with_space && cur_len > 0 && next_len > 0;
+        start_col.push(cur_len + usize::from(space));
+        cur_len += usize::from(space) + next_len;
+        joined += 1;
+    }
+    if joined == 0 || p.row == row {
+        // The anchor row keeps its columns; text is only appended after it.
+        return p;
+    }
+    if p.row <= row + joined {
+        let k = p.row - row; // 1..=joined
+        Position::new(row, start_col[k - 1] + p.col)
+    } else {
+        Position::new(p.row - joined, p.col)
+    }
+}
+
+/// Where `p` lands after a block insert: `chunks[i]` spliced at
+/// `(at.row + i, at.col)`. Rows shorter than `at.col` are space-padded first,
+/// but every position on such a row sits left of `at.col` and so cannot move.
+fn after_insert_block(p: Position, at: Position, chunks: &[String]) -> Position {
+    if p.row < at.row || p.row >= at.row + chunks.len() || p.col < at.col {
+        return p;
+    }
+    let width = chunks[p.row - at.row].chars().count();
+    Position::new(p.row, p.col + width)
+}
+
+/// Where `p` lands after a block delete: `widths[i]` chars removed at
+/// `(at.row + i, at.col)`.
+fn after_delete_block_chunks(p: Position, at: Position, widths: &[usize]) -> Position {
+    if p.row < at.row || p.row >= at.row + widths.len() || p.col <= at.col {
+        return p;
+    }
+    let w = widths[p.row - at.row];
+    if p.col >= at.col + w {
+        Position::new(p.row, p.col - w)
+    } else {
+        // Inside the removed chunk.
+        Position::new(p.row, at.col)
+    }
+}
+
 /// Rewrite `p` so it still points at the same text after `edit` lands, or
 /// `None` when the edit's geometry is not modelled and the position must be
 /// dropped rather than guessed.
+///
+/// `line_len` returns the **pre-edit** char length of a row, and `rows` the
+/// pre-edit row count. Only the row-restructuring edits consult them.
 ///
 /// # Units
 ///
@@ -118,7 +198,12 @@ fn after_delete_block(p: Position, start: Position, end: Position) -> Position {
 /// would silently mis-shift every position sitting after a multi-byte
 /// character. Converting between the two units needs the buffer, so it belongs
 /// at the call boundary, not here.
-pub fn shift_position(p: Position, edit: &Edit) -> Option<Position> {
+pub fn shift_position(
+    p: Position,
+    edit: &Edit,
+    line_len: impl Fn(usize) -> usize,
+    rows: usize,
+) -> Option<Position> {
     match edit {
         // A `\n` typed as a char restructures rows exactly like the 1-char
         // string would, so route both through the same insert geometry.
@@ -137,12 +222,18 @@ pub fn shift_position(p: Position, edit: &Edit) -> Option<Position> {
             let deleted = after_delete_char(p, *start, *end);
             Some(after_insert(deleted, *start, with))
         }
-        // Row-restructuring edits: exact tracking needs pre-edit line metrics.
-        // Drop rather than approximate — see module docs.
-        Edit::JoinLines { .. }
-        | Edit::SplitLines { .. }
-        | Edit::InsertBlock { .. }
-        | Edit::DeleteBlockChunks { .. } => None,
+        Edit::JoinLines {
+            row,
+            count,
+            with_space,
+        } => Some(after_join(p, *row, *count, *with_space, &line_len, rows)),
+        Edit::InsertBlock { at, chunks } => Some(after_insert_block(p, *at, chunks)),
+        Edit::DeleteBlockChunks { at, widths } => Some(after_delete_block_chunks(p, *at, widths)),
+        // `SplitLines` is the undo-inverse of a join, emitted when history rewinds
+        // rather than when a user edits. Undo restores a whole snapshot and does
+        // not preserve secondary carets anyway, so modelling it would buy nothing
+        // real — drop rather than write geometry no test could justify.
+        Edit::SplitLines { .. } => None,
     }
 }
 
@@ -166,9 +257,16 @@ mod tests {
             kind,
         }
     }
-    /// Shift a bare position.
+    /// Shift a bare position against a buffer with no interesting geometry.
+    /// (`line_len` / `rows` only matter for `JoinLines`; the join tests below
+    /// pass real metrics.)
     fn head(row: usize, col: usize, edit: &Edit) -> Option<Position> {
-        shift_position(p(row, col), edit)
+        shift_position(p(row, col), edit, |_| 0, 0)
+    }
+
+    /// Shift against explicit pre-edit line lengths.
+    fn head_in(row: usize, col: usize, edit: &Edit, lens: &[usize]) -> Option<Position> {
+        shift_position(p(row, col), edit, |r| lens[r], lens.len())
     }
 
     // ── Insert ───────────────────────────────────────────────────────────────
@@ -344,35 +442,135 @@ mod tests {
 
     // ── Untracked edits drop rather than guess ───────────────────────────────
 
+    // ── Join ─────────────────────────────────────────────────────────────────
+
     #[test]
-    fn structural_edits_drop_the_selection_instead_of_guessing() {
-        // Dropping degrades multi-cursor to single-cursor (visible, harmless).
-        // Guessing would leave a selection pointing at the wrong text and let a
-        // later edit apply somewhere the user never asked for.
-        let joins = Edit::JoinLines {
+    fn join_folds_the_next_row_up_after_the_anchor_plus_a_space() {
+        // rows: "abc"(3) "de"(2). J -> "abc de"; a caret at (1,1) lands at col 4+1.
+        let e = Edit::JoinLines {
+            row: 0,
+            count: 1,
+            with_space: true,
+        };
+        assert_eq!(head_in(1, 1, &e, &[3, 2]), Some(p(0, 5)));
+    }
+
+    #[test]
+    fn join_without_space_folds_flush() {
+        let e = Edit::JoinLines {
+            row: 0,
+            count: 1,
+            with_space: false,
+        };
+        assert_eq!(head_in(1, 1, &e, &[3, 2]), Some(p(0, 4)));
+    }
+
+    #[test]
+    fn join_inserts_no_space_when_a_side_is_empty() {
+        // The buffer only inserts a space when BOTH sides are non-empty.
+        let e = Edit::JoinLines {
+            row: 0,
+            count: 1,
+            with_space: true,
+        };
+        assert_eq!(
+            head_in(1, 1, &e, &[0, 2]),
+            Some(p(0, 1)),
+            "empty prefix -> no space"
+        );
+    }
+
+    #[test]
+    fn join_leaves_the_anchor_rows_own_columns_alone() {
+        let e = Edit::JoinLines {
+            row: 0,
+            count: 1,
+            with_space: true,
+        };
+        assert_eq!(head_in(0, 2, &e, &[3, 2]), Some(p(0, 2)));
+    }
+
+    #[test]
+    fn join_pulls_rows_below_the_joined_span_up() {
+        let e = Edit::JoinLines {
+            row: 0,
+            count: 1,
+            with_space: true,
+        };
+        assert_eq!(head_in(3, 1, &e, &[3, 2, 4, 4]), Some(p(2, 1)));
+    }
+
+    #[test]
+    fn multi_row_join_accumulates_each_rows_offset() {
+        // "ab"(2) "cd"(2) "ef"(2), J J -> "ab cd ef".
+        // row2 col0 -> after "ab"+sp+"cd"+sp = 6.
+        let e = Edit::JoinLines {
             row: 0,
             count: 2,
             with_space: true,
         };
-        assert_eq!(shift_position(p(5, 0), &joins), None);
+        assert_eq!(head_in(2, 0, &e, &[2, 2, 2]), Some(p(0, 6)));
+    }
 
-        let splits = Edit::SplitLines {
+    // ── Block insert / delete (visual-block I / A / d) ───────────────────────
+
+    #[test]
+    fn block_insert_pushes_columns_at_or_after_the_block_right() {
+        let e = Edit::InsertBlock {
+            at: p(0, 2),
+            chunks: vec!["xx".into(), "xx".into()],
+        };
+        assert_eq!(head(1, 4, &e), Some(p(1, 6)));
+    }
+
+    #[test]
+    fn block_insert_leaves_columns_before_the_block_alone() {
+        let e = Edit::InsertBlock {
+            at: p(0, 2),
+            chunks: vec!["xx".into(), "xx".into()],
+        };
+        assert_eq!(head(1, 1, &e), Some(p(1, 1)));
+    }
+
+    #[test]
+    fn block_insert_leaves_rows_outside_the_block_alone() {
+        let e = Edit::InsertBlock {
+            at: p(0, 2),
+            chunks: vec!["xx".into()],
+        };
+        assert_eq!(head(5, 4, &e), Some(p(5, 4)));
+    }
+
+    #[test]
+    fn block_chunk_delete_pulls_columns_after_the_chunk_left() {
+        let e = Edit::DeleteBlockChunks {
+            at: p(0, 2),
+            widths: vec![2, 2],
+        };
+        assert_eq!(head(1, 6, &e), Some(p(1, 4)));
+    }
+
+    #[test]
+    fn block_chunk_delete_collapses_columns_inside_the_chunk() {
+        let e = Edit::DeleteBlockChunks {
+            at: p(0, 2),
+            widths: vec![3],
+        };
+        assert_eq!(head(0, 3, &e), Some(p(0, 2)));
+    }
+
+    // ── The one edit still dropped ───────────────────────────────────────────
+
+    #[test]
+    fn split_lines_drops_rather_than_guessing() {
+        // `SplitLines` is the undo-inverse of a join — emitted when history
+        // rewinds, not when a user edits. Undo restores a snapshot and does not
+        // preserve secondary carets anyway, so there is nothing real to model.
+        let e = Edit::SplitLines {
             row: 0,
             cols: vec![3],
             inserted_space: true,
         };
-        assert_eq!(shift_position(p(5, 0), &splits), None);
-
-        let block_ins = Edit::InsertBlock {
-            at: p(0, 0),
-            chunks: vec!["x".into()],
-        };
-        assert_eq!(shift_position(p(5, 0), &block_ins), None);
-
-        let block_del = Edit::DeleteBlockChunks {
-            at: p(0, 0),
-            widths: vec![1],
-        };
-        assert_eq!(shift_position(p(5, 0), &block_del), None);
+        assert_eq!(shift_position(p(5, 0), &e, |_| 0, 0), None);
     }
 }
