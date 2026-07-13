@@ -76,6 +76,7 @@ pub(crate) mod command;
 pub(crate) mod comment;
 pub(crate) mod dot_repeat;
 pub(crate) mod entry;
+pub(crate) mod insert_bridges;
 pub(crate) mod insert_ops;
 pub(crate) mod jumplist;
 pub(crate) mod linewise;
@@ -85,7 +86,6 @@ pub(crate) mod operator;
 pub(crate) mod range_ops;
 pub(crate) mod sneak;
 pub(crate) mod state;
-pub(crate) mod tag;
 pub(crate) mod text_object;
 pub(crate) mod text_object_ops;
 pub(crate) mod visual;
@@ -108,6 +108,7 @@ pub(crate) use command::*;
 pub(crate) use comment::*;
 pub(crate) use dot_repeat::*;
 pub(crate) use entry::*;
+pub(crate) use insert_bridges::*;
 pub(crate) use insert_ops::*;
 pub(crate) use jumplist::*;
 pub(crate) use linewise::*;
@@ -117,7 +118,6 @@ pub(crate) use operator::*;
 pub(crate) use range_ops::*;
 pub(crate) use sneak::*;
 pub(crate) use state::*;
-pub(crate) use tag::*;
 pub(crate) use text_object::*;
 pub(crate) use text_object_ops::*;
 pub(crate) use visual::*;
@@ -126,7 +126,8 @@ pub(crate) use visual_ops::*;
 // The vim discipline's actual public API.
 pub use motion::parse_motion;
 pub use state::{MAX_COUNT, VimState};
-pub use tag::matching_tag_pair;
+// `matching_tag_pair` and the tag-matching group moved to `hjkl_engine::tag`
+// (#265): a pure buffer query any discipline can use, not vim grammar.
 pub use visual::{drop_blame_if_left_normal, op_is_change};
 
 use hjkl_engine::Editor;

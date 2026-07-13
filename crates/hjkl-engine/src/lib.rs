@@ -32,6 +32,7 @@ mod registers;
 pub mod rope_util;
 pub mod search;
 pub mod substitute;
+pub mod tag;
 pub mod types;
 mod viewport_math;
 
@@ -59,6 +60,7 @@ pub use types::{
 // `hjkl-vim-types`, which both crates name and neither owns.
 pub use abbrev::{Abbrev, AbbrevTrigger};
 pub use search::SearchPrompt;
+pub use tag::matching_tag_pair;
 pub use types::{InsertDir, ScrollDir};
 
 pub use hjkl_vim_types::{

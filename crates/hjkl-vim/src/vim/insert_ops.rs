@@ -2,6 +2,8 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
+use hjkl_engine::tag::is_html_filetype;
+
 /// Return the filetype-gated autopair close character for `open`, or `None`
 /// when no pairing applies.
 ///
@@ -104,13 +106,6 @@ pub(crate) fn detect_code_fence_opener(line: &str, cursor_col: usize) -> Option<
         return None;
     }
     Some("`".repeat(backtick_run))
-}
-/// Filetypes that get HTML/XML-family treatment (`<` pairing + tag autoclose).
-pub(crate) fn is_html_filetype(ft: &str) -> bool {
-    matches!(
-        ft,
-        "html" | "xml" | "svg" | "jsx" | "tsx" | "vue" | "svelte"
-    )
 }
 #[cfg(test)]
 mod abbrev_tests {

@@ -9,6 +9,7 @@ use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_set_cursor_rc};
+use hjkl_engine::tag::{is_html_filetype, scan_tag_opener};
 
 /// Open the `/` (forward) or `?` (backward) search prompt. Clears any
 /// live search highlight until the user commits a query. `last_search`
