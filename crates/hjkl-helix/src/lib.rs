@@ -2,47 +2,43 @@
 //!
 //! The second discipline to run on `hjkl-engine`, and the reason the engine was
 //! made discipline-agnostic in the first place: it exists to prove that a
-//! non-vim grammar needs **no engine changes**. This crate implements one trait
-//! ([`hjkl_engine::DisciplineState`]) and drives the editor through its public
-//! API. Nothing in `hjkl-engine` knows this crate exists.
+//! non-vim grammar needs no engine *special-casing*. This crate implements one
+//! trait ([`hjkl_engine::DisciplineState`]) and drives the editor through its
+//! public API. Nothing in `hjkl-engine` knows this crate exists.
 //!
 //! # Selection model
 //!
 //! Helix is selection-first: every motion produces a *selection*, and operators
-//! act on it. A selection is `(anchor, head)`.
+//! act on it. A selection is `(anchor, head)`, both ends inclusive.
 //!
-//! The engine already stores the **heads** — the primary cursor plus
-//! [`Editor::extra_cursors`] (#63). So this crate stores only the **anchors**.
-//! That is the same split vim already uses for visual mode (its `visual_anchor`
-//! lives in `VimState`, not the engine), and it means multi-cursor comes for
-//! free: the engine shifts every head across every edit, and
-//! [`Editor::edit_at_all_cursors`] fans an edit out over all of them.
+//! - The **secondary** selections live in the engine, as
+//!   [`hjkl_engine::Sel`]. Both ends, together — because the engine may DROP a
+//!   selection it cannot track across an edit, and a discipline-side `Vec` of
+//!   anchors running alongside the engine's carets would silently desync the
+//!   moment that happened, pairing anchors with the wrong heads and landing the
+//!   next edit on text nobody selected.
+//! - The **primary** selection is asymmetric: its head is the engine's cursor
+//!   ([`Editor::cursor`]) and its anchor is [`HelixState::anchor`], here. That
+//!   is the same split vim uses for visual mode (its `visual_anchor` lives in
+//!   `VimState`), it predates multi-cursor, and unifying it would mean rewriting
+//!   vim's visual mode. It stays. [`sels`] and [`set_sels`] are the seam that
+//!   makes the asymmetry invisible to the rest of this crate.
 //!
-//! # Scope
-//!
-//! This is a working scaffold, not feature-parity with Helix. It implements the
-//! grammar needed to exercise multi-cursor end to end: motions, `v` select mode,
-//! `d`, `i`/`a`, `C` (add cursor below), `,` (collapse), and insert-mode typing
-//! that lands at *every* cursor.
-//!
-//! What it deliberately does not do yet: ranged selections on the *secondary*
-//! cursors. The primary carries an anchor, the secondaries are bare carets. A
-//! secondary anchor would have to be kept in lockstep with `extra_cursors`,
-//! which the engine may drop mid-edit — that needs a real answer, not a
-//! hopeful `Vec` that silently desyncs. See the module TODO.
-//!
-//! [`Editor::extra_cursors`]: hjkl_engine::Editor::extra_cursors
-//! [`Editor::edit_at_all_cursors`]: hjkl_engine::Editor::edit_at_all_cursors
+//! [`Editor::cursor`]: hjkl_engine::Editor::cursor
 
 use hjkl_buffer::{Buffer, Edit, MotionKind, Position};
 use hjkl_engine::input::{Input, Key};
 use hjkl_engine::types::Host;
-use hjkl_engine::{CoarseMode, Editor};
+use hjkl_engine::{CoarseMode, Editor, Sel};
 
+mod doc;
 mod motion;
 mod normal;
+mod ops;
+mod word;
 
 pub use motion::Motion;
+pub use word::WordTarget;
 
 /// Helix's mode set. Smaller than vim's: there is no operator-pending mode,
 /// because the selection *is* the operand — you select first, then act.
@@ -57,13 +53,31 @@ pub enum HelixMode {
     Select,
 }
 
+/// A chord waiting for its second key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pending {
+    /// `g` — goto mode (`gg`, `ge`, `gh`, `gl`, `gs`).
+    Goto,
+    /// `f` / `t` / `F` / `T` — waiting for the char to find.
+    Find { till: bool, fwd: bool },
+    /// `r` — waiting for the replacement char.
+    Replace,
+}
+
 /// The helix FSM's state. Lives in the editor's type-erased discipline slot.
 #[derive(Debug, Default)]
 pub struct HelixState {
     pub mode: HelixMode,
-    /// Anchor of the **primary** selection. The head is the engine's cursor, so
-    /// `anchor == cursor` means a caret with no extent.
+    /// Anchor of the **primary** selection. Its head is the engine's cursor, so
+    /// `anchor == cursor` means a caret with no extent. See the crate docs for
+    /// why only this one lives outside the engine.
     pub anchor: Position,
+    /// Count prefix under construction (`3w`). `0` means "no count".
+    pub(crate) count: usize,
+    /// A chord waiting for its second key.
+    pub(crate) pending: Option<Pending>,
+    /// The last `f` / `t` / `F` / `T`, kept for a future repeat binding.
+    pub(crate) last_find: Option<(char, bool, bool)>,
 }
 
 impl HelixState {
@@ -84,9 +98,11 @@ impl hjkl_engine::DisciplineState for HelixState {
         }
     }
 
-    /// Idle for helix is Normal with a collapsed selection.
+    /// Idle for helix is Normal with no half-typed count or chord.
     fn reset_to_idle(&mut self) {
         self.mode = HelixMode::Normal;
+        self.count = 0;
+        self.pending = None;
     }
 
     /// Only the mode. Deliberately weaker than `reset_to_idle` — see the trait
@@ -150,6 +166,32 @@ pub(crate) fn head<H: Host>(ed: &Editor<Buffer, H>) -> Position {
     Position::new(row, col)
 }
 
+// ─── The selection set ──────────────────────────────────────────────────────
+
+/// Every selection, **primary first**.
+///
+/// The one place the primary's split storage (head in the engine, anchor here)
+/// is reassembled. Everything downstream — motions, operators — sees a flat list
+/// and treats the primary like any other selection.
+pub(crate) fn sels<H: Host>(ed: &Editor<Buffer, H>) -> Vec<Sel> {
+    let mut out = Vec::with_capacity(1 + ed.extra_selections().len());
+    out.push(Sel::new(hx(ed).anchor, head(ed)));
+    out.extend_from_slice(ed.extra_selections());
+    out
+}
+
+/// Write the selection set back. `sels[0]` becomes the primary.
+///
+/// The cursor is moved first on purpose: [`Editor::set_extra_selections`] drops
+/// any secondary whose head collides with the primary's, and it can only do that
+/// against the *new* primary.
+pub(crate) fn set_sels<H: Host>(ed: &mut Editor<Buffer, H>, sels: &[Sel]) {
+    let Some(primary) = sels.first() else { return };
+    ed.set_cursor_quiet(primary.head.row, primary.head.col);
+    hx_mut(ed).anchor = primary.anchor;
+    ed.set_extra_selections(sels[1..].to_vec());
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────────
 
 /// Drive the helix FSM with one [`Input`]. Returns `true` if it was consumed.
@@ -179,6 +221,7 @@ fn step_insert<H: Host>(ed: &mut Editor<Buffer, H>, input: Input) -> bool {
                 at,
                 text: c.to_string(),
             });
+            sync_anchor_to_head(ed);
             true
         }
         Key::Enter => {
@@ -187,6 +230,7 @@ fn step_insert<H: Host>(ed: &mut Editor<Buffer, H>, input: Input) -> bool {
                 at,
                 text: "\n".to_string(),
             });
+            sync_anchor_to_head(ed);
             true
         }
         Key::Backspace => {
@@ -206,8 +250,16 @@ fn step_insert<H: Host>(ed: &mut Editor<Buffer, H>, input: Input) -> bool {
                     kind: MotionKind::Char,
                 }
             });
+            sync_anchor_to_head(ed);
             true
         }
         _ => false,
     }
+}
+
+/// Insert mode has no selection: keep the primary anchor glued to the caret so
+/// leaving insert does not resurrect a stale range.
+fn sync_anchor_to_head<H: Host>(ed: &mut Editor<Buffer, H>) {
+    let h = head(ed);
+    hx_mut(ed).anchor = h;
 }

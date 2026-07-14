@@ -35,6 +35,66 @@
 
 use hjkl_buffer::{Edit, MotionKind, Position};
 
+/// One selection: an `anchor` (the fixed end) and a `head` (the end a motion
+/// moves). Both are **inclusive** char positions — `anchor == head` is a bare
+/// caret, and a selection with extent covers `[start, end]` inclusive of both.
+///
+/// # Units
+///
+/// Char columns, like [`hjkl_buffer::Edit`] and `Buffer::cursor` — NOT the
+/// grapheme columns of [`crate::types::Pos`]. Mixing the two is silently wrong
+/// on multi-byte text.
+///
+/// # Why the engine owns the anchor
+///
+/// A discipline could keep its own `Vec` of anchors beside `Editor`'s secondary
+/// carets, but [`shift_position`] may DROP a caret it cannot track, and a
+/// parallel `Vec` would then desync: anchors and heads would pair up wrong and
+/// the next edit would land on text the user never selected. Keeping both ends
+/// in one struct, shifted together by [`shift_sel`], makes that class of bug
+/// unrepresentable — either the whole selection survives the edit or the whole
+/// selection is dropped.
+///
+/// The **primary** selection is deliberately asymmetric: its head is
+/// `Buffer::cursor` and its anchor lives in the discipline's own state (vim's
+/// `visual_anchor` in `VimState`, helix's `anchor` in `HelixState`). That split
+/// predates multi-cursor and unifying it would rewrite vim's visual mode, so it
+/// stays. Only the *secondary* selections live here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sel {
+    /// The end that stays put while a motion runs.
+    pub anchor: Position,
+    /// The end a motion moves; where an edit is applied.
+    pub head: Position,
+}
+
+impl Sel {
+    /// A selection from `anchor` to `head`.
+    pub fn new(anchor: Position, head: Position) -> Self {
+        Self { anchor, head }
+    }
+
+    /// A zero-width selection: anchor and head on the same position.
+    pub fn caret(p: Position) -> Self {
+        Self { anchor: p, head: p }
+    }
+
+    /// True when the selection has no extent.
+    pub fn is_caret(&self) -> bool {
+        self.anchor == self.head
+    }
+
+    /// The earlier of the two ends, in document order.
+    pub fn start(&self) -> Position {
+        self.anchor.min(self.head)
+    }
+
+    /// The later of the two ends, in document order.
+    pub fn end(&self) -> Position {
+        self.anchor.max(self.head)
+    }
+}
+
 /// Order positions in document order.
 fn key(p: Position) -> (usize, usize) {
     (p.row, p.col)
@@ -235,6 +295,27 @@ pub fn shift_position(
         // real — drop rather than write geometry no test could justify.
         Edit::SplitLines { .. } => None,
     }
+}
+
+/// Rewrite BOTH ends of `sel` so it still covers the same text after `edit`,
+/// or `None` when *either* end is untrackable.
+///
+/// All-or-nothing is the whole point: a selection whose head survived and whose
+/// anchor did not is worse than no selection at all — it would still apply the
+/// next edit, just over a range the user never selected. Half-tracked is not a
+/// state this type can be in.
+///
+/// See [`shift_position`] for the contract on `line_len` / `rows` (both are
+/// **pre-edit** geometry).
+pub fn shift_sel(
+    sel: Sel,
+    edit: &Edit,
+    line_len: impl Fn(usize) -> usize,
+    rows: usize,
+) -> Option<Sel> {
+    let anchor = shift_position(sel.anchor, edit, &line_len, rows)?;
+    let head = shift_position(sel.head, edit, &line_len, rows)?;
+    Some(Sel { anchor, head })
 }
 
 #[cfg(test)]
@@ -560,6 +641,52 @@ mod tests {
     }
 
     // ── The one edit still dropped ───────────────────────────────────────────
+
+    // ── Selections shift as a unit ───────────────────────────────────────────
+
+    #[test]
+    fn a_selection_shifts_both_of_its_ends() {
+        // "ab|cdef|gh": insert 2 chars at col 0 -> both ends slide right by 2.
+        let s = Sel::new(p(0, 2), p(0, 5));
+        assert_eq!(
+            shift_sel(s, &ins(0, 0, "XY"), |_| 0, 1),
+            Some(Sel::new(p(0, 4), p(0, 7)))
+        );
+    }
+
+    #[test]
+    fn a_backwards_selection_keeps_its_direction() {
+        let s = Sel::new(p(0, 5), p(0, 2));
+        let out = shift_sel(s, &ins(0, 0, "XY"), |_| 0, 1).unwrap();
+        assert_eq!(out.anchor, p(0, 7));
+        assert_eq!(out.head, p(0, 4));
+        assert!(out.anchor > out.head, "direction must survive the shift");
+    }
+
+    #[test]
+    fn a_selection_whose_text_is_deleted_collapses_to_the_hole() {
+        // Deleting [0,2)..(0,6) swallows a selection living inside it.
+        let s = Sel::new(p(0, 3), p(0, 5));
+        assert_eq!(
+            shift_sel(s, &del((0, 2), (0, 6), MotionKind::Char), |_| 0, 1),
+            Some(Sel::caret(p(0, 2))),
+            "both ends collapse to the deletion start — a caret, not a stale range"
+        );
+    }
+
+    #[test]
+    fn a_selection_is_dropped_whole_when_either_end_is_untrackable() {
+        let e = Edit::SplitLines {
+            row: 0,
+            cols: vec![3],
+            inserted_space: true,
+        };
+        assert_eq!(
+            shift_sel(Sel::new(p(1, 0), p(1, 4)), &e, |_| 0, 0),
+            None,
+            "never half-track: a selection with one guessed end edits the wrong text"
+        );
+    }
 
     #[test]
     fn split_lines_drops_rather_than_guessing() {

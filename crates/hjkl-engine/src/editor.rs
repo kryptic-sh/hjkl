@@ -559,20 +559,25 @@ pub struct Editor<
     /// [`CoarseMode`]: crate::CoarseMode
     /// [`DisciplineState`]: crate::DisciplineState
     discipline: Box<dyn crate::DisciplineState>,
-    /// Secondary cursors for multi-cursor editing (#63).
+    /// Secondary selections for multi-cursor editing (#63).
     ///
-    /// The **primary** cursor is not in here — it stays `Buffer::cursor`, so the
-    /// ~130 places across the engine and the disciplines that move the cursor
-    /// keep working untouched. This holds only the *extra* carets, and
-    /// [`Editor::mutate_edit`] rewrites them against the pre-edit geometry after
-    /// every edit.
+    /// The **primary** selection is not in here: its head stays `Buffer::cursor`
+    /// (so the ~130 places across the engine and the disciplines that move the
+    /// cursor keep working untouched) and its anchor lives in the discipline's
+    /// own state (vim's `visual_anchor`, helix's `anchor`). That asymmetry is
+    /// deliberate — see [`crate::selection_shift::Sel`].
+    ///
+    /// Each entry carries BOTH ends, so an operator can act on a *range* at every
+    /// cursor, not just the char under it. [`Editor::mutate_edit`] rewrites both
+    /// ends against the pre-edit geometry after every edit, and drops the whole
+    /// selection if either end becomes untrackable — never half of one.
     ///
     /// Char columns, matching `Buffer::cursor` and [`hjkl_buffer::Edit`] — NOT
     /// the grapheme columns that `types::Pos` uses.
     ///
     /// Empty for a single-cursor editor, which is every editor today: vim drives
     /// one caret, so this costs an `is_empty()` check per edit and nothing else.
-    extra_cursors: Vec<hjkl_buffer::Position>,
+    extra_selections: Vec<crate::selection_shift::Sel>,
     /// Read-only view overlay (git blame, …) layered over the input mode.
     /// Discipline-agnostic engine substrate (#265 G3): hoisted out of
     /// `VimState` because the core edit funnel (`mutate_edit`) and render/chrome
@@ -1192,7 +1197,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             // keys build through `hjkl_vim::vim_editor` (or call
             // `hjkl_vim::install_vim_discipline`), which fills this slot.
             discipline: Box::new(crate::NoDiscipline),
-            extra_cursors: Vec::new(),
+            extra_selections: Vec::new(),
             view: crate::ViewMode::default(),
             last_edit_pos: None,
             change_list: Vec::new(),
@@ -2019,27 +2024,28 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 text: String::new(),
             };
         }
-        // Multi-cursor (#63): every edit cascades, so the secondary cursors have
-        // to be rewritten against the *pre-edit* geometry or they end up pointing
-        // at the wrong text. This is the single edit funnel, so doing it here
-        // covers every mutation in the engine by construction. A cursor the shift
-        // cannot track exactly is dropped, never guessed — see `selection_shift`.
-        if !self.extra_cursors.is_empty() {
+        // Multi-cursor (#63): every edit cascades, so the secondary selections
+        // have to be rewritten against the *pre-edit* geometry or they end up
+        // pointing at the wrong text. This is the single edit funnel, so doing it
+        // here covers every mutation in the engine by construction. BOTH ends move
+        // together, and a selection the shift cannot track exactly is dropped
+        // whole, never guessed and never half-tracked — see `selection_shift`.
+        if !self.extra_selections.is_empty() {
             let edit_ref = &edit;
             // `JoinLines` geometry depends on how long each row was *before* the
             // join, so the metrics have to be read here — after `apply_buffer_edit`
             // they describe the wrong buffer.
             let rows = buf_row_count(&self.buffer);
             let lens: Vec<usize> = (0..rows).map(|r| buf_line_chars(&self.buffer, r)).collect();
-            self.extra_cursors.retain_mut(|c| {
-                match crate::selection_shift::shift_position(
-                    *c,
+            self.extra_selections.retain_mut(|s| {
+                match crate::selection_shift::shift_sel(
+                    *s,
                     edit_ref,
                     |r| lens.get(r).copied().unwrap_or(0),
                     rows,
                 ) {
                     Some(shifted) => {
-                        *c = shifted;
+                        *s = shifted;
                         true
                     }
                     None => false,
@@ -2600,28 +2606,66 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.discipline.coarse_mode()
     }
 
-    /// The secondary cursors, in char columns. Empty for a single-cursor editor.
+    /// The secondary selections, in char columns. Empty for a single-cursor
+    /// editor.
     ///
-    /// The primary cursor is [`Editor::cursor`] and is *not* included — see the
-    /// `extra_cursors` field docs for why it stays on the buffer.
-    pub fn extra_cursors(&self) -> &[hjkl_buffer::Position] {
-        &self.extra_cursors
+    /// The primary selection is *not* included: its head is [`Editor::cursor`]
+    /// and its anchor lives in the discipline — see the `extra_selections` field
+    /// docs for why.
+    pub fn extra_selections(&self) -> &[crate::selection_shift::Sel] {
+        &self.extra_selections
     }
 
-    /// Add a secondary cursor. Ignores a position that duplicates the primary or
-    /// an existing secondary, so a set never carries two carets at one spot —
-    /// that would apply an edit twice at the same place.
-    pub fn add_cursor(&mut self, pos: hjkl_buffer::Position) {
+    /// The **heads** of the secondary selections — the carets a user sees.
+    ///
+    /// Convenience view over [`Editor::extra_selections`] for callers that only
+    /// care where the carets are (rendering, tests).
+    pub fn extra_cursors(&self) -> Vec<hjkl_buffer::Position> {
+        self.extra_selections.iter().map(|s| s.head).collect()
+    }
+
+    /// Replace the whole secondary set.
+    ///
+    /// Selections whose head duplicates the primary head, or an earlier entry's
+    /// head, are dropped: two carets on one spot would apply every edit twice at
+    /// the same place. Same invariant [`Editor::add_cursor`] enforces, applied to
+    /// a bulk write — a discipline recomputing every selection after a motion
+    /// (helix does this on every keystroke) must not be able to smuggle a
+    /// duplicate in through the back door.
+    pub fn set_extra_selections(&mut self, sels: Vec<crate::selection_shift::Sel>) {
         let (row, col) = self.cursor();
-        if pos == hjkl_buffer::Position::new(row, col) || self.extra_cursors.contains(&pos) {
+        let primary = hjkl_buffer::Position::new(row, col);
+        self.extra_selections.clear();
+        for s in sels {
+            if s.head == primary || self.extra_selections.iter().any(|e| e.head == s.head) {
+                continue;
+            }
+            self.extra_selections.push(s);
+        }
+    }
+
+    /// Add a secondary selection. Same dedup rule as [`Editor::add_cursor`].
+    pub fn add_selection(&mut self, sel: crate::selection_shift::Sel) {
+        let (row, col) = self.cursor();
+        if sel.head == hjkl_buffer::Position::new(row, col)
+            || self.extra_selections.iter().any(|s| s.head == sel.head)
+        {
             return;
         }
-        self.extra_cursors.push(pos);
+        self.extra_selections.push(sel);
     }
 
-    /// Drop every secondary cursor, collapsing back to the primary.
+    /// Add a secondary cursor: a zero-width selection at `pos`. Ignores a
+    /// position that duplicates the primary head or an existing secondary head,
+    /// so a set never carries two carets at one spot — that would apply an edit
+    /// twice at the same place.
+    pub fn add_cursor(&mut self, pos: hjkl_buffer::Position) {
+        self.add_selection(crate::selection_shift::Sel::caret(pos));
+    }
+
+    /// Drop every secondary selection, collapsing back to the primary.
     pub fn clear_extra_cursors(&mut self) {
-        self.extra_cursors.clear();
+        self.extra_selections.clear();
     }
 
     /// Apply an edit at **every** cursor — the primary and all secondaries —
@@ -2661,49 +2705,130 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ) -> Vec<hjkl_buffer::Edit> {
         let (pr, pc) = self.cursor();
         let primary = hjkl_buffer::Position::new(pr, pc);
+        let (inverses, _) = self.edit_at_all_selections(primary, |s| make(s.head));
+        inverses
+    }
 
-        let mut all: Vec<hjkl_buffer::Position> = std::iter::once(primary)
-            .chain(self.extra_cursors.iter().copied())
+    /// Apply an edit at **every selection** — the primary and all secondaries —
+    /// where `make` sees the whole selection, not just its head (#63).
+    ///
+    /// This is what an operator needs: `d` on three selections has to delete
+    /// three *ranges*, and only the caller-visible [`Sel`] carries both ends.
+    /// [`Editor::edit_at_all_cursors`] is the caret-only special case of this.
+    ///
+    /// `primary_anchor` is passed in — and the primary's *new* anchor is returned
+    /// — because the primary selection's anchor lives in the discipline's state,
+    /// not the engine's (see the `extra_selections` field docs).
+    ///
+    /// Returns `(inverse of each applied edit in application order, new primary
+    /// anchor)`. This does **not** touch the undo stack — `mutate_edit` never
+    /// does, and a multi-cursor keystroke is one user action, so the discipline
+    /// pushes undo once before calling.
+    ///
+    /// # Why the order matters
+    ///
+    /// Edits are applied **bottom-up** (last selection in the document first). An
+    /// edit at position P only moves positions at or after P, so working
+    /// backwards leaves every not-yet-visited selection's coordinates still valid.
+    /// Going top-down would invalidate them all after the first edit.
+    ///
+    /// Each selection that has already been edited is parked in
+    /// `extra_selections`, so [`Editor::mutate_edit`]'s shift keeps it correct as
+    /// the remaining (earlier) edits land.
+    ///
+    /// # What happens to the anchors
+    ///
+    /// Each selection's anchor is shifted through *its own* edit with the same
+    /// insertion-point semantics [`crate::selection_shift`] uses everywhere: an
+    /// anchor swallowed by a deletion collapses onto the deletion start, which is
+    /// exactly where the head lands — so `d` / `c` leave a caret at each edit
+    /// site, with no bookkeeping. An anchor sitting exactly at an insertion point
+    /// slides right with the text. A caller that needs a selection *preserved*
+    /// across a same-length rewrite (helix's `~`, `>`) should re-set the
+    /// selections afterwards via [`Editor::set_extra_selections`] rather than
+    /// rely on that shift.
+    ///
+    /// # Degradation
+    ///
+    /// If any selection becomes untrackable mid-apply (see `selection_shift`), the
+    /// secondaries are dropped and the editor collapses to the primary rather than
+    /// carrying on with a selection that no longer knows where it is.
+    ///
+    /// [`Sel`]: crate::selection_shift::Sel
+    pub fn edit_at_all_selections(
+        &mut self,
+        primary_anchor: hjkl_buffer::Position,
+        make: impl Fn(crate::selection_shift::Sel) -> hjkl_buffer::Edit,
+    ) -> (Vec<hjkl_buffer::Edit>, hjkl_buffer::Position) {
+        use crate::selection_shift::Sel;
+
+        let (pr, pc) = self.cursor();
+        let primary = Sel::new(primary_anchor, hjkl_buffer::Position::new(pr, pc));
+
+        let mut all: Vec<Sel> = std::iter::once(primary)
+            .chain(self.extra_selections.iter().copied())
             .collect();
-        all.sort_by_key(|p| std::cmp::Reverse((p.row, p.col)));
+        // Bottom-up by where each selection's edit *starts* — its earlier end.
+        // For a caret that is just the head, so this is the same order as before.
+        all.sort_by_key(|s| std::cmp::Reverse((s.start().row, s.start().col)));
 
-        // Rebuilt as we go: a cursor lands in here the moment its edit is done,
+        // Rebuilt as we go: a selection lands in here the moment its edit is done,
         // which enrols it in the shift for every later edit.
-        self.extra_cursors.clear();
+        self.extra_selections.clear();
 
         let mut inverses = Vec::with_capacity(all.len());
         let mut primary_idx: Option<usize> = None;
-        let mut lost_a_cursor = false;
+        let mut lost_a_selection = false;
 
-        for (i, p) in all.iter().copied().enumerate() {
-            // Every previous iteration should have parked exactly one cursor. If
-            // the count slipped, `mutate_edit` dropped one it could not track.
-            if self.extra_cursors.len() != i {
-                lost_a_cursor = true;
+        for (i, s) in all.iter().copied().enumerate() {
+            // Every previous iteration should have parked exactly one selection.
+            // If the count slipped, `mutate_edit` dropped one it could not track.
+            if self.extra_selections.len() != i {
+                lost_a_selection = true;
                 break;
             }
-            self.set_cursor_quiet(p.row, p.col);
-            inverses.push(self.mutate_edit(make(p)));
+            let edit = make(s);
+            // The anchor has to be shifted against the PRE-edit geometry, same as
+            // the parked selections are — so read the metrics before applying.
+            let rows = buf_row_count(&self.buffer);
+            let lens: Vec<usize> = (0..rows).map(|r| buf_line_chars(&self.buffer, r)).collect();
+            let shifted_anchor = crate::selection_shift::shift_position(
+                s.anchor,
+                &edit,
+                |r| lens.get(r).copied().unwrap_or(0),
+                rows,
+            );
+
+            self.set_cursor_quiet(s.head.row, s.head.col);
+            inverses.push(self.mutate_edit(edit));
             let (nr, nc) = self.cursor();
-            if p == primary && primary_idx.is_none() {
-                primary_idx = Some(self.extra_cursors.len());
+
+            let Some(anchor) = shifted_anchor else {
+                lost_a_selection = true;
+                break;
+            };
+            if s == primary && primary_idx.is_none() {
+                primary_idx = Some(self.extra_selections.len());
             }
-            self.extra_cursors.push(hjkl_buffer::Position::new(nr, nc));
+            self.extra_selections
+                .push(Sel::new(anchor, hjkl_buffer::Position::new(nr, nc)));
         }
 
-        match (lost_a_cursor, primary_idx) {
-            (false, Some(idx)) if idx < self.extra_cursors.len() => {
+        match (lost_a_selection, primary_idx) {
+            (false, Some(idx)) if idx < self.extra_selections.len() => {
                 // Pull the primary back out of the parked set; the rest stay.
-                let landed = self.extra_cursors.remove(idx);
-                self.set_cursor_quiet(landed.row, landed.col);
+                let landed = self.extra_selections.remove(idx);
+                self.set_cursor_quiet(landed.head.row, landed.head.col);
+                (inverses, landed.anchor)
             }
             _ => {
-                // Something went untrackable: collapse to a single cursor rather
-                // than leave a caret pointing at text it no longer owns.
-                self.extra_cursors.clear();
+                // Something went untrackable: collapse to a single selection rather
+                // than leave one pointing at text it no longer owns.
+                self.extra_selections.clear();
+                let (row, col) = self.cursor();
+                (inverses, hjkl_buffer::Position::new(row, col))
             }
         }
-        inverses
     }
 
     /// The installed discipline's FSM state, type-erased.
@@ -3689,6 +3814,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// then clamps the cursor to a valid column.
     pub(crate) fn settle_after_history_jump(&mut self) {
         self.discipline.reset_mode_after_history();
+        // Undo / redo restore a whole snapshot: the secondary selections were
+        // computed against a document that no longer exists, and nothing tracked
+        // them across the rewind. Drop them rather than leave carets pointing at
+        // text that moved — the same "drop, never guess" rule `selection_shift`
+        // applies to a single untrackable edit.
+        self.extra_selections.clear();
         // Unconditional clamp: the restored cursor came from a snapshot that may
         // have been taken mid-insert and can sit one past the last valid column.
         let (row, col) = self.cursor();
