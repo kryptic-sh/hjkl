@@ -6,7 +6,7 @@
 //! gets one that tracks the text rather than a stale coordinate.
 
 use hjkl_buffer::{Buffer, Edit, MotionKind, Position};
-use hjkl_engine::{DefaultHost, Editor, Options};
+use hjkl_engine::{DefaultHost, Editor, Options, Sel};
 
 fn editor(content: &str) -> Editor<Buffer, DefaultHost> {
     let mut e = Editor::new(Buffer::new(), DefaultHost::new(), Options::default());
@@ -298,7 +298,7 @@ fn every_caret_ends_up_after_its_own_inserted_text() {
     // "-ab-cd-ef": carets land just past each dash -> cols 1, 4, 7.
     let (pr, pc) = e.cursor();
     let mut all: Vec<Position> = vec![pos(pr, pc)];
-    all.extend_from_slice(e.extra_cursors());
+    all.extend_from_slice(&e.extra_cursors());
     all.sort_by_key(|p| (p.row, p.col));
     assert_eq!(all, [pos(0, 1), pos(0, 4), pos(0, 7)]);
 }
@@ -393,4 +393,112 @@ fn a_single_cursor_editor_carries_no_secondaries() {
         text: "x".to_string(),
     });
     assert!(e.extra_cursors().is_empty());
+}
+
+// ── Ranged secondary selections ──────────────────────────────────────────────
+//
+// A secondary is a *selection*, not a bare caret: it carries an anchor, and an
+// operator fanned out with `edit_at_all_selections` acts on the whole range at
+// every one of them. Without this, helix's `d` deletes a range at the primary
+// and a single char everywhere else.
+
+#[test]
+fn a_secondary_selection_deletes_its_whole_range() {
+    let mut e = editor("abcdef\nghijkl\n");
+    // Primary selects "ab" on row 0; secondary selects "gh" on row 1.
+    e.set_cursor_quiet(0, 1);
+    e.add_selection(Sel::new(pos(1, 0), pos(1, 1)));
+    let (_, _) = e.edit_at_all_selections(pos(0, 0), |s| Edit::DeleteRange {
+        start: s.start(),
+        end: Position::new(s.end().row, s.end().col + 1),
+        kind: MotionKind::Char,
+    });
+    assert_eq!(e.line(0).as_deref(), Some("cdef"));
+    assert_eq!(e.line(1).as_deref(), Some("ijkl"));
+}
+
+#[test]
+fn deleting_a_range_leaves_a_caret_at_each_edit_site() {
+    let mut e = editor("abcdef\nghijkl\n");
+    e.set_cursor_quiet(0, 3);
+    e.add_selection(Sel::new(pos(1, 2), pos(1, 3)));
+    let (_, anchor) = e.edit_at_all_selections(pos(0, 2), |s| Edit::DeleteRange {
+        start: s.start(),
+        end: Position::new(s.end().row, s.end().col + 1),
+        kind: MotionKind::Char,
+    });
+    assert_eq!(e.cursor(), (0, 2));
+    assert_eq!(
+        anchor,
+        pos(0, 2),
+        "the primary anchor collapses onto the head"
+    );
+    assert_eq!(e.extra_selections(), [Sel::caret(pos(1, 2))]);
+}
+
+#[test]
+fn two_selections_on_one_row_do_not_smear_when_both_are_deleted() {
+    // The case a top-down fan-out gets wrong: deleting the first range moves the
+    // second one's coordinates out from under it.
+    let mut e = editor("aaBBccDDee\n");
+    e.set_cursor_quiet(0, 3); // primary selects "BB" (cols 2..=3)
+    e.add_selection(Sel::new(pos(0, 6), pos(0, 7))); // secondary selects "DD"
+    e.edit_at_all_selections(pos(0, 2), |s| Edit::DeleteRange {
+        start: s.start(),
+        end: Position::new(s.end().row, s.end().col + 1),
+        kind: MotionKind::Char,
+    });
+    assert_eq!(e.line(0).as_deref(), Some("aaccee"));
+}
+
+#[test]
+fn a_secondary_selection_shifts_both_ends_across_an_unrelated_edit() {
+    let mut e = editor("abcdef\n");
+    e.add_selection(Sel::new(pos(0, 2), pos(0, 4)));
+    e.mutate_edit(Edit::InsertStr {
+        at: pos(0, 0),
+        text: "XY".to_string(),
+    });
+    assert_eq!(
+        e.extra_selections(),
+        [Sel::new(pos(0, 4), pos(0, 6))],
+        "anchor and head must move together or the next edit spans the wrong text"
+    );
+}
+
+#[test]
+fn an_untrackable_edit_drops_the_whole_selection_not_half_of_it() {
+    let mut e = editor("abc\ndef\n");
+    e.add_selection(Sel::new(pos(1, 0), pos(1, 2)));
+    e.mutate_edit(Edit::SplitLines {
+        row: 0,
+        cols: vec![1],
+        inserted_space: false,
+    });
+    assert!(e.extra_selections().is_empty());
+}
+
+#[test]
+fn history_rewind_drops_the_secondaries() {
+    // Undo restores a snapshot; nothing tracked the carets across it.
+    let mut e = editor("abc\ndef\n");
+    e.add_cursor(pos(1, 0));
+    e.push_undo();
+    e.mutate_edit(Edit::InsertStr {
+        at: pos(0, 0),
+        text: "X".to_string(),
+    });
+    e.undo();
+    assert!(e.extra_selections().is_empty());
+}
+
+#[test]
+fn set_extra_selections_refuses_a_duplicate_head() {
+    let mut e = editor("abcdef\n"); // primary head at (0, 0)
+    e.set_extra_selections(vec![
+        Sel::caret(pos(0, 2)),
+        Sel::new(pos(0, 1), pos(0, 2)), // same head as the previous entry
+        Sel::caret(pos(0, 0)),          // the primary's head
+    ]);
+    assert_eq!(e.extra_selections(), [Sel::caret(pos(0, 2))]);
 }
