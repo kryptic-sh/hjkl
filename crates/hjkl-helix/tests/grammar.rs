@@ -59,6 +59,15 @@ fn text(e: &Editor<Buffer, DefaultHost>) -> String {
         .join("\n")
 }
 
+/// The primary selection's anchor.
+fn anchor(e: &Editor<Buffer, DefaultHost>) -> hjkl_buffer::Position {
+    e.discipline()
+        .as_any()
+        .downcast_ref::<hjkl_helix::HelixState>()
+        .unwrap()
+        .anchor
+}
+
 // ── The seam ─────────────────────────────────────────────────────────────────
 
 #[test]
@@ -99,10 +108,17 @@ fn hjkl_moves_the_cursor() {
 }
 
 #[test]
-fn word_motion_uses_the_engines_word_rules() {
+fn w_selects_the_word_and_its_trailing_space_helix_style() {
+    // NOT vim's `w`. Vim moves the caret to the next word's first char (col 4).
+    // Helix *selects* "foo " — the word plus the whitespace after it — and leaves
+    // the cursor on that trailing space (col 3), with the anchor back at col 0.
     let mut e = ed("foo bar baz\n");
     keys(&mut e, "w");
-    assert_eq!(e.cursor(), (0, 4), "w lands on the next word start");
+    assert_eq!(e.cursor(), (0, 3), "the head sits on the trailing space");
+    assert_eq!(anchor(&e), hjkl_buffer::Position::new(0, 0));
+    // And the selection is the operand: `d` deletes all of "foo ".
+    keys(&mut e, "d");
+    assert_eq!(e.line(0).as_deref(), Some("bar baz"));
 }
 
 // ── Selection-first grammar ──────────────────────────────────────────────────
