@@ -45,18 +45,6 @@ pub fn rect_to_layout(r: ratatui::layout::Rect) -> LayoutRect {
     LayoutRect::new(r.x, r.y, r.width, r.height)
 }
 
-/// Convert a [`LayoutRect`] back to a ratatui `Rect`.
-#[allow(dead_code)]
-#[inline]
-pub fn layout_to_rect(r: LayoutRect) -> ratatui::layout::Rect {
-    ratatui::layout::Rect {
-        x: r.x,
-        y: r.y,
-        width: r.w,
-        height: r.h,
-    }
-}
-
 // ── App window-action dispatcher ──────────────────────────────────────────────
 
 use super::App;

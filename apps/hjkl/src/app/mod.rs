@@ -571,18 +571,10 @@ pub struct App {
 /// content.  Key presses route to [`App::handle_recovery_key`] while this
 /// is `Some`.
 pub(crate) struct PendingRecovery {
-    /// Path of the file being opened.
-    // Used for diagnostics / future `:recover [file]` TODO(#185).
-    #[allow(dead_code)]
-    pub file_path: std::path::PathBuf,
     /// The loaded swap header.
     pub header: hjkl_app::swap::SwapHeader,
     /// The swap body text.
     pub body: String,
-    /// Path to the swap file itself.
-    // Stored for future `:recover [file]` TODO(#185).
-    #[allow(dead_code)]
-    pub swap_path: std::path::PathBuf,
     /// Index of the slot whose content should be replaced on `y`.
     pub slot_idx: usize,
     /// Human-readable relative time string for the prompt ("42s ago", "3m ago", …).
@@ -1036,24 +1028,6 @@ impl App {
             .slot
     }
 
-    /// Return a shared reference to the focused [`AppWindow`].
-    #[allow(dead_code)]
-    pub fn active_window(&self) -> &window::AppWindow {
-        let fw = self.focused_window();
-        self.windows[fw]
-            .as_ref()
-            .expect("focused_window must point to an open window")
-    }
-
-    /// Return a mutable reference to the focused [`AppWindow`].
-    #[allow(dead_code)]
-    pub fn active_window_mut(&mut self) -> &mut window::AppWindow {
-        let fw = self.focused_window();
-        self.windows[fw]
-            .as_mut()
-            .expect("focused_window must point to an open window")
-    }
-
     /// Return a shared reference to the active buffer slot.
     pub fn active(&self) -> &BufferSlot {
         &self.slots[self.focused_slot_idx()]
@@ -1369,14 +1343,7 @@ impl App {
         }
     }
 
-    /// Return a shared reference to the active buffer slot.
-    #[allow(dead_code)]
-    pub fn active_slot(&self) -> &BufferSlot {
-        &self.slots[self.focused_slot_idx()]
-    }
-
     /// Return a mutable reference to the active buffer slot.
-    #[allow(dead_code)]
     pub fn active_slot_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();
         &mut self.slots[slot_idx]
@@ -1391,6 +1358,11 @@ impl App {
     /// buffer content/viewport directly. (#151 Phase D moved the renderer's
     /// per-window viewport publish onto the window editors, so this is now
     /// test-only.)
+    ///
+    /// The `#[allow(dead_code)]` here is NOT stale (audit D8 checked): every
+    /// call site is inside a `#[cfg(test)]` module, so a plain non-test
+    /// `cargo build` genuinely never calls this — unlike `active_slot_mut`,
+    /// whose stale attribute audit D8 did drop.
     #[allow(dead_code)]
     pub fn slots_mut(&mut self) -> &mut [BufferSlot] {
         &mut self.slots

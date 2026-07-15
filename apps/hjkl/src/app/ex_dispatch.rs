@@ -1632,10 +1632,8 @@ impl App {
         // Swap is newer than disk (or forced) → prompt for recovery.
         let written_ago = format_swap_age(header.write_time_unix_ms);
         self.pending_recovery = Some(super::PendingRecovery {
-            file_path: filename,
             header,
             body,
-            swap_path,
             slot_idx,
             written_ago,
         });
