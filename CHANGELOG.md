@@ -8,6 +8,23 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-07-16
+
+### Fixed
+
+- **Release pipeline** — 0.34.1 is the first fully-published build of the 0.34
+  line; 0.34.0 only published partially to crates.io before the release job
+  failed. Two release-only defects fixed:
+  - The crates.io publish step still listed the deleted `hjkl-css-gui` crate.
+  - The `hjkl-vim` dev-dependency on `hjkl-engine` / `hjkl-engine-tui` /
+    `hjkl-editor` carried a `^0.34` version requirement (via
+    `.workspace = true`) that deadlocked the first publish of a new minor —
+    `hjkl-vim@0.34` does not exist on crates.io until this release, and it is
+    published after those crates. Made those dev-deps path-only so
+    `cargo publish` drops them.
+
+  No source changes vs 0.34.0 — same rename and removals (see below).
+
 ## [0.34.0] - 2026-07-16
 
 ### Changed
