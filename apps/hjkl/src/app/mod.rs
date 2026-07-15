@@ -1642,7 +1642,7 @@ impl App {
             return false;
         }
 
-        let source = std::sync::Arc::new(self.active_editor().buffer().as_string());
+        let source = self.active_editor().buffer().content_joined();
         let dirty_gen = self.active_editor().buffer().dirty_gen();
         let buffer_id = self.active().buffer_id;
 
