@@ -29,6 +29,7 @@ pub mod paste;
 pub mod register_count;
 pub mod render_sync;
 pub mod substitute;
+pub mod substitute_newline_cursor;
 pub mod tabline_icons;
 pub mod text_object_bracket;
 pub mod yank_linewise;

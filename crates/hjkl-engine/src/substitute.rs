@@ -336,11 +336,25 @@ pub fn apply_substitute<H: crate::types::Host>(
         });
     }
 
+    // `last_changed_row` above is a PRE-split row index into `new_lines`: it
+    // counts one entry per original row, even though a `\r`/newline in the
+    // replacement can turn one entry into several physical rows once joined
+    // and re-split by the buffer. Map it into POST-split row space before
+    // placing the cursor: earlier rows may have grown (shifting this row's
+    // start down), and this row's own replacement may itself have split into
+    // multiple physical lines — vim lands on the LAST of those.
+    let newlines_before: usize = new_lines[..last_changed_row]
+        .iter()
+        .map(|l| l.matches('\n').count())
+        .sum();
+    let newlines_within = new_lines[last_changed_row].matches('\n').count();
+    let last_changed_row = last_changed_row + newlines_before + newlines_within;
+
     // Apply the new content in one shot.
     ed.buffer_mut().replace_all(&new_lines.join("\n"));
 
     // Cursor lands on the first non-blank of the last changed line (vim). Clamp
-    // the row in case a replacement inserted line breaks (e.g. `\r`).
+    // the row defensively in case of any off-by-one at buffer edges.
     let final_total = crate::types::Query::rope(ed.buffer()).len_lines();
     let cursor_row = last_changed_row.min(final_total.saturating_sub(1));
     let first_non_blank = crate::buf_helpers::buf_line(ed.buffer(), cursor_row)
@@ -550,12 +564,26 @@ pub fn apply_collected_matches<H: crate::types::Host>(
         new_line.push_str(&line[be..]);
         lines_vec[row] = new_line;
         applied += 1;
-        last_changed_row = Some(row);
+        // Matches are applied high-row-first (reverse document order) so
+        // earlier byte offsets stay valid; track the HIGHEST row touched so
+        // the cursor lands on the last-in-document-order changed line (vim),
+        // not merely the last one processed by this loop.
+        last_changed_row = Some(last_changed_row.map_or(row, |lr: usize| lr.max(row)));
     }
 
     if applied > 0 {
         ed.buffer_mut().replace_all(&lines_vec.join("\n"));
         if let Some(row) = last_changed_row {
+            // `row` is a PRE-split index into `lines_vec`: a `\r`/newline in
+            // an accepted replacement can turn one entry into several
+            // physical rows once joined and re-split by the buffer. Map into
+            // POST-split row space the same way `apply_substitute` does.
+            let newlines_before: usize = lines_vec[..row]
+                .iter()
+                .map(|l| l.matches('\n').count())
+                .sum();
+            let newlines_within = lines_vec[row].matches('\n').count();
+            let row = row + newlines_before + newlines_within;
             ed.buffer_mut()
                 .set_cursor(hjkl_buffer::Position::new(row, 0));
         }
@@ -998,6 +1026,58 @@ mod tests {
         assert_eq!(buf_line(&e, 0), "a");
         assert_eq!(buf_line(&e, 1), "b");
         assert_eq!(buf_line(&e, 2), "c");
+    }
+
+    /// Audit A5 regression: `:%s/,/\r/` across a multi-row range where an
+    /// earlier row's replacement also splits into extra rows. The recorded
+    /// "last changed row" must be adjusted into POST-substitution row space
+    /// (vim lands on the first non-blank of the last changed line, `d`, real
+    /// row 3) — not the PRE-split row index (which would land on `b`, row 1).
+    #[test]
+    fn apply_backslash_r_multi_row_cursor_lands_on_final_split_row() {
+        let mut e = editor_with("a,b\nc,d\n");
+        let cmd = parse_substitute("/,/\\r/").unwrap();
+        let total = crate::types::Query::rope(e.buffer()).len_lines();
+        let out = apply_substitute(&mut e, &cmd, 0..=(total.saturating_sub(1)) as u32).unwrap();
+        assert_eq!(buf_line(&e, 0), "a");
+        assert_eq!(buf_line(&e, 1), "b");
+        assert_eq!(buf_line(&e, 2), "c");
+        assert_eq!(buf_line(&e, 3), "d");
+        assert_eq!(
+            out.last_row,
+            Some(3),
+            "cursor should land on the last changed line ('d', real row 3) \
+             in post-split coordinates, not the pre-split row index"
+        );
+        assert_eq!(e.buffer().cursor().row, 3);
+    }
+
+    /// Single-row case: `\r` splitting one line into several must still put
+    /// the cursor on the LAST resulting physical line (vim semantics for a
+    /// single `:s` invocation whose replacement itself contains newlines).
+    #[test]
+    fn apply_backslash_r_single_row_cursor_lands_on_last_split_line() {
+        let mut e = editor_with("a,b");
+        let cmd = parse_substitute("/,/\\r/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "a");
+        assert_eq!(buf_line(&e, 1), "b");
+        assert_eq!(out.last_row, Some(1));
+        assert_eq!(e.buffer().cursor().row, 1);
+    }
+
+    /// Guard the common (no-newline) multi-row path: cursor still lands on
+    /// the last changed row with no coordinate adjustment needed.
+    #[test]
+    fn apply_no_newline_multi_row_cursor_unaffected() {
+        let mut e = editor_with("a\na\na");
+        let cmd = parse_substitute("/a/X/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=2).unwrap();
+        assert_eq!(buf_line(&e, 0), "X");
+        assert_eq!(buf_line(&e, 1), "X");
+        assert_eq!(buf_line(&e, 2), "X");
+        assert_eq!(out.last_row, Some(2));
+        assert_eq!(e.buffer().cursor().row, 2);
     }
 
     #[test]
