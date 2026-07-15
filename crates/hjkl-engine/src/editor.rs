@@ -4204,6 +4204,92 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.last_indent_range.take()
     }
 
+    /// Replace rows `top..=bot` (0-based, inclusive) with `new_lines` via a
+    /// single bounded [`hjkl_buffer::Edit::Replace`] splice.
+    ///
+    /// Shared by [`Editor::toggle_comment_range`] and
+    /// [`Editor::filter_range`] (audit D1 / D4): both used to rebuild the
+    /// entire document as a `Vec<String>` + rejoin on every call —
+    /// O(document size) for a range-scoped edit — which made `gcc` /
+    /// `gc{motion}` and `:!`/`:%!` filters cost a full-document
+    /// reallocation even when touching a single line. Routing through
+    /// [`Editor::mutate_edit`] instead touches only the affected char span
+    /// in the rope, so cost is O(edit size).
+    ///
+    /// `new_lines` may have a different row count than `bot - top + 1`
+    /// (a filter can add/remove/keep lines) — including empty (deletes
+    /// the range entirely). This is why the caller passes rows rather
+    /// than a pre-joined string: `&[]` (delete) and `&[String::new()]`
+    /// (replace with one blank line) join to the same `""` but must
+    /// splice differently — the former must also swallow one of the
+    /// range's boundary newlines, the latter must not.
+    ///
+    /// The boundary-newline math mirrors `do_delete_range`'s
+    /// `MotionKind::Line` case (which already handles vim's "last row
+    /// keeps no trailing newline" rule): when `bot` is not the buffer's
+    /// last row, the replace span runs through the newline *after* `bot`
+    /// and the inserted text re-adds it; when `bot` *is* the last row,
+    /// the span instead runs from the end of row `top - 1` (swallowing
+    /// the newline *before* `top`) so the buffer never grows a trailing
+    /// empty row that didn't exist before.
+    ///
+    /// Cursor lands at `(top, 0)` — vim-commentary / filter parity —
+    /// overriding wherever [`hjkl_buffer::Edit::Replace`] would otherwise
+    /// leave it (end of the inserted text).
+    ///
+    /// Callers must call [`Editor::push_undo`] first so the whole
+    /// operation lands as a single undo step (same contract `restore`
+    /// callers already followed).
+    fn splice_row_range(&mut self, top: usize, bot: usize, new_lines: &[String]) {
+        let row_count = buf_row_count(&self.buffer);
+        let bot_is_last_row = bot + 1 >= row_count;
+        let joined = new_lines.join("\n");
+
+        let (start, end, with) = if !bot_is_last_row {
+            // Rows exist after `bot` — span through the newline that
+            // separates `bot` from `bot + 1` and re-add it (unless the
+            // range is being deleted outright, i.e. `new_lines` is empty).
+            let with = if new_lines.is_empty() {
+                String::new()
+            } else {
+                format!("{joined}\n")
+            };
+            (
+                hjkl_buffer::Position::new(top, 0),
+                hjkl_buffer::Position::new(bot + 1, 0),
+                with,
+            )
+        } else if top > 0 {
+            // `bot` is the last row but rows exist before `top` — span
+            // from the end of row `top - 1` (swallowing the newline
+            // before `top`) through end-of-buffer, mirroring the
+            // linewise-delete "no trailing-newline orphan" rule.
+            let prev_end_col = buf_line_chars(&self.buffer, top - 1);
+            let bot_end_col = buf_line_chars(&self.buffer, bot);
+            let with = if new_lines.is_empty() {
+                String::new()
+            } else {
+                format!("\n{joined}")
+            };
+            (
+                hjkl_buffer::Position::new(top - 1, prev_end_col),
+                hjkl_buffer::Position::new(bot, bot_end_col),
+                with,
+            )
+        } else {
+            // Whole buffer is the range (`top == 0`, `bot` == last row).
+            let bot_end_col = buf_line_chars(&self.buffer, bot);
+            (
+                hjkl_buffer::Position::new(0, 0),
+                hjkl_buffer::Position::new(bot, bot_end_col),
+                joined,
+            )
+        };
+
+        self.mutate_edit(hjkl_buffer::Edit::Replace { start, end, with });
+        buf_set_cursor_rc(&mut self.buffer, top, 0);
+    }
+
     /// Filter rows `top_row..=bot_row` through an external shell command.
     ///
     /// Spawns `sh -c "<command>"` (or `cmd /C "<command>"` on Windows), pipes
@@ -4234,8 +4320,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let bot = bot_row.min(line_count.saturating_sub(1));
         let (top, bot) = (top.min(bot), top.max(bot));
         let input_text = crate::rope_util::rope_row_range_str(&rope, top, bot);
-        // Materialized for the splice-back after the command succeeds.
-        let lines = crate::rope_util::rope_to_lines_vec(&rope);
 
         tracing::debug!(
             top_row = top,
@@ -4330,20 +4414,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             "filter_range: command succeeded, replacing rows"
         );
 
-        // Replace the row range with the stdout lines.
-        let mut all_lines = lines;
+        // Replace rows `top..=bot` with the stdout lines — a single
+        // bounded splice (audit D4), not a whole-document rebuild.
+        // `stdout.lines()` already drops the trailing-newline sentinel —
+        // this preserves vim's "no trailing-newline trim" spec because a
+        // trailing '\n' from the command means the last replacement line
+        // is the line BEFORE the newline, not an empty line after it.
         let new_lines: Vec<String> = stdout.lines().map(|l| l.to_owned()).collect();
-        // If stdout ended with a newline, stdout.lines() drops the trailing empty
-        // entry — this preserves vim's "no trailing-newline trim" spec because
-        // a trailing '\n' from the command means the last replacement line is the
-        // line BEFORE the newline, not an empty line after it.
-        let after = all_lines.split_off(bot + 1);
-        all_lines.truncate(top);
-        all_lines.extend(new_lines);
-        all_lines.extend(after);
 
         self.push_undo();
-        self.restore(all_lines, (top, 0));
+        self.splice_row_range(top, bot, &new_lines);
         // Leave the editor idle after a successful filter (vim parity: Normal).
         // Goes through the discipline hook, so the engine does not name vim.
         self.discipline.reset_to_idle();
@@ -4466,19 +4546,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             }
         }
 
-        // Replace the row range in the buffer — single undo step.
+        // Replace the row range in the buffer — single undo step, O(edit
+        // size) rather than O(document size) (audit D1): `gcc` on one line
+        // of a huge file no longer rebuilds the whole document.
         self.push_undo();
-        let row_count_after = buf_row_count(&self.buffer);
-        let all_before: Vec<String> = (0..top)
-            .map(|r| buf_line(&self.buffer, r).unwrap_or_default())
-            .collect();
-        let all_after: Vec<String> = ((bot + 1)..row_count_after)
-            .map(|r| buf_line(&self.buffer, r).unwrap_or_default())
-            .collect();
-        let mut all: Vec<String> = all_before;
-        all.extend(new_lines);
-        all.extend(all_after);
-        self.restore(all, (top, 0));
+        self.splice_row_range(top, bot, &new_lines);
     }
 
     // ─── Phase 6.1: public insert-mode primitives (kryptic-sh/hjkl#87) ────────
