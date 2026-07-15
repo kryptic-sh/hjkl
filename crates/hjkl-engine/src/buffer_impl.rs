@@ -184,22 +184,38 @@ impl Query for RopeBuffer {
         }
         // Multi-line: allocate.
         let mut out = String::new();
-        for r in start.row..=end.row.min(self.row_count().saturating_sub(1)) {
+        // The buffer's true last row — it never has a trailing newline
+        // (vim invariant), so a row equal to `last_row` must never get
+        // a fabricated `\n` appended.
+        let last_row = self.row_count().saturating_sub(1);
+        // Clamp the end row for iteration, but remember whether the
+        // *original* end row was in-bounds: only an in-bounds end row
+        // is a genuine mid-line cut. An out-of-bounds (past-end
+        // sentinel) end row means "through the end of the buffer",
+        // which must fall through to the full-line branch below
+        // instead of comparing against a phantom row that can never
+        // be reached by the clamped loop.
+        let end_row = end.row.min(last_row);
+        let end_in_bounds = end.row <= last_row;
+        for r in start.row..=end_row {
             let line = if r < n {
                 hjkl_buffer::rope_line_str(&rope, r)
             } else {
                 String::new()
             };
-            if r == start.row {
-                let lo = start.byte_offset(&line).min(line.len());
-                out.push_str(&line[lo..]);
-                out.push('\n');
-            } else if r == end.row {
-                let hi = end.byte_offset(&line).min(line.len());
-                out.push_str(&line[..hi]);
+            let lo = if r == start.row {
+                start.byte_offset(&line).min(line.len())
             } else {
-                out.push_str(&line);
-                out.push('\n');
+                0
+            };
+            if r == end_row && end_in_bounds {
+                let hi = end.byte_offset(&line).min(line.len()).max(lo);
+                out.push_str(&line[lo..hi]);
+            } else {
+                out.push_str(&line[lo..]);
+                if r < last_row {
+                    out.push('\n');
+                }
             }
         }
         Cow::Owned(out)
@@ -654,6 +670,23 @@ mod tests {
         let s = Query::slice(&b, Pos::new(0, 1)..Pos::new(2, 1));
         assert_eq!(&*s, "b\ncd\ne");
         assert!(matches!(s, Cow::Owned(_)));
+    }
+
+    /// Regression for audit finding A9: an end row past the buffer's
+    /// last row (a "through end of buffer" sentinel, e.g. `u32::MAX`
+    /// as used by `BufferEdit::replace_all`'s default range) used to
+    /// compare against the *unclamped* end row, so the clamped loop
+    /// never hit the mid-line-cut branch and instead fell through to
+    /// the "full line + \n" branch on the buffer's real last row —
+    /// fabricating a trailing newline that isn't in the source text
+    /// (the last line of a buffer never has one). The slice must stop
+    /// exactly at the end of the real content, with no spurious `\n`.
+    #[test]
+    fn query_slice_past_end_sentinel_row_has_no_spurious_trailing_newline() {
+        let b = RopeBuffer::from_str("ab\ncd\nef");
+        let s = Query::slice(&b, Pos::new(0, 1)..Pos::new(u32::MAX, u32::MAX));
+        assert_eq!(&*s, "b\ncd\nef");
+        assert!(!s.ends_with('\n'));
     }
 
     #[test]
