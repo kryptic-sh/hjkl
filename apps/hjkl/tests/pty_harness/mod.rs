@@ -27,3 +27,4 @@ pub mod register_count;
 pub mod render_sync;
 pub mod substitute;
 pub mod tabline_icons;
+pub mod yank_linewise;

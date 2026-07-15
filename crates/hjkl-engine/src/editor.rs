@@ -737,6 +737,15 @@ pub struct Editor<
     /// Whether the unnamed register's current content is linewise. This is
     /// register metadata, not vim FSM state — any discipline that yanks and
     /// pastes needs it (#265).
+    ///
+    /// Deliberately per-window, NOT shared via `Arc` (#279 slice 4
+    /// investigation): it is transient scratch state saved/restored around a
+    /// single operator (see `visual_ops.rs`, `text_object_ops.rs`), not the
+    /// source of truth for paste. The actual paste decision (`do_paste` in
+    /// hjkl-vim/src/vim/command.rs) reads `linewise` off the *selected
+    /// register slot* — which already lives in the shared `registers` Arc
+    /// above — so a whole-line yank in one window correctly pastes linewise
+    /// in a sibling window without this field needing to be shared too.
     pub(crate) yank_linewise: bool,
 
     /// The `buffer_id` this editor instance is currently attached to.
@@ -4987,6 +4996,35 @@ mod shared_registers_tests {
         };
         // Read from editor B — same bank, no copy needed
         assert_eq!(b.registers().unnamed.text, "hello");
+    }
+
+    /// #279 slice 4: the `linewise` flag on a `Slot` must travel with the
+    /// shared register bank, not just the text — `do_paste`
+    /// (hjkl-vim/src/vim/command.rs) sources its linewise decision from the
+    /// selected register slot precisely so a whole-line yank in one window
+    /// pastes linewise in a sibling window. This proves the shared `Arc`
+    /// carries that bit, independent of the per-editor `yank_linewise` bool
+    /// (which is deliberately NOT shared — see its doc comment).
+    #[test]
+    fn shared_register_bank_linewise_visible_across_editors() {
+        let shared =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::registers::Registers::default()));
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_registers_arc(shared.clone());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        b.set_registers_arc(shared.clone());
+        // Write a LINEWISE yank to editor A's unnamed register.
+        a.registers_mut().unnamed = crate::registers::Slot {
+            text: "hello\n".to_string(),
+            linewise: true,
+        };
+        // Read from editor B — same bank, so the linewise bit must be
+        // visible too, not just the text.
+        assert!(
+            b.registers().unnamed.linewise,
+            "editor B should see editor A's linewise flag through the \
+             shared register Arc"
+        );
     }
 }
 
