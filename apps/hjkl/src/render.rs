@@ -389,14 +389,29 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
+/// `true` when `row` falls inside the visible viewport `[vp_top, vp_bot)`.
+///
+/// Shared by [`build_diag_overlays`] and the eol-hint builder in
+/// `render_window` so both skip diagnostics outside the current viewport
+/// instead of touching every entry of the uncapped `slot.lsp_diags` list
+/// every frame (audit D2 — allocation churn proportional to total diagnostic
+/// count, independent of what's on screen).
+fn row_in_viewport(row: usize, vp_top: usize, vp_bot: usize) -> bool {
+    row >= vp_top && row < vp_bot
+}
+
 /// Build `DiagOverlay` items for the active buffer slot, filtered to the
-/// visible viewport. Called once per frame in `render_window`.
+/// visible viewport `[vp_top, vp_bot)`. Called once per frame per visible
+/// window in `render_window`.
 fn build_diag_overlays(
     slot: &crate::app::BufferSlot,
     _ui: &crate::theme::UiTheme,
+    vp_top: usize,
+    vp_bot: usize,
 ) -> Vec<DiagOverlay> {
     slot.lsp_diags
         .iter()
+        .filter(|d| row_in_viewport(d.start_row, vp_top, vp_bot))
         .map(|d| DiagOverlay {
             row: d.start_row,
             col_start: d.start_col,
@@ -988,7 +1003,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             None
         };
 
-    let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
+    let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui, vp_top, vp_bot);
 
     // Inline end-of-line ghost text, rendered comment-style (`// …` in
     // Rust/JS, `# …` in Python, …) so it reads like a trailing comment, with
@@ -1016,6 +1031,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let mut by_row: std::collections::HashMap<usize, (DiagSeverity, &str)> =
                 std::collections::HashMap::new();
             for d in &slot.lsp_diags {
+                // Skip diagnostics outside the visible viewport (audit D2):
+                // only a diagnostic whose start row is on screen can produce
+                // a visible EOL hint. Safe for `Current` mode too — the
+                // focused cursor row is always inside `[vp_top, vp_bot)`.
+                if !row_in_viewport(d.start_row, vp_top, vp_bot) {
+                    continue;
+                }
                 if diag_mode == DiagInlineMode::Current && d.start_row != cursor_row {
                     continue;
                 }
@@ -3120,5 +3142,137 @@ mod tests {
         let has_filler = (0..24u16)
             .any(|y| (0..80u16).any(|x| buf.cell((x, y)).map(|c| c.bg) == Some(filler_bg)));
         assert!(has_filler, "a DiffDelete filler row must be painted");
+    }
+
+    // ── Audit D2: diagnostics clipped to the visible viewport ──────────────
+
+    /// `row_in_viewport` is the shared predicate `build_diag_overlays` and the
+    /// eol-hint builder use to skip off-screen diagnostics. `vp_top` is
+    /// inclusive, `vp_bot` is exclusive — matches the `top_row..top_row+height`
+    /// convention used everywhere else in this file (e.g. `visible_signs`).
+    #[test]
+    fn row_in_viewport_bounds() {
+        assert!(!row_in_viewport(4, 5, 10), "row before vp_top is out");
+        assert!(row_in_viewport(5, 5, 10), "vp_top is inclusive");
+        assert!(row_in_viewport(9, 5, 10), "last visible row is inclusive");
+        assert!(!row_in_viewport(10, 5, 10), "vp_bot is exclusive");
+        assert!(!row_in_viewport(500, 5, 10), "far off-screen row is out");
+    }
+
+    /// `build_diag_overlays` must only emit an overlay for a diagnostic whose
+    /// `start_row` is inside `[vp_top, vp_bot)`. Before the fix it mapped
+    /// every entry in `slot.lsp_diags` unconditionally — this is the direct
+    /// regression guard for that allocation-churn bug (audit D2): a
+    /// diagnostic thousands of lines off-screen must neither appear in the
+    /// output nor be touched by the `.map()` at all.
+    #[test]
+    fn build_diag_overlays_clips_to_viewport() {
+        use crate::app::{App, LspDiag};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("diag_clip.txt");
+        let content: String = (0..500).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&path, &content).unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        let mk = |row: usize, msg: &str| LspDiag {
+            start_row: row,
+            start_col: 0,
+            end_row: row,
+            end_col: 3,
+            severity: DiagSeverity::Error,
+            message: msg.to_string(),
+            source: None,
+            code: None,
+        };
+        app.slots_mut()[0].lsp_diags = vec![
+            mk(0, "top edge, in range"),
+            mk(5, "middle, in range"),
+            mk(49, "bottom edge, in range (vp_bot exclusive at 50)"),
+            mk(50, "just past vp_bot, out"),
+            mk(400, "far off-screen, out"),
+        ];
+
+        let overlays = build_diag_overlays(&app.slots()[0], &app.theme.ui, 0, 50);
+        let mut rows: Vec<usize> = overlays.iter().map(|o| o.row).collect();
+        rows.sort_unstable();
+        assert_eq!(
+            rows,
+            vec![0, 5, 49],
+            "only diagnostics with start_row in [0, 50) may produce an overlay"
+        );
+
+        // Scrolling the viewport down must reveal the previously off-screen
+        // diagnostic and hide the ones that scrolled out — proves the clip is
+        // a real viewport window, not a fixed cutoff.
+        let overlays2 = build_diag_overlays(&app.slots()[0], &app.theme.ui, 400, 450);
+        let rows2: Vec<usize> = overlays2.iter().map(|o| o.row).collect();
+        assert_eq!(rows2, vec![400]);
+    }
+
+    /// End-to-end regression guard: a diagnostic on a visible row must still
+    /// render its EOL ghost-text hint exactly as before the viewport clip —
+    /// the clip must be invisible for on-screen rows. `diagnostics_inline`
+    /// defaults to `all`, so no config is needed to enable the hint.
+    #[test]
+    fn visible_diagnostic_eol_hint_still_renders() {
+        use crate::app::{App, LspDiag};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("diag_eol.rs");
+        // Plenty of trailing lines so a diagnostic near the end is off-screen
+        // while the cursor (row 0) stays on-screen.
+        let content: String = std::iter::once("let x = 1;\n".to_string())
+            .chain((0..500).map(|i| format!("// filler {i}\n")))
+            .collect();
+        std::fs::write(&path, &content).unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        app.slots_mut()[0].lsp_diags = vec![
+            LspDiag {
+                start_row: 0,
+                start_col: 0,
+                end_row: 0,
+                end_col: 1,
+                severity: DiagSeverity::Error,
+                message: "visible unused variable".to_string(),
+                source: None,
+                code: None,
+            },
+            LspDiag {
+                start_row: 450,
+                start_col: 0,
+                end_row: 450,
+                end_col: 1,
+                severity: DiagSeverity::Error,
+                message: "offscreen diagnostic".to_string(),
+                source: None,
+                code: None,
+            },
+        ];
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut rendered = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    rendered.push_str(c.symbol());
+                }
+            }
+        }
+        assert!(
+            rendered.contains("visible unused variable"),
+            "the cursor-row diagnostic's EOL hint must still render: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("offscreen diagnostic"),
+            "the far off-screen diagnostic must never reach the screen buffer"
+        );
     }
 }
