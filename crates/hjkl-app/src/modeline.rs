@@ -273,6 +273,33 @@ mod tests {
         assert!(!entries.iter().any(|(n, _)| n == "bogus"));
     }
 
+    // ── parse_modeline_rejects_makeprg (security, CVE-2019-12735 class) ───────
+
+    #[test]
+    fn parse_modeline_rejects_makeprg() {
+        // vim's `:set makeprg=` / `errorformat` from a modeline is the
+        // classic arbitrary-command-on-`:make` CVE. `hjkl` has no
+        // `makeprg`/`errorformat` fields on `Options` at all, so
+        // `set_by_name` rejects them the same way it rejects any unknown
+        // option — this pins that a modeline can never smuggle either in,
+        // even though `ts=2` right next to it is still honored normally.
+        let entries = parse_modelines("# vim: ts=2 makeprg=pwned errorformat=fmt:\n", 5);
+        assert!(
+            entries
+                .iter()
+                .any(|(n, v)| n == "ts" && *v == OptionValue::Int(2)),
+            "an unrelated, legitimate option on the same line must still work"
+        );
+        assert!(
+            !entries.iter().any(|(n, _)| n == "makeprg"),
+            "makeprg must never be emitted from a modeline"
+        );
+        assert!(
+            !entries.iter().any(|(n, _)| n == "errorformat"),
+            "errorformat must never be emitted from a modeline"
+        );
+    }
+
     // ── parse_modeline_marker_must_be_word_boundary ───────────────────────────
 
     #[test]

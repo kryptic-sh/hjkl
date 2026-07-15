@@ -1653,6 +1653,38 @@ mod tests {
         assert!(o.get_by_name("frobnicate").is_none());
     }
 
+    /// Security regression (CVE-2019-12735 class): vim's `:set makeprg=...`
+    /// / `errorformat` can be abused from a modeline to run an arbitrary
+    /// shell command on `:make`. `hjkl`'s modeline path
+    /// (`hjkl_app::modeline`) only ever applies an option if
+    /// `Options::set_by_name` accepts it first — so as long as `makeprg` /
+    /// `errorformat` are never recognized names, a modeline can never set
+    /// them, full stop. This pins that: if a future change ever adds these
+    /// fields to `Options` without deliberately excluding them from the
+    /// modeline-settable allowlist, this test catches it.
+    #[test]
+    fn set_by_name_rejects_makeprg_and_errorformat() {
+        let mut o = Options::default();
+        assert!(
+            matches!(
+                o.set_by_name("makeprg", OptionValue::String("rm -rf /".into())),
+                Err(EngineError::Ex(_))
+            ),
+            "`makeprg` must never be a settable option — a modeline must \
+             never be able to smuggle an arbitrary shell command into `:make`"
+        );
+        assert!(o.get_by_name("makeprg").is_none());
+        assert!(
+            matches!(
+                o.set_by_name("errorformat", OptionValue::String("%f:%l:%m".into())),
+                Err(EngineError::Ex(_))
+            ),
+            "`errorformat` rides the same `:make`/`:grep` shell-out surface \
+             as `makeprg` and must stay unsettable too"
+        );
+        assert!(o.get_by_name("errorformat").is_none());
+    }
+
     #[test]
     fn options_type_mismatch_errors() {
         let mut o = Options::default();
