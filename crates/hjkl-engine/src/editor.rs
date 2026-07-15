@@ -2699,7 +2699,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn cursor_screen_row(&mut self, height: u16) -> u16 {
         let cursor = buf_cursor_row(&self.buffer);
         let top = self.host.viewport().top_row;
-        cursor.saturating_sub(top).min(height as usize - 1) as u16
+        cursor
+            .saturating_sub(top)
+            .min((height as usize).saturating_sub(1)) as u16
     }
 
     /// Returns the cursor's screen position `(x, y)` for the textarea
