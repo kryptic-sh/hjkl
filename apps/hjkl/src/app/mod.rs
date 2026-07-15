@@ -349,6 +349,19 @@ pub struct App {
     /// so `/foo<Enter>` in one split and `n` in another must see the same
     /// pattern.
     pub search: std::sync::Arc<std::sync::Mutex<hjkl_engine::SearchBank>>,
+    /// Per-buffer changelist banks — `g;`/`g,` history and the `'.`/`` `. ``
+    /// last-change mark (audit B3), keyed by `buffer_id`. UNLIKE the five
+    /// banks above (one Arc shared by every editor in the app session),
+    /// vim's changelist is per-BUFFER: two windows/splits on the SAME
+    /// buffer must share one changelist, but windows on DIFFERENT buffers
+    /// must stay isolated. Fetch-or-create via [`App::change_bank_for`];
+    /// wired into an editor via `Editor::set_change_bank_arc` at every point
+    /// that also sets `Editor::set_current_buffer_id` (mirrors the other
+    /// banks' wiring at slot/window-editor creation and
+    /// `reconcile_window_editors`). Pruned on buffer close (`:bd`/`:bw`) so
+    /// this map can't grow without bound across a long session.
+    pub(crate) change_banks:
+        std::collections::HashMap<u64, std::sync::Arc<std::sync::Mutex<hjkl_engine::ChangeBank>>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1258,6 +1271,27 @@ impl App {
         }
     }
 
+    /// Fetch (or create) the shared changelist bank for `buffer_id` (audit
+    /// B3). All editors currently attached to the same `buffer_id` — the
+    /// slot's own bridge editor plus every window's view editor onto it —
+    /// must be wired to the SAME `Arc` so `g;`/`` `. `` in one split see
+    /// edits made from another split on that buffer. Callers pair this with
+    /// `Editor::set_current_buffer_id(buffer_id)` /
+    /// `Editor::set_change_bank_arc(..)` at every site that retargets an
+    /// editor's buffer (mirrors how the other shared banks are wired
+    /// alongside `set_current_buffer_id`).
+    pub(crate) fn change_bank_for(
+        &mut self,
+        buffer_id: u64,
+    ) -> std::sync::Arc<std::sync::Mutex<hjkl_engine::ChangeBank>> {
+        self.change_banks
+            .entry(buffer_id)
+            .or_insert_with(|| {
+                std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::ChangeBank::default()))
+            })
+            .clone()
+    }
+
     /// Build a fresh per-window view editor onto `slot_idx`'s shared `Buffer`.
     /// Copies the slot editor's settings + viewport dims so the new view
     /// renders identically; the cursor starts at the slot editor's cursor.
@@ -1321,6 +1355,15 @@ impl App {
                 ed.set_last_substitute_arc(self.last_substitute.clone());
                 ed.set_abbrevs_arc(self.abbrevs.clone());
                 ed.set_search_arc(self.search.clone());
+                // Per-buffer changelist bank (audit B3): fetch-or-create the
+                // bank keyed by this window's slot's buffer_id, and swap it
+                // in — this is the point where a window's editor actually
+                // (re)targets a buffer, so it is where the change-bank Arc
+                // must be re-resolved too (unlike the five banks above,
+                // which are one Arc for the whole session and never change).
+                let bid = self.slots[slot].buffer_id;
+                let bank = self.change_bank_for(bid);
+                ed.set_change_bank_arc(bank);
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1815,6 +1858,21 @@ impl App {
             std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::SearchBank::default()));
         slot.editor.set_search_arc(shared_search.clone());
 
+        // Per-buffer changelist bank (audit B3). UNLIKE the banks above —
+        // one Arc shared by the whole app session — this one is keyed by
+        // `buffer_id`: seed the map with slot 0's bank up front so the
+        // invariant "every editor's change_bank Arc == change_banks[its
+        // buffer_id]" holds from the very first keystroke, before any
+        // buffer switch runs `change_bank_for`.
+        let mut change_banks: std::collections::HashMap<
+            u64,
+            std::sync::Arc<std::sync::Mutex<hjkl_engine::ChangeBank>>,
+        > = std::collections::HashMap::new();
+        let initial_change_bank =
+            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::ChangeBank::default()));
+        change_banks.insert(buffer_id, initial_change_bank.clone());
+        slot.editor.set_change_bank_arc(initial_change_bank);
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1928,6 +1986,7 @@ impl App {
             last_substitute: shared_last_substitute,
             abbrevs: shared_abbrevs,
             search: shared_search,
+            change_banks,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

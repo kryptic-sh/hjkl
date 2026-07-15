@@ -585,6 +585,36 @@ impl Default for SearchBank {
     }
 }
 
+/// Per-buffer changelist bank: `g;`/`g,` history plus the `'.` / `` `. ``
+/// "last change" mark. Shared via `Arc<Mutex<ChangeBank>>` across every
+/// window's [`Editor`] viewing the SAME buffer — vim's changelist and
+/// last-change mark are per-buffer, not per-window, so an edit made in one
+/// split must be visible to `g;` / `` `. `` from any other split on that
+/// buffer (audit B3).
+///
+/// UNLIKE [`GlobalMarks`] / [`Registers`] / [`SearchBank`] / abbrevs /
+/// last-substitute — which are each a single `Arc` shared by literally
+/// every `Editor` in the app, session-global — a `ChangeBank` is
+/// per-buffer: the app layer keys a bank per `buffer_id` and hands each
+/// `Editor` the Arc for its CURRENT buffer, swapping it whenever the
+/// editor's buffer changes (see `App::change_bank_for` /
+/// `Editor::set_change_bank_arc`). Two editors on the same buffer_id share
+/// one bank; editors on different buffers never see each other's entries.
+#[derive(Debug, Clone, Default)]
+pub struct ChangeBank {
+    /// Position of the most recent buffer mutation, matching vim's `:h '.`
+    /// ("the position where the last change was made" — change-start, not
+    /// the post-edit cursor). Surfaced via the `'.` / `` `. `` marks.
+    pub last_edit: Option<(usize, usize)>,
+    /// Bounded ring of recent edit positions (newest at back). `g;` walks
+    /// toward older, `g,` toward newer. Capped at
+    /// [`crate::types::CHANGE_LIST_MAX`].
+    pub list: Vec<(usize, usize)>,
+    /// Index into `list` while walking; `None` outside a walk (any new
+    /// edit clears it and trims forward entries).
+    pub cursor: Option<usize>,
+}
+
 pub struct Editor<
     B: crate::types::View = hjkl_buffer::View,
     H: crate::types::Host = crate::types::DefaultHost,
@@ -626,19 +656,19 @@ pub struct Editor<
     /// overlay. Orthogonal to the input mode; auto-reset to `Normal` whenever
     /// the input mode leaves Normal (see `drop_blame_if_left_normal`).
     pub(crate) view: crate::ViewMode,
-    /// Position of the most recent buffer mutation, recorded by the core edit
-    /// funnel ([`Editor::mutate_edit`]). Surfaced via the `'.` / `` `. `` marks.
-    /// Discipline-agnostic substrate (#265 G3): the engine-core edit path writes
-    /// it and any discipline can offer "back to last edit", so it lives on
-    /// `Editor`, not `VimState`.
-    pub(crate) last_edit_pos: Option<(usize, usize)>,
-    /// Bounded ring of recent edit positions (newest at back), maintained by
-    /// `mutate_edit`. `g;` walks toward older, `g,` toward newer. Capped at
-    /// [`crate::types::CHANGE_LIST_MAX`]. Substrate — see [`Editor::last_edit_pos`].
-    pub(crate) change_list: Vec<(usize, usize)>,
-    /// Index into `change_list` while walking; `None` outside a walk (any new
-    /// edit clears it and trims forward entries). Substrate.
-    pub(crate) change_list_cursor: Option<usize>,
+    /// The changelist / last-change-mark bank: `last_edit`, `list`,
+    /// `cursor`. Discipline-agnostic substrate (#265 G3): the engine-core
+    /// edit path (`mutate_edit`) writes it and any discipline can offer
+    /// "back to last edit" / `g;`/`g,`.
+    ///
+    /// Shared via `Arc<Mutex<_>>` — but PER-BUFFER, not session-global like
+    /// [`Editor::global_marks`] / [`Editor::registers`] (audit B3): vim's
+    /// changelist and `` `. `` mark are per-buffer, so two windows/splits on
+    /// the SAME buffer must see one shared changelist, while windows on
+    /// DIFFERENT buffers must stay isolated. The app layer keys a bank per
+    /// `buffer_id` and swaps this Arc via [`Editor::set_change_bank_arc`]
+    /// whenever the editor's buffer changes. See [`ChangeBank`].
+    pub(crate) change_bank: std::sync::Arc<std::sync::Mutex<ChangeBank>>,
     /// Undo history: each entry is `(joined_document, cursor)` before the
     /// edit. Stored as `Arc<String>` so it shares the
     /// Undo history: snapshots taken via `View::rope()` — `ropey::Rope::clone`
@@ -1272,9 +1302,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             discipline: Box::new(crate::NoDiscipline),
             extra_selections: Vec::new(),
             view: crate::ViewMode::default(),
-            last_edit_pos: None,
-            change_list: Vec::new(),
-            change_list_cursor: None,
+            change_bank: std::sync::Arc::new(std::sync::Mutex::new(ChangeBank::default())),
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
             buffer,
@@ -1503,9 +1531,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// Position of the last edit (where `.` would replay). `None` if
-    /// no edit has happened yet in this session.
+    /// no edit has happened yet on this buffer. Per-buffer (audit B3) —
+    /// reads the shared [`ChangeBank`] so a `` `. `` jump in one split sees
+    /// an edit made in a sibling split on the same buffer.
     pub fn last_edit_pos(&self) -> Option<(usize, usize)> {
-        self.last_edit_pos
+        self.change_bank.lock().unwrap().last_edit
     }
 
     /// Read-only view of the file-marks table — uppercase / "file"
@@ -1656,10 +1686,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.registers.lock().unwrap().set_clipboard(text, linewise);
     }
 
-    /// Read-only view of the change list (positions of recent edits) plus
-    /// the current walk cursor. Newest entry is at the back.
-    pub fn change_list(&self) -> (&[(usize, usize)], Option<usize>) {
-        (&self.change_list, self.change_list_cursor)
+    /// Snapshot of the change list (positions of recent edits) plus the
+    /// current walk cursor. Newest entry is at the back. Per-buffer (audit
+    /// B3) — reads the shared [`ChangeBank`], so this reflects edits made
+    /// from any window/split on the same buffer.
+    ///
+    /// Returns owned data rather than a borrow: the bank lives behind a
+    /// `Mutex`, so a borrow can't outlive the guard (mirrors
+    /// [`Editor::global_marks_iter`] / [`Editor::abbrevs`]).
+    pub fn change_list(&self) -> (Vec<(usize, usize)>, Option<usize>) {
+        let bank = self.change_bank.lock().unwrap();
+        (bank.list.clone(), bank.cursor)
     }
 
     /// Replace the unnamed register without touching any other slot.
@@ -2180,24 +2217,29 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // Dot mark records the PRE-edit position (change start), matching
         // vim's `:h '.` semantics. Previously this stored the post-edit
         // cursor, which diverged from nvim on `iX<Esc>j`.
-        self.last_edit_pos = Some((pre_edit_row, pre_edit_col));
+        //
+        // Per-buffer (audit B3): both the dot mark and the change-list ring
+        // live in the shared `ChangeBank`, so an edit here is visible to
+        // `` `. `` / `g;` from any other window/split on this same buffer.
+        let mut bank = self.change_bank.lock().unwrap();
+        bank.last_edit = Some((pre_edit_row, pre_edit_col));
         // Append to the change-list ring (skip when the cursor sits on
         // the same cell as the last entry — back-to-back keystrokes on
         // one column shouldn't pollute the ring). A new edit while
         // walking the ring trims the forward half, vim style.
         let entry = (pos_row, pos_col);
-        if self.change_list.last() != Some(&entry) {
-            if let Some(idx) = self.change_list_cursor.take() {
-                self.change_list.truncate(idx + 1);
+        if bank.list.last() != Some(&entry) {
+            if let Some(idx) = bank.cursor.take() {
+                bank.list.truncate(idx + 1);
             }
-            self.change_list.push(entry);
-            let len = self.change_list.len();
+            bank.list.push(entry);
+            let len = bank.list.len();
             if len > crate::types::CHANGE_LIST_MAX {
-                self.change_list
-                    .drain(0..len - crate::types::CHANGE_LIST_MAX);
+                bank.list.drain(0..len - crate::types::CHANGE_LIST_MAX);
             }
         }
-        self.change_list_cursor = None;
+        bank.cursor = None;
+        drop(bank);
         // Shift / drop marks + jump-list entries to track the row
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
@@ -2356,14 +2398,26 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// Walk cursor into the change list (`g;` / `g,`), or `None` when not
-    /// walking.
+    /// walking. Per-buffer (audit B3) — reads the shared [`ChangeBank`].
     pub fn change_list_cursor(&self) -> Option<usize> {
-        self.change_list_cursor
+        self.change_bank.lock().unwrap().cursor
     }
 
-    /// Set the change-list walk cursor.
+    /// Set the change-list walk cursor. Per-buffer (audit B3) — writes the
+    /// shared [`ChangeBank`], so the walk position is visible to (and can be
+    /// continued from) any other window/split on the same buffer.
     pub fn set_change_list_cursor(&mut self, idx: Option<usize>) {
-        self.change_list_cursor = idx;
+        self.change_bank.lock().unwrap().cursor = idx;
+    }
+
+    /// Point this editor at a shared per-buffer changelist bank. UNLIKE the
+    /// other `set_*_arc` setters (registers/global-marks/last-substitute/
+    /// abbrevs/search — one Arc for the whole app session), this one is
+    /// per-buffer: the caller must fetch-or-create the bank keyed by the
+    /// target `buffer_id` and swap it in whenever the editor's buffer
+    /// changes (audit B3). See [`ChangeBank`].
+    pub fn set_change_bank_arc(&mut self, bank: std::sync::Arc<std::sync::Mutex<ChangeBank>>) {
+        self.change_bank = bank;
     }
 
     /// Arm the one-shot hint that the next scroll should be animated.
@@ -5216,6 +5270,110 @@ mod shared_search_tests {
         a.set_last_search(Some("foo".to_string()), true);
         // No shared Arc wired — B must not see A's search.
         assert_eq!(b.last_search(), None);
+    }
+}
+
+// ─── shared change-bank tests (audit B3) ──────────────────────────────────
+//
+// Unlike the banks above (one Arc shared by every editor in the app), the
+// change bank is PER-BUFFER: the app keys one Arc per `buffer_id` and hands
+// each editor the Arc for its CURRENT buffer. These tests model that at the
+// `Editor` level — the "keyed by buffer_id" bookkeeping itself lives on the
+// app (`App::change_bank_for`), which has no unit-test seam here.
+
+#[cfg(test)]
+mod shared_change_bank_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::{Edit, Position, View};
+
+    fn editor_with(content: &str) -> Editor<View, DefaultHost> {
+        let mut e = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        e.set_content(content);
+        e
+    }
+
+    /// Move the cursor to `(row, col)` then insert `text` there via the
+    /// core edit funnel. `mutate_edit` records the dot mark / changelist
+    /// entry from the LIVE cursor position (matching real FSM edits, which
+    /// always type at the cursor) — not from the `Edit`'s `at` field — so
+    /// the cursor must be positioned first.
+    fn record_insert(e: &mut Editor<View, DefaultHost>, row: usize, col: usize, text: &str) {
+        e.jump_cursor(row, col);
+        e.mutate_edit(Edit::InsertStr {
+            at: Position::new(row, col),
+            text: text.to_string(),
+        });
+    }
+
+    /// (1) Two editors wired to the same buffer's bank share a changelist —
+    /// an edit recorded via A is visible to B's `last_edit_pos` / `change_list`.
+    #[test]
+    fn shared_change_bank_visible_across_editors_on_same_buffer() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(ChangeBank::default()));
+        let mut a = editor_with("alpha\nbeta\ngamma\n");
+        a.set_change_bank_arc(shared.clone());
+        let mut b = editor_with("alpha\nbeta\ngamma\n");
+        b.set_change_bank_arc(shared.clone());
+
+        // Edit via editor A (e.g. window A on a `:split`).
+        record_insert(&mut a, 1, 0, "X");
+
+        // Editor B (a sibling window on the SAME buffer) must see A's edit
+        // in both the dot mark and the changelist ring.
+        assert_eq!(b.last_edit_pos(), Some((1, 0)));
+        let (list, _) = b.change_list();
+        assert_eq!(list, vec![(1, 1)]);
+    }
+
+    /// (2) NEGATIVE — two editors on DIFFERENT buffers (independent banks,
+    /// as if on different buffer_ids) must stay isolated.
+    #[test]
+    fn unshared_change_banks_on_different_buffers_stay_isolated() {
+        let mut a = editor_with("alpha\nbeta\ngamma\n");
+        let b = editor_with("alpha\nbeta\ngamma\n");
+        // No Arc shared — each editor keeps its own default bank, exactly
+        // as if `a` and `b` were windows on two different buffer_ids.
+        record_insert(&mut a, 1, 0, "X");
+
+        assert_eq!(a.last_edit_pos(), Some((1, 0)));
+        assert_eq!(
+            b.last_edit_pos(),
+            None,
+            "different buffer must not see A's edit"
+        );
+        let (b_list, _) = b.change_list();
+        assert!(b_list.is_empty());
+    }
+
+    /// (3) An editor switched from buffer X's bank to buffer Y's bank picks
+    /// up Y's changelist — and X's bank is left untouched by the switch.
+    #[test]
+    fn switching_buffers_swaps_to_the_new_buffers_bank() {
+        let bank_x = std::sync::Arc::new(std::sync::Mutex::new(ChangeBank::default()));
+        let bank_y = std::sync::Arc::new(std::sync::Mutex::new(ChangeBank::default()));
+
+        let mut ed = editor_with("alpha\nbeta\ngamma\n");
+        ed.set_change_bank_arc(bank_x.clone());
+        record_insert(&mut ed, 0, 0, "X");
+        assert_eq!(ed.last_edit_pos(), Some((0, 0)));
+
+        // Simulate the app retargeting this window's editor onto a
+        // different buffer (e.g. `:e other.txt` in that window).
+        ed.set_change_bank_arc(bank_y.clone());
+
+        // The editor now sees Y's (empty) bank, not X's edit.
+        assert_eq!(
+            ed.last_edit_pos(),
+            None,
+            "after switching buffers the editor must see the NEW buffer's bank"
+        );
+        let (list, _) = ed.change_list();
+        assert!(list.is_empty());
+
+        // X's bank is untouched by the switch — a sibling window still on
+        // buffer X (if any) would still see the edit.
+        assert_eq!(bank_x.lock().unwrap().last_edit, Some((0, 0)));
     }
 }
 

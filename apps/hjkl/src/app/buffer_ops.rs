@@ -23,6 +23,10 @@ impl App {
     pub(crate) fn reset_slot_to_scratch(&mut self, idx: usize) {
         let old_id = self.slots[idx].buffer_id;
         self.syntax.forget(old_id);
+        // The old buffer is fully discarded here (its content is gone) —
+        // prune its changelist bank so it doesn't leak (audit B3), mirroring
+        // `syntax.forget` right above.
+        self.change_banks.remove(&old_id);
         let new_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
@@ -33,6 +37,7 @@ impl App {
         editor.set_last_substitute_arc(self.last_substitute.clone());
         editor.set_abbrevs_arc(self.abbrevs.clone());
         editor.set_search_arc(self.search.clone());
+        editor.set_change_bank_arc(self.change_bank_for(new_id));
         if let Ok(size) = crossterm::terminal::size() {
             let vp = editor.host_mut().viewport_mut();
             vp.width = size.0;
@@ -196,6 +201,9 @@ impl App {
         self.lsp_detach_buffer(active_slot);
         let mut removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
+        // The buffer is fully closed — prune its changelist bank so it
+        // doesn't leak (audit B3), mirroring `syntax.forget` above.
+        self.change_banks.remove(&removed.buffer_id);
         // Drop the closed buffer's swap. The owning process stays alive, so the
         // orphan scan never reaps it, and the slot is gone so cleanup_swaps_on_exit
         // can't either — leaving it makes a later open of the same file surface a
@@ -293,6 +301,9 @@ impl App {
         self.lsp_detach_buffer(active_slot);
         let mut removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
+        // The buffer is fully wiped — prune its changelist bank (audit B3),
+        // mirroring `syntax.forget` above.
+        self.change_banks.remove(&removed.buffer_id);
         // Drop the closed buffer's swap (see buffer_delete for rationale).
         if let Some(p) = removed.swap_path.take() {
             let _ = hjkl_app::swap::remove_swap(&p);
@@ -464,6 +475,7 @@ impl App {
         editor.set_last_substitute_arc(self.last_substitute.clone());
         editor.set_abbrevs_arc(self.abbrevs.clone());
         editor.set_search_arc(self.search.clone());
+        editor.set_change_bank_arc(self.change_bank_for(buffer_id));
         // Mirror the nvim_api build_app viewport (80×24) for headless paths;
         // in the real TUI crossterm::terminal::size() wins.
         if let Ok(size) = crossterm::terminal::size() {

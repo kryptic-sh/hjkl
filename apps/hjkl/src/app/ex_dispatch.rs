@@ -789,6 +789,7 @@ impl App {
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
             editor.set_search_arc(self.search.clone());
+            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -875,6 +876,7 @@ impl App {
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
             editor.set_search_arc(self.search.clone());
+            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -1368,6 +1370,7 @@ impl App {
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
             editor.set_search_arc(self.search.clone());
+            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -1705,6 +1708,9 @@ impl App {
                     if self.slots.len() > 1 {
                         let removed = self.slots.remove(idx);
                         self.syntax.forget(removed.buffer_id);
+                        // The aborted-recovery slot is fully discarded — prune its
+                        // changelist bank too (audit B3).
+                        self.change_banks.remove(&removed.buffer_id);
                         // Fix window pointers.
                         let slot_count = self.slots.len();
                         for win in self.windows.iter_mut().flatten() {
@@ -1877,6 +1883,9 @@ impl App {
                 if prev_pristine && self.slots.len() > 1 {
                     let removed = self.slots.remove(prev_idx);
                     self.syntax.forget(removed.buffer_id);
+                    // The pristine placeholder buffer is fully discarded — prune
+                    // its changelist bank too (audit B3).
+                    self.change_banks.remove(&removed.buffer_id);
                     // Fix all window slot pointers.
                     let slot_count = self.slots.len();
                     for win in self.windows.iter_mut().flatten() {
@@ -2314,6 +2323,7 @@ impl App {
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
             editor.set_search_arc(self.search.clone());
+            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;

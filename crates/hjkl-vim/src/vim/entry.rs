@@ -68,10 +68,11 @@ pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
     dir: isize,
     count: usize,
 ) {
-    if ed.change_list().0.is_empty() {
+    let (list, _) = ed.change_list();
+    if list.is_empty() {
         return;
     }
-    let len = ed.change_list().0.len();
+    let len = list.len();
     let mut idx: isize = match (ed.change_list_cursor(), dir) {
         (None, -1) => len as isize - 1,
         (None, 1) => return, // already past the newest entry
@@ -91,7 +92,7 @@ pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
     }
     let idx = idx as usize;
     ed.set_change_list_cursor(Some(idx));
-    let (row, col) = ed.change_list().0[idx];
+    let (row, col) = list[idx];
     ed.jump_cursor(row, col);
 }
 /// `Ctrl-R {reg}` body — insert the named register's contents at the
