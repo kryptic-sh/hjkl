@@ -10,6 +10,7 @@
 //! gates are lifted. If a suite still flakes on macOS, re-gate it with
 //! `#[cfg(all(unix, not(target_os = "macos")))]` and note the failing test.
 
+pub mod abbreviations;
 pub mod at_colon;
 // Event-driven autoreload (#242): writes a file externally and waits for the
 // reload with no keypress. macOS tmpdir lives under a `/private` symlink that

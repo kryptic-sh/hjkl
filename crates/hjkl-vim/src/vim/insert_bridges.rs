@@ -36,7 +36,7 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
     // the lhs and insert the rhs, then continue to insert `ch` as normal.
     // `<C-v>` (literal-insert) must bypass this — callers that want literal
     // insertion should NOT call this bridge; they use insert_char_literal.
-    if !in_replace && !ed.abbrevs().is_empty() {
+    if !in_replace && !ed.abbrevs_is_empty() {
         let iskeyword = ed.settings().iskeyword.clone();
         if !is_keyword_char(ch, &iskeyword) {
             // Only non-keyword trigger chars fire abbreviation expansion.
@@ -220,7 +220,7 @@ pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
     // ── Abbreviation expansion on CR ─────────────────────────────────────────
     // CR triggers expansion for full-id / end-id / non-id abbreviations.
     // We expand BEFORE the newline is inserted; CR is then inserted as normal.
-    if !ed.abbrevs().is_empty() {
+    if !ed.abbrevs_is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Cr);
     }
 
@@ -686,7 +686,7 @@ pub(crate) fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
 
     // ── Abbreviation expansion on Esc ────────────────────────────────────────
     // Esc triggers expansion for all abbreviation types.
-    if !ed.abbrevs().is_empty() {
+    if !ed.abbrevs_is_empty() {
         check_and_apply_abbrev(ed, AbbrevTrigger::Esc);
     }
 

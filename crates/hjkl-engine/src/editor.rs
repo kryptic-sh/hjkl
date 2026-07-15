@@ -725,7 +725,14 @@ pub struct Editor<
     /// matching close char consumes the queued one instead of inserting.
     pub(crate) pending_closes: Vec<(usize, usize, char)>,
     /// Active abbreviation table (insert-mode + cmdline entries).
-    pub(crate) abbrevs: Vec<crate::abbrev::Abbrev>,
+    ///
+    /// Shared via `Arc<Mutex<_>>` across every window's `Editor` (mirrors
+    /// [`Editor::last_substitute`]) — vim's abbreviations are session-global,
+    /// so `:iabbrev` defined in one split must expand in every other split.
+    /// Internal — read/mutated via [`Editor::abbrevs`] / [`Editor::add_abbrev`]
+    /// / [`Editor::remove_abbrev`] / [`Editor::clear_abbrevs`]; wired by
+    /// [`Editor::set_abbrevs_arc`].
+    pub(crate) abbrevs: std::sync::Arc<std::sync::Mutex<Vec<crate::abbrev::Abbrev>>>,
 
     /// Whether the unnamed register's current content is linewise. This is
     /// register metadata, not vim FSM state — any discipline that yanks and
@@ -1246,7 +1253,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             last_input_host_at: None,
             last_substitute: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_closes: Vec::new(),
-            abbrevs: Vec::new(),
+            abbrevs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             yank_linewise: false,
             current_buffer_id: 0,
             sticky_col: None,
@@ -2325,9 +2332,30 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.view = v;
     }
 
-    /// The active abbreviation table.
-    pub fn abbrevs(&self) -> &[crate::abbrev::Abbrev] {
-        &self.abbrevs
+    /// The active abbreviation table. Returns an owned clone (the value
+    /// lives behind a shared `Mutex`, so a borrow can't outlive the guard —
+    /// mirrors [`Editor::global_marks_iter`]).
+    pub fn abbrevs(&self) -> Vec<crate::abbrev::Abbrev> {
+        self.abbrevs.lock().unwrap().clone()
+    }
+
+    /// Whether any abbreviations are defined. Cheap emptiness check that
+    /// locks but does NOT clone — the insert hot path calls this per
+    /// keystroke, so it must not allocate. Use instead of `abbrevs().is_empty()`.
+    pub fn abbrevs_is_empty(&self) -> bool {
+        self.abbrevs.lock().unwrap().is_empty()
+    }
+
+    /// Point this editor at a shared abbreviations bank. All editors in the
+    /// app share one bank (mirrors [`Editor::set_last_substitute_arc`]) so
+    /// `:iabbrev` / `:abbreviate` defined in one window/split expand in
+    /// every other window — vim's abbreviations are session-global, not
+    /// per-window.
+    pub fn set_abbrevs_arc(
+        &mut self,
+        abbrevs: std::sync::Arc<std::sync::Mutex<Vec<crate::abbrev::Abbrev>>>,
+    ) {
+        self.abbrevs = abbrevs;
     }
 
     /// Autopair's queued close-brackets, as `(row, col, ch)`. A discipline's
@@ -4374,10 +4402,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// mode flags), it is replaced. Inserts at the front so newer definitions
     /// take priority (first-match wins in `try_abbrev_expand`).
     pub fn add_abbrev(&mut self, lhs: &str, rhs: &str, insert: bool, cmdline: bool, noremap: bool) {
+        let mut abbrevs = self.abbrevs.lock().unwrap();
         // Remove existing entry with same lhs + overlapping mode flags.
-        self.abbrevs
-            .retain(|a| a.lhs != lhs || (a.insert && !insert) || (a.cmdline && !cmdline));
-        self.abbrevs.insert(
+        abbrevs.retain(|a| a.lhs != lhs || (a.insert && !insert) || (a.cmdline && !cmdline));
+        abbrevs.insert(
             0,
             crate::abbrev::Abbrev {
                 lhs: lhs.to_string(),
@@ -4393,6 +4421,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// whose mode flags overlap with the requested `insert`/`cmdline` flags.
     pub fn remove_abbrev(&mut self, lhs: &str, insert: bool, cmdline: bool) {
         self.abbrevs
+            .lock()
+            .unwrap()
             .retain(|a| a.lhs != lhs || (!insert || !a.insert) && (!cmdline || !a.cmdline));
     }
 
@@ -4401,7 +4431,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// `insert=true` removes insert-mode abbrevs; `cmdline=true` removes
     /// cmdline-mode abbrevs. Both `true` clears everything.
     pub fn clear_abbrevs(&mut self, insert: bool, cmdline: bool) {
-        self.abbrevs.retain(|a| {
+        self.abbrevs.lock().unwrap().retain(|a| {
             // Keep entries that do NOT match any of the cleared modes.
             let cleared = (insert && a.insert) || (cmdline && a.cmdline);
             !cleared
@@ -5028,6 +5058,40 @@ mod shared_last_substitute_tests {
         a.set_last_substitute(dummy_cmd("bar"));
         // No shared Arc wired — B must not see A's last substitute.
         assert_eq!(b.last_substitute(), None);
+    }
+}
+
+// ─── shared abbreviations bank tests (#279 slice 3) ───────────────────────
+
+#[cfg(test)]
+mod shared_abbrevs_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::View;
+
+    #[test]
+    fn shared_abbrevs_bank_visible_across_editors() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_abbrevs_arc(shared.clone());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        b.set_abbrevs_arc(shared.clone());
+        // Define an abbreviation on editor A.
+        a.add_abbrev("foo", "bar", true, true, false);
+        // Read from editor B — same bank, no copy needed.
+        let b_abbrevs = b.abbrevs();
+        assert_eq!(b_abbrevs.len(), 1);
+        assert_eq!(b_abbrevs[0].lhs, "foo");
+        assert_eq!(b_abbrevs[0].rhs, "bar");
+    }
+
+    #[test]
+    fn unshared_abbrevs_stay_isolated() {
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        let b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.add_abbrev("foo", "bar", true, true, false);
+        // No shared Arc wired — B must not see A's abbrev.
+        assert!(b.abbrevs().is_empty());
     }
 }
 

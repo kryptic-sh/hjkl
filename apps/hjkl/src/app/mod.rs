@@ -337,6 +337,12 @@ pub struct App {
     /// last substitute is session-global, so `:s` in one split and `:&` in
     /// another must see the same command.
     pub last_substitute: std::sync::Arc<std::sync::Mutex<Option<hjkl_engine::SubstituteCmd>>>,
+    /// Vim abbreviations (`:iabbrev` / `:abbreviate`) (#279 slice 3). One
+    /// shared bank, wired into every `Editor` exactly like
+    /// [`App::last_substitute`]: vim's abbreviations are session-global, so
+    /// `:iabbrev foo bar` defined in one split must expand in every other
+    /// split.
+    pub abbrevs: std::sync::Arc<std::sync::Mutex<Vec<hjkl_engine::Abbrev>>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1309,6 +1315,7 @@ impl App {
                 ed.set_registers_arc(self.registers.clone());
                 ed.set_global_marks_arc(self.global_marks.clone());
                 ed.set_last_substitute_arc(self.last_substitute.clone());
+                ed.set_abbrevs_arc(self.abbrevs.clone());
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1790,6 +1797,12 @@ impl App {
         slot.editor
             .set_last_substitute_arc(shared_last_substitute.clone());
 
+        // Same treatment for abbreviations — session-global in vim, so
+        // every editor must share one bank from the start.
+        let shared_abbrevs: std::sync::Arc<std::sync::Mutex<Vec<hjkl_engine::Abbrev>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        slot.editor.set_abbrevs_arc(shared_abbrevs.clone());
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1901,6 +1914,7 @@ impl App {
             registers: shared_registers,
             global_marks: shared_global_marks,
             last_substitute: shared_last_substitute,
+            abbrevs: shared_abbrevs,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

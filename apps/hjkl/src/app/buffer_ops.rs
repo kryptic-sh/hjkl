@@ -139,6 +139,7 @@ impl App {
             editor.set_registers_arc(self.registers.clone());
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
+            editor.set_abbrevs_arc(self.abbrevs.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -267,6 +268,7 @@ impl App {
             editor.set_registers_arc(self.registers.clone());
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
+            editor.set_abbrevs_arc(self.abbrevs.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -476,6 +478,7 @@ impl App {
         editor.set_registers_arc(self.registers.clone());
         editor.set_global_marks_arc(self.global_marks.clone());
         editor.set_last_substitute_arc(self.last_substitute.clone());
+        editor.set_abbrevs_arc(self.abbrevs.clone());
         // Mirror the nvim_api build_app viewport (80×24) for headless paths;
         // in the real TUI crossterm::terminal::size() wins.
         if let Ok(size) = crossterm::terminal::size() {

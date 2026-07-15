@@ -584,7 +584,7 @@ pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     }
 
     let iskeyword = ed.settings().iskeyword.clone();
-    let abbrevs = ed.abbrevs().to_vec();
+    let abbrevs = ed.abbrevs();
 
     let Some((lhs_len, rhs)) =
         try_abbrev_expand(&abbrevs, &line_before, mincol, trigger, &iskeyword)
