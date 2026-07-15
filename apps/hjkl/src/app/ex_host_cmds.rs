@@ -501,7 +501,14 @@ impl HostCmd<App> for BCmd {
         }
         if arg.chars().all(|c| c.is_ascii_digit()) {
             let n: usize = arg.parse().unwrap_or(0);
-            if n == 0 || n > app.slots.len() {
+            // Buffer numbers are raw 1-based slot indices (matches `:ls`'s
+            // `i + 1` numbering, which is never renumbered/compacted around
+            // the explorer). The explorer's scratch slot is never a valid
+            // `:b N` target — it's excluded from `:ls`'s listing and
+            // `switch_to` silently no-ops on it — so treat it the same as
+            // out-of-range.
+            let is_valid = n != 0 && app.slots.get(n - 1).is_some_and(|s| !s.is_explorer);
+            if !is_valid {
                 return Some(ExEffect::Error(format!("E86: Buffer {n} does not exist")));
             }
             app.switch_to(n - 1);

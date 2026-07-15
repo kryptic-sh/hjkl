@@ -638,6 +638,66 @@ fn b_num_out_of_range_errors() {
 }
 
 #[test]
+fn b_num_targeting_explorer_slot_errors_e86() {
+    // A8: the explorer's scratch slot is appended as a normal-looking slot
+    // (invisible in `:ls`), so its numeric position must NOT be a valid
+    // `:b N` target — `switch_to` silently no-ops on it, so the bounds
+    // check has to reject it explicitly rather than let it through.
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.slots.len(), 1, "starts with one real (scratch) slot");
+    app.toggle_explorer();
+    assert_eq!(app.slots.len(), 2, "explorer appended as slot index 1");
+    assert!(app.slots[1].is_explorer);
+    // Focus back on the real editor window (as a user would after opening
+    // the explorer in a side split) before issuing `:b 2`.
+    app.switch_to(0);
+    assert!(!app.explorer_buf_focused());
+    let before = app.active_index();
+    app.dispatch_ex("b 2");
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(
+        msg.contains("E86"),
+        "`:b <explorer index>` should error E86, got: {msg}"
+    );
+    assert_eq!(
+        app.active_index(),
+        before,
+        "active slot must not change when targeting the explorer slot"
+    );
+    assert!(
+        !app.explorer_buf_focused(),
+        "explorer must not become focused via `:b N`"
+    );
+}
+
+#[test]
+fn b_num_still_switches_to_real_buffer_when_explorer_open() {
+    // Companion to the E86 test above: a real file slot placed *after* the
+    // explorer slot must still be a valid `:b N` target.
+    let path_a = std::env::temp_dir().join("hjkl_a8_bnum_explorer_a.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.toggle_explorer();
+    assert!(app.slots[1].is_explorer);
+    // Focus back on the real editor window before opening a second file.
+    app.switch_to(0);
+    // Open a second real file so there's a real slot after the explorer.
+    let path_b = std::env::temp_dir().join("hjkl_a8_bnum_explorer_b.txt");
+    std::fs::write(&path_b, "b\n").unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    assert_eq!(app.slots.len(), 3);
+    assert!(!app.slots[2].is_explorer);
+    app.dispatch_ex("b 3");
+    assert_eq!(
+        app.active_index(),
+        2,
+        "`:b 3` should switch to the real slot"
+    );
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
+#[test]
 fn b_name_substring_switches() {
     let path_foo = std::env::temp_dir().join("hjkl_phe_bname_foo.txt");
     let path_bar = std::env::temp_dir().join("hjkl_phe_bname_bar.txt");
