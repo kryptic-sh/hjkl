@@ -2011,3 +2011,59 @@ fn auto_completion_pending_times_out_quickly() {
         "auto completion is dropped after the 3s timeout"
     );
 }
+
+// ── App::shutdown (audit finding B1) ───────────────────────────────────────
+//
+// Regression coverage for the orphaned-LSP-child bug: quitting hjkl used to
+// return from `main` without ever calling `LspManager::shutdown()`, so
+// spawned language servers (rust-analyzer, gopls, tsserver, …) survived the
+// process exit — `Drop for LspManager` only fire-and-forgets a `ShutdownAll`
+// on a background thread the process exit races. `App::shutdown` is the
+// testable seam `main` now calls on every exit path.
+
+/// With no LSP manager attached (the common case — `lsp.enabled = false` by
+/// default), `App::shutdown` must be a safe no-op: `self.lsp` stays `None`
+/// and nothing panics.
+#[test]
+fn shutdown_with_no_lsp_manager_is_noop() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.lsp.is_none());
+    app.shutdown();
+    assert!(app.lsp.is_none());
+}
+
+/// With a real `LspManager` attached, `App::shutdown` must take it out of
+/// `self.lsp` (leaving `None`) and drive the manager's blocking
+/// `shutdown()` — the graceful `ShutdownAll` + bounded (~2s) thread join
+/// that actually kills and reaps any spawned server child. This is the
+/// core regression assertion for B1: before the fix, nothing on any exit
+/// path called this.
+#[test]
+fn shutdown_takes_and_shuts_down_attached_lsp_manager() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+    assert!(app.lsp.is_some(), "precondition: manager attached");
+
+    app.shutdown();
+
+    assert!(
+        app.lsp.is_none(),
+        "shutdown must take self.lsp, leaving None"
+    );
+}
+
+/// `App::shutdown` must be idempotent — safe to call twice (e.g. once from
+/// an early `+wq`-style exit path and, hypothetically, again from a later
+/// one) without panicking or double-joining a thread that's already gone.
+#[test]
+fn shutdown_is_idempotent() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+    app.shutdown();
+    assert!(app.lsp.is_none());
+
+    // Second call: self.lsp is already None — must not panic.
+    app.shutdown();
+    assert!(app.lsp.is_none());
+}

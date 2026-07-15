@@ -595,6 +595,27 @@ impl App {
             .map(|k| k.language.clone())
     }
 
+    /// Gracefully shut down the LSP subsystem, if one is attached.
+    ///
+    /// Takes `self.lsp` (leaving `None` behind) and calls
+    /// [`hjkl_lsp::LspManager::shutdown`], which sends `ShutdownAll` and
+    /// blocks (bounded ~2s) joining the background thread so every child
+    /// language-server process (rust-analyzer, gopls, tsserver, …) is killed
+    /// and reaped before the call returns — instead of being orphaned when
+    /// the process exits, which is all `Drop for LspManager` can guarantee
+    /// (it only fire-and-forgets `ShutdownAll` on a detached thread that the
+    /// process exit races).
+    ///
+    /// Idempotent: a second call finds `self.lsp` already `None` and is a
+    /// no-op. Must be called on every normal exit path from `main` —
+    /// including the error-return path — so a language server never
+    /// outlives the editor just because it exited with an error.
+    pub fn shutdown(&mut self) {
+        if let Some(lsp) = self.lsp.take() {
+            lsp.shutdown();
+        }
+    }
+
     /// Restart the LSP server for the active buffer: detach, then re-attach.
     ///
     /// Detaching stops the server and clears state; re-attaching restarts it.

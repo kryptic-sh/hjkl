@@ -359,6 +359,9 @@ fn main() -> Result<()> {
         if app.exit_requested {
             // A `+wq` / `+q!` style command requested exit before the loop
             // even runs — honour it without entering the alternate screen.
+            // `with_lsp` may already have attached a manager above, so it
+            // still needs a clean shutdown here.
+            app.shutdown();
             return Ok(());
         }
     }
@@ -402,6 +405,14 @@ fn main() -> Result<()> {
         event::DisableBracketedPaste,
         terminal::LeaveAlternateScreen
     );
+
+    // Shut the LSP subsystem down on every normal exit path — including the
+    // error path — so a spawned language server (rust-analyzer, gopls,
+    // tsserver, …) is never orphaned. `App` has no `Drop` impl; without this
+    // call the process would exit while `Drop for LspManager` only
+    // fire-and-forgets a shutdown notification on a background thread that
+    // the process exit races (audit finding B1).
+    app.shutdown();
 
     result
 }
