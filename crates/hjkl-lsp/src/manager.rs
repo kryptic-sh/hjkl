@@ -62,19 +62,38 @@ impl LspManager {
         }
     }
 
+    /// Send a command to the background LSP thread, warning (once per
+    /// call) instead of silently swallowing the failure when the channel
+    /// is closed — i.e. the background thread has died. Without this, a
+    /// dead `hjkl-lsp` thread makes every command a permanent, invisible
+    /// no-op (audit D7). `label` is the command's variant name, logged
+    /// instead of the command itself since some variants (`NotifyChange`,
+    /// `AttachBuffer`) carry a whole buffer's text.
+    fn send_cmd(&self, label: &'static str, cmd: LspCommand) {
+        if self.cmd_tx.send(cmd).is_err() {
+            tracing::warn!(
+                command = label,
+                "hjkl-lsp: command dropped — background thread is not running"
+            );
+        }
+    }
+
     /// Attach a buffer to the appropriate language server.
     pub fn attach_buffer(&self, id: BufferId, path: &Path, language_id: &str, text: &str) {
-        let _ = self.cmd_tx.send(LspCommand::AttachBuffer {
-            id,
-            path: path.to_path_buf(),
-            language_id: language_id.to_string(),
-            text: text.to_string(),
-        });
+        self.send_cmd(
+            "AttachBuffer",
+            LspCommand::AttachBuffer {
+                id,
+                path: path.to_path_buf(),
+                language_id: language_id.to_string(),
+                text: text.to_string(),
+            },
+        );
     }
 
     /// Detach a buffer (closes the document on the server side).
     pub fn detach_buffer(&self, id: BufferId) {
-        let _ = self.cmd_tx.send(LspCommand::DetachBuffer { id });
+        self.send_cmd("DetachBuffer", LspCommand::DetachBuffer { id });
     }
 
     /// Notify the server that a buffer's full text changed.
@@ -84,7 +103,7 @@ impl LspManager {
     /// entire buffer per keystroke (on a 1.86 M-line file the clone was
     /// ~22 % of per-keystroke CPU in profiling).
     pub fn notify_change(&self, id: BufferId, full_text: Arc<String>) {
-        let _ = self.cmd_tx.send(LspCommand::NotifyChange { id, full_text });
+        self.send_cmd("NotifyChange", LspCommand::NotifyChange { id, full_text });
     }
 
     /// Notify the server of an incremental edit batch. Each `TextChange` is
@@ -93,16 +112,17 @@ impl LspManager {
     /// the caller is responsible for converting from UTF-8 byte columns to
     /// UTF-16 code units when the server didn't negotiate UTF-8.
     pub fn notify_change_incremental(&self, id: BufferId, changes: Vec<TextChange>) {
-        let _ = self
-            .cmd_tx
-            .send(LspCommand::NotifyChangeIncremental { id, changes });
+        self.send_cmd(
+            "NotifyChangeIncremental",
+            LspCommand::NotifyChangeIncremental { id, changes },
+        );
     }
 
     /// Notify the server that a buffer was saved (`textDocument/didSave`).
     /// rust-analyzer (and most servers) run their flycheck — `cargo check` /
     /// `cargo clippy` — on save, so this is what surfaces clippy diagnostics.
     pub fn notify_save(&self, id: BufferId) {
-        let _ = self.cmd_tx.send(LspCommand::NotifySave { id });
+        self.send_cmd("NotifySave", LspCommand::NotifySave { id });
     }
 
     /// Send a JSON-RPC request to the server attached to `buffer_id`.
@@ -116,12 +136,15 @@ impl LspManager {
         method: &str,
         params: serde_json::Value,
     ) {
-        let _ = self.cmd_tx.send(LspCommand::Request {
-            request_id,
-            buffer_id,
-            method: method.to_string(),
-            params,
-        });
+        self.send_cmd(
+            "Request",
+            LspCommand::Request {
+                request_id,
+                buffer_id,
+                method: method.to_string(),
+                params,
+            },
+        );
     }
 
     /// Non-blocking poll: returns the next pending event, or `None` if empty.
