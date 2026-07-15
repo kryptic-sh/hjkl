@@ -19,6 +19,7 @@ pub mod at_colon;
 // Esc-coalescing flake, so this suite stays linux-only.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod autoreload;
+pub mod backward_range;
 pub mod dot_repeat;
 pub mod explorer;
 pub mod global_marks;

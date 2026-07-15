@@ -175,12 +175,16 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
             return Err(format!("invalid end address in range: `{after_comma}`"));
         };
         let end = resolve_address(end_addr, end_offset, editor)?;
-        let (lo, hi) = if start <= end {
-            (start, end)
-        } else {
-            (end, start)
-        };
-        return Ok((Some(LineRange::new(lo, hi)), rest));
+        if start > end {
+            // Vim parity: a backward range (`:8,3d`) is rejected outright in
+            // non-interactive use — real vim only offers to swap it via an
+            // interactive "OK to swap" prompt, which hjkl (headless/keystroke
+            // driven) has no equivalent of, so the plain error is the correct
+            // match here. Previously this silently swapped to `(end, start)`,
+            // which let e.g. `:8,3d` delete lines 3-8 instead of erroring.
+            return Err("E493: Backwards range given".into());
+        }
+        return Ok((Some(LineRange::new(start, end)), rest));
     }
 
     Ok((Some(LineRange::single(start)), after_start))
@@ -329,6 +333,67 @@ mod tests {
     fn mark_not_set_returns_error() {
         let result = parse("'z");
         assert!(result.is_err());
+    }
+
+    // ---- audit A3: backward ranges error (E493) instead of silently swapping
+
+    #[test]
+    fn backward_numeric_range_returns_e493() {
+        // `:4,2` — start (4) > end (2) — must error, not silently become
+        // `(2, 4)`.
+        let result = parse("4,2");
+        let err = result.expect_err("backward range must be rejected, not swapped");
+        assert!(
+            err.contains("E493"),
+            "expected E493 backwards-range error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn backward_numeric_range_does_not_produce_swapped_range() {
+        // Belt-and-suspenders on top of the message check: confirm the `Err`
+        // path is actually taken (no `Ok((Some(range), _))` sneaking through
+        // with the swapped bounds).
+        let e = make_editor();
+        let result = parse_range("4,2", &e);
+        assert!(
+            result.is_err(),
+            "backward range must not resolve to a swapped LineRange, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn backward_mark_range_returns_e493() {
+        use hjkl_buffer::View;
+        use hjkl_engine::{DefaultHost, Options};
+        let buf = View::from_str("a\nb\nc\nd\ne");
+        let host = DefaultHost::new();
+        let mut editor = hjkl_vim::vim_editor(buf, host, Options::default());
+        // mark 'a' on line 4, mark 'b' on line 2 — 'a,'b is backward.
+        editor.set_mark('a', (3, 0)); // line 4
+        editor.set_mark('b', (1, 0)); // line 2
+        let result = parse_range("'a,'b", &editor);
+        let err = result.expect_err("backward mark range must be rejected, not swapped");
+        assert!(
+            err.contains("E493"),
+            "expected E493 backwards-range error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn forward_range_still_works_after_e493_change() {
+        // Forward ranges (start <= end) must be completely unaffected.
+        let (r, rest) = parse("2,4").unwrap();
+        assert_eq!(r, Some((2, 4)));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn equal_range_is_fine() {
+        // start == end is not "backward" — must parse fine, not error.
+        let (r, rest) = parse("5,5").unwrap();
+        assert_eq!(r, Some((5, 5)));
+        assert_eq!(rest, "");
     }
 
     #[test]
