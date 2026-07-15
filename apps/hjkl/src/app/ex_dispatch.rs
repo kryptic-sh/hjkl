@@ -1867,7 +1867,13 @@ impl App {
         let prev_idx = self.focused_slot_idx();
         let prev_pristine = {
             let s = &self.slots[prev_idx];
-            s.filename.is_none() && !s.dirty
+            // The explorer's own scratch slot is ALSO `filename.is_none() &&
+            // !dirty` — the same shape as the pristine-default buffer this
+            // check exists to discard. Without the `is_explorer` guard,
+            // `:e <path>` while the explorer window is focused would delete
+            // the explorer slot itself instead of a throwaway default one
+            // (audit A8 follow-up).
+            s.filename.is_none() && !s.dirty && !s.is_explorer
         };
         match self.open_new_slot(path) {
             Ok(new_slot_idx) => {

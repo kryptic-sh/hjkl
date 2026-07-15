@@ -250,6 +250,47 @@ fn edit_existing_path_switches_to_open_slot() {
     let _ = std::fs::remove_file(&path_b);
 }
 
+/// Regression (audit A8 follow-up): the explorer's own scratch slot has
+/// `filename == None && !dirty` — the exact same shape `:e <path>`'s
+/// "drop the pristine default buffer" logic used to treat as discardable.
+/// Without the `is_explorer` guard, opening a file while the explorer
+/// window is focused deleted the explorer slot instead of the intended
+/// throwaway default buffer.
+#[test]
+fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
+    use crate::keymap_actions::AppAction;
+
+    let path = std::env::temp_dir().join("hjkl_a8_explorer_guard.txt");
+    std::fs::write(&path, "hello\n").unwrap();
+
+    // No file on the command line → slot 0 is the pristine default buffer.
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.slots.len(), 1);
+
+    // Open the explorer: it gets its own slot and takes focus.
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert_eq!(app.slots.len(), 2);
+    assert!(
+        app.active().is_explorer,
+        "explorer window must be focused after opening it"
+    );
+
+    // `:e <path>` while the explorer is focused.
+    app.dispatch_ex(&format!("e {}", path.display()));
+
+    assert!(
+        app.slots.iter().any(|s| s.is_explorer),
+        "the explorer slot must survive `:e` while it was the focused window"
+    );
+    assert_eq!(
+        app.slots.len(),
+        3,
+        "pristine default (untouched) + explorer + newly opened file"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn edit_other_open_path_does_not_block_on_dirty() {
     let path_a = std::env::temp_dir().join("hjkl_phc_dirty_a.txt");
