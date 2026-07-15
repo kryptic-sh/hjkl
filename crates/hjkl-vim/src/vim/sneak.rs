@@ -10,7 +10,7 @@ use hjkl_vim_types::{
 use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_line, buf_line_bytes, buf_row_count, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
 /// Scan the buffer from the current cursor position for the `count`-th
 /// occurrence of the two-char digraph `(c1, c2)`.
@@ -230,7 +230,26 @@ pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
     if c > 0 {
         (r, c - 1)
     } else if r > 0 {
-        let prev_len = buf_line_bytes(ed.buffer(), r - 1);
+        // Char columns, not bytes — cursor columns in this engine are always
+        // char-indexed (this codebase's known char-vs-byte trap), so a
+        // previous line with any multi-byte char landed on the wrong /
+        // mid-codepoint column with `buf_line_bytes`.
+        //
+        // Deliberately NOT `- 1`: `char_len` is the "one past the last
+        // char" virtual column (a legal cursor position — `View::set_cursor`
+        // clamps to `line_chars`, not `line_chars - 1`). Landing the
+        // INCLUSIVE visual cursor there is what makes the downstream
+        // charwise-delete swallow the line's trailing newline and join with
+        // the next line — verified against live nvim (and pinned by
+        // `hjkl-compat-oracle`'s `vi_brace_open_trailing_charwise` case):
+        // `vi{d` on `"{ a\n  b\n}\n"` from `(1,2)` deletes through to `{}`,
+        // and `vi{d` on `"fn foo() {\n    body\n}\n"` from inside `body`
+        // collapses to `"fn foo() {\n}\n"` — in both cases the closing
+        // bracket's line gets pulled up, not left as an empty line. Landing
+        // on the last REAL char (char_len - 1) instead would leave the
+        // newline out of the inclusive range and wrongly preserve that
+        // empty line — which is what broke the oracle gate when tried.
+        let prev_len = buf_line_chars(ed.buffer(), r - 1);
         (r - 1, prev_len)
     } else {
         (0, 0)
@@ -388,6 +407,81 @@ mod sneak_tests {
             ls,
             Some((('b', 'a'), true)),
             "last_sneak should record the digraph and direction"
+        );
+    }
+
+    // ── retreat_one / vi{ column-invariant regression (audit A1) ──────────
+    //
+    // NOTE on the audit brief's original diagnosis: it additionally claimed
+    // `retreat_one` should land on the last REAL char of the previous line
+    // (`char_len - 1`), not the "one past end" virtual column (`char_len`).
+    // That part was verified WRONG against live nvim and against
+    // `hjkl-compat-oracle`'s `vi_brace_open_trailing_charwise` case: when the
+    // bracket's inner content is non-whitespace and the close bracket sits
+    // alone on its own line, real vim's `vi{d` lands the inclusive visual
+    // cursor on the virtual "one past end" column (`char_len`, a legal
+    // cursor position — `View::set_cursor` clamps to `line_chars`, not
+    // `line_chars - 1`), which makes the charwise delete swallow the
+    // newline and join the closing bracket's line up. Landing on
+    // `char_len - 1` instead leaves the newline out of the range and
+    // wrongly preserves that line — confirmed by running this exact fix
+    // through `cargo test -p hjkl-compat-oracle` (57 -> 56) and by directly
+    // diffing against `nvim --headless`. The ONLY real bug is byte-vs-char
+    // (see below); the `- 1` was not warranted and is intentionally absent.
+
+    /// Byte length and char length coincide for an all-ASCII previous line,
+    /// so this does NOT discriminate old vs. new code (both compute `8`) —
+    /// it's here purely to pin the "one past end" semantics as documentation
+    /// alongside the multibyte case below, which DOES discriminate.
+    #[test]
+    fn retreat_one_vi_brace_prev_line_lands_on_char_length() {
+        let mut ed = make_editor("fn foo() {\n    body\n}\n");
+        ed.jump_cursor(1, 4); // cursor on 'b' of "body"
+        let (_start, end, kind) =
+            crate::vim::text_object::text_object_range(&ed, TextObject::Bracket('{'), true, 1)
+                .expect("vi{ should resolve the enclosing braces");
+        assert_eq!(kind, RangeKind::Exclusive);
+        assert_eq!(
+            end,
+            (2, 0),
+            "exclusive inner end should be col 0 of the '}}' line"
+        );
+        let landed = super::retreat_one(&ed, end);
+        assert_eq!(
+            landed,
+            (1, 8),
+            "visual cursor should land on char-col 8 (char_len of \"    body\"), \
+             the virtual one-past-end column that makes the delete join lines"
+        );
+    }
+
+    /// Multibyte variant: previous line has a 2-byte UTF-8 char (`é`), so the
+    /// byte length (10) and char length (9) of the line diverge. The old
+    /// buggy code used `buf_line_bytes` — a BYTE count — as a CHAR column,
+    /// landing the cursor two columns too far right (mid-codepoint / out of
+    /// bounds by char-column standards). This is the actual regression this
+    /// fix addresses; the ascii test above only documents the mechanism.
+    #[test]
+    fn retreat_one_vi_brace_multibyte_prev_line_uses_char_column() {
+        let mut ed = make_editor("fn foo() {\n    héllo\n}\n");
+        ed.jump_cursor(1, 4); // cursor on 'h' of "héllo"
+        let (_start, end, _kind) =
+            crate::vim::text_object::text_object_range(&ed, TextObject::Bracket('{'), true, 1)
+                .expect("vi{ should resolve the enclosing braces");
+        assert_eq!(
+            end,
+            (2, 0),
+            "exclusive inner end should be col 0 of the '}}' line"
+        );
+        // "    héllo" is 9 CHARS (4 spaces + h,é,l,l,o) but 10 BYTES (é is
+        // 2 bytes) — the buggy code returned 10 (a byte count used as a char
+        // column).
+        let landed = super::retreat_one(&ed, end);
+        assert_eq!(
+            landed,
+            (1, 9),
+            "visual cursor should land on char-col 9 (char_len of \"    héllo\"), \
+             not the byte length (10)"
         );
     }
 }
