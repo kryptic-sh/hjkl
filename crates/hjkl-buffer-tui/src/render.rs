@@ -90,12 +90,14 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// Bg painted across the cursor row (vim's `cursorline`). Pass
     /// `Style::default()` to disable.
     pub cursor_line_bg: Style,
-    /// Row to paint [`Self::cursor_line_bg`] across, overriding the buffer's
-    /// live cursor row. Used for **unfocused** windows sharing a buffer with
-    /// the focused one: each window keeps its own saved cursor row, so the
-    /// inactive "ghost" cursorline must sit on that saved row, not chase the
-    /// active window's cursor. `None` = use `buffer.cursor().row` (the
-    /// focused-window default).
+    /// Doc row to paint [`Self::cursor_line_bg`] across. When the host tracks a
+    /// per-window cursor that is authoritative over [`Self::buffer`]'s own
+    /// cursor — e.g. multiple windows share one buffer's `Content` but each
+    /// keeps its own cursor — it should pass that row here so the cursorline
+    /// follows the intended window rather than whichever cursor the shared
+    /// buffer happens to hold. `None` falls back to `buffer.cursor().row`, for
+    /// simple single-view callers (e.g. the picker preview) where the buffer's
+    /// own cursor is the source of truth.
     pub cursor_line_row: Option<usize>,
     /// Bg painted across a closed fold's header row — brighter than
     /// `cursor_line_bg` so a collapsed fold is visually distinct.

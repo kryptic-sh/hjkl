@@ -1131,15 +1131,19 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         selection,
         resolver: &resolver,
         cursor_line_bg: cursor_line_style,
-        // Unfocused windows paint the cursorline on their OWN saved cursor row
-        // (the per-window `cursor_row`), not the shared editor cursor — so the
-        // ghost line stays put when another window on the same buffer moves.
-        // Focused window: `None` defers to the live editor cursor.
-        cursor_line_row: if is_focused {
-            None
-        } else {
-            Some(app.window_cursor(win_id).0)
-        },
+        // Cursorline row = THIS window's own editor cursor (`w_cursor_row`), the
+        // same single source of truth (#151) that relative line numbers, indent
+        // guides, and EOL hints above already key off. It resolves correctly for
+        // both cases: the focused window's authoritative cursor is its window
+        // editor, and each unfocused split keeps its own saved cursor — so the
+        // ghost line stays put when a sibling window on the same buffer moves.
+        //
+        // Passing it explicitly (rather than `None` → the renderer's slot-buffer
+        // fallback) matters because `BufferView.buffer` is the SHARED slot
+        // editor's buffer, whose cursor is a distinct object from the focused
+        // window editor's cursor; the two can diverge, and the fallback would
+        // then paint the cursorline on the wrong row.
+        cursor_line_row: Some(w_cursor_row),
         // The explorer is a tree, not code — don't tint folded directory rows.
         fold_line_bg: if is_explorer_slot {
             Style::default()
