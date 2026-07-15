@@ -725,7 +725,7 @@ pub fn move_viewport_middle<B: Cursor + Query>(buf: &mut B, viewport: &hjkl_buff
         .top_row
         .saturating_add(height.saturating_sub(1))
         .min(last);
-    let mid = viewport.top_row + visible_bot.saturating_sub(viewport.top_row) / 2;
+    let mid = (viewport.top_row + visible_bot.saturating_sub(viewport.top_row) / 2).min(last);
     write_cursor(buf, Position::new(mid, 0));
     move_first_non_blank(buf);
 }
@@ -742,7 +742,10 @@ pub fn move_viewport_bottom<B: Cursor + Query>(
         .top_row
         .saturating_add(height.saturating_sub(1))
         .min(last);
-    let target = visible_bot.saturating_sub(offset).max(viewport.top_row);
+    let target = visible_bot
+        .saturating_sub(offset)
+        .max(viewport.top_row)
+        .min(last);
     write_cursor(buf, Position::new(target, 0));
     move_first_non_blank(buf);
 }
@@ -1452,6 +1455,34 @@ mod tests {
         };
         move_viewport_bottom(&mut b, &v, 1);
         assert_eq!(at(&b), Position::new(3, 0));
+    }
+
+    #[test]
+    fn move_viewport_middle_clamps_when_top_row_past_end() {
+        // Simulates a stale viewport (e.g. right after a bulk delete
+        // shrinks the buffer, before the viewport re-clamps): top_row
+        // is past the buffer's last row. The computed middle must still
+        // clamp to the last row instead of going out of bounds.
+        let mut b = View::from_str("a\nb\nc");
+        let v = hjkl_buffer::Viewport {
+            top_row: 10,
+            height: 4,
+            ..Default::default()
+        };
+        move_viewport_middle(&mut b, &v);
+        assert_eq!(at(&b), Position::new(2, 0));
+    }
+
+    #[test]
+    fn move_viewport_bottom_clamps_when_top_row_past_end() {
+        let mut b = View::from_str("a\nb\nc");
+        let v = hjkl_buffer::Viewport {
+            top_row: 10,
+            height: 4,
+            ..Default::default()
+        };
+        move_viewport_bottom(&mut b, &v, 0);
+        assert_eq!(at(&b), Position::new(2, 0));
     }
 
     #[test]
