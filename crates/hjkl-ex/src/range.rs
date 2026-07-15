@@ -36,13 +36,18 @@ enum Address {
     Mark(char),
 }
 
-/// Strip a leading address from `s`, return `(address, remainder)` or `None`.
-fn parse_address(s: &str) -> Option<(Address, &str)> {
+/// Strip a leading base address from `s`, return `(address, remainder)` or
+/// `None`. Does NOT consume a trailing offset (`+3`, `-2`, ...) — that's
+/// [`parse_offset_chain`]'s job. A leading `+`/`-` (no explicit base) is
+/// treated as an implicit `.` (current line) base and left unconsumed so the
+/// offset parser picks it up.
+fn parse_base_address(s: &str) -> Option<(Address, &str)> {
     let mut chars = s.char_indices();
     let (_, first) = chars.next()?;
     match first {
         '.' => Some((Address::Current, &s[1..])),
         '$' => Some((Address::Last, &s[1..])),
+        '+' | '-' => Some((Address::Current, s)), // implicit `.`; leave sign for offset parsing
         '\'' => {
             // The mark char may be multibyte (e.g. `:'é`); slice at its real
             // byte boundary rather than a hard-coded `2` to avoid a
@@ -66,24 +71,71 @@ fn parse_address(s: &str) -> Option<(Address, &str)> {
     }
 }
 
-/// Resolve a parsed address against the current editor state. Numbers are
-/// 1-based and clamped to the buffer; bad marks return an error.
+/// Consume a chain of `+N` / `-N` / bare `+` / `-` offset terms from the
+/// front of `s` (vim allows repeats like `++`, `+-`, `.+3-1`), summing them.
+/// Bare `+`/`-` (no digits) count as 1. Returns `(total_offset, remainder)`;
+/// `(0, s)` when `s` has no leading offset term.
+fn parse_offset_chain(mut s: &str) -> (i64, &str) {
+    let mut total: i64 = 0;
+    loop {
+        let sign: i64 = match s.chars().next() {
+            Some('+') => 1,
+            Some('-') => -1,
+            _ => break,
+        };
+        let after_sign = &s[1..];
+        let mut end = 0;
+        for (i, c) in after_sign.char_indices() {
+            if c.is_ascii_digit() {
+                end = i + c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let magnitude: i64 = if end == 0 {
+            1
+        } else {
+            match after_sign[..end].parse() {
+                Ok(v) => v,
+                Err(_) => break,
+            }
+        };
+        total += sign * magnitude;
+        s = &after_sign[end..];
+    }
+    (total, s)
+}
+
+/// Strip a leading address (base + optional offset chain) from `s`. Returns
+/// `(base_address, offset, remainder)` or `None` when `s` doesn't start with
+/// a valid address character.
+fn parse_address(s: &str) -> Option<(Address, i64, &str)> {
+    let (base, rest) = parse_base_address(s)?;
+    let (offset, rest) = parse_offset_chain(rest);
+    Some((base, offset, rest))
+}
+
+/// Resolve a parsed address (base + offset) against the current editor
+/// state. Numbers are 1-based; the final `base + offset` is clamped to the
+/// buffer. Bad marks return an error.
 fn resolve_address<H: hjkl_engine::Host>(
     addr: Address,
+    offset: i64,
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<usize, String> {
     let line_count = editor.buffer().row_count();
     // 1-based last line (at least 1 so single-line buffers work)
     let last = line_count.max(1);
-    match addr {
-        Address::Number(n) => Ok(n.clamp(1, last)),
-        Address::Current => Ok(editor.cursor().0 + 1), // cursor is 0-based
-        Address::Last => Ok(last),
+    let base: i64 = match addr {
+        Address::Number(n) => n as i64,
+        Address::Current => editor.cursor().0 as i64 + 1, // cursor is 0-based
+        Address::Last => last as i64,
         Address::Mark(c) => editor
             .mark(c)
-            .map(|(r, _)| (r + 1).min(last)) // 0-based → 1-based
-            .ok_or_else(|| format!("mark `{c}` not set")),
-    }
+            .map(|(r, _)| r as i64 + 1) // 0-based → 1-based
+            .ok_or_else(|| format!("mark `{c}` not set"))?,
+    };
+    Ok((base + offset).clamp(1, last as i64) as usize)
 }
 
 // ---- public API ------------------------------------------------------------
@@ -107,22 +159,22 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
         return Ok((Some(LineRange::new(1, line_count)), rest));
     }
 
-    let Some((start_addr, after_start)) = parse_address(cmd) else {
+    let Some((start_addr, start_offset, after_start)) = parse_address(cmd) else {
         return Ok((None, cmd));
     };
 
-    let start = resolve_address(start_addr, editor)?;
+    let start = resolve_address(start_addr, start_offset, editor)?;
 
     if let Some(after_comma) = after_start.strip_prefix(',') {
         // Expect a second address after the comma. If absent, error.
         if after_comma.is_empty() {
             return Err("missing end address after ','".into());
         }
-        let Some((end_addr, rest)) = parse_address(after_comma) else {
+        let Some((end_addr, end_offset, rest)) = parse_address(after_comma) else {
             // Something like `5,x` where `x` is not an address character
             return Err(format!("invalid end address in range: `{after_comma}`"));
         };
-        let end = resolve_address(end_addr, editor)?;
+        let end = resolve_address(end_addr, end_offset, editor)?;
         let (lo, hi) = if start <= end {
             (start, end)
         } else {
@@ -146,16 +198,16 @@ pub fn parse_dest_address<H: hjkl_engine::Host>(
     if s.is_empty() {
         return Err("expected a destination address".into());
     }
-    let (addr, rest) = parse_address(s).ok_or_else(|| format!("invalid address: `{s}`"))?;
+    let (addr, offset, rest) = parse_address(s).ok_or_else(|| format!("invalid address: `{s}`"))?;
     if !rest.trim().is_empty() {
         return Err(format!("trailing characters after address: `{rest}`"));
     }
     // `0` is a legal destination (place before line 1); resolve_address would
     // clamp it to 1, so special-case it here.
-    if let Address::Number(0) = addr {
+    if let (Address::Number(0), 0) = (addr, offset) {
         return Ok(0);
     }
-    resolve_address(addr, editor)
+    resolve_address(addr, offset, editor)
 }
 
 // ---- tests -----------------------------------------------------------------
@@ -284,5 +336,89 @@ mod tests {
         let r = LineRange::single(5);
         assert_eq!(r.start_one_based(), 5);
         assert_eq!(r.end_one_based(), 5);
+    }
+
+    // ---- audit A4: `+N` / `-N` cursor-relative offset addresses -----------
+
+    /// Parse `cmd` on a 5-line editor whose cursor starts on 1-based
+    /// `cursor_line`. Returns `(start, end)` (1-based) like `parse`.
+    fn parse_from_line(cmd: &str, cursor_line: usize) -> Result<(usize, usize), String> {
+        let mut e = make_editor();
+        e.set_cursor_quiet(cursor_line - 1, 0);
+        let (r, _rest) = parse_range(cmd, &e)?;
+        Ok(r.map(|lr| (lr.start_one_based(), lr.end_one_based()))
+            .expect("expected a parsed range"))
+    }
+
+    #[test]
+    fn plus_n_is_cursor_relative_not_absolute() {
+        // Audit A4: `:+3` from cursor line 1 must land on line 4 (cursor + 3),
+        // NOT absolute line 3 (the old bug: it fell through to the bare
+        // line-number fallback, whose `usize::from_str` silently accepts a
+        // leading `+`).
+        let (start, end) = parse_from_line("+3", 1).unwrap();
+        assert_eq!((start, end), (4, 4));
+    }
+
+    #[test]
+    fn minus_n_is_cursor_relative() {
+        // `:-2` from cursor line 5 → line 3.
+        let (start, end) = parse_from_line("-2", 5).unwrap();
+        assert_eq!((start, end), (3, 3));
+    }
+
+    #[test]
+    fn bare_plus_is_cursor_plus_one() {
+        let (start, end) = parse_from_line("+", 2).unwrap();
+        assert_eq!((start, end), (3, 3));
+    }
+
+    #[test]
+    fn bare_minus_is_cursor_minus_one() {
+        let (start, end) = parse_from_line("-", 4).unwrap();
+        assert_eq!((start, end), (3, 3));
+    }
+
+    #[test]
+    fn dot_plus_n_offset() {
+        // `.+2` — explicit current-line base with an offset.
+        let (start, end) = parse_from_line(".+2", 2).unwrap();
+        assert_eq!((start, end), (4, 4));
+    }
+
+    #[test]
+    fn plus_offset_clamps_to_last_line() {
+        // `:+999` on a 5-line buffer clamps to the last line, it doesn't error.
+        let (start, end) = parse_from_line("+999", 1).unwrap();
+        assert_eq!((start, end), (5, 5));
+    }
+
+    #[test]
+    fn minus_offset_clamps_to_first_line() {
+        // `:-999` on a 5-line buffer clamps to line 1.
+        let (start, end) = parse_from_line("-999", 5).unwrap();
+        assert_eq!((start, end), (1, 1));
+    }
+
+    #[test]
+    fn repeated_sign_offsets_accumulate() {
+        // vim allows repeated offset terms: `++` = +2, `+-` = 0.
+        let (start, end) = parse_from_line("++", 1).unwrap();
+        assert_eq!((start, end), (3, 3));
+        let (start, end) = parse_from_line("+-", 3).unwrap();
+        assert_eq!((start, end), (3, 3));
+    }
+
+    #[test]
+    fn existing_address_tests_unaffected_by_offset_support() {
+        // Sanity: plain numbers, `.`, `$`, and marks with no offset still
+        // resolve exactly as before (offset chain parses to 0 and is a
+        // no-op).
+        let (r, rest) = parse("5").unwrap();
+        assert_eq!(r, Some((5, 5)));
+        assert_eq!(rest, "");
+        let (r, rest) = parse("%").unwrap();
+        assert_eq!(r, Some((1, 5)));
+        assert_eq!(rest, "");
     }
 }

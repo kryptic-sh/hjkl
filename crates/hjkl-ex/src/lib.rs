@@ -178,7 +178,17 @@ fn handle_bare_line_number<H: hjkl_engine::Host>(
     cmd_str: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    if let Ok(line) = cmd_str.trim().parse::<usize>()
+    let trimmed = cmd_str.trim();
+    // `usize::from_str` accepts a leading `+` (and `parse_range` already
+    // handles `+N`/`-N` as cursor-relative addresses upstream), so a
+    // `+`/`-`-prefixed remainder reaching here means `parse_range` did NOT
+    // treat it as an address — don't let it fall through to the permissive
+    // absolute-number parse below (that's audit A4: `:+3` silently became
+    // an absolute `goto_line(3)`).
+    if trimmed.starts_with('+') || trimmed.starts_with('-') {
+        return None;
+    }
+    if let Ok(line) = trimmed.parse::<usize>()
         && range.is_none()
     {
         editor.goto_line(line);
