@@ -461,7 +461,7 @@ pub(crate) fn search_repeat_bridge<H: hjkl_engine::types::Host>(
     forward: bool,
     count: usize,
 ) {
-    if let Some(pattern) = ed.last_search_pattern().map(str::to_string) {
+    if let Some(pattern) = ed.last_search_pattern() {
         ed.push_search_pattern(&pattern);
     }
     if ed.search_state().pattern.is_none() {

@@ -788,6 +788,7 @@ impl App {
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
+            editor.set_search_arc(self.search.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -873,6 +874,7 @@ impl App {
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
+            editor.set_search_arc(self.search.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -1365,6 +1367,7 @@ impl App {
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
+            editor.set_search_arc(self.search.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -2310,6 +2313,7 @@ impl App {
             editor.set_global_marks_arc(self.global_marks.clone());
             editor.set_last_substitute_arc(self.last_substitute.clone());
             editor.set_abbrevs_arc(self.abbrevs.clone());
+            editor.set_search_arc(self.search.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;

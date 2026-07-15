@@ -56,7 +56,7 @@ pub fn step_search_prompt<H: Host>(
                 // Empty `/<CR>` (or `?<CR>`) re-runs the previous search
                 // pattern in the prompt's direction — vim parity.
                 let pattern: Option<String> = if pat_text.is_empty() {
-                    ed.last_search_pattern().map(str::to_owned)
+                    ed.last_search_pattern()
                 } else {
                     Some(pat_text)
                 };

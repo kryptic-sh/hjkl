@@ -549,6 +549,42 @@ pub enum MarkJump {
 /// generic (mirrors [`crate::Registers`]).
 pub type GlobalMarks = std::collections::BTreeMap<char, (u64, usize, usize)>;
 
+/// Session-global search state: the last committed `/`/`?` pattern, its
+/// direction, and the search-prompt history. Shared across every window's
+/// [`Editor`] via `Arc<Mutex<SearchBank>>` — see [`Editor::set_search_arc`].
+///
+/// Bundled into one struct behind a single lock (rather than four separate
+/// `Arc<Mutex<_>>` fields) because vim always reads/writes these four
+/// together — e.g. committing a search sets both `last` and `forward` in
+/// the same breath, and `n`/`N` reads both. Mirrors [`GlobalMarks`] /
+/// [`crate::Registers`] as the app host's spelling for the shared-bank type.
+#[derive(Debug, Clone)]
+pub struct SearchBank {
+    /// Last committed search pattern, for `n` / `N` (or Find Next).
+    pub last: Option<String>,
+    /// Direction of the last committed search: `true` = forward (`/`),
+    /// `false` = backward (`?`).
+    pub forward: bool,
+    /// Search history, oldest first. Capped at
+    /// [`crate::types::SEARCH_HISTORY_MAX`] entries.
+    pub history: Vec<String>,
+    /// Cursor while walking search history with Up/Down (Ctrl-P/Ctrl-N).
+    pub history_cursor: Option<usize>,
+}
+
+impl Default for SearchBank {
+    fn default() -> Self {
+        SearchBank {
+            last: None,
+            // Matches vim's default: before any search, `n` behaves as if
+            // the last search were forward.
+            forward: true,
+            history: Vec::new(),
+            history_cursor: None,
+        }
+    }
+}
+
 pub struct Editor<
     B: crate::types::View = hjkl_buffer::View,
     H: crate::types::Host = crate::types::DefaultHost,
@@ -686,14 +722,16 @@ pub struct Editor<
     // direction and history without depending on hjkl-vim.
     /// Live `/` or `?` prompt while the user is typing a pattern.
     pub(crate) search_prompt: Option<crate::search::SearchPrompt>,
-    /// Last committed search pattern, for `n` / `N` (or Find Next).
-    pub(crate) last_search: Option<String>,
-    /// Direction of the last committed search.
-    pub(crate) last_search_forward: bool,
-    /// Search history, oldest first.
-    pub(crate) search_history: Vec<String>,
-    /// Cursor while walking search history with Up/Down.
-    pub(crate) search_history_cursor: Option<usize>,
+    /// Last committed search pattern + direction + history (the `"/`
+    /// register), bundled into [`SearchBank`].
+    ///
+    /// Shared via `Arc<Mutex<_>>` across every window's `Editor` (mirrors
+    /// [`Editor::global_marks`]) — vim's last search is session-global, so
+    /// `/foo<CR>` in one split and `n` in another must see the same
+    /// pattern. Internal — read/mutated via [`Editor::last_search`] /
+    /// [`Editor::set_last_search`] / friends; wired by
+    /// [`Editor::set_search_arc`].
+    pub(crate) search: std::sync::Arc<std::sync::Mutex<SearchBank>>,
 
     // ── Input timing (discipline-agnostic) ───────────────────────────────────
     //
@@ -1254,10 +1292,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             viewport_pinned: false,
             scroll_anim_hint: false,
             search_prompt: None,
-            last_search: None,
-            last_search_forward: true,
-            search_history: Vec::new(),
-            search_history_cursor: None,
+            search: std::sync::Arc::new(std::sync::Mutex::new(SearchBank::default())),
             last_input_at: None,
             last_input_host_at: None,
             last_substitute: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -2417,38 +2452,36 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// The last committed search pattern, for `n` / `N` (or Find Next).
-    pub fn last_search_pattern(&self) -> Option<&str> {
-        self.last_search.as_deref()
+    /// Returns an owned clone (the value lives behind a shared `Mutex`, so a
+    /// borrow can't outlive the guard — mirrors [`Editor::global_marks_iter`]).
+    pub fn last_search_pattern(&self) -> Option<String> {
+        self.search.lock().unwrap().last.clone()
     }
 
     /// Set the last search pattern without touching direction or highlight.
     pub fn set_last_search_pattern_only(&mut self, pattern: Option<String>) {
-        self.last_search = pattern;
+        self.search.lock().unwrap().last = pattern;
     }
 
     /// Set the last search direction without touching the pattern.
     pub fn set_last_search_forward_only(&mut self, forward: bool) {
-        self.last_search_forward = forward;
+        self.search.lock().unwrap().forward = forward;
     }
 
-    /// Read-only view of the search history (oldest first).
-    pub fn search_history(&self) -> &[String] {
-        &self.search_history
-    }
-
-    /// Mutable access to the search history.
-    pub fn search_history_mut(&mut self) -> &mut Vec<String> {
-        &mut self.search_history
+    /// The search history (oldest first). Returns an owned clone (the value
+    /// lives behind a shared `Mutex`, so a borrow can't outlive the guard).
+    pub fn search_history(&self) -> Vec<String> {
+        self.search.lock().unwrap().history.clone()
     }
 
     /// Cursor position while walking search history with Up/Down.
     pub fn search_history_cursor(&self) -> Option<usize> {
-        self.search_history_cursor
+        self.search.lock().unwrap().history_cursor
     }
 
     /// Set the search-history walk cursor.
     pub fn set_search_history_cursor(&mut self, idx: Option<usize>) {
-        self.search_history_cursor = idx;
+        self.search.lock().unwrap().history_cursor = idx;
     }
 
     // ── Input timing (discipline-agnostic seam) ──────────────────────────────
@@ -2970,16 +3003,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// Most recent committed search pattern (persists across `n` / `N`
-    /// and across prompt exits). `None` before the first search.
-    pub fn last_search(&self) -> Option<&str> {
-        self.last_search.as_deref()
+    /// and across prompt exits). `None` before the first search. Returns an
+    /// owned clone (the value lives behind a shared `Mutex`, so a borrow
+    /// can't outlive the guard — mirrors [`Editor::global_marks_iter`]).
+    pub fn last_search(&self) -> Option<String> {
+        self.search.lock().unwrap().last.clone()
     }
 
     /// Whether the last committed search was a forward `/` (`true`) or
     /// a backward `?` (`false`). `n` and `N` consult this to honour the
     /// direction the user committed.
     pub fn last_search_forward(&self) -> bool {
-        self.last_search_forward
+        self.search.lock().unwrap().forward
     }
 
     /// Set the most recent committed search text + direction. Used by
@@ -2988,8 +3023,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// most recent commit with the right direction. Pass `None` /
     /// `true` to clear.
     pub fn set_last_search(&mut self, text: Option<String>, forward: bool) {
-        self.last_search = text;
-        self.last_search_forward = forward;
+        let mut bank = self.search.lock().unwrap();
+        bank.last = text;
+        bank.forward = forward;
+    }
+
+    /// Point this editor at a shared search bank. All editors in the app
+    /// share one bank (mirrors [`Editor::set_last_substitute_arc`]) so `/`
+    /// / `?` committed in one window/split and `n` / `N` typed in another
+    /// see the same pattern — vim's last search (the `"/` register) is
+    /// session-global, not per-window.
+    pub fn set_search_arc(&mut self, search: std::sync::Arc<std::sync::Mutex<SearchBank>>) {
+        self.search = search;
     }
 
     /// The most recent successful `:s` command. `None` before the first substitute.
@@ -4496,13 +4541,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if pattern.is_empty() {
             return;
         }
-        if self.search_history.last().map(String::as_str) == Some(pattern) {
+        let mut bank = self.search.lock().unwrap();
+        if bank.history.last().map(String::as_str) == Some(pattern) {
             return;
         }
-        self.search_history.push(pattern.to_string());
-        let len = self.search_history.len();
+        bank.history.push(pattern.to_string());
+        let len = bank.history.len();
         if len > crate::types::SEARCH_HISTORY_MAX {
-            self.search_history
+            bank.history
                 .drain(0..len - crate::types::SEARCH_HISTORY_MAX);
         }
     }
@@ -4512,22 +4558,30 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// (Ctrl-N / Down). Stops at the ends; does nothing if there is no
     /// active search prompt.
     pub fn walk_search_history(&mut self, dir: isize) {
-        if self.search_history.is_empty() || self.search_prompt.is_none() {
+        if self.search_prompt.is_none() {
             return;
         }
-        let len = self.search_history.len();
-        let next_idx = match (self.search_history_cursor, dir) {
-            (None, -1) => Some(len - 1),
-            (None, 1) => return,
-            (Some(i), -1) => i.checked_sub(1),
-            (Some(i), 1) if i + 1 < len => Some(i + 1),
-            _ => None,
-        };
-        let Some(idx) = next_idx else {
+        let Some(text) = ({
+            let mut bank = self.search.lock().unwrap();
+            if bank.history.is_empty() {
+                None
+            } else {
+                let len = bank.history.len();
+                let next_idx = match (bank.history_cursor, dir) {
+                    (None, -1) => Some(len - 1),
+                    (None, 1) => None,
+                    (Some(i), -1) => i.checked_sub(1),
+                    (Some(i), 1) if i + 1 < len => Some(i + 1),
+                    _ => None,
+                };
+                next_idx.map(|idx| {
+                    bank.history_cursor = Some(idx);
+                    bank.history[idx].clone()
+                })
+            }
+        }) else {
             return;
         };
-        self.search_history_cursor = Some(idx);
-        let text = self.search_history[idx].clone();
         if let Some(prompt) = self.search_prompt.as_mut() {
             prompt.cursor = text.chars().count();
             prompt.text = text.clone();
@@ -5130,6 +5184,38 @@ mod shared_abbrevs_tests {
         a.add_abbrev("foo", "bar", true, true, false);
         // No shared Arc wired — B must not see A's abbrev.
         assert!(b.abbrevs().is_empty());
+    }
+}
+
+// ─── shared search bank tests (audit B2) ──────────────────────────────────
+
+#[cfg(test)]
+mod shared_search_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::View;
+
+    #[test]
+    fn shared_search_bank_visible_across_editors() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(SearchBank::default()));
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_search_arc(shared.clone());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        b.set_search_arc(shared.clone());
+        // Commit a search on editor A.
+        a.set_last_search(Some("foo".to_string()), true);
+        // Read from editor B — same bank, no copy needed.
+        assert_eq!(b.last_search(), Some("foo".to_string()));
+        assert!(b.last_search_forward());
+    }
+
+    #[test]
+    fn unshared_search_stays_isolated() {
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        let b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_last_search(Some("foo".to_string()), true);
+        // No shared Arc wired — B must not see A's search.
+        assert_eq!(b.last_search(), None);
     }
 }
 

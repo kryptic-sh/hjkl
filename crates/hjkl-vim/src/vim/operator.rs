@@ -146,7 +146,7 @@ pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_engine::types::{Cursor, Pos};
     // Make sure the compiled pattern reflects the last `/` or `*` search.
-    if let Some(p) = ed.last_search_pattern().map(str::to_string) {
+    if let Some(p) = ed.last_search_pattern() {
         ed.push_search_pattern(&p);
     }
     let Some(re) = ed.search_state().pattern.clone() else {

@@ -2812,7 +2812,7 @@ fn last_search_pattern_and_direction_round_trips() {
     let mut e = normal_editor("hello");
     assert_eq!(e.last_search_pattern(), None);
     e.set_last_search_pattern_only(Some("world".to_string()));
-    assert_eq!(e.last_search_pattern(), Some("world"));
+    assert_eq!(e.last_search_pattern(), Some("world".to_string()));
     e.set_last_search_forward_only(false);
     assert!(!e.last_search_forward());
 }
@@ -2821,8 +2821,8 @@ fn last_search_pattern_and_direction_round_trips() {
 fn search_history_round_trips() {
     let mut e = normal_editor("hello");
     assert!(e.search_history().is_empty());
-    e.search_history_mut().push("pattern1".to_string());
-    assert_eq!(e.search_history(), &["pattern1"]);
+    e.record_search_history("pattern1");
+    assert_eq!(e.search_history(), vec!["pattern1".to_string()]);
     e.set_search_history_cursor(Some(0));
     assert_eq!(e.search_history_cursor(), Some(0));
     e.set_search_history_cursor(None);

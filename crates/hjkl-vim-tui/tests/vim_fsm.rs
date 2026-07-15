@@ -2686,7 +2686,7 @@ fn search_prompt_backspace_and_enter() {
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // Prompt closed, last_search set, cursor advanced to match.
     assert!(e.search_prompt().is_none());
-    assert_eq!(e.last_search(), Some("worl"));
+    assert_eq!(e.last_search(), Some("worl".to_string()));
     assert_eq!(e.cursor(), (0, 6));
 }
 
@@ -2700,7 +2700,7 @@ fn empty_search_prompt_enter_repeats_last_search() {
     run_keys(&mut e, "/");
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 16);
-    assert_eq!(e.last_search(), Some("foo"));
+    assert_eq!(e.last_search(), Some("foo".to_string()));
 }
 
 #[test]
@@ -2817,7 +2817,7 @@ fn empty_backward_search_prompt_enter_repeats_last_search() {
     run_keys(&mut e, "?");
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 0);
-    assert_eq!(e.last_search(), Some("foo"));
+    assert_eq!(e.last_search(), Some("foo".to_string()));
 }
 
 #[test]
@@ -2826,7 +2826,7 @@ fn search_prompt_esc_cancels_but_keeps_last_search() {
     run_keys(&mut e, "/bar");
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(e.search_prompt().is_none());
-    assert_eq!(e.last_search(), Some("bar"));
+    assert_eq!(e.last_search(), Some("bar".to_string()));
 }
 
 #[test]

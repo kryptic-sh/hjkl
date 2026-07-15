@@ -563,7 +563,7 @@ impl App {
 
     pub(crate) fn cancel_search_prompt(&mut self) {
         self.search_field = None;
-        let last = self.active_editor().last_search().map(str::to_owned);
+        let last = self.active_editor().last_search();
         match last {
             Some(p) if !p.is_empty() => {
                 if let Ok(re) = regex::Regex::new(&p) {
@@ -627,7 +627,7 @@ impl App {
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
                 // Restore the previous pattern (cancel live-preview side-effect).
-                let last = self.active_editor().last_search().map(str::to_owned);
+                let last = self.active_editor().last_search();
                 match last {
                     Some(p) if !p.is_empty() => {
                         if let Ok(re) = regex::Regex::new(&p) {
@@ -725,7 +725,7 @@ impl App {
 
     pub(crate) fn commit_search(&mut self, pattern: &str) {
         let effective: Option<String> = if pattern.is_empty() {
-            self.active_editor().last_search().map(str::to_owned)
+            self.active_editor().last_search()
         } else {
             Some(pattern.to_owned())
         };

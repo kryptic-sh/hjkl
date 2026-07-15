@@ -243,7 +243,6 @@ pub fn apply_substitute<H: crate::types::Host>(
         Some(p) => p.clone(),
         None => ed
             .last_search()
-            .map(str::to_owned)
             .ok_or_else(|| "no previous regular expression".to_string())?,
     };
 
@@ -421,7 +420,6 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
         Some(p) => p.clone(),
         None => ed
             .last_search()
-            .map(str::to_owned)
             .ok_or_else(|| "no previous regular expression".to_string())?,
     };
 
@@ -978,7 +976,7 @@ mod tests {
         let mut e = editor_with("foo");
         let cmd = parse_substitute("/foo/bar/").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
-        assert_eq!(e.last_search(), Some("foo"));
+        assert_eq!(e.last_search(), Some("foo".to_string()));
     }
 
     #[test]

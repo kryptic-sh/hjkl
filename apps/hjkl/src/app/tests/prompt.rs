@@ -161,7 +161,7 @@ fn search_enter_commits_and_advances_cursor() {
     let (row, col) = app.active_editor().cursor();
     assert_eq!(row, 2);
     assert_eq!(col, 0);
-    assert_eq!(app.active_editor().last_search(), Some("foo"));
+    assert_eq!(app.active_editor().last_search(), Some("foo".to_string()));
     assert!(app.active_editor().last_search_forward());
 }
 

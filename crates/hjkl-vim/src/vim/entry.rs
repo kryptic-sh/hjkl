@@ -106,7 +106,7 @@ pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
     // Special read-only registers: `/` = last search pattern, `.` = last
     // inserted text. Fall back to the register store for everything else.
     let text = match selector {
-        '/' => match &ed.last_search_pattern().map(str::to_string) {
+        '/' => match &ed.last_search_pattern() {
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },

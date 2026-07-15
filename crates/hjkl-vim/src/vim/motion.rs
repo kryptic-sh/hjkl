@@ -585,7 +585,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             // Re-push the last query so the buffer's search state is
             // correct even if the host happened to clear it (e.g. while
             // a Visual mode draw was in progress).
-            if let Some(pattern) = ed.last_search_pattern().map(str::to_string) {
+            if let Some(pattern) = ed.last_search_pattern() {
                 ed.push_search_pattern(&pattern);
             }
             if ed.search_state().pattern.is_none() {

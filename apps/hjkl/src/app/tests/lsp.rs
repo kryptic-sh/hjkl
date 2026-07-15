@@ -460,7 +460,7 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
     let (row0, _) = app.active_editor().cursor();
     assert_eq!(row0, 2, "+/main must land on first match (row 2)");
     // last_search must be persisted so `n` knows the pattern.
-    assert_eq!(app.active_editor().last_search(), Some("main"));
+    assert_eq!(app.active_editor().last_search(), Some("main".to_string()));
     // Drive `n` through the engine vim FSM and assert FORWARD jump.
     let n_input = Input {
         key: Key::Char('n'),

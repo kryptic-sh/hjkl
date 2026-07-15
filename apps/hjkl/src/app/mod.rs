@@ -343,6 +343,12 @@ pub struct App {
     /// `:iabbrev foo bar` defined in one split must expand in every other
     /// split.
     pub abbrevs: std::sync::Arc<std::sync::Mutex<Vec<hjkl_engine::Abbrev>>>,
+    /// Last committed search pattern + direction + history — the `"/`
+    /// register (audit B2). One shared bank, wired into every `Editor`
+    /// exactly like [`App::abbrevs`]: vim's last search is session-global,
+    /// so `/foo<Enter>` in one split and `n` in another must see the same
+    /// pattern.
+    pub search: std::sync::Arc<std::sync::Mutex<hjkl_engine::SearchBank>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1266,11 +1272,9 @@ impl App {
         // inheriting the source cursor).
         let src_cursor = src.buffer().cursor();
         ed.set_cursor_quiet(src_cursor.row, src_cursor.col);
-        // Inherit last-search so `n`/`N` work in the new view (e.g. after a
-        // startup `+/pat` search applied to the slot editor pre-window).
-        if let Some(pat) = src.last_search() {
-            ed.set_last_search(Some(pat.to_string()), src.last_search_forward());
-        }
+        // Last-search is a shared bank (audit B2) wired by the caller
+        // (`reconcile_window_editors`) via `set_search_arc` right after this
+        // returns — no per-window copy needed, `n`/`N` see it live.
         let (w, h, top_row, top_col) = {
             let vp = src.host().viewport();
             (vp.width, vp.height, vp.top_row, vp.top_col)
@@ -1316,6 +1320,7 @@ impl App {
                 ed.set_global_marks_arc(self.global_marks.clone());
                 ed.set_last_substitute_arc(self.last_substitute.clone());
                 ed.set_abbrevs_arc(self.abbrevs.clone());
+                ed.set_search_arc(self.search.clone());
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1803,6 +1808,13 @@ impl App {
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         slot.editor.set_abbrevs_arc(shared_abbrevs.clone());
 
+        // Same treatment for the last search pattern (the `"/` register) —
+        // session-global in vim, so every editor must share one bank from
+        // the start (audit B2).
+        let shared_search: std::sync::Arc<std::sync::Mutex<hjkl_engine::SearchBank>> =
+            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::SearchBank::default()));
+        slot.editor.set_search_arc(shared_search.clone());
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1915,6 +1927,7 @@ impl App {
             global_marks: shared_global_marks,
             last_substitute: shared_last_substitute,
             abbrevs: shared_abbrevs,
+            search: shared_search,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
