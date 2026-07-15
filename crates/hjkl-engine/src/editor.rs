@@ -542,6 +542,13 @@ pub enum MarkJump {
     Unset,
 }
 
+/// Uppercase (global) vim marks, keyed by `'A'`–`'Z'`; values are
+/// `(buffer_id, row, col)`. Shared across every window's [`Editor`] via
+/// `Arc<Mutex<GlobalMarks>>` — see [`Editor::set_global_marks_arc`]. Named so
+/// the app host can spell the shared-bank type without repeating the nested
+/// generic (mirrors [`crate::Registers`]).
+pub type GlobalMarks = std::collections::BTreeMap<char, (u64, usize, usize)>;
+
 pub struct Editor<
     B: crate::types::View = hjkl_buffer::View,
     H: crate::types::Host = crate::types::DefaultHost,
@@ -647,7 +654,14 @@ pub struct Editor<
     /// across buffers. Keyed by `'A'`–`'Z'`; values are
     /// `(buffer_id, row, col)`. Set by `m{A-Z}`, resolved by
     /// `try_goto_mark_line` / `try_goto_mark_char`.
-    pub(crate) global_marks: std::collections::BTreeMap<char, (u64, usize, usize)>,
+    ///
+    /// Shared via `Arc<Mutex<_>>` across every window's `Editor` (mirrors
+    /// [`Editor::registers`]) — vim's uppercase marks are session-global, so
+    /// setting `mA` in one split and jumping `'A` from another must see the
+    /// same map. Internal — read/mutated via [`Editor::global_mark`] /
+    /// [`Editor::set_global_mark`] / [`Editor::global_marks_iter`]; wired by
+    /// [`Editor::set_global_marks_arc`].
+    pub(crate) global_marks: std::sync::Arc<std::sync::Mutex<GlobalMarks>>,
 
     // ── Navigation history / viewport (discipline-agnostic, #265) ────────────
     //
@@ -1208,7 +1222,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             )),
             styled_spans: Vec::new(),
             settings,
-            global_marks: std::collections::BTreeMap::new(),
+            global_marks: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::BTreeMap::new(),
+            )),
             jump_back: Vec::new(),
             jump_fwd: Vec::new(),
             viewport_pinned: false,
@@ -1338,12 +1354,26 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Look up an uppercase global mark by letter. Returns
     /// `(buffer_id, row, col)` if set; `None` otherwise.
     pub fn global_mark(&self, c: char) -> Option<(u64, usize, usize)> {
-        self.global_marks.get(&c).copied()
+        self.global_marks.lock().unwrap().get(&c).copied()
     }
 
     /// Set an uppercase global mark `c` to `(buffer_id, row, col)`.
     pub fn set_global_mark(&mut self, c: char, buffer_id: u64, pos: (usize, usize)) {
-        self.global_marks.insert(c, (buffer_id, pos.0, pos.1));
+        self.global_marks
+            .lock()
+            .unwrap()
+            .insert(c, (buffer_id, pos.0, pos.1));
+    }
+
+    /// Point this editor at a shared global-marks bank. All editors in the
+    /// app share one bank (mirrors [`Editor::set_registers_arc`]) so
+    /// uppercase marks set in one window/split are visible from every other
+    /// window — vim's `mA`/`'A` are session-global, not per-window.
+    pub fn set_global_marks_arc(
+        &mut self,
+        global_marks: std::sync::Arc<std::sync::Mutex<GlobalMarks>>,
+    ) {
+        self.global_marks = global_marks;
     }
 
     /// Return the `buffer_id` this editor is currently attached to.
@@ -1359,10 +1389,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
     /// Iterate all global marks (`'A'`–`'Z'`), yielding
     /// `(mark_char, buffer_id, row, col)`.
-    pub fn global_marks_iter(&self) -> impl Iterator<Item = (char, u64, usize, usize)> + '_ {
+    pub fn global_marks_iter(&self) -> Vec<(char, u64, usize, usize)> {
         self.global_marks
+            .lock()
+            .unwrap()
             .iter()
             .map(|(c, &(bid, r, col))| (*c, bid, r, col))
+            .collect()
     }
 
     /// Look up a buffer-local lowercase mark (`'a`–`'z`). Kept as a
@@ -2141,8 +2174,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
         // Shift global marks that belong to the current buffer.
         let cur_bid = self.current_buffer_id;
+        let mut global_marks = self.global_marks.lock().unwrap();
         let mut global_to_drop: Vec<char> = Vec::new();
-        for (c, (bid, row, _col)) in self.global_marks.iter_mut() {
+        for (c, (bid, row, _col)) in global_marks.iter_mut() {
             if *bid != cur_bid {
                 continue;
             }
@@ -2153,8 +2187,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             }
         }
         for c in global_to_drop {
-            self.global_marks.remove(&c);
+            global_marks.remove(&c);
         }
+        drop(global_marks);
 
         let shift_jumps = |entries: &mut Vec<(usize, usize)>| {
             entries.retain(|(row, _)| !(edit_start..drop_end).contains(row));
@@ -3273,6 +3308,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .collect();
         let global_marks = self
             .global_marks
+            .lock()
+            .unwrap()
             .iter()
             .map(|(c, &(bid, r, col))| (*c, (bid, r as u32, col as u32)))
             .collect();
@@ -3317,7 +3354,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 .map(|(c, (r, col))| (c, (r as usize, col as usize)))
                 .collect(),
         );
-        self.global_marks = snap
+        *self.global_marks.lock().unwrap() = snap
             .global_marks
             .into_iter()
             .map(|(c, (bid, r, col))| (c, (bid, r as usize, col as usize)))
@@ -4899,6 +4936,37 @@ mod shared_registers_tests {
         };
         // Read from editor B — same bank, no copy needed
         assert_eq!(b.registers().unnamed.text, "hello");
+    }
+}
+
+// ─── shared global-marks bank tests (#279 slice 1) ────────────────────────────
+
+#[cfg(test)]
+mod shared_global_marks_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::View;
+
+    #[test]
+    fn shared_global_marks_bank_visible_across_editors() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_global_marks_arc(shared.clone());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        b.set_global_marks_arc(shared.clone());
+        // Set a global mark on editor A.
+        a.set_global_mark('A', 7, (3, 5));
+        // Read from editor B — same bank, no copy needed.
+        assert_eq!(b.global_mark('A'), Some((7, 3, 5)));
+    }
+
+    #[test]
+    fn unshared_global_marks_stay_isolated() {
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        let b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_global_mark('A', 1, (0, 0));
+        // No shared Arc wired — B must not see A's mark.
+        assert_eq!(b.global_mark('A'), None);
     }
 }
 

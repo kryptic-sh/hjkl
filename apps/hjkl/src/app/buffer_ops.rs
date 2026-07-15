@@ -137,6 +137,7 @@ impl App {
             let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
+            editor.set_global_marks_arc(self.global_marks.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -263,6 +264,7 @@ impl App {
             let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
+            editor.set_global_marks_arc(self.global_marks.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -470,6 +472,7 @@ impl App {
         let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
         editor.set_current_buffer_id(buffer_id);
         editor.set_registers_arc(self.registers.clone());
+        editor.set_global_marks_arc(self.global_marks.clone());
         // Mirror the nvim_api build_app viewport (80×24) for headless paths;
         // in the real TUI crossterm::terminal::size() wins.
         if let Ok(size) = crossterm::terminal::size() {

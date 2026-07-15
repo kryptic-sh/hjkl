@@ -18,6 +18,7 @@ pub mod at_colon;
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod autoreload;
 pub mod explorer;
+pub mod global_marks;
 pub mod harness;
 pub mod indent;
 pub mod paste;

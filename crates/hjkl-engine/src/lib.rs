@@ -38,7 +38,9 @@ pub mod types;
 mod viewport_math;
 
 pub use discipline::{DisciplineState, NoDiscipline};
-pub use editor::{CursorScrollTarget, Editor, LspIntent, MarkJump, Settings, UndoGranularity};
+pub use editor::{
+    CursorScrollTarget, Editor, GlobalMarks, LspIntent, MarkJump, Settings, UndoGranularity,
+};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};
 pub use selection_shift::{Sel, shift_position, shift_sel};

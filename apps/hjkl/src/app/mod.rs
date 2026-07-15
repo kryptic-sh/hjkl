@@ -327,6 +327,11 @@ pub struct App {
     /// (slots + window views) points at this same `Arc<Mutex<_>>`, so `yy` in
     /// one buffer/window pastes with `p` in any other — no copy-on-switch.
     pub registers: std::sync::Arc<std::sync::Mutex<hjkl_engine::Registers>>,
+    /// Global (uppercase) vim marks — `mA`..`mZ` / `'A`..`'Z` (#279 slice 1).
+    /// One shared bank, wired into every `Editor` exactly like [`App::registers`]:
+    /// vim's uppercase marks are session-global, so setting `mA` in one split and
+    /// jumping `'A` from another must see the same map.
+    pub global_marks: std::sync::Arc<std::sync::Mutex<hjkl_engine::GlobalMarks>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1297,6 +1302,7 @@ impl App {
             if needs {
                 let mut ed = self.make_view_editor(slot);
                 ed.set_registers_arc(self.registers.clone());
+                ed.set_global_marks_arc(self.global_marks.clone());
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1763,6 +1769,13 @@ impl App {
             std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::Registers::default()));
         slot.editor.set_registers_arc(shared_registers.clone());
 
+        // Same treatment for uppercase (global) marks — session-global in
+        // vim, so every editor must share one bank from the start.
+        let shared_global_marks: std::sync::Arc<std::sync::Mutex<hjkl_engine::GlobalMarks>> =
+            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::GlobalMarks::new()));
+        slot.editor
+            .set_global_marks_arc(shared_global_marks.clone());
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1872,6 +1885,7 @@ impl App {
             lsp_pending: HashMap::new(),
             lsp_pending_seen_at: HashMap::new(),
             registers: shared_registers,
+            global_marks: shared_global_marks,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
