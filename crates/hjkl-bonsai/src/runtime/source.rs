@@ -402,21 +402,37 @@ fn resolve_inherits(
 
     // Collect `; inherits: foo,bar` or `; inherits: foo, bar` from first non-
     // empty lines (helix always puts it near the top, but scan all lines to be safe).
+    //
+    // Two spellings occur in the wild: helix / most nvim-treesitter files use a
+    // colon (`; inherits: ecma,jsx`), but a handful of nvim-treesitter files —
+    // including `html` (`; inherits html_tags`) — omit it and separate parents
+    // with whitespace. Accept both; splitting on comma AND whitespace covers
+    // `ecma,jsx` and `html_tags` alike. Missing the no-colon form silently drops
+    // html_tags, which is where the default `<script>`→js / `<style>`→css
+    // injections live.
     let mut parents: Vec<String> = Vec::new();
     for line in raw.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed
-            .strip_prefix("; inherits:")
-            .or_else(|| trimmed.strip_prefix(";; inherits:"))
-        {
-            for part in rest.split(',') {
-                // helix uses `_typescript` (underscore prefix = "private") and
-                // `ecma`. Look them up as-is including the underscore because
-                // that IS the directory name.
-                let p_raw = part.trim();
-                if !p_raw.is_empty() {
-                    parents.push(p_raw.to_string());
-                }
+        let Some(after) = trimmed
+            .strip_prefix(";; inherits")
+            .or_else(|| trimmed.strip_prefix("; inherits"))
+        else {
+            continue;
+        };
+        // Require a word boundary after `inherits` so `; inheritance ...` (or any
+        // stray token) doesn't match. The next char must be `:` or whitespace.
+        let rest = match after.strip_prefix(':') {
+            Some(r) => r,
+            None if after.is_empty() || after.starts_with(char::is_whitespace) => after,
+            None => continue,
+        };
+        for part in rest.split(|c: char| c == ',' || c.is_whitespace()) {
+            // helix uses `_typescript` (underscore prefix = "private") and
+            // `ecma`. Look them up as-is including the underscore because
+            // that IS the directory name.
+            let p_raw = part.trim();
+            if !p_raw.is_empty() {
+                parents.push(p_raw.to_string());
             }
         }
     }
@@ -631,6 +647,66 @@ mod tests {
         let parent_pos = result.find("(injection.foo)").unwrap();
         let child_pos = result.find("(typescript.bar)").unwrap();
         assert!(parent_pos < child_pos, "parent must precede child");
+    }
+
+    #[test]
+    fn inherits_no_colon_whitespace_separated_resolved() {
+        // nvim-treesitter's `html` query writes `; inherits html_tags` (no colon,
+        // whitespace-separated). The default `<script>`→js injection lives in
+        // html_tags, so dropping this chain kills script highlighting.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let prefix = "queries";
+        let tags_dir = repo.join(prefix).join("html_tags");
+        let html_dir = repo.join(prefix).join("html");
+        std::fs::create_dir_all(&tags_dir).unwrap();
+        std::fs::create_dir_all(&html_dir).unwrap();
+        std::fs::write(tags_dir.join("injections.scm"), "(script.js)\n").unwrap();
+        std::fs::write(
+            html_dir.join("injections.scm"),
+            "; inherits html_tags\n(html.py)\n",
+        )
+        .unwrap();
+
+        // resolve_inherits reads `highlights.scm`; exercise the parser directly
+        // by feeding a highlights file with the same modeline.
+        std::fs::write(tags_dir.join("highlights.scm"), "(script.js)\n").unwrap();
+        std::fs::write(
+            html_dir.join("highlights.scm"),
+            "; inherits html_tags\n(html.py)\n",
+        )
+        .unwrap();
+
+        let mut visited = vec![];
+        let result = resolve_inherits(&repo, prefix, "html", &mut visited).unwrap();
+        assert!(
+            result.contains("(script.js)"),
+            "html_tags parent not chained without colon: {result}"
+        );
+        assert!(result.contains("(html.py)"), "html child missing: {result}");
+    }
+
+    #[test]
+    fn inherits_word_boundary_not_matched_by_prefix() {
+        // `; inheritance` must NOT be parsed as an inherits directive.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let prefix = "queries";
+        let dir = repo.join(prefix).join("lang");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("highlights.scm"),
+            "; inheritance notes here\n(lang.id)\n",
+        )
+        .unwrap();
+
+        let mut visited = vec![];
+        // Must resolve fine (no bogus parent lookup) and keep own content.
+        let result = resolve_inherits(&repo, prefix, "lang", &mut visited).unwrap();
+        assert!(
+            result.contains("(lang.id)"),
+            "own content missing: {result}"
+        );
     }
 
     #[test]
