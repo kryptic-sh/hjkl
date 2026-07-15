@@ -21,7 +21,11 @@ serde = ["dep:serde"]
 # hjkl_vim::VimEditorExt (#267). Safe here (unlike inline unit tests) because a
 # tests/ target links hjkl-engine as an external crate, so `Editor` has a single
 # identity and the blanket impl applies. Cargo permits cycles through dev-deps.
-hjkl-vim.workspace = true
+# Path-only (no version) on purpose: `cargo publish` drops a versionless dev-dep,
+# which breaks the publish-time cycle (hjkl-vim depends on hjkl-engine and is
+# published later). Without this, the first release of a new minor fails because
+# `hjkl-vim ^X.Y` has nothing to resolve against on crates.io yet.
+hjkl-vim = { path = "../hjkl-vim" }
 proptest = "1"
 serde_json = "1"
 

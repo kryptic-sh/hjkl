@@ -22,8 +22,10 @@ crossterm = { version = "0.29.0", features = ["event-stream"] }
 # Test-only: the vim visual-selection accessors these tests assert on now live
 # on `hjkl_vim::VimEditorExt` (#267). This crate stays vim-agnostic at build
 # time — the dep is dev-only and no cycle exists (hjkl-vim does not depend on
-# hjkl-engine-tui).
-hjkl-vim.workspace = true
+# hjkl-engine-tui). Path-only (no version) so `cargo publish` drops it — else the
+# first release of a new minor fails resolving `hjkl-vim ^X.Y` before hjkl-vim@X.Y
+# is on crates.io.
+hjkl-vim = { path = "../hjkl-vim" }
 regex = "1"
 ropey = "1.6"
 
