@@ -210,7 +210,7 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
                     ed.push_buffer_cursor_to_textarea();
                 }
             }
-            for _ in 0..count.max(1) {
+            for _ in 0..scaled(count).max(1) {
                 let cursor = ed.cursor();
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(cursor.0, cursor.1),

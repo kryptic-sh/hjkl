@@ -358,3 +358,57 @@ fn mode_entry_key_exits_blame_view() {
     assert!(!e.is_blame());
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Visual);
 }
+
+// ── dot-repeat count override (audit A2) ──────────────────────────────────
+
+/// `3ihello<Esc>` then `5.` — an explicit `[count]` before `.` must
+/// *override* the count recorded on the insert-mode change (`:h .`), not be
+/// ignored in favour of the recorded count. `LastChange::InsertAt`'s replay
+/// loop used to iterate on the raw recorded `count`, skipping the same
+/// `scaled(...)` override every other `LastChange` arm applies.
+///
+/// Each "hello" contributes exactly one 'h', so counting 'h' characters in
+/// the result is a splice-position-independent way to count insertions
+/// (avoids asserting the exact string, which depends on where the cursor
+/// sits after `Esc`).
+#[test]
+fn dot_repeat_count_override_applies_to_insert_mode_change() {
+    let mut e = editor_with("");
+    dispatch_keys(&mut e, "3ihello<Esc>");
+    let after_insert = e.content();
+    assert_eq!(
+        after_insert.matches('h').count(),
+        3,
+        "3ihello<Esc> must insert 'hello' 3 times; got {after_insert:?}"
+    );
+
+    dispatch_keys(&mut e, "5.");
+    let after_repeat = e.content();
+    assert_eq!(
+        after_repeat.matches('h').count(),
+        8,
+        "5. must override the recorded count 3 with 5 (3 + 5 = 8 total 'hello' \
+         insertions), got {after_repeat:?}"
+    );
+}
+
+/// `2iX<Esc>` then `.` with NO explicit count must reuse the recorded count
+/// of 2 (regression guard: the override must default to the recorded count,
+/// not to 1 or 0, when the user types no count before `.`).
+#[test]
+fn dot_repeat_without_count_reuses_recorded_count() {
+    let mut e = editor_with("");
+    dispatch_keys(&mut e, "2iX<Esc>");
+    assert!(
+        e.content().starts_with("XX"),
+        "2iX<Esc> must insert 'X' twice; got {:?}",
+        e.content()
+    );
+
+    dispatch_keys(&mut e, ".");
+    assert!(
+        e.content().starts_with("XXXX"),
+        "bare . must reuse the recorded count 2 (2 + 2 = 4 'X's); got {:?}",
+        e.content()
+    );
+}
