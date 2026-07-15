@@ -8,6 +8,43 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.33.6] - 2026-07-15
+
+### Added
+
+- **Helix editing discipline** (`hjkl-helix`): a selection-first keymap where
+  motions extend a live selection that operators then act on. Real Helix
+  behavior — counts, word/WORD selections (`w`/`W`/`e`/`b`), operators, `g` goto
+  submaps, and `f`/`t` find — not a vim reskin (#63).
+- **Multi-cursor / secondary cursors** in the engine: secondary cursors are
+  tracked across edits, line joins, and block edits, and each carries an anchor
+  (`Sel`) so operators act on the full range rather than a bare caret. Edits now
+  apply at every cursor (#63).
+- **Discipline-facing public API** on `Editor`: a stable seam disciplines
+  (vim/helix) build against, decoupling keymaps from engine internals (#265).
+
+### Fixed
+
+- **HTML `<script>`/`<style>` highlighting**: `hjkl-bonsai` now accepts the
+  colon-less `; inherits html_tags` modeline that nvim-treesitter's `html` query
+  uses, restoring the default `<script>`→JavaScript and `<style>`→CSS
+  injections. A bare `<script>` tag previously rendered unhighlighted.
+- **Cursorline follows the active window's own cursor**: the cursorline
+  background now keys off the per-window editor cursor (the same single source
+  of truth as relative line numbers and indent guides) instead of the shared
+  slot buffer's cursor, which could diverge and paint the wrong row in splits.
+
+### Changed
+
+- **Engine/vim seam extraction** (#265, #267): moved the vim FSM into
+  `hjkl-vim`, hoisted engine-owned state (undo/redo, search, jumplist, viewport
+  flags, scroll, autopair, abbreviations, marks) out of `VimState` behind a
+  `Discipline` seam and the new public API, defaulted `Editor` to `NoDiscipline`
+  with vim installed explicitly, and split the 10k-line `vim.rs` into a `vim/`
+  module tree. Internal restructuring with no user-facing behavior change.
+- Dependency bumps: `regex` 1.12.4 → 1.13.0, `pollster` 0.4.0 → 1.0.1,
+  `cosmic-text` pinned to floem's version, plus a patch-group update.
+
 ## [0.33.5] - 2026-07-12
 
 ### Added
