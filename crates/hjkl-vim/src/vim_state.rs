@@ -15,7 +15,7 @@ use hjkl_engine::types::Host;
 /// Panics if a different discipline is installed. That is a wiring bug — vim
 /// input was dispatched at an `Editor` that never had the vim discipline
 /// installed — not a runtime condition worth recovering from.
-pub(crate) fn vim<H: Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState {
+pub(crate) fn vim<H: Host>(ed: &Editor<hjkl_buffer::View, H>) -> &VimState {
     ed.discipline()
         .as_any()
         .downcast_ref::<VimState>()
@@ -23,7 +23,7 @@ pub(crate) fn vim<H: Host>(ed: &Editor<hjkl_buffer::Buffer, H>) -> &VimState {
 }
 
 /// Mutable counterpart of [`vim`].
-pub(crate) fn vim_mut<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) -> &mut VimState {
+pub(crate) fn vim_mut<H: Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> &mut VimState {
     ed.discipline_mut()
         .as_any_mut()
         .downcast_mut::<VimState>()

@@ -17,7 +17,7 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::app::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::{BufferEdit, Host, Options};
 
         // Must be a real on-disk file (not a scratch / explorer buffer).
@@ -29,7 +29,7 @@ impl App {
         // On-disk bytes (the "old" side). A missing file diffs against empty.
         let disk = std::fs::read(&path).unwrap_or_default();
 
-        // Buffer bytes (the "new" side), produced exactly as `:w` would write
+        // View bytes (the "new" side), produced exactly as `:w` would write
         // them (trailing newline) so an unmodified buffer yields an empty diff.
         let buf_bytes: Vec<u8> = {
             let rope = self.active_editor().buffer().rope();
@@ -70,7 +70,7 @@ impl App {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;

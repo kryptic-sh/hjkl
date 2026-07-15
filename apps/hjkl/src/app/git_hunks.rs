@@ -288,7 +288,7 @@ pub(crate) fn build_blame_box_plan(
             continue;
         }
         let Some(info) = commit_of(dr) else {
-            plan.push(BlameRow::Content(dr));
+            plan.push(BlameRow::Buffer(dr));
             dr += 1;
             continue;
         };
@@ -308,7 +308,7 @@ pub(crate) fn build_blame_box_plan(
                 break;
             }
         }
-        plan.push(BlameRow::Content(dr));
+        plan.push(BlameRow::Buffer(dr));
         if plan.len() >= height {
             break;
         }

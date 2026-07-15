@@ -9,7 +9,7 @@ use hjkl_engine::Host;
 /// the fold extends to the row before indent drops back to or below the
 /// opener's level. Ported verbatim from `hjkl_editor::ex::apply_fold_indent`.
 pub(crate) fn apply_fold_indent<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -80,7 +80,7 @@ pub(crate) fn apply_fold_indent<H: Host>(
 ///
 /// Ported verbatim from `hjkl_editor::ex::apply_fold_syntax`.
 pub(crate) fn apply_fold_syntax<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -104,9 +104,9 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let content = lines.join("\n");
-        let buf = hjkl_buffer::Buffer::from_str(&content);
+        let buf = hjkl_buffer::View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }

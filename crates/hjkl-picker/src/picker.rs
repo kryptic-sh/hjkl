@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{Input, Key};
 use hjkl_form::TextFieldEditor;
 
@@ -68,7 +68,7 @@ pub struct Picker {
     /// Index into the source whose preview is currently cached.
     preview_idx: Option<usize>,
     /// Cached preview content. Empty when nothing is selected.
-    preview_buffer: Buffer,
+    preview_buffer: View,
     /// Status tag for the preview pane title.
     preview_status: String,
     /// Cached label for the preview header.
@@ -109,7 +109,7 @@ impl Picker {
             _scan: handle,
             requery_at: None,
             preview_idx: None,
-            preview_buffer: Buffer::new(),
+            preview_buffer: View::new(),
             preview_status: String::new(),
             preview_label: None,
             preview_path: None,
@@ -308,7 +308,7 @@ impl Picker {
         }
         self.preview_idx = target_idx;
         let Some(idx) = target_idx else {
-            self.preview_buffer = Buffer::new();
+            self.preview_buffer = View::new();
             self.preview_status.clear();
             self.preview_label = None;
             self.preview_path = None;
@@ -353,7 +353,7 @@ impl Picker {
     }
 
     /// Borrow the preview buffer for `BufferView` rendering.
-    pub fn preview_buffer(&self) -> &Buffer {
+    pub fn preview_buffer(&self) -> &View {
         &self.preview_buffer
     }
 

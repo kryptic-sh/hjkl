@@ -1,20 +1,20 @@
 //! Viewport-math helpers — engine-side relocation of the three
-//! viewport-aware methods that lived on `hjkl_buffer::Buffer` through
+//! viewport-aware methods that lived on `hjkl_buffer::View` through
 //! 0.0.41:
 //!
-//! - `Buffer::ensure_cursor_visible` → [`ensure_cursor_visible`]
-//! - `Buffer::cursor_screen_row` → [`cursor_screen_row_from`]
-//! - `Buffer::max_top_for_height` → [`max_top_for_height`]
+//! - `View::ensure_cursor_visible` → [`ensure_cursor_visible`]
+//! - `View::cursor_screen_row` → [`cursor_screen_row_from`]
+//! - `View::max_top_for_height` → [`max_top_for_height`]
 //!
 //! 0.0.42 (Patch C-δ.7): The "Viewport on Host" decision excludes
-//! viewport math from the `Buffer` trait surface. Pre-0.0.42 the engine
+//! viewport math from the `View` trait surface. Pre-0.0.42 the engine
 //! reached through to the inherent buffer methods (4 resistant reaches
 //! flagged in the 0.0.41 CHANGELOG); this module lifts that math onto
 //! engine free fns over `B: Query` + `&dyn FoldProvider` + `&Viewport`.
 //! Behavior is byte-for-byte identical to the prior buffer-inherent
 //! implementation; the lift is purely a re-homing.
 //!
-//! The buffer-side `Buffer::ensure_cursor_visible` / `cursor_screen_row`
+//! The buffer-side `View::ensure_cursor_visible` / `cursor_screen_row`
 //! / `max_top_for_height` inherent methods stay in place for now (other
 //! call sites — e.g. the buffer's own tests — depend on them). 0.1.0
 //! removes the buffer-side copies once every consumer migrates.
@@ -30,7 +30,7 @@ use crate::types::{Cursor, FoldProvider, Query};
 /// cursor's screen row falls inside the viewport's height.
 ///
 /// Replaces the pre-0.0.42 inherent
-/// [`hjkl_buffer::Buffer::ensure_cursor_visible`].
+/// [`hjkl_buffer::View::ensure_cursor_visible`].
 pub fn ensure_cursor_visible<B>(buf: &B, folds: &dyn FoldProvider, viewport: &mut Viewport)
 where
     B: Cursor + Query + ?Sized,
@@ -102,7 +102,7 @@ where
 /// `height` this returns 0.
 ///
 /// Replaces the pre-0.0.42 inherent
-/// [`hjkl_buffer::Buffer::max_top_for_height`].
+/// [`hjkl_buffer::View::max_top_for_height`].
 pub fn max_top_for_height<B>(
     buf: &B,
     folds: &dyn FoldProvider,

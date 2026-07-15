@@ -17,7 +17,7 @@ pub(crate) type Pos = (usize, usize);
 /// last character to act on). `kind` is `Linewise` for line-oriented text
 /// objects like paragraphs and `Exclusive` otherwise.
 pub(crate) fn text_object_range<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     obj: TextObject,
     inner: bool,
     count: usize,
@@ -43,7 +43,7 @@ pub(crate) fn text_object_range<H: hjkl_engine::types::Host>(
 /// Returns `(row, col)` of the boundary's first non-whitespace cell, or
 /// `None` when already at the buffer's edge in that direction.
 pub(crate) fn sentence_boundary<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
@@ -156,7 +156,7 @@ pub(crate) fn sentence_boundary<H: hjkl_engine::types::Host>(
 /// terminators stay attached to the same sentence. `as` extends to
 /// include trailing whitespace; `is` does not.
 pub(crate) fn sentence_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -290,7 +290,7 @@ pub(crate) fn sentence_text_object<H: hjkl_engine::types::Host>(
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
 /// returns the innermost pair containing the cursor.
 pub(crate) fn tag_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
@@ -556,7 +556,7 @@ pub(crate) fn try_abbrev_expand(
 /// `trigger` is what the user did; the trigger char itself is NOT inserted
 /// here — the caller inserts it (or not, in the case of `C-]`).
 pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     trigger: AbbrevTrigger,
 ) -> bool {
     use hjkl_buffer::{Edit, Position};
@@ -619,7 +619,7 @@ pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     true
 }
 pub(crate) fn word_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     big: bool,
     count: usize,
@@ -743,7 +743,7 @@ pub(crate) fn word_text_object<H: hjkl_engine::types::Host>(
     Some(((row, start_col), (row, end_col)))
 }
 pub(crate) fn quote_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     q: char,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -816,7 +816,7 @@ pub(crate) fn quote_text_object<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn bracket_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     open: char,
     inner: bool,
     count: usize,
@@ -1058,7 +1058,7 @@ pub(crate) fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usiz
     }
 }
 pub(crate) fn paragraph_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {

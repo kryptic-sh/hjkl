@@ -149,7 +149,7 @@ mod tests {
         let mut acc = CountAccumulator::new();
         acc.try_accumulate('5');
         assert_eq!(acc.take_or(1), 5);
-        // Buffer must be cleared after take.
+        // View must be cleared after take.
         assert!(acc.is_empty());
         assert_eq!(acc.take_or(1), 1);
     }

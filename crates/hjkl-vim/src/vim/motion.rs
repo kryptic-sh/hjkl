@@ -77,7 +77,7 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
     }
 }
 pub(crate) fn execute_motion<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: Motion,
     count: usize,
 ) {
@@ -133,7 +133,7 @@ pub(crate) fn execute_motion<H: hjkl_engine::types::Host>(
 /// (Up, Down, FileTop, FileBottom, Search), so passing every motion through is
 /// safe — the function's own match arm handles the no-op case.
 pub(crate) fn execute_motion_with_block_vcol<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: Motion,
     count: usize,
 ) {
@@ -171,7 +171,7 @@ pub(crate) fn execute_motion_with_block_vcol<H: hjkl_engine::types::Host>(
 /// each motion.  There are **no further sync gaps** beyond the `block_vcol`
 /// fix already applied above.
 pub(crate) fn apply_motion_kind<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     kind: hjkl_engine::MotionKind,
     count: usize,
 ) {
@@ -354,7 +354,7 @@ pub(crate) fn apply_motion_kind<H: hjkl_engine::types::Host>(
 /// `pre_col` is the cursor column captured *before* the motion — used
 /// to bootstrap the sticky value on the very first motion.
 pub(crate) fn apply_sticky_col<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
     pre_col: usize,
 ) {
@@ -390,14 +390,14 @@ pub(crate) fn is_vertical_motion(motion: &Motion) -> bool {
     )
 }
 pub(crate) fn apply_motion_cursor<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
     count: usize,
 ) {
     apply_motion_cursor_ctx(ed, motion, count, false)
 }
 pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
     count: usize,
     as_operator: bool,
@@ -415,7 +415,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         .min(ed.buffer().rope().len_chars().saturating_add(1));
     match motion {
         Motion::Left => {
-            // `h` — Buffer clamps at col 0 (no wrap), matching vim.
+            // `h` — View clamps at col 0 (no wrap), matching vim.
             hjkl_engine::motions::move_left(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
@@ -548,7 +548,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         }
         Motion::FileBottom => {
             // `count G` jumps to line `count`; bare `G` lands at
-            // the buffer bottom (`Buffer::move_bottom(0)`).
+            // the buffer bottom (`View::move_bottom(0)`).
             if count > 1 {
                 hjkl_engine::motions::move_bottom(ed.buffer_mut(), count);
             } else {
@@ -701,7 +701,7 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn move_first_non_whitespace<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     // Some call sites invoke this right after `dd` / `<<` / `>>` etc
     // mutates the textarea content, so the migration buffer hasn't
@@ -713,7 +713,7 @@ pub(crate) fn move_first_non_whitespace<H: hjkl_engine::types::Host>(
     ed.push_buffer_cursor_to_textarea();
 }
 pub(crate) fn find_char_on_line<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     forward: bool,
     till: bool,
@@ -727,7 +727,7 @@ pub(crate) fn find_char_on_line<H: hjkl_engine::types::Host>(
     moved
 }
 pub(crate) fn matching_bracket<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     let moved = hjkl_engine::motions::match_bracket(ed.buffer_mut());
     if moved {
@@ -739,7 +739,7 @@ pub(crate) fn matching_bracket<H: hjkl_engine::types::Host>(
 /// false`) / next (`forward = true`) unmatched bracket of the kind given by
 /// `open` (`(` or `{`). Balanced inner pairs are skipped via a depth counter.
 pub(crate) fn goto_unmatched_bracket<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     open: char,
     count: usize,
@@ -820,7 +820,7 @@ pub(crate) fn goto_unmatched_bracket<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn word_at_cursor_search<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     whole_word: bool,
     count: usize,

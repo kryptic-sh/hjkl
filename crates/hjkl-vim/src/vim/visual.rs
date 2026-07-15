@@ -16,7 +16,7 @@ use hjkl_engine::buf_helpers::buf_set_cursor_rc;
 /// truth — the host never has to police this.
 #[inline]
 pub fn drop_blame_if_left_normal<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if vim(ed).current_mode != hjkl_engine::VimMode::Normal {
         ed.set_view_mode(hjkl_engine::ViewMode::Normal);
@@ -27,7 +27,7 @@ pub fn drop_blame_if_left_normal<H: hjkl_engine::types::Host>(
 /// `vim_mode()` stays correct without going through the FSM's `step()` loop.
 #[inline]
 pub(crate) fn set_vim_mode_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     mode: Mode,
 ) {
     vim_mut(ed).mode = mode;
@@ -37,7 +37,7 @@ pub(crate) fn set_vim_mode_bridge<H: hjkl_engine::types::Host>(
 /// `v` from Normal — enter charwise Visual mode. Anchors at the current
 /// cursor position; the cursor IS the live end of the selection.
 pub(crate) fn enter_visual_char_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let cur = ed.cursor();
     vim_mut(ed).visual_anchor = cur;
@@ -46,7 +46,7 @@ pub(crate) fn enter_visual_char_bridge<H: hjkl_engine::types::Host>(
 /// `V` from Normal — enter linewise Visual mode. Anchors the whole line
 /// containing the current cursor; `o` still swaps the anchor row.
 pub(crate) fn enter_visual_line_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let (row, _) = ed.cursor();
     vim_mut(ed).visual_line_anchor = row;
@@ -56,7 +56,7 @@ pub(crate) fn enter_visual_line_bridge<H: hjkl_engine::types::Host>(
 /// cursor; `block_vcol` is seeded from the cursor column so h/l navigation
 /// preserves the desired virtual column.
 pub(crate) fn enter_visual_block_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let cur = ed.cursor();
     vim_mut(ed).block_anchor = cur;
@@ -68,7 +68,7 @@ pub(crate) fn enter_visual_block_bridge<H: hjkl_engine::types::Host>(
 /// `pre_visual_snapshot` logic in `step()` so callers outside the FSM get
 /// identical behaviour.
 pub(crate) fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     // Build the same snapshot that `step()` captures at pre-step time.
     let snap: Option<LastVisual> = match vim(ed).mode {
@@ -144,7 +144,7 @@ pub(crate) fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
 /// the anchor *row* swaps with the current cursor row. In block mode the
 /// block corners swap.
 pub(crate) fn visual_o_toggle_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     match vim(ed).mode {
         Mode::Visual => {
@@ -173,7 +173,7 @@ pub(crate) fn visual_o_toggle_bridge<H: hjkl_engine::types::Host>(
 /// No-op if no selection was ever stored. Mirrors the `gv` arm in
 /// `handle_normal_g`.
 pub(crate) fn reenter_last_visual_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if let Some(snap) = vim(ed).last_visual {
         match snap.mode {
@@ -201,7 +201,7 @@ pub(crate) fn reenter_last_visual_bridge<H: hjkl_engine::types::Host>(
 /// (`enter_visual_char_bridge`, `enter_insert_i_bridge`, …) which also
 /// set up the required bookkeeping (anchors, sessions, …).
 pub(crate) fn set_mode_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     mode: hjkl_engine::VimMode,
 ) {
     let internal = match mode {
@@ -222,7 +222,7 @@ pub(crate) fn set_mode_bridge<H: hjkl_engine::types::Host>(
 /// `EngineCmd::SetMark` without re-entering the engine FSM.
 /// `handle_set_mark` delegates here to avoid logic duplication.
 pub(crate) fn set_mark_at_cursor<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
 ) {
     if ch.is_ascii_lowercase() {
@@ -251,7 +251,7 @@ pub(crate) fn set_mark_at_cursor<H: hjkl_engine::types::Host>(
 /// Uppercase marks are handled by [`try_goto_mark`] which can return a
 /// `MarkJump::CrossBuffer` for cross-buffer jumps.
 pub(crate) fn goto_mark<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     linewise: bool,
 ) {
@@ -289,7 +289,7 @@ pub(crate) fn goto_mark<H: hjkl_engine::types::Host>(
 /// - All other legal mark chars delegate to [`goto_mark`] and return
 ///   `SameBuffer`.
 pub(crate) fn try_goto_mark<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     linewise: bool,
 ) -> hjkl_engine::MarkJump {

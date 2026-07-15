@@ -8,7 +8,7 @@
 //! `motions.rs` in 0.0.40.
 //!
 //! All helpers take a generic `B: <trait> + ?Sized` so they compile
-//! against the in-tree `hjkl_buffer::Buffer` and the engine's mock
+//! against the in-tree `hjkl_buffer::View` and the engine's mock
 //! buffers (used by motion / search / vim trait-routing tests). The
 //! `Pos { line: u32, col: u32 }` ⇄ `Position { row: usize, col: usize }`
 //! cast lives at the boundary so call sites stay terse.
@@ -100,7 +100,7 @@ pub fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// Apply a [`hjkl_buffer::Edit`] and return the inverse for undo.
 ///
 /// 0.0.42 (Patch C-δ.7): the `apply_edit` reach is intentionally kept
-/// against the concrete `&mut hjkl_buffer::Buffer` rather than lifted
+/// against the concrete `&mut hjkl_buffer::View` rather than lifted
 /// onto a trait method. Rationale:
 ///
 /// - `hjkl_buffer::Edit` is the rich buffer-side enum (~8 variants —
@@ -118,7 +118,7 @@ pub fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// Centralizing the reach in this free fn keeps `Editor::mutate_edit`
 /// trait-shaped at the call site (no `self.buffer.<inherent>` hop in
 /// the editor body) and gives 0.1.0 a single seam to flip when the
-/// `B: Buffer` generic lands.
+/// `B: View` generic lands.
 ///
 /// The 0.1.0 design will introduce
 /// `BufferEdit::apply_edit(&mut self, op: Self::Edit) -> Self::Edit`
@@ -126,7 +126,7 @@ pub fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// fn forwards there once that lands.
 #[inline]
 pub fn apply_buffer_edit(
-    buf: &mut hjkl_buffer::Buffer,
+    buf: &mut hjkl_buffer::View,
     edit: hjkl_buffer::Edit,
 ) -> hjkl_buffer::Edit {
     buf.apply_edit(edit)

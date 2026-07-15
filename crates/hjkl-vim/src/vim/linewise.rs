@@ -13,7 +13,7 @@ use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_
 /// fold it overlaps — vim's rule that a linewise operator on a closed fold acts
 /// on the whole fold. Loops until stable so nested closed folds are absorbed.
 pub(crate) fn expand_linewise_over_closed_folds(
-    buf: &hjkl_buffer::Buffer,
+    buf: &hjkl_buffer::View,
     mut start: usize,
     mut end: usize,
 ) -> (usize, usize) {
@@ -46,7 +46,7 @@ pub(crate) fn expand_linewise_over_closed_folds(
     (start, end)
 }
 pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
 ) {

@@ -4,7 +4,7 @@
 //! These read the vim FSM state (`Editor::vim`) to answer render/selection
 //! questions. They belong to the vim *discipline*, not the mode-agnostic
 //! engine core, so they live here — a blanket trait impl on
-//! `Editor<Buffer, H>`. As `VimState` finishes relocating into this crate,
+//! `Editor<View, H>`. As `VimState` finishes relocating into this crate,
 //! more of the engine's vim accessors move onto this trait; call sites pick
 //! them up with `use hjkl_vim::VimEditorExt`.
 
@@ -22,7 +22,7 @@ use hjkl_engine::{Editor, FsmMode, MarkJump, MotionKind, VimMode};
 /// Was `Editor::dec_pos_one_char` in the engine; it exists only to serve
 /// [`VimEditorExt::buffer_selection`], so it moved here with it.
 fn dec_pos_one_char<H: Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     p: hjkl_buffer::Position,
 ) -> hjkl_buffer::Position {
     use hjkl_buffer::Position;
@@ -47,7 +47,7 @@ fn dec_pos_one_char<H: Host>(
 /// Marks the content dirty, widens the insert row's autoindent tracking, and
 /// re-checks scrolloff. Was `Editor::after_insert_mutation` (#267) — it exists
 /// only to serve the insert primitives, so it moved here with them.
-fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     ed.mark_content_dirty();
     let (row, _) = ed.cursor();
     crate::vim_state::vim_mut(ed).widen_insert_row(row);
@@ -56,13 +56,13 @@ fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
 
 /// Like [`after_insert_mutation`] but for cursor-only insert ops that do not
 /// change content (arrows, Home/End, PageUp/Down). Skips the dirty mark.
-fn after_insert_motion<H: Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+fn after_insert_motion<H: Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let (row, _) = ed.cursor();
     crate::vim_state::vim_mut(ed).widen_insert_row(row);
     ed.ensure_cursor_in_scrolloff();
 }
 
-/// Vim-discipline read accessors layered onto every `Editor<Buffer, H>`.
+/// Vim-discipline read accessors layered onto every `Editor<View, H>`.
 ///
 /// Blanket-implemented below; bring it into scope with
 /// `use hjkl_vim::VimEditorExt` to call these on an `Editor`.
@@ -1050,7 +1050,7 @@ pub trait VimEditorExt {
     ) -> Option<(usize, usize)>;
 }
 
-impl<H: Host> VimEditorExt for Editor<hjkl_buffer::Buffer, H> {
+impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     fn visual_block_bounds(&self) -> (usize, usize, usize, usize) {
         let (ar, ac) = crate::vim_state::vim(self).block_anchor;
         let (cr, _) = self.cursor();

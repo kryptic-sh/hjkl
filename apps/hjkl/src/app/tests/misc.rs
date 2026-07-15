@@ -78,7 +78,7 @@ fn dot_repeat_replays_last_change() {
         app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
-    // Buffer now "bc". Dot-repeat should delete one more char.
+    // View now "bc". Dot-repeat should delete one more char.
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
     let line0 = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
@@ -102,7 +102,7 @@ fn dot_repeat_with_count_3_replays_three_times() {
         app.active_editor_mut(),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
-    // Buffer "bcdef". `3.` deletes 3 more. Seed pending_count to simulate
+    // View "bcdef". `3.` deletes 3 more. Seed pending_count to simulate
     // the keymap layer's count-prefix accumulation.
     app.pending_count.try_accumulate('3');
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);

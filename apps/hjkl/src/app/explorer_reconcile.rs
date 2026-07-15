@@ -5,7 +5,7 @@
 //! filesystem match the buffer.  **No filesystem access occurs here** — this is
 //! a pure function suitable for exhaustive unit testing before the wiring phase.
 //!
-//! # Buffer format
+//! # View format
 //! Each non-root line is `<indent spaces><name><US><id>` where `US` = U+001F
 //! (Unit Separator) and `id` is the node's decimal index in `tree.nodes` at
 //! render time.  Line 0 is the root directory (no id, not an editable target).
@@ -44,7 +44,7 @@ pub(crate) enum FsOp {
     Rename { from: PathBuf, to: PathBuf },
 }
 
-// ── Buffer parser ─────────────────────────────────────────────────────────────
+// ── View parser ─────────────────────────────────────────────────────────────
 
 /// One parsed entry from the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1017,7 +1017,7 @@ mod tests {
     #[test]
     fn delete_to_trash() {
         let baseline = make_baseline(&[("to_delete.rs", false)]);
-        // Buffer: root line only — file line omitted → id=1 not seen → Trash.
+        // View: root line only — file line omitted → id=1 not seen → Trash.
         let buffer = root_header().to_string();
         let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(
@@ -1292,7 +1292,7 @@ mod tests {
     #[test]
     fn trash_ordering_deep_before_shallow() {
         let baseline = make_baseline(&[("parent", true), ("parent/child.rs", false)]);
-        // Buffer: both ids missing → both trashed.
+        // View: both ids missing → both trashed.
         let buffer = root_header().to_string();
         let ops = reconcile(&baseline, &buffer, &root());
 
@@ -1374,7 +1374,7 @@ mod tests {
     #[test]
     fn blank_lines_ignored() {
         let baseline = make_baseline(&[("foo.rs", false)]);
-        // Buffer has blank lines interspersed; foo.rs carries its id.
+        // View has blank lines interspersed; foo.rs carries its id.
         let buffer = format!("{}\n\n{}\n\n", root_header(), idline(1, "foo.rs", 1),);
         let ops = reconcile(&baseline, &buffer, &root());
         assert!(ops.is_empty(), "blank lines must be ignored, got {ops:?}");
@@ -1430,7 +1430,7 @@ mod tests {
             ("mydir/a.rs", false),
             ("mydir/b.rs", false),
         ]);
-        // Buffer AFTER `dd` on the open `mydir/` line: the dir line is gone, but
+        // View AFTER `dd` on the open `mydir/` line: the dir line is gone, but
         // its two children remain at depth-2 (6-space) indent with their ids.
         let buffer = format!(
             "{}\n{}\n{}",
@@ -1471,7 +1471,7 @@ mod tests {
             ("mydir/file.rs", false),
             ("sibling.rs", false),
         ]);
-        // Buffer: mydir/ id=1, sibling.rs id=3; file.rs id=2 moved to wrong indent
+        // View: mydir/ id=1, sibling.rs id=3; file.rs id=2 moved to wrong indent
         // (indent mangled from 6 to 4 spaces = depth 1, no longer under mydir).
         // IDs are intact so: id=1 → mydir (unchanged), id=2 → file.rs under root
         // (mangled indent = depth 1 = new location → Rename), id=3 → sibling.rs.

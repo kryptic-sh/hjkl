@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 
 use crate::logic::{PickerAction, PickerLogic, RequeryMode};
 use crate::preview::load_preview;
@@ -56,14 +56,14 @@ impl PickerLogic for FileSource {
         self.label(idx)
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         let path = match self.items.lock().ok().and_then(|g| g.get(idx).cloned()) {
             Some(p) => p,
-            None => return (Buffer::new(), String::new()),
+            None => return (View::new(), String::new()),
         };
         let abs = self.root.join(&path);
         let (content, status) = load_preview(&abs);
-        (Buffer::from_str(&content), status)
+        (View::from_str(&content), status)
     }
 
     fn preview_path(&self, idx: usize) -> Option<PathBuf> {

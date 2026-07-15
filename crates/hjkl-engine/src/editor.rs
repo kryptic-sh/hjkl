@@ -1,4 +1,4 @@
-//! Editor — the public sqeel-vim type, layered over `hjkl_buffer::Buffer`.
+//! Editor — the public sqeel-vim type, layered over `hjkl_buffer::View`.
 //!
 //! This file owns the public Editor API — construction, content access,
 //! mouse and goto helpers, the (buffer-level) undo stack, and insert-mode
@@ -144,7 +144,7 @@ fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
 /// Now O(log N): ropey's `line_to_byte` walks the B-tree's per-node
 /// byte counts. No String materialization.
 #[inline]
-fn buffer_byte_of_row(buf: &hjkl_buffer::Buffer, row: usize) -> usize {
+fn buffer_byte_of_row(buf: &hjkl_buffer::View, row: usize) -> usize {
     let rope = buf.rope();
     let row = row.min(rope.len_lines());
     rope.line_to_byte(row)
@@ -154,7 +154,7 @@ fn buffer_byte_of_row(buf: &hjkl_buffer::Buffer, row: usize) -> usize {
 /// coordinates `(byte_within_buffer, (row, col_byte))` against the
 /// **pre-edit** buffer.
 fn position_to_byte_coords(
-    buf: &hjkl_buffer::Buffer,
+    buf: &hjkl_buffer::View,
     pos: hjkl_buffer::Position,
 ) -> (usize, (u32, u32)) {
     let row = pos.row.min(buf.row_count().saturating_sub(1));
@@ -269,7 +269,7 @@ fn advance_by_text(text: &str, start_byte: usize, start_pos: (u32, u32)) -> (usi
 /// state for byte/position lookups. Block ops fan out to one entry per
 /// touched row (matches `edit_to_editops`).
 fn content_edits_from_buffer_edit(
-    buf: &hjkl_buffer::Buffer,
+    buf: &hjkl_buffer::View,
     edit: &hjkl_buffer::Edit,
 ) -> Vec<crate::types::ContentEdit> {
     use hjkl_buffer::Edit as B;
@@ -543,7 +543,7 @@ pub enum MarkJump {
 }
 
 pub struct Editor<
-    B: crate::types::Buffer = hjkl_buffer::Buffer,
+    B: crate::types::View = hjkl_buffer::View,
     H: crate::types::Host = crate::types::DefaultHost,
 > {
     /// The installed keyboard discipline's FSM state, type-erased (#265 G3).
@@ -559,7 +559,7 @@ pub struct Editor<
     discipline: Box<dyn crate::DisciplineState>,
     /// Secondary selections for multi-cursor editing (#63).
     ///
-    /// The **primary** selection is not in here: its head stays `Buffer::cursor`
+    /// The **primary** selection is not in here: its head stays `View::cursor`
     /// (so the ~130 places across the engine and the disciplines that move the
     /// cursor keep working untouched) and its anchor lives in the discipline's
     /// own state (vim's `visual_anchor`, helix's `anchor`). That asymmetry is
@@ -570,7 +570,7 @@ pub struct Editor<
     /// ends against the pre-edit geometry after every edit, and drops the whole
     /// selection if either end becomes untrackable — never half of one.
     ///
-    /// Char columns, matching `Buffer::cursor` and [`hjkl_buffer::Edit`] — NOT
+    /// Char columns, matching `View::cursor` and [`hjkl_buffer::Edit`] — NOT
     /// the grapheme columns that `types::Pos` uses.
     ///
     /// Empty for a single-cursor editor, which is every editor today: vim drives
@@ -598,7 +598,7 @@ pub struct Editor<
     pub(crate) change_list_cursor: Option<usize>,
     /// Undo history: each entry is `(joined_document, cursor)` before the
     /// edit. Stored as `Arc<String>` so it shares the
-    /// Undo history: snapshots taken via `Buffer::rope()` — `ropey::Rope::clone`
+    /// Undo history: snapshots taken via `View::rope()` — `ropey::Rope::clone`
     /// is O(1) (Arc-clone of the B-tree root). Previously stored
     /// `Arc<String>` from `content_joined()`, which on the rope storage
     /// builds the entire document `String` via `rope.to_string()` — that
@@ -607,7 +607,7 @@ pub struct Editor<
     // undo_stack, redo_stack, content_dirty, cached_content (as
     // cached_editor_content), pending_fold_ops, change_log,
     // pending_content_edits, pending_content_reset are now stored on
-    // Content (inside self.buffer) and accessed via Buffer accessor methods.
+    // Buffer (inside self.buffer) and accessed via View accessor methods.
     /// Last rendered viewport height (text rows only, no chrome). Written
     /// by the draw path via [`set_viewport_height`] so the scroll helpers
     /// can clamp the cursor to stay visible without plumbing the height
@@ -617,11 +617,11 @@ pub struct Editor<
     /// goto-definition). The host app drains this each step and fires
     /// the matching request against its own LSP client.
     pub(super) pending_lsp: Option<LspIntent>,
-    /// Buffer storage.
+    /// View storage.
     ///
-    /// 0.1.0 (Patch C-δ): generic over `B: Buffer` per SPEC §"Editor
-    /// surface". Default `B = hjkl_buffer::Buffer`. The vim FSM body
-    /// and `Editor::mutate_edit` are concrete on `hjkl_buffer::Buffer`
+    /// 0.1.0 (Patch C-δ): generic over `B: View` per SPEC §"Editor
+    /// surface". Default `B = hjkl_buffer::View`. The vim FSM body
+    /// and `Editor::mutate_edit` are concrete on `hjkl_buffer::View`
     /// for 0.1.0 — see `crate::buf_helpers::apply_buffer_edit`.
     pub(super) buffer: B,
     /// Engine-native style intern table. Opaque `Span::style` ids index
@@ -715,14 +715,14 @@ pub struct Editor<
     /// global-mark writes record the correct id without requiring the app
     /// to pass the id on every keystroke.
     pub(crate) current_buffer_id: u64,
-    // change_log moved to Content; accessed via self.buffer.take_change_log() etc.
+    // change_log moved to Buffer; accessed via self.buffer.take_change_log() etc.
     /// Vim's "sticky column" (curswant). `None` before the first
     /// motion — the next vertical motion bootstraps from the live
     /// cursor column. Horizontal motions refresh this to the new
     /// column; vertical motions read it back so bouncing through a
     /// shorter row doesn't drag the cursor to col 0. Hoisted out of
-    /// `hjkl_buffer::Buffer` (and `VimState`) in 0.0.28 — Editor is
-    /// the single owner now. Buffer motion methods that need it
+    /// `hjkl_buffer::View` (and `VimState`) in 0.0.28 — Editor is
+    /// the single owner now. View motion methods that need it
     /// take a `&mut Option<usize>` parameter.
     pub(crate) sticky_col: Option<usize>,
     /// Host adapter for clipboard, cursor-shape, time, viewport, and
@@ -739,9 +739,9 @@ pub struct Editor<
     /// call across every `vim.mode = ...` site.
     pub(crate) last_emitted_mode: crate::CoarseMode,
     /// Search FSM state (pattern + per-row match cache + wrapscan).
-    /// 0.0.35: relocated out of `hjkl_buffer::Buffer` per
+    /// 0.0.35: relocated out of `hjkl_buffer::View` per
     /// `DESIGN_33_METHOD_CLASSIFICATION.md` step 1.
-    /// 0.0.37: the buffer-side bridge (`Buffer::search_pattern`) is
+    /// 0.0.37: the buffer-side bridge (`View::search_pattern`) is
     /// gone; `BufferView` now takes the active regex as a `&Regex`
     /// parameter, sourced from `Editor::search_state().pattern`.
     pub(crate) search_state: crate::search::SearchState,
@@ -752,11 +752,11 @@ pub struct Editor<
     /// and, in due course, by `Host::syntax_highlights` once the engine
     /// drives that path directly.
     ///
-    /// 0.0.37: lifted out of `hjkl_buffer::Buffer` per step 3 of
+    /// 0.0.37: lifted out of `hjkl_buffer::View` per step 3 of
     /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The buffer-side cache +
-    /// `Buffer::set_spans` / `Buffer::spans` accessors are gone.
+    /// `View::set_spans` / `View::spans` accessors are gone.
     pub(crate) buffer_spans: Vec<Vec<hjkl_buffer::Span>>,
-    // pending_content_edits and pending_content_reset moved to Content;
+    // pending_content_edits and pending_content_reset moved to Buffer;
     // accessed via self.buffer.take_pending_content_edits() etc.
     /// Row range touched by the most recent `auto_indent_rows` call.
     /// `(top_row, bot_row)` inclusive. Set by the engine after every
@@ -1177,7 +1177,7 @@ pub enum LspIntent {
     GotoDefinition,
 }
 
-impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
+impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Build an [`Editor`] from a buffer, host adapter, and SPEC options.
     ///
     /// 0.1.0 (Patch C-δ): canonical, frozen constructor per SPEC §"Editor
@@ -1187,7 +1187,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Consumers that don't need a custom host pass
     /// [`crate::types::DefaultHost::new()`]; consumers that don't need
     /// custom options pass [`crate::types::Options::default()`].
-    pub fn new(buffer: hjkl_buffer::Buffer, host: H, options: crate::types::Options) -> Self {
+    pub fn new(buffer: hjkl_buffer::View, host: H, options: crate::types::Options) -> Self {
         let settings = settings_from_options(&options);
         Self {
             // No discipline: the engine cannot name one. Callers that want vim
@@ -1235,9 +1235,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 }
 
-impl<B: crate::types::Buffer, H: crate::types::Host> Editor<B, H> {
+impl<B: crate::types::View, H: crate::types::Host> Editor<B, H> {
     /// Borrow the buffer (typed `&B`). Host renders through this via
-    /// `hjkl_buffer::BufferView` when `B = hjkl_buffer::Buffer`.
+    /// `hjkl_buffer::BufferView` when `B = hjkl_buffer::View`.
     pub fn buffer(&self) -> &B {
         &self.buffer
     }
@@ -1258,10 +1258,10 @@ impl<B: crate::types::Buffer, H: crate::types::Host> Editor<B, H> {
     }
 }
 
-impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
+impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Update the active `iskeyword` spec for word motions
     /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). 0.0.28
-    /// hoisted iskeyword storage out of `Buffer` — `Editor` is the
+    /// hoisted iskeyword storage out of `View` — `Editor` is the
     /// single owner now. Equivalent to assigning
     /// `settings_mut().iskeyword` directly; the dedicated setter is
     /// retained for source-compatibility with 0.0.27 callers.
@@ -1300,7 +1300,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Vim's sticky column (curswant). `None` before the first motion;
     /// hosts shouldn't normally need to read this directly — it's
-    /// surfaced for migration off `Buffer::sticky_col` and for
+    /// surfaced for migration off `View::sticky_col` and for
     /// snapshot tests.
     pub fn sticky_col(&self) -> Option<usize> {
         self.sticky_col
@@ -1843,7 +1843,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// Historical reverse-sync hook from when the textarea mirrored
-    /// the buffer. Now that Buffer is the cursor authority this is a
+    /// the buffer. Now that View is the cursor authority this is a
     /// no-op; call sites can remain in place during the migration.
     pub fn push_buffer_cursor_to_textarea(&mut self) {}
 
@@ -1853,7 +1853,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// apply.
     ///
     /// 0.0.34 (Patch C-δ.1): writes through `Host::viewport_mut`
-    /// instead of the (now-deleted) `Buffer::viewport_mut`.
+    /// instead of the (now-deleted) `View::viewport_mut`.
     pub fn set_viewport_top(&mut self, row: usize) {
         let last = buf_row_count(&self.buffer).saturating_sub(1);
         let target = row.min(last);
@@ -1918,7 +1918,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// [`crate::types::Host::Intent`] requires.
     ///
     /// The engine has already applied every op locally against the
-    /// in-tree [`hjkl_buffer::Buffer`] fold storage via
+    /// in-tree [`hjkl_buffer::View`] fold storage via
     /// [`crate::buffer_impl::BufferFoldProviderMut`], so hosts that
     /// don't track folds independently can ignore the queue
     /// (or simply never call this drain).
@@ -1959,15 +1959,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Refresh the host viewport's height from the cached
     /// `viewport_height_value()`. Called from the per-step
     /// boilerplate; was the textarea → buffer mirror before Phase 7f
-    /// put Buffer in charge. 0.0.28 hoisted sticky_col out of
-    /// `Buffer`. 0.0.34 (Patch C-δ.1) routes the height write through
+    /// put View in charge. 0.0.28 hoisted sticky_col out of
+    /// `View`. 0.0.34 (Patch C-δ.1) routes the height write through
     /// `Host::viewport_mut`.
     pub fn sync_buffer_from_textarea(&mut self) {
         let height = self.viewport_height_value();
         self.host.viewport_mut().height = height;
     }
 
-    /// Was the full textarea → buffer content sync. Buffer is the
+    /// Was the full textarea → buffer content sync. View is the
     /// content authority now; this remains as a no-op so the per-step
     /// call sites don't have to be ripped in the same patch.
     pub fn sync_buffer_content_from_textarea(&mut self) {
@@ -2070,7 +2070,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // 0.0.42 (Patch C-δ.7): the `apply_edit` reach is centralized
         // in [`crate::buf_helpers::apply_buffer_edit`] (option (c) of
         // the 0.0.42 plan — see that fn's doc comment). The free fn
-        // takes `&mut hjkl_buffer::Buffer` so the editor body itself
+        // takes `&mut hjkl_buffer::View` so the editor body itself
         // no longer carries a `self.buffer.<inherent>` hop.
         let inverse = apply_buffer_edit(&mut self.buffer, edit);
         let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
@@ -2172,7 +2172,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// the textarea from the buffer's lines + cursor, preserving yank
     /// text. Heavy (allocates a fresh `TextArea`) but correct; the
     /// textarea field disappears at the end of Phase 7f anyway.
-    /// No-op since Buffer is the content authority. Retained as a
+    /// No-op since View is the content authority. Retained as a
     /// shim so call sites in `mutate_edit` and friends don't have to
     /// be ripped in lockstep with the field removal.
     pub(crate) fn push_buffer_content_to_textarea(&mut self) {}
@@ -3236,7 +3236,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Today's snapshot covers mode, cursor, lines, viewport top.
     /// Registers, marks, jump list, undo tree, and full options arrive
     /// once phase 5 trait extraction lands the generic
-    /// `Editor<B: Buffer, H: Host>` constructor — this method's surface
+    /// `Editor<B: View, H: Host>` constructor — this method's surface
     /// stays stable; only the snapshot's internal fields grow.
     ///
     /// Distinct from the internal `snapshot` used by undo (which
@@ -3368,7 +3368,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Scroll the viewport so the cursor stays at least `scrolloff`
     /// rows from each edge. Replaces the bare
-    /// `Buffer::ensure_cursor_visible` call at end-of-step so motions
+    /// `View::ensure_cursor_visible` call at end-of-step so motions
     /// don't park the cursor on the very last visible row.
     pub fn ensure_cursor_in_scrolloff(&mut self) {
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
@@ -3745,7 +3745,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// Capture the buffer state for undo / redo.  Uses
-    /// [`Query::content_joined`], which the `Buffer` impl caches as an
+    /// [`Query::content_joined`], which the `View` impl caches as an
     /// `Arc<String>` against `dirty_gen` — so when LSP / git / syntax
     /// already joined this generation, the snapshot is an `Arc::clone`
     /// (one ptr bump). Previously this cloned every line into a
@@ -3968,7 +3968,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Restore the buffer from a `ropey::Rope` snapshot. Used by undo /
     /// redo: snapshots are stored as `Rope` (O(1) Arc-clone via
-    /// `Buffer::rope()`), so this avoids the full-document `to_string`
+    /// `View::rope()`), so this avoids the full-document `to_string`
     /// materialization that the old `Arc<String>` snapshot path forced
     /// on every undo group boundary.
     ///
@@ -4294,7 +4294,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // these methods are thin delegators so the public surface stays on `Editor`.
     //
     // Invariants (enforced by the bridge fns):
-    //   - Buffer mutations go through `mutate_edit` (dirty/undo/change-list).
+    //   - View mutations go through `mutate_edit` (dirty/undo/change-list).
     //   - Navigation keys call `break_undo_group_in_insert` when the FSM did.
     //   - `push_buffer_cursor_to_textarea` is called after every mutation
     //     (currently a no-op, kept for migration hygiene).
@@ -4307,7 +4307,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 // one-line `///` rustdoc. Fields mutated as a unit get a combined action method
 // rather than individual getters + setters (e.g. `accumulate_count_digit`).
 
-impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
+impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     // ── Pending chord ─────────────────────────────────────────────────────────
 
     // ── Abbreviations ─────────────────────────────────────────────────────────
@@ -4502,14 +4502,14 @@ fn visual_col_for_char(line: &str, char_col: usize, tab_width: usize) -> usize {
 mod shift_syntax_spans_tests {
     use super::*;
     use crate::types::{ContentEdit, DefaultHost, Options, Style};
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
-    fn ed_with_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+    fn ed_with_spans(line_count: usize) -> Editor<View, DefaultHost> {
         let text = (0..line_count)
             .map(|i| format!("row{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let buf = Buffer::from_str(&text);
+        let buf = View::from_str(&text);
         let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
         // Synthesize span rows so we can detect which survive a shift.
         // Use a distinct fg colour per row so spans are identifiable.
@@ -4611,12 +4611,12 @@ mod shift_syntax_spans_tests {
     /// column `i + 1` so the rows are independently identifiable after a
     /// shift (otherwise all spans look identical and can't tell which
     /// original row's spans landed at which post-shift index).
-    fn ed_with_distinguishable_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+    fn ed_with_distinguishable_spans(line_count: usize) -> Editor<View, DefaultHost> {
         let text = (0..line_count)
             .map(|i| format!("rowwwwwwwwww{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let buf = Buffer::from_str(&text);
+        let buf = View::from_str(&text);
         let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
         let style = Style::default();
         let spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
@@ -4746,7 +4746,7 @@ mod shift_syntax_spans_tests {
     /// Regression: `push_undo` used to clone every line into a
     /// `Vec<String>` (162 k heap allocations on a 162 k-row buffer per
     /// snapshot). Now stores an `Arc<String>` shared with
-    /// `Buffer::content_joined`'s per-dirty_gen cache — a warm snapshot
+    /// `View::content_joined`'s per-dirty_gen cache — a warm snapshot
     /// is an `Arc::clone` (one ptr bump).
     ///
     /// Test: snapshot a 60 k-row buffer 100 times. With the Arc impl
@@ -4757,7 +4757,7 @@ mod shift_syntax_spans_tests {
     fn push_undo_snapshot_arc_clone_is_under_100ms_for_100_snapshots() {
         use crate::types::{DefaultHost, Options};
         let text = "x\n".repeat(60_000);
-        let buf = hjkl_buffer::Buffer::from_str(&text);
+        let buf = hjkl_buffer::View::from_str(&text);
         let mut e = Editor::new(buf, DefaultHost::default(), Options::default());
         // Warm the cache: one join, subsequent snapshots Arc::clone it.
         e.push_undo();
@@ -4778,11 +4778,11 @@ mod shift_syntax_spans_tests {
 mod earlier_later_tests {
     use super::*;
     use crate::types::{DefaultHost, Options};
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use std::time::{Duration, SystemTime};
 
-    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         Editor::new(buf, DefaultHost::default(), Options::default())
     }
 
@@ -4882,15 +4882,15 @@ mod earlier_later_tests {
 mod shared_registers_tests {
     use super::*;
     use crate::types::{DefaultHost, Options};
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
     #[test]
     fn shared_register_bank_visible_across_editors() {
         let shared =
             std::sync::Arc::new(std::sync::Mutex::new(crate::registers::Registers::default()));
-        let mut a = Editor::new(Buffer::new(), DefaultHost::default(), Options::default());
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
         a.set_registers_arc(shared.clone());
-        let mut b = Editor::new(Buffer::new(), DefaultHost::default(), Options::default());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
         b.set_registers_arc(shared.clone());
         // Write to editor A's unnamed register
         a.registers_mut().unnamed = crate::registers::Slot {
@@ -4906,10 +4906,10 @@ mod shared_registers_tests {
 mod scroll_anim_tests {
     use super::*;
     use crate::types::{DefaultHost, Host, Options};
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
-    fn make_editor_with_content(content: &str) -> Editor<Buffer, DefaultHost> {
-        let mut buf = Buffer::new();
+    fn make_editor_with_content(content: &str) -> Editor<View, DefaultHost> {
+        let mut buf = View::new();
         crate::types::BufferEdit::replace_all(&mut buf, content);
         let host = DefaultHost::new();
         Editor::new(buf, host, Options::default())
@@ -4917,7 +4917,7 @@ mod scroll_anim_tests {
 
     #[test]
     fn scroll_duration_default_is_zero() {
-        let buf = Buffer::new();
+        let buf = View::new();
         let host = DefaultHost::new();
         let ed = Editor::new(buf, host, Options::default());
         assert_eq!(ed.settings().scroll_duration_ms, 0);
@@ -4925,7 +4925,7 @@ mod scroll_anim_tests {
 
     #[test]
     fn take_scroll_anim_hint_false_initially() {
-        let buf = Buffer::new();
+        let buf = View::new();
         let host = DefaultHost::new();
         let mut ed = Editor::new(buf, host, Options::default());
         assert!(!ed.take_scroll_anim_hint());

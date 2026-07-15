@@ -491,7 +491,7 @@ impl HostCmd<App> for BCmd {
     }
 
     fn arg_kind(&self) -> ArgKind {
-        ArgKind::Buffer
+        ArgKind::View
     }
 
     fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {

@@ -26,7 +26,7 @@ use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_row_count, buf_set_
 ///
 /// No-op when `motion_key` does not produce a known motion.
 pub(crate) fn apply_op_motion_key<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     motion_key: char,
     total_count: usize,
@@ -79,7 +79,7 @@ pub(crate) fn apply_op_motion_key<H: hjkl_engine::types::Host>(
 /// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`/`gcc`).
 /// Called by `Editor::apply_op_double` (the public controller API).
 pub(crate) fn apply_op_double<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     total_count: usize,
 ) {
@@ -112,7 +112,7 @@ pub(crate) fn apply_op_double<H: hjkl_engine::types::Host>(
 /// next match (forward) or previous match (backward) is used. Returns `None`
 /// when there is no pattern or no match remains.
 pub(crate) fn gn_find_range<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     re: &regex::Regex,
     forward: bool,
 ) -> Option<(hjkl_engine::types::Pos, hjkl_engine::types::Pos)> {
@@ -139,7 +139,7 @@ pub(crate) fn gn_find_range<H: hjkl_engine::types::Host>(
 /// match as a charwise inclusive range. Records `LastChange::GnOp` so `cgn` /
 /// `dgn` are `.`-repeatable.
 pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Option<Operator>,
     forward: bool,
     count: usize,
@@ -236,7 +236,7 @@ pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
 ///   `E`→BigWordEndBack, `j`→ScreenDown, `k`→ScreenUp) and applies. Unknown
 ///   chars are silently ignored (no-op), matching the engine FSM's behaviour.
 pub(crate) fn apply_op_g_inner<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     ch: char,
     total_count: usize,
@@ -294,7 +294,7 @@ pub(crate) fn apply_op_g_inner<H: hjkl_engine::types::Host>(
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterGChord` without re-entering the FSM.
 pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     count: usize,
 ) {
@@ -330,7 +330,7 @@ pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
         'v' => reenter_last_visual_bridge(ed),
         // `gj` / `gk` — display-line down / up. Walks one screen
         // segment at a time under `:set wrap`; falls back to `j`/`k`
-        // when wrap is off (Buffer::move_screen_* handles the branch).
+        // when wrap is off (View::move_screen_* handles the branch).
         'j' => execute_motion(ed, Motion::ScreenDown, count),
         'k' => execute_motion(ed, Motion::ScreenUp, count),
         // Case operators: `gU` / `gu` / `g~`. Enter operator-pending
@@ -476,9 +476,7 @@ pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
 /// Normal-mode `&` — repeat the last `:s` on the current line, dropping the
 /// previous flags (vim: `&` ≡ `:s` with no flags). `g&` keeps flags + whole
 /// buffer; this is the single-line, flag-less form.
-pub(crate) fn ampersand_repeat<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-) {
+pub(crate) fn ampersand_repeat<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(mut cmd) = ed.last_substitute().cloned() else {
         return;
     };
@@ -491,7 +489,7 @@ pub(crate) fn ampersand_repeat<H: hjkl_engine::types::Host>(
 /// (the public controller API) so the hjkl-vim pending-state reducer can
 /// dispatch `AfterZChord` without re-entering the engine FSM.
 pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     count: usize,
 ) {
@@ -579,7 +577,7 @@ pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
 /// hjkl-vim pending-state reducer can dispatch `FindChar` without
 /// re-entering the FSM.
 pub(crate) fn apply_find_char<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     forward: bool,
     till: bool,
@@ -592,18 +590,18 @@ pub(crate) fn apply_find_char<H: hjkl_engine::types::Host>(
 #[cfg(test)]
 mod indent_count_tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         ed.settings_mut().expandtab = true;
         ed.settings_mut().shiftwidth = 4;
         ed
     }
 
-    fn content(ed: &Editor<Buffer, DefaultHost>) -> String {
+    fn content(ed: &Editor<View, DefaultHost>) -> String {
         (*ed.buffer().content_joined()).clone()
     }
 

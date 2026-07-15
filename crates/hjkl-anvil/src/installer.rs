@@ -1259,7 +1259,7 @@ mod tests {
 
         let bin = tmp.path().join("hello");
         assert!(bin.exists(), "hello must be written for single-file gz");
-        // Content should be the decompressed script.
+        // Buffer should be the decompressed script.
         let content = std::fs::read_to_string(&bin).unwrap();
         assert!(content.contains("hello"), "content should say hello");
     }

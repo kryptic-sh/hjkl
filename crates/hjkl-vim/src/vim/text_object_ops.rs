@@ -15,7 +15,7 @@ use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_set_cursor_rc
 /// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
 /// when the cursor's line contains fewer than two occurrences of `quote`.
 pub(crate) fn text_object_inner_quote_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
     quote_text_object(ed, quote, true)
@@ -23,7 +23,7 @@ pub(crate) fn text_object_inner_quote_bridge<H: hjkl_engine::types::Host>(
 /// Resolve the range of `a<quote>` (around quote) at the current cursor
 /// position. Includes surrounding whitespace on one side per vim semantics.
 pub(crate) fn text_object_around_quote_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
     quote_text_object(ed, quote, false)
@@ -36,7 +36,7 @@ pub(crate) fn text_object_around_quote_bridge<H: hjkl_engine::types::Host>(
 /// covering the first content character through the last content character
 /// (RangeKind metadata is stripped — callers receive start/end only).
 pub(crate) fn text_object_inner_bracket_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
     bracket_text_object(ed, open, true, 1).map(|(s, e, _kind)| (s, e))
@@ -45,7 +45,7 @@ pub(crate) fn text_object_inner_bracket_bridge<H: hjkl_engine::types::Host>(
 /// bracket characters themselves. `open` must be one of `'('`, `'{'`, `'['`,
 /// `'<'`.
 pub(crate) fn text_object_around_bracket_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
     bracket_text_object(ed, open, false, 1).map(|(s, e, _kind)| (s, e))
@@ -53,28 +53,28 @@ pub(crate) fn text_object_around_bracket_bridge<H: hjkl_engine::types::Host>(
 /// Resolve the range of `is` (inner sentence) at the cursor. Excludes
 /// trailing whitespace.
 pub(crate) fn text_object_inner_sentence_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, true, 1)
 }
 /// Resolve the range of `as` (around sentence) at the cursor. Includes
 /// trailing whitespace.
 pub(crate) fn text_object_around_sentence_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     sentence_text_object(ed, false, 1)
 }
 /// Resolve the range of `ip` (inner paragraph) at the cursor. A paragraph
 /// is a block of non-blank lines bounded by blank lines or buffer edges.
 pub(crate) fn text_object_inner_paragraph_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, true, 1)
 }
 /// Resolve the range of `ap` (around paragraph) at the cursor. Includes one
 /// trailing blank line when present.
 pub(crate) fn text_object_around_paragraph_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     paragraph_text_object(ed, false, 1)
 }
@@ -82,14 +82,14 @@ pub(crate) fn text_object_around_paragraph_bridge<H: hjkl_engine::types::Host>(
 /// `<tag>...</tag>` pairs; returns the range of inner content between the open
 /// and close tags.
 pub(crate) fn text_object_inner_tag_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, true)
 }
 /// Resolve the range of `at` (around tag) at the cursor. Includes the open
 /// and close tag delimiters themselves.
 pub(crate) fn text_object_around_tag_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, false)
 }
@@ -143,7 +143,7 @@ pub(crate) fn greedy_wrap(original: &[String], width: usize) -> Vec<String> {
 /// before re-wrapping. Cursor lands at `(top, 0)` after the call
 /// (via `ed.restore`).
 pub(crate) fn reflow_rows<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
 ) {
@@ -177,7 +177,7 @@ pub(crate) fn reflow_rows<H: hjkl_engine::types::Host>(
 /// and the wrapped lines so the caller can compute a character-preserving
 /// cursor position via [`reflow_keep_cursor`].
 pub(crate) fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
 ) -> (Vec<String>, Vec<String>) {
@@ -276,7 +276,7 @@ pub(crate) fn reflow_keep_cursor(
 /// Preserves the textarea yank buffer (vim's case operators don't
 /// touch registers).
 pub(crate) fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     top: (usize, usize),
     bot: (usize, usize),
@@ -312,7 +312,7 @@ pub(crate) fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
 /// indenting). `shiftwidth` is read from `editor.settings()` so
 /// `:set shiftwidth=N` takes effect on the next operation.
 pub(crate) fn indent_rows<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
     count: usize,
@@ -346,7 +346,7 @@ pub(crate) fn indent_rows<H: hjkl_engine::types::Host>(
 /// each row in `[top, bot]`. Rows with less leading whitespace have
 /// all their indent stripped, not clipped to zero length.
 pub(crate) fn outdent_rows<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
     count: usize,
@@ -465,7 +465,7 @@ pub(crate) fn bracket_net(line: &str) -> i32 {
 /// such patterns will produce incorrect indent depths. Tree-sitter / LSP
 /// indentation is deferred to a follow-up.
 pub(crate) fn auto_indent_rows<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
 ) {
@@ -564,7 +564,7 @@ pub(crate) fn order(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (u
 /// line). Vim applies this clamp on every return to Normal mode after an
 /// operator or Esc-from-insert.
 pub(crate) fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let (row, col) = ed.cursor();
     let line_chars = buf_line_chars(ed.buffer(), row);

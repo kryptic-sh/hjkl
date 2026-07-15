@@ -41,7 +41,7 @@ use hjkl_buffer::{Edit, MotionKind, Position};
 ///
 /// # Units
 ///
-/// Char columns, like [`hjkl_buffer::Edit`] and `Buffer::cursor` — NOT the
+/// Char columns, like [`hjkl_buffer::Edit`] and `View::cursor` — NOT the
 /// grapheme columns of [`crate::types::Pos`]. Mixing the two is silently wrong
 /// on multi-byte text.
 ///
@@ -56,7 +56,7 @@ use hjkl_buffer::{Edit, MotionKind, Position};
 /// selection is dropped.
 ///
 /// The **primary** selection is deliberately asymmetric: its head is
-/// `Buffer::cursor` and its anchor lives in the discipline's own state (vim's
+/// `View::cursor` and its anchor lives in the discipline's own state (vim's
 /// `visual_anchor` in `VimState`, helix's `anchor` in `HelixState`). That split
 /// predates multi-cursor and unifying it would rewrite vim's visual mode, so it
 /// stays. Only the *secondary* selections live here.
@@ -252,7 +252,7 @@ fn after_delete_block_chunks(p: Position, at: Position, widths: &[usize]) -> Pos
 ///
 /// # Units
 ///
-/// Works in **char columns**, which is what [`Edit`] and `Buffer::cursor` both
+/// Works in **char columns**, which is what [`Edit`] and `View::cursor` both
 /// speak. Deliberately *not* expressed over [`crate::types::Selection`], whose
 /// `Pos::col` counts **graphemes**: doing this arithmetic in grapheme columns
 /// would silently mis-shift every position sitting after a multi-byte

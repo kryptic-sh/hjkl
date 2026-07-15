@@ -35,9 +35,9 @@ pub(crate) enum HopKind {
 /// One labeled jump target.
 #[derive(Debug, Clone)]
 pub(crate) struct HopTarget {
-    /// Buffer document row (0-based).
+    /// View document row (0-based).
     pub row: usize,
-    /// Buffer document column (0-based char index).
+    /// View document column (0-based char index).
     pub col: usize,
     /// Label string to paint and wait for ("a", "b", ..., "aa", "ab", ...).
     pub label: String,

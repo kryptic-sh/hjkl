@@ -13,7 +13,7 @@ use crate::global::{global_match_handler, vglobal_handler};
 // ---- quit ------------------------------------------------------------------
 
 fn quit_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -24,7 +24,7 @@ fn quit_handler<H: Host>(
 }
 
 fn quit_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -38,7 +38,7 @@ fn quit_force_handler<H: Host>(
 
 /// `:w` / `:write` — save current buffer, or save to `<path>` when given.
 fn write_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -56,7 +56,7 @@ fn write_handler<H: Host>(
 /// Returns `None` (defer to legacy) when no path given — legacy handles
 /// the reload-current-buffer case via app-side logic.
 fn edit_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -68,7 +68,7 @@ fn edit_handler<H: Host>(
 
 /// `:e! [path]` / `:edit! [path]` — open or force-reload a file.
 fn edit_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -89,7 +89,7 @@ fn edit_force_handler<H: Host>(
 ///
 /// Returns `None` when no path/cmd is given (vim errors on `:r` alone).
 fn read_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -163,7 +163,7 @@ fn read_handler<H: Host>(
 
 /// `:bd` / `:bdelete` — close current buffer (no force).
 fn bdelete_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -175,7 +175,7 @@ fn bdelete_handler<H: Host>(
 
 /// `:bd!` / `:bdelete!` — close current buffer (force).
 fn bdelete_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -187,7 +187,7 @@ fn bdelete_force_handler<H: Host>(
 
 /// `:bw` / `:bwipeout` — wipe current buffer (no force).
 fn bwipeout_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -199,7 +199,7 @@ fn bwipeout_handler<H: Host>(
 
 /// `:bw!` / `:bwipeout!` — wipe current buffer (force).
 fn bwipeout_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -212,7 +212,7 @@ fn bwipeout_force_handler<H: Host>(
 /// `:wa` / `:wall` — write all modified buffers.
 /// hjkl owns one buffer per Editor; behaviour parity with legacy: same as `:w`.
 fn wall_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -222,7 +222,7 @@ fn wall_handler<H: Host>(
 // ---- wq / x ----------------------------------------------------------------
 
 fn wq_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -233,7 +233,7 @@ fn wq_handler<H: Host>(
 }
 
 fn wq_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -246,7 +246,7 @@ fn wq_force_handler<H: Host>(
 // ---- wqall -----------------------------------------------------------------
 
 fn wqall_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -259,7 +259,7 @@ fn wqall_handler<H: Host>(
 // ---- qall ------------------------------------------------------------------
 
 fn qall_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -270,7 +270,7 @@ fn qall_handler<H: Host>(
 }
 
 fn qall_force_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -283,7 +283,7 @@ fn qall_force_handler<H: Host>(
 // ---- nohlsearch ------------------------------------------------------------
 
 fn nohlsearch_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -294,7 +294,7 @@ fn nohlsearch_handler<H: Host>(
 // ---- undo / redo -----------------------------------------------------------
 
 fn undo_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -303,7 +303,7 @@ fn undo_handler<H: Host>(
 }
 
 fn redo_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -362,7 +362,7 @@ fn parse_earlier_later_arg(arg: &str) -> Result<EarlierLaterArg, String> {
 }
 
 fn earlier_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -385,7 +385,7 @@ fn earlier_handler<H: Host>(
 }
 
 fn later_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -415,7 +415,7 @@ fn later_handler<H: Host>(
 /// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename the
 /// buffer identity so future `:w` writes there.
 fn saveas_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -431,7 +431,7 @@ fn saveas_handler<H: Host>(
 /// `:file [{name}]` — no-arg: print filename + status; with-arg: rename
 /// buffer in-memory without writing.
 fn file_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -457,7 +457,7 @@ fn file_handler<H: Host>(
 
 /// `:cd [{path}]` — change working directory. No arg → `$HOME`.
 fn cd_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -480,7 +480,7 @@ fn cd_handler<H: Host>(
 
 /// `:pwd` — print working directory.
 fn pwd_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -498,7 +498,7 @@ fn pwd_handler<H: Host>(
 /// With `!`: paste above the current line.
 /// Default register when no arg: `"` (unnamed).
 fn put_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -507,7 +507,7 @@ fn put_handler<H: Host>(
 }
 
 fn put_above_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -518,7 +518,7 @@ fn put_above_handler<H: Host>(
 // ---- registers / marks / jumps / changes -----------------------------------
 
 fn registers_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -529,7 +529,7 @@ fn registers_handler<H: Host>(
 }
 
 fn marks_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -540,7 +540,7 @@ fn marks_handler<H: Host>(
 }
 
 fn jumps_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -551,7 +551,7 @@ fn jumps_handler<H: Host>(
 }
 
 fn changes_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -568,7 +568,7 @@ fn changes_handler<H: Host>(
 /// `LineRange` is 1-based inclusive. Legacy `Range` (in hjkl-editor) is 0-based;
 /// we convert here before mutating the buffer.
 fn delete_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -620,7 +620,7 @@ fn delete_handler<H: Host>(
 ///
 /// Flags (trailing args): `!` reverse, `i` ignore-case, `u` unique, `n` numeric.
 fn sort_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -701,7 +701,7 @@ fn sort_handler<H: Host>(
 /// `:[range]m {addr}` / `:move` — move the range to after line `addr`
 /// (`0` = before the first line). Default range is the current line.
 fn move_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -711,7 +711,7 @@ fn move_handler<H: Host>(
 /// `:[range]t {addr}` / `:co` / `:copy` — copy the range to after line `addr`
 /// (`0` = before the first line). Default range is the current line.
 fn copy_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -720,7 +720,7 @@ fn copy_handler<H: Host>(
 
 /// Shared body for `:move` (`copy = false`) and `:copy` (`copy = true`).
 fn line_relocate_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
     copy: bool,
@@ -833,7 +833,7 @@ fn extract_leading_number(line: &str) -> i64 {
 /// On success the parsed `SubstituteCmd` is stored on the editor so `:&` / `:&&`
 /// can repeat it (part of #171).
 fn substitute_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -957,7 +957,7 @@ fn format_print_line(line: &str, row: usize, num: bool, list: bool) -> String {
 ///
 /// Cursor lands on the first non-blank of the last shifted line, matching vim.
 pub(crate) fn shift_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     cmd_str: &str,
     range: Option<LineRange>,
 ) -> ExEffect {
@@ -1017,7 +1017,7 @@ pub(crate) fn shift_handler<H: Host>(
 ///
 /// `keep_flags` is `true` for `&&`, `false` for `&`.
 pub(crate) fn repeat_substitute_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     keep_flags: bool,
     range: Option<LineRange>,
 ) -> ExEffect {
@@ -1068,7 +1068,7 @@ pub(crate) fn repeat_substitute_handler<H: Host>(
 
 /// `:set [option ...]` — query / assign vim settings.
 fn set_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2070,7 +2070,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
 
 /// `:redraw` — signal the host to repaint without clearing.
 fn redraw_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2079,7 +2079,7 @@ fn redraw_handler<H: Host>(
 
 /// `:redraw!` — signal the host to clear the terminal then repaint.
 fn redraw_clear_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2091,7 +2091,7 @@ fn redraw_clear_handler<H: Host>(
 macro_rules! qf_handler {
     ($name:ident, $cmd:expr) => {
         fn $name<H: Host>(
-            _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+            _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
             _args: &str,
             _range: Option<LineRange>,
         ) -> Option<ExEffect> {
@@ -2109,7 +2109,7 @@ qf_handler!(clast_handler, QfCommand::Last);
 
 /// `:cc [N]` — jump to the 1-based entry `N`; no arg means "current" (`Nth(0)`).
 fn cc_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2119,7 +2119,7 @@ fn cc_handler<H: Host>(
 
 /// `:grep <pattern>` — run ripgrep, populate the quickfix list, open the popup.
 fn grep_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2133,7 +2133,7 @@ fn grep_handler<H: Host>(
 /// `:make [args]` — run `makeprg` (appending `args`), parse output via the
 /// errorformat, populate the quickfix list, open the popup.
 fn make_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2142,7 +2142,7 @@ fn make_handler<H: Host>(
 
 /// `:cexpr {expr}` — parse `expr` via errorformat, replace quickfix list, jump to first.
 fn cexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2155,7 +2155,7 @@ fn cexpr_handler<H: Host>(
 
 /// `:cgetexpr {expr}` — parse `expr` via errorformat, replace quickfix list, no jump.
 fn cgetexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2168,7 +2168,7 @@ fn cgetexpr_handler<H: Host>(
 
 /// `:caddexpr {expr}` — parse `expr` via errorformat, append to quickfix list, no jump.
 fn caddexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2186,7 +2186,7 @@ fn caddexpr_handler<H: Host>(
 macro_rules! loc_handler {
     ($name:ident, $cmd:expr) => {
         fn $name<H: Host>(
-            _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+            _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
             _args: &str,
             _range: Option<LineRange>,
         ) -> Option<ExEffect> {
@@ -2204,7 +2204,7 @@ loc_handler!(llast_handler, QfCommand::Last);
 
 /// `:ll [N]` — jump to the 1-based location entry `N`; no arg means "current".
 fn ll_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2214,7 +2214,7 @@ fn ll_handler<H: Host>(
 
 /// `:lgrep <pattern>` — run ripgrep, populate the location list, open popup.
 fn lgrep_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2227,7 +2227,7 @@ fn lgrep_handler<H: Host>(
 
 /// `:lmake [args]` — run `makeprg` into the location list.
 fn lmake_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2236,7 +2236,7 @@ fn lmake_handler<H: Host>(
 
 /// `:lexpr {expr}` — parse `expr` via errorformat, replace location list, jump to first.
 fn lexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2249,7 +2249,7 @@ fn lexpr_handler<H: Host>(
 
 /// `:lgetexpr {expr}` — parse `expr` via errorformat, replace location list, no jump.
 fn lgetexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2262,7 +2262,7 @@ fn lgetexpr_handler<H: Host>(
 
 /// `:laddexpr {expr}` — parse `expr` via errorformat, append to location list, no jump.
 fn laddexpr_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2277,7 +2277,7 @@ fn laddexpr_handler<H: Host>(
 
 /// `:cbuffer` — parse current buffer via errorformat, replace quickfix list, jump to first.
 fn cbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2289,7 +2289,7 @@ fn cbuffer_handler<H: Host>(
 
 /// `:cgetbuffer` — parse current buffer via errorformat, replace quickfix list, no jump.
 fn cgetbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2301,7 +2301,7 @@ fn cgetbuffer_handler<H: Host>(
 
 /// `:caddbuffer` — parse current buffer via errorformat, append to quickfix list, no jump.
 fn caddbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2315,7 +2315,7 @@ fn caddbuffer_handler<H: Host>(
 
 /// `:cfile [path]` — read file, parse via errorformat, replace quickfix list, jump to first.
 fn cfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2328,7 +2328,7 @@ fn cfile_handler<H: Host>(
 
 /// `:cgetfile [path]` — read file, parse via errorformat, replace quickfix list, no jump.
 fn cgetfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2341,7 +2341,7 @@ fn cgetfile_handler<H: Host>(
 
 /// `:caddfile [path]` — read file, parse via errorformat, append to quickfix list, no jump.
 fn caddfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2356,7 +2356,7 @@ fn caddfile_handler<H: Host>(
 
 /// `:lbuffer` — parse current buffer via errorformat, replace location list, jump to first.
 fn lbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2368,7 +2368,7 @@ fn lbuffer_handler<H: Host>(
 
 /// `:lgetbuffer` — parse current buffer via errorformat, replace location list, no jump.
 fn lgetbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2380,7 +2380,7 @@ fn lgetbuffer_handler<H: Host>(
 
 /// `:laddbuffer` — parse current buffer via errorformat, append to location list, no jump.
 fn laddbuffer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2394,7 +2394,7 @@ fn laddbuffer_handler<H: Host>(
 
 /// `:lfile [path]` — read file, parse via errorformat, replace location list, jump to first.
 fn lfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2407,7 +2407,7 @@ fn lfile_handler<H: Host>(
 
 /// `:lgetfile [path]` — read file, parse via errorformat, replace location list, no jump.
 fn lgetfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2420,7 +2420,7 @@ fn lgetfile_handler<H: Host>(
 
 /// `:laddfile [path]` — read file, parse via errorformat, append to location list, no jump.
 fn laddfile_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2435,7 +2435,7 @@ fn laddfile_handler<H: Host>(
 
 /// `:colder [N]` — activate an older quickfix list (default 1 step).
 fn colder_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2445,7 +2445,7 @@ fn colder_handler<H: Host>(
 
 /// `:cnewer [N]` — activate a newer quickfix list (default 1 step).
 fn cnewer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2455,7 +2455,7 @@ fn cnewer_handler<H: Host>(
 
 /// `:lolder [N]` — activate an older location list (default 1 step).
 fn lolder_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2465,7 +2465,7 @@ fn lolder_handler<H: Host>(
 
 /// `:lnewer [N]` — activate a newer location list (default 1 step).
 fn lnewer_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2477,7 +2477,7 @@ fn lnewer_handler<H: Host>(
 
 /// `:cdo {cmd}` — run `cmd` once per valid quickfix entry.
 fn cdo_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2489,7 +2489,7 @@ fn cdo_handler<H: Host>(
 
 /// `:cfdo {cmd}` — run `cmd` once per distinct file in the quickfix list.
 fn cfdo_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2501,7 +2501,7 @@ fn cfdo_handler<H: Host>(
 
 /// `:ldo {cmd}` — run `cmd` once per valid location-list entry.
 fn ldo_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2513,7 +2513,7 @@ fn ldo_handler<H: Host>(
 
 /// `:lfdo {cmd}` — run `cmd` once per distinct file in the location list.
 fn lfdo_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2532,7 +2532,7 @@ fn lfdo_handler<H: Host>(
 /// `:syntax sync`, `:syntax clear`, `:syntax reset` are accepted without
 /// error).
 fn syntax_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2549,7 +2549,7 @@ fn syntax_handler<H: Host>(
 ///
 /// No range → current cursor line.
 fn comment_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2565,7 +2565,7 @@ fn comment_handler<H: Host>(
 /// check: scan each non-blank line and strip exactly one occurrence of the
 /// comment marker if present. Lines that are not commented are left unchanged.
 fn uncomment_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2653,7 +2653,7 @@ fn uncomment_handler<H: Host>(
 /// Resolve a `LineRange` to `(top, bot)` 0-based row indices.
 /// No range → current cursor line.
 fn resolve_comment_range<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
     range: Option<LineRange>,
 ) -> (usize, usize) {
     match range {
@@ -2806,7 +2806,7 @@ fn retab_line(line: &str, tabstop: usize, expandtab: bool, bang: bool) -> String
 
 /// `:[range]retab [N]` — convert leading whitespace per expandtab/tabstop.
 fn retab_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2815,7 +2815,7 @@ fn retab_handler<H: Host>(
 
 /// `:[range]retab! [N]` — also convert internal whitespace runs.
 fn retab_bang_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2827,7 +2827,7 @@ fn retab_bang_handler<H: Host>(
 /// The engine side is a pure pass-through; the host (TUI app) handles the
 /// actual write when it receives `ExEffect::Preserve`. Issue #185.
 fn preserve_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2841,7 +2841,7 @@ fn preserve_handler<H: Host>(
 /// force recovery on it.  The host (TUI app) handles the logic when it
 /// receives `ExEffect::Recover`.
 fn recover_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2853,7 +2853,7 @@ fn recover_handler<H: Host>(
 /// `:diagnostics` — populate the QUICKFIX list from LSP diagnostics across all
 /// non-explorer buffer slots.
 fn diagnostics_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2863,7 +2863,7 @@ fn diagnostics_handler<H: Host>(
 /// `:ldiagnostics` — populate the LOCATION list from LSP diagnostics of the
 /// current buffer slot.
 fn ldiagnostics_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2871,7 +2871,7 @@ fn ldiagnostics_handler<H: Host>(
 }
 
 fn retab_impl<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
     bang: bool,
@@ -2970,7 +2970,7 @@ fn parse_abbrev_args(args: &str) -> Option<(String, String)> {
 
 // `:abbreviate {lhs} {rhs}` — define insert + cmdline abbreviation.
 fn abbreviate_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2983,7 +2983,7 @@ fn abbreviate_handler<H: Host>(
 
 // `:iabbrev {lhs} {rhs}` — insert-mode only abbreviation.
 fn iabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -2996,7 +2996,7 @@ fn iabbrev_handler<H: Host>(
 
 // `:cabbrev {lhs} {rhs}` — cmdline-mode only abbreviation (stored, not expanded).
 fn cabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3009,7 +3009,7 @@ fn cabbrev_handler<H: Host>(
 
 // `:noreabbrev {lhs} {rhs}` — non-recursive insert + cmdline abbreviation.
 fn noreabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3022,7 +3022,7 @@ fn noreabbrev_handler<H: Host>(
 
 // `:inoreabbrev {lhs} {rhs}` — non-recursive insert-only abbreviation.
 fn inoreabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3035,7 +3035,7 @@ fn inoreabbrev_handler<H: Host>(
 
 // `:cnoreabbrev {lhs} {rhs}` — non-recursive cmdline-only abbreviation.
 fn cnoreabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3048,7 +3048,7 @@ fn cnoreabbrev_handler<H: Host>(
 
 // `:unabbreviate {lhs}` — remove insert + cmdline abbreviation.
 fn unabbreviate_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3062,7 +3062,7 @@ fn unabbreviate_handler<H: Host>(
 
 // `:iunabbrev {lhs}` — remove insert-only abbreviation.
 fn iunabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3076,7 +3076,7 @@ fn iunabbrev_handler<H: Host>(
 
 // `:cunabbrev {lhs}` — remove cmdline-only abbreviation.
 fn cunabbrev_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3090,7 +3090,7 @@ fn cunabbrev_handler<H: Host>(
 
 // `:abclear` — clear all insert + cmdline abbreviations.
 fn abclear_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3100,7 +3100,7 @@ fn abclear_handler<H: Host>(
 
 // `:iabclear` — clear all insert-only abbreviations.
 fn iabclear_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3110,7 +3110,7 @@ fn iabclear_handler<H: Host>(
 
 // `:cabclear` — clear all cmdline-only abbreviations.
 fn cabclear_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -3128,24 +3128,24 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::new();
+    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::new();
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let content = lines.join("\n");
-        let buf = hjkl_buffer::Buffer::from_str(&content);
+        let buf = hjkl_buffer::View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
-    fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {
+    fn buf_line(editor: &Editor<hjkl_buffer::View, DefaultHost>, row: usize) -> String {
         hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
     }
 
-    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+    fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
         let rope = editor.buffer().rope();
         (0..rope.len_lines())
             .map(|i| hjkl_buffer::rope_line_str(&rope, i))
@@ -3154,17 +3154,14 @@ mod tests {
 
     // ── :> / :< shift commands ────────────────────────────────────────────────
 
-    fn shift_editor(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn shift_editor(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let mut ed = make_editor_with_lines(lines);
         ed.settings_mut().expandtab = true;
         ed.settings_mut().shiftwidth = 4;
         ed
     }
 
-    fn dispatch(
-        ed: &mut Editor<hjkl_buffer::Buffer, DefaultHost>,
-        input: &str,
-    ) -> Option<ExEffect> {
+    fn dispatch(ed: &mut Editor<hjkl_buffer::View, DefaultHost>, input: &str) -> Option<ExEffect> {
         let mut reg = crate::registry::Registry::<DefaultHost>::new();
         register_builtins(&mut reg);
         crate::try_dispatch(&reg, ed, input)
@@ -3828,7 +3825,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["only line"]);
         let result = delete_handler(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        // Buffer keeps one empty line rather than zero rows.
+        // View keeps one empty line rather than zero rows.
         assert_eq!(ed.buffer().row_count(), 1);
         assert_eq!(buf_line(&ed, 0), "");
     }
@@ -4337,8 +4334,8 @@ mod tests {
 
     // ── comment_handler / uncomment_handler (#187) ────────────────────────────
 
-    fn make_rust_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::from_str("let a = 1;\nlet b = 2;\nlet c = 3;");
+    fn make_rust_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::from_str("let a = 1;\nlet b = 2;\nlet c = 3;");
         let host = DefaultHost::new();
         let opts = Options {
             filetype: "rust".to_string(),
@@ -4385,7 +4382,7 @@ mod tests {
 
     #[test]
     fn uncomment_handler_strips_comments_idempotent() {
-        let buf = hjkl_buffer::Buffer::from_str("// let a = 1;\nlet b = 2;");
+        let buf = hjkl_buffer::View::from_str("// let a = 1;\nlet b = 2;");
         let host = DefaultHost::new();
         let opts = Options {
             filetype: "rust".to_string(),
@@ -4404,7 +4401,7 @@ mod tests {
     #[test]
     fn mixed_state_range_gets_fully_commented() {
         // 3 uncommented + 2 commented → all 5 get commented (vim-commentary parity).
-        let buf = hjkl_buffer::Buffer::from_str(
+        let buf = hjkl_buffer::View::from_str(
             "let a = 1;\n// let b = 2;\nlet c = 3;\n// let d = 4;\nlet e = 5;",
         );
         let host = DefaultHost::new();
@@ -4452,8 +4449,8 @@ mod tests {
         content: &str,
         expandtab: bool,
         tabstop: usize,
-    ) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::from_str(content);
+    ) -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::from_str(content);
         let host = DefaultHost::new();
         let opts = Options {
             expandtab,

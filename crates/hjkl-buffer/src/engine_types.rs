@@ -1,4 +1,4 @@
-//! Engine-level types relocated from `hjkl-engine` so that [`crate::Content`]
+//! Engine-level types relocated from `hjkl-engine` so that [`crate::Buffer`]
 //! can own per-buffer engine state (undo stack, change log, pending edits,
 //! fold ops) without requiring `hjkl-buffer` to depend on `hjkl-engine`.
 //!
@@ -102,7 +102,7 @@ pub struct ContentEdit {
 /// `hjkl_engine::Editor::take_fold_ops`).
 ///
 /// Row indices are zero-based and match the row coordinate space used
-/// by [`crate::Buffer`]'s fold methods.
+/// by [`crate::View`]'s fold methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FoldOp {

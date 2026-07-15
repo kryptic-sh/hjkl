@@ -4,21 +4,21 @@
 //! seen through the dependency graph; an inline test inside hjkl-engine sees a
 //! distinct `crate::Editor` identity to which the impl does not apply.
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::Editor;
 use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_vim::VimEditorExt;
 
 /// Helper: create an editor in Insert mode with `content`.
-fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-    let buf = Buffer::from_str(content);
+fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+    let buf = View::from_str(content);
     let mut ed = hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default());
     ed.enter_insert_i(1);
     ed
 }
 
 /// Helper: create an editor with `selection_exclusive = true` in Insert mode.
-fn make_ed_exclusive(content: &str) -> Editor<Buffer, DefaultHost> {
+fn make_ed_exclusive(content: &str) -> Editor<View, DefaultHost> {
     let mut ed = make_ed(content);
     ed.settings_mut().selection_exclusive = true;
     ed
@@ -28,7 +28,7 @@ fn make_ed_exclusive(content: &str) -> Editor<Buffer, DefaultHost> {
 
 #[test]
 fn inclusive_default_single_char_right() {
-    // Buffer "abc". Cursor at col 0, enter visual, move right 1 → selects 'a'.
+    // View "abc". Cursor at col 0, enter visual, move right 1 → selects 'a'.
     let mut ed = make_ed("abc");
     ed.exit_visual_to_normal();
     ed.set_cursor_doc(0, 0);
@@ -54,7 +54,7 @@ fn inclusive_default_not_none_for_same_pos() {
 
 #[test]
 fn exclusive_single_char_right() {
-    // Buffer "hello". Cursor at 0, enter visual, advance caret to col 1.
+    // View "hello". Cursor at 0, enter visual, advance caret to col 1.
     // Exclusive range: 0..1 (only 'h' selected, caret before 'e').
     let mut ed = make_ed_exclusive("hello");
     ed.exit_visual_to_normal();

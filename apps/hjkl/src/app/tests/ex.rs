@@ -866,7 +866,7 @@ fn checktime_marks_dirty_buffer_as_changed_on_disk_no_reload() {
     write_and_wait(&path, "changed on disk\n");
     app.checktime_all();
 
-    // Content must NOT have changed.
+    // Buffer must NOT have changed.
     assert_eq!(
         app.active_editor()
             .buffer()
@@ -947,7 +947,7 @@ fn checktime_marks_deleted_when_file_removed() {
     app.checktime_all();
 
     assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
-    // Buffer content preserved.
+    // View content preserved.
     assert_eq!(
         app.active_editor()
             .buffer()
@@ -2902,7 +2902,7 @@ fn scratch_buffer_writes_swap_when_dirty() {
 #[test]
 fn empty_scratch_buffer_writes_no_swap() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // Buffer is empty by default — do not seed any content.
+    // View is empty by default — do not seed any content.
 
     app.write_swap_for_slot(0);
 
@@ -3437,7 +3437,7 @@ fn diff_orig_no_changes_shows_no_difference_message() {
     std::fs::write(&path, "same\ncontent\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    // Buffer matches disk exactly.
+    // View matches disk exactly.
     app.dispatch_ex("DiffOrig");
 
     let new_win = app.focused_window();
@@ -3477,7 +3477,7 @@ fn diff_orig_file_deleted_on_disk_shows_all_additions() {
     std::fs::write(&path, "placeholder\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    // Buffer has content, but the file vanishes from disk (old side empty).
+    // View has content, but the file vanishes from disk (old side empty).
     seed_buffer(&mut app, "line one\nline two\n");
     app.active_mut().dirty = true;
     std::fs::remove_file(&path).unwrap();
@@ -3559,7 +3559,7 @@ fn raise_disk_change_prompt(tag: &str) -> (App, std::path::PathBuf) {
 #[test]
 fn disk_change_prompt_raised_and_buffer_intact() {
     let (app, path) = raise_disk_change_prompt("raise");
-    // Buffer content untouched while the prompt is up.
+    // View content untouched while the prompt is up.
     assert_eq!(
         app.active_editor().buffer().rope().to_string(),
         "buffer edit\n"

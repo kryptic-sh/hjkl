@@ -38,7 +38,7 @@ pub struct HjklOutcome {
 /// divergence rather than errors.
 pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // 1. Build buffer from the initial content.
-    let buffer = hjkl_buffer::Buffer::from_str(&case.initial_buffer);
+    let buffer = hjkl_buffer::View::from_str(&case.initial_buffer);
 
     // 2. Construct editor.
     let mut editor = hjkl_vim::vim_editor(buffer, TestHost::new(), Options::default());

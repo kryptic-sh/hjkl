@@ -397,7 +397,7 @@ fn count_engine_motion_5j_moves_cursor_five_rows() {
     assert_eq!(start_row, 0);
 
     // Simulate what the event loop does for `5j`:
-    // 1. Buffer '5' into pending_count.
+    // 1. View '5' into pending_count.
     // 2. On 'j', replay '5' then 'j' to the engine.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
@@ -614,7 +614,7 @@ fn fx_with_count_3() {
     seed_buffer(&mut app, "xaxbxc");
     app.active_editor_mut().jump_cursor(0, 0);
 
-    // Buffer count via pending_count (mimicking the event_loop digit path).
+    // View count via pending_count (mimicking the event_loop digit path).
     app.pending_count.try_accumulate('3');
     drive_key(&mut app, key(KeyCode::Char('f')));
     // dispatch_keymap reads pending_count when BeginPendingFind fires.
@@ -1486,7 +1486,7 @@ fn which_key_backspace_to_empty_enters_sticky() {
     // Simulate the Backspace intercept: pop the last key.
     let removed = app.app_keymap.pop(crate::app::keymap::HjklMode::Normal);
     assert!(removed.is_some(), "pop should return the removed key");
-    // Buffer is now empty — caller sets sticky.
+    // View is now empty — caller sets sticky.
     if app
         .app_keymap
         .pending(crate::app::keymap::HjklMode::Normal)
@@ -1581,7 +1581,7 @@ fn pending_replace_with_count_replaces_five_chars() {
     seed_buffer(&mut app, "abcdefgh");
     app.active_editor_mut().jump_cursor(0, 0);
 
-    // Buffer the count digit `5` (simulates the event loop accumulating digits).
+    // View the count digit `5` (simulates the event loop accumulating digits).
     app.pending_count.try_accumulate('5');
     // `r` → matched by trie → BeginPendingReplace reads pending_count (5).
     drive_key(&mut app, key(KeyCode::Char('r')));
@@ -2280,7 +2280,7 @@ fn df_then_esc_cancels_via_reducer() {
         "Esc must cancel OpFind pending"
     );
 
-    // Buffer unchanged.
+    // View unchanged.
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello x world",
@@ -2397,7 +2397,7 @@ fn d_then_esc_cancels() {
 
 #[test]
 fn y_dollar_yanks_to_eol() {
-    // `y$`: yank to end-of-line. Buffer unchanged, cursor stays.
+    // `y$`: yank to end-of-line. View unchanged, cursor stays.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
     app.active_editor_mut().jump_cursor(0, 0);
@@ -2416,7 +2416,7 @@ fn y_dollar_yanks_to_eol() {
     drive_key(&mut app, key(KeyCode::Char('$')));
     assert!(app.pending_state.is_none(), "pending must clear after y$");
 
-    // Buffer unchanged (yank is non-destructive).
+    // View unchanged (yank is non-destructive).
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(line, "hello world", "y$ must not modify buffer");
 }
@@ -3915,7 +3915,7 @@ fn p64_big_y_yanks_to_eol() {
 
     let consumed = app.route_chord_key(ck('Y'));
     assert!(consumed, "Y must be consumed by keymap");
-    // Buffer must be unchanged.
+    // View must be unchanged.
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert_eq!(
         line, "hello world",
@@ -4020,7 +4020,7 @@ fn p64_p_pastes_after_cursor() {
     // Yank 'h' to unnamed register by deleting it.
     app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    // Buffer now "ello", unnamed reg = "h".
+    // View now "ello", unnamed reg = "h".
     // Paste after cursor (at col 0, which is 'e').
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
@@ -4038,7 +4038,7 @@ fn p64_big_p_pastes_before_cursor() {
     // Yank 'l' (col 2) to unnamed register by deleting it.
     app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    // Buffer now "helo", cursor at col 2 ('l'). Paste before cursor.
+    // View now "helo", cursor at col 2 ('l'). Paste before cursor.
     let consumed = app.route_chord_key(ck('P'));
     assert!(consumed, "P must be consumed by keymap");
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
@@ -4058,7 +4058,7 @@ fn p64_p_with_count_3_pastes_three_times() {
     // Delete 'a' into unnamed reg.
     app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    // Buffer "bc". `3p` must paste "aaa" after cursor.
+    // View "bc". `3p` must paste "aaa" after cursor.
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
@@ -4449,7 +4449,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
         "must stop recording after q"
     );
 
-    // Buffer after record: "Helloworld" (or similar depending on cursor pos).
+    // View after record: "Helloworld" (or similar depending on cursor pos).
     // Move cursor back to start and replay.
     app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
@@ -4457,7 +4457,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     // `@a` — replay.
     rck(&mut app, &['@', 'a']);
 
-    // Buffer must contain "Hello" prepended again.
+    // View must contain "Hello" prepended again.
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with("Hello"),
@@ -4477,7 +4477,7 @@ fn p64_count_3p_pastes_three_times() {
     // Delete 'a' into unnamed reg.
     app.active_editor_mut().delete_char_forward(1);
     app.sync_after_engine_mutation();
-    // Buffer "bc". `3p` must paste "aaa" after cursor (at 'b').
+    // View "bc". `3p` must paste "aaa" after cursor (at 'b').
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed");

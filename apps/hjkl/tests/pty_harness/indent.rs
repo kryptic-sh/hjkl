@@ -62,7 +62,7 @@ fn count_10_outdent_clamps_to_end() {
 #[test]
 fn count_indent_last_line_is_noop() {
     // `5>>` on the final line: the implied `count_` motion can't move down, so
-    // vim aborts the whole operator (E16). Buffer must be untouched.
+    // vim aborts the whole operator (E16). View must be untouched.
     let got = run_indent("a\nb\nc\n", "G5>>", "a\nb\nc\n");
     assert_eq!(got, "a\nb\nc\n");
 }

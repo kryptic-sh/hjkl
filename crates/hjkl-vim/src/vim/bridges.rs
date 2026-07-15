@@ -14,14 +14,14 @@ use hjkl_engine::buf_helpers::{
 /// `i` — begin Insert at the cursor. `count` is stored in the session for
 /// insert-exit replay. Returns `true`.
 pub(crate) fn enter_insert_i_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
 }
 /// `I` — move to first non-blank then begin Insert. `count` stored for replay.
 pub(crate) fn enter_insert_shift_i_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     move_first_non_whitespace(ed);
@@ -29,7 +29,7 @@ pub(crate) fn enter_insert_shift_i_bridge<H: hjkl_engine::types::Host>(
 }
 /// `a` — advance past the cursor char then begin Insert. `count` for replay.
 pub(crate) fn enter_insert_a_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
@@ -38,7 +38,7 @@ pub(crate) fn enter_insert_a_bridge<H: hjkl_engine::types::Host>(
 }
 /// `A` — move to end-of-line then begin Insert. `count` for replay.
 pub(crate) fn enter_insert_shift_a_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     hjkl_engine::motions::move_line_end(ed.buffer_mut());
@@ -50,7 +50,7 @@ pub(crate) fn enter_insert_shift_a_bridge<H: hjkl_engine::types::Host>(
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically.
 pub(crate) fn open_line_below_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     use hjkl_buffer::{Edit, Position};
@@ -84,7 +84,7 @@ pub(crate) fn open_line_below_bridge<H: hjkl_engine::types::Host>(
 /// When `formatoptions` has `o` and the current line is a comment, the
 /// continuation prefix is inserted automatically on the new line above.
 pub(crate) fn open_line_above_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     use hjkl_buffer::{Edit, Position};
@@ -130,7 +130,7 @@ pub(crate) fn open_line_above_bridge<H: hjkl_engine::types::Host>(
 }
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.
 pub(crate) fn enter_replace_mode_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     // Guard delegated to begin_insert which already checks modifiable/Blame.
@@ -139,7 +139,7 @@ pub(crate) fn enter_replace_mode_bridge<H: hjkl_engine::types::Host>(
 /// `x` — delete `count` chars forward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
 pub(crate) fn delete_char_forward_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     do_char_delete(ed, true, count.max(1));
@@ -153,7 +153,7 @@ pub(crate) fn delete_char_forward_bridge<H: hjkl_engine::types::Host>(
 /// `X` — delete `count` chars backward from the cursor, writing to the unnamed
 /// register. Records `LastChange::CharDel` for dot-repeat.
 pub(crate) fn delete_char_backward_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     do_char_delete(ed, false, count.max(1));
@@ -167,7 +167,7 @@ pub(crate) fn delete_char_backward_bridge<H: hjkl_engine::types::Host>(
 /// `s` — substitute `count` chars (delete then enter Insert). Equivalent to
 /// `cl`. Records `LastChange::OpMotion` for dot-repeat.
 pub(crate) fn substitute_char_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -199,7 +199,7 @@ pub(crate) fn substitute_char_bridge<H: hjkl_engine::types::Host>(
 /// `S` — substitute the whole line (delete line contents then enter Insert).
 /// Equivalent to `cc`. Records `LastChange::LineOp` for dot-repeat.
 pub(crate) fn substitute_line_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     execute_line_op(ed, Operator::Change, count.max(1));
@@ -214,7 +214,7 @@ pub(crate) fn substitute_line_bridge<H: hjkl_engine::types::Host>(
 /// `D` — delete from the cursor to end-of-line, writing to the unnamed
 /// register. Cursor parks on the new last char. Records for dot-repeat.
 pub(crate) fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     ed.push_undo();
     delete_to_eol(ed);
@@ -227,7 +227,7 @@ pub(crate) fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
 /// `C` — change from the cursor to end-of-line (delete then enter Insert).
 /// Equivalent to `c$`. Shares the delete path with `D`.
 pub(crate) fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     ed.push_undo();
     delete_to_eol(ed);
@@ -235,7 +235,7 @@ pub(crate) fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
 }
 /// `Y` — yank from the cursor to end-of-line (same as `y$` in Vim 8 default).
 pub(crate) fn yank_to_eol_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     apply_op_with_motion(ed, Operator::Yank, &Motion::LineEnd, count.max(1));
@@ -243,7 +243,7 @@ pub(crate) fn yank_to_eol_bridge<H: hjkl_engine::types::Host>(
 /// `J` — join `count` lines (default 2) onto the current one, inserting a
 /// single space between each pair (vim semantics). Records for dot-repeat.
 pub(crate) fn join_line_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     // vim `[count]J` joins `count` lines together — i.e. `count - 1` joins.
@@ -262,7 +262,7 @@ pub(crate) fn join_line_bridge<H: hjkl_engine::types::Host>(
 /// `~` — toggle the case of `count` chars from the cursor, advancing right.
 /// Records `LastChange::ToggleCase` for dot-repeat.
 pub(crate) fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     for _ in 0..count.max(1) {
@@ -281,7 +281,7 @@ pub(crate) fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
 /// Linewise yanks open a new line below; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
 pub(crate) fn paste_after_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     paste_bridge(ed, false, count, false, false);
@@ -290,7 +290,7 @@ pub(crate) fn paste_after_bridge<H: hjkl_engine::types::Host>(
 /// Linewise yanks open a new line above; charwise pastes inline.
 /// Records `LastChange::Paste` for dot-repeat.
 pub(crate) fn paste_before_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     paste_bridge(ed, true, count, false, false);
@@ -298,7 +298,7 @@ pub(crate) fn paste_before_bridge<H: hjkl_engine::types::Host>(
 /// Shared paste entry for `p`/`P`, `gp`/`gP` (`cursor_after`), and
 /// `]p`/`[p` (`reindent`). Records `LastChange::Paste` for dot-repeat.
 pub(crate) fn paste_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
     count: usize,
     cursor_after: bool,
@@ -317,7 +317,7 @@ pub(crate) fn paste_bridge<H: hjkl_engine::types::Host>(
 /// `<C-o>` — jump back `count` entries in the jumplist, saving the current
 /// position on the forward stack so `<C-i>` can return.
 pub(crate) fn jump_back_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     for _ in 0..count.max(1) {
@@ -329,7 +329,7 @@ pub(crate) fn jump_back_bridge<H: hjkl_engine::types::Host>(
 /// `<C-i>` / `Tab` — redo `count` jumps on the forward stack, saving the
 /// current position on the backward stack.
 pub(crate) fn jump_forward_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     for _ in 0..count.max(1) {
@@ -339,12 +339,12 @@ pub(crate) fn jump_forward_bridge<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn force_normal_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     vim_mut(ed).force_normal();
 }
 pub(crate) fn mouse_click_doc_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     row: usize,
     col: usize,
 ) {
@@ -370,14 +370,14 @@ pub(crate) fn mouse_click_doc_bridge<H: hjkl_engine::types::Host>(
     ed.set_sticky_col(Some(c));
 }
 pub(crate) fn mouse_begin_drag_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if !vim(ed).is_visual_char() {
         enter_visual_char_bridge(ed);
     }
 }
 pub(crate) fn range_for_op_motion_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion_key: char,
     total_count: usize,
 ) -> Option<(usize, usize)> {
@@ -412,7 +412,7 @@ pub(crate) fn range_for_op_motion_bridge<H: hjkl_engine::types::Host>(
     Some((r0, r1))
 }
 pub(crate) fn range_for_op_g_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     total_count: usize,
 ) -> Option<(usize, usize)> {
@@ -432,7 +432,7 @@ pub(crate) fn range_for_op_g_bridge<H: hjkl_engine::types::Host>(
     Some((r0, r1))
 }
 pub(crate) fn range_for_op_text_obj_bridge<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     ch: char,
     inner: bool,
     total_count: usize,
@@ -457,7 +457,7 @@ pub(crate) fn range_for_op_text_obj_bridge<H: hjkl_engine::types::Host>(
 /// `n` / `N` — repeat the last search `count` times. `forward = true` means
 /// repeat in the original search direction; `false` inverts it (like `N`).
 pub(crate) fn search_repeat_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     count: usize,
 ) {
@@ -481,7 +481,7 @@ pub(crate) fn search_repeat_bridge<H: hjkl_engine::types::Host>(
 /// `forward` picks search direction; `whole_word` wraps in `\b...\b`.
 /// `count` repeats the advance.
 pub(crate) fn word_search_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     whole_word: bool,
     count: usize,

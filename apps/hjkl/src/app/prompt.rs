@@ -53,7 +53,7 @@ fn map_ex_kind(kind: hjkl_ex::CompletionKind) -> CompletionKind {
         hjkl_ex::CompletionKind::Command => CompletionKind::Keyword,
         hjkl_ex::CompletionKind::Path => CompletionKind::File,
         hjkl_ex::CompletionKind::Setting => CompletionKind::Variable,
-        hjkl_ex::CompletionKind::Buffer => CompletionKind::Variable,
+        hjkl_ex::CompletionKind::View => CompletionKind::Variable,
         hjkl_ex::CompletionKind::Register => CompletionKind::Other,
         hjkl_ex::CompletionKind::Mark => CompletionKind::Other,
         hjkl_ex::CompletionKind::None => CompletionKind::Other,
@@ -871,7 +871,7 @@ impl App {
     ) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::{BufferEdit, Host, Options};
         use std::time::Instant;
 
@@ -899,7 +899,7 @@ impl App {
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
             {

@@ -1,6 +1,6 @@
 //! Undo/redo entry type for per-buffer undo history.
 //!
-//! Lives in `hjkl-buffer` so that [`crate::Content`] can own the undo stack
+//! Lives in `hjkl-buffer` so that [`crate::Buffer`] can own the undo stack
 //! directly, keeping per-buffer state co-located with the rope.
 
 use std::time::SystemTime;

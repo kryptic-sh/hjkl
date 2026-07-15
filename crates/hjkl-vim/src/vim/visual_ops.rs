@@ -12,7 +12,7 @@ use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_row_count, buf_set_cursor_rc};
 
 pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
 ) {
@@ -197,7 +197,7 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
 /// tracked virtual column (updated by h/l, preserved across j/k) so
 /// ragged / empty rows don't collapse the block's width.
 pub(crate) fn block_bounds<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
 ) -> (usize, usize, usize, usize) {
     let (ar, ac) = vim(ed).block_anchor;
     let (cr, _) = ed.cursor();
@@ -213,7 +213,7 @@ pub(crate) fn block_bounds<H: hjkl_engine::types::Host>(
 /// vertical / non-h/l motions leave it alone so the intended column
 /// survives clamping to shorter lines.
 pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
 ) {
     match motion {
@@ -246,7 +246,7 @@ pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
 /// the block as sequential lines. (Vim's true block-paste reinserts as
 /// columns; we render the content with our char-wise paste path.)
 pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
 ) {
@@ -348,7 +348,7 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
 /// `(top..=bot, left..=right)`. Rows shorter than `left` are left
 /// untouched — vim behaves the same way (ragged blocks).
 pub(crate) fn transform_block_case<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     top: usize,
     bot: usize,
@@ -381,7 +381,7 @@ pub(crate) fn transform_block_case<H: hjkl_engine::types::Host>(
     ed.set_yank_linewise(saved_linewise);
 }
 pub(crate) fn block_yank<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
     left: usize,
@@ -406,7 +406,7 @@ pub(crate) fn block_yank<H: hjkl_engine::types::Host>(
     rows.join("\n")
 }
 pub(crate) fn delete_block_contents<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
     left: usize,
@@ -427,7 +427,7 @@ pub(crate) fn delete_block_contents<H: hjkl_engine::types::Host>(
 }
 /// Replace each character cell in the block with `ch`.
 pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
 ) {
     let (top, bot, left, right) = block_bounds(ed);
@@ -453,7 +453,7 @@ pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
 /// Used by indent / outdent / block_replace to wholesale rewrite
 /// rows without going through the per-edit funnel.
 pub(crate) fn reset_textarea_lines<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     lines: Vec<String>,
 ) {
     let cursor = ed.cursor();

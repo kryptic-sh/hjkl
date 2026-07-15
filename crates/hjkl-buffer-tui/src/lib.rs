@@ -1,4 +1,4 @@
-//! Direct cell-write `ratatui::widgets::Widget` for [`hjkl_buffer::Buffer`].
+//! Direct cell-write `ratatui::widgets::Widget` for [`hjkl_buffer::View`].
 //!
 //! ## Render path
 //!
@@ -9,7 +9,7 @@
 //! selection bg layer in a single pass without the grapheme / wrap machinery
 //! `Paragraph` does.
 //!
-//! Caller wraps a `&Buffer` in [`BufferView`], hands it the style table
+//! Caller wraps a `&View` in [`BufferView`], hands it the style table
 //! that resolves opaque [`hjkl_buffer::Span`] style ids to real ratatui styles
 //! via a [`StyleResolver`], and renders into a `ratatui::Frame`.
 //!

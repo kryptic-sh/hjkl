@@ -3,14 +3,14 @@ use std::ops::Range;
 use crate::{ArgKind, HostRegistry, Registry};
 
 /// What kind of token is being completed. Phase 5a only emits `Command`;
-/// Phase 6 adds Path/Setting/Buffer/Register/Mark for arg completion.
+/// Phase 6 adds Path/Setting/View/Register/Mark for arg completion.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CompletionKind {
     None,
     Command,
     Path,
     Setting,
-    Buffer,
+    View,
     Register,
     Mark,
 }
@@ -233,7 +233,7 @@ pub fn arg_kind_usage(kind: ArgKind) -> &'static str {
     match kind {
         ArgKind::None => "",
         ArgKind::Path => "<path>",
-        ArgKind::Buffer => "<buffer>",
+        ArgKind::View => "<buffer>",
         ArgKind::Setting => "<setting>",
         ArgKind::Register => "<register>",
         ArgKind::Mark => "<mark>",
@@ -357,7 +357,7 @@ pub fn complete_arg(
             c.dedup();
             (c, CompletionKind::Setting)
         }
-        ArgKind::Buffer => {
+        ArgKind::View => {
             let mut c: Vec<String> = sources
                 .buffers
                 .iter()
@@ -366,7 +366,7 @@ pub fn complete_arg(
                 .collect();
             c.sort();
             c.dedup();
-            (c, CompletionKind::Buffer)
+            (c, CompletionKind::View)
         }
         ArgKind::Register => {
             let mut c: Vec<String> = sources
@@ -588,14 +588,14 @@ mod tests {
             buffers: &buffers,
             ..Default::default()
         };
-        let result = complete_arg("b ", 2, ArgKind::Buffer, &sources);
-        assert_eq!(result.kind, CompletionKind::Buffer);
+        let result = complete_arg("b ", 2, ArgKind::View, &sources);
+        assert_eq!(result.kind, CompletionKind::View);
         assert!(result.candidates.contains(&"src/main.rs".to_string()));
         assert!(result.candidates.contains(&"src/lib.rs".to_string()));
         assert!(result.candidates.contains(&"tests/foo.rs".to_string()));
 
-        let result2 = complete_arg("b src", 5, ArgKind::Buffer, &sources);
-        assert_eq!(result2.kind, CompletionKind::Buffer);
+        let result2 = complete_arg("b src", 5, ArgKind::View, &sources);
+        assert_eq!(result2.kind, CompletionKind::View);
         assert!(result2.candidates.contains(&"src/main.rs".to_string()));
         assert!(result2.candidates.contains(&"src/lib.rs".to_string()));
         assert!(!result2.candidates.contains(&"tests/foo.rs".to_string()));
@@ -662,7 +662,7 @@ mod tests {
         use hjkl_engine::DefaultHost;
 
         fn noop(
-            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
             _: &str,
             _: Option<crate::range::LineRange>,
         ) -> Option<crate::effect::ExEffect> {
@@ -706,7 +706,7 @@ mod tests {
     fn arg_kind_usage_labels() {
         assert_eq!(arg_kind_usage(ArgKind::None), "");
         assert_eq!(arg_kind_usage(ArgKind::Path), "<path>");
-        assert_eq!(arg_kind_usage(ArgKind::Buffer), "<buffer>");
+        assert_eq!(arg_kind_usage(ArgKind::View), "<buffer>");
         assert_eq!(arg_kind_usage(ArgKind::Setting), "<setting>");
         assert_eq!(arg_kind_usage(ArgKind::Register), "<register>");
         assert_eq!(arg_kind_usage(ArgKind::Mark), "<mark>");
@@ -719,7 +719,7 @@ mod tests {
         use hjkl_engine::DefaultHost;
 
         fn noop(
-            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
             _: &str,
             _: Option<crate::range::LineRange>,
         ) -> Option<crate::effect::ExEffect> {
@@ -776,7 +776,7 @@ mod tests {
         use hjkl_engine::DefaultHost;
 
         fn noop(
-            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
             _: &str,
             _: Option<crate::range::LineRange>,
         ) -> Option<crate::effect::ExEffect> {

@@ -12,7 +12,7 @@ use hjkl_engine::buf_helpers::{buf_line_chars, buf_row_count};
 /// the current cursor onto the forward stack so `Ctrl-i` can return.
 /// Returns `false` when the back stack is empty so counted loops stop.
 pub(crate) fn jump_back<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     let Some(target) = ed.jump_back_list_mut().pop() else {
         return false;
@@ -28,7 +28,7 @@ pub(crate) fn jump_back<H: hjkl_engine::types::Host>(
 /// onto the back stack.
 /// Returns `false` when the forward stack is empty so counted loops stop.
 pub(crate) fn jump_forward<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     let Some(target) = ed.jump_fwd_list_mut().pop() else {
         return false;
@@ -46,7 +46,7 @@ pub(crate) fn jump_forward<H: hjkl_engine::types::Host>(
 /// Clamp a stored `(row, col)` to the live buffer in case edits
 /// shrunk the document between push and pop.
 pub(crate) fn clamp_pos<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
     let last_row = buf_row_count(ed.buffer()).saturating_sub(1);

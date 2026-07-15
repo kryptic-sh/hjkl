@@ -17,7 +17,7 @@ use hjkl_engine::{Host, Input, Key};
 /// Returns `true` (consumed) unconditionally — every key inside the prompt
 /// is swallowed regardless of whether it produced a visible effect.
 pub fn step_search_prompt<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     // Ctrl-P / Ctrl-N (and Up / Down) walk the search history. Handled
@@ -143,10 +143,7 @@ fn split_search_offset(text: &str, delim: char) -> (String, Option<String>) {
 /// - `e[+-N]` — end of match, ± N chars
 /// - `s[+-N]` / `b[+-N]` — start of match, ± N chars
 /// - `[+-]N` / `N` — line offset (N lines down/up, first non-blank)
-fn apply_search_offset<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
-    offset: &str,
-) {
+fn apply_search_offset<H: Host>(ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>, offset: &str) {
     let (row, col) = ed.cursor();
     match offset.chars().next() {
         Some('e') => {
@@ -181,7 +178,7 @@ fn apply_search_offset<H: Host>(
 /// Char-length of the regex match that begins at `(row, col)`. Falls back to 1
 /// when no pattern is set or no match starts there.
 fn match_len_at<H: Host>(
-    ed: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &hjkl_engine::Editor<hjkl_buffer::View, H>,
     row: usize,
     col: usize,
 ) -> usize {

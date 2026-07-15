@@ -279,7 +279,7 @@ fn ctrl_w_chord_resolves() {
 
 #[test]
 fn timeout_resolve_keeps_buffer_when_pure_prefix() {
-    // Buffer = "<leader>" (prefix-only — only "<leader>g" is bound).
+    // View = "<leader>" (prefix-only — only "<leader>g" is bound).
     // timeout_resolve must NOT drain: user is mid-chord.
     let mut km: Keymap<&str, TestMode> = Keymap::new(' ');
     km.add(Mode::Normal, "<leader>g", "git", "git submenu")
@@ -304,7 +304,7 @@ fn timeout_resolve_keeps_buffer_when_pure_prefix() {
 
 #[test]
 fn timeout_resolve_fires_ambiguous_shorter_binding() {
-    // Buffer = "g" where both "g" (terminal) and "gd" (deeper) are bound.
+    // View = "g" where both "g" (terminal) and "gd" (deeper) are bound.
     // timeout_resolve must fire the shorter "g" binding.
     let mut km: Keymap<&str, TestMode> = Keymap::new(' ');
     km.add(Mode::Normal, "g", "g_action", "g").unwrap();

@@ -92,7 +92,7 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let mut ed = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         DefaultHost::new(),
         Options::default(),
     );

@@ -14,7 +14,7 @@ use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_set_cursor_rc
 /// with Esc, so the dot-repeat must end the same way — including
 /// the cursor step-back vim does on Esc-from-insert).
 pub(crate) fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     text: &str,
 ) {
     use hjkl_buffer::{Edit, Position};
@@ -32,7 +32,7 @@ pub(crate) fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     outer_count: usize,
 ) {
     let Some(change) = vim(ed).last_change.clone() else {

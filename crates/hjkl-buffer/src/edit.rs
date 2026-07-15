@@ -1,13 +1,13 @@
-//! Edit operations on [`crate::Buffer`].
+//! Edit operations on [`crate::View`].
 //!
-//! Every mutation goes through [`Buffer::apply_edit`] and returns
+//! Every mutation goes through [`View::apply_edit`] and returns
 //! the inverse `Edit` so the host can build an undo stack without
 //! snapshotting the whole buffer. Cursor follows edits the way vim
 //! does: insertions land the cursor at the end of the inserted
 //! text; deletions clamp the cursor to the deletion start.
 
 use crate::buffer::{pos_to_char_idx, rope_line_char_count};
-use crate::{Buffer, Position};
+use crate::{Position, View};
 
 /// Granularity of a delete; preserved through undo so a linewise
 /// delete doesn't come back as a charwise one.
@@ -23,17 +23,17 @@ pub enum MotionKind {
 }
 
 /// One unit of buffer mutation. Constructed by the caller (vim
-/// engine, ex command, …) and handed to [`Buffer::apply_edit`].
+/// engine, ex command, …) and handed to [`View::apply_edit`].
 ///
 /// ## Invariants
 ///
 /// All `Position` arguments must satisfy the bounds documented on
 /// [`Position`] before the edit is applied. Out-of-bounds positions
-/// are clamped by [`Buffer::clamp_position`] inside
-/// [`Buffer::apply_edit`]; if the clamped form changes the edit's
+/// are clamped by [`View::clamp_position`] inside
+/// [`View::apply_edit`]; if the clamped form changes the edit's
 /// meaning the result is implementation-defined.
 ///
-/// See [`Buffer::apply_edit`] for post-conditions that hold after
+/// See [`View::apply_edit`] for post-conditions that hold after
 /// every variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edit {
@@ -102,7 +102,7 @@ pub enum Edit {
     DeleteBlockChunks { at: Position, widths: Vec<usize> },
 }
 
-impl Buffer {
+impl View {
     /// Apply `edit` and return the inverse. Pushing the inverse back
     /// through `apply_edit` restores the previous state, making it the
     /// single hook for undo-stack integration.
@@ -113,11 +113,11 @@ impl Buffer {
     ///
     /// After any [`Edit`] variant:
     ///
-    /// - [`Buffer::dirty_gen`] is incremented exactly once.
+    /// - [`View::dirty_gen`] is incremented exactly once.
     /// - The cursor is repositioned to a sensible place for the edit kind
     ///   (insert lands past the inserted content; delete lands at the
     ///   start). Callers that need to override the new cursor must call
-    ///   [`Buffer::set_cursor`] immediately after.
+    ///   [`View::set_cursor`] immediately after.
     /// - All [`Position`] values the caller held from before the edit may
     ///   be invalid. Re-derive from row / col deltas; do not cache.
     pub fn apply_edit(&mut self, edit: Edit) -> Edit {
@@ -516,7 +516,7 @@ mod tests {
     use crate::buffer::rope_line_str;
 
     fn round_trip_check(initial: &str, edit: Edit) {
-        let mut b = Buffer::from_str(initial);
+        let mut b = View::from_str(initial);
         let snapshot_before = b.as_string();
         let inverse = b.apply_edit(edit);
         b.apply_edit(inverse);
@@ -634,7 +634,7 @@ mod tests {
     /// `line_to_char(lo)`. Both endpoints must clamp to the last row.
     #[test]
     fn delete_linewise_start_past_end_is_clamped() {
-        let mut b = Buffer::from_str("a\nb\nc");
+        let mut b = View::from_str("a\nb\nc");
         b.apply_edit(Edit::DeleteRange {
             start: Position::new(10, 0),
             end: Position::new(20, 0),
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn delete_clearing_buffer_keeps_one_empty_row() {
-        let mut b = Buffer::from_str("only");
+        let mut b = View::from_str("only");
         b.apply_edit(Edit::DeleteRange {
             start: Position::new(0, 0),
             end: Position::new(0, 0),
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn insert_char_lands_cursor_after() {
-        let mut b = Buffer::from_str("abc");
+        let mut b = View::from_str("abc");
         b.set_cursor(Position::new(0, 1));
         b.apply_edit(Edit::InsertChar {
             at: Position::new(0, 1),
@@ -672,7 +672,7 @@ mod tests {
     fn block_delete_on_ragged_rows_handles_short_lines() {
         // Row 1 is shorter than the block right edge — only the
         // chars that exist get removed.
-        let mut b = Buffer::from_str("longline\nhi\nthird row");
+        let mut b = View::from_str("longline\nhi\nthird row");
         let inv = b.apply_edit(Edit::DeleteRange {
             start: Position::new(0, 2),
             end: Position::new(2, 5),
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn dirty_gen_bumps_per_edit() {
-        let mut b = Buffer::from_str("abc");
+        let mut b = View::from_str("abc");
         let g0 = b.dirty_gen();
         b.apply_edit(Edit::InsertChar {
             at: Position::new(0, 0),
@@ -705,9 +705,9 @@ mod tests {
     /// stays comfortably under the 200 ms budget.
     #[test]
     fn splice_at_60k_paste_at_row_zero_is_under_200ms() {
-        // Buffer with 60 k rows of empty content.
+        // View with 60 k rows of empty content.
         let initial = "\n".repeat(60_000);
-        let mut b = Buffer::from_str(&initial);
+        let mut b = View::from_str(&initial);
         // Multi-line payload: 60 k "x" lines glued by \n.
         let payload = vec!["x"; 60_000].join("\n");
         let t = std::time::Instant::now();

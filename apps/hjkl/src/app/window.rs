@@ -480,7 +480,7 @@ impl App {
         self.windows.get(id as usize).is_some_and(Option::is_some)
     }
 
-    /// Buffer id of the slot backing window `id`, or `None` when `id` is invalid.
+    /// View id of the slot backing window `id`, or `None` when `id` is invalid.
     pub(crate) fn nvim_window_buffer_id(&self, id: u64) -> Option<u64> {
         let slot = self.windows.get(id as usize)?.as_ref()?.slot;
         self.slots.get(slot).map(|s| s.buffer_id)

@@ -9,7 +9,7 @@
 //! `hjkl-engine-tui` companion crate.
 //!
 //! Imported wholesale from sqeel-vim with full git history. The trait
-//! extraction (Selection / SelectionSet / Buffer + Host sub-traits) lands
+//! extraction (Selection / SelectionSet / View + Host sub-traits) lands
 //! progressively under [`crate::types`]. Pre-1.0 churn — the public surface
 //! may change in patch bumps. See [docs.rs](https://docs.rs/hjkl-engine) for
 //! the canonical API reference.
@@ -50,11 +50,11 @@ pub use substitute::{
     apply_collected_matches, apply_substitute, collect_substitute_matches, parse_substitute,
 };
 pub use types::{
-    Attrs, Buffer, BufferEdit, BufferId, Color, ContentEdit, Cursor, CursorShape, DefaultHost,
-    Edit, EditorSnapshot, EngineError, FoldOp, FoldProvider, Highlight, HighlightKind, Host,
+    Attrs, BufferEdit, BufferId, Color, ContentEdit, Cursor, CursorShape, DefaultHost, Edit,
+    EditorSnapshot, EngineError, FoldOp, FoldProvider, Highlight, HighlightKind, Host,
     Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, NoopFoldProvider, OptionValue,
     Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode,
-    SpecialKey, Style, Viewport, WrapMode,
+    SpecialKey, Style, View, Viewport, WrapMode,
 };
 // The vim FSM itself now lives in `hjkl-vim` (#267). What stays here is the
 // engine-owned substrate it happens to use — abbreviations, the search prompt,
@@ -80,7 +80,7 @@ pub use hjkl_vim_types::Mode as FsmMode;
 
 // 0.0.32 dropped the `#[deprecated]` re-export aliases introduced at
 // 0.0.31 (`SpecBuffer`, `SpecBufferEdit`, `EditOp`, `PlannedViewport`).
-// Consumers must use the canonical names: `Buffer`, `BufferEdit`,
+// Consumers must use the canonical names: `View`, `BufferEdit`,
 // `Edit`, `Viewport`.
 
 /// Coarse vim-mode a host app can display in its status line.

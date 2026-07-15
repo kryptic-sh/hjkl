@@ -1,6 +1,6 @@
 //! HTML/XML tag matching — discipline-agnostic buffer substrate.
 //!
-//! Everything here is a pure query over a [`Buffer`](hjkl_buffer::Buffer) (plus
+//! Everything here is a pure query over a [`View`](hjkl_buffer::View) (plus
 //! one edit helper that goes through `Editor`): find the tag under the cursor,
 //! find its structural partner, decide whether an element is void. None of it
 //! knows what a mode or an operator is.
@@ -97,7 +97,7 @@ pub fn detect_tag_at_cursor(line: &str, row: usize, col: usize) -> Option<TagSpa
 ///
 /// Returns `None` when the buffer end is reached before depth hits zero
 /// (orphan tag or malformed input).
-pub fn find_matching_tag(buffer: &hjkl_buffer::Buffer, anchor: &TagSpan) -> Option<TagSpan> {
+pub fn find_matching_tag(buffer: &hjkl_buffer::View, anchor: &TagSpan) -> Option<TagSpan> {
     let row_count = buffer.row_count();
     let scan_forward = anchor.kind == TagKind::Open;
     let row_iter: Box<dyn Iterator<Item = usize>> = if scan_forward {
@@ -225,7 +225,7 @@ pub fn scan_line_tags(chars: &[char], row: usize) -> Vec<TagSpan> {
 /// differs, rewrite the paired tag's name to match. Called from
 /// `leave_insert_to_normal_bridge` so the magical sync fires exactly when
 /// the user finishes editing.
-pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     if !is_html_filetype(&ed.settings().filetype) {
         return;
     }
@@ -269,7 +269,7 @@ pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffe
 /// cursor is not on a tag name or the tag is unpaired. Char-column ranges
 /// (display), consistent with `motions::matching_bracket_pos`.
 pub fn matching_tag_pair(
-    buffer: &hjkl_buffer::Buffer,
+    buffer: &hjkl_buffer::View,
     row: usize,
     col: usize,
 ) -> Option<[(usize, usize, usize); 2]> {

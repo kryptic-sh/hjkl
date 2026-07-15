@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Buffer picker (D4) source tests ────────────────────────────────────
+// ── View picker (D4) source tests ────────────────────────────────────
 
 #[test]
 fn buffer_source_new_produces_n_entries() {
@@ -248,7 +248,7 @@ fn git_file_history_picker_opens() {
     std::fs::write(&path, "content\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert!(app.picker.is_none());
-    // Buffer has a path — picker opens (it may show sentinel if not a repo).
+    // View has a path — picker opens (it may show sentinel if not a repo).
     app.open_git_file_history_picker();
     let _ = std::fs::remove_file(&path);
 }

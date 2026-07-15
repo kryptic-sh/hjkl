@@ -142,7 +142,7 @@ use hjkl_engine::Editor;
 /// Dispatching vim input at an editor that skipped this panics on the first
 /// state access (see `hjkl_vim::vim_state`) rather than silently behaving like
 /// a keyboard-less buffer.
-pub fn install<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub fn install<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     ed.set_discipline(Box::new(VimState::default()));
 }
 /// Build an [`Editor`] with the vim discipline already installed.
@@ -150,10 +150,10 @@ pub fn install<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer,
 /// The vim-flavoured counterpart of [`Editor::new`], which yields an editor
 /// with no discipline at all.
 pub fn vim_editor<H: hjkl_engine::types::Host>(
-    buffer: hjkl_buffer::Buffer,
+    buffer: hjkl_buffer::View,
     host: H,
     options: hjkl_engine::types::Options,
-) -> Editor<hjkl_buffer::Buffer, H> {
+) -> Editor<hjkl_buffer::View, H> {
     let mut ed = Editor::new(buffer, host, options);
     install(&mut ed);
     ed

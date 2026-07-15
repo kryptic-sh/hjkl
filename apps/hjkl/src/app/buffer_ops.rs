@@ -1,4 +1,4 @@
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{Host, MarkJump, Options};
 use hjkl_vim::VimEditorExt;
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ impl App {
         // Point the focused window at the new slot.
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;
-        // Rebuild the focused window's view editor onto the new slot's Content
+        // Rebuild the focused window's view editor onto the new slot's Buffer
         // (#151 Phase D) so active_editor() below sees the switched buffer.
         self.reconcile_window_editors();
         if let Ok(size) = crossterm::terminal::size() {
@@ -134,7 +134,7 @@ impl App {
             let new_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
@@ -165,7 +165,7 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
-            // Rebuild window view editors onto the replacement Content (#151 Phase D).
+            // Rebuild window view editors onto the replacement Buffer (#151 Phase D).
             self.reconcile_window_editors();
             // No file open in slot 0 anymore — stop watching it (#242).
             self.fs_watch_sync();
@@ -260,7 +260,7 @@ impl App {
             let new_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_current_buffer_id(new_id);
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
@@ -291,7 +291,7 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
-            // Rebuild window view editors onto the fresh scratch Content (#151 Phase D).
+            // Rebuild window view editors onto the fresh scratch Buffer (#151 Phase D).
             self.reconcile_window_editors();
             // No file open in slot 0 anymore — stop watching it (#242).
             self.fs_watch_sync();
@@ -363,7 +363,7 @@ impl App {
 
     // ── nvim-api helpers ──────────────────────────────────────────────────────
 
-    /// Buffer ids of all non-explorer slots, as `u64` (nvim wire format).
+    /// View ids of all non-explorer slots, as `u64` (nvim wire format).
     pub(crate) fn nvim_buffer_ids(&self) -> Vec<u64> {
         self.slots
             .iter()
@@ -372,7 +372,7 @@ impl App {
             .collect()
     }
 
-    /// Buffer id of the currently focused slot, as `u64`.
+    /// View id of the currently focused slot, as `u64`.
     pub(crate) fn nvim_current_buffer_id(&self) -> u64 {
         self.active().buffer_id
     }
@@ -422,7 +422,7 @@ impl App {
     pub(crate) fn nvim_slot_editor(
         &self,
         id: u64,
-    ) -> Option<&hjkl_engine::Editor<hjkl_buffer::Buffer, crate::host::TuiHost>> {
+    ) -> Option<&hjkl_engine::Editor<hjkl_buffer::View, crate::host::TuiHost>> {
         self.slots
             .iter()
             .find(|s| s.buffer_id == id)
@@ -433,7 +433,7 @@ impl App {
     pub(crate) fn nvim_slot_editor_mut(
         &mut self,
         id: u64,
-    ) -> Option<&mut hjkl_engine::Editor<hjkl_buffer::Buffer, crate::host::TuiHost>> {
+    ) -> Option<&mut hjkl_engine::Editor<hjkl_buffer::View, crate::host::TuiHost>> {
         self.slots
             .iter_mut()
             .find(|s| s.buffer_id == id)
@@ -460,14 +460,14 @@ impl App {
         use super::{BufferFeatures, BufferSlot, DiskState};
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::Options;
         use std::time::Instant;
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
         editor.set_current_buffer_id(buffer_id);
         editor.set_registers_arc(self.registers.clone());
         // Mirror the nvim_api build_app viewport (80×24) for headless paths;

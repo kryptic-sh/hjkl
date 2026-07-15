@@ -70,7 +70,7 @@ fn parse_address(s: &str) -> Option<(Address, &str)> {
 /// 1-based and clamped to the buffer; bad marks return an error.
 fn resolve_address<H: hjkl_engine::Host>(
     addr: Address,
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<usize, String> {
     let line_count = editor.buffer().row_count();
     // 1-based last line (at least 1 so single-line buffers work)
@@ -99,7 +99,7 @@ fn resolve_address<H: hjkl_engine::Host>(
 /// command starts with a non-range character (typical case for `:w`, `:e`).
 pub fn parse_range<'a, H: hjkl_engine::Host>(
     cmd: &'a str,
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<(Option<LineRange>, &'a str), String> {
     // `%` — whole buffer
     if let Some(rest) = cmd.strip_prefix('%') {
@@ -140,7 +140,7 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
 /// the address is an error.
 pub fn parse_dest_address<H: hjkl_engine::Host>(
     s: &str,
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<usize, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -165,15 +165,15 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        use hjkl_buffer::Buffer;
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
+        use hjkl_buffer::View;
         let content = lines.join("\n");
-        let buf = Buffer::from_str(&content);
+        let buf = View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
-    fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
         make_editor_with_lines(&["line1", "line2", "line3", "line4", "line5"])
     }
 
@@ -232,9 +232,9 @@ mod tests {
 
     #[test]
     fn mark_range() {
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::{DefaultHost, Options};
-        let buf = Buffer::from_str("a\nb\nc\nd\ne");
+        let buf = View::from_str("a\nb\nc\nd\ne");
         let host = DefaultHost::new();
         let mut editor = hjkl_vim::vim_editor(buf, host, Options::default());
         // marks are 0-based internally; 1-based in range results

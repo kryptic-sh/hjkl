@@ -4,7 +4,7 @@ use hjkl_engine::Host;
 
 /// `:reg` / `:registers` — tabular dump of every non-empty register slot.
 pub(crate) fn format_registers<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> String {
     let r = editor.registers();
     let mut lines = vec!["--- Registers ---".to_string()];
@@ -56,9 +56,7 @@ fn display_register(text: &str) -> String {
 
 /// `:marks` — list every set mark with `(line, col)`. Lines are 1-based to
 /// match vim; cols are 0-based. Uppercase global marks include the buffer id.
-pub(crate) fn format_marks<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
-) -> String {
+pub(crate) fn format_marks<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
     // Lowercase (buffer-local) marks — from the unified `Editor::marks` map.
     for (c, (r, col)) in editor.marks() {
@@ -87,9 +85,7 @@ pub(crate) fn format_marks<H: Host>(
 /// `:jumps` — list the jump-back and jump-forward lists.
 /// Format mirrors vim: `jump  line  col  file` columns. Newest items
 /// have the smallest `jump` number; current position is `0`.
-pub(crate) fn format_jumps<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
-) -> String {
+pub(crate) fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let (back, fwd) = editor.jump_list();
     if back.is_empty() && fwd.is_empty() {
         return "(no jumps recorded)".to_string();
@@ -122,7 +118,7 @@ pub(crate) fn format_jumps<H: Host>(
 /// `:changes` — list the change list (bounded ring of recent edit positions).
 /// Newest entries have lower index numbers, matching vim's `:changes` output.
 pub(crate) fn format_changes<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> String {
     let (list, cursor) = editor.change_list();
     if list.is_empty() {
@@ -157,8 +153,8 @@ mod tests {
     use hjkl_engine::{DefaultHost, Editor, Options};
     use hjkl_vim::VimEditorExt;
 
-    fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::new();
+    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::new();
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }

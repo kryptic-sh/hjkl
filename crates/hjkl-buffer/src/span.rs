@@ -10,7 +10,7 @@
 ///
 /// The host installs spans via the engine's `Editor::install_syntax_spans`
 /// (or equivalent) after each edit. Spans are cleared for affected rows on
-/// every [`crate::Buffer::apply_edit`] call and must be re-installed by the
+/// every [`crate::View::apply_edit`] call and must be re-installed by the
 /// host's syntax pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {

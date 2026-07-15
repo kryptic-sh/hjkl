@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-16
+
+### Changed
+
+- **BREAKING — core type rename to fix a Document/View mislabel** (#279). The
+  layering was a Document/View split whose two lower names sat one level off.
+  Renamed the three core types so the code reads as vim's model:
+  - `Content` (rope + folds + dirty — the document) → **`Buffer`**
+  - `Buffer` (`Arc<Content>` + cursor — a view handle) → **`View`** (both the
+    struct `hjkl_buffer::Buffer` and the engine's `Buffer` trait become `View`)
+  - `Editor` is unchanged — the split/window is already named `Window`
+    (`hjkl_layout::Window`); `Editor` remains the per-window editing context.
+
+  Downstream consumers of `hjkl-engine` / `hjkl-editor` that name `Content` or
+  the `Buffer` struct/trait must update to `Buffer` / `View`. Crate names,
+  method/field names, and compound identifiers (`BufferView`, `BufferId`,
+  `BufferEdit`, `ContentEdit`, …) are unchanged.
+
 ### Removed
 
 - **Non-vim editing disciplines.** hjkl is vim-only again — its identity is a

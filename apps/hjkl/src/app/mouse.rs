@@ -166,7 +166,7 @@ fn rect_contains(rect: window::LayoutRect, col: u16, row: u16) -> bool {
 /// counterpart of `viewport_math::cursor_screen_row_from`. Without this,
 /// clicks below a closed fold land on the wrong line.
 pub(crate) fn doc_row_at_screen_offset(
-    buffer: &hjkl_buffer::Buffer,
+    buffer: &hjkl_buffer::View,
     top_row: usize,
     screen_offset: usize,
 ) -> usize {
@@ -212,7 +212,7 @@ pub(crate) fn box_plan_doc_row(
         0,
     );
     match plan.get(rel_y) {
-        Some(BlameRow::Content(d)) => Some(*d),
+        Some(BlameRow::Buffer(d)) => Some(*d),
         _ => None,
     }
 }
@@ -252,15 +252,15 @@ pub(crate) fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize
         0,
     );
     match plan.get(rel_y)? {
-        BlameRow::Content(d) => Some(*d),
+        BlameRow::Buffer(d) => Some(*d),
         // Commit header → the run's first content line below it.
         BlameRow::BorderTop(_) => plan.get(rel_y + 1..)?.iter().find_map(|r| match r {
-            BlameRow::Content(d) => Some(*d),
+            BlameRow::Buffer(d) => Some(*d),
             _ => None,
         }),
         // Bottom border → the run's last content line above it.
         BlameRow::BorderBottom => plan[..rel_y].iter().rev().find_map(|r| match r {
-            BlameRow::Content(d) => Some(*d),
+            BlameRow::Buffer(d) => Some(*d),
             _ => None,
         }),
     }
@@ -398,7 +398,7 @@ pub fn doc_to_cell(
         );
         let idx = plan
             .iter()
-            .position(|r| matches!(r, BlameRow::Content(d) if *d == doc_row))?;
+            .position(|r| matches!(r, BlameRow::Buffer(d) if *d == doc_row))?;
         rect.y + idx as u16
     } else {
         rect.y + (doc_row - vp_top) as u16
@@ -1256,7 +1256,7 @@ mod tests {
         assert_eq!(got2, Some((0, 1)), "click on cell 6 should map to col 1");
     }
 
-    // ── Buffer line zone ──────────────────────────────────────────────────────
+    // ── View line zone ──────────────────────────────────────────────────────
 
     /// Build an app with N tempfile-backed slots so the buffer line renders.
     fn make_app_with_n_slots(n: usize) -> (App, Vec<std::path::PathBuf>) {
@@ -1983,7 +1983,7 @@ mod tests {
     /// `TabBar { tab_idx }`.
     #[test]
     fn hit_test_zone_tab_bar_close_glyph() {
-        // 1 slot + 1 extra tab (tabnew) = 2 tabs. Buffer line shows (2 slots).
+        // 1 slot + 1 extra tab (tabnew) = 2 tabs. View line shows (2 slots).
         let (app, paths) = make_app_with_slots_and_tabs(1, 1);
         cleanup_paths(&paths);
 

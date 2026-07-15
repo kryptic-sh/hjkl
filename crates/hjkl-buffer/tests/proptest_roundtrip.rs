@@ -1,14 +1,14 @@
 //! Property-based tests proving the edit/undo round-trip contract.
 //!
-//! Every [`hjkl_buffer::Edit`] passed to [`Buffer::apply_edit`] yields
+//! Every [`hjkl_buffer::Edit`] passed to [`View::apply_edit`] yields
 //! an inverse `Edit`. Applying the inverse must restore the buffer's
 //! content to its prior state. This file proves the property over
 //! randomized text + edit shapes.
 
-use hjkl_buffer::{Buffer, Edit, MotionKind, Position, rope_line_str};
+use hjkl_buffer::{Edit, MotionKind, Position, View, rope_line_str};
 use proptest::prelude::*;
 
-fn buf_lines(buf: &Buffer) -> Vec<String> {
+fn buf_lines(buf: &View) -> Vec<String> {
     let rope = buf.rope();
     let n = rope.len_lines();
     (0..n).map(|i| rope_line_str(&rope, i)).collect()
@@ -17,7 +17,7 @@ fn buf_lines(buf: &Buffer) -> Vec<String> {
 /// Resolve normalized fractions [0.0, 1.0] to a valid `Position` inside
 /// `buf`. Keeps the strategy tree primitive-only — proptest shrinks
 /// floats deterministically.
-fn pos_from_fractions(buf: &Buffer, row_frac: f64, col_frac: f64) -> Position {
+fn pos_from_fractions(buf: &View, row_frac: f64, col_frac: f64) -> Position {
     let rope = buf.rope();
     let n = rope.len_lines();
     if n == 0 {
@@ -46,7 +46,7 @@ proptest! {
         col_f in 0.0_f64..=1.0,
         ch in prop::char::range('a', 'z'),
     ) {
-        let mut buf = Buffer::from_str(&text);
+        let mut buf = View::from_str(&text);
         let at = pos_from_fractions(&buf, row_f, col_f);
         let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::InsertChar { at, ch });
@@ -62,7 +62,7 @@ proptest! {
         col_f in 0.0_f64..=1.0,
         ins in "[a-z\n]{0,8}",
     ) {
-        let mut buf = Buffer::from_str(&text);
+        let mut buf = View::from_str(&text);
         let at = pos_from_fractions(&buf, row_f, col_f);
         let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::InsertStr { at, text: ins });
@@ -79,7 +79,7 @@ proptest! {
         b_row_f in 0.0_f64..=1.0,
         b_col_f in 0.0_f64..=1.0,
     ) {
-        let mut buf = Buffer::from_str(&text);
+        let mut buf = View::from_str(&text);
         let a = pos_from_fractions(&buf, a_row_f, a_col_f);
         let b = pos_from_fractions(&buf, b_row_f, b_col_f);
         let (start, end) = if (a.row, a.col) <= (b.row, b.col) { (a, b) } else { (b, a) };
@@ -96,7 +96,7 @@ proptest! {
 
 #[test]
 fn empty_buffer_insert_then_delete_roundtrip() {
-    let mut buf = Buffer::new();
+    let mut buf = View::new();
     let lines_before = buf_lines(&buf);
     let inv = buf.apply_edit(Edit::InsertStr {
         at: Position::new(0, 0),

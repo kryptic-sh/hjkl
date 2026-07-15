@@ -410,7 +410,7 @@ impl App {
         if use_incremental {
             // Slice per-edit text directly from the rope — avoids the
             // ~3 MB content_joined build that dominated the LSP path on
-            // huge files. `Buffer::rope()` is an O(1) Arc-clone.
+            // huge files. `View::rope()` is an O(1) Arc-clone.
             let rope = slot.editor.buffer().rope();
             let changes = build_text_changes(&rope, edits);
             tracing::debug!(

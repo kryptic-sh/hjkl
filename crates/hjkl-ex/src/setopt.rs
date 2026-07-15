@@ -121,7 +121,7 @@ pub fn all_setting_names() -> Vec<String> {
 /// `:set [opt ...]` body. Splits on whitespace and applies each token.
 /// Bare `:set` reports the current values for the supported options.
 pub(crate) fn apply_set<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     body: &str,
 ) -> ExEffect {
     let trimmed = body.trim();
@@ -224,7 +224,7 @@ pub(crate) fn apply_set<H: Host>(
 /// accepted match those in [`apply_set_token`] (both the long and short
 /// aliases).
 pub fn query_option_value<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
     name: &str,
 ) -> Option<String> {
     let s = editor.settings();
@@ -308,7 +308,7 @@ pub fn query_option_value<H: Host>(
 /// pre-constructed token (e.g. `makeprg=cargo build`) without going through
 /// `apply_set`'s whitespace-splitting loop.
 pub fn apply_set_token<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     token: &str,
 ) -> Result<(), String> {
     // `formatoptions+=flags` — append flags.
@@ -543,7 +543,7 @@ fn parse_bool_word(s: &str) -> Option<bool> {
 /// boolean option (and was applied), `false` otherwise. Shared by the bare
 /// `name`/`noname` path and the `name=on|off|true|false|yes|no|1|0` path.
 fn apply_bool_option<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     name: &str,
     value: bool,
 ) -> bool {
@@ -615,8 +615,8 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::new();
+    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::new();
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }

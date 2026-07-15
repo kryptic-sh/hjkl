@@ -756,7 +756,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // Per-window state (#151 Phase D): settings, cursor, viewport, blame-view
-    // come from THIS window's editor. Content + syntax spans + per-buffer
+    // come from THIS window's editor. Buffer + syntax spans + per-buffer
     // metadata (blame data, diag/git signs) stay on the slot editor (shared).
     let win_settings = app
         .window_editors
@@ -1625,7 +1625,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let map_doc_to_screen = |pair_row: usize, pair_col: usize| -> Option<(u16, u16)> {
         if box_mode {
             let idx = blame_box_plan.iter().position(
-                |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == pair_row),
+                |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Buffer(d) if *d == pair_row),
             )?;
             Some((
                 base_text_x + hjkl_buffer_tui::render::BLAME_BOX_FRAME_LEFT + pair_col as u16,
@@ -1747,7 +1747,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             blame_box_plan
                 .iter()
                 .position(
-                    |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cur),
+                    |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Buffer(d) if *d == cur),
                 )
                 .map(|idx| {
                     (
@@ -2230,7 +2230,7 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// `(buffer_id, dirty_gen, cursor, pattern_text)` — the status line
 /// re-runs this every render, but the scan only re-runs when one of
 /// those changes. On a cache miss the scan walks
-/// `Buffer::content_joined` (cached `Arc<String>`) once with regex's
+/// `View::content_joined` (cached `Arc<String>`) once with regex's
 /// SIMD-fast `find_iter`, translating each match position back to its
 /// row via the cumulative newline count instead of cloning per-line
 /// `Vec<String>`s.

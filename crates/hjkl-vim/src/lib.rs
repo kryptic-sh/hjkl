@@ -51,7 +51,7 @@ pub enum Mode {
 /// variants the legacy FSM does not dispatch (`Mouse`, `Paste`, `FocusGained`,
 /// `FocusLost`, `Resize`) and for special-key variants that map to `Key::Null`.
 pub fn feed_input<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: hjkl_engine::PlannedInput,
 ) -> bool {
     let Some(event) = hjkl_engine::decode_planned_input(input) else {
@@ -87,7 +87,7 @@ pub fn feed_input<H: hjkl_engine::Host>(
 /// The deprecated `Editor::step_input_raw` shim path is retained for
 /// back-compat until Phase 6.6h.
 pub fn dispatch_input<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: hjkl_engine::Input,
 ) -> bool {
     // Search-prompt intercept: short-circuits before begin_step, matching

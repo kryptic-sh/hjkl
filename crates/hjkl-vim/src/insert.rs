@@ -12,7 +12,7 @@ use hjkl_engine::{Host, Input, Key};
 /// Returns `true` (consumed) unconditionally — every key inside insert mode
 /// is swallowed regardless of whether it produced a visible effect.
 pub fn step_insert<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     // `Ctrl-R {reg}` paste — the previous keystroke armed the wait. Any
@@ -96,7 +96,7 @@ pub fn step_insert<H: Host>(
 /// corresponding public `Editor::*` method (Phase 6.6a). Returns `true`
 /// when the buffer mutated (editing keys), `false` for navigation-only keys.
 pub(crate) fn handle_insert_key<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     use hjkl_engine::InsertDir;

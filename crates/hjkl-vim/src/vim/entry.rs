@@ -15,7 +15,7 @@ use hjkl_engine::tag::{is_html_filetype, scan_tag_opener};
 /// live search highlight until the user commits a query. `last_search`
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
 pub(crate) fn enter_search<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
 ) {
     ed.set_search_prompt_state(Some(SearchPrompt {
@@ -34,7 +34,7 @@ pub(crate) fn enter_search<H: hjkl_engine::types::Host>(
 /// operator-pending mode. On commit the operator runs over the exclusive
 /// charwise range from the current cursor to the match.
 pub(crate) fn enter_search_op<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     op: Operator,
     count: usize,
@@ -53,7 +53,7 @@ pub(crate) fn enter_search_op<H: hjkl_engine::types::Host>(
 /// `origin` to the current (post-search) cursor. Used by the search-prompt
 /// commit path for `d/` / `c/` / `y/`.
 pub(crate) fn apply_op_search_range<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     origin: (usize, usize),
 ) {
@@ -64,7 +64,7 @@ pub(crate) fn apply_op_search_range<H: hjkl_engine::types::Host>(
 /// `dir = 1` toward newer (g,). `count` repeats the step. Stops at
 /// the ends of the ring; off-ring positions are silently ignored.
 pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     dir: isize,
     count: usize,
 ) {
@@ -99,7 +99,7 @@ pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
 /// `Edit::InsertStr`. Unknown selectors and empty slots are no-ops so
 /// stray keystrokes don't mutate the buffer.
 pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     selector: char,
 ) {
     use hjkl_buffer::Edit;

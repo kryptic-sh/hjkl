@@ -8,7 +8,7 @@ use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_editor::buffer::Position;
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options, VimMode};
 use hjkl_ex::ExEffect;
@@ -81,8 +81,8 @@ fn drain_to_newline<R: BufRead>(r: &mut R) -> std::io::Result<()> {
 
 fn build_editor(
     maybe_path: Option<&PathBuf>,
-) -> Result<(Editor<Buffer, DefaultHost>, Option<PathBuf>)> {
-    let mut buffer = Buffer::new();
+) -> Result<(Editor<View, DefaultHost>, Option<PathBuf>)> {
+    let mut buffer = View::new();
 
     if let Some(path) = maybe_path {
         match std::fs::read_to_string(path) {
@@ -109,7 +109,7 @@ fn build_editor(
 // ---------------------------------------------------------------------------
 
 fn dispatch(
-    editor: &mut Editor<Buffer, DefaultHost>,
+    editor: &mut Editor<View, DefaultHost>,
     current_filename: &mut Option<PathBuf>,
     should_quit: &mut bool,
     method: &str,
@@ -384,11 +384,11 @@ fn params_array(params: &Value, idx: usize) -> std::result::Result<Vec<Value>, S
 }
 
 // ---------------------------------------------------------------------------
-// Buffer write helper (mirrors headless.rs)
+// View write helper (mirrors headless.rs)
 // ---------------------------------------------------------------------------
 
 fn write_buffer(
-    editor: &Editor<Buffer, DefaultHost>,
+    editor: &Editor<View, DefaultHost>,
     path: &Option<PathBuf>,
 ) -> std::result::Result<(), String> {
     match path {

@@ -234,7 +234,7 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
 ///
 /// Returns an error when pattern resolution fails or the regex is invalid.
 pub fn apply_substitute<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     cmd: &SubstituteCmd,
     line_range: std::ops::RangeInclusive<u32>,
 ) -> Result<SubstituteOutcome, SubstError> {
@@ -398,7 +398,7 @@ pub struct SubstituteMatch {
 ///
 /// Returns an error when pattern resolution fails or the regex is invalid.
 pub fn collect_substitute_matches<H: crate::types::Host>(
-    ed: &crate::Editor<hjkl_buffer::Buffer, H>,
+    ed: &crate::Editor<hjkl_buffer::View, H>,
     cmd: &SubstituteCmd,
     line_range: std::ops::RangeInclusive<u32>,
 ) -> Result<Vec<SubstituteMatch>, SubstError> {
@@ -498,7 +498,7 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
 ///
 /// Panics when `accepted.len() != matches.len()`.
 pub fn apply_collected_matches<H: crate::types::Host>(
-    ed: &mut crate::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut crate::Editor<hjkl_buffer::View, H>,
     matches: &[SubstituteMatch],
     accepted: &[bool],
 ) -> usize {
@@ -739,15 +739,15 @@ fn do_replace(
 mod tests {
     use super::*;
     use crate::types::{DefaultHost, Options};
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
-    fn editor_with(content: &str) -> Editor<Buffer, DefaultHost> {
-        let mut e = Editor::new(Buffer::new(), DefaultHost::new(), Options::default());
+    fn editor_with(content: &str) -> Editor<View, DefaultHost> {
+        let mut e = Editor::new(View::new(), DefaultHost::new(), Options::default());
         e.set_content(content);
         e
     }
 
-    fn buf_line(e: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+    fn buf_line(e: &Editor<View, DefaultHost>, row: usize) -> String {
         hjkl_buffer::rope_line_str(&e.buffer().rope(), row)
     }
 
@@ -1089,7 +1089,7 @@ mod tests {
         assert!(cmd.flags.report_only);
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 3);
-        // Buffer is untouched.
+        // View is untouched.
         assert_eq!(buf_line(&e, 0), "foo foo foo");
     }
 

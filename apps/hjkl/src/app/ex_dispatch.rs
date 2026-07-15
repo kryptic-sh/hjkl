@@ -22,7 +22,7 @@ use super::{App, DiskState, ex_host_cmds};
 /// clean `ContentReset` signal. When no line has trailing whitespace this is a
 /// no-op (no allocation, no dirty-gen bump).
 fn trim_trailing_whitespace_in_place<H: hjkl_engine::types::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) {
     use hjkl_engine::Query;
     let n = editor.buffer().line_count() as usize;
@@ -776,14 +776,14 @@ impl App {
         // Create a fresh empty unnamed slot.
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -858,14 +858,14 @@ impl App {
         // Create a fresh empty unnamed slot.
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -1093,7 +1093,7 @@ impl App {
 
                 // Reuse the per-dirty_gen Arc<String> from content_joined() so
                 // saves share the same allocation that LSP / git / syntax / dirty
-                // signature paths already paid for. Was Buffer::lines().join()
+                // signature paths already paid for. Was View::lines().join()
                 // which re-cloned every line (162k allocs on a 162k-row buffer).
                 // Write in two pieces so the trailing newline doesn't force a
                 // full-buffer clone just to push a byte.
@@ -1340,7 +1340,7 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::host::TuiHost;
         use hjkl_app::swap;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::Options;
 
         let orphans = swap::scan_orphan_scratch_swaps_in(dir);
@@ -1354,7 +1354,7 @@ impl App {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
@@ -1864,7 +1864,7 @@ impl App {
                 }
 
                 // Rebuild the focused window's view editor onto the newly opened
-                // slot's Content (#151 Phase D) before reading active_editor below.
+                // slot's Buffer (#151 Phase D) before reading active_editor below.
                 self.reconcile_window_editors();
 
                 // Recovery check: if a swap file is newer than the on-disk
@@ -2271,7 +2271,7 @@ impl App {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::app::window::{LayoutTree, Tab, Window};
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::Options;
 
         // Save current tab's viewport state before switching.
@@ -2283,7 +2283,7 @@ impl App {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
             let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
             editor.set_registers_arc(self.registers.clone());
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();

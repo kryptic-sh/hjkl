@@ -1,7 +1,7 @@
 //! `App` — owns the editor + host, drives the event loop.
 
 use anyhow::Result;
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CoarseMode, CursorShape, Editor, Options};
 use hjkl_engine_tui::EditorRatatuiExt;
@@ -175,13 +175,13 @@ pub struct App {
     /// collide; closed windows are pruned on the main close paths.
     pub window_folds: std::collections::HashMap<window::WindowId, Vec<hjkl_buffer::Fold>>,
     /// Per-window editor, keyed by `WindowId` (#151 Phase D). Each is a
-    /// [`Buffer::new_view`] of its slot's shared `Content`, so it owns an
+    /// [`View::new_view`] of its slot's shared `Buffer`, so it owns an
     /// independent cursor / viewport / vim FSM while editing the same document.
     /// Invariant: a key exists here iff `windows[id]` is `Some`. The slot's own
     /// editor is retained as a content bridge during the migration (Stage 2b
     /// removes it); content reads via either editor agree because they share
-    /// the same `Arc<Mutex<Content>>`.
-    pub(crate) window_editors: std::collections::HashMap<window::WindowId, Editor<Buffer, TuiHost>>,
+    /// the same `Arc<Mutex<Buffer>>`.
+    pub(crate) window_editors: std::collections::HashMap<window::WindowId, Editor<View, TuiHost>>,
     /// All open tabs. Each tab owns its own layout tree + focused window.
     /// Never empty — always at least one tab.
     pub tabs: Vec<window::Tab>,
@@ -257,7 +257,7 @@ pub struct App {
     /// Background worker for external formatter invocations (`=` / `==`).
     /// Moves blocking subprocess calls off the UI thread (#118).
     pub(crate) format_worker: hjkl_mangler::FormatWorker,
-    /// Buffer ids for which a format job is currently in-flight.
+    /// View ids for which a format job is currently in-flight.
     /// Used to show a "formatting…" status indicator and to skip redundant
     /// submits (the worker's per-buffer dedup is the hard guarantee; this
     /// set is advisory UI state).
@@ -522,7 +522,7 @@ pub struct App {
     /// Global variable store (`g:` namespace). Keyed by variable name.
     /// Populated by `nvim_set_var` / `nvim_get_var` / `nvim_del_var`.
     pub(crate) nvim_gvars: std::collections::HashMap<String, rmpv::Value>,
-    /// Buffer-local variable store (`b:` namespace). Keyed by `(buffer_id, name)`.
+    /// View-local variable store (`b:` namespace). Keyed by `(buffer_id, name)`.
     /// Populated by `nvim_buf_set_var` / `nvim_buf_get_var` / `nvim_buf_del_var`.
     pub(crate) nvim_bvars: std::collections::HashMap<(u64, String), rmpv::Value>,
     /// Window-local variable store (`w:` namespace). Keyed by `(window_id, name)`.
@@ -682,7 +682,7 @@ pub(super) fn build_slot(
     path: Option<PathBuf>,
     config: &hjkl_app::config::Config,
 ) -> Result<BufferSlot, String> {
-    let mut buffer = Buffer::new();
+    let mut buffer = View::new();
     let mut is_new_file = false;
     let mut disk_mtime: Option<SystemTime> = None;
     let mut disk_len: Option<u64> = None;
@@ -1050,7 +1050,7 @@ impl App {
     /// The editor for window `win_id` (the View — single source of per-window
     /// cursor/viewport/is_blame, #151). Falls back to the slot bridge editor
     /// when no window editor exists yet (pre-reconcile / headless paths).
-    pub(crate) fn window_editor(&self, win_id: window::WindowId) -> &Editor<Buffer, TuiHost> {
+    pub(crate) fn window_editor(&self, win_id: window::WindowId) -> &Editor<View, TuiHost> {
         self.window_editors.get(&win_id).unwrap_or_else(|| {
             let slot = self
                 .windows
@@ -1218,7 +1218,7 @@ impl App {
     /// one. Falls back to the focused slot's bridge editor only if the window
     /// editor is somehow absent (should not happen — the invariant keeps them
     /// in lockstep).
-    pub fn active_editor(&self) -> &Editor<Buffer, TuiHost> {
+    pub fn active_editor(&self) -> &Editor<View, TuiHost> {
         let fw = self.focused_window();
         self.window_editors
             .get(&fw)
@@ -1226,7 +1226,7 @@ impl App {
     }
 
     /// Mutable reference to the focused window's editor. See [`active_editor`].
-    pub fn active_editor_mut(&mut self) -> &mut Editor<Buffer, TuiHost> {
+    pub fn active_editor_mut(&mut self) -> &mut Editor<View, TuiHost> {
         let fw = self.focused_window();
         if self.window_editors.contains_key(&fw) {
             self.window_editors.get_mut(&fw).unwrap()
@@ -1236,12 +1236,12 @@ impl App {
         }
     }
 
-    /// Build a fresh per-window view editor onto `slot_idx`'s shared `Content`.
+    /// Build a fresh per-window view editor onto `slot_idx`'s shared `Buffer`.
     /// Copies the slot editor's settings + viewport dims so the new view
     /// renders identically; the cursor starts at the slot editor's cursor.
-    pub(crate) fn make_view_editor(&self, slot_idx: usize) -> Editor<Buffer, TuiHost> {
+    pub(crate) fn make_view_editor(&self, slot_idx: usize) -> Editor<View, TuiHost> {
         let src = &self.slots[slot_idx].editor;
-        let view = Buffer::new_view(src.buffer().content_arc());
+        let view = View::new_view(src.buffer().content_arc());
         let mut ed = hjkl_vim::vim_editor(view, TuiHost::new(), Options::default());
         *ed.settings_mut() = src.settings().clone();
         ed.set_current_buffer_id(self.slots[slot_idx].buffer_id);
@@ -1270,7 +1270,7 @@ impl App {
         ed
     }
 
-    /// Reconcile every window's editor with its current slot's `Content`
+    /// Reconcile every window's editor with its current slot's `Buffer`
     /// (#151 Phase D). Rebuilds a window editor only when its content `Arc` no
     /// longer matches its slot's — so a pure slot-index reindex (e.g. after
     /// `:bd`) preserves the window's cursor, while a true buffer switch rebuilds

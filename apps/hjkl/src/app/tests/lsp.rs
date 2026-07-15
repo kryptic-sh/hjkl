@@ -1158,7 +1158,7 @@ fn accept_completion_inserts_selected_item() {
 
     // Popup must be gone.
     assert!(app.completion.is_none());
-    // Buffer line should start with "world" (inserted at col 0).
+    // View line should start with "world" (inserted at col 0).
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
     assert!(
         line.starts_with("world"),

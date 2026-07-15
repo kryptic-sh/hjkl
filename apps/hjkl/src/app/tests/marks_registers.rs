@@ -26,7 +26,7 @@ fn quote_a_then_dd_deletes_into_register_a() {
         "register 'a' should contain 'hello world', got {text:?}"
     );
     drop(regs);
-    // Buffer should only have the second line.
+    // View should only have the second line.
     let lines = app
         .active_editor()
         .buffer()
@@ -76,7 +76,7 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     drive_key(&mut app, key(KeyCode::Char('a')));
     drive_key(&mut app, key(KeyCode::Char('p')));
 
-    // Buffer should now have "first line" duplicated after line two.
+    // View should now have "first line" duplicated after line two.
     let lines = app
         .active_editor()
         .buffer()

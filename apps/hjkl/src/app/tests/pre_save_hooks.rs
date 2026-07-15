@@ -46,7 +46,7 @@ fn save_trims_trailing_whitespace_when_option_on() {
         "content must be preserved; got: {on_disk:?}"
     );
 
-    // Buffer must also reflect the trimmed content.
+    // View must also reflect the trimmed content.
     let buf = app.active_editor().buffer().as_string();
     assert!(
         !buf.contains("   "),

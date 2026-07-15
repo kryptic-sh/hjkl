@@ -4,7 +4,7 @@
 //! `DiagSource` — LSP diagnostics for the active buffer.
 //! `StaticListSource` — generic (label, action) list (LSP goto picker, …).
 //!
-//! Sources here are bonsai-agnostic: previews ship `(Buffer, status)` plus
+//! Sources here are bonsai-agnostic: previews ship `(View, status)` plus
 //! an optional `preview_path`. The host renderer (apps/hjkl/src/render.rs)
 //! reads the path and runs syntax highlighting through the editor's own
 //! grammar pipeline (`App::preview_spans_for`), so picker preview never
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::JoinHandle;
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, RequeryMode, RgSource};
 
 use crate::picker_action::AppAction;
@@ -61,7 +61,7 @@ impl PickerLogic for FileSourceWithOpen {
         self.inner.has_preview()
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         self.inner.preview(idx)
     }
 
@@ -139,7 +139,7 @@ impl PickerLogic for RgSourceWithOpen {
         self.inner.has_preview()
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         self.inner.preview(idx)
     }
 
@@ -273,17 +273,17 @@ impl PickerLogic for BufferSource {
         true
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         match self.entries.get(idx) {
             Some(e) => {
-                let mut buf = Buffer::from_str(&e.content);
+                let mut buf = View::from_str(&e.content);
                 buf.set_cursor(hjkl_buffer::Position {
                     row: e.cursor_row,
                     col: 0,
                 });
                 (buf, String::new())
             }
-            None => (Buffer::new(), String::new()),
+            None => (View::new(), String::new()),
         }
     }
 

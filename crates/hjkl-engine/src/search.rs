@@ -3,7 +3,7 @@
 //! Patch 0.0.35 step 1 of the 33-method classification rollout
 //! (see `DESIGN_33_METHOD_CLASSIFICATION.md`). The pattern, per-row
 //! match cache, and `wrapscan` flag previously lived on
-//! [`hjkl_buffer::Buffer`] (private `SearchState`). Moving the FSM
+//! [`hjkl_buffer::View`] (private `SearchState`). Moving the FSM
 //! state out of the buffer keeps multi-window hosts from sharing the
 //! "current search" across panes that happen to share content.
 //!
@@ -292,7 +292,7 @@ pub fn search_backward<B: Cursor + Query + Search>(
     if total == 0 {
         return false;
     }
-    // Buffer's `Search::find_prev` returns the at-or-before match
+    // View's `Search::find_prev` returns the at-or-before match
     // for the anchor `from`. For `skip_current`, we want the
     // rightmost match whose start is *strictly before* the cursor.
     // Strategy: query find_prev(cursor); if the returned match
@@ -354,7 +354,7 @@ pub fn search_matches<B: Query>(
 mod tests {
     use super::*;
     use crate::types::Pos;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
     fn re(pat: &str) -> Regex {
         Regex::new(pat).unwrap()
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn empty_state_no_match() {
-        let mut b = Buffer::from_str("anything");
+        let mut b = View::from_str("anything");
         let mut s = SearchState::new();
         assert!(!search_forward(&mut b, &mut s, false));
         assert!(!search_backward(&mut b, &mut s, false));
@@ -471,11 +471,11 @@ mod tests {
     /// (Mirrors what `Editor::search_advance_forward` does.)
     #[test]
     fn search_forward_reveals_fold() {
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
 
-        // Buffer: row 0 = "header", row 1 = "needle", row 2 = "footer"
+        // View: row 0 = "header", row 1 = "needle", row 2 = "footer"
         // Fold [0..2] closed → row 1 is hidden.
-        let mut buf = Buffer::from_str("header\nneedle\nfooter");
+        let mut buf = View::from_str("header\nneedle\nfooter");
         buf.add_fold(0, 2, true);
         assert!(buf.is_row_hidden(1), "row 1 must be hidden before search");
 
@@ -498,11 +498,11 @@ mod tests {
     /// `search_backward` similarly: finding a match then calling reveal_row opens folds.
     #[test]
     fn search_backward_reveals_fold() {
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
 
         // row 0 = "footer", row 1 = "needle", row 2 = "header"
         // fold [0..2] closed → row 1 hidden. Start cursor at row 2.
-        let mut buf = Buffer::from_str("footer\nneedle\nheader");
+        let mut buf = View::from_str("footer\nneedle\nheader");
         buf.add_fold(0, 2, true);
         crate::types::Cursor::set_cursor(&mut buf, crate::types::Pos::new(2, 0));
         assert!(buf.is_row_hidden(1), "row 1 must be hidden before search");
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn forward_finds_first_match() {
-        let mut b = Buffer::from_str("foo bar foo baz");
+        let mut b = View::from_str("foo bar foo baz");
         let mut s = SearchState::new();
         s.set_pattern(Some(re("foo")));
         assert!(search_forward(&mut b, &mut s, false));
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn forward_skip_current_walks_past() {
-        let mut b = Buffer::from_str("foo bar foo baz");
+        let mut b = View::from_str("foo bar foo baz");
         let mut s = SearchState::new();
         s.set_pattern(Some(re("foo")));
         search_forward(&mut b, &mut s, false);
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn forward_wraps_to_top() {
-        let mut b = Buffer::from_str("zzz\nfoo");
+        let mut b = View::from_str("zzz\nfoo");
         // 0.0.37: wrap policy lives entirely on `SearchState::wrap_around`;
         // the buffer-side `set_search_wrap` accessor is gone. Trait
         // `find_next` always wraps; the engine search free function
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn search_matches_caches_against_dirty_gen() {
-        let b = Buffer::from_str("foo bar");
+        let b = View::from_str("foo bar");
         let mut s = SearchState::new();
         s.set_pattern(Some(re("bar")));
         let dgen = b.dirty_gen();

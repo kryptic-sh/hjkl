@@ -20,7 +20,7 @@ use hjkl_engine::tag::{is_html_filetype, scan_tag_opener, sync_paired_tag_on_exi
 /// closing brackets (}/)]/). Also handles autopair insertion and skip-over.
 /// Returns `true`.
 pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -212,7 +212,7 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
 /// produces an indented block with the close on its own line.
 /// Returns `true`.
 pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
@@ -332,7 +332,7 @@ pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
 /// Insert a tab character (or spaces up to the next softtabstop boundary when
 /// `expandtab` is set). Returns `true`.
 pub(crate) fn insert_tab_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
@@ -368,7 +368,7 @@ pub(crate) fn insert_tab_bridge<H: hjkl_engine::types::Host>(
 /// Returns `true` when something was deleted, `false` at the very start of the
 /// buffer.
 pub(crate) fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
@@ -438,7 +438,7 @@ pub(crate) fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
 /// Delete the character under the cursor (vim `Delete`). Joins with the
 /// next line when at end-of-line. Returns `true` when something was deleted.
 pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
@@ -470,7 +470,7 @@ pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(
 /// `undo_break_on_motion`. Clears the autopair pending-closes stack (cursor
 /// moved off the pair). Returns `false` (no mutation).
 pub(crate) fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     dir: InsertDir,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
@@ -502,7 +502,7 @@ pub(crate) fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
 /// Move the cursor to the start of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
 pub(crate) fn insert_home_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes_mut().clear();
@@ -514,7 +514,7 @@ pub(crate) fn insert_home_bridge<H: hjkl_engine::types::Host>(
 /// Move the cursor to the end of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
 pub(crate) fn insert_end_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes_mut().clear();
@@ -526,7 +526,7 @@ pub(crate) fn insert_end_bridge<H: hjkl_engine::types::Host>(
 /// Scroll up one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
 pub(crate) fn insert_pageup_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     viewport_h: u16,
 ) -> bool {
     let rows = viewport_h.saturating_sub(2).max(1) as isize;
@@ -536,7 +536,7 @@ pub(crate) fn insert_pageup_bridge<H: hjkl_engine::types::Host>(
 /// Scroll down one full viewport height, moving the cursor with it.
 /// Breaks the undo group. Returns `false` (no mutation).
 pub(crate) fn insert_pagedown_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     viewport_h: u16,
 ) -> bool {
     let rows = viewport_h.saturating_sub(2).max(1) as isize;
@@ -547,7 +547,7 @@ pub(crate) fn insert_pagedown_bridge<H: hjkl_engine::types::Host>(
 /// At col 0, joins with the previous line (vim semantics). Returns `true`
 /// when something was deleted.
 pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind};
     ed.sync_buffer_content_from_textarea();
@@ -573,7 +573,7 @@ pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
 /// Delete from the cursor back to the start of the current line (`Ctrl-U`).
 /// No-op when already at column 0. Returns `true` when something was deleted.
 pub(crate) fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
@@ -592,7 +592,7 @@ pub(crate) fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
 /// mode. Joins with the previous line when at col 0. Returns `true` when
 /// something was deleted.
 pub(crate) fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
@@ -619,7 +619,7 @@ pub(crate) fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
 /// Indent the current line by one `shiftwidth` and shift the cursor right by
 /// the same amount (`Ctrl-T`). Returns `true`.
 pub(crate) fn insert_ctrl_t_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
     let sw = ed.settings().shiftwidth;
@@ -630,7 +630,7 @@ pub(crate) fn insert_ctrl_t_bridge<H: hjkl_engine::types::Host>(
 /// Outdent the current line by up to one `shiftwidth` and shift the cursor
 /// left by the amount stripped (`Ctrl-D`). Returns `true`.
 pub(crate) fn insert_ctrl_d_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     let (row, col) = ed.cursor();
     let before_len = buf_line_bytes(ed.buffer(), row);
@@ -645,7 +645,7 @@ pub(crate) fn insert_ctrl_d_bridge<H: hjkl_engine::types::Host>(
 /// complete normal-mode command, then return to insert. Returns `false`
 /// (no buffer mutation — only mode state changes).
 pub(crate) fn insert_ctrl_o_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     vim_mut(ed).one_shot_normal = true;
     vim_mut(ed).mode = Mode::Normal;
@@ -657,7 +657,7 @@ pub(crate) fn insert_ctrl_o_bridge<H: hjkl_engine::types::Host>(
 /// names the register whose text will be inserted inline. Returns `false`
 /// (no buffer mutation yet — mutation happens when the register char arrives).
 pub(crate) fn insert_ctrl_r_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     vim_mut(ed).insert_pending_register = true;
     false
@@ -666,7 +666,7 @@ pub(crate) fn insert_ctrl_r_bridge<H: hjkl_engine::types::Host>(
 /// Unknown or empty registers are a no-op. Returns `true` when text was
 /// inserted.
 pub(crate) fn insert_paste_register_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     reg: char,
 ) -> bool {
     insert_register_text(ed, reg);
@@ -680,7 +680,7 @@ pub(crate) fn insert_paste_register_bridge<H: hjkl_engine::types::Host>(
 /// consumed — even if no buffer mutation, the mode change itself is a
 /// meaningful step).
 pub(crate) fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     ed.pending_closes_mut().clear();
 

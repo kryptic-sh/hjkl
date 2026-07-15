@@ -3,8 +3,8 @@
 //! ## #151 design (per-window Editor)
 //!
 //! Cursor and scroll are NOT mirrored anywhere: each window owns its own
-//! `Editor` (a `Buffer::new_view` of the slot's shared `Content`), and that
-//! window editor's `Buffer::cursor()` + `host().viewport()` are the *single
+//! `Editor` (a `View::new_view` of the slot's shared `Buffer`), and that
+//! window editor's `View::cursor()` + `host().viewport()` are the *single
 //! source of truth*. `layout::Window` is geometry-only (slot + last_rect).
 //!
 //! What remains here is the residual per-window state that does NOT live on the
@@ -103,7 +103,7 @@ impl App {
                     0, // title text is irrelevant to border placement
                 );
                 let idx = plan.iter().position(|r| {
-                    matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cursor_row)
+                    matches!(r, hjkl_buffer_tui::render::BlameRow::Buffer(d) if *d == cursor_row)
                 });
                 (top, idx)
             };

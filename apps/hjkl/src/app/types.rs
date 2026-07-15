@@ -4,7 +4,7 @@ use std::hash::Hasher;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_buffer_tui::Sign;
 use hjkl_engine::{Editor, VimMode};
 
@@ -246,9 +246,9 @@ pub enum LspPendingRequest {
 /// than `ahash` on multi-MB inputs. Profile on a busy edit run showed
 /// ~10 % of per-keystroke self time inside `SipHasher::write`; ahash
 /// brings that to ~1–2 %.
-fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
+fn buffer_signature(editor: &Editor<View, TuiHost>) -> (u64, usize) {
     // Stream the rope chunks straight into ahash — no full-document
-    // `Arc<String>` materialization. `Buffer::rope()` is an O(1) Arc-clone.
+    // `Arc<String>` materialization. `View::rope()` is an O(1) Arc-clone.
     let rope = editor.buffer().rope();
     let mut hasher = ahash::AHasher::default();
     let mut len = 0usize;
@@ -318,7 +318,7 @@ pub struct BufferSlot {
     /// dispatch `sync_slot_from_window` writes cursor/scroll back here so
     /// slot-level operations (`:w`, dirty-check, LSP didChange) see the
     /// current buffer state.
-    pub editor: Editor<Buffer, TuiHost>,
+    pub editor: Editor<View, TuiHost>,
     /// File path shown in status line and used for `:w` saves.
     pub filename: Option<PathBuf>,
     /// Persistent dirty flag. Set when `editor.take_dirty()` returns `true`;
@@ -456,7 +456,7 @@ impl BufferSlot {
     /// per-keystroke main-thread CPU.
     pub(super) fn refresh_dirty_against_saved(&mut self) -> u128 {
         let t = std::time::Instant::now();
-        // `Buffer::byte_len()` is cached against dirty_gen and computes
+        // `View::byte_len()` is cached against dirty_gen and computes
         // the length by summing per-row `.len()` under one lock — no
         // join, no allocation. `content_joined().len()` was forcing the
         // full ~3 MB joined `String` build on huge files just to read

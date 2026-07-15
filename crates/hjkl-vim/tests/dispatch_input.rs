@@ -7,7 +7,7 @@ use hjkl_vim::VimEditorExt;
 fn editor_with(content: &str) -> Editor {
     let opts = hjkl_engine::Options::default();
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
     );
@@ -75,7 +75,7 @@ fn insert_char_appends_to_buffer() {
     e.enter_insert_i(1);
     hjkl_vim::dispatch_input(&mut e, inp(Key::Char('x')));
     hjkl_vim::dispatch_input(&mut e, inp(Key::Esc));
-    // Buffer always has a trailing newline.
+    // View always has a trailing newline.
     assert!(
         e.content().starts_with('x'),
         "dispatch_input should type 'x' in insert mode; got: {:?}",
@@ -105,7 +105,7 @@ fn insert_backspace_deletes_char() {
     hjkl_vim::dispatch_input(&mut e, inp(Key::Char('b')));
     hjkl_vim::dispatch_input(&mut e, inp(Key::Backspace));
     hjkl_vim::dispatch_input(&mut e, inp(Key::Esc));
-    // Buffer content starts with 'a'; trailing newline is expected.
+    // View content starts with 'a'; trailing newline is expected.
     assert!(
         e.content().starts_with('a') && !e.content().starts_with("ab"),
         "Backspace via dispatch_input should delete last char; got: {:?}",
@@ -135,7 +135,7 @@ fn insert_ctrl_r_pastes_register() {
 
 #[test]
 fn search_forward_commit_moves_cursor() {
-    // Buffer: "alpha beta" — cursor at col 0.
+    // View: "alpha beta" — cursor at col 0.
     // `/beta<CR>` should advance the cursor to col 6 (start of "beta").
     let mut e = editor_with("alpha beta");
     dispatch_keys(&mut e, "/beta<CR>");
@@ -240,7 +240,7 @@ fn sneak_disabled_falls_through_to_substitute_char() {
     e.settings_mut().motion_sneak = false;
     // `s` with sneak disabled should substitute char (enter insert, delete 'f', type 'x').
     dispatch_keys(&mut e, "sx<Esc>");
-    // Buffer starts with 'x' (substitute-char path was taken).
+    // View starts with 'x' (substitute-char path was taken).
     let content = e.content();
     assert!(
         content.starts_with('x'),

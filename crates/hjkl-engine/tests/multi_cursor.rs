@@ -5,11 +5,11 @@
 //! — actually rewrites the secondary cursors, so a discipline that adds a caret
 //! gets one that tracks the text rather than a stale coordinate.
 
-use hjkl_buffer::{Buffer, Edit, MotionKind, Position};
+use hjkl_buffer::{Edit, MotionKind, Position, View};
 use hjkl_engine::{DefaultHost, Editor, Options, Sel};
 
-fn editor(content: &str) -> Editor<Buffer, DefaultHost> {
-    let mut e = Editor::new(Buffer::new(), DefaultHost::new(), Options::default());
+fn editor(content: &str) -> Editor<View, DefaultHost> {
+    let mut e = Editor::new(View::new(), DefaultHost::new(), Options::default());
     e.set_content(content);
     e
 }
@@ -156,7 +156,7 @@ fn several_secondaries_all_track_one_edit() {
 }
 
 /// The char at `pos`, or `None` past end of row.
-fn char_at(e: &Editor<Buffer, DefaultHost>, p: Position) -> Option<char> {
+fn char_at(e: &Editor<View, DefaultHost>, p: Position) -> Option<char> {
     e.line(p.row)?.chars().nth(p.col)
 }
 

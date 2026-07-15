@@ -10,20 +10,20 @@
 //! Folds are **row-range** spans, not byte spans. [`Fold`] covers
 //! `[start_row, end_row]` inclusive. The host renders folds as collapsed
 //! single-line stubs; the buffer never elides them on its own —
-//! [`crate::Buffer::lines`] always returns the underlying logical text.
+//! [`crate::View::lines`] always returns the underlying logical text.
 //!
 //! Add / remove / toggle goes through
-//! [`crate::Buffer::add_fold`] / [`crate::Buffer::remove_fold_at`] /
-//! [`crate::Buffer::toggle_fold_at`]. Open-all / close-all (`zR` / `zM`)
-//! go through [`crate::Buffer::open_all_folds`] /
-//! [`crate::Buffer::close_all_folds`]; folds keep their definitions across
+//! [`crate::View::add_fold`] / [`crate::View::remove_fold_at`] /
+//! [`crate::View::toggle_fold_at`]. Open-all / close-all (`zR` / `zM`)
+//! go through [`crate::View::open_all_folds`] /
+//! [`crate::View::close_all_folds`]; folds keep their definitions across
 //! open/close cycles.
 
 /// A contiguous range of rows that the host can collapse to a single
 /// fold-marker line.
 ///
 /// Folds are row-range spans: `[start_row, end_row]` inclusive. The buffer
-/// never elides content — [`crate::Buffer::lines`] always returns the full
+/// never elides content — [`crate::View::lines`] always returns the full
 /// logical text regardless of fold state. It is the host's render path that
 /// skips hidden rows and replaces them with a stub.
 ///
@@ -38,9 +38,9 @@ pub struct Fold {
     pub closed: bool,
     /// `true` when this fold was created by the auto-fold engine
     /// (tree-sitter foldmethod=expr). Manual folds created via `zf` /
-    /// [`crate::Buffer::add_fold`] set this to `false`.
+    /// [`crate::View::add_fold`] set this to `false`.
     ///
-    /// Used by [`crate::Buffer::set_auto_folds`] to distinguish auto
+    /// Used by [`crate::View::set_auto_folds`] to distinguish auto
     /// folds (which it manages) from manual folds (which it leaves
     /// untouched).
     pub auto_generated: bool,
@@ -63,11 +63,11 @@ impl Fold {
     }
 }
 
-impl crate::Buffer {
+impl crate::View {
     /// Returns a snapshot of all folds as an owned `Vec<Fold>`.
     ///
-    /// Owned rather than `&[Fold]` because a `Buffer` is a per-window
-    /// view onto a shared `Content`; another view could mutate the folds vec
+    /// Owned rather than `&[Fold]` because a `View` is a per-window
+    /// view onto a shared `Buffer`; another view could mutate the folds vec
     /// between when this returns and when the caller reads the slice.
     pub fn folds(&self) -> Vec<Fold> {
         self.content_lock().folds.clone()
@@ -410,7 +410,7 @@ impl crate::Buffer {
 
 /// Drop every fold in `folds` that touches `[start_row, end_row]`, in place.
 ///
-/// Free helper so both [`crate::Buffer::invalidate_folds_in_range`] (operating
+/// Free helper so both [`crate::View::invalidate_folds_in_range`] (operating
 /// on the shared content) and the app's window-level edit-coherence pass
 /// (operating on a sibling window's owned `Vec<Fold>`) share one rule — vim
 /// opens/forgets any fold the edit overlapped.
@@ -420,10 +420,10 @@ pub fn invalidate_folds(folds: &mut Vec<Fold>, start_row: usize, end_row: usize)
 
 #[cfg(test)]
 mod tests {
-    use crate::Buffer;
+    use crate::View;
 
-    fn b() -> Buffer {
-        Buffer::from_str("a\nb\nc\nd\ne")
+    fn b() -> View {
+        View::from_str("a\nb\nc\nd\ne")
     }
 
     #[test]

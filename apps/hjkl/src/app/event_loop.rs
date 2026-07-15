@@ -543,7 +543,7 @@ impl App {
         //            Ctrl-h/j/k/l window focus + tmux (TmuxNavigate)
         if self.active_editor().vim_mode() == VimMode::Normal {
             // ── App-level count prefix buffering ─────────────────
-            // Buffer digit keys so that count-aware chords (Ngt,
+            // View digit keys so that count-aware chords (Ngt,
             // N<C-w>+) can consume the count. When the non-digit key
             // is not a chord-starter, replay digits to the engine.
             //
@@ -1489,7 +1489,7 @@ impl App {
                     mouse::Zone::BufferLine { slot_idx }
                     | mouse::Zone::BufferLineClose { slot_idx } => {
                         // Switch to the clicked buffer first so the
-                        // tab menu's actions operate on it. Buffer
+                        // tab menu's actions operate on it. View
                         // line shares the tab menu for v1 — close /
                         // close-others / close-{left,right} have
                         // intuitive buffer-line semantics too.
@@ -1620,7 +1620,7 @@ impl App {
             // / move_window_to_new_tab).  Calling it before every keypress
             // clobbered sticky_col and broke j/k column preservation (#151).
             self.drain_lsp_events();
-            // Ensure every window has a view editor onto its slot's Content
+            // Ensure every window has a view editor onto its slot's Buffer
             // (#151 Phase D). Splits create a window before its editor exists;
             // buffer switches change a window's slot. Idempotent — rebuilds a
             // window editor only on a real content change (Arc::ptr_eq).

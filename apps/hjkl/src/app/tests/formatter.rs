@@ -46,7 +46,7 @@ fn equal_equal_in_normal_reindents_current_line() {
 #[test]
 fn eq_g_from_top_reindents_entire_buffer() {
     // `=G` from row 0 covers the whole buffer (top → last line).
-    // Buffer: "{\nbody\n}" where "body" has wrong zero indent.
+    // View: "{\nbody\n}" where "body" has wrong zero indent.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "{\nbody\n}");
     app.active_editor_mut().settings_mut().shiftwidth = 4;

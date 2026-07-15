@@ -13,7 +13,7 @@
 //! - `:set noautoclose-tag` disables tag autoclose
 //! - Open-pair-newline: Enter between `{|}` expands to indented block
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{DefaultHost, Editor, Options};
 use hjkl_vim::{dispatch_input, insert::step_insert};
 
@@ -21,8 +21,8 @@ use hjkl_vim::{dispatch_input, insert::step_insert};
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
-    let buf = Buffer::from_str(content);
+fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
+    let buf = View::from_str(content);
     let host = DefaultHost::new();
     let opts = Options {
         filetype: lang.to_string(),
@@ -33,7 +33,7 @@ fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
 }
 
 /// Feed keystrokes through the normal/insert dispatcher.
-fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -67,7 +67,7 @@ fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
 }
 
 /// Feed keystrokes directly to the insert-mode FSM.
-fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -101,7 +101,7 @@ fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
 }
 
 /// Feed an arrow key to the insert-mode FSM.
-fn feed_arrow_left(ed: &mut Editor<Buffer, DefaultHost>) {
+fn feed_arrow_left(ed: &mut Editor<View, DefaultHost>) {
     use hjkl_engine::{Input, Key};
     step_insert(
         ed,
@@ -114,7 +114,7 @@ fn feed_arrow_left(ed: &mut Editor<Buffer, DefaultHost>) {
     );
 }
 
-fn cursor(ed: &Editor<Buffer, DefaultHost>) -> (usize, usize) {
+fn cursor(ed: &Editor<View, DefaultHost>) -> (usize, usize) {
     ed.cursor()
 }
 
@@ -123,7 +123,7 @@ fn cursor(ed: &Editor<Buffer, DefaultHost>) -> (usize, usize) {
 // ---------------------------------------------------------------------------
 
 /// Helper: content without the trailing newline that `ed.content()` always adds.
-fn buf_lines(ed: &Editor<Buffer, DefaultHost>) -> Vec<String> {
+fn buf_lines(ed: &Editor<View, DefaultHost>) -> Vec<String> {
     ed.buffer()
         .rope()
         .lines()

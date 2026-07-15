@@ -3,7 +3,7 @@
 //! `Editor` via its public surface + the transitional `pub vim` field.
 
 use hjkl_engine::Editor as EngineEditor;
-type Editor<H> = EngineEditor<hjkl_buffer::Buffer, H>;
+type Editor<H> = EngineEditor<hjkl_buffer::View, H>;
 
 pub struct StepBookkeeping {
     /// True when the pending chord before this step was a macro-chord
@@ -164,7 +164,7 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
         crate::vim_state::vim_mut(ed).one_shot_normal = false;
         crate::vim_state::vim_mut(ed).mode = Mode::Insert;
     }
-    // ── Content + viewport sync ───────────────────────────────────────────
+    // ── Buffer + viewport sync ───────────────────────────────────────────
     ed.sync_buffer_content_from_textarea();
     if !ed.viewport_pinned() {
         ed.ensure_cursor_in_scrolloff();

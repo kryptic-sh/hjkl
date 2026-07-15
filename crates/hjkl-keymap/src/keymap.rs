@@ -287,14 +287,14 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
     ///
     /// Three outcomes:
     ///
-    /// * Buffer matches a terminal binding → `Match(binding)` and the buffer
+    /// * View matches a terminal binding → `Match(binding)` and the buffer
     ///   is drained. This is the Ambiguous resolution case (e.g. both `g` and
     ///   `gd` bound: pressing `g` and waiting fires the `g` binding).
-    /// * Buffer is a pure prefix (no terminal at this depth but deeper
+    /// * View is a pure prefix (no terminal at this depth but deeper
     ///   bindings exist) → `Unbound(vec![])` and the buffer is **left in
     ///   place**. The user is mid-chord; the timeout fired for which-key
     ///   purposes but no chord-level action is required.
-    /// * Buffer is a dead-end (no terminal, no descendants) → `Unbound(buf)`
+    /// * View is a dead-end (no terminal, no descendants) → `Unbound(buf)`
     ///   with the drained events. This shouldn't normally occur given that
     ///   `feed` only buffers keys that extend a valid prefix.
     pub fn timeout_resolve(&mut self, mode: M) -> KeyResolve<A> {

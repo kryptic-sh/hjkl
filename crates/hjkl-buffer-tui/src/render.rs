@@ -1,4 +1,4 @@
-//! Direct cell-write `ratatui::widgets::Widget` for [`hjkl_buffer::Buffer`].
+//! Direct cell-write `ratatui::widgets::Widget` for [`hjkl_buffer::View`].
 //!
 //! ## Render path
 //!
@@ -10,7 +10,7 @@
 //! layer in a single pass without the grapheme / wrap machinery `Paragraph`
 //! does.
 //!
-//! Caller wraps a `&Buffer` in [`BufferView`], hands it the style table
+//! Caller wraps a `&View` in [`BufferView`], hands it the style table
 //! that resolves opaque [`hjkl_buffer::Span`] style ids to real ratatui styles
 //! via a [`StyleResolver`], and renders into a `ratatui::Frame`.
 //!
@@ -28,7 +28,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
 use hjkl_buffer::wrap::wrap_segments;
-use hjkl_buffer::{Buffer, Selection, Span, Viewport, Wrap};
+use hjkl_buffer::{Selection, Span, View, Viewport, Wrap};
 
 /// Map a C0/C1 control character or DEL to a printable, single-width glyph so
 /// raw terminal escape sequences embedded in a file (e.g. `ESC`, OSC 52
@@ -65,7 +65,7 @@ impl<F: Fn(u32) -> Style> StyleResolver for F {
     }
 }
 
-/// Render-time wrapper around `&Buffer` that carries the optional
+/// Render-time wrapper around `&View` that carries the optional
 /// [`Selection`] + a [`StyleResolver`]. Created per draw, dropped
 /// when the frame is done — cheap, holds only refs.
 ///
@@ -75,12 +75,12 @@ impl<F: Fn(u32) -> Style> StyleResolver for F {
 ///
 /// 0.0.37: added the `spans` and `search_pattern` fields. Per-row
 /// syntax spans + the active `/` regex used to live on the buffer
-/// (`Buffer::spans` / `Buffer::search_pattern`); both moved out per
+/// (`View::spans` / `View::search_pattern`); both moved out per
 /// step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The host now feeds
 /// each into the view per draw — populated from
 /// `Editor::buffer_spans()` and `Editor::search_state().pattern`.
 pub struct BufferView<'a, R: StyleResolver> {
-    pub buffer: &'a Buffer,
+    pub buffer: &'a View,
     /// Viewport snapshot the host published this frame. Owned by the
     /// engine `Host`; the renderer borrows for the duration of the
     /// draw.
@@ -92,7 +92,7 @@ pub struct BufferView<'a, R: StyleResolver> {
     pub cursor_line_bg: Style,
     /// Doc row to paint [`Self::cursor_line_bg`] across. When the host tracks a
     /// per-window cursor that is authoritative over [`Self::buffer`]'s own
-    /// cursor — e.g. multiple windows share one buffer's `Content` but each
+    /// cursor — e.g. multiple windows share one buffer's `Buffer` but each
     /// keeps its own cursor — it should pass that row here so the cursorline
     /// follows the intended window rather than whichever cursor the shared
     /// buffer happens to hold. `None` falls back to `buffer.cursor().row`, for
@@ -138,7 +138,7 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// rows beyond `spans.len()` get no syntax styling. Pass `&[]`
     /// for hosts without syntax integration.
     ///
-    /// 0.0.37: lifted out of `Buffer` per step 3 of
+    /// 0.0.37: lifted out of `View` per step 3 of
     /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine populates
     /// this via `Editor::buffer_spans()`.
     pub spans: &'a [Vec<Span>],
@@ -146,7 +146,7 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// [`Self::search_bg`] under cells that match. Pass `None` to
     /// disable hlsearch.
     ///
-    /// 0.0.37: lifted out of `Buffer` (was `Buffer::search_pattern`)
+    /// 0.0.37: lifted out of `View` (was `View::search_pattern`)
     /// per step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine
     /// publishes the pattern via `Editor::search_state().pattern`.
     pub search_pattern: Option<&'a regex::Regex>,
@@ -200,7 +200,7 @@ pub struct BufferView<'a, R: StyleResolver> {
     pub eol_hints: &'a [EolHint],
     /// Boxed-blame layout. When `Some`, the renderer draws exactly this
     /// sequence of screen rows (top-to-bottom) instead of deriving rows from
-    /// `top_row`: `Content(doc_row)` paints that buffer row, `BorderTop`/
+    /// `top_row`: `Buffer(doc_row)` paints that buffer row, `BorderTop`/
     /// `BorderBottom` paint a box rule. The host (render level) builds the plan
     /// — the engine's cursor/scroll stays the source of truth. `Wrap::None`
     /// only. `None` = normal rendering.
@@ -256,7 +256,7 @@ impl DiffFiller {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlameRow {
     /// A real buffer row painted at this screen line.
-    Content(usize),
+    Buffer(usize),
     /// Box top border with a commit title rendered into it.
     BorderTop(String),
     /// Box bottom border (plain rule).
@@ -451,11 +451,11 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // at most `area.height` screen rows, so on a 100K-row buffer we
         // clone ~50 rows instead of the entire Vec<String>. Closed folds
         // can skip past the precomputed bound — the rare overflow branch
-        // falls back to `Buffer::line(row)`.
+        // falls back to `View::line(row)`.
         let rope = self.buffer.rope();
         // Derive the row count from the same rope snapshot the line fetches
         // use. `row_count()` takes a separate lock; another view mutating the
-        // shared Content between the two reads could leave a stale count and
+        // shared Buffer between the two reads could leave a stale count and
         // panic `rope.line()` past the snapshot's last line.
         let total_rows = rope.len_lines();
         let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
@@ -902,7 +902,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
 pub const BLAME_BOX_FRAME_LEFT: u16 = 1;
 
 impl<R: StyleResolver> BufferView<'_, R> {
-    /// Render the boxed-blame plan: one screen row per [`BlameRow`]. Content
+    /// Render the boxed-blame plan: one screen row per [`BlameRow`]. Buffer
     /// rows paint the buffer line (gutter + syntax/selection/search) framed by
     /// `│` sides; border rows draw the box top (with commit title) / bottom.
     /// `Wrap::None` only — blame mode requires it.
@@ -945,7 +945,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
             let screen_row = sr as u16;
             let y = area.y + screen_row;
             match item {
-                BlameRow::Content(dr) => {
+                BlameRow::Buffer(dr) => {
                     let dr = *dr;
                     if dr >= rope.len_lines() {
                         // Stale host plan (buffer shrank since it was built):
@@ -1616,7 +1616,7 @@ mod tests {
     #[test]
     fn cursor_past_end_on_very_long_line_does_not_overflow() {
         let line = "a".repeat(65_530);
-        let mut b = Buffer::from_str(&line);
+        let mut b = View::from_str(&line);
         b.set_cursor(hjkl_buffer::Position::new(0, 65_530));
         let v = vp(20, 1);
         let view = BufferView {
@@ -1673,7 +1673,7 @@ mod tests {
 
     #[test]
     fn renders_plain_chars_into_terminal_buffer() {
-        let b = Buffer::from_str("hello\nworld");
+        let b = View::from_str("hello\nworld");
         let v = vp(20, 5);
         let view = BufferView {
             buffer: &b,
@@ -1718,7 +1718,7 @@ mod tests {
 
     #[test]
     fn cursor_cell_gets_reversed_style() {
-        let mut b = Buffer::from_str("abc");
+        let mut b = View::from_str("abc");
         let v = vp(10, 1);
         b.set_cursor(hjkl_buffer::Position::new(0, 1));
         let view = BufferView {
@@ -1763,7 +1763,7 @@ mod tests {
     #[test]
     fn selection_bg_applies_only_to_selected_cells() {
         use hjkl_buffer::{Position, Selection};
-        let b = Buffer::from_str("abcdef");
+        let b = View::from_str("abcdef");
         let v = vp(10, 1);
         let view = BufferView {
             buffer: &b,
@@ -1815,7 +1815,7 @@ mod tests {
         // Char selection spanning two lines, middle empty row must show
         // a selection cell at col 0 so the user can see the row is in range.
         use hjkl_buffer::{Position, Selection};
-        let b = Buffer::from_str("abc\n\nxyz");
+        let b = View::from_str("abc\n\nxyz");
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -1862,7 +1862,7 @@ mod tests {
     #[test]
     fn selection_paints_placeholder_on_empty_line_linewise() {
         use hjkl_buffer::Selection;
-        let b = Buffer::from_str("abc\n\nxyz");
+        let b = View::from_str("abc\n\nxyz");
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -1912,7 +1912,7 @@ mod tests {
         // NOT just col 0 — otherwise the block looks broken at empty
         // rows. Matches Neovim's rectangular block highlight.
         use hjkl_buffer::{Position, Selection};
-        let b = Buffer::from_str("abcdef\n\nuvwxyz");
+        let b = View::from_str("abcdef\n\nuvwxyz");
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -1976,7 +1976,7 @@ mod tests {
     fn selection_block_placeholder_clips_to_row_width() {
         // Block right edge past row width must stop at row_end_x.
         use hjkl_buffer::{Position, Selection};
-        let b = Buffer::from_str("abc\n\nxyz");
+        let b = View::from_str("abc\n\nxyz");
         let v = vp(5, 3);
         let view = BufferView {
             buffer: &b,
@@ -2035,7 +2035,7 @@ mod tests {
         // and dropped the broad bg, which made markdown code-block tinting
         // impossible without bloating every injected language's captures.
         use hjkl_buffer::Span;
-        let b = Buffer::from_str("fn main() {}");
+        let b = View::from_str("fn main() {}");
         let v = vp(20, 1);
         // id=1 = broad code-block bg, id=2 = narrow keyword fg.
         let spans = vec![vec![
@@ -2109,7 +2109,7 @@ mod tests {
         // had this trivially; the new layered logic relies on
         // `Style::patch` overriding only set fields, so we pin it.
         use hjkl_buffer::Span;
-        let b = Buffer::from_str("hello world");
+        let b = View::from_str("hello world");
         let v = vp(20, 1);
         let spans = vec![vec![
             Span::new(0, 11, 1), // broad bg = DarkGray
@@ -2174,7 +2174,7 @@ mod tests {
     #[test]
     fn syntax_span_fg_resolves_via_table() {
         use hjkl_buffer::Span;
-        let b = Buffer::from_str("SELECT foo");
+        let b = View::from_str("SELECT foo");
         let v = vp(20, 1);
         let spans = vec![vec![Span::new(0, 6, 7)]];
         let resolver = |id: u32| -> Style {
@@ -2226,7 +2226,7 @@ mod tests {
 
     #[test]
     fn gutter_renders_right_aligned_line_numbers() {
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -2280,7 +2280,7 @@ mod tests {
     #[test]
     fn gutter_renders_relative_with_cursor_at_zero() {
         // 5 rows, cursor on row 2 (0-based). Relative: row 2 → 0, row 0 → 2, row 4 → 2.
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         b.set_cursor(hjkl_buffer::Position::new(2, 0));
         let v = vp(10, 5);
         let view = BufferView {
@@ -2342,7 +2342,7 @@ mod tests {
     fn gutter_renders_hybrid_cursor_row_absolute() {
         // 3 rows, cursor on row 1 (0-based). Hybrid: row 1 → absolute (2),
         // row 0 → offset 1, row 2 → offset 1.
-        let mut b = Buffer::from_str("a\nb\nc");
+        let mut b = View::from_str("a\nb\nc");
         b.set_cursor(hjkl_buffer::Position::new(1, 0));
         let v = vp(10, 3);
         let view = BufferView {
@@ -2397,7 +2397,7 @@ mod tests {
 
     #[test]
     fn gutter_none_paints_blank_cells() {
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -2458,7 +2458,7 @@ mod tests {
     #[test]
     fn search_bg_paints_match_cells() {
         use regex::Regex;
-        let b = Buffer::from_str("foo bar foo");
+        let b = View::from_str("foo bar foo");
         let v = vp(20, 1);
         let pat = Regex::new("foo").unwrap();
         let view = BufferView {
@@ -2512,7 +2512,7 @@ mod tests {
         // Cursor sits on a `/foo` match. The cursorcolumn pass would
         // otherwise overwrite the search bg with column bg — verify
         // the match cells keep their search colour.
-        let mut b = Buffer::from_str("foo bar foo");
+        let mut b = View::from_str("foo bar foo");
         let v = vp(20, 1);
         let pat = Regex::new("foo").unwrap();
         // Cursor on column 1 (inside first `foo` match).
@@ -2560,7 +2560,7 @@ mod tests {
     fn highest_priority_sign_wins_per_row_in_dedicated_sign_column() {
         // Layout: sign_column_width=1, width=3 → total gutter = 4 cells.
         // Sign column at x=0; number column at x=1..4; text at x=4.
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         let v = vp(10, 3);
         let signs = [
             Sign {
@@ -2629,7 +2629,7 @@ mod tests {
 
     #[test]
     fn conceal_replaces_byte_range() {
-        let b = Buffer::from_str("see https://example.com end");
+        let b = View::from_str("see https://example.com end");
         let v = vp(30, 1);
         let conceals = vec![Conceal {
             row: 0,
@@ -2684,7 +2684,7 @@ mod tests {
     /// text), and the `fold_line_bg` is overlaid across that row.
     #[test]
     fn closed_fold_renders_first_line_content_with_fold_bg() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let v = vp(30, 5);
         // Fold rows 1-3 closed. Visible should be: 'a', fold-header, 'e'.
         b.add_fold(1, 3, true);
@@ -2765,7 +2765,7 @@ mod tests {
     /// BLEND of `fold_line_bg` and `cursor_line_bg`, not either one alone.
     #[test]
     fn fold_header_on_cursor_row_blends_bgs() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let v = vp(30, 5);
         b.add_fold(1, 3, true);
         let fold_bg = Color::Rgb(0x40, 0x20, 0x60);
@@ -2817,7 +2817,7 @@ mod tests {
 
     #[test]
     fn open_fold_renders_normally() {
-        let mut b = Buffer::from_str("a\nb\nc");
+        let mut b = View::from_str("a\nb\nc");
         let v = vp(5, 3);
         b.add_fold(0, 2, false); // open
         let view = BufferView {
@@ -2862,7 +2862,7 @@ mod tests {
 
     #[test]
     fn horizontal_scroll_clips_left_chars() {
-        let b = Buffer::from_str("abcdefgh");
+        let b = View::from_str("abcdefgh");
         let mut v = vp(4, 1);
         v.top_col = 3;
         let view = BufferView {
@@ -2905,7 +2905,7 @@ mod tests {
     }
 
     fn make_wrap_view<'a>(
-        b: &'a Buffer,
+        b: &'a View,
         viewport: &'a Viewport,
         resolver: &'a (impl StyleResolver + 'a),
         gutter: Option<Gutter>,
@@ -2971,7 +2971,7 @@ mod tests {
 
     #[test]
     fn wrap_char_paints_continuation_rows() {
-        let b = Buffer::from_str("abcdefghij");
+        let b = View::from_str("abcdefghij");
         let v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -2997,7 +2997,7 @@ mod tests {
 
     #[test]
     fn wrap_char_gutter_blank_on_continuation() {
-        let b = Buffer::from_str("abcdefgh");
+        let b = View::from_str("abcdefgh");
         let v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -3030,7 +3030,7 @@ mod tests {
 
     #[test]
     fn wrap_char_cursor_lands_on_correct_segment() {
-        let mut b = Buffer::from_str("abcdefghij");
+        let mut b = View::from_str("abcdefghij");
         let v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -3056,7 +3056,7 @@ mod tests {
 
     #[test]
     fn wrap_char_eol_cursor_placeholder_on_last_segment() {
-        let mut b = Buffer::from_str("abcdef");
+        let mut b = View::from_str("abcdef");
         let v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -3083,7 +3083,7 @@ mod tests {
 
     #[test]
     fn wrap_word_breaks_at_whitespace() {
-        let b = Buffer::from_str("alpha beta gamma");
+        let b = View::from_str("alpha beta gamma");
         let v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -3107,13 +3107,13 @@ mod tests {
         assert_eq!(term.cell((4, 2)).unwrap().symbol(), "a");
     }
 
-    // 0.0.37 — `BufferView` lost `Buffer::spans` / `Buffer::search_pattern`
+    // 0.0.37 — `BufferView` lost `View::spans` / `View::search_pattern`
     // and now takes them as parameters. The tests below cover the new
     // shape: empty/missing parameters, multi-row spans, regex hlsearch,
     // and the interaction with cursor / selection / wrap.
 
     fn view_with<'a>(
-        b: &'a Buffer,
+        b: &'a View,
         viewport: &'a Viewport,
         resolver: &'a (impl StyleResolver + 'a),
         spans: &'a [Vec<Span>],
@@ -3157,7 +3157,7 @@ mod tests {
 
     #[test]
     fn empty_spans_param_renders_default_style() {
-        let b = Buffer::from_str("hello");
+        let b = View::from_str("hello");
         let v = vp(10, 1);
         let r = no_styles as fn(u32) -> Style;
         let view = view_with(&b, &v, &r, &[], None);
@@ -3168,7 +3168,7 @@ mod tests {
 
     #[test]
     fn spans_param_paints_styled_byte_range() {
-        let b = Buffer::from_str("abcdef");
+        let b = View::from_str("abcdef");
         let v = vp(10, 1);
         let resolver = |id: u32| -> Style {
             if id == 3 {
@@ -3188,7 +3188,7 @@ mod tests {
 
     #[test]
     fn spans_param_handles_per_row_overlay() {
-        let b = Buffer::from_str("abc\ndef");
+        let b = View::from_str("abc\ndef");
         let v = vp(10, 2);
         let resolver = |id: u32| -> Style {
             if id == 1 {
@@ -3206,7 +3206,7 @@ mod tests {
 
     #[test]
     fn spans_param_rows_beyond_get_no_styling() {
-        let b = Buffer::from_str("abc\ndef\nghi");
+        let b = View::from_str("abc\ndef\nghi");
         let v = vp(10, 3);
         let resolver = |_: u32| -> Style { Style::default().fg(Color::Red) };
         // Only row 0 carries spans; rows 1 and 2 inherit default.
@@ -3220,7 +3220,7 @@ mod tests {
 
     #[test]
     fn search_pattern_none_disables_hlsearch() {
-        let b = Buffer::from_str("foo bar foo");
+        let b = View::from_str("foo bar foo");
         let v = vp(20, 1);
         let r = no_styles as fn(u32) -> Style;
         // No regex → no Magenta bg anywhere even though `search_bg` is set.
@@ -3234,7 +3234,7 @@ mod tests {
     #[test]
     fn search_pattern_regex_paints_match_bg() {
         use regex::Regex;
-        let b = Buffer::from_str("xyz foo xyz");
+        let b = View::from_str("xyz foo xyz");
         let v = vp(20, 1);
         let r = no_styles as fn(u32) -> Style;
         let pat = Regex::new("foo").unwrap();
@@ -3252,7 +3252,7 @@ mod tests {
     fn search_pattern_unicode_columns_are_charwise() {
         use regex::Regex;
         // "tablé foo" — match "foo" must land on char column 6, not byte.
-        let b = Buffer::from_str("tablé foo");
+        let b = View::from_str("tablé foo");
         let v = vp(20, 1);
         let r = no_styles as fn(u32) -> Style;
         let pat = Regex::new("foo").unwrap();
@@ -3267,7 +3267,7 @@ mod tests {
     #[test]
     fn spans_param_clamps_short_row_overlay() {
         // Row 0 has 3 chars; span past end shouldn't crash or smear.
-        let b = Buffer::from_str("abc");
+        let b = View::from_str("abc");
         let v = vp(10, 1);
         let resolver = |_: u32| -> Style { Style::default().fg(Color::Red) };
         let spans = vec![vec![Span::new(0, 100, 0)]];
@@ -3282,7 +3282,7 @@ mod tests {
     fn spans_and_search_pattern_compose() {
         // hlsearch bg layers on top of the syntax span fg.
         use regex::Regex;
-        let b = Buffer::from_str("foo");
+        let b = View::from_str("foo");
         let v = vp(10, 1);
         let resolver = |_: u32| -> Style { Style::default().fg(Color::Green) };
         let spans = vec![vec![Span::new(0, 3, 0)]];
@@ -3300,7 +3300,7 @@ mod tests {
     #[test]
     fn tilde_marker_painted_past_eof() {
         // 5-line buffer rendered in a 10-row viewport.
-        let b = Buffer::from_str("a\nb\nc\nd\ne");
+        let b = View::from_str("a\nb\nc\nd\ne");
         let v = vp(10, 10);
         let r = no_styles as fn(u32) -> Style;
         let non_text_fg = Color::DarkGray;
@@ -3370,7 +3370,7 @@ mod tests {
     /// `~` marker (vim's `fillchars=eob:`).
     #[test]
     fn show_eob_false_suppresses_tilde() {
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         let v = vp(10, 8);
         let r = no_styles as fn(u32) -> Style;
         let view = BufferView {
@@ -3422,7 +3422,7 @@ mod tests {
     /// `~` at the first text column (after the gutter).
     #[test]
     fn tilde_marker_with_gutter_past_eof() {
-        let b = Buffer::from_str("a\nb");
+        let b = View::from_str("a\nb");
         let v = vp(10, 5);
         let r = no_styles as fn(u32) -> Style;
         let non_text_fg = Color::DarkGray;
@@ -3494,7 +3494,7 @@ mod tests {
         // Render "hello world" and apply a DiagOverlay from col 6 to 11.
         // The cells in that range must carry the UNDERLINED modifier; cells
         // outside must not.
-        let b = Buffer::from_str("hello world");
+        let b = View::from_str("hello world");
         let v = vp(20, 2);
         let overlay = DiagOverlay {
             row: 0,
@@ -3565,7 +3565,7 @@ mod tests {
     #[test]
     fn diag_overlay_out_of_viewport_is_ignored() {
         // Overlay on row 5, viewport height = 3 → must not panic or paint.
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         let v = vp(10, 3);
         let overlay = DiagOverlay {
             row: 5,
@@ -3625,7 +3625,7 @@ mod tests {
         // Build a buffer with enough lines that the max line number is 5 digits.
         // We don't need all 13109 lines — just enough rows to get a 5-digit
         // line_offset. We'll use line_offset to fake the large document.
-        let b = Buffer::from_str("a\nb");
+        let b = View::from_str("a\nb");
         // num_w = 6 (5 digits + 1 spacer), sign_w = 1, total = 7
         let v = vp(20, 2);
         let sign = Sign {
@@ -3706,7 +3706,7 @@ mod tests {
     /// layout collapses to [ number_padded | spacer | text ] as before.
     #[test]
     fn paint_signs_zero_sign_column_width_layout_collapses() {
-        let b = Buffer::from_str("abc");
+        let b = View::from_str("abc");
         let v = vp(10, 1);
         let sign = Sign {
             row: 0,
@@ -3775,7 +3775,7 @@ mod tests {
 
     /// Helper to build a BufferView with indent guides configured.
     fn indent_guide_view<'a>(
-        b: &'a Buffer,
+        b: &'a View,
         viewport: &'a Viewport,
         shiftwidth: usize,
         guide_char: char,
@@ -3822,7 +3822,7 @@ mod tests {
     #[test]
     fn indent_guides_disabled_paints_nothing() {
         // Even with indented content, flag=false → no guide chars.
-        let b = Buffer::from_str("    foo\n        bar");
+        let b = View::from_str("    foo\n        bar");
         let v = vp(20, 2);
         let view = BufferView {
             buffer: &b,
@@ -3875,7 +3875,7 @@ mod tests {
     fn indent_guides_basic_two_levels() {
         // fn() {\n    if foo {\n        bar();\n    }
         // shiftwidth=4: guides at col 4 on rows 1+2+3, col 8 on row 2.
-        let b = Buffer::from_str("fn() {\n    if foo {\n        bar();\n    }");
+        let b = View::from_str("fn() {\n    if foo {\n        bar();\n    }");
         let v = vp(20, 4);
         // Active col: None (just test inactive guides).
         let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
@@ -3919,7 +3919,7 @@ mod tests {
 
     #[test]
     fn indent_guides_skip_when_no_indent() {
-        let b = Buffer::from_str("no_indent\nstill_none");
+        let b = View::from_str("no_indent\nstill_none");
         let v = vp(20, 2);
         let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
         let term = run_render(view, 20, 2);
@@ -3939,7 +3939,7 @@ mod tests {
         // shiftwidth=4 tabstop=4 line "\t\tfoo": visual cols 0..3=tab, 4..7=tab, 8='f'.
         // leading_vcols = 8 (two tabs each expanding to 4 cells).
         // Guide at sw=4 only (4 < 8 = true; 8 < 8 = false).
-        let b = Buffer::from_str("\t\tfoo");
+        let b = View::from_str("\t\tfoo");
         let mut v = vp(20, 1);
         v.tab_width = 4;
         let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
@@ -3959,7 +3959,7 @@ mod tests {
     fn indent_guides_active_col_uses_active_fg() {
         // 8 leading spaces, shiftwidth=4 → guide at col 4.
         // active_col = 4 → that guide gets active_fg (Gray), not inactive (DarkGray).
-        let b = Buffer::from_str("        code");
+        let b = View::from_str("        code");
         let v = vp(20, 1);
         let active_col = Some(4usize);
         let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, active_col);
@@ -3973,7 +3973,7 @@ mod tests {
     fn indent_guides_inactive_col_uses_inactive_fg() {
         // 12 leading spaces, shiftwidth=4 → guides at col 4 and col 8.
         // active_col = 8 → col 4 is inactive (DarkGray), col 8 is active (Gray).
-        let b = Buffer::from_str("            code");
+        let b = View::from_str("            code");
         let v = vp(20, 1);
         let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, Some(8));
         let term = run_render(view, 20, 1);
@@ -3990,7 +3990,7 @@ mod tests {
     #[test]
     fn indent_guides_custom_char_paints_that_char() {
         // Use ':' as guide character.
-        let b = Buffer::from_str("        code");
+        let b = View::from_str("        code");
         let v = vp(20, 1);
         let view = indent_guide_view(&b, &v, 4, ':', Color::DarkGray, Color::Gray, None);
         let term = run_render(view, 20, 1);
@@ -4003,9 +4003,9 @@ mod tests {
 
     #[test]
     fn eol_hint_paints_after_text() {
-        // Buffer with line "ab". EolHint{row:0, text:"BLAME"} must paint the
+        // View with line "ab". EolHint{row:0, text:"BLAME"} must paint the
         // 5 chars "BLAME" somewhere to the right of "ab" on screen row 0.
-        let b = Buffer::from_str("ab");
+        let b = View::from_str("ab");
         let v = vp(30, 1);
         let hint = EolHint {
             row: 0,
@@ -4065,7 +4065,7 @@ mod tests {
     #[test]
     fn fold_column_glyph_open_closed_body() {
         // Outer fold rows 1..=4 OPEN, with a CLOSED fold rows 2..=3 inside.
-        let mut b = hjkl_buffer::Buffer::from_str("a\nb\nc\nd\ne\nf");
+        let mut b = hjkl_buffer::View::from_str("a\nb\nc\nd\ne\nf");
         b.add_fold(1, 4, false); // open outer
         b.add_fold(2, 3, true); // closed inner
         let folds = b.folds();

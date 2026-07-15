@@ -10,12 +10,12 @@
 //! Self-closing tags (`<br />`) and void elements (`<br>`, `<img>`)
 //! are explicitly skipped — they don't open a block.
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{DefaultHost, Editor, Options};
 use hjkl_vim::{dispatch_input, insert::step_insert};
 
-fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
-    let buf = Buffer::from_str(content);
+fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
+    let buf = View::from_str(content);
     let host = DefaultHost::new();
     let opts = Options {
         filetype: lang.to_string(),
@@ -31,7 +31,7 @@ fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
     hjkl_vim::vim_editor(buf, host, opts)
 }
 
-fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -48,7 +48,7 @@ fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
     }
 }
 
-fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -65,7 +65,7 @@ fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
     }
 }
 
-fn lines(ed: &Editor<Buffer, DefaultHost>) -> Vec<String> {
+fn lines(ed: &Editor<View, DefaultHost>) -> Vec<String> {
     ed.buffer()
         .rope()
         .lines()

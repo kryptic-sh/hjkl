@@ -35,7 +35,7 @@ fn visual_d_deletes_selection_via_keymap() {
         "d in Visual must be consumed by keymap (VisualOp)"
     );
 
-    // Buffer should have " world" (the chars after the deleted selection).
+    // View should have " world" (the chars after the deleted selection).
     let lines = app
         .active_editor()
         .buffer()
@@ -83,7 +83,7 @@ fn visual_y_yanks_selection_via_keymap() {
         "y in Visual must be consumed by keymap (VisualOp)"
     );
 
-    // Buffer must be unchanged.
+    // View must be unchanged.
     let lines = app
         .active_editor()
         .buffer()
@@ -197,7 +197,7 @@ fn visual_c_enters_insert_mode_via_keymap() {
         app.active_editor().vim_mode()
     );
 
-    // Buffer should have "hello" deleted, leaving " world".
+    // View should have "hello" deleted, leaving " world".
     let lines = app
         .active_editor()
         .buffer()
@@ -417,7 +417,7 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
 
 #[test]
 fn visual_block_y_yanks_rectangle_to_register() {
-    // <C-v>lj"ay — yank a 2-col block into register 'a'. Buffer unchanged.
+    // <C-v>lj"ay — yank a 2-col block into register 'a'. View unchanged.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcde\nfghij\nklmno");
     app.active_editor_mut().jump_cursor(0, 0);
@@ -440,7 +440,7 @@ fn visual_block_y_yanks_rectangle_to_register() {
     let consumed = app.route_chord_key(ck('y'));
     assert!(consumed, "y in VisualBlock must be consumed");
 
-    // Buffer must be unchanged.
+    // View must be unchanged.
     let lines = app
         .active_editor()
         .buffer()

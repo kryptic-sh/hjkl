@@ -12,9 +12,9 @@ use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_vim::VimEditorExt;
 use hjkl_vim::vim::Operator;
 
-fn ed_with(content: &str) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+fn ed_with(content: &str) -> Editor<hjkl_buffer::View, DefaultHost> {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         DefaultHost::new(),
         Options::default(),
     );
@@ -22,7 +22,7 @@ fn ed_with(content: &str) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
     e
 }
 
-fn line0(e: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> String {
+fn line0(e: &Editor<hjkl_buffer::View, DefaultHost>) -> String {
     hjkl_buffer::rope_line_str(&e.buffer().rope(), 0)
 }
 

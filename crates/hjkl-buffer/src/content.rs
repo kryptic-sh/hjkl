@@ -1,20 +1,20 @@
-//! Per-document text content. Arc-shareable across multiple [`crate::Buffer`]
+//! Per-document text content. Arc-shareable across multiple [`crate::View`]
 //! views.
 //!
-//! [`Content`] owns everything that belongs to the document itself:
+//! [`Buffer`] owns everything that belongs to the document itself:
 //!
 //! - The `text` rope (text content).
 //! - The `dirty_gen` render-cache generation counter.
 //! - Manual folds (`folds`).
 //!
-//! [`crate::Buffer`] is the per-window wrapper. It holds an
-//! `Arc<Mutex<Content>>` plus the per-window cursor. Two `Buffer`
-//! instances that share one `Content` see the same text and folds, but
+//! [`crate::View`] is the per-window wrapper. It holds an
+//! `Arc<Mutex<Buffer>>` plus the per-window cursor. Two `View`
+//! instances that share one `Buffer` see the same text and folds, but
 //! each moves its cursor independently.
 //!
 //! ## Concurrency
 //!
-//! Held inside `Arc<Mutex<Content>>` so multiple `Buffer` views can share
+//! Held inside `Arc<Mutex<Buffer>>` so multiple `View` views can share
 //! one document safely. `Mutex` (not `RefCell`) because the engine's
 //! `Cursor`, `Query`, `BufferEdit`, and `Search` traits require `Send`,
 //! and `RefCell` is `!Send`. Lock contention is near-zero in the
@@ -23,14 +23,14 @@
 
 use crate::folds::Fold;
 
-/// Per-document state shared across all [`crate::Buffer`] views of the
-/// same file. Wrap in `Arc<Mutex<Content>>` and pass to
-/// [`crate::Buffer::new_view`] to create an additional window onto the
+/// Per-document state shared across all [`crate::View`] views of the
+/// same file. Wrap in `Arc<Mutex<Buffer>>` and pass to
+/// [`crate::View::new_view`] to create an additional window onto the
 /// same content.
 ///
 /// Uses a `ropey::Rope` for O(log N) edits and O(1) byte-length queries.
 /// The rope always contains at least one logical line: a freshly constructed
-/// `Content` holds an empty rope (which `ropey` reports as 1 line) so
+/// `Buffer` holds an empty rope (which `ropey` reports as 1 line) so
 /// cursor positions never need an "is the buffer empty?" branch.
 ///
 /// ## Line semantics
@@ -42,7 +42,7 @@ use crate::folds::Fold;
 ///
 /// `Rope::line(i)` returns a `RopeSlice` that includes the trailing `\n`
 /// for non-final lines. Public accessors strip it before returning `String`.
-pub struct Content {
+pub struct Buffer {
     /// Rope-backed document text. Always non-empty: `ropey::Rope::new()`
     /// (an empty rope) reports `len_lines() == 1`, satisfying the "at least
     /// one row" invariant without a separate sentinel.
@@ -98,13 +98,13 @@ pub struct Content {
     pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
 }
 
-impl Default for Content {
+impl Default for Buffer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Content {
+impl Buffer {
     /// New empty content with one empty row.
     pub fn new() -> Self {
         Self {

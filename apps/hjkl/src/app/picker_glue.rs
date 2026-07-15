@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::picker_action::AppAction;
 
 use git2::{BranchType, ErrorCode, ObjectType};
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{BufferEdit, Host, Options};
 use hjkl_engine_tui::EditorRatatuiExt;
 
@@ -21,7 +21,7 @@ const BUFFER_PREVIEW_WINDOW_RADIUS: usize = 250;
 /// Snapshot a window of `buf` around the cursor as a `String`, returning
 /// the content, the cursor row *within that window* (0-based), and the
 /// original-buffer row of the first line in the window (`window_start`).
-fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize, usize) {
+fn snapshot_buffer_window(buf: &hjkl_buffer::View) -> (String, usize, usize) {
     let cursor_row = buf.cursor().row;
     let total = buf.row_count();
     let start = cursor_row.saturating_sub(BUFFER_PREVIEW_WINDOW_RADIUS);
@@ -740,7 +740,7 @@ fn build_scratch_slot(
     content: &str,
     config: &hjkl_app::config::Config,
 ) -> Result<BufferSlot, String> {
-    let mut buffer = Buffer::new();
+    let mut buffer = View::new();
     let content = content.strip_suffix('\n').unwrap_or(content);
     BufferEdit::replace_all(&mut buffer, content);
 

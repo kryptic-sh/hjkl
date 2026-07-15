@@ -238,7 +238,7 @@ impl App {
         })
     }
 
-    /// Buffer-line indices (this side) where each change hunk begins, sorted
+    /// View-line indices (this side) where each change hunk begins, sorted
     /// ascending. A hunk is a maximal run of non-`Equal` aligned rows; its
     /// representative line is the first real this-side line at or after the run
     /// start (so a pure-filler hunk attributes to the line after the gap).

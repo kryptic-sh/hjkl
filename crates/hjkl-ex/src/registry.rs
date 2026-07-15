@@ -6,7 +6,7 @@ use hjkl_engine::Host;
 pub enum ArgKind {
     None,
     Path,
-    Buffer,
+    View,
     Setting,
     Register,
     Mark,
@@ -23,7 +23,7 @@ pub enum ArgKind {
 /// `Unknown` error: e.g. `:w` returns `Some(Save)` but `:w foo` returns
 /// `None` so `apps/hjkl::dispatch_ex` lets the legacy `SaveAs` arm handle it.
 pub type ExHandler<H> = fn(
-    &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     &str,
     Option<crate::range::LineRange>,
 ) -> Option<ExEffect>;
@@ -312,7 +312,7 @@ mod tests {
     use hjkl_engine::{DefaultHost, Editor};
 
     fn noop_handler(
-        _editor: &mut Editor<hjkl_buffer::Buffer, DefaultHost>,
+        _editor: &mut Editor<hjkl_buffer::View, DefaultHost>,
         _args: &str,
         _range: Option<crate::range::LineRange>,
     ) -> Option<ExEffect> {

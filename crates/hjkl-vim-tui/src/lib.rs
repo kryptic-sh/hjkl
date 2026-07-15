@@ -18,7 +18,7 @@
 /// Returns `true` if the engine consumed the keystroke. Returns `false`
 /// for keys the engine FSM does not model (maps to [`hjkl_engine::Key::Null`]).
 pub fn handle_key<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     key: hjkl_engine_tui::KeyEvent,
 ) -> bool {
     let input = hjkl_engine_tui::crossterm_to_input(key);

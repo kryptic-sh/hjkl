@@ -2,7 +2,7 @@
 //!
 //! Patch C (0.0.30) relocated the 24 inherent vim motion helpers
 //! that lived here onto [`hjkl_engine::motions`] free functions
-//! over `&mut hjkl_buffer::Buffer`. Motions don't belong on `Buffer`
+//! over `&mut hjkl_buffer::View`. Motions don't belong on `View`
 //! — they're computed over the buffer, not delegated to it; the
 //! relocation is a step toward 0.1.0's full motion-as-trait-bound
 //! generic-ification.

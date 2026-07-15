@@ -7,7 +7,7 @@ use git2::{
     BranchType, Commit, DiffFormat, DiffOptions, ObjectType, Repository, Sort, Status,
     StatusOptions, Time,
 };
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::{PickerAction, PickerLogic, RequeryMode, load_preview};
 
@@ -457,9 +457,9 @@ impl PickerLogic for GitStatusPicker {
         self.label(idx)
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (Buffer::new(), String::new());
+            return (View::new(), String::new());
         }
 
         let item = match self
@@ -469,25 +469,25 @@ impl PickerLogic for GitStatusPicker {
             .and_then(|g| g.get(idx).map(|i| (i.path.clone(), i.is_untracked)))
         {
             Some(v) => v,
-            None => return (Buffer::new(), String::new()),
+            None => return (View::new(), String::new()),
         };
         let (path, is_untracked) = item;
         let abs = self.root.join(&path);
 
         if is_untracked {
             let (content, load_status) = load_preview(&abs);
-            return (Buffer::from_str(&content), load_status);
+            return (View::from_str(&content), load_status);
         }
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (Buffer::new(), format!("git error: {e}"));
+                return (View::new(), format!("git error: {e}"));
             }
         };
 
         let diff_text = git_diff_for_path(&repo, &self.root, &path);
-        (Buffer::from_str(&diff_text), String::new())
+        (View::from_str(&diff_text), String::new())
     }
 
     fn preview_path(&self, idx: usize) -> Option<PathBuf> {
@@ -741,9 +741,9 @@ impl PickerLogic for GitLogPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (Buffer::new(), String::new());
+            return (View::new(), String::new());
         }
 
         let sha = match self
@@ -753,32 +753,32 @@ impl PickerLogic for GitLogPicker {
             .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
         {
             Some(s) => s,
-            None => return (Buffer::new(), String::new()),
+            None => return (View::new(), String::new()),
         };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (Buffer::new(), format!("git error: {e}"));
+                return (View::new(), format!("git error: {e}"));
             }
         };
 
         let oid = match git2::Oid::from_str(&sha) {
             Ok(o) => o,
             Err(e) => {
-                return (Buffer::new(), format!("git error: {e}"));
+                return (View::new(), format!("git error: {e}"));
             }
         };
 
         let commit = match repo.find_commit(oid) {
             Ok(c) => c,
             Err(e) => {
-                return (Buffer::new(), format!("git error: {e}"));
+                return (View::new(), format!("git error: {e}"));
             }
         };
 
         let body = render_commit(&repo, &commit);
-        (Buffer::from_str(&body), String::new())
+        (View::from_str(&body), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -1061,9 +1061,9 @@ impl PickerLogic for GitFileHistoryPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String) {
+    fn preview(&self, idx: usize) -> (hjkl_buffer::View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (hjkl_buffer::Buffer::new(), String::new());
+            return (hjkl_buffer::View::new(), String::new());
         }
 
         let sha = match self
@@ -1074,33 +1074,33 @@ impl PickerLogic for GitFileHistoryPicker {
         {
             Some(s) if !s.is_empty() => s,
             _ => {
-                return (hjkl_buffer::Buffer::new(), String::new());
+                return (hjkl_buffer::View::new(), String::new());
             }
         };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let oid = match git2::Oid::from_str(&sha) {
             Ok(o) => o,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let commit = match repo.find_commit(oid) {
             Ok(c) => c,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let body = render_commit(&repo, &commit);
-        (hjkl_buffer::Buffer::from_str(&body), String::new())
+        (hjkl_buffer::View::from_str(&body), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -1389,9 +1389,9 @@ impl PickerLogic for GitBranchPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String) {
+    fn preview(&self, idx: usize) -> (hjkl_buffer::View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (hjkl_buffer::Buffer::new(), String::new());
+            return (hjkl_buffer::View::new(), String::new());
         }
 
         let target_sha = match self
@@ -1402,33 +1402,33 @@ impl PickerLogic for GitBranchPicker {
         {
             Some(s) => s,
             None => {
-                return (hjkl_buffer::Buffer::new(), String::new());
+                return (hjkl_buffer::View::new(), String::new());
             }
         };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let oid = match git2::Oid::from_str(&target_sha) {
             Ok(o) => o,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let mut revwalk = match repo.revwalk() {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         if let Err(e) = revwalk.push(oid) {
-            return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+            return (hjkl_buffer::View::new(), format!("git error: {e}"));
         }
 
         let mut text = String::new();
@@ -1452,7 +1452,7 @@ impl PickerLogic for GitBranchPicker {
             }
         }
 
-        (hjkl_buffer::Buffer::from_str(&text), String::new())
+        (hjkl_buffer::View::from_str(&text), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -1678,9 +1678,9 @@ impl PickerLogic for GitStashPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String) {
+    fn preview(&self, idx: usize) -> (hjkl_buffer::View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (hjkl_buffer::Buffer::new(), String::new());
+            return (hjkl_buffer::View::new(), String::new());
         }
 
         let oid = match self
@@ -1691,21 +1691,21 @@ impl PickerLogic for GitStashPicker {
         {
             Some(o) if o != git2::Oid::ZERO_SHA1 => o,
             _ => {
-                return (hjkl_buffer::Buffer::new(), String::new());
+                return (hjkl_buffer::View::new(), String::new());
             }
         };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
         let commit = match repo.find_commit(oid) {
             Ok(c) => c,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
@@ -1721,7 +1721,7 @@ impl PickerLogic for GitStashPicker {
             String::new()
         };
 
-        (hjkl_buffer::Buffer::from_str(&diff_text), String::new())
+        (hjkl_buffer::View::from_str(&diff_text), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -1981,9 +1981,9 @@ impl PickerLogic for GitTagsPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String) {
+    fn preview(&self, idx: usize) -> (hjkl_buffer::View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (hjkl_buffer::Buffer::new(), String::new());
+            return (hjkl_buffer::View::new(), String::new());
         }
 
         let (target_oid, tag_name, tag_message, tag_tagger) =
@@ -1999,14 +1999,14 @@ impl PickerLogic for GitTagsPicker {
             }) {
                 Some(v) => v,
                 None => {
-                    return (hjkl_buffer::Buffer::new(), String::new());
+                    return (hjkl_buffer::View::new(), String::new());
                 }
             };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
@@ -2016,7 +2016,7 @@ impl PickerLogic for GitTagsPicker {
         {
             Ok(c) => c,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
@@ -2042,7 +2042,7 @@ impl PickerLogic for GitTagsPicker {
             commit_body
         };
 
-        (hjkl_buffer::Buffer::from_str(&body), String::new())
+        (hjkl_buffer::View::from_str(&body), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -2268,9 +2268,9 @@ impl PickerLogic for GitRemotesPicker {
         Some(out)
     }
 
-    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String) {
+    fn preview(&self, idx: usize) -> (hjkl_buffer::View, String) {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return (hjkl_buffer::Buffer::new(), String::new());
+            return (hjkl_buffer::View::new(), String::new());
         }
 
         let (name, url) = match self
@@ -2281,14 +2281,14 @@ impl PickerLogic for GitRemotesPicker {
         {
             Some(v) => v,
             None => {
-                return (hjkl_buffer::Buffer::new(), String::new());
+                return (hjkl_buffer::View::new(), String::new());
             }
         };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
             Err(e) => {
-                return (hjkl_buffer::Buffer::new(), format!("git error: {e}"));
+                return (hjkl_buffer::View::new(), format!("git error: {e}"));
             }
         };
 
@@ -2316,7 +2316,7 @@ impl PickerLogic for GitRemotesPicker {
             }
         }
 
-        (hjkl_buffer::Buffer::from_str(&body), String::new())
+        (hjkl_buffer::View::from_str(&body), String::new())
     }
 
     fn select(&self, idx: usize) -> PickerAction {

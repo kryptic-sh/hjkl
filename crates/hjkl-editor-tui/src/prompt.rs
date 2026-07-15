@@ -39,7 +39,7 @@ pub fn draw_prompt_line(
     draw_prompt_line_into(buf, area, prefix, field, style)
 }
 
-/// Variant that renders into a `&mut Buffer` — used by tests with
+/// Variant that renders into a `&mut View` — used by tests with
 /// `TestBackend`.
 pub fn draw_prompt_line_into(
     buf: &mut RBuffer,

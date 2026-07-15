@@ -10,18 +10,18 @@
 //! resolves.
 
 mod insert_mode_scrolloff_tests {
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::Editor;
     use hjkl_engine::FsmMode as Mode;
     use hjkl_engine::types::{DefaultHost, Host, Options};
     use hjkl_vim::VimEditorExt;
 
-    fn ed_with_lines(line_count: usize) -> Editor<Buffer, DefaultHost> {
+    fn ed_with_lines(line_count: usize) -> Editor<View, DefaultHost> {
         let text = (0..line_count)
             .map(|i| format!("row{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let buf = Buffer::from_str(&text);
+        let buf = View::from_str(&text);
         let mut e = hjkl_vim::vim_editor(buf, DefaultHost::new(), Options::default());
         // Viewport: 20 rows tall, starts at top.
         let vp = e.host_mut().viewport_mut();
@@ -197,13 +197,13 @@ mod insert_mode_scrolloff_tests {
 }
 
 mod modifiable_readonly_tests {
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::Editor;
     use hjkl_engine::types::{DefaultHost, Options};
     use hjkl_vim::VimEditorExt;
 
-    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
     }
 
@@ -307,26 +307,26 @@ mod modifiable_readonly_tests {
 }
 
 mod undo_granularity_tests {
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::Editor;
     use hjkl_engine::UndoGranularity;
     use hjkl_engine::types::{DefaultHost, Options};
     use hjkl_vim::VimEditorExt;
 
-    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
     }
 
     /// Helper: type a string char-by-char in insert mode.
-    fn type_str(ed: &mut Editor<Buffer, DefaultHost>, s: &str) {
+    fn type_str(ed: &mut Editor<View, DefaultHost>, s: &str) {
         for ch in s.chars() {
             ed.insert_char(ch);
         }
     }
 
     /// Helper: return current buffer content as a plain String.
-    fn content(ed: &Editor<Buffer, DefaultHost>) -> String {
+    fn content(ed: &Editor<View, DefaultHost>) -> String {
         ed.buffer().content_joined().to_string()
     }
 
@@ -468,13 +468,13 @@ mod undo_granularity_tests {
 }
 
 mod scan_tag_opener_multibyte_tests {
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::types::Options;
     use hjkl_engine::{DefaultHost, Editor};
     use hjkl_vim::VimEditorExt;
 
-    fn html_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn html_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let host = DefaultHost::new();
         let mut ed = hjkl_vim::vim_editor(buf, host, Options::default());
         ed.settings_mut().filetype = "html".to_string();

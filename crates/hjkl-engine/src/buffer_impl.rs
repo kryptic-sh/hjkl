@@ -1,4 +1,4 @@
-//! Canonical [`Buffer`] trait impl over [`hjkl_buffer::Buffer`].
+//! Canonical [`View`] trait impl over [`hjkl_buffer::View`].
 //!
 //! Wires the engine trait surface (`Cursor` / `Query` / `BufferEdit` /
 //! `Search`, sealed via [`crate::types::sealed::Sealed`]) onto the
@@ -10,28 +10,28 @@
 //! # Why concrete-Editor today
 //!
 //! The trait surface here is 13 methods. The engine FSM today calls
-//! ~46 distinct methods on `hjkl_buffer::Buffer` — most of them are
-//! motion / fold / viewport helpers that don't belong on `Buffer`
+//! ~46 distinct methods on `hjkl_buffer::View` — most of them are
+//! motion / fold / viewport helpers that don't belong on `View`
 //! (they're computed over the buffer, not delegated to it). Generic-ifying
-//! `Editor<B: Buffer, H: Host>` therefore requires relocating those
+//! `Editor<B: View, H: Host>` therefore requires relocating those
 //! ~33 helpers from `hjkl-buffer` into `hjkl-engine` as free functions
 //! over `B: Cursor + Query`. That's a separate, multi-thousand-LOC
 //! patch tracked for the 0.1.0 cut.
 //!
 //! Until then this module ships the canonical impl + a compile-time
-//! assertion that `hjkl_buffer::Buffer` satisfies the trait, so
-//! downstream callers can write `fn f<B: hjkl_engine::Buffer>(…)`
+//! assertion that `hjkl_buffer::View` satisfies the trait, so
+//! downstream callers can write `fn f<B: hjkl_engine::View>(…)`
 //! today and the engine's own `Editor` becomes generic over `B` in a
 //! follow-up patch without breaking the trait contract.
 
 use std::borrow::Cow;
 
-use hjkl_buffer::Buffer as RopeBuffer;
 use hjkl_buffer::Position;
+use hjkl_buffer::View as RopeBuffer;
 use regex::Regex;
 
 use crate::types::sealed::Sealed;
-use crate::types::{Buffer, BufferEdit, Cursor, FoldOp, FoldProvider, Pos, Query, Search};
+use crate::types::{BufferEdit, Cursor, FoldOp, FoldProvider, Pos, Query, Search, View};
 
 // ── Pos ⇄ Position conversion ──────────────────────────────────────
 
@@ -50,7 +50,7 @@ pub(crate) fn pos_to_position(p: Pos) -> Position {
     }
 }
 
-/// Buffer [`Position`] → engine [`Pos`].
+/// View [`Position`] → engine [`Pos`].
 #[inline]
 pub(crate) fn position_to_pos(p: Position) -> Pos {
     Pos {
@@ -172,7 +172,7 @@ impl Query for RopeBuffer {
         }
         let rope = self.rope();
         let n = rope.len_lines();
-        // Single-line slice — allocate since Buffer::rope_line_str returns owned String.
+        // Single-line slice — allocate since View::rope_line_str returns owned String.
         if start.row == end.row {
             if start.row < n {
                 let line = hjkl_buffer::rope_line_str(&rope, start.row);
@@ -383,15 +383,15 @@ fn byte_range_to_pos_range(
     }
 }
 
-// ── Buffer super-trait ─────────────────────────────────────────────
+// ── View super-trait ─────────────────────────────────────────────
 
-impl Buffer for RopeBuffer {}
+impl View for RopeBuffer {}
 
 // ── Fold provider ──────────────────────────────────────────────────
 
-/// [`FoldProvider`] adapter wrapping a `&hjkl_buffer::Buffer`. Lets
+/// [`FoldProvider`] adapter wrapping a `&hjkl_buffer::View`. Lets
 /// engine call sites ask the buffer's fold storage about visible
-/// rows without reaching into `Buffer::next_visible_row` &c. directly.
+/// rows without reaching into `View::next_visible_row` &c. directly.
 ///
 /// Construct with [`BufferFoldProvider::new`]. Hosts that want to
 /// expose their own fold model (a separate fold tree, LSP-derived
@@ -413,7 +413,7 @@ impl<'a> BufferFoldProvider<'a> {
 
 impl FoldProvider for BufferFoldProvider<'_> {
     fn next_visible_row(&self, row: usize, _row_count: usize) -> Option<usize> {
-        // Buffer ignores the row_count hint — it knows its own size.
+        // View ignores the row_count hint — it knows its own size.
         RopeBuffer::next_visible_row(self.buffer, row)
     }
 
@@ -435,7 +435,7 @@ impl FoldProvider for BufferFoldProvider<'_> {
     // For fold mutation, use [`BufferFoldProviderMut`] instead.
 }
 
-/// Mutable [`FoldProvider`] adapter wrapping a `&mut hjkl_buffer::Buffer`.
+/// Mutable [`FoldProvider`] adapter wrapping a `&mut hjkl_buffer::View`.
 /// Engine call sites that need to dispatch a [`FoldOp`] (vim's `z…`
 /// keystrokes, the `:fold*` Ex commands, edit-pipeline invalidation)
 /// construct this on the fly from `&mut self.buffer` and call
@@ -443,7 +443,7 @@ impl FoldProvider for BufferFoldProvider<'_> {
 ///
 /// Introduced in 0.0.38 (Patch C-δ.4) as part of routing fold mutation
 /// through the [`FoldProvider`] surface. Fold *storage* still lives
-/// on [`hjkl_buffer::Buffer`] for `dirty_gen` / render-cache reasons;
+/// on [`hjkl_buffer::View`] for `dirty_gen` / render-cache reasons;
 /// only the dispatch path moved.
 pub struct BufferFoldProviderMut<'a> {
     buffer: &'a mut RopeBuffer,
@@ -520,7 +520,7 @@ impl FoldProvider for BufferFoldProviderMut<'_> {
 /// Owned-snapshot [`FoldProvider`] adapter. Carries a copy of the
 /// buffer's fold list (one `Vec<Fold>` clone — fold lists are tiny in
 /// practice) plus the buffer's `row_count`, so the call site can hold
-/// the snapshot for fold queries while passing `&mut hjkl_buffer::Buffer`
+/// the snapshot for fold queries while passing `&mut hjkl_buffer::View`
 /// to a motion function that needs cursor mutation.
 ///
 /// Introduced in 0.0.40 (Patch C-δ.5) so the lifted motion fns can
@@ -549,7 +549,7 @@ impl SnapshotFoldProvider {
     }
 
     /// True iff `row` is hidden by any closed fold in the snapshot.
-    /// Mirrors [`hjkl_buffer::Buffer::is_row_hidden`] over the
+    /// Mirrors [`hjkl_buffer::View::is_row_hidden`] over the
     /// snapshotted fold list.
     fn snapshot_is_row_hidden(&self, row: usize) -> bool {
         self.folds.iter().any(|f| f.hides(row))
@@ -558,7 +558,7 @@ impl SnapshotFoldProvider {
 
 impl FoldProvider for SnapshotFoldProvider {
     fn next_visible_row(&self, row: usize, _row_count: usize) -> Option<usize> {
-        // Mirrors [`hjkl_buffer::Buffer::next_visible_row`]: walk
+        // Mirrors [`hjkl_buffer::View::next_visible_row`]: walk
         // forward, skipping closed-fold-hidden rows, stop at end.
         let last = self.row_count.saturating_sub(1);
         if last == 0 && row == 0 {
@@ -572,7 +572,7 @@ impl FoldProvider for SnapshotFoldProvider {
     }
 
     fn prev_visible_row(&self, row: usize) -> Option<usize> {
-        // Mirrors [`hjkl_buffer::Buffer::prev_visible_row`].
+        // Mirrors [`hjkl_buffer::View::prev_visible_row`].
         let mut r = row.checked_sub(1)?;
         while self.snapshot_is_row_hidden(r) {
             r = r.checked_sub(1)?;
@@ -600,13 +600,13 @@ impl FoldProvider for SnapshotFoldProvider {
 mod tests {
     use super::*;
 
-    /// Compile-time check: the in-tree `hjkl_buffer::Buffer` satisfies
-    /// the SPEC `Buffer` super-trait (and therefore all four sub-traits).
+    /// Compile-time check: the in-tree `hjkl_buffer::View` satisfies
+    /// the SPEC `View` super-trait (and therefore all four sub-traits).
     /// If this stops compiling, the trait surface diverged from the
     /// canonical impl — fix the impl, not this assertion.
     #[test]
     fn rope_buffer_implements_spec_buffer() {
-        fn assert_buffer<B: Buffer>() {}
+        fn assert_buffer<B: View>() {}
         fn assert_cursor<B: Cursor>() {}
         fn assert_query<B: Query>() {}
         fn assert_edit<B: BufferEdit>() {}
@@ -644,7 +644,7 @@ mod tests {
         let b = RopeBuffer::from_str("hello world");
         let s = Query::slice(&b, Pos::new(0, 0)..Pos::new(0, 5));
         assert_eq!(&*s, "hello");
-        // Buffer::line now returns owned String; single-line slice is Owned.
+        // View::line now returns owned String; single-line slice is Owned.
         assert!(matches!(s, Cow::Owned(_)));
     }
 
@@ -735,7 +735,7 @@ mod tests {
                 None
             }
         }
-        impl Buffer for MockBuf {}
+        impl View for MockBuf {}
 
         let mut m = MockBuf {
             cursor: Pos::ORIGIN,

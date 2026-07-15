@@ -901,7 +901,7 @@ pub struct FormatJob {
     pub project_root: PathBuf,
     /// Formatter to run.
     pub formatter: Arc<dyn Formatter>,
-    /// Buffer dirty-generation at submission time. The install path drops
+    /// View dirty-generation at submission time. The install path drops
     /// results whose `dirty_gen` is older than the current buffer gen so
     /// that interleaved typing does not install stale formatted output.
     pub dirty_gen: u64,

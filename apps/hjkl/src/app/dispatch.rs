@@ -80,7 +80,7 @@ impl App {
             | AppAction::MaximizeWidth
             | AppAction::TmuxNavigate(_) => self.dispatch_window_action(action, count),
 
-            // ── Buffer / tab navigation ────────────────────────────────────
+            // ── View / tab navigation ────────────────────────────────────
             AppAction::Tabnext
             | AppAction::Tabprev
             | AppAction::BufferNext

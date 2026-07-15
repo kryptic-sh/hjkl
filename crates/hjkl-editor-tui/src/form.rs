@@ -78,7 +78,7 @@ pub fn draw_form(
     draw_form_into(buf, area, form, palette)
 }
 
-/// Variant that renders into a `&mut Buffer` (used by tests with
+/// Variant that renders into a `&mut View` (used by tests with
 /// `TestBackend`).
 pub fn draw_form_into(
     buf: &mut RBuffer,

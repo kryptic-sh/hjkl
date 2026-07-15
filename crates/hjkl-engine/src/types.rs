@@ -7,7 +7,7 @@
 //! authoritative.
 
 // `Pos`, `Edit` (as `EngineEdit`), `ContentEdit`, and `FoldOp` now live in
-// `hjkl-buffer` so `Content` can own per-buffer engine state without a
+// `hjkl-buffer` so `Buffer` can own per-buffer engine state without a
 // circular dependency. Re-exported here so all existing call sites compile
 // without change.
 pub use hjkl_buffer::ContentEdit;
@@ -876,14 +876,14 @@ impl Options {
 /// owns and mutates per render frame.
 ///
 /// 0.0.34 (Patch C-δ.1): semantic ownership moved from
-/// [`hjkl_buffer::Buffer`] to [`Host`]. The struct still lives in
+/// [`hjkl_buffer::View`] to [`Host`]. The struct still lives in
 /// `hjkl-buffer` (alongside [`hjkl_buffer::Wrap`] and the rope-walking
 /// `wrap_segments` math it depends on) so the dependency graph stays
 /// `engine → buffer`; the engine re-exports it as
 /// [`crate::types::Viewport`] (this alias) for hosts that program to
 /// the SPEC surface.
 ///
-/// The architectural decision is "viewport lives on Host, not Buffer":
+/// The architectural decision is "viewport lives on Host, not View":
 /// vim logic must work in GUI hosts (variable-width fonts, pixel
 /// canvases, soft-wrap by pixel) as well as TUI hosts, so the runtime
 /// viewport state is expressed in cells/rows/cols and is owned by the
@@ -965,7 +965,7 @@ pub enum Input {
 }
 
 /// Host adapter consumed by the engine. Lives behind the planned
-/// `Editor<B: Buffer, H: Host>` generic; today it's the contract that
+/// `Editor<B: View, H: Host>` generic; today it's the contract that
 /// `buffr-modal::BuffrHost` and the (future) `sqeel-tui` Host impl
 /// align against.
 ///
@@ -1041,7 +1041,7 @@ pub trait Host: Send {
     /// Borrow the host's viewport. The host writes `width`/`height`/
     /// `text_width`/`wrap` per render frame; the engine reads/writes
     /// `top_row` / `top_col` to scroll. 0.0.34 (Patch C-δ.1) moved
-    /// this off [`hjkl_buffer::Buffer`] onto `Host`.
+    /// this off [`hjkl_buffer::View`] onto `Host`.
     fn viewport(&self) -> &Viewport;
 
     /// Mutable viewport access. Engine motion + scroll code routes
@@ -1182,7 +1182,7 @@ pub struct RenderFrame {
 /// Today's shape is intentionally minimal — it carries only the bits
 /// the runtime [`crate::Editor`] knows how to round-trip without the
 /// trait extraction (mode, cursor, lines, viewport top, settings).
-/// Once `Editor<B: Buffer, H: Host>` ships under phase 5, this struct
+/// Once `Editor<B: View, H: Host>` ships under phase 5, this struct
 /// grows to cover full SPEC state: registers, marks, jump list, change
 /// list, undo tree, full options.
 ///
@@ -1213,7 +1213,7 @@ pub struct EditorSnapshot {
     pub mode: SnapshotMode,
     /// Cursor `(row, col)` in byte indexing.
     pub cursor: (u32, u32),
-    /// Buffer lines. Trailing `\n` not included.
+    /// View lines. Trailing `\n` not included.
     pub lines: Vec<String>,
     /// Viewport top line at snapshot time.
     pub viewport_top: u32,
@@ -1305,21 +1305,21 @@ pub enum EngineError {
 }
 
 pub(crate) mod sealed {
-    /// Sealing trait for the planned 0.1.0 [`super::Buffer`] surface.
+    /// Sealing trait for the planned 0.1.0 [`super::View`] surface.
     /// Pre-1.0 the engine reserves the right to add methods to the
-    /// `Buffer` super-trait without a major bump; downstream cannot
-    /// `impl Buffer` from outside this family.
+    /// `View` super-trait without a major bump; downstream cannot
+    /// `impl View` from outside this family.
     ///
-    /// The in-tree [`hjkl_buffer::Buffer`] is the canonical impl; the
+    /// The in-tree [`hjkl_buffer::View`] is the canonical impl; the
     /// `Sealed` marker for it lives in `crate::buffer_impl`. The module
     /// itself stays `pub(crate)` so the sibling impl module can name
     /// the trait while keeping the seal closed to the outside world.
     pub trait Sealed {}
 }
 
-/// Cursor sub-trait of [`Buffer`].
+/// Cursor sub-trait of [`View`].
 ///
-/// `Pos` here is the engine's grapheme-indexed [`Pos`] type. Buffer
+/// `Pos` here is the engine's grapheme-indexed [`Pos`] type. View
 /// implementations convert at the boundary if their internal indexing
 /// differs (e.g., the rope's byte indexing).
 pub trait Cursor: Send {
@@ -1333,7 +1333,7 @@ pub trait Cursor: Send {
     fn pos_at_byte(&self, byte: usize) -> Pos;
 }
 
-/// Read-only query sub-trait of [`Buffer`].
+/// Read-only query sub-trait of [`View`].
 pub trait Query: Send {
     /// Number of logical lines (excluding the implicit trailing line).
     fn line_count(&self) -> u32;
@@ -1394,7 +1394,7 @@ pub trait Query: Send {
     /// Return the canonical `lines().join("\n")` rendering of the
     /// document as an `Arc<String>`. Multiple per-tick consumers (syntax
     /// pipeline, LSP notify, git signature, dirty hash) need this; the
-    /// `Buffer` impl caches against `dirty_gen` so they share one
+    /// `View` impl caches against `dirty_gen` so they share one
     /// allocation per generation.
     ///
     /// Default impl walks `line(r)` for every row — slow but correct.
@@ -1414,7 +1414,7 @@ pub trait Query: Send {
     /// Byte length of `row`. Out-of-range rows return 0.
     ///
     /// Default impl pays a full `line(row)` clone just to read its length.
-    /// Backends with row-indexed storage (canonical `hjkl_buffer::Buffer`)
+    /// Backends with row-indexed storage (canonical `hjkl_buffer::View`)
     /// should override to read the byte length under one lock with no
     /// allocation — `Editor::restore_text` calls this on every undo/redo
     /// to recompute the inverse `ContentEdit`.
@@ -1427,7 +1427,7 @@ pub trait Query: Send {
     }
 
     /// Return a cheaply-cloned rope snapshot of the buffer. O(1) for the
-    /// canonical `hjkl_buffer::Buffer` (Arc-backed B-tree clone). Used by
+    /// canonical `hjkl_buffer::View` (Arc-backed B-tree clone). Used by
     /// the syntax pipeline's `parse_initial_rope` / `parse_incremental_rope`
     /// to stream bytes into tree-sitter without materializing a contiguous
     /// `String`.
@@ -1439,7 +1439,7 @@ pub trait Query: Send {
     }
 }
 
-/// Mutating sub-trait of [`Buffer`]. Distinct trait name from the
+/// Mutating sub-trait of [`View`]. Distinct trait name from the
 /// crate-root [`Edit`] struct — this one carries methods, the other
 /// is a value type.
 pub trait BufferEdit: Send {
@@ -1468,7 +1468,7 @@ pub trait BufferEdit: Send {
     }
 }
 
-/// Search sub-trait of [`Buffer`]. The pattern is owned by the engine;
+/// Search sub-trait of [`View`]. The pattern is owned by the engine;
 /// buffers do not cache compiled regexes.
 pub trait Search: Send {
     /// First match at-or-after `from`. `None` when no match remains.
@@ -1477,14 +1477,14 @@ pub trait Search: Send {
     fn find_prev(&self, from: Pos, pat: &regex::Regex) -> Option<core::ops::Range<Pos>>;
 }
 
-/// Buffer super-trait — the pre-1.0 contract every backend implements.
+/// View super-trait — the pre-1.0 contract every backend implements.
 ///
 /// Sealed to the engine's own crate family (in-tree
-/// `hjkl_buffer::Buffer` is the canonical impl). Pre-0.1.0 the engine
+/// `hjkl_buffer::View` is the canonical impl). Pre-0.1.0 the engine
 /// reserves the right to add methods on patch bumps; downstream
 /// consumers depend on the full trait without naming
 /// [`sealed::Sealed`].
-pub trait Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {}
+pub trait View: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {}
 
 /// Fold-iteration + mutation trait. The engine asks "what's the next
 /// visible row" / "is this row hidden" through this surface, and
@@ -1495,12 +1495,12 @@ pub trait Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {
 /// Introduced in 0.0.32 (Patch C-β) for read access; 0.0.38 (Patch
 /// C-δ.4) added [`FoldProvider::apply`] + [`FoldProvider::invalidate_range`]
 /// so engine call sites that used to call
-/// `hjkl_buffer::Buffer::{open,close,toggle,…}_fold_at` directly route
+/// `hjkl_buffer::View::{open,close,toggle,…}_fold_at` directly route
 /// through this trait now. The canonical read-only implementation
 /// [`crate::buffer_impl::BufferFoldProvider`] wraps a
-/// `&hjkl_buffer::Buffer`; the canonical mutable implementation
+/// `&hjkl_buffer::View`; the canonical mutable implementation
 /// [`crate::buffer_impl::BufferFoldProviderMut`] wraps a
-/// `&mut hjkl_buffer::Buffer`. Hosts that don't care about folds can
+/// `&mut hjkl_buffer::View`. Hosts that don't care about folds can
 /// use [`NoopFoldProvider`].
 ///
 /// The engine carries a `Box<dyn FoldProvider + 'a>` slot today and
@@ -1521,7 +1521,7 @@ pub trait FoldProvider: Send {
 
     /// Apply a [`FoldOp`] to the underlying fold storage. Read-only
     /// providers (e.g. [`crate::buffer_impl::BufferFoldProvider`] which
-    /// holds a `&Buffer`) and providers that don't track folds (e.g.
+    /// holds a `&View`) and providers that don't track folds (e.g.
     /// [`NoopFoldProvider`]) implement this as a no-op.
     ///
     /// Default impl is a no-op so that read-only / host-stub providers

@@ -37,7 +37,7 @@ fn ctrl_key(code: KeyCode) -> KeyEvent {
 fn intern_style_dedups_engine_native_styles() {
     use hjkl_engine::types::{Attrs, Color, Style};
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -58,7 +58,7 @@ fn intern_style_dedups_engine_native_styles() {
 #[test]
 fn engine_style_at_out_of_range_returns_none() {
     let e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -68,7 +68,7 @@ fn engine_style_at_out_of_range_returns_none() {
 #[test]
 fn options_bridge_roundtrip() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -94,7 +94,7 @@ fn options_bridge_roundtrip() {
 #[test]
 fn selection_highlight_none_in_normal() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -106,7 +106,7 @@ fn selection_highlight_none_in_normal() {
 fn highlights_emit_search_matches() {
     use hjkl_engine::types::HighlightKind;
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -127,7 +127,7 @@ fn highlights_emit_search_matches() {
 #[test]
 fn highlights_empty_without_pattern() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -138,7 +138,7 @@ fn highlights_empty_without_pattern() {
 #[test]
 fn highlights_empty_for_out_of_range_line() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -151,7 +151,7 @@ fn highlights_empty_for_out_of_range_line() {
 fn snapshot_roundtrips_through_restore() {
     use hjkl_engine::types::SnapshotMode;
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -163,7 +163,7 @@ fn snapshot_roundtrips_through_restore() {
     assert_eq!(snap.lines.len(), 3);
 
     let mut other = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -175,7 +175,7 @@ fn snapshot_roundtrips_through_restore() {
 #[test]
 fn restore_snapshot_rejects_version_mismatch() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -193,7 +193,7 @@ fn restore_snapshot_rejects_version_mismatch() {
 #[test]
 fn take_content_change_returns_some_on_first_dirty() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -212,7 +212,7 @@ fn many_lines(n: usize) -> String {
 }
 
 #[allow(dead_code)]
-fn prime_viewport<H: Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, height: u16) {
+fn prime_viewport<H: Host>(e: &mut Editor<hjkl_buffer::View, H>, height: u16) {
     e.set_viewport_height(height);
 }
 
@@ -225,7 +225,7 @@ fn prime_viewport<H: Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, height: u16) 
 #[test]
 fn set_content_dirties_then_take_dirty_clears() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -240,7 +240,7 @@ fn set_content_dirties_then_take_dirty_clears() {
 #[test]
 fn content_arc_cache_invalidated_by_set_content() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -257,7 +257,7 @@ fn content_arc_cache_invalidated_by_set_content() {
 #[test]
 fn lnum_width_numberwidth_floor_enforced() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -270,7 +270,7 @@ fn lnum_width_numberwidth_floor_enforced() {
 #[test]
 fn lnum_width_zero_when_both_flags_off() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options {
             number: false,
@@ -291,7 +291,7 @@ fn lnum_width_zero_when_both_flags_off() {
 #[test]
 fn mouse_click_doc_moves_cursor_to_doc_coords() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -303,7 +303,7 @@ fn mouse_click_doc_moves_cursor_to_doc_coords() {
 #[test]
 fn mouse_click_doc_normal_mode_clamps_past_eol_to_last_char() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -318,7 +318,7 @@ fn mouse_click_doc_normal_mode_clamps_past_eol_to_last_char() {
 #[test]
 fn mouse_click_doc_normal_mode_clamps_past_eol_multibyte() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -331,7 +331,7 @@ fn mouse_click_doc_normal_mode_clamps_past_eol_multibyte() {
 #[test]
 fn mouse_click_doc_insert_mode_allows_one_past_eol() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -346,7 +346,7 @@ fn mouse_click_doc_insert_mode_allows_one_past_eol() {
 #[test]
 fn mouse_click_doc_resets_sticky_col() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -369,7 +369,7 @@ fn mouse_click_doc_resets_sticky_col() {
 fn mouse_click_doc_exits_visual_mode() {
     use hjkl_engine::VimMode;
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -384,7 +384,7 @@ fn mouse_click_doc_exits_visual_mode() {
 #[test]
 fn set_cursor_doc_clamps_past_last_row() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -398,7 +398,7 @@ fn set_cursor_doc_clamps_past_last_row() {
 fn mouse_begin_drag_enters_visual_char() {
     use hjkl_engine::VimMode;
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -411,7 +411,7 @@ fn mouse_begin_drag_enters_visual_char() {
 fn mouse_extend_drag_doc_moves_cursor_leaving_visual_anchor() {
     use hjkl_engine::VimMode;
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -429,7 +429,7 @@ fn host_clipboard_round_trip_via_default_host() {
     // DefaultHost stores write_clipboard in-memory; read_clipboard
     // returns the most recent payload.
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -440,7 +440,7 @@ fn host_clipboard_round_trip_via_default_host() {
 // ── ContentEdit emission ─────────────────────────────────────────
 
 fn fresh_editor(initial: &str) -> Editor {
-    let buffer = hjkl_buffer::Buffer::from_str(initial);
+    let buffer = hjkl_buffer::View::from_str(initial);
     hjkl_vim::vim_editor(
         buffer,
         hjkl_engine::types::DefaultHost::new(),
@@ -468,7 +468,7 @@ fn content_edit_insert_char_at_origin() {
 
 #[test]
 fn content_edit_insert_str_multiline() {
-    // Buffer "x\ny" — insert "ab\ncd" at end of row 0.
+    // View "x\ny" — insert "ab\ncd" at end of row 0.
     let mut e = fresh_editor("x\ny");
     let _ = e.mutate_edit(hjkl_buffer::Edit::InsertStr {
         at: hjkl_buffer::Position::new(0, 1),
@@ -1107,7 +1107,7 @@ fn bracket_match_with_no_match_on_line_is_noop_or_engine_behaviour() {
 fn fresh_viewport_editor() -> Editor {
     let content = many_lines(20);
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -1169,7 +1169,7 @@ fn viewport_bottom_lands_on_last_visible_row() {
 fn half_page_down_moves_cursor_by_half_window() {
     // viewport height=10, so half=5. Cursor at row 0 → row 5 after C-d.
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&many_lines(30)),
+        hjkl_buffer::View::from_str(&many_lines(30)),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -1187,7 +1187,7 @@ fn half_page_down_moves_cursor_by_half_window() {
 fn half_page_up_moves_cursor_by_half_window_reverse() {
     // viewport height=10, half=5. Cursor at row 10 → row 5 after C-u.
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&many_lines(30)),
+        hjkl_buffer::View::from_str(&many_lines(30)),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -1205,7 +1205,7 @@ fn half_page_up_moves_cursor_by_half_window_reverse() {
 fn full_page_down_moves_cursor_by_full_window() {
     // viewport height=10, full = 10 - 2 = 8. Cursor at row 0 → row 8.
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&many_lines(30)),
+        hjkl_buffer::View::from_str(&many_lines(30)),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -1223,7 +1223,7 @@ fn full_page_down_moves_cursor_by_full_window() {
 fn full_page_up_moves_cursor_by_full_window_reverse() {
     // viewport height=10, full=8. Cursor at row 10 → row 2.
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&many_lines(30)),
+        hjkl_buffer::View::from_str(&many_lines(30)),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -1556,7 +1556,7 @@ fn insert_tab_real_tab_when_noexpandtab() {
         ..hjkl_engine::types::Options::default()
     };
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         opts,
     );
@@ -1659,7 +1659,7 @@ fn insert_ctrl_h_join_up() {
 #[test]
 fn insert_ctrl_t_indents_current_line() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options {
             shiftwidth: 4,
@@ -1678,7 +1678,7 @@ fn insert_ctrl_t_indents_current_line() {
 #[test]
 fn insert_ctrl_d_outdents_current_line() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options {
             shiftwidth: 4,
@@ -3030,7 +3030,7 @@ fn auto_indent_vs_cargo_fmt_motions_diagnostic() {
     let original = include_str!("../../hjkl-engine/src/motions.rs");
 
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options {
             shiftwidth: 4,
@@ -3099,7 +3099,7 @@ fn auto_indent_vs_cargo_fmt_motions_diagnostic() {
 
 fn make_editor(content: &str) -> Editor {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -3132,7 +3132,7 @@ fn filter_range_nonexistent_command_returns_err() {
     let count_before = e.buffer().row_count();
     let result = e.filter_range(0, 1, "__hjkl_no_such_cmd_xyz__", None);
     assert!(result.is_err(), "non-existent command must return Err");
-    // Buffer must still have same line count — no mutation on error.
+    // View must still have same line count — no mutation on error.
     assert_eq!(e.buffer().row_count(), count_before);
 }
 
@@ -3229,7 +3229,7 @@ fn cursor_screen_pos_skips_hidden_fold_rows() {
         .join("\n");
 
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -3274,7 +3274,7 @@ fn cursor_screen_pos_no_fold_row_unchanged() {
         .join("\n");
 
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -3310,7 +3310,7 @@ fn cursor_screen_pos_partial_fold_arithmetic() {
         .join("\n");
 
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -3347,7 +3347,7 @@ fn goto_line_opens_enclosing_fold() {
         .collect::<Vec<_>>()
         .join("\n");
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
@@ -3375,7 +3375,7 @@ fn goto_line_opens_nested_folds() {
         .collect::<Vec<_>>()
         .join("\n");
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_buffer::View::from_str(&content),
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );

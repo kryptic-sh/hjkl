@@ -183,7 +183,7 @@ pub fn default_layer() -> SyntaxLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use std::path::Path;
 
     /// Test buffer id.
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn render_viewport_with_no_language_returns_none() {
-        let buf = Buffer::from_str("hello world");
+        let buf = View::from_str("hello world");
         let mut layer = default_layer();
         assert!(
             !layer
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn parse_and_render_small_rust_buffer() {
-        let buf = Buffer::from_str("fn main() { let x = 1; }\n");
+        let buf = View::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
         assert!(
             layer
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn diagnostics_emit_sign_for_syntax_error() {
-        let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
+        let buf = View::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let out = layer.render_viewport(TID, &buf, 0, 10).unwrap();
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn incremental_path_matches_cold_for_small_edit() {
-        let pre = Buffer::from_str("fn main() { let x = 1; }");
+        let pre = View::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
@@ -292,7 +292,7 @@ mod tests {
                 new_end_position: (0, 4),
             }],
         );
-        let post = Buffer::from_str("fn Ymain() { let x = 1; }");
+        let post = View::from_str("fn Ymain() { let x = 1; }");
         let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
         let mut cold_layer = default_layer();
         cold_layer.set_language_for_path(TID, Path::new("a.rs"));

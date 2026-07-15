@@ -134,7 +134,7 @@ fn q_colon_opens_cmdline_window() {
         "cmdline window must be focused"
     );
 
-    // Buffer should contain 3 history lines.
+    // View should contain 3 history lines.
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
     let line_count = app.slots()[slot_idx].editor.buffer().row_count();
     assert_eq!(line_count, 3, "buffer must have 3 history lines");
@@ -250,7 +250,7 @@ fn c_f_from_ex_prompt_opens_q_colon_with_inprogress_text() {
 
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
     let buffer = app.slots()[slot_idx].editor.buffer();
-    // Buffer: 1 history line + 1 prefill line = 2 rows.
+    // View: 1 history line + 1 prefill line = 2 rows.
     assert_eq!(
         buffer.row_count(),
         2,

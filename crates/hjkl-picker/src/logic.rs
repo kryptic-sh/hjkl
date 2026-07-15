@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::JoinHandle;
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 
 /// Action emitted when the user picks an item. The App dispatches each
 /// variant to the right machinery.
@@ -55,9 +55,9 @@ pub trait PickerLogic: Send + 'static {
     /// highlighting in the preview pane read [`Self::preview_path`] and
     /// run the buffer's bytes through their own highlighter at render
     /// time.
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         let _ = idx;
-        (Buffer::new(), String::new())
+        (View::new(), String::new())
     }
 
     /// File-system path the preview's content was loaded from, when one

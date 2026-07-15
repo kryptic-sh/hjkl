@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options};
 use hjkl_ex::ExEffect;
 
@@ -63,7 +63,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             .unwrap_or_else(|| "<scratch>".to_string());
 
         // --- load buffer ---
-        let mut buffer = Buffer::new();
+        let mut buffer = View::new();
         let mut is_new_file = false;
 
         if let Some(ref path) = maybe_path {
@@ -237,7 +237,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 /// Serialise the buffer and write it to `path`. Returns a formatted error
 /// string on failure so the caller can print it and set `exit_code = 1`.
 fn write_buffer(
-    editor: &Editor<Buffer, DefaultHost>,
+    editor: &Editor<View, DefaultHost>,
     path: &Option<PathBuf>,
     display_name: &str,
 ) -> Result<(), String> {

@@ -1,36 +1,36 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::content::Content;
+use crate::content::Buffer;
 use crate::{Position, Viewport};
 
-/// Per-window view onto a [`Content`].
+/// Per-window view onto a [`Buffer`].
 ///
-/// `Buffer` is the type the rest of `hjkl-buffer` — and all consumers —
+/// `View` is the type the rest of `hjkl-buffer` — and all consumers —
 /// use directly. It owns exactly the state that is local to one editor
 /// window:
 ///
 /// - `cursor` — the charwise caret for this window.
 ///
 /// All document-level state (text rope, dirty generation, folds) lives on
-/// the inner [`Content`] and is accessed via `Arc<Mutex<Content>>`.
-/// Two `Buffer` instances that share the same `Arc` share text + folds
+/// the inner [`Buffer`] and is accessed via `Arc<Mutex<Buffer>>`.
+/// Two `View` instances that share the same `Arc` share text + folds
 /// but carry independent cursors — the Helix Document+View model.
 ///
 /// ## `Send` + `Sync`
 ///
-/// `Arc<Mutex<Content>>` is `Send + Sync`, so `Buffer` remains `Send`.
-/// The engine trait surface requires `Buffer: Send`; this constraint
+/// `Arc<Mutex<Buffer>>` is `Send + Sync`, so `View` remains `Send`.
+/// The engine trait surface requires `View: Send`; this constraint
 /// drove the choice of `Mutex` over `RefCell`. The mutex is never
 /// contended in normal operation (single-threaded app loop), so the
 /// lock cost is negligible (~5 ns uncontested).
 ///
 /// ## 0.8.0 migration notes
 ///
-/// The existing constructors ([`Buffer::new`], [`Buffer::from_str`],
-/// [`Buffer::replace_all`], etc.) keep the same external signatures.
+/// The existing constructors ([`View::new`], [`View::from_str`],
+/// [`View::replace_all`], etc.) keep the same external signatures.
 /// Callers that do not need multi-window sharing see no behaviour change.
-/// Use [`Buffer::new_view`] to create a second window onto the same
-/// [`Content`].
+/// Use [`View::new_view`] to create a second window onto the same
+/// [`Buffer`].
 ///
 /// ## Viewport
 ///
@@ -40,27 +40,27 @@ use crate::{Position, Viewport};
 /// lives on the engine `Host` adapter; methods that need it take a
 /// `&Viewport` / `&mut Viewport` parameter so the rope-walking math stays
 /// here while runtime state lives there.
-pub struct Buffer {
+pub struct View {
     /// Shared per-document state (text rope, dirty gen, folds).
-    pub(crate) content: Arc<Mutex<Content>>,
+    pub(crate) content: Arc<Mutex<Buffer>>,
     /// Charwise cursor. `col` is bound by the char count of `row` in
     /// normal mode, one past it in operator-pending / insert.
     cursor: Position,
 }
 
-impl Default for Buffer {
+impl Default for View {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Buffer {
+impl View {
     // ── Constructors ──────────────────────────────────────────────
 
     /// Construct an empty buffer with one empty row + cursor at `(0, 0)`.
     pub fn new() -> Self {
         Self {
-            content: Arc::new(Mutex::new(Content::new())),
+            content: Arc::new(Mutex::new(Buffer::new())),
             cursor: Position::default(),
         }
     }
@@ -72,44 +72,44 @@ impl Buffer {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(text: &str) -> Self {
         Self {
-            content: Arc::new(Mutex::new(Content::from_str(text))),
+            content: Arc::new(Mutex::new(Buffer::from_str(text))),
             cursor: Position::default(),
         }
     }
 
-    /// Create a second per-window view onto existing [`Content`].
+    /// Create a second per-window view onto existing [`Buffer`].
     ///
-    /// The new `Buffer` shares text + folds with every other view on the
+    /// The new `View` shares text + folds with every other view on the
     /// same `Arc`. Its cursor starts at `(0, 0)` independently. This is
     /// the primary entry point for split-window features.
     ///
     /// ```rust
-    /// # use hjkl_buffer::{Buffer, Content, Position};
+    /// # use hjkl_buffer::{View, Buffer, Position};
     /// # use std::sync::Arc;
     /// # use std::sync::Mutex;
-    /// let a = Buffer::from_str("hello\nworld");
+    /// let a = View::from_str("hello\nworld");
     /// let content = a.content_arc();
-    /// let mut b = Buffer::new_view(Arc::clone(&content));
+    /// let mut b = View::new_view(Arc::clone(&content));
     ///
     /// // Cursors are independent.
-    /// let mut a = Buffer::new_view(Arc::clone(&content));
+    /// let mut a = View::new_view(Arc::clone(&content));
     /// a.set_cursor(Position::new(1, 0));
     /// assert_eq!(b.cursor(), Position::new(0, 0));
     /// ```
-    pub fn new_view(content: Arc<Mutex<Content>>) -> Self {
+    pub fn new_view(content: Arc<Mutex<Buffer>>) -> Self {
         Self {
             content,
             cursor: Position::default(),
         }
     }
 
-    /// Return a clone of the `Arc<Mutex<Content>>` so callers can
-    /// create additional views with [`Buffer::new_view`].
-    pub fn content_arc(&self) -> Arc<Mutex<Content>> {
+    /// Return a clone of the `Arc<Mutex<Buffer>>` so callers can
+    /// create additional views with [`View::new_view`].
+    pub fn content_arc(&self) -> Arc<Mutex<Buffer>> {
         Arc::clone(&self.content)
     }
 
-    // ── Read-only accessors (delegate to Content) ─────────────────
+    // ── Read-only accessors (delegate to Buffer) ─────────────────
 
     pub fn cursor(&self) -> Position {
         self.cursor
@@ -364,12 +364,12 @@ impl Buffer {
     }
 
     /// Shared access to the content guard. Crate-internal.
-    pub(crate) fn content_lock(&self) -> MutexGuard<'_, Content> {
+    pub(crate) fn content_lock(&self) -> MutexGuard<'_, Buffer> {
         self.content.lock().unwrap()
     }
 
-    /// Exclusive access to Content. Crate-internal.
-    pub(crate) fn content_lock_mut(&mut self) -> MutexGuard<'_, Content> {
+    /// Exclusive access to Buffer. Crate-internal.
+    pub(crate) fn content_lock_mut(&mut self) -> MutexGuard<'_, Buffer> {
         self.content.lock().unwrap()
     }
 
@@ -381,7 +381,7 @@ impl Buffer {
             return None;
         }
         let c = self.content.lock().unwrap();
-        // Clamp against the live rope: another view sharing this Content may
+        // Clamp against the live rope: another view sharing this Buffer may
         // have removed rows since this view's cursor was last clamped, and
         // `rope.line(r)` panics past the last line.
         let cursor_row = cursor.row.min(c.text.len_lines().saturating_sub(1));
@@ -645,7 +645,7 @@ pub(crate) fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
 
 /// Char index from `(row, col)` where `col` is a char index within the line.
 /// Both coordinates are clamped to the rope's bounds so a position that went
-/// stale (e.g. another view shrank the shared `Content` between the caller's
+/// stale (e.g. another view shrank the shared `Buffer` between the caller's
 /// clamp and this call) can never panic `line_to_char`.
 pub(crate) fn pos_to_char_idx(rope: &ropey::Rope, row: usize, col: usize) -> usize {
     let row = row.min(rope.len_lines().saturating_sub(1));
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn new_has_one_empty_row() {
-        let b = Buffer::new();
+        let b = View::new();
         assert_eq!(b.row_count(), 1);
         assert_eq!(rope_line_str(&b.rope(), 0), "");
         assert_eq!(b.cursor(), Position::default());
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn from_str_splits_on_newline() {
-        let b = Buffer::from_str("foo\nbar\nbaz");
+        let b = View::from_str("foo\nbar\nbaz");
         assert_eq!(b.row_count(), 3);
         assert_eq!(rope_line_str(&b.rope(), 0), "foo");
         assert_eq!(rope_line_str(&b.rope(), 2), "baz");
@@ -676,27 +676,27 @@ mod tests {
 
     #[test]
     fn from_str_trailing_newline_keeps_empty_row() {
-        let b = Buffer::from_str("foo\n");
+        let b = View::from_str("foo\n");
         assert_eq!(b.row_count(), 2);
         assert_eq!(rope_line_str(&b.rope(), 1), "");
     }
 
     #[test]
     fn from_str_empty_input_keeps_one_row() {
-        let b = Buffer::from_str("");
+        let b = View::from_str("");
         assert_eq!(b.row_count(), 1);
         assert_eq!(rope_line_str(&b.rope(), 0), "");
     }
 
     #[test]
     fn as_string_round_trips() {
-        let b = Buffer::from_str("a\nb\nc");
+        let b = View::from_str("a\nb\nc");
         assert_eq!(b.as_string(), "a\nb\nc");
     }
 
     #[test]
     fn dirty_gen_starts_at_zero() {
-        assert_eq!(Buffer::new().dirty_gen(), 0);
+        assert_eq!(View::new().dirty_gen(), 0);
     }
 
     fn vp_wrap(width: u16, height: u16) -> Viewport {
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn ensure_cursor_visible_wrap_scrolls_when_cursor_below_screen() {
-        let mut b = Buffer::from_str("aaaaaaaaaa\nb\nc");
+        let mut b = View::from_str("aaaaaaaaaa\nb\nc");
         let mut v = vp_wrap(4, 3);
         b.set_cursor(Position::new(2, 0));
         b.ensure_cursor_visible(&mut v);
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn ensure_cursor_visible_wrap_no_scroll_when_visible() {
-        let mut b = Buffer::from_str("aaaaaaaaaa\nb");
+        let mut b = View::from_str("aaaaaaaaaa\nb");
         let mut v = vp_wrap(4, 4);
         b.set_cursor(Position::new(0, 5));
         b.ensure_cursor_visible(&mut v);
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn ensure_cursor_visible_wrap_snaps_top_when_cursor_above() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let mut v = vp_wrap(4, 2);
         v.top_row = 3;
         b.set_cursor(Position::new(1, 0));
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn screen_rows_between_sums_segments_under_wrap() {
-        let b = Buffer::from_str("aaaaaaaaa\nb\n");
+        let b = View::from_str("aaaaaaaaa\nb\n");
         let v = vp_wrap(4, 0);
         assert_eq!(b.screen_rows_between(&v, 0, 0), 3);
         assert_eq!(b.screen_rows_between(&v, 0, 1), 4);
@@ -751,14 +751,14 @@ mod tests {
 
     #[test]
     fn screen_rows_between_one_per_doc_row_when_wrap_off() {
-        let b = Buffer::from_str("aaaaa\nb\nc");
+        let b = View::from_str("aaaaa\nb\nc");
         let v = Viewport::default();
         assert_eq!(b.screen_rows_between(&v, 0, 2), 3);
     }
 
     #[test]
     fn max_top_for_height_walks_back_until_height_reached() {
-        let b = Buffer::from_str("a\nb\nc\nd\neeeeeeee");
+        let b = View::from_str("a\nb\nc\nd\neeeeeeee");
         let v = vp_wrap(4, 0);
         assert_eq!(b.max_top_for_height(&v, 4), 2);
         assert_eq!(b.max_top_for_height(&v, 99), 0);
@@ -766,14 +766,14 @@ mod tests {
 
     #[test]
     fn cursor_screen_row_returns_none_when_wrap_off() {
-        let b = Buffer::from_str("a");
+        let b = View::from_str("a");
         let v = Viewport::default();
         assert!(b.cursor_screen_row(&v).is_none());
     }
 
     #[test]
     fn cursor_screen_row_under_wrap() {
-        let mut b = Buffer::from_str("aaaaaaaaaa\nb");
+        let mut b = View::from_str("aaaaaaaaaa\nb");
         let v = vp_wrap(4, 0);
         b.set_cursor(Position::new(0, 5));
         assert_eq!(b.cursor_screen_row(&v), Some(1));
@@ -782,14 +782,14 @@ mod tests {
     }
 
     /// Regression: a view whose cursor went stale after another view shrank
-    /// the shared Content used to panic `rope.line()` inside
+    /// the shared Buffer used to panic `rope.line()` inside
     /// `cursor_screen_row_from`. The row must clamp to the live rope.
     #[test]
     fn cursor_screen_row_survives_shrink_from_other_view() {
-        let a = Buffer::from_str("a\nb\nc\nd\ne");
+        let a = View::from_str("a\nb\nc\nd\ne");
         let arc = a.content_arc();
-        let mut view_a = Buffer::new_view(Arc::clone(&arc));
-        let mut view_b = Buffer::new_view(Arc::clone(&arc));
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
         view_b.set_cursor(Position::new(4, 0));
         // view_a truncates the document; view_b's cursor row 4 is now stale.
         view_a.replace_all("a");
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn ensure_cursor_visible_falls_back_when_wrap_disabled() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let mut v = Viewport {
             top_row: 0,
             top_col: 0,
@@ -818,18 +818,18 @@ mod tests {
 
     // ── Per-buffer engine state tests (new in 0.33.0 / Phase B) ──────
 
-    /// Undo entries pushed via one `Buffer` view are visible via
-    /// another view sharing the same `Content` — proving that the
-    /// undo stack lives on `Content`, not on the per-window `Buffer`.
+    /// Undo entries pushed via one `View` view are visible via
+    /// another view sharing the same `Buffer` — proving that the
+    /// undo stack lives on `Buffer`, not on the per-window `View`.
     #[test]
     fn undo_stack_shared_across_views() {
         use crate::UndoEntry;
         use std::time::SystemTime;
 
-        let a = Buffer::from_str("hello");
+        let a = View::from_str("hello");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         assert!(view_a.undo_stack_is_empty());
         assert_eq!(view_a.undo_stack_len(), 0);
@@ -851,10 +851,10 @@ mod tests {
         use crate::UndoEntry;
         use std::time::SystemTime;
 
-        let a = Buffer::from_str("world");
+        let a = View::from_str("world");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         assert!(view_a.redo_stack_is_empty());
 
@@ -875,10 +875,10 @@ mod tests {
         use crate::UndoEntry;
         use std::time::SystemTime;
 
-        let a = Buffer::from_str("abc");
+        let a = View::from_str("abc");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         view_a.push_undo_entry(UndoEntry {
             rope: view_a.rope(),
@@ -899,10 +899,10 @@ mod tests {
     /// `content_dirty` flag is shared across views.
     #[test]
     fn content_dirty_shared_across_views() {
-        let a = Buffer::from_str("test");
+        let a = View::from_str("test");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         assert!(!view_a.content_dirty());
 
@@ -917,10 +917,10 @@ mod tests {
     /// `pending_fold_ops` push and take are shared across views.
     #[test]
     fn pending_fold_ops_shared_across_views() {
-        let a = Buffer::from_str("a\nb\nc");
+        let a = View::from_str("a\nb\nc");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         view_a.push_fold_op(crate::FoldOp::Add {
             start_row: 0,
@@ -943,10 +943,10 @@ mod tests {
     /// `pending_content_reset` flag is shared across views.
     #[test]
     fn pending_content_reset_shared_across_views() {
-        let a = Buffer::from_str("x");
+        let a = View::from_str("x");
         let arc = a.content_arc();
-        let view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         assert!(!view_a.pending_content_reset());
         view_b.set_pending_content_reset(true);
@@ -958,14 +958,14 @@ mod tests {
 
     // ── View-split tests (new in 0.8.0) ──────────────────────────
 
-    /// Two `Buffer` views sharing one `Content` must have independent
+    /// Two `View` views sharing one `Buffer` must have independent
     /// cursors.
     #[test]
     fn buffer_views_independent_cursors() {
-        let a = Buffer::from_str("hello\nworld");
+        let a = View::from_str("hello\nworld");
         let arc = a.content_arc();
-        let mut view_a = Buffer::new_view(Arc::clone(&arc));
-        let mut view_b = Buffer::new_view(Arc::clone(&arc));
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
 
         view_a.set_cursor(Position::new(1, 3));
         // view_b cursor must remain at (0, 0).
@@ -981,10 +981,10 @@ mod tests {
     fn buffer_views_share_content() {
         use crate::edit::Edit;
 
-        let a = Buffer::from_str("foo");
+        let a = View::from_str("foo");
         let arc = a.content_arc();
-        let mut view_a = Buffer::new_view(Arc::clone(&arc));
-        let view_b = Buffer::new_view(Arc::clone(&arc));
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let view_b = View::new_view(Arc::clone(&arc));
 
         view_a.apply_edit(Edit::InsertStr {
             at: Position::new(0, 3),
@@ -1002,25 +1002,25 @@ mod marks_shared_content_tests {
 
     #[test]
     fn marks_shared_across_views() {
-        // Two Buffer views on the same Content share marks (#154).
-        let a = Buffer::from_str("hello\nworld");
+        // Two View views on the same Buffer share marks (#154).
+        let a = View::from_str("hello\nworld");
         let content = a.content_arc();
-        let mut view_a = Buffer::new_view(std::sync::Arc::clone(&content));
-        let view_b = Buffer::new_view(std::sync::Arc::clone(&content));
+        let mut view_a = View::new_view(std::sync::Arc::clone(&content));
+        let view_b = View::new_view(std::sync::Arc::clone(&content));
 
         // Set mark 'x' on view_a.
         view_a.set_mark('x', (1, 3));
 
-        // view_b must see the same mark via shared Content.
+        // view_b must see the same mark via shared Buffer.
         assert_eq!(view_b.mark('x'), Some((1, 3)));
     }
 
     #[test]
     fn syntax_fold_ranges_shared_across_views() {
-        let a = Buffer::from_str("fn foo() {\n  bar();\n}");
+        let a = View::from_str("fn foo() {\n  bar();\n}");
         let content = a.content_arc();
-        let mut view_a = Buffer::new_view(std::sync::Arc::clone(&content));
-        let view_b = Buffer::new_view(std::sync::Arc::clone(&content));
+        let mut view_a = View::new_view(std::sync::Arc::clone(&content));
+        let view_b = View::new_view(std::sync::Arc::clone(&content));
 
         view_a.set_syntax_fold_ranges(vec![(0, 2)]);
 

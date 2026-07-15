@@ -16,7 +16,7 @@
 //! ## Why so many invariants?
 //!
 //! Most of them follow from one rule: **the engine layer treats
-//! [`Buffer`] as the source of truth for text content**. Any divergence
+//! [`View`] as the source of truth for text content**. Any divergence
 //! between cached state (engine-side selections, undo stacks, search matches)
 //! and the buffer's `lines()` is a bug. The invariants documented on each type
 //! are the contract that lets the engine cache aggressively without risking
@@ -24,10 +24,10 @@
 //!
 //! Open issues: <https://github.com/kryptic-sh/hjkl/issues>.
 //!
-//! ## Testing your `Buffer` use
+//! ## Testing your `View` use
 //!
 //! Property tests are encouraged for any non-trivial caller. The crate ships
-//! its own test suite; reuse [`Buffer::from_str`] to construct fixtures from
+//! its own test suite; reuse [`View::from_str`] to construct fixtures from
 //! inline strings.
 //!
 //! Things worth proving:
@@ -36,7 +36,7 @@
 //!   its original `lines()`.
 //! - For any valid [`Position`] and motion call, the resulting cursor is itself
 //!   valid.
-//! - [`Buffer::dirty_gen`] strictly increases across mutations and stays
+//! - [`View::dirty_gen`] strictly increases across mutations and stays
 //!   constant across read-only queries.
 
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -56,9 +56,9 @@ mod undo;
 mod viewport;
 pub mod wrap;
 
-pub use buffer::Buffer;
+pub use buffer::View;
 pub use buffer::{rope_line_bytes, rope_line_str};
-pub use content::Content;
+pub use content::Buffer;
 pub use edit::{Edit, MotionKind};
 pub use engine_types::{ContentEdit, EngineEdit, FoldOp, Pos};
 pub use folds::{Fold, invalidate_folds};

@@ -55,7 +55,7 @@ pub enum AppAction {
     Tabnext,
     Tabprev,
 
-    // ── Buffer navigation ──────────────────────────────────────────────
+    // ── View navigation ──────────────────────────────────────────────
     BufferNext,
     BufferPrev,
 

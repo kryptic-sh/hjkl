@@ -58,7 +58,7 @@ pub(crate) fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, 
 /// continuation is appropriate, `None` otherwise. The caller appends the
 /// string after the `\n` they are about to insert.
 pub(crate) fn continue_comment(
-    buffer: &hjkl_buffer::Buffer,
+    buffer: &hjkl_buffer::View,
     settings: &hjkl_engine::Settings,
     row: usize,
 ) -> Option<String> {
@@ -79,7 +79,7 @@ pub(crate) fn continue_comment(
 ///   - all bytes BEFORE the cursor on the current line are whitespace
 ///   - there is at least one full indent unit of leading whitespace
 pub(crate) fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     cursor: hjkl_buffer::Position,
     ch: char,
 ) -> bool {
@@ -153,7 +153,7 @@ pub(crate) fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
     true
 }
 pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
@@ -220,7 +220,7 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
     // padding short rows to reach `col` first. Returns without touching the
     // cursor — callers position the cursor afterward according to their needs.
     fn replicate_block_text<H: hjkl_engine::types::Host>(
-        ed: &mut Editor<hjkl_buffer::Buffer, H>,
+        ed: &mut Editor<hjkl_buffer::View, H>,
         inserted: &str,
         top: usize,
         bot: usize,
@@ -318,7 +318,7 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
     }
 }
 pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
     reason: InsertReason,
 ) {
@@ -370,7 +370,7 @@ pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
 /// During replay we skip the break — replay shouldn't pollute the
 /// undo stack with intra-replay snapshots.
 pub(crate) fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if !ed.settings().undo_break_on_motion {
         return;
@@ -414,7 +414,7 @@ pub(crate) fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
 /// When `undo_granularity == InsertSession` this function returns
 /// immediately, adding zero calls to the hot path.
 pub(crate) fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     next: char,
 ) {
     use hjkl_engine::UndoGranularity;
@@ -481,11 +481,11 @@ pub(crate) fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
 #[cfg(test)]
 mod comment_continuation_tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor_with_lang(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_editor_with_lang(lang: &str, content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let host = DefaultHost::new();
         let opts = Options {
             filetype: lang.to_string(),
@@ -581,7 +581,7 @@ mod comment_continuation_tests {
 
     #[test]
     fn continue_comment_returns_none_when_filetype_empty() {
-        let buf = Buffer::from_str("// hello\n");
+        let buf = View::from_str("// hello\n");
         let host = DefaultHost::new();
         // filetype defaults to "" in Options::default().
         let ed = crate::vim::vim_editor(buf, host, Options::default());
@@ -592,11 +592,11 @@ mod comment_continuation_tests {
 #[cfg(test)]
 mod comment_toggle_tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_rust_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_rust_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let host = DefaultHost::new();
         let opts = Options {
             filetype: "rust".to_string(),
@@ -605,7 +605,7 @@ mod comment_toggle_tests {
         crate::vim::vim_editor(buf, host, opts)
     }
 
-    fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+    fn line(ed: &Editor<View, DefaultHost>, row: usize) -> String {
         buf_line(ed.buffer(), row).unwrap_or_default()
     }
 
@@ -695,7 +695,7 @@ mod comment_toggle_tests {
 
     #[test]
     fn python_comment_toggle() {
-        let buf = Buffer::from_str("x = 1\ny = 2");
+        let buf = View::from_str("x = 1\ny = 2");
         let host = DefaultHost::new();
         let opts = Options {
             filetype: "python".to_string(),
@@ -715,7 +715,7 @@ mod comment_toggle_tests {
 
     #[test]
     fn commentstring_override_via_setting() {
-        let buf = Buffer::from_str("hello world");
+        let buf = View::from_str("hello world");
         let host = DefaultHost::new();
         let opts = Options {
             filetype: "rust".to_string(),
@@ -732,7 +732,7 @@ mod comment_toggle_tests {
 
     #[test]
     fn unknown_lang_no_op() {
-        let buf = Buffer::from_str("hello");
+        let buf = View::from_str("hello");
         let host = DefaultHost::new();
         let opts = Options::default(); // filetype = ""
         let mut ed = crate::vim::vim_editor(buf, host, opts);

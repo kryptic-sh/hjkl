@@ -91,7 +91,7 @@ pub enum Event {
         /// Raw source URL.
         url: String,
     },
-    /// Start of a `> blockquote`. Content events until the matching
+    /// Start of a `> blockquote`. Buffer events until the matching
     /// [`Event::BlockQuoteEnd`] belong to the quote (may nest).
     BlockQuoteStart,
     /// End of a blockquote.

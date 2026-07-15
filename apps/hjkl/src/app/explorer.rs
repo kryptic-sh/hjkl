@@ -702,7 +702,7 @@ impl super::App {
         use super::STATUS_LINE_HEIGHT;
         use super::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
-        use hjkl_buffer::Buffer;
+        use hjkl_buffer::View;
         use hjkl_engine::{BufferEdit, Host, Options};
         use std::time::Instant;
 
@@ -729,7 +729,7 @@ impl super::App {
         self.next_buffer_id += 1;
 
         let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(Buffer::new(), host, Options::default());
+        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
         editor.set_registers_arc(self.registers.clone());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
@@ -2573,7 +2573,7 @@ mod tests {
         app.dispatch_action(AppAction::FocusRight, 1); // focus the editor window
         app.dispatch_ex(&format!("edit {}", f1.display())); // slot 2 = f1
 
-        // Buffer line shows f0, f1 (explorer skipped). Clicking the LAST entry
+        // View line shows f0, f1 (explorer skipped). Clicking the LAST entry
         // must resolve to f1's real slot — NOT the interleaved explorer slot.
         let ranges = buffer_line_x_ranges(&app, 80);
         assert!(ranges.len() >= 2, "expected >=2 entries, got {ranges:?}");

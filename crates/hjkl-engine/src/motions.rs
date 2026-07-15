@@ -1,13 +1,13 @@
 //! Vim-shaped cursor motions, computed over the SPEC trait surface.
 //!
 //! Patch C (0.0.30) relocated the 24 motion helpers from `hjkl-buffer`
-//! into the engine; bodies were concrete over `&mut hjkl_buffer::Buffer`
+//! into the engine; bodies were concrete over `&mut hjkl_buffer::View`
 //! at the time. **0.0.40 (Patch C-δ.5)** lifts every motion fn — and
 //! the ten internal helpers — to a `B: Cursor + Query` bound, with
 //! fold-aware vertical / screen-vertical motions taking a separate
 //! `&dyn FoldProvider` parameter so callers thread their own fold
 //! storage through. `Editor` itself remains concrete over
-//! `hjkl_buffer::Buffer` until the 0.1.0 freeze patch.
+//! `hjkl_buffer::View` until the 0.1.0 freeze patch.
 //!
 //! Cast plumbing: motion bodies still walk vim's `Position { row, col
 //! : usize }` shape internally — converting to/from the engine's
@@ -51,7 +51,7 @@ fn write_cursor<B: Cursor + ?Sized>(buf: &mut B, pos: Position) {
 }
 
 /// Borrow line `row`, returning `None` if out of bounds. Mirrors the
-/// pre-0.0.40 `Buffer::line(row) -> Option<&str>` shape every motion
+/// pre-0.0.40 `View::line(row) -> Option<&str>` shape every motion
 /// body uses (the SPEC `Query::line` panics OOB; the bound check
 /// keeps motion bodies's `unwrap_or("")` pattern intact).
 #[inline]
@@ -70,7 +70,7 @@ fn read_line<B: Query + ?Sized>(buf: &B, row: usize) -> String {
     read_line_opt(buf, row).unwrap_or_default()
 }
 
-/// Number of lines (mirrors pre-0.0.40 `Buffer::row_count() -> usize`).
+/// Number of lines (mirrors pre-0.0.40 `View::row_count() -> usize`).
 #[inline]
 fn read_row_count<B: Query + ?Sized>(buf: &B) -> usize {
     Query::line_count(buf) as usize
@@ -1096,7 +1096,7 @@ fn next_word_end<B: Query + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
 
     use crate::buffer_impl::SnapshotFoldProvider;
 
@@ -1104,7 +1104,7 @@ mod tests {
     /// (`@,48-57,_,192-255`) and the engine's `Settings::default()`.
     const ISK: &str = "@,48-57,_,192-255";
 
-    fn at(b: &Buffer) -> Position {
+    fn at(b: &View) -> Position {
         b.cursor()
     }
 
@@ -1113,13 +1113,13 @@ mod tests {
     /// tiny — production call sites in `vim.rs` mirror this shape.
     /// Snapshot decouples from the buffer's lifetime so the caller
     /// can re-borrow `&mut buf` for the motion fn.
-    fn folds(b: &Buffer) -> SnapshotFoldProvider {
+    fn folds(b: &View) -> SnapshotFoldProvider {
         SnapshotFoldProvider::from_buffer(b)
     }
 
     #[test]
     fn move_left_clamps_at_zero() {
-        let mut b = Buffer::from_str("abcd");
+        let mut b = View::from_str("abcd");
         move_right_in_line(&mut b, 3);
         assert_eq!(at(&b), Position::new(0, 3));
         move_left(&mut b, 10);
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn move_left_does_not_wrap_to_prev_row() {
-        let mut b = Buffer::from_str("abc\ndef");
+        let mut b = View::from_str("abc\ndef");
         let mut sticky = None;
         {
             let f = folds(&b);
@@ -1141,21 +1141,21 @@ mod tests {
 
     #[test]
     fn move_right_in_line_stops_at_last_char() {
-        let mut b = Buffer::from_str("abcd");
+        let mut b = View::from_str("abcd");
         move_right_in_line(&mut b, 99);
         assert_eq!(at(&b), Position::new(0, 3));
     }
 
     #[test]
     fn move_right_to_end_allows_one_past() {
-        let mut b = Buffer::from_str("abcd");
+        let mut b = View::from_str("abcd");
         move_right_to_end(&mut b, 99);
         assert_eq!(at(&b), Position::new(0, 4));
     }
 
     #[test]
     fn move_line_start_end() {
-        let mut b = Buffer::from_str("  hello");
+        let mut b = View::from_str("  hello");
         move_line_end(&mut b);
         assert_eq!(at(&b), Position::new(0, 6));
         move_line_start(&mut b);
@@ -1166,14 +1166,14 @@ mod tests {
 
     #[test]
     fn move_line_end_on_empty_row_stays_at_zero() {
-        let mut b = Buffer::from_str("");
+        let mut b = View::from_str("");
         move_line_end(&mut b);
         assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]
     fn move_down_preserves_sticky_col_across_short_row() {
-        let mut b = Buffer::from_str("hello world\nhi\nlong line again");
+        let mut b = View::from_str("hello world\nhi\nlong line again");
         move_right_in_line(&mut b, 7);
         assert_eq!(at(&b), Position::new(0, 7));
         let mut sticky = None;
@@ -1194,7 +1194,7 @@ mod tests {
 
     #[test]
     fn move_down_preserves_sticky_col_across_empty_row() {
-        let mut b = Buffer::from_str("hello world\n\nlong line again");
+        let mut b = View::from_str("hello world\n\nlong line again");
         // position cursor at col 7
         move_right_in_line(&mut b, 7);
         assert_eq!(at(&b), Position::new(0, 7));
@@ -1215,7 +1215,7 @@ mod tests {
 
     #[test]
     fn move_down_skips_closed_fold() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         b.add_fold(1, 3, true);
         let mut sticky = None;
         // From row 0, `j` should land on row 4 — the fold collapses
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn move_up_skips_closed_fold() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         b.add_fold(1, 3, true);
         b.set_cursor(Position::new(4, 0));
         let mut sticky = None;
@@ -1252,7 +1252,7 @@ mod tests {
 
     #[test]
     fn open_fold_is_walked_normally() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         b.add_fold(1, 3, false);
         let mut sticky = None;
         // Open fold: every row is visible, plain row-by-row stepping.
@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     fn move_top_lands_on_first_non_blank() {
-        let mut b = Buffer::from_str("    indented\nrow2");
+        let mut b = View::from_str("    indented\nrow2");
         let mut sticky = None;
         {
             let f = folds(&b);
@@ -1277,21 +1277,21 @@ mod tests {
 
     #[test]
     fn move_bottom_with_count_jumps_to_line() {
-        let mut b = Buffer::from_str("a\n  b\nc\nd");
+        let mut b = View::from_str("a\n  b\nc\nd");
         move_bottom(&mut b, 2);
         assert_eq!(at(&b), Position::new(1, 2));
     }
 
     #[test]
     fn move_bottom_zero_jumps_to_last_row() {
-        let mut b = Buffer::from_str("a\nb\nc");
+        let mut b = View::from_str("a\nb\nc");
         move_bottom(&mut b, 0);
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
     #[test]
     fn move_word_fwd_skips_whitespace_runs() {
-        let mut b = Buffer::from_str("foo bar  baz");
+        let mut b = View::from_str("foo bar  baz");
         move_word_fwd(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 4));
         move_word_fwd(&mut b, false, 1, ISK);
@@ -1300,7 +1300,7 @@ mod tests {
 
     #[test]
     fn move_word_fwd_separates_word_from_punct_in_small_w() {
-        let mut b = Buffer::from_str("foo.bar");
+        let mut b = View::from_str("foo.bar");
         move_word_fwd(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 3));
         move_word_fwd(&mut b, false, 1, ISK);
@@ -1311,7 +1311,7 @@ mod tests {
     fn move_word_fwd_off_empty_line() {
         // vim: `w` on an empty line counts the empty line as a word and steps
         // to the first word of the next non-empty line.
-        let mut b = Buffer::from_str("foo\n\nbar");
+        let mut b = View::from_str("foo\n\nbar");
         let mut sticky = None;
         {
             let f = folds(&b);
@@ -1326,7 +1326,7 @@ mod tests {
     fn move_word_fwd_empty_line_stops_on_next_empty_line() {
         // Each empty line is its own word, so `w` from one blank line lands on
         // the next blank line, not skipping to the following text.
-        let mut b = Buffer::from_str("foo\n\n\nbar");
+        let mut b = View::from_str("foo\n\n\nbar");
         let mut sticky = None;
         {
             let f = folds(&b);
@@ -1339,14 +1339,14 @@ mod tests {
 
     #[test]
     fn move_word_fwd_big_collapses_word_and_punct() {
-        let mut b = Buffer::from_str("foo.bar baz");
+        let mut b = View::from_str("foo.bar baz");
         move_word_fwd(&mut b, true, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 8));
     }
 
     #[test]
     fn move_word_back_lands_on_word_start() {
-        let mut b = Buffer::from_str("foo bar baz");
+        let mut b = View::from_str("foo bar baz");
         move_line_end(&mut b);
         assert_eq!(at(&b), Position::new(0, 10));
         move_word_back(&mut b, false, 1, ISK);
@@ -1357,7 +1357,7 @@ mod tests {
 
     #[test]
     fn move_word_end_lands_on_last_char() {
-        let mut b = Buffer::from_str("foo bar");
+        let mut b = View::from_str("foo bar");
         move_word_end(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 2));
         move_word_end(&mut b, false, 1, ISK);
@@ -1366,7 +1366,7 @@ mod tests {
 
     #[test]
     fn find_char_forward_lands_on_match() {
-        let mut b = Buffer::from_str("foo,bar,baz");
+        let mut b = View::from_str("foo,bar,baz");
         assert!(find_char_on_line(&mut b, ',', true, false, false));
         assert_eq!(at(&b), Position::new(0, 3));
         assert!(find_char_on_line(&mut b, ',', true, false, false));
@@ -1375,7 +1375,7 @@ mod tests {
 
     #[test]
     fn find_char_till_stops_one_short() {
-        let mut b = Buffer::from_str("foo,bar");
+        let mut b = View::from_str("foo,bar");
         assert!(find_char_on_line(&mut b, ',', true, true, false));
         assert_eq!(at(&b), Position::new(0, 2));
     }
@@ -1384,7 +1384,7 @@ mod tests {
     fn find_char_till_repeat_skips_adjacent() {
         // `t,` lands one cell before the comma; a repeat with `skip_adjacent`
         // advances to just before the NEXT comma instead of sticking.
-        let mut b = Buffer::from_str("a,b,c");
+        let mut b = View::from_str("a,b,c");
         assert!(find_char_on_line(&mut b, ',', true, true, false));
         assert_eq!(at(&b), Position::new(0, 0));
         assert!(find_char_on_line(&mut b, ',', true, true, true));
@@ -1395,7 +1395,7 @@ mod tests {
     fn find_char_till_reverse_repeat_skips_adjacent() {
         // `T,` from the end lands one cell after the comma; a reverse repeat
         // advances to just after the previous comma.
-        let mut b = Buffer::from_str("a,b,c");
+        let mut b = View::from_str("a,b,c");
         b.set_cursor(Position::new(0, 4));
         assert!(find_char_on_line(&mut b, ',', false, true, false));
         assert_eq!(at(&b), Position::new(0, 4));
@@ -1405,7 +1405,7 @@ mod tests {
 
     #[test]
     fn find_char_backward_lands_on_match() {
-        let mut b = Buffer::from_str("foo,bar,baz");
+        let mut b = View::from_str("foo,bar,baz");
         b.set_cursor(Position::new(0, 10));
         assert!(find_char_on_line(&mut b, ',', false, false, false));
         assert_eq!(at(&b), Position::new(0, 7));
@@ -1413,14 +1413,14 @@ mod tests {
 
     #[test]
     fn find_char_no_match_returns_false() {
-        let mut b = Buffer::from_str("hello");
+        let mut b = View::from_str("hello");
         assert!(!find_char_on_line(&mut b, 'z', true, false, false));
         assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]
     fn move_viewport_top_with_offset() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne\nf");
+        let mut b = View::from_str("a\nb\nc\nd\ne\nf");
         let v = hjkl_buffer::Viewport {
             top_row: 1,
             height: 4,
@@ -1432,7 +1432,7 @@ mod tests {
 
     #[test]
     fn move_viewport_middle_picks_center_of_visible() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let v = hjkl_buffer::Viewport {
             top_row: 0,
             height: 5,
@@ -1444,7 +1444,7 @@ mod tests {
 
     #[test]
     fn move_viewport_bottom_with_offset() {
-        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let mut b = View::from_str("a\nb\nc\nd\ne");
         let v = hjkl_buffer::Viewport {
             top_row: 0,
             height: 5,
@@ -1456,7 +1456,7 @@ mod tests {
 
     #[test]
     fn move_word_end_back_lands_on_prev_word_end() {
-        let mut b = Buffer::from_str("foo bar baz");
+        let mut b = View::from_str("foo bar baz");
         b.set_cursor(Position::new(0, 9));
         move_word_end_back(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 6));
@@ -1466,7 +1466,7 @@ mod tests {
 
     #[test]
     fn move_word_end_back_big_skips_punct() {
-        let mut b = Buffer::from_str("foo-bar qux");
+        let mut b = View::from_str("foo-bar qux");
         b.set_cursor(Position::new(0, 10));
         move_word_end_back(&mut b, true, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 6));
@@ -1474,7 +1474,7 @@ mod tests {
 
     #[test]
     fn move_word_end_back_crosses_lines() {
-        let mut b = Buffer::from_str("abc\ndef");
+        let mut b = View::from_str("abc\ndef");
         b.set_cursor(Position::new(1, 2));
         move_word_end_back(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 2));
@@ -1482,7 +1482,7 @@ mod tests {
 
     #[test]
     fn match_bracket_pairs_within_line() {
-        let mut b = Buffer::from_str("if (x + y) {");
+        let mut b = View::from_str("if (x + y) {");
         b.set_cursor(Position::new(0, 3));
         assert!(match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(0, 9));
@@ -1492,7 +1492,7 @@ mod tests {
 
     #[test]
     fn match_bracket_handles_nesting() {
-        let mut b = Buffer::from_str("((x))");
+        let mut b = View::from_str("((x))");
         b.set_cursor(Position::new(0, 0));
         assert!(match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(0, 4));
@@ -1500,7 +1500,7 @@ mod tests {
 
     #[test]
     fn match_bracket_crosses_lines() {
-        let mut b = Buffer::from_str("{\n  x\n}");
+        let mut b = View::from_str("{\n  x\n}");
         b.set_cursor(Position::new(0, 0));
         assert!(match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(2, 0));
@@ -1508,7 +1508,7 @@ mod tests {
 
     #[test]
     fn match_bracket_returns_false_off_bracket() {
-        let mut b = Buffer::from_str("hello");
+        let mut b = View::from_str("hello");
         assert!(!match_bracket(&mut b));
     }
 
@@ -1516,7 +1516,7 @@ mod tests {
 
     #[test]
     fn matching_bracket_pos_same_line_pair() {
-        let b = Buffer::from_str("foo(bar)baz");
+        let b = View::from_str("foo(bar)baz");
         // opener at col 3 → closer at col 7
         assert_eq!(matching_bracket_pos(&b, 0, 3), Some((0, 7)));
         // closer at col 7 → opener at col 3
@@ -1525,7 +1525,7 @@ mod tests {
 
     #[test]
     fn matching_bracket_pos_nesting() {
-        let b = Buffer::from_str("((x))");
+        let b = View::from_str("((x))");
         // outer opener at 0 → outer closer at 4
         assert_eq!(matching_bracket_pos(&b, 0, 0), Some((0, 4)));
         // inner opener at 1 → inner closer at 3
@@ -1534,14 +1534,14 @@ mod tests {
 
     #[test]
     fn matching_bracket_pos_cross_line() {
-        let b = Buffer::from_str("{\n  x\n}");
+        let b = View::from_str("{\n  x\n}");
         assert_eq!(matching_bracket_pos(&b, 0, 0), Some((2, 0)));
         assert_eq!(matching_bracket_pos(&b, 2, 0), Some((0, 0)));
     }
 
     #[test]
     fn matching_bracket_pos_off_bracket_none() {
-        let b = Buffer::from_str("hello world");
+        let b = View::from_str("hello world");
         assert_eq!(matching_bracket_pos(&b, 0, 0), None);
         assert_eq!(matching_bracket_pos(&b, 0, 4), None);
     }
@@ -1549,17 +1549,17 @@ mod tests {
     #[test]
     fn matching_bracket_pos_unbalanced_none() {
         // Unmatched opener — no closing bracket
-        let b = Buffer::from_str("(abc");
+        let b = View::from_str("(abc");
         assert_eq!(matching_bracket_pos(&b, 0, 0), None);
         // Unmatched closer — no opening bracket
-        let b2 = Buffer::from_str("abc)");
+        let b2 = View::from_str("abc)");
         assert_eq!(matching_bracket_pos(&b2, 0, 3), None);
     }
 
     #[test]
     fn matching_bracket_pos_closer_finds_opener() {
         // Ensure backward scan from a closer correctly returns the opener.
-        let b = Buffer::from_str("[hello]");
+        let b = View::from_str("[hello]");
         assert_eq!(matching_bracket_pos(&b, 0, 6), Some((0, 0)));
     }
 
@@ -1567,7 +1567,7 @@ mod tests {
     fn match_bracket_scans_forward_on_line() {
         // vim `%` doesn't need the cursor on a bracket: it scans forward on
         // the line to the first bracket, then jumps to its match.
-        let mut b = Buffer::from_str("foo(bar)");
+        let mut b = View::from_str("foo(bar)");
         assert_eq!(at(&b), Position::new(0, 0));
         assert!(match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(0, 7));
@@ -1575,7 +1575,7 @@ mod tests {
 
     #[test]
     fn match_bracket_noop_when_no_bracket_on_line() {
-        let mut b = Buffer::from_str("foobar baz");
+        let mut b = View::from_str("foobar baz");
         assert!(!match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(0, 0));
     }
@@ -1584,14 +1584,14 @@ mod tests {
     fn match_bracket_ignores_angle_brackets() {
         // Default `matchpairs` excludes `<:>`, so `%` does not scan to or jump
         // on angle brackets.
-        let mut b = Buffer::from_str("a<b>");
+        let mut b = View::from_str("a<b>");
         assert!(!match_bracket(&mut b));
         assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]
     fn motion_count_zero_treated_as_one() {
-        let mut b = Buffer::from_str("abcd");
+        let mut b = View::from_str("abcd");
         move_right_in_line(&mut b, 0);
         assert_eq!(at(&b), Position::new(0, 1));
     }
@@ -1610,7 +1610,7 @@ mod tests {
 
     #[test]
     fn screen_down_falls_back_to_move_down_when_wrap_off() {
-        let mut b = Buffer::from_str("a\nb\nc");
+        let mut b = View::from_str("a\nb\nc");
         let v = hjkl_buffer::Viewport::default();
         let mut sticky = None;
         {
@@ -1628,7 +1628,7 @@ mod tests {
     #[test]
     fn screen_down_walks_within_wrapped_row() {
         // 12-char line, width 4 → segments (0,4), (4,8), (8,12).
-        let mut b = Buffer::from_str("aaaabbbbcccc\nx");
+        let mut b = View::from_str("aaaabbbbcccc\nx");
         let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 1));
         let mut sticky = None;
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn screen_up_walks_within_wrapped_row() {
-        let mut b = Buffer::from_str("aaaabbbbcccc");
+        let mut b = View::from_str("aaaabbbbcccc");
         let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 9));
         let mut sticky = None;
@@ -1681,7 +1681,7 @@ mod tests {
         // First row wraps into a 6-char then a 2-char segment; second
         // row is only 1 char. Visual col 4 should clamp to row 1's
         // last col (0) when crossing into the short row.
-        let mut b = Buffer::from_str("aaaaaabb\nx");
+        let mut b = View::from_str("aaaaaabb\nx");
         let v = make_wrap_viewport(Wrap::Char, 6);
         b.set_cursor(Position::new(0, 4));
         let mut sticky = None;
@@ -1701,7 +1701,7 @@ mod tests {
 
     #[test]
     fn screen_down_count_compounds() {
-        let mut b = Buffer::from_str("aaaabbbbcccc");
+        let mut b = View::from_str("aaaabbbbcccc");
         let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 0));
         let mut sticky = None;
@@ -1715,17 +1715,17 @@ mod tests {
     #[test]
     fn motions_module_compiles_against_concrete_buffer() {
         // Compile-time assertion that the engine motions module is
-        // physically reachable via the concrete `hjkl_buffer::Buffer`.
+        // physically reachable via the concrete `hjkl_buffer::View`.
         // 0.0.40 (Patch C-δ.5) lifted the bound to `B: Cursor + Query`;
-        // the canonical concrete `Buffer` still drives motions.
-        let mut b = Buffer::from_str("hello");
+        // the canonical concrete `View` still drives motions.
+        let mut b = View::from_str("hello");
         super::move_right_in_line(&mut b, 1);
         assert_eq!(b.cursor(), Position::new(0, 1));
     }
 
     /// Mock-buffer compile-test: a non-canonical `Cursor + Query` impl
     /// drives motions correctly. Verifies the lift is on the trait
-    /// surface — not pinned to `hjkl_buffer::Buffer` — by exercising
+    /// surface — not pinned to `hjkl_buffer::View` — by exercising
     /// every public motion that doesn't need fold or viewport state.
     #[test]
     fn motions_drive_non_canonical_cursor_query_impl() {
@@ -1807,7 +1807,7 @@ mod tests {
     #[test]
     fn section_forward_finds_brace_at_col0() {
         // "a\n{\nb\n{\nc" — two `{` at col 0 on rows 1 and 3.
-        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        let mut b = View::from_str("a\n{\nb\n{\nc");
         // ]] from row 0 → row 1.
         move_section_forward(&mut b, 1);
         assert_eq!(at(&b), Position::new(1, 0));
@@ -1822,7 +1822,7 @@ mod tests {
 
     #[test]
     fn section_forward_count_skips_n_braces() {
-        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        let mut b = View::from_str("a\n{\nb\n{\nc");
         // 2]] from row 0 → row 3 (second `{`).
         move_section_forward(&mut b, 2);
         assert_eq!(at(&b), Position::new(3, 0));
@@ -1830,7 +1830,7 @@ mod tests {
 
     #[test]
     fn section_backward_finds_brace_at_col0() {
-        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        let mut b = View::from_str("a\n{\nb\n{\nc");
         b.set_cursor(Position::new(4, 0));
         // [[ from row 4 → row 3.
         move_section_backward(&mut b, 1);
@@ -1845,7 +1845,7 @@ mod tests {
 
     #[test]
     fn section_backward_count_skips_n_braces() {
-        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        let mut b = View::from_str("a\n{\nb\n{\nc");
         b.set_cursor(Position::new(4, 0));
         // 2[[ → row 1 (two `{` back from row 4).
         move_section_backward(&mut b, 2);
@@ -1854,7 +1854,7 @@ mod tests {
 
     #[test]
     fn section_forward_at_bottom_clamps() {
-        let mut b = Buffer::from_str("no braces here");
+        let mut b = View::from_str("no braces here");
         move_section_forward(&mut b, 1);
         // No `{` found; stays at last row.
         assert_eq!(at(&b).row, 0);
@@ -1862,14 +1862,14 @@ mod tests {
 
     #[test]
     fn section_backward_at_top_clamps() {
-        let mut b = Buffer::from_str("no braces here");
+        let mut b = View::from_str("no braces here");
         move_section_backward(&mut b, 1);
         assert_eq!(at(&b).row, 0);
     }
 
     #[test]
     fn section_end_forward_finds_close_brace_at_col0() {
-        let mut b = Buffer::from_str("a\n}\nb\n}\nc");
+        let mut b = View::from_str("a\n}\nb\n}\nc");
         // ][ from row 0 → row 1.
         move_section_end_forward(&mut b, 1);
         assert_eq!(at(&b), Position::new(1, 0));
@@ -1880,7 +1880,7 @@ mod tests {
 
     #[test]
     fn section_end_backward_finds_close_brace_at_col0() {
-        let mut b = Buffer::from_str("a\n}\nb\n}\nc");
+        let mut b = View::from_str("a\n}\nb\n}\nc");
         b.set_cursor(Position::new(4, 0));
         // [] from row 4 → row 3.
         move_section_end_backward(&mut b, 1);
@@ -1895,7 +1895,7 @@ mod tests {
     #[test]
     fn first_non_blank_next_line_lands_on_non_blank() {
         // `+` from row 0 → row 1, first non-blank.
-        let mut b = Buffer::from_str("foo\n    bar\nbaz");
+        let mut b = View::from_str("foo\n    bar\nbaz");
         move_first_non_blank_next_line(&mut b, 1);
         assert_eq!(at(&b), Position::new(1, 4));
     }
@@ -1903,14 +1903,14 @@ mod tests {
     #[test]
     fn first_non_blank_next_line_count() {
         // `3+` from row 0 → row 3.
-        let mut b = Buffer::from_str("a\nb\n  c\nd");
+        let mut b = View::from_str("a\nb\n  c\nd");
         move_first_non_blank_next_line(&mut b, 3);
         assert_eq!(at(&b), Position::new(3, 0));
     }
 
     #[test]
     fn first_non_blank_next_line_at_last_row_clamps() {
-        let mut b = Buffer::from_str("foo\nbar");
+        let mut b = View::from_str("foo\nbar");
         b.set_cursor(Position::new(1, 0));
         move_first_non_blank_next_line(&mut b, 1);
         assert_eq!(at(&b).row, 1);
@@ -1919,7 +1919,7 @@ mod tests {
     #[test]
     fn first_non_blank_prev_line_lands_on_non_blank() {
         // `-` from row 1 → row 0, first non-blank.
-        let mut b = Buffer::from_str("    hello\nworld");
+        let mut b = View::from_str("    hello\nworld");
         b.set_cursor(Position::new(1, 0));
         move_first_non_blank_prev_line(&mut b, 1);
         assert_eq!(at(&b), Position::new(0, 4));
@@ -1928,7 +1928,7 @@ mod tests {
     #[test]
     fn first_non_blank_prev_line_count() {
         // `3-` from row 3 → row 0.
-        let mut b = Buffer::from_str("  a\nb\nc\nd");
+        let mut b = View::from_str("  a\nb\nc\nd");
         b.set_cursor(Position::new(3, 0));
         move_first_non_blank_prev_line(&mut b, 3);
         assert_eq!(at(&b), Position::new(0, 2));
@@ -1936,7 +1936,7 @@ mod tests {
 
     #[test]
     fn first_non_blank_prev_line_at_row_zero_clamps() {
-        let mut b = Buffer::from_str("  foo\nbar");
+        let mut b = View::from_str("  foo\nbar");
         move_first_non_blank_prev_line(&mut b, 1);
         assert_eq!(at(&b).row, 0);
     }
@@ -1944,7 +1944,7 @@ mod tests {
     #[test]
     fn first_non_blank_line_count_1_stays_on_current() {
         // `_` with count=1 stays on current line, first non-blank.
-        let mut b = Buffer::from_str("    hello\nworld");
+        let mut b = View::from_str("    hello\nworld");
         move_first_non_blank_line(&mut b, 1);
         assert_eq!(at(&b), Position::new(0, 4));
     }
@@ -1952,14 +1952,14 @@ mod tests {
     #[test]
     fn first_non_blank_line_count_2_goes_one_down() {
         // `2_` from row 0 → row 1 (count-1=1 line down), first non-blank.
-        let mut b = Buffer::from_str("foo\n  bar\nbaz");
+        let mut b = View::from_str("foo\n  bar\nbaz");
         move_first_non_blank_line(&mut b, 2);
         assert_eq!(at(&b), Position::new(1, 2));
     }
 
     #[test]
     fn first_non_blank_line_clamps_at_last_row() {
-        let mut b = Buffer::from_str("a\nb");
+        let mut b = View::from_str("a\nb");
         // 10_ from row 0 → last row (row 1), first non-blank.
         move_first_non_blank_line(&mut b, 10);
         assert_eq!(at(&b).row, 1);

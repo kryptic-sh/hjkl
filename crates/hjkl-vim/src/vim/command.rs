@@ -17,7 +17,7 @@ use hjkl_engine::buf_helpers::{
 /// `Operator::Yank` so we can pipe the same range translation as
 /// [`cut_vim_range`] but skip the delete + inverse extraction.
 pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
     kind: RangeKind,
@@ -62,7 +62,7 @@ pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
         }
     }
 }
-/// Cut a vim-shaped range through the Buffer edit funnel and return
+/// Cut a vim-shaped range through the View edit funnel and return
 /// the deleted text. Translates vim's `RangeKind`
 /// (Linewise/Inclusive/Exclusive) into the buffer's
 /// `hjkl_buffer::MotionKind` (Line/Char) and applies the right end-
@@ -71,7 +71,7 @@ pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
 /// and the textarea yank buffer (still observed by `p`/`P` until the paste
 /// path is ported), and updates `yank_linewise` for linewise cuts.
 pub(crate) fn cut_vim_range<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
     kind: RangeKind,
@@ -127,7 +127,7 @@ pub(crate) fn cut_vim_range<H: hjkl_engine::types::Host>(
 /// and the textarea's yank buffer (still observed by `p`/`P` until the paste
 /// path is ported). Cursor lands at the deletion start so the caller
 /// can decide whether to step it left (`D`) or open insert mode (`C`).
-pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
@@ -151,7 +151,7 @@ pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_bu
     ed.push_buffer_cursor_to_textarea();
 }
 pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     count: usize,
 ) {
@@ -211,7 +211,7 @@ pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
 /// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
 /// well as signed decimals. No-op if the line has no number to the right.
 pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     delta: i64,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -300,7 +300,7 @@ pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
     true
 }
 pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     count: usize,
 ) {
@@ -336,7 +336,7 @@ pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
 /// (end of line / empty line) so counted loops can stop instead of
 /// spinning through a saturated count prefix.
 pub(crate) fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
@@ -363,7 +363,7 @@ pub(crate) fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
 /// Returns `false` when the cursor is on the last line (nothing to
 /// join) so counted loops can stop instead of spinning.
 pub(crate) fn join_line<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
@@ -400,7 +400,7 @@ pub(crate) fn join_line<H: hjkl_engine::types::Host>(
 /// separating space or stripping leading whitespace.
 /// Returns `false` when the cursor is on the last line. See [`join_line`].
 pub(crate) fn join_line_raw<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
@@ -423,7 +423,7 @@ pub(crate) fn join_line_raw<H: hjkl_engine::types::Host>(
 /// every line spanned by the selection into one. A single-line selection joins
 /// the current line with the one below (matching normal-mode `J`).
 pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     with_space: bool,
 ) {
     let cursor_row = buf_cursor_pos(ed.buffer()).row;
@@ -464,7 +464,7 @@ pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
 pub(crate) fn goto_percent<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
     let rows = buf_row_count(ed.buffer());
@@ -546,7 +546,7 @@ pub(crate) fn reindent_block(
         .join("\n")
 }
 pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
     count: usize,
     cursor_after: bool,
@@ -700,7 +700,7 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
 /// with `P` (`before = true`) the source register is preserved so it can be
 /// pasted over multiple selections in turn.
 pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
 ) {
     use hjkl_buffer::{Edit, Position};
@@ -800,7 +800,7 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
 /// grows by `delta` for each successive number found (vim's `g<C-a>`): the
 /// first gets `delta`, the second `2*delta`, and so on.
 pub(crate) fn adjust_number_visual<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     delta: i64,
     sequential: bool,
 ) {
@@ -890,16 +890,16 @@ pub(crate) fn adjust_number_visual<H: hjkl_engine::types::Host>(
 }
 #[cfg(test)]
 mod replace_char_tests {
-    use hjkl_buffer::{Buffer, rope_line_str};
+    use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+    fn line(ed: &Editor<View, DefaultHost>, row: usize) -> String {
         rope_line_str(&ed.buffer().rope(), row)
     }
 
     #[test]
     fn replace_char_count_exceeding_line_replaces_nothing() {
-        let buf = Buffer::from_str("ab\ncd");
+        let buf = View::from_str("ab\ncd");
         let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         // Cursor at (0,0); `3rx` needs 3 chars but the line has 2 — vim aborts
         // the whole command and replaces nothing (not a partial run).
@@ -910,7 +910,7 @@ mod replace_char_tests {
 
     #[test]
     fn replace_char_count_fitting_replaces_run() {
-        let buf = Buffer::from_str("abc");
+        let buf = View::from_str("abc");
         let mut ed = crate::vim::vim_editor(buf, DefaultHost::new(), Options::default());
         super::replace_char(&mut ed, 'x', 2);
         assert_eq!(line(&ed, 0), "xxc");
@@ -919,16 +919,16 @@ mod replace_char_tests {
 #[cfg(test)]
 mod g_ampersand_tests {
     use super::*;
-    use hjkl_buffer::{Buffer, rope_line_str};
+    use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let host = DefaultHost::new();
         crate::vim::vim_editor(buf, host, Options::default())
     }
 
-    fn buf_line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+    fn buf_line(ed: &Editor<View, DefaultHost>, row: usize) -> String {
         let rope = ed.buffer().rope();
         rope_line_str(&rope, row).trim_end_matches('\n').to_string()
     }

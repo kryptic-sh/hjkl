@@ -690,7 +690,7 @@ impl SyntaxLayer {
             client.invalidate_cache();
         }
 
-        // Get a rope snapshot — O(1) Arc-clone from hjkl_buffer::Buffer.
+        // Get a rope snapshot — O(1) Arc-clone from hjkl_buffer::View.
         // All downstream consumers (parse, highlight, row_starts, diag signs)
         // now read directly from the rope: no full-document String allocation.
         let rope = buffer.rope();
@@ -1251,7 +1251,7 @@ pub fn default_layer() -> SyntaxLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use std::path::Path;
 
     const TID: BufferId = 0;
@@ -1405,7 +1405,7 @@ mod tests {
 
     #[test]
     fn render_viewport_with_no_language_returns_none() {
-        let buf = Buffer::from_str("hello world");
+        let buf = View::from_str("hello world");
         let mut layer = default_layer();
         assert!(
             !layer
@@ -1482,7 +1482,7 @@ mod tests {
         // `Vec::new()`, which the caller misinterpreted as "ran successfully,
         // no folds" → dirty_gen stamped → folds never re-tried after load.
         let buf =
-            Buffer::from_str("fn hello() {\n    let x = 1;\n    x\n}\n\nfn world() {\n    2\n}\n");
+            View::from_str("fn hello() {\n    let x = 1;\n    x\n}\n\nfn world() {\n    2\n}\n");
         let mut layer = default_layer();
         // Deliberately use an unknown extension so no grammar is attached.
         layer.set_language_for_path(TID, Path::new("a.zzz_no_grammar_here"));
@@ -1496,8 +1496,8 @@ mod tests {
 
     #[test]
     fn extract_fold_ranges_returns_none_when_no_client_registered() {
-        // Buffer ID with no prior `set_language_for_path` call — no client at all.
-        let buf = Buffer::from_str("fn foo() {}\n");
+        // View ID with no prior `set_language_for_path` call — no client at all.
+        let buf = View::from_str("fn foo() {}\n");
         let mut layer = default_layer();
         // Never called set_language_for_path for TID.
         let result = layer.extract_fold_ranges(TID, &buf);
@@ -1513,7 +1513,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn parse_and_render_small_rust_buffer() {
-        let buf = Buffer::from_str("fn main() { let x = 1; }\n");
+        let buf = View::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
         assert!(
             layer
@@ -1532,7 +1532,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn diagnostics_emit_sign_for_syntax_error() {
-        let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
+        let buf = View::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let out = layer.render_viewport(TID, &buf, 0, 10).unwrap();
@@ -1562,7 +1562,7 @@ mod tests {
             src.push_str(&format!("fn f{i}() {{}}\n"));
         }
         src.push_str("fn broken() {\nlet x = ;\n}\n");
-        let buf = Buffer::from_str(&src);
+        let buf = View::from_str(&src);
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let out = layer.render_viewport(TID, &buf, 45, 20).unwrap();
@@ -1578,7 +1578,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn incremental_path_matches_cold_for_small_edit() {
-        let pre = Buffer::from_str("fn main() { let x = 1; }");
+        let pre = View::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
@@ -1593,7 +1593,7 @@ mod tests {
                 new_end_position: (0, 4),
             }],
         );
-        let post = Buffer::from_str("fn Ymain() { let x = 1; }");
+        let post = View::from_str("fn Ymain() { let x = 1; }");
         let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
         let mut cold_layer = default_layer();
         cold_layer.set_language_for_path(TID, Path::new("a.rs"));
@@ -1604,7 +1604,7 @@ mod tests {
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn forget_drops_buffer_state() {
-        let buf = Buffer::from_str("fn main() {}");
+        let buf = View::from_str("fn main() {}");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
         let _ = layer.render_viewport(TID, &buf, 0, 10).unwrap();

@@ -45,7 +45,7 @@ pub use setopt::{all_setting_names, apply_set_token, query_option_value};
 /// - `None` when no registered command matched (caller falls back to legacy handling)
 pub fn try_dispatch<H: hjkl_engine::Host>(
     reg: &Registry<H>,
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: &str,
 ) -> Option<ExEffect> {
     let input = input.trim();
@@ -106,7 +106,7 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
 /// matching `pat`. Empty pattern reuses `editor.last_search()`.
 /// Ported from `hjkl_editor::ex::run` lines 149–181.
 fn handle_search_address<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: &str,
 ) -> ExEffect {
     let forward = input.starts_with('/');
@@ -174,7 +174,7 @@ pub fn try_dispatch_host<Ctx>(
 /// - `range.is_some()` AND `cmd_str.is_empty()` → goto range start (vim semantics).
 /// - Otherwise → `None` (let caller fall back to legacy).
 fn handle_bare_line_number<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     cmd_str: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -205,24 +205,24 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
-        let buf = hjkl_buffer::Buffer::new();
+    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
+        let buf = hjkl_buffer::View::new();
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let content = lines.join("\n");
-        let buf = hjkl_buffer::Buffer::from_str(&content);
+        let buf = hjkl_buffer::View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
 
-    fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {
+    fn buf_line(editor: &Editor<hjkl_buffer::View, DefaultHost>, row: usize) -> String {
         hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
     }
 
-    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+    fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
         let rope = editor.buffer().rope();
         (0..rope.len_lines())
             .map(|i| hjkl_buffer::rope_line_str(&rope, i))
@@ -1760,7 +1760,7 @@ mod tests {
     // ---- Phase 5a: collect_registry_names + completion integration -----------
 
     fn noop_handler(
-        _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+        _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
         _args: &str,
         _range: Option<crate::range::LineRange>,
     ) -> Option<ExEffect> {

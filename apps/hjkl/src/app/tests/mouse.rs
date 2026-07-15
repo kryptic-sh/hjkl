@@ -1095,7 +1095,7 @@ mod border_drag_tests {
         git(tmp.path(), &["add", "h.txt"]);
         git(tmp.path(), &["commit", "-q", "-m", "init"]);
 
-        // Buffer differs from HEAD/index on row 1 → unstaged hunk at row 1.
+        // View differs from HEAD/index on row 1 → unstaged hunk at row 1.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
         app.slots_mut()[0].filename = Some(f.clone());
@@ -1154,7 +1154,7 @@ mod border_drag_tests {
         std::fs::write(&f, "a\nB\nc\nd\ne\n").unwrap();
         git(tmp.path(), &["add", "h.txt"]);
 
-        // Buffer matches the staged worktree content → row 1 is a *staged* hunk.
+        // View matches the staged worktree content → row 1 is a *staged* hunk.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
         app.slots_mut()[0].filename = Some(f.clone());
@@ -1251,7 +1251,7 @@ mod border_drag_tests {
         git(tmp.path(), &["add", "h.txt"]);
         git(tmp.path(), &["commit", "-q", "-m", "init"]);
 
-        // Buffer differs from HEAD on row 1 → one hunk covering row 1.
+        // View differs from HEAD on row 1 → one hunk covering row 1.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
         app.slots_mut()[0].filename = Some(f.clone());

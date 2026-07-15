@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Editor, Host, VimMode};
 use hjkl_vim::VimEditorExt;
 
-fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, keys: &str) {
+fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::View, H>, keys: &str) {
     // Minimal notation:
     //   <Esc> <CR> <BS> <Left/Right/Up/Down> <C-x>
     //   anything else = single char
@@ -61,7 +61,7 @@ fn editor_with(content: &str) -> Editor {
         ..hjkl_engine::Options::default()
     };
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
     );
@@ -395,7 +395,7 @@ fn dd_in_middle_puts_cursor_on_first_non_blank_of_next() {
     let mut e = editor_with("one\ntwo\n    three\nfour");
     e.jump_cursor(1, 2);
     run_keys(&mut e, "dd");
-    // Buffer: ["one", "    three", "four"]
+    // View: ["one", "    three", "four"]
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "    three"
@@ -408,7 +408,7 @@ fn dd_on_last_line_puts_cursor_on_first_non_blank_of_prev() {
     let mut e = editor_with("one\n  two\nthree");
     e.jump_cursor(2, 0);
     run_keys(&mut e, "dd");
-    // Buffer: ["one", "  two"]
+    // View: ["one", "  two"]
     assert_eq!(e.buffer().row_count(), 2);
     assert_eq!(e.cursor(), (1, 2));
 }
@@ -444,7 +444,7 @@ fn count_dd_puts_cursor_on_first_non_blank_of_remaining() {
 
 #[test]
 fn dd_then_j_uses_first_non_blank_not_sticky_col() {
-    // Buffer: 3 lines with predictable widths.
+    // View: 3 lines with predictable widths.
     // Line 0: "    line one"   (12 chars, first-non-blank at col 4)
     // Line 1: "    line two"   (12 chars, first-non-blank at col 4)
     // Line 2: "  xy"           (4 chars, indices 0-3; last char at col 3)
@@ -1928,7 +1928,7 @@ fn cc_preserves_indent_with_autoindent() {
 }
 
 /// Helper: collect rope lines (strip trailing `\n`) into a `Vec<String>`.
-fn rope_lines(e: &Editor<hjkl_buffer::Buffer, impl hjkl_engine::types::Host>) -> Vec<String> {
+fn rope_lines(e: &Editor<hjkl_buffer::View, impl hjkl_engine::types::Host>) -> Vec<String> {
     e.buffer()
         .rope()
         .lines()
@@ -2982,7 +2982,7 @@ fn ctrl_scroll_keys_do_not_panic() {
 #[test]
 fn count_insert_with_arrow_nav_does_not_leak_rows() {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
     );
@@ -2998,7 +2998,7 @@ fn count_insert_with_arrow_nav_does_not_leak_rows() {
         "row1 leaked row0 contents: {:?}",
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 1)
     );
-    // Buffer stays the same number of rows — no extra lines
+    // View stays the same number of rows — no extra lines
     // injected by a multi-line "inserted" replay.
     assert_eq!(e.buffer().row_count(), 3);
 }
@@ -3007,7 +3007,7 @@ fn count_insert_with_arrow_nav_does_not_leak_rows() {
 
 fn editor_with_rows(n: usize, viewport: u16) -> Editor {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
     );
@@ -3029,7 +3029,7 @@ fn ctrl_d_moves_cursor_half_page_down() {
 
 fn editor_with_wrap_lines(lines: &[&str], viewport: u16, text_width: u16) -> Editor {
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
     );
@@ -3583,7 +3583,7 @@ fn mark_shifts_down_after_insert() {
     // Open a new line above row 0 with `O\nfoo<Esc>`.
     e.jump_cursor(0, 0);
     run_keys(&mut e, "Onew<Esc>");
-    // Buffer is now ["new", "a", "b", "c"]; mark `a` should track
+    // View is now ["new", "a", "b", "c"]; mark `a` should track
     // the original content row → 3.
     e.jump_cursor(0, 0);
     run_keys(&mut e, "'a");
@@ -4480,7 +4480,7 @@ fn edit_pipeline_emits_invalidate_fold_op() {
 /// must snap the cursor to the fold's start_row (vim behaviour).
 #[test]
 fn close_fold_snaps_cursor_to_start_row() {
-    // Buffer: rows 0-4. Fold covers rows 1-3. Cursor starts on row 2
+    // View: rows 0-4. Fold covers rows 1-3. Cursor starts on row 2
     // (inside the fold body). Closing the fold must snap cursor to row 1.
     let mut e = editor_with("a\nb\nc\nd\ne");
     e.buffer_mut().add_fold(1, 3, false); // open fold, rows 1-3
@@ -4515,7 +4515,7 @@ fn toggle_fold_closed_snaps_cursor_to_start_row() {
 /// should step over the fold as a single visual unit.
 #[test]
 fn j_after_fold_close_steps_over_fold() {
-    // Buffer: rows 0-4. Fold rows 1-3 (closed). Cursor at start_row=1.
+    // View: rows 0-4. Fold rows 1-3 (closed). Cursor at start_row=1.
     // j from row 1 should go to row 4 (first visible row after fold).
     let mut e = editor_with_rows(5, 10);
     e.buffer_mut().add_fold(1, 3, true); // already closed
@@ -4800,7 +4800,7 @@ fn si_editor(content: &str) -> Editor {
         ..hjkl_engine::Options::default()
     };
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
     );
@@ -4848,7 +4848,7 @@ fn smartindent_uses_tab_when_noexpandtab() {
         ..hjkl_engine::Options::default()
     };
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
     );
@@ -5256,11 +5256,11 @@ fn gi_resumes_last_insert_position() {
 
 /// Bug 4: `<C-v>jlc<text><Esc>` — after blockwise change the cursor
 /// should sit on the last char of the inserted text (`col 1` for "ZZ"),
-/// not at the block start (`col 0`). Buffer result must still be correct.
+/// not at the block start (`col 0`). View result must still be correct.
 #[test]
 fn visual_block_change_cursor_on_last_inserted_char() {
     // "foo\nbar\nbaz\n", cursor (0,0). Block covers rows 0-1, cols 0-1.
-    // `cZZ` replaces cols 0-1 on each row with "ZZ". Buffer becomes
+    // `cZZ` replaces cols 0-1 on each row with "ZZ". View becomes
     // "ZZo\nZZr\nbaz\n". Cursor should be at (0,1) — last char of "ZZ".
     let mut e = editor_with("foo\nbar\nbaz\n");
     e.jump_cursor(0, 0);
@@ -5671,7 +5671,7 @@ fn apply_op_g_dge_deletes_word_end_back() {
     );
     // 'e' at col 0 with no previous word → no-op (nothing to go back to).
     e.apply_op_g(hjkl_engine::Operator::Delete, 'e', 1);
-    // Buffer may or may not change; just assert no panic.
+    // View may or may not change; just assert no panic.
 }
 
 #[test]
@@ -5697,7 +5697,7 @@ fn apply_op_g_dgj_deletes_screen_down() {
 
 fn blank_editor() -> Editor {
     hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         hjkl_engine::Options::default(),
     )
@@ -5755,7 +5755,7 @@ fn indent_editor_vim(content: &str) -> Editor {
         ..hjkl_engine::Options::default()
     };
     let mut e = hjkl_vim::vim_editor(
-        hjkl_buffer::Buffer::new(),
+        hjkl_buffer::View::new(),
         hjkl_engine::DefaultHost::new(),
         opts,
     );
@@ -6224,7 +6224,7 @@ fn d_double_bracket_open_deletes_range() {
     run_keys(&mut e, "[["); // row 5
     // d[[ from row 5 → nearest { backward is row 1; charwise exclusive.
     run_keys(&mut e, "d[[");
-    // Content between rows 1..5 is deleted; row 1 `{` itself stays (exclusive).
+    // Buffer between rows 1..5 is deleted; row 1 `{` itself stays (exclusive).
     assert!(e.content().contains('{'), "opening brace should remain");
 }
 

@@ -8,13 +8,13 @@
 //! targets. A `tests/` target links hjkl-engine as an external crate, so the
 //! impl resolves here.
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_engine::{Editor, ViewMode, VimMode};
 use hjkl_vim::VimEditorExt;
 
-fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
-    let buf = Buffer::from_str(content);
+fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+    let buf = View::from_str(content);
     hjkl_vim::vim_editor(buf, DefaultHost::default(), Options::default())
 }
 

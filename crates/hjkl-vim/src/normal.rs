@@ -23,7 +23,7 @@ use crate::VimEditorExt;
 /// Returns `true` when the input was consumed. Every key is consumed in
 /// these modes (unknown keys swallow silently to avoid TUI bubbling).
 pub fn step_normal<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     // Consume digits first — except '0' at start of count (that's LineStart).
@@ -496,7 +496,7 @@ pub fn step_normal<H: Host>(
 
 /// Normal-only commands (not motion, not operator, not applicable in visual).
 fn handle_normal_only<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: &Input,
     count: usize,
 ) -> bool {
@@ -625,7 +625,7 @@ fn handle_normal_only<H: Host>(
 // ─── Pending chord handlers ────────────────────────────────────────────────
 
 fn handle_set_mark<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     if let Key::Char(c) = input.key {
@@ -635,7 +635,7 @@ fn handle_set_mark<H: Host>(
 }
 
 fn handle_select_register<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     if let Key::Char(c) = input.key {
@@ -645,7 +645,7 @@ fn handle_select_register<H: Host>(
 }
 
 fn handle_record_macro_target<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     if let Key::Char(c) = input.key
@@ -673,7 +673,7 @@ fn handle_record_macro_target<H: Host>(
 }
 
 fn handle_play_macro_target<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     count: usize,
 ) -> bool {
@@ -723,7 +723,7 @@ fn handle_play_macro_target<H: Host>(
 }
 
 fn handle_goto_mark<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     linewise: bool,
 ) -> bool {
@@ -744,7 +744,7 @@ fn handle_goto_mark<H: Host>(
 }
 
 fn handle_after_op<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -917,7 +917,7 @@ fn handle_after_op<H: Host>(
 }
 
 fn handle_op_after_g<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -936,7 +936,7 @@ fn handle_op_after_g<H: Host>(
 }
 
 fn handle_after_g<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     let count = ed.take_count();
@@ -981,7 +981,7 @@ fn handle_after_g<H: Host>(
 }
 
 fn handle_after_z<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     let count = ed.take_count();
@@ -994,7 +994,7 @@ fn handle_after_z<H: Host>(
 }
 
 fn handle_replace<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
     // Consume the stashed count up front so a cancelled chord (Esc or any
@@ -1017,7 +1017,7 @@ fn handle_replace<H: Host>(
 }
 
 fn handle_find_target<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     forward: bool,
     till: bool,
@@ -1033,7 +1033,7 @@ fn handle_find_target<H: Host>(
 }
 
 fn handle_op_find_target<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -1051,7 +1051,7 @@ fn handle_op_find_target<H: Host>(
 }
 
 fn handle_text_object<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -1073,7 +1073,7 @@ fn handle_text_object<H: Host>(
 }
 
 fn handle_visual_text_obj<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     inner: bool,
 ) -> bool {
@@ -1088,7 +1088,7 @@ fn handle_visual_text_obj<H: Host>(
 
 /// `[[` — backward to previous `{` at col 0; `[]` — backward to `}` at col 0.
 fn handle_after_square_bracket_open<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     count: usize,
 ) -> bool {
@@ -1117,7 +1117,7 @@ fn handle_after_square_bracket_open<H: Host>(
 
 /// `]]` — forward to next `{` at col 0; `][` — forward to `}` at col 0.
 fn handle_after_square_bracket_close<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     count: usize,
 ) -> bool {
@@ -1153,7 +1153,7 @@ fn handle_after_square_bracket_close<H: Host>(
 
 /// Operator + `[[` / `[]`.
 fn handle_op_after_square_bracket_open<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -1181,7 +1181,7 @@ fn handle_op_after_square_bracket_open<H: Host>(
 
 /// Operator + `]]` / `][`.
 fn handle_op_after_square_bracket_close<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -1263,7 +1263,7 @@ fn find_entry(input: &Input) -> Option<(bool, bool)> {
 ///                `SneakSecond` → char2 → `apply_sneak(c1, c2)`
 ///                Either state + Esc/non-char → cancel.
 fn handle_sneak_first<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     forward: bool,
     count: usize,
@@ -1288,7 +1288,7 @@ fn handle_sneak_first<H: Host>(
 /// Handle the second char of a bare sneak: we have char1, this is char2.
 /// Execute the jump.
 fn handle_sneak_second<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     c1: char,
     forward: bool,
@@ -1306,7 +1306,7 @@ fn handle_sneak_second<H: Host>(
 
 /// Handle the first char of an op+sneak (`dsXY` — this is `X`).
 fn handle_op_sneak_first<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,
@@ -1336,7 +1336,7 @@ fn handle_op_sneak_first<H: Host>(
 
 /// Handle the second char of an op+sneak (`dsXY` — this is `Y`).
 fn handle_op_sneak_second<H: Host>(
-    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
     op: Operator,
     count1: usize,

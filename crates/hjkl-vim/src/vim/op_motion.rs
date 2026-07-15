@@ -10,7 +10,7 @@ use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_set_cursor_rc};
 
 pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     motion: &Motion,
     count: usize,
@@ -61,7 +61,7 @@ pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 /// columns `[.., end.1)` there — which is what keeps `d2w` ending mid-line
 /// (last word not at EOL, `word_end.0 == end.0`) from being clamped.
 pub(crate) fn last_word_end_before<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
 ) -> Option<(usize, usize)> {
@@ -86,7 +86,7 @@ pub(crate) fn last_word_end_before<H: hjkl_engine::types::Host>(
     None
 }
 pub(crate) fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     obj: TextObject,
     inner: bool,
@@ -169,7 +169,7 @@ pub(crate) fn motion_kind(motion: &Motion) -> RangeKind {
 /// `[`/`]` deferral. Calls `push_undo` internally — callers must NOT also
 /// call it.
 pub(crate) fn change_linewise_rows<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     end_row: usize,
 ) {
@@ -215,7 +215,7 @@ pub(crate) fn change_linewise_rows<H: hjkl_engine::types::Host>(
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
 pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     start: (usize, usize),
     end: (usize, usize),

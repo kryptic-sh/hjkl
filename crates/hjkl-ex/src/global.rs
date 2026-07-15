@@ -42,7 +42,7 @@ fn split_unescaped(s: &str, sep: char) -> Vec<String> {
 /// then drops them in reverse so row indices stay valid through the cascade
 /// of deletes. Ported verbatim from `hjkl_editor::ex::apply_global`.
 pub(crate) fn global_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
     negate: bool,
@@ -149,7 +149,7 @@ pub(crate) fn global_handler<H: Host>(
 
 /// `:global/pat/cmd` — delete matching lines (negate=false).
 pub(crate) fn global_match_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -164,7 +164,7 @@ pub(crate) fn global_match_handler<H: Host>(
 
 /// `:vglobal/pat/cmd` — delete non-matching lines (negate=true).
 pub(crate) fn vglobal_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
@@ -176,9 +176,9 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let content = lines.join("\n");
-        let buf = hjkl_buffer::Buffer::from_str(&content);
+        let buf = hjkl_buffer::View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }
@@ -264,7 +264,7 @@ mod tests {
         assert!(lines.iter().all(|l| l == "foo"), "lines: {lines:?}");
     }
 
-    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+    fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
         let rope = editor.buffer().rope();
         (0..rope.len_lines())
             .map(|i| hjkl_buffer::rope_line_str(&rope, i))

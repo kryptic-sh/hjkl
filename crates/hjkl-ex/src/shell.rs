@@ -12,7 +12,7 @@ use hjkl_engine::Host;
 /// Called from `try_dispatch` via the special-case `!` prefix check
 /// (before `split_name_args`).
 pub(crate) fn shell_filter_handler<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     cmd: &str,
     range: Option<LineRange>,
 ) -> ExEffect {
@@ -141,9 +141,9 @@ mod tests {
     use super::*;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
         let content = lines.join("\n");
-        let buf = hjkl_buffer::Buffer::from_str(&content);
+        let buf = hjkl_buffer::View::from_str(&content);
         let host = DefaultHost::new();
         hjkl_vim::vim_editor(buf, host, Options::default())
     }

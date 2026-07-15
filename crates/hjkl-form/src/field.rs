@@ -2,7 +2,7 @@
 
 use crate::host::FormFieldHost;
 use crate::validate::Validator;
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{CoarseMode, Editor, Host, Input, Key, Options};
 use hjkl_vim::VimEditorExt;
 
@@ -43,7 +43,7 @@ impl FieldMeta {
 }
 
 /// A text input field — either single-line or multi-line. Owns its own
-/// `Editor<Buffer, FormFieldHost>` so the full vim grammar applies.
+/// `Editor<View, FormFieldHost>` so the full vim grammar applies.
 ///
 /// Two construction paths:
 ///
@@ -61,7 +61,7 @@ impl FieldMeta {
 /// reaches the field. This keeps the buffer single-line by construction.
 pub struct TextFieldEditor {
     pub meta: FieldMeta,
-    pub editor: Editor<Buffer, FormFieldHost>,
+    pub editor: Editor<View, FormFieldHost>,
     pub validator: Option<Validator>,
     /// Visible body height for multi-line fields. Single-line is 1.
     pub rows: u16,
@@ -81,7 +81,7 @@ impl TextFieldEditor {
     /// want a different multi-line height should bump `rows` afterwards
     /// or use [`TextFieldEditor::with_meta`].
     pub fn new(single_line: bool) -> Self {
-        let buffer = Buffer::new();
+        let buffer = View::new();
         let host = FormFieldHost::new();
         let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         Self {
@@ -106,7 +106,7 @@ impl TextFieldEditor {
     /// / placeholder / required marker render via
     /// [`crate::Form`]'s ratatui adapter.
     pub fn with_meta(meta: FieldMeta, rows: u16) -> Self {
-        let buffer = Buffer::new();
+        let buffer = View::new();
         let host = FormFieldHost::new();
         let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         Self {
@@ -127,21 +127,21 @@ impl TextFieldEditor {
 
     /// Pre-fill the editor's buffer with `text`.
     pub fn with_initial(mut self, text: &str) -> Self {
-        let buffer = Buffer::from_str(text);
+        let buffer = View::from_str(text);
         let host = FormFieldHost::new();
         self.editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         self
     }
 
-    /// Borrow the underlying [`Buffer`] for span rendering, snapshots,
+    /// Borrow the underlying [`View`] for span rendering, snapshots,
     /// or other read-only consumers.
-    pub fn buffer(&self) -> &Buffer {
+    pub fn buffer(&self) -> &View {
         self.editor.buffer()
     }
 
     /// Mutable buffer access. Rare — prefer [`TextFieldEditor::handle_input`]
     /// which routes through the vim FSM and keeps the cursor consistent.
-    pub fn buffer_mut(&mut self) -> &mut Buffer {
+    pub fn buffer_mut(&mut self) -> &mut View {
         self.editor.buffer_mut()
     }
 
@@ -162,7 +162,7 @@ impl TextFieldEditor {
     /// preset value. Drops the inner editor and rebuilds it; cursor
     /// lands at the end of the new content and mode is `Normal`.
     pub fn set_text(&mut self, text: &str) {
-        let buffer = Buffer::from_str(text);
+        let buffer = View::from_str(text);
         let host = FormFieldHost::new();
         self.editor = hjkl_vim::vim_editor(buffer, host, Options::default());
         // Land cursor at end-of-text so `enter_insert_at_end` puts the
@@ -241,7 +241,7 @@ impl TextFieldEditor {
         self.editor.buffer().dirty_gen() != before
     }
 
-    /// Buffer dirty generation — bumps on every content edit.
+    /// View dirty generation — bumps on every content edit.
     pub fn dirty_gen(&self) -> u64 {
         self.editor.buffer().dirty_gen()
     }

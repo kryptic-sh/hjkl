@@ -22,7 +22,7 @@ use hjkl_engine::buf_helpers::{buf_line, buf_line_bytes, buf_row_count, buf_set_
 /// `last_sneak` and `last_horizontal_motion` are updated so `;`/`,` repeat.
 /// No-op (cursor unchanged) when no match exists.
 pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     c1: char,
     c2: char,
     forward: bool,
@@ -50,7 +50,7 @@ pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
 /// Scan forward from `(start_row, start_col)` (exclusive — start right after
 /// cursor) for the `count`-th occurrence of `c1+c2`.
 pub(crate) fn sneak_scan_forward<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     start_row: usize,
     start_col: usize,
     c1: char,
@@ -81,7 +81,7 @@ pub(crate) fn sneak_scan_forward<H: hjkl_engine::types::Host>(
 /// Scan backward from `(start_row, start_col)` (exclusive — start left of
 /// cursor) for the `count`-th occurrence of `c1+c2`.
 pub(crate) fn sneak_scan_backward<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     start_row: usize,
     start_col: usize,
     c1: char,
@@ -125,7 +125,7 @@ pub(crate) fn sneak_scan_backward<H: hjkl_engine::types::Host>(
 /// Example: buffer `"foo ab bar\n"`, cursor col 0, `dsab` → deletes `"foo "`
 /// leaving `"ab bar\n"`.
 pub(crate) fn apply_op_sneak<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     c1: char,
     c2: char,
@@ -161,7 +161,7 @@ pub(crate) fn apply_op_sneak<H: hjkl_engine::types::Host>(
 /// re-entering the FSM. `handle_op_find_target` now delegates here to avoid
 /// logic duplication.
 pub(crate) fn apply_op_find_motion<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     ch: char,
     forward: bool,
@@ -189,7 +189,7 @@ pub(crate) fn apply_op_find_motion<H: hjkl_engine::types::Host>(
 /// `apply_op_motion_key` but is currently unused — text objects don't repeat
 /// in vim's current grammar. Kept for future-proofing.
 pub(crate) fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     ch: char,
     inner: bool,
@@ -223,7 +223,7 @@ pub(crate) fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
 }
 /// Move `pos` back by one character, clamped to (0, 0).
 pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::Buffer, H>,
+    ed: &Editor<hjkl_buffer::View, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
     let (r, c) = pos;
@@ -238,7 +238,7 @@ pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
 }
 /// Variant of begin_insert that doesn't push_undo (caller already did).
 pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
     reason: InsertReason,
 ) {
@@ -265,11 +265,11 @@ pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
 #[cfg(test)]
 mod sneak_tests {
     use super::*;
-    use hjkl_buffer::Buffer;
+    use hjkl_buffer::View;
     use hjkl_engine::{DefaultHost, Editor, Options};
 
-    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
-        let buf = Buffer::from_str(content);
+    fn make_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
         let host = DefaultHost::new();
         crate::vim::vim_editor(buf, host, Options::default())
     }
@@ -360,7 +360,7 @@ mod sneak_tests {
         let mut ed = make_editor("hello ab world\n");
         ed.jump_cursor(0, 0);
         super::apply_op_sneak(&mut ed, Operator::Delete, 'a', 'b', true, 1);
-        // Buffer content after exclusive delete from [0,0] to [0,6] (start of "ab").
+        // View content after exclusive delete from [0,0] to [0,6] (start of "ab").
         let content = ed.content();
         assert!(
             content.starts_with("ab world"),

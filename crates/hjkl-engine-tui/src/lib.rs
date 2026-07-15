@@ -173,7 +173,7 @@ pub trait EditorRatatuiExt {
     fn ratatui_style_table(&self) -> Vec<RStyle>;
 }
 
-impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::Buffer, H> {
+impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::View, H> {
     fn intern_ratatui_style(&mut self, style: RStyle) -> u32 {
         self.intern_style(style_from_ratatui(style))
     }
@@ -224,7 +224,7 @@ mod tests {
 
     fn fresh_editor(content: &str) -> Editor {
         let mut e = hjkl_vim::vim_editor(
-            hjkl_buffer::Buffer::new(),
+            hjkl_buffer::View::new(),
             DefaultHost::new(),
             hjkl_engine::types::Options::default(),
         );

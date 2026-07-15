@@ -7,14 +7,14 @@
 //!
 //! No temp files needed — all state lives in-memory.
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{DefaultHost, Editor, Options};
 use hjkl_vim::{dispatch_input, insert::step_insert};
 
 /// Build an editor pre-loaded with `content` and the given language.
 /// The editor starts in Normal mode (default).
-fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
-    let buf = Buffer::from_str(content);
+fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
+    let buf = View::from_str(content);
     let host = DefaultHost::new();
     let opts = Options {
         filetype: lang.to_string(),
@@ -25,7 +25,7 @@ fn editor(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
 }
 
 /// Feed a string of keystrokes through `dispatch_input` (hjkl-vim FSM).
-fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -53,7 +53,7 @@ fn feed(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
 }
 
 /// Send a key to the insert-mode FSM (step_insert).
-fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
+fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
     use hjkl_engine::{Input, Key};
     for ch in keys.chars() {
         let input = match ch {
@@ -81,7 +81,7 @@ fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
 }
 
 /// Return the full buffer text as a String.
-fn buf_text(ed: &Editor<Buffer, DefaultHost>) -> String {
+fn buf_text(ed: &Editor<View, DefaultHost>) -> String {
     ed.content().to_string()
 }
 
@@ -248,7 +248,7 @@ fn open_above_continues_rust_comment() {
 /// Backspace on `// ` (just the prefix, cursor at end) removes all of it.
 #[test]
 fn backspace_strips_comment_prefix_at_end() {
-    // Buffer: "// \n" (the continued line with just the prefix).
+    // View: "// \n" (the continued line with just the prefix).
     let mut ed = editor("rust", "// \n");
     // Go to end of line 0 (col 3, after the trailing space).
     feed(&mut ed, "A"); // enter insert, move to end

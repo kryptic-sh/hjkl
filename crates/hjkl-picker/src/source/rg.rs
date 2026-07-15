@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 
 use crate::logic::{PickerAction, PickerLogic, RequeryMode};
 use crate::preview::load_preview;
@@ -245,7 +245,7 @@ impl PickerLogic for RgSource {
         true
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String) {
+    fn preview(&self, idx: usize) -> (View, String) {
         let (path, line) = match self
             .items
             .lock()
@@ -253,22 +253,22 @@ impl PickerLogic for RgSource {
             .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
         {
             Some(v) => v,
-            None => return (Buffer::new(), String::new()),
+            None => return (View::new(), String::new()),
         };
         // Sentinel: no path means rg wasn't found.
         if path.as_os_str().is_empty() {
-            return (Buffer::new(), String::new());
+            return (View::new(), String::new());
         }
         let abs = self.root.join(&path);
         let (content, status) = load_preview(&abs);
         if !status.is_empty() {
-            return (Buffer::from_str(&content), status);
+            return (View::from_str(&content), status);
         }
 
         // Render the full file; the picker's `preview_top_row` puts the
         // match line near the top of the visible window. Keeping the buffer
         // intact preserves correct gutter line numbers.
-        let mut buf = Buffer::from_str(&content);
+        let mut buf = View::from_str(&content);
         let match_row = (line as usize).saturating_sub(1);
         buf.set_cursor(hjkl_buffer::Position {
             row: match_row,

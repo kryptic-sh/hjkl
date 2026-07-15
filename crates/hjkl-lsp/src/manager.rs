@@ -80,7 +80,7 @@ impl LspManager {
     /// Notify the server that a buffer's full text changed.
     ///
     /// Takes an `Arc<String>` so the caller can hand off the shared
-    /// `Buffer::content_joined()` cache without a `to_string()` clone of the
+    /// `View::content_joined()` cache without a `to_string()` clone of the
     /// entire buffer per keystroke (on a 1.86 M-line file the clone was
     /// ~22 % of per-keystroke CPU in profiling).
     pub fn notify_change(&self, id: BufferId, full_text: Arc<String>) {

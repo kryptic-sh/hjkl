@@ -26,11 +26,11 @@
 //! use hjkl_editor::buffer;
 //! use hjkl_editor::runtime::{DefaultHost, Editor, Options};
 //!
-//! let mut editor = hjkl_vim::vim_editor(buffer::Buffer::new(), DefaultHost::new(), Options::default());
+//! let mut editor = hjkl_vim::vim_editor(buffer::View::new(), DefaultHost::new(), Options::default());
 //! editor.set_content("hello world");
 //! ```
 //!
-//! Buffer and rope helpers are re-exported at the [`buffer`] module,
+//! View and rope helpers are re-exported at the [`buffer`] module,
 //! mirroring the [`hjkl_buffer`] surface.
 //!
 //! [`Editor`]: hjkl_engine::Editor
@@ -49,7 +49,7 @@ pub mod buffer {
     //! Re-export of [`hjkl_buffer`]'s public surface.
 
     pub use hjkl_buffer::{
-        Buffer, Edit, Fold, MotionKind, Position, RowSpan, Selection, Span, Viewport, Wrap,
+        Edit, Fold, MotionKind, Position, RowSpan, Selection, Span, View, Viewport, Wrap,
     };
 
     #[cfg(feature = "ratatui")]
@@ -60,7 +60,7 @@ pub mod runtime {
     //! Legacy runtime surface — the working sqeel-vim port.
     //!
     //! These types drive editing today. The trait extraction lands a
-    //! generic `Editor<B: Buffer, H: Host>` into [`crate::spec`] that
+    //! generic `Editor<B: View, H: Host>` into [`crate::spec`] that
     //! eventually replaces this surface; pre-1.0 churn means the swap
     //! can land on a patch bump.
 
@@ -76,10 +76,10 @@ pub mod spec {
     //! types support host-side prep (e.g., buffr-modal's `BuffrHost`).
 
     pub use hjkl_engine::types::{
-        Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, Edit, EngineError, FoldOp,
+        Attrs, BufferEdit, BufferId, Color, Cursor, CursorShape, Edit, EngineError, FoldOp,
         FoldProvider, Highlight, HighlightKind, Host, Input, Mode, Modifiers, MouseEvent,
         MouseKind, NoopFoldProvider, Options, Pos, Query, Search, Selection, SelectionKind,
-        SelectionSet, SpecialKey, Style, Viewport,
+        SelectionSet, SpecialKey, Style, View, Viewport,
     };
     pub use hjkl_engine::{BufferFoldProvider, BufferFoldProviderMut};
 }
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn editor_constructs() {
         let _ = hjkl_vim::vim_editor(
-            buffer::Buffer::new(),
+            buffer::View::new(),
             runtime::DefaultHost::new(),
             runtime::Options::default(),
         );
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn buffer_constructs() {
-        let _ = buffer::Buffer::from_str("hello\nworld");
+        let _ = buffer::View::from_str("hello\nworld");
     }
 
     #[test]

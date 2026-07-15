@@ -1,4 +1,4 @@
-/// A `(row, col)` location inside a [`crate::Buffer`].
+/// A `(row, col)` location inside a [`crate::View`].
 ///
 /// - `row` is zero-based, in **logical lines** (newline-separated). Wrapping
 ///   is a render-only concern; no `Position` ever points at a display line.
@@ -17,18 +17,18 @@
 /// - `col <= buffer.line(row).unwrap().chars().count()` (one past the last
 ///   char is allowed — insert mode lives there).
 ///
-/// Pass an out-of-bounds `Position` to [`crate::Buffer::set_cursor`] and the
+/// Pass an out-of-bounds `Position` to [`crate::View::set_cursor`] and the
 /// buffer clamps to the nearest valid one via
-/// [`crate::Buffer::clamp_position`]. Pass one to
-/// [`crate::Buffer::apply_edit`] and the edit is rejected (returns the no-op
+/// [`crate::View::clamp_position`]. Pass one to
+/// [`crate::View::apply_edit`] and the edit is rejected (returns the no-op
 /// inverse).
 ///
 /// ## Sticky column
 ///
-/// [`crate::Buffer`] tracks an optional sticky column for `j` / `k` motions:
+/// [`crate::View`] tracks an optional sticky column for `j` / `k` motions:
 /// the target column to land in once the cursor reaches a line long enough to
 /// honor it. Never reset it manually outside motion code — it survives
-/// [`crate::Buffer::set_cursor`] for that exact reason.
+/// [`crate::View::set_cursor`] for that exact reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub row: usize,

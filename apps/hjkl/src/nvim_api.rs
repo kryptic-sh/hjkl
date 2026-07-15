@@ -10,7 +10,7 @@
 //! The server reads requests off stdin in a loop; responses are written to
 //! stdout and flushed after each one.
 //!
-//! ## Buffer/window ext-type handles
+//! ## View/window ext-type handles
 //!
 //! nvim-rs expects buffer handles as `Value::Ext(BUFFER_EXT, bytes)` and window
 //! handles as `Value::Ext(WINDOW_EXT, bytes)`. The single supported buffer has
@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hjkl_buffer::Buffer;
+use hjkl_buffer::View;
 use hjkl_engine::{Host, VimMode};
 use hjkl_quickfix::{QfEntry, QfKind};
 use hjkl_vim::VimEditorExt;
@@ -161,7 +161,7 @@ fn err(stdout: &mut impl Write, msgid: u32, msg: &str) -> Result<()> {
 
 fn build_app(first_file: Option<PathBuf>) -> anyhow::Result<crate::app::App> {
     use crate::app::STATUS_LINE_HEIGHT;
-    // Buffer-pane height = total terminal height minus the 1-row status line.
+    // View-pane height = total terminal height minus the 1-row status line.
     const HEADLESS_W: u16 = 80;
     const HEADLESS_TERMINAL_H: u16 = 24;
     let buf_h = HEADLESS_TERMINAL_H.saturating_sub(STATUS_LINE_HEIGHT);
@@ -275,7 +275,7 @@ fn param_string_array(params: &[Value], idx: usize) -> std::result::Result<Vec<S
 
 // ── nvim_get_mode helper ───────────────────────────────────────────────────────
 
-fn mode_code(editor: &hjkl_engine::Editor<Buffer, TuiHost>) -> &'static str {
+fn mode_code(editor: &hjkl_engine::Editor<View, TuiHost>) -> &'static str {
     match editor.vim_mode() {
         VimMode::Normal => "n",
         VimMode::Insert => "i",
@@ -5058,7 +5058,7 @@ mod tests {
         );
         assert_ne!(resp[2], Value::Nil, "inverted range must be an error");
 
-        // Buffer must be untouched.
+        // View must be untouched.
         let resp = call(
             &mut app,
             "nvim_buf_get_lines",
