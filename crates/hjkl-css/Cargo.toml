@@ -2,7 +2,7 @@
 name = "hjkl-css"
 version.workspace = true
 edition.workspace = true
-description = "Parser + AST for a CSS subset used to drive declarative UI styling. Toolkit-agnostic; pair with hjkl-css-floem for floem bindings."
+description = "Parser + AST for a CSS subset used to drive declarative UI styling. Toolkit-agnostic."
 license.workspace = true
 repository.workspace = true
 keywords = ["css", "style", "ui", "parser"]

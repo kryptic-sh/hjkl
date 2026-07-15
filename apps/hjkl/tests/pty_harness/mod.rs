@@ -24,4 +24,3 @@ pub mod paste;
 pub mod register_count;
 pub mod render_sync;
 pub mod tabline_icons;
-pub mod vscode;

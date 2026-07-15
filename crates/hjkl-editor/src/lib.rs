@@ -9,7 +9,7 @@
 //! Two layers ride alongside each other during the 0.0.x churn:
 //!
 //! - **Legacy surface** (today's runtime): the [`runtime`] module
-//!   re-exports the existing [`Editor`], [`KeybindingMode`], [`VimMode`],
+//!   re-exports the existing [`Editor`], [`VimMode`],
 //!   [`Input`], [`Key`], [`SearchPrompt`], [`Registers`], [`Slot`], and
 //!   [`LspIntent`]. This is what sqeel-tui consumes today.
 //! - **Planned surface** (0.1.0 SPEC): the [`spec`] module re-exports
@@ -34,7 +34,6 @@
 //! mirroring the [`hjkl_buffer`] surface.
 //!
 //! [`Editor`]: hjkl_engine::Editor
-//! [`KeybindingMode`]: hjkl_engine::KeybindingMode
 //! [`VimMode`]: hjkl_engine::VimMode
 //! [`Input`]: hjkl_engine::Input
 //! [`Key`]: hjkl_engine::Key
@@ -66,9 +65,7 @@ pub mod runtime {
     //! can land on a patch bump.
 
     pub use hjkl_engine::types::{DefaultHost, Options};
-    pub use hjkl_engine::{
-        Editor, Input, Key, KeybindingMode, LspIntent, Registers, SearchPrompt, Slot, VimMode,
-    };
+    pub use hjkl_engine::{Editor, Input, Key, LspIntent, Registers, SearchPrompt, Slot, VimMode};
 }
 
 pub mod spec {

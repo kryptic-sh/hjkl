@@ -76,18 +76,10 @@ pub struct EditorConfig {
     /// `hjkl-icons`). Defaults to `"auto"` so existing configs keep parsing.
     #[serde(default = "default_icons")]
     pub icons: String,
-    /// Keybinding discipline: `"vim"` (default) or `"vscode"` (non-modal).
-    /// Existing configs that omit this field continue to use `"vim"`.
-    #[serde(default = "default_keybindings")]
-    pub keybindings: String,
 }
 
 fn default_icons() -> String {
     "auto".to_string()
-}
-
-fn default_keybindings() -> String {
-    "vim".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

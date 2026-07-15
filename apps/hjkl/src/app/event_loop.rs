@@ -1759,24 +1759,11 @@ impl App {
                     // Record keystroke time for the idle swap-write timer (#185).
                     self.last_input_at = std::time::Instant::now();
 
-                    // ── Kitty keyboard normalization (vim only) ────────
+                    // ── Kitty keyboard normalization ────────
                     // Under DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab,
                     // Ctrl+M ≠ Enter at the terminal level. Normalize back to the
-                    // legacy aliases for vim discipline only; VSCode gets raw keys
-                    // (Ctrl+[ = outdent, etc.).
-                    let key = if self.keybinding_mode == hjkl_engine::KeybindingMode::Vim {
-                        hjkl_kitty::normalize_legacy(key)
-                    } else {
-                        key
-                    };
-
-                    // ── VSCode keybinding mode early intercept ────────
-                    // Folded into one choke point shared with the drain loop
-                    // (#265 G3 B3). Returns true (consumed) when VSCode owns
-                    // the key; false falls through to handle_keypress.
-                    if self.try_vscode_intercept(key) {
-                        continue;
-                    }
+                    // legacy aliases vim expects.
+                    let key = hjkl_kitty::normalize_legacy(key);
 
                     let consumed_inline = match self.handle_keypress(key) {
                         KeyOutcome::Break => break,
@@ -1884,20 +1871,10 @@ impl App {
                     match extra {
                         Event::Key(k) => {
                             // Kitty-protocol legacy normalization (drain-loop
-                            // mirror of the primary path): in the vim discipline,
-                            // map disambiguated Ctrl+[ / Ctrl+I / Ctrl+M back to
-                            // Esc / Tab / Enter so muscle-memory survives. VSCode
-                            // keeps the raw keys (Ctrl+[ = outdent, etc.).
-                            let k = if self.keybinding_mode == hjkl_engine::KeybindingMode::Vim {
-                                hjkl_kitty::normalize_legacy(k)
-                            } else {
-                                k
-                            };
-                            // ── VSCode early intercept (drain loop mirror) ──
-                            // Shared choke point with the primary path (#265 G3 B3).
-                            if self.try_vscode_intercept(k) {
-                                continue;
-                            }
+                            // mirror of the primary path): map disambiguated
+                            // Ctrl+[ / Ctrl+I / Ctrl+M back to Esc / Tab / Enter
+                            // so muscle-memory survives.
+                            let k = hjkl_kitty::normalize_legacy(k);
                             match self.handle_keypress(k) {
                                 KeyOutcome::Break => {
                                     self.exit_requested = true;

@@ -50,7 +50,6 @@ mod syntax_glue;
 mod tests;
 mod types;
 mod viewport_sync;
-mod vscode;
 pub mod window;
 
 use crate::completion::Completion;
@@ -239,9 +238,6 @@ pub struct App {
     /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
     /// `icons` config setting.
     pub(crate) icon_mode: hjkl_icons::IconMode,
-    /// Active keybinding discipline (`vim` or `vscode`), from the
-    /// `editor.keybindings` config setting. Overridable via `--keybindings` CLI flag.
-    pub(crate) keybinding_mode: hjkl_engine::KeybindingMode,
     /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -1850,7 +1846,6 @@ impl App {
             explorer: None,
             explorer_git_discard_confirm: None,
             icon_mode: hjkl_icons::IconMode::default(),
-            keybinding_mode: hjkl_engine::KeybindingMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
@@ -2044,7 +2039,6 @@ impl App {
         // reliable fallback for non-Nerd setups.
         self.icon_mode = hjkl_icons::IconMode::from_config(&config.editor.icons)
             .unwrap_or(hjkl_icons::IconMode::Nerd);
-        self.keybinding_mode = hjkl_engine::KeybindingMode::from_config(&config.editor.keybindings);
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();
@@ -2061,39 +2055,7 @@ impl App {
             }
             slot.editor.apply_options(&opts);
         }
-        self.propagate_vscode_settings();
         self
-    }
-
-    /// Propagate VSCode-specific per-editor settings to all slot editors and
-    /// all live window-view editors.
-    ///
-    /// Settings that only make sense in VSCode keybinding mode (e.g.
-    /// `selection_exclusive`, `undo_granularity`) are written to every editor
-    /// that might serve as the `active_editor`. `make_view_editor` clones slot
-    /// settings at creation time, so window editors created before this call
-    /// also need the update applied directly.
-    pub(crate) fn propagate_vscode_settings(&mut self) {
-        let is_vscode = self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode;
-        let granularity = if is_vscode {
-            hjkl_engine::UndoGranularity::Word
-        } else {
-            hjkl_engine::UndoGranularity::InsertSession
-        };
-        for slot in &mut self.slots {
-            slot.editor.settings_mut().selection_exclusive = is_vscode;
-            slot.editor.settings_mut().undo_granularity = granularity;
-        }
-        // Window-view editors are separate instances from slot editors.
-        // They are built by `make_view_editor` (which clones slot settings),
-        // but that clone may pre-date the keybinding-mode finalisation (e.g.
-        // when the `--keybindings` CLI flag is processed after App::new).
-        // Apply the same settings here so `active_editor_mut()` always returns
-        // an editor with up-to-date VSCode settings.
-        for ed in self.window_editors.values_mut() {
-            ed.settings_mut().selection_exclusive = is_vscode;
-            ed.settings_mut().undo_granularity = granularity;
-        }
     }
 
     /// Attach an `LspManager` to the app. Call after `with_config`. Iterates
@@ -2119,14 +2081,9 @@ impl App {
         if self.active_editor().is_blame() {
             return "BLAME";
         }
-        // VSCode mode is non-modal — always "EDITOR" regardless of internal vim state.
-        if self.keybinding_mode == hjkl_engine::KeybindingMode::Vscode {
-            return "EDITOR";
-        }
-        // Modal disciplines (vim today) project their precise mode onto the
-        // discipline-agnostic CoarseMode; the badge text is the discipline's
-        // concern. Read CoarseMode rather than VimMode so this stays correct as
-        // FSM state becomes pluggable (epic #265 G3).
+        // Vim projects its precise mode onto the discipline-agnostic CoarseMode;
+        // the badge text is the discipline's concern. Read CoarseMode rather
+        // than VimMode so it stays behind the engine's discipline seam.
         match self.active_editor().coarse_mode() {
             CoarseMode::Normal => "NORMAL",
             CoarseMode::Insert => "INSERT",

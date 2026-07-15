@@ -8,6 +8,29 @@ patch bumps.
 
 ## [Unreleased]
 
+### Removed
+
+- **Non-vim editing disciplines.** hjkl is vim-only again — its identity is a
+  vim alternative, not an everything-editor. Removed the experimental VSCode
+  non-modal discipline (the `apps/hjkl/src/app/vscode.rs` dispatcher and its pty
+  tests) and the `hjkl-helix` crate (helix keymap/discipline). The engine's
+  `KeybindingMode` enum, the `editor.keybindings` config option, and the
+  `--keybindings` CLI flag are gone; the editor always runs the vim discipline.
+- **GUI stack.** Dropped GUI support entirely. Removed the `apps/hjkl-gui`
+  binary and the seven floem/cosmic-text adapter crates (`hjkl-css-gui`,
+  `hjkl-editor-gui`, `hjkl-keymap-gui`, `hjkl-menu-gui`, `hjkl-prompt-gui`,
+  `hjkl-syntax-gui`, `hjkl-tabs-gui`) plus their workspace-dependency entries.
+  `floem` and `cosmic-text` are no longer in the build.
+
+### Retained
+
+- **Multi-cursor / secondary-cursor engine primitives** (`Sel`,
+  `extra_selections`, `edit_at_all_cursors`, `selection_shift`) stay — they are
+  a vim enhancement (real vim lacks them), kept for a future vim multi-cursor
+  binding, and were never entangled with the removed disciplines.
+- The engine's `DisciplineState` seam is kept as-is (vim installs through it),
+  preserving the engine↔vim decoupling from #267.
+
 ## [0.33.6] - 2026-07-15
 
 ### Added

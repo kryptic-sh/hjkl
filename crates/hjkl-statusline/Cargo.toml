@@ -1,6 +1,6 @@
 [package]
 name = "hjkl-statusline"
-description = "Renderer-agnostic statusline data model for hjkl editors. Segments + mode + filename + cursor; ratatui/floem adapters live in hjkl-statusline-tui / hjkl-statusline-gui."
+description = "Renderer-agnostic statusline data model for hjkl editors. Segments + mode + filename + cursor; the ratatui adapter lives in hjkl-statusline-tui."
 keywords = ["editor", "statusline", "vim", "tui", "gui"]
 categories = ["text-editors"]
 version.workspace = true

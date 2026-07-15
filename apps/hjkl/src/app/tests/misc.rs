@@ -1,23 +1,12 @@
 use super::*;
 
-// ── mode_label / VSCode keybinding tests ────────────────────────────────
-
-#[test]
-fn mode_label_vscode_returns_editor() {
-    let mut app = App::new(None, false, None, None).unwrap();
-    // Dismiss the start screen so mode_label reaches the keybinding branch.
-    app.start_screen = None;
-    app.keybinding_mode = hjkl_engine::KeybindingMode::Vscode;
-    assert_eq!(app.mode_label(), "EDITOR");
-}
+// ── mode_label tests ────────────────────────────────────────────────────
 
 #[test]
 fn mode_label_vim_normal_returns_normal() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Dismiss the start screen so mode_label reaches the vim-mode match.
     app.start_screen = None;
-    // Default is Vim keybindings + Normal mode.
-    assert_eq!(app.keybinding_mode, hjkl_engine::KeybindingMode::Vim);
     assert_eq!(app.mode_label(), "NORMAL");
 }
 

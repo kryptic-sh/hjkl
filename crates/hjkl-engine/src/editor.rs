@@ -6,7 +6,6 @@
 //! [`vim`] and communicates with Editor through a small internal API
 //! exposed via `pub(super)` fields and helper methods.
 
-use crate::KeybindingMode;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::SystemTime;
 
@@ -547,7 +546,6 @@ pub struct Editor<
     B: crate::types::Buffer = hjkl_buffer::Buffer,
     H: crate::types::Host = crate::types::DefaultHost,
 > {
-    pub keybinding_mode: KeybindingMode,
     /// The installed keyboard discipline's FSM state, type-erased (#265 G3).
     ///
     /// The engine never names the concrete type: it only projects a
@@ -1192,7 +1190,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn new(buffer: hjkl_buffer::Buffer, host: H, options: crate::types::Options) -> Self {
         let settings = settings_from_options(&options);
         Self {
-            keybinding_mode: KeybindingMode::Vim,
             // No discipline: the engine cannot name one. Callers that want vim
             // keys build through `hjkl_vim::vim_editor` (or call
             // `hjkl_vim::install_vim_discipline`), which fills this slot.

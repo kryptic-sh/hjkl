@@ -186,7 +186,7 @@ impl TerminalSession {
     }
 
     /// Spawn `hjkl` with a file argument plus extra CLI arguments (e.g.
-    /// `["--keybindings", "vscode"]`) and the default terminal size (80x24).
+    /// `["--readonly"]`) and the default terminal size (80x24).
     #[allow(dead_code)]
     pub fn spawn_with_file_and_args(path: &Path, extra_args: &[&str]) -> Self {
         Self::spawn_inner_args(Some(path), 24, 80, extra_args)

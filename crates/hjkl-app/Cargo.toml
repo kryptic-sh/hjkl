@@ -1,7 +1,7 @@
 [package]
 name = "hjkl-app"
-description = "Host-agnostic application layer for the hjkl editor. Used by apps/hjkl (TUI) and apps/hjkl-gui (GUI)."
-keywords = ["editor", "tui", "gui"]
+description = "Host-agnostic application layer for the hjkl editor. Used by apps/hjkl (TUI)."
+keywords = ["editor", "tui"]
 categories = ["text-editors"]
 version.workspace = true
 edition = "2024"

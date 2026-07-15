@@ -11,12 +11,6 @@ ignore = [
   # publish = false `hjkl-compat-oracle` test crate. Not redistributed
   # in any released hjkl artifact.
   { id = "RUSTSEC-2026-0058", reason = "transitive via nvim-rs in test-only crate" },
-  # `ttf-parser` is unmaintained (RUSTSEC-2026-0192); pulled
-  # transitively through floem's GUI rendering stack (fontdb →
-  # usvg → resvg). Only affects the experimental hjkl-gui binary;
-  # the TUI binary does not link it. Migration to skrifa needs to
-  # happen upstream in floem.
-  { id = "RUSTSEC-2026-0192", reason = "transitive via floem GUI stack; not in TUI binary" },
 ]
 
 [licenses]

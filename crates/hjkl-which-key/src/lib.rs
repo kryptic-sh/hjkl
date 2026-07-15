@@ -210,20 +210,6 @@ pub fn layout(entries: &[Entry], width: u16) -> PopupLayout {
     }
 }
 
-// ── Feature stubs ─────────────────────────────────────────────────────────────
-
-/// GUI adapter stub (no-op until `apps/hjkl-gui` needs it).
-///
-/// Enable with `features = ["gui"]` in your `Cargo.toml`. Currently a marker
-/// only — the actual GUI render lives in a future `hjkl-which-key-gui` crate.
-#[cfg(feature = "gui")]
-pub mod gui {
-    /// Placeholder: GUI render not yet implemented.
-    pub fn render_gui() {
-        // future: floem adapter
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

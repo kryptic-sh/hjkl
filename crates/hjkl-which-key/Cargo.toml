@@ -12,10 +12,6 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
-[features]
-## Stub for a future `hjkl-which-key-gui` floem adapter. No-op today.
-gui = []
-
 [dependencies]
 hjkl-keymap.workspace = true
 hjkl-vim.workspace = true
