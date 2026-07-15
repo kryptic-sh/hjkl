@@ -693,20 +693,20 @@ const VIEWPORT_SLACK_ROWS: usize = 50;
 
 /// Find the byte offset where row `target_row` begins (row 0 = byte 0). For
 /// `target_row` past the end, returns `bytes.len()`.
+///
+/// Picker preview scroll/keystroke handling calls this on every frame, so a
+/// per-byte linear scan re-walked the whole prefix from offset 0 each time
+/// (audit D5). `memchr::memchr_iter` gives the same result via a SIMD
+/// newline scan — same pattern `hjkl-bonsai`'s comment_markers.rs already
+/// uses for the same reason.
 fn byte_offset_of_row(bytes: &[u8], target_row: usize) -> usize {
     if target_row == 0 {
         return 0;
     }
-    let mut row = 0usize;
-    for (i, b) in bytes.iter().enumerate() {
-        if *b == b'\n' {
-            row += 1;
-            if row == target_row {
-                return i + 1;
-            }
-        }
-    }
-    bytes.len()
+    memchr::memchr_iter(b'\n', bytes)
+        .nth(target_row - 1)
+        .map(|i| i + 1)
+        .unwrap_or(bytes.len())
 }
 
 /// Bridge: route `hjkl-picker`'s preview-pane highlighter through the
@@ -800,5 +800,57 @@ mod tests {
             rust_row.len(),
             rust_row
         );
+    }
+
+    /// Reference oracle: the original per-byte linear scan `byte_offset_of_row`
+    /// used before the audit D5 fix switched it to `memchr::memchr_iter`.
+    /// Kept here only to pin the new implementation's output against the old
+    /// one across the row/content combinations that would expose a
+    /// mismatch — off-by-one boundaries, row 0, and multibyte content.
+    fn byte_offset_of_row_linear_scan(bytes: &[u8], target_row: usize) -> usize {
+        if target_row == 0 {
+            return 0;
+        }
+        let mut row = 0usize;
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == b'\n' {
+                row += 1;
+                if row == target_row {
+                    return i + 1;
+                }
+            }
+        }
+        bytes.len()
+    }
+
+    #[test]
+    fn byte_offset_of_row_matches_the_old_linear_scan() {
+        // Includes multibyte UTF-8 content (emoji + accented text), a blank
+        // line, and no trailing newline on the last line — none of which
+        // should affect a byte-oriented `\n` scan, but pin them anyway.
+        let text = "fn café() {\n    🦀\n}\n\nlast line, no trailing newline";
+        let bytes = text.as_bytes();
+        let row_count = bytes.iter().filter(|&&b| b == b'\n').count() + 1;
+
+        // Row 0, every real row, and a couple of past-end rows.
+        for target_row in 0..=(row_count + 3) {
+            assert_eq!(
+                byte_offset_of_row(bytes, target_row),
+                byte_offset_of_row_linear_scan(bytes, target_row),
+                "mismatch at target_row={target_row}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_offset_of_row_past_end_returns_len() {
+        let bytes = b"a\nb\nc";
+        assert_eq!(byte_offset_of_row(bytes, 100), bytes.len());
+    }
+
+    #[test]
+    fn byte_offset_of_row_zero_is_always_zero() {
+        assert_eq!(byte_offset_of_row(b"", 0), 0);
+        assert_eq!(byte_offset_of_row(b"abc\ndef", 0), 0);
     }
 }

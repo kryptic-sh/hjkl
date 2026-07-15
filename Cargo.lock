@@ -1319,6 +1319,7 @@ dependencies = [
  "hjkl-which-key",
  "hjkl-which-key-tui",
  "lsp-types",
+ "memchr",
  "mimalloc",
  "nvim-rs",
  "portable-pty",
