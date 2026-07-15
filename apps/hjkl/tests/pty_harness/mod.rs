@@ -24,4 +24,5 @@ pub mod indent;
 pub mod paste;
 pub mod register_count;
 pub mod render_sync;
+pub mod substitute;
 pub mod tabline_icons;

@@ -705,7 +705,15 @@ pub struct Editor<
 
     /// Last `:s` command, for `:&` / `:&&`. This is ex-command state owned by
     /// the hjkl-ex seam, not vim FSM state.
-    pub(crate) last_substitute: Option<crate::substitute::SubstituteCmd>,
+    ///
+    /// Shared via `Arc<Mutex<_>>` across every window's `Editor` (mirrors
+    /// [`Editor::global_marks`]) — vim's last substitute is session-global,
+    /// so running `:s` in one split and `:&` in another must see the same
+    /// command. Internal — read/mutated via [`Editor::last_substitute`] /
+    /// [`Editor::set_last_substitute`]; wired by
+    /// [`Editor::set_last_substitute_arc`].
+    pub(crate) last_substitute:
+        std::sync::Arc<std::sync::Mutex<Option<crate::substitute::SubstituteCmd>>>,
 
     // ── Autopair / abbreviations (discipline-agnostic, #265) ─────────────────
     //
@@ -1236,7 +1244,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             search_history_cursor: None,
             last_input_at: None,
             last_input_host_at: None,
-            last_substitute: None,
+            last_substitute: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_closes: Vec::new(),
             abbrevs: Vec::new(),
             yank_linewise: false,
@@ -2948,14 +2956,27 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// The most recent successful `:s` command. `None` before the first substitute.
-    /// Used by `:&` / `:&&` to repeat it.
-    pub fn last_substitute(&self) -> Option<&crate::substitute::SubstituteCmd> {
-        self.last_substitute.as_ref()
+    /// Used by `:&` / `:&&` to repeat it. Returns an owned clone (the value
+    /// lives behind a shared `Mutex`, so a borrow can't outlive the guard —
+    /// mirrors [`Editor::global_marks_iter`]).
+    pub fn last_substitute(&self) -> Option<crate::substitute::SubstituteCmd> {
+        self.last_substitute.lock().unwrap().clone()
     }
 
     /// Store the last successful substitute so `:&` / `:&&` can repeat it.
     pub fn set_last_substitute(&mut self, cmd: crate::substitute::SubstituteCmd) {
-        self.last_substitute = Some(cmd);
+        *self.last_substitute.lock().unwrap() = Some(cmd);
+    }
+
+    /// Point this editor at a shared last-substitute bank. All editors in
+    /// the app share one bank (mirrors [`Editor::set_global_marks_arc`]) so
+    /// `:&` run in one window repeats the `:s` most recently executed in any
+    /// window — vim's last substitute is session-global, not per-window.
+    pub fn set_last_substitute_arc(
+        &mut self,
+        last_substitute: std::sync::Arc<std::sync::Mutex<Option<crate::substitute::SubstituteCmd>>>,
+    ) {
+        self.last_substitute = last_substitute;
     }
 
     /// Number of rows (lines) in the buffer.
@@ -4967,6 +4988,46 @@ mod shared_global_marks_tests {
         a.set_global_mark('A', 1, (0, 0));
         // No shared Arc wired — B must not see A's mark.
         assert_eq!(b.global_mark('A'), None);
+    }
+}
+
+// ─── shared last-substitute bank tests (#279 slice 2) ─────────────────────
+
+#[cfg(test)]
+mod shared_last_substitute_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::View;
+
+    fn dummy_cmd(replacement: &str) -> crate::substitute::SubstituteCmd {
+        crate::substitute::SubstituteCmd {
+            pattern: Some("foo".to_string()),
+            replacement: replacement.to_string(),
+            flags: crate::substitute::SubstFlags::default(),
+            count: None,
+        }
+    }
+
+    #[test]
+    fn shared_last_substitute_bank_visible_across_editors() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_last_substitute_arc(shared.clone());
+        let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        b.set_last_substitute_arc(shared.clone());
+        // Run `:s` (set the last substitute) on editor A.
+        a.set_last_substitute(dummy_cmd("bar"));
+        // Read from editor B — same bank, no copy needed.
+        assert_eq!(b.last_substitute(), Some(dummy_cmd("bar")));
+    }
+
+    #[test]
+    fn unshared_last_substitute_stays_isolated() {
+        let mut a = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        let b = Editor::new(View::new(), DefaultHost::default(), Options::default());
+        a.set_last_substitute(dummy_cmd("bar"));
+        // No shared Arc wired — B must not see A's last substitute.
+        assert_eq!(b.last_substitute(), None);
     }
 }
 

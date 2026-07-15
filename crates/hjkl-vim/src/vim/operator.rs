@@ -451,7 +451,7 @@ pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
         // `g&` — repeat last `:s` over the whole buffer (1,$), keeping all
         // original flags. Equivalent to `:%s//~/&` in vim.
         '&' => {
-            let cmd = match ed.last_substitute().cloned() {
+            let cmd = match ed.last_substitute() {
                 Some(c) => c,
                 None => {
                     // No prior substitute — mirror the `:&` error path; do
@@ -477,7 +477,7 @@ pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
 /// previous flags (vim: `&` ≡ `:s` with no flags). `g&` keeps flags + whole
 /// buffer; this is the single-line, flag-less form.
 pub(crate) fn ampersand_repeat<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
-    let Some(mut cmd) = ed.last_substitute().cloned() else {
+    let Some(mut cmd) = ed.last_substitute() else {
         return;
     };
     cmd.flags = hjkl_engine::substitute::SubstFlags::default();

@@ -732,6 +732,7 @@ impl super::App {
         let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
         editor.set_registers_arc(self.registers.clone());
         editor.set_global_marks_arc(self.global_marks.clone());
+        editor.set_last_substitute_arc(self.last_substitute.clone());
         if let Ok(size) = crossterm::terminal::size() {
             let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
             let vp = editor.host_mut().viewport_mut();

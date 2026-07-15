@@ -332,6 +332,11 @@ pub struct App {
     /// vim's uppercase marks are session-global, so setting `mA` in one split and
     /// jumping `'A` from another must see the same map.
     pub global_marks: std::sync::Arc<std::sync::Mutex<hjkl_engine::GlobalMarks>>,
+    /// Last `:s` command, for `:&` / `:&&` (#279 slice 2). One shared bank,
+    /// wired into every `Editor` exactly like [`App::global_marks`]: vim's
+    /// last substitute is session-global, so `:s` in one split and `:&` in
+    /// another must see the same command.
+    pub last_substitute: std::sync::Arc<std::sync::Mutex<Option<hjkl_engine::SubstituteCmd>>>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1303,6 +1308,7 @@ impl App {
                 let mut ed = self.make_view_editor(slot);
                 ed.set_registers_arc(self.registers.clone());
                 ed.set_global_marks_arc(self.global_marks.clone());
+                ed.set_last_substitute_arc(self.last_substitute.clone());
                 self.window_editors.insert(wid, ed);
             }
         }
@@ -1776,6 +1782,14 @@ impl App {
         slot.editor
             .set_global_marks_arc(shared_global_marks.clone());
 
+        // Same treatment for the last `:s` command — session-global in vim,
+        // so every editor must share one bank from the start.
+        let shared_last_substitute: std::sync::Arc<
+            std::sync::Mutex<Option<hjkl_engine::SubstituteCmd>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(None));
+        slot.editor
+            .set_last_substitute_arc(shared_last_substitute.clone());
+
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
         {
@@ -1886,6 +1900,7 @@ impl App {
             lsp_pending_seen_at: HashMap::new(),
             registers: shared_registers,
             global_marks: shared_global_marks,
+            last_substitute: shared_last_substitute,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

@@ -1023,7 +1023,7 @@ pub(crate) fn repeat_substitute_handler<H: Host>(
 ) -> ExEffect {
     use hjkl_engine::substitute::{SubstFlags, apply_substitute};
 
-    let cmd = match editor.last_substitute().cloned() {
+    let cmd = match editor.last_substitute() {
         Some(c) => c,
         None => return ExEffect::Error("no previous substitute".into()),
     };
