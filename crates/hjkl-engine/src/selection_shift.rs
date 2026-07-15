@@ -93,6 +93,53 @@ impl Sel {
     pub fn end(&self) -> Position {
         self.anchor.max(self.head)
     }
+
+    /// True when `self` and `other` cover any common position, treating
+    /// both `[start, end]` ranges as inclusive of both ends (matching the
+    /// doc comment on the struct: a selection covers `[start, end]`
+    /// inclusive).
+    ///
+    /// Used to guard the secondary-selection set against overlaps: the
+    /// bottom-up fan-out in [`crate::editor::Editor::edit_at_all_selections`]
+    /// assumes selections are disjoint, since an edit made at one selection
+    /// only shifts positions strictly after it — an overlapping selection's
+    /// still-queued coordinates would land mid-edit and corrupt (audit A7).
+    pub fn overlaps(&self, other: &Sel) -> bool {
+        self.start() <= other.end() && other.start() <= self.end()
+    }
+}
+
+/// Merge `a` and `b` into the selection spanning their union, in document
+/// order (`anchor == start`, `head == end`). Direction (which end was
+/// originally the anchor) is not preserved — once two selections overlap
+/// there is no single sensible "the user dragged from here" answer, so the
+/// merged range just picks a canonical rightward orientation.
+fn merge_two(a: Sel, b: Sel) -> Sel {
+    Sel::new(a.start().min(b.start()), a.end().max(b.end()))
+}
+
+/// Collapse a set of selections so no two overlap, merging any that do into
+/// their union. Order of the input is not preserved — callers that need a
+/// stable order should re-sort the result.
+///
+/// This is the guard behind [`crate::editor::Editor::add_selection`] and
+/// [`crate::editor::Editor::set_extra_selections`] (audit A7): without it,
+/// two overlapping secondaries would both queue edits against ranges that
+/// alias each other, and the bottom-up fan-out in `edit_at_all_selections`
+/// (which shifts each not-yet-applied selection's coordinates as earlier
+/// edits land) has no way to represent "this position belongs to two
+/// selections at once" — the later edit corrupts the earlier selection's
+/// already-shifted coordinates.
+pub fn merge_overlapping(mut sels: Vec<Sel>) -> Vec<Sel> {
+    sels.sort_by_key(|s| (s.start().row, s.start().col));
+    let mut out: Vec<Sel> = Vec::with_capacity(sels.len());
+    for s in sels {
+        match out.last_mut() {
+            Some(last) if last.overlaps(&s) => *last = merge_two(*last, s),
+            _ => out.push(s),
+        }
+    }
+    out
 }
 
 /// Order positions in document order.
@@ -641,6 +688,68 @@ mod tests {
     }
 
     // ── The one edit still dropped ───────────────────────────────────────────
+
+    // ── Overlap guard (audit A7) ─────────────────────────────────────────────
+
+    #[test]
+    fn adjacent_carets_do_not_overlap() {
+        // Touching-but-disjoint: [0,3] and [0,4] share no position.
+        let a = Sel::new(p(0, 3), p(0, 3));
+        let b = Sel::new(p(0, 4), p(0, 4));
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn ranges_sharing_one_boundary_position_overlap() {
+        // [0,2..0,5] and [0,5..0,8] share position (0,5) — inclusive ranges.
+        let a = Sel::new(p(0, 2), p(0, 5));
+        let b = Sel::new(p(0, 5), p(0, 8));
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn a_caret_inside_a_range_overlaps_it() {
+        let range = Sel::new(p(0, 2), p(0, 8));
+        let caret = Sel::caret(p(0, 5));
+        assert!(range.overlaps(&caret));
+    }
+
+    #[test]
+    fn merge_overlapping_leaves_disjoint_selections_untouched() {
+        let sels = vec![
+            Sel::new(p(0, 0), p(0, 2)),
+            Sel::new(p(1, 0), p(1, 2)),
+            Sel::new(p(2, 0), p(2, 2)),
+        ];
+        let merged = merge_overlapping(sels.clone());
+        assert_eq!(merged.len(), 3);
+        for s in &sels {
+            assert!(merged.contains(s));
+        }
+    }
+
+    #[test]
+    fn merge_overlapping_unions_two_overlapping_ranges() {
+        // [0,0..0,5] and [0,3..0,9] overlap on [0,3..0,5] — must merge into
+        // one selection spanning the union, not two aliasing entries that
+        // would both queue an edit over the shared text.
+        let sels = vec![Sel::new(p(0, 0), p(0, 5)), Sel::new(p(0, 3), p(0, 9))];
+        let merged = merge_overlapping(sels);
+        assert_eq!(merged, vec![Sel::new(p(0, 0), p(0, 9))]);
+    }
+
+    #[test]
+    fn merge_overlapping_collapses_a_transitive_chain() {
+        // A overlaps B, B overlaps C, but A and C alone would not touch —
+        // the whole chain must still collapse into one selection.
+        let a = Sel::new(p(0, 0), p(0, 3));
+        let b = Sel::new(p(0, 2), p(0, 6));
+        let c = Sel::new(p(0, 5), p(0, 9));
+        let merged = merge_overlapping(vec![c, a, b]);
+        assert_eq!(merged, vec![Sel::new(p(0, 0), p(0, 9))]);
+    }
 
     // ── Selections shift as a unit ───────────────────────────────────────────
 

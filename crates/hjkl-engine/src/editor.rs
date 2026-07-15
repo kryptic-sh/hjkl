@@ -2798,19 +2798,29 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// a bulk write — a discipline recomputing every selection after a motion
     /// (helix does this on every keystroke) must not be able to smuggle a
     /// duplicate in through the back door.
+    ///
+    /// Any two selections whose *ranges* overlap (not just their heads) are
+    /// merged into their union rather than kept as separate entries (audit
+    /// A7) — [`Editor::edit_at_all_selections`]'s bottom-up fan-out assumes
+    /// selections are disjoint, and an overlapping pair would corrupt each
+    /// other's still-queued coordinates as edits land.
     pub fn set_extra_selections(&mut self, sels: Vec<crate::selection_shift::Sel>) {
         let (row, col) = self.cursor();
         let primary = hjkl_buffer::Position::new(row, col);
-        self.extra_selections.clear();
+        let mut deduped: Vec<crate::selection_shift::Sel> = Vec::new();
         for s in sels {
-            if s.head == primary || self.extra_selections.iter().any(|e| e.head == s.head) {
+            if s.head == primary || deduped.iter().any(|e| e.head == s.head) {
                 continue;
             }
-            self.extra_selections.push(s);
+            deduped.push(s);
         }
+        self.extra_selections = crate::selection_shift::merge_overlapping(deduped);
     }
 
-    /// Add a secondary selection. Same dedup rule as [`Editor::add_cursor`].
+    /// Add a secondary selection. Same dedup rule as [`Editor::add_cursor`],
+    /// plus the overlap-merge guard documented on [`Editor::set_extra_selections`]
+    /// (audit A7): a selection whose range overlaps an existing secondary is
+    /// merged into it instead of being kept as a second, aliasing entry.
     pub fn add_selection(&mut self, sel: crate::selection_shift::Sel) {
         let (row, col) = self.cursor();
         if sel.head == hjkl_buffer::Position::new(row, col)
@@ -2819,6 +2829,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             return;
         }
         self.extra_selections.push(sel);
+        self.extra_selections =
+            crate::selection_shift::merge_overlapping(std::mem::take(&mut self.extra_selections));
     }
 
     /// Add a secondary cursor: a zero-width selection at `pos`. Ignores a

@@ -502,3 +502,64 @@ fn set_extra_selections_refuses_a_duplicate_head() {
     ]);
     assert_eq!(e.extra_selections(), [Sel::caret(pos(0, 2))]);
 }
+
+// ── Overlap guard (audit A7) ─────────────────────────────────────────────
+//
+// `edit_at_all_selections`'s bottom-up fan-out assumes every selection is
+// disjoint from the others: an edit only shifts positions strictly after
+// its own start, so a still-queued selection whose range aliases one
+// that's already been edited would have its coordinates corrupted. Not
+// reachable via any shipped keybinding today, but `add_selection` /
+// `set_extra_selections` guard the primitives by merging overlapping
+// ranges into their union before they ever reach the fan-out.
+
+#[test]
+fn add_selection_merges_an_overlapping_range_instead_of_aliasing() {
+    let mut e = editor("abcdefghij\n");
+    e.add_selection(Sel::new(pos(0, 2), pos(0, 5))); // "cdef"
+    e.add_selection(Sel::new(pos(0, 4), pos(0, 8))); // "efghi" — overlaps on cols 4..=5
+    assert_eq!(
+        e.extra_selections(),
+        [Sel::new(pos(0, 2), pos(0, 8))],
+        "overlapping secondaries must merge into one selection, not sit as \
+         two aliasing entries"
+    );
+}
+
+#[test]
+fn set_extra_selections_merges_a_transitive_chain_of_overlaps() {
+    let mut e = editor("abcdefghij\n"); // primary head at (0, 0)
+    e.set_extra_selections(vec![
+        Sel::new(pos(0, 6), pos(0, 9)),
+        Sel::new(pos(0, 2), pos(0, 4)),
+        Sel::new(pos(0, 3), pos(0, 7)), // bridges both of the above
+    ]);
+    assert_eq!(e.extra_selections(), [Sel::new(pos(0, 2), pos(0, 9))]);
+}
+
+#[test]
+fn overlapping_secondaries_merge_before_fan_out_and_the_buffer_stays_correct() {
+    // Without the guard, adding these two selections directly would leave
+    // two overlapping entries in `extra_selections`; the bottom-up fan-out
+    // would then delete the second (already-shifted) range from
+    // coordinates the first delete had already invalidated, corrupting
+    // the buffer. With the guard, `add_selection` has already merged them
+    // into one selection before `edit_at_all_selections` ever runs.
+    let mut e = editor("aaBBccDDee\n");
+    e.set_cursor_quiet(0, 0); // primary is a bare caret on the first "a"
+    e.add_selection(Sel::new(pos(0, 2), pos(0, 5))); // "BBcc"
+    e.add_selection(Sel::new(pos(0, 4), pos(0, 7))); // "ccDD" — overlaps cols 4..=5
+    assert_eq!(
+        e.extra_selections(),
+        [Sel::new(pos(0, 2), pos(0, 7))],
+        "must have merged into one selection before any edit ran"
+    );
+    e.edit_at_all_selections(pos(0, 0), |s| Edit::DeleteRange {
+        start: s.start(),
+        end: Position::new(s.end().row, s.end().col + 1),
+        kind: MotionKind::Char,
+    });
+    // Primary caret deletes the first "a"; the merged secondary deletes
+    // "BBccDD" as one clean range — not twice, not partially.
+    assert_eq!(e.line(0).as_deref(), Some("aee"));
+}
