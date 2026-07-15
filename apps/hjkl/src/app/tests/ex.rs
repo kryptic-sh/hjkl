@@ -2348,6 +2348,79 @@ fn recovery_y_loads_swap_body() {
     );
 }
 
+/// Choosing 'q' in the recovery prompt on the SOLE open slot (the common
+/// `hjkl foo.txt` launch after a crash) must abort with a visible message and
+/// reset the buffer to an empty scratch, not silently dismiss the prompt and
+/// leave the on-disk content displayed as if nothing happened (audit A6).
+///
+/// Unlike the multi-slot case, the only slot can't be removed outright, so
+/// this exercises the fallback path added alongside [`App::reset_slot_to_scratch`].
+#[test]
+fn recovery_q_on_sole_slot_aborts_with_message_and_resets_to_scratch() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("test_recovery_q.txt");
+    std::fs::write(&file_path, "on disk content\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("test_recovery_q.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+        writer_pid: 999_999_999, // almost certainly dead — not a live-lock
+    };
+    let rope = ropey::Rope::from_str("swap body that must NOT survive abort");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    app.check_recovery_on_open(idx);
+    assert!(app.pending_recovery.is_some(), "must be in recovery state");
+    assert_eq!(app.slots.len(), 1, "this test targets the sole-slot launch");
+
+    // Simulate pressing 'q'.
+    app.handle_recovery_key(key(crossterm::event::KeyCode::Char('q')));
+
+    assert!(
+        app.pending_recovery.is_none(),
+        "pending_recovery must be cleared after 'q'"
+    );
+    assert_eq!(
+        app.slots.len(),
+        1,
+        "the sole slot must not be removed (there'd be nothing left to show)"
+    );
+    let msgs: Vec<&str> = app.bus.history().map(|h| h.body.as_str()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("Aborted file open")),
+        "'q' must emit a visible abort message on the sole-slot path too; got: {msgs:?}"
+    );
+    assert_eq!(
+        app.active().filename,
+        None,
+        "aborted slot must fall back to an unnamed scratch buffer, not stay on the file"
+    );
+    let content = app.active_editor().buffer().content_joined();
+    assert!(
+        content.is_empty(),
+        "aborted slot must be empty, not the silently-opened on-disk content \
+         or the swap body; got: {content:?}"
+    );
+}
+
 // ── #185 recovery must reset syntax (content_reset) ──────────────────────────
 
 #[test]

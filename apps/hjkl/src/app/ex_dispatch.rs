@@ -1698,18 +1698,31 @@ impl App {
                 // Abort: remove the slot we just added and switch back if possible.
                 let slot_idx = self.pending_recovery.as_ref().map(|p| p.slot_idx);
                 self.pending_recovery = None;
-                if let Some(idx) = slot_idx
-                    && self.slots.len() > 1
-                {
-                    let removed = self.slots.remove(idx);
-                    self.syntax.forget(removed.buffer_id);
-                    // Fix window pointers.
-                    let slot_count = self.slots.len();
-                    for win in self.windows.iter_mut().flatten() {
-                        if win.slot >= idx && win.slot > 0 {
-                            win.slot -= 1;
+                if let Some(idx) = slot_idx {
+                    if self.slots.len() > 1 {
+                        let removed = self.slots.remove(idx);
+                        self.syntax.forget(removed.buffer_id);
+                        // Fix window pointers.
+                        let slot_count = self.slots.len();
+                        for win in self.windows.iter_mut().flatten() {
+                            if win.slot >= idx && win.slot > 0 {
+                                win.slot -= 1;
+                            }
+                            win.slot = win.slot.min(slot_count.saturating_sub(1));
                         }
-                        win.slot = win.slot.min(slot_count.saturating_sub(1));
+                    } else {
+                        // Sole slot (the common `hjkl foo.txt` launch after a
+                        // crash): can't remove the only slot, so fall back to
+                        // an empty unnamed scratch buffer instead of silently
+                        // leaving the on-disk content displayed as if nothing
+                        // happened (audit A6).
+                        self.lsp_detach_buffer(idx);
+                        self.reset_slot_to_scratch(idx);
+                        for win in self.windows.iter_mut().flatten() {
+                            win.slot = 0;
+                        }
+                        self.reconcile_window_editors();
+                        self.fs_watch_sync();
                     }
                     self.bus.info("Aborted file open.");
                 }

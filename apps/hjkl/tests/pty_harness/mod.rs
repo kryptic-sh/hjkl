@@ -26,6 +26,7 @@ pub mod global_marks;
 pub mod harness;
 pub mod indent;
 pub mod paste;
+pub mod recovery;
 pub mod register_count;
 pub mod render_sync;
 pub mod substitute;

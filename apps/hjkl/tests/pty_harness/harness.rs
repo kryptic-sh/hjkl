@@ -262,11 +262,45 @@ impl TerminalSession {
         session
     }
 
+    /// Spawn `hjkl` opening `file`, using a caller-supplied `cache_dir` as
+    /// `XDG_CACHE_HOME` instead of a freshly-generated one.
+    ///
+    /// The auto-generated per-session cache dir used by the other
+    /// constructors isn't known until spawn, which makes it impossible for a
+    /// test to pre-seed a swap file at the exact path the spawned process
+    /// will look for. Crash-recovery tests need exactly that: write a
+    /// `<cache_dir>/hjkl/swap/<hash>.swp` matching `hjkl_app::swap`'s layout
+    /// *before* spawning, so the process finds a "newer than disk" swap on
+    /// open and surfaces the recovery prompt. Takes ownership of `cache_dir`
+    /// so the caller's `TempDir` (and therefore the swap file it wrote) stays
+    /// alive for the session's lifetime, same as the auto-generated case.
+    #[allow(dead_code)]
+    pub fn spawn_with_file_and_cache_dir(path: &Path, cache_dir: tempfile::TempDir) -> Self {
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir)
+    }
+
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
         Self::spawn_inner_cwd(file, rows, cols, None)
     }
 
     fn spawn_inner_cwd(file: Option<&Path>, rows: u16, cols: u16, cwd: Option<&Path>) -> Self {
+        // Isolated, UNIQUE-per-session cache dir so swap files (written on
+        // open since #185) never touch the real user cache and never collide
+        // across concurrent sessions opening the same fixture (which would
+        // trip the live-PID swap lock and open the file read-only). A shared
+        // cache dir would also leave fixture swaps behind across runs and
+        // surface the recovery prompt. Unique per spawn → fresh + clean.
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir)
+    }
+
+    fn spawn_inner_cwd_cache(
+        file: Option<&Path>,
+        rows: u16,
+        cols: u16,
+        cwd: Option<&Path>,
+        cache_dir: tempfile::TempDir,
+    ) -> Self {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -293,13 +327,6 @@ impl TerminalSession {
             "XDG_CONFIG_HOME",
             std::env::temp_dir().join("hjkl-e2e-config"),
         );
-        // Isolated, UNIQUE-per-session cache dir so swap files (written on
-        // open since #185) never touch the real user cache and never collide
-        // across concurrent sessions opening the same fixture (which would
-        // trip the live-PID swap lock and open the file read-only). A shared
-        // cache dir would also leave fixture swaps behind across runs and
-        // surface the recovery prompt. Unique per spawn → fresh + clean.
-        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
 
         if let Some(d) = cwd {

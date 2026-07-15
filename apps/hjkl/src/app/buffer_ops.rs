@@ -7,6 +7,57 @@ use super::{App, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
 
 impl App {
+    /// Reset slot `idx`'s editor to a fresh, empty, unnamed scratch buffer,
+    /// discarding its content, undo history, and file identity. Used
+    /// whenever the sole remaining slot must fall back to `[No Name]`
+    /// instead of being removed (`:bdelete`/`:bwipeout` on the only
+    /// buffer; aborting a stale-swap recovery prompt on a single-file
+    /// launch).
+    ///
+    /// Only replaces the editor instance and the file-identity/disk-state
+    /// slot fields. Callers remain responsible for anything else that
+    /// should be discarded first (e.g. `:bwipeout` explicitly clears marks
+    /// and jumplists before calling this), for LSP detach/diagnostics, and
+    /// for post-reset bookkeeping (window slot pointers,
+    /// `reconcile_window_editors`, `fs_watch_sync`, the status message).
+    pub(crate) fn reset_slot_to_scratch(&mut self, idx: usize) {
+        let old_id = self.slots[idx].buffer_id;
+        self.syntax.forget(old_id);
+        let new_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+        let host = TuiHost::new();
+        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
+        editor.set_current_buffer_id(new_id);
+        editor.set_registers_arc(self.registers.clone());
+        editor.set_global_marks_arc(self.global_marks.clone());
+        editor.set_last_substitute_arc(self.last_substitute.clone());
+        editor.set_abbrevs_arc(self.abbrevs.clone());
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
+        let slot = &mut self.slots[idx];
+        slot.buffer_id = new_id;
+        slot.editor = editor;
+        slot.filename = None;
+        slot.dirty = false;
+        slot.is_new_file = false;
+        slot.is_untracked = false;
+        slot.diag_signs.clear();
+        slot.git_signs.clear();
+        slot.last_git_dirty_gen = None;
+        slot.git_repo_present = None; // re-probe on next edit
+        slot.saved_hash = 0;
+        slot.saved_len = 0;
+        slot.disk_mtime = None;
+        slot.disk_len = None;
+        slot.disk_state = DiskState::Synced;
+        slot.snapshot_saved();
+    }
+
     /// Switch the focused window to display slot `idx` and refresh its
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).
@@ -129,41 +180,7 @@ impl App {
         let active_slot = self.focused_slot_idx();
         if self.slots.len() == 1 {
             self.lsp_detach_buffer(active_slot);
-            let old_id = self.active().buffer_id;
-            self.syntax.forget(old_id);
-            let new_id = self.next_buffer_id;
-            self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_current_buffer_id(new_id);
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
-            let slot = &mut self.slots[0];
-            slot.buffer_id = new_id;
-            slot.editor = editor;
-            slot.filename = None;
-            slot.dirty = false;
-            slot.is_new_file = false;
-            slot.is_untracked = false;
-            slot.diag_signs.clear();
-            slot.git_signs.clear();
-            slot.last_git_dirty_gen = None;
-            slot.git_repo_present = None; // re-probe on next edit
-            slot.saved_hash = 0;
-            slot.saved_len = 0;
-            slot.disk_mtime = None;
-            slot.disk_len = None;
-            slot.disk_state = DiskState::Synced;
-            slot.snapshot_saved();
+            self.reset_slot_to_scratch(0);
             // Keep all windows pointing at slot 0 (the only one).
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
@@ -258,41 +275,7 @@ impl App {
                 slot.diag_signs_lsp.clear();
             }
             self.lsp_detach_buffer(active_slot);
-            let old_id = self.active().buffer_id;
-            self.syntax.forget(old_id);
-            let new_id = self.next_buffer_id;
-            self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_current_buffer_id(new_id);
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
-            let slot = &mut self.slots[0];
-            slot.buffer_id = new_id;
-            slot.editor = editor;
-            slot.filename = None;
-            slot.dirty = false;
-            slot.is_new_file = false;
-            slot.is_untracked = false;
-            slot.diag_signs.clear();
-            slot.git_signs.clear();
-            slot.last_git_dirty_gen = None;
-            slot.git_repo_present = None; // re-probe on next edit
-            slot.saved_hash = 0;
-            slot.saved_len = 0;
-            slot.disk_mtime = None;
-            slot.disk_len = None;
-            slot.disk_state = DiskState::Synced;
-            slot.snapshot_saved();
+            self.reset_slot_to_scratch(0);
             // Keep all windows pointing at slot 0 (the only one).
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
