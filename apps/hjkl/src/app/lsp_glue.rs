@@ -77,6 +77,26 @@ fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
     rope.char_to_byte(rope.byte_to_char(b))
 }
 
+/// True when `edits`, applied in the given array order, are ascending and
+/// non-overlapping in byte space: each edit's `start_byte` is at or past
+/// the previous edit's `new_end_byte`.
+///
+/// Only a batch that satisfies this can [`build_text_changes`] safely
+/// slice replacement text from the POST-edit rope (see its doc comment):
+/// for such a batch, everything recorded after edit *i* sits strictly to
+/// its right, so nothing shifts edit *i*'s `[start_byte, new_end_byte)`
+/// between the moment it was recorded and the final rope.
+///
+/// A batch recorded in end-DESCENDING application order — e.g.
+/// `apply_workspace_edit`'s deliberate sort (so applying a later edit
+/// doesn't shift an earlier edit's positions), or a block-delete fan-out —
+/// fails this check: edits recorded earlier sit to the RIGHT of edits
+/// applied after them, so later (leftward) edits shift the earlier ones'
+/// byte ranges in the final rope out from under this slicing approach.
+fn edits_ascending_disjoint(edits: &[hjkl_engine::ContentEdit]) -> bool {
+    edits.windows(2).all(|w| w[0].new_end_byte <= w[1].start_byte)
+}
+
 /// Build the `TextChange[]` array for `textDocument/didChange` incremental
 /// sync from the engine's `ContentEdit` batch.
 ///
@@ -91,32 +111,43 @@ fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
 /// full `content_joined()` build (~3 MB on a 1.86 M-line file, ~15 % of
 /// per-keystroke CPU when LSP was attached).
 ///
+/// Slicing from the FINAL rope is only correct when the batch is
+/// [`edits_ascending_disjoint`] — returns `None` otherwise (e.g. for
+/// `apply_workspace_edit`'s end-descending batches) so the caller falls
+/// back to a full-document sync instead of deriving the wrong replacement
+/// text (audit R2, fix 2).
+///
 /// Caller MUST verify the server uses UTF-8 `positionEncoding`; this
 /// function passes byte columns straight through.
 fn build_text_changes(
     rope: &ropey::Rope,
     edits: &[hjkl_engine::ContentEdit],
-) -> Vec<hjkl_lsp::TextChange> {
+) -> Option<Vec<hjkl_lsp::TextChange>> {
+    if !edits_ascending_disjoint(edits) {
+        return None;
+    }
     let len_bytes = rope.len_bytes();
-    edits
-        .iter()
-        .map(|e| {
-            // Clamp then snap to char boundaries: `.min(len_bytes)` can land
-            // in the middle of a multi-byte char (e.g. on emoji/CJK content),
-            // causing `byte_slice` to panic. `snap_to_char_boundary` floors
-            // each bound to the start of the char that contains it.
-            let start = snap_to_char_boundary(rope, e.start_byte.min(len_bytes));
-            let end = snap_to_char_boundary(rope, e.new_end_byte.min(len_bytes)).max(start);
-            let text = rope.byte_slice(start..end).to_string();
-            hjkl_lsp::TextChange {
-                start_line: e.start_position.0,
-                start_col: e.start_position.1,
-                end_line: e.old_end_position.0,
-                end_col: e.old_end_position.1,
-                text,
-            }
-        })
-        .collect()
+    Some(
+        edits
+            .iter()
+            .map(|e| {
+                // Clamp then snap to char boundaries: `.min(len_bytes)` can land
+                // in the middle of a multi-byte char (e.g. on emoji/CJK content),
+                // causing `byte_slice` to panic. `snap_to_char_boundary` floors
+                // each bound to the start of the char that contains it.
+                let start = snap_to_char_boundary(rope, e.start_byte.min(len_bytes));
+                let end = snap_to_char_boundary(rope, e.new_end_byte.min(len_bytes)).max(start);
+                let text = rope.byte_slice(start..end).to_string();
+                hjkl_lsp::TextChange {
+                    start_line: e.start_position.0,
+                    start_col: e.start_position.1,
+                    end_line: e.old_end_position.0,
+                    end_col: e.old_end_position.1,
+                    text,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Small inline map: file extension → LSP language id.
@@ -392,7 +423,13 @@ impl App {
         }
         // Compute sync-mode decision before taking the mutable slot
         // borrow — `lsp_supports_incremental_utf8` walks `self.lsp_state`.
-        let use_incremental = !edits.is_empty() && self.lsp_supports_incremental_utf8();
+        // `edits_ascending_disjoint` also gates incremental sync: a batch
+        // recorded in end-descending order (e.g. `apply_workspace_edit`)
+        // can't be safely sliced from the final rope — see
+        // `build_text_changes`'s doc comment (audit R2, fix 2).
+        let use_incremental = !edits.is_empty()
+            && self.lsp_supports_incremental_utf8()
+            && edits_ascending_disjoint(edits);
 
         let mgr = self.lsp.as_ref().unwrap();
         let slot_idx = self.focused_slot_idx();
@@ -412,7 +449,10 @@ impl App {
             // ~3 MB content_joined build that dominated the LSP path on
             // huge files. `View::rope()` is an O(1) Arc-clone.
             let rope = slot.editor.buffer().rope();
-            let changes = build_text_changes(&rope, edits);
+            let changes = build_text_changes(&rope, edits).expect(
+                "use_incremental already checked edits_ascending_disjoint, \
+                so build_text_changes must succeed",
+            );
             tracing::debug!(
                 buffer_id,
                 dg,
@@ -2353,7 +2393,23 @@ impl App {
 
 #[cfg(test)]
 mod lsp_glue_tests {
-    use super::snap_to_char_boundary;
+    use super::{build_text_changes, snap_to_char_boundary};
+
+    /// Apply a single-row `TextChange` (row 0 only — sufficient for these
+    /// single-line fixtures) to `doc`, replacing the byte range
+    /// `[start_col, end_col)` with `change.text`. Mirrors what a real LSP
+    /// client does when it applies a `contentChanges` array in order.
+    fn apply_change(doc: &str, change: &hjkl_lsp::TextChange) -> String {
+        assert_eq!(change.start_line, 0);
+        assert_eq!(change.end_line, 0);
+        let start = change.start_col as usize;
+        let end = change.end_col as usize;
+        let mut out = String::new();
+        out.push_str(&doc[..start]);
+        out.push_str(&change.text);
+        out.push_str(&doc[end..]);
+        out
+    }
 
     /// `snap_to_char_boundary` must floor a byte index that falls inside a
     /// multi-byte char (here a 4-byte emoji U+1F600) to the char's first byte.
@@ -2394,10 +2450,119 @@ mod lsp_glue_tests {
             new_end_position: (0, 0),
         };
         // Must not panic.
-        let changes = super::build_text_changes(&rope, &[edit]);
+        let changes = build_text_changes(&rope, &[edit]).expect("single edit is ascending-safe");
         assert!(!changes.is_empty());
         // The extracted text must be valid UTF-8 (implicit: it compiled to String).
         assert!(std::str::from_utf8(changes[0].text.as_bytes()).is_ok());
+    }
+
+    /// Regression (audit R2, fix 2): a batch recorded in end-DESCENDING
+    /// application order — exactly what `apply_workspace_edit` produces
+    /// (it deliberately sorts edits by range-end descending so applying a
+    /// later edit doesn't shift an earlier edit's positions) — must NOT be
+    /// sliced from the final rope. Doing so silently derives the wrong
+    /// replacement text.
+    ///
+    /// Worked example from a `foo` -> `x` rename over `"foo bar foo"`:
+    /// the rightmost `foo` (bytes 8..11) is replaced first, then the
+    /// leftmost `foo` (bytes 0..3) — final doc `"x bar x"` (7 bytes). The
+    /// pre-fix code sliced the first edit's `[8, 9)` from the 7-byte final
+    /// rope (clamped to `[7, 7)`) and got `""` instead of `"x"`, which,
+    /// replayed against the pre-edit doc, drops the trailing `x` entirely.
+    #[test]
+    fn build_text_changes_rejects_descending_batch() {
+        use hjkl_engine::ContentEdit;
+
+        let pre = "foo bar foo";
+        let post = "x bar x";
+        let final_rope = ropey::Rope::from_str(post);
+
+        let edits = vec![
+            // Rightmost "foo" (bytes 8..11) -> "x", recorded (and applied)
+            // first — matches `apply_workspace_edit`'s descending sort.
+            ContentEdit {
+                start_byte: 8,
+                old_end_byte: 11,
+                new_end_byte: 9,
+                start_position: (0, 8),
+                old_end_position: (0, 11),
+                new_end_position: (0, 9),
+            },
+            // Leftmost "foo" (bytes 0..3) -> "x", recorded second.
+            ContentEdit {
+                start_byte: 0,
+                old_end_byte: 3,
+                new_end_byte: 1,
+                start_position: (0, 0),
+                old_end_position: (0, 3),
+                new_end_position: (0, 1),
+            },
+        ];
+
+        assert!(
+            build_text_changes(&final_rope, &edits).is_none(),
+            "descending batch must be rejected instead of sliced from the \
+            final rope — the caller must fall back to a full-document sync"
+        );
+
+        // Sanity: this is exactly the scenario that corrupted the server's
+        // copy pre-fix — `pre` replayed with the (rejected) old behaviour
+        // would have produced "x bar " instead of `post`, dropping the
+        // trailing "x".
+        let _ = pre;
+    }
+
+    /// Companion to the descending-batch rejection above: an
+    /// ascending-and-disjoint batch (the common case — edits recorded in
+    /// left-to-right application order) must still produce changes that,
+    /// replayed in order against the pre-edit document, reconstruct the
+    /// post-edit document exactly.
+    #[test]
+    fn build_text_changes_ascending_batch_replays_correctly() {
+        use hjkl_engine::ContentEdit;
+
+        // "foo bar foo" -> replace first "foo" with "x" (ascending step 1)
+        // -> "x bar foo" -> replace second "foo" with "y" (ascending step 2)
+        // -> "x bar y".
+        let pre = "foo bar foo";
+        let post = "x bar y";
+        let final_rope = ropey::Rope::from_str(post);
+
+        let edits = vec![
+            // Leftmost "foo" (bytes 0..3) -> "x", recorded first.
+            ContentEdit {
+                start_byte: 0,
+                old_end_byte: 3,
+                new_end_byte: 1,
+                start_position: (0, 0),
+                old_end_position: (0, 3),
+                new_end_position: (0, 1),
+            },
+            // Second "foo", recorded against the state AFTER the first
+            // edit ("x bar foo") where it sits at bytes 6..9 -> "y".
+            ContentEdit {
+                start_byte: 6,
+                old_end_byte: 9,
+                new_end_byte: 7,
+                start_position: (0, 6),
+                old_end_position: (0, 9),
+                new_end_position: (0, 7),
+            },
+        ];
+
+        let changes =
+            build_text_changes(&final_rope, &edits).expect("ascending batch must be accepted");
+        assert_eq!(changes.len(), 2);
+
+        let mut doc = pre.to_string();
+        for change in &changes {
+            doc = apply_change(&doc, change);
+        }
+        assert_eq!(
+            doc, post,
+            "replaying the ascending batch's changes against the pre-edit \
+            doc must reconstruct the post-edit doc"
+        );
     }
 
     /// A `WorkspaceEdit` targeting a file OUTSIDE every active LSP workspace
