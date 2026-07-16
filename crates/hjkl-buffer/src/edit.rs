@@ -238,8 +238,7 @@ impl View {
                     } else {
                         let char_start = pos_to_char_idx(&c.text, row, col_start);
                         let char_end = pos_to_char_idx(&c.text, row, col_end);
-                        let removed_span: String =
-                            c.text.slice(char_start..char_end).to_string();
+                        let removed_span: String = c.text.slice(char_start..char_end).to_string();
                         c.text.remove(char_start..char_end);
                         // Discard the pad portion from the returned chunk —
                         // it's regenerated automatically by do_insert_block
