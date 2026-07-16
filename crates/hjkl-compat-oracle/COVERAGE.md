@@ -107,7 +107,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | insert (i/a/I/A/o/O) | 6                   | tier1.toml                                |
 | visual char (v)      | 4                   | tier2_visual.toml                         |
 | visual line (V)      | 4                   | tier2_visual.toml                         |
-| visual block (C-v)   | 5                   | tier2_visual_block.toml                   |
+| visual block (C-v)   | 7                   | tier2_visual_block.toml                   |
 | command-line (:)     | via nvim-api driver | nvim_api_tier.toml, tier2_substitute.toml |
 | terminal             | —                   | (not shipped)                             |
 | replace (R)          | 8                   | tier2_replace_mode.toml                   |
@@ -139,17 +139,19 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Marks
 
-| Feature                 | Cases | File(s)                            |
-| ----------------------- | ----- | ---------------------------------- |
-| ma / 'a (line jump)     | 1     | tier2_marks.toml                   |
-| ma / \`a (char jump)    | 1     | tier2_marks.toml                   |
-| '< / '> (visual bounds) | 2     | tier2_marks.toml                   |
-| '[ / '] (change bounds) | 2     | tier2_marks.toml                   |
-| '. (last edit)          | 2     | tier2_marks.toml, tier2_jumps.toml |
-| g; / g, (changelist)    | 8     | tier2_jumps.toml                   |
-| mA-Z (global marks)     | —     | TODO                               |
-| '' / \`\` (last jump)   | —     | TODO                               |
-| '0-'9 (viminfo marks)   | —     | (not shipped)                      |
+| Feature                                       | Cases | File(s)                            |
+| --------------------------------------------- | ----- | ---------------------------------- |
+| ma / 'a (line jump)                           | 1     | tier2_marks.toml                   |
+| ma / \`a (char jump)                          | 1     | tier2_marks.toml                   |
+| '< / '> (visual bounds)                       | 2     | tier2_marks.toml                   |
+| '[ / '] (change bounds)                       | 2     | tier2_marks.toml                   |
+| '. (last edit)                                | 2     | tier2_marks.toml, tier2_jumps.toml |
+| g; / g, (changelist)                          | 11    | tier2_jumps.toml                   |
+| mark shift on insert-above line (ma, ggO, `a) | 1     | tier2_marks.toml                   |
+| mA-Z (global marks)                           | —     | TODO                               |
+| '' (last-jump, linewise)                      | 1     | tier2_jumps.toml                   |
+| \`\` (last-jump, exact col)                   | 2     | tier2_jumps.toml                   |
+| '0-'9 (viminfo marks)                         | —     | (not shipped)                      |
 
 ## Registers
 
@@ -228,7 +230,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 | Feature                      | Cases | File(s)                                                                                                                                                                                                                                                                                |
 | ---------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| . (dot repeat)               | 7     | tier2_dot_repeat.toml                                                                                                                                                                                                                                                                  |
+| . (dot repeat)               | 10    | tier2_dot_repeat.toml                                                                                                                                                                                                                                                                  |
 | . with count (3.)            | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
 | J. (join dot)                | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
 | u (undo)                     | 2     | tier1.toml                                                                                                                                                                                                                                                                             |

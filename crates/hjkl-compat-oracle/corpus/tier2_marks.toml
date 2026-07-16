@@ -104,3 +104,18 @@ initial_cursor = [0, 0]
 keys = "iX<Esc>j`."
 expected_buffer = "Xhello\nworld\n"
 expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ─── Mark adjustment on insert-above (G7) ────────────────────────────────────
+
+# `ma` on row 1, then `ggO<text><Esc>` inserts a new row 0 — `a` must shift
+# down to row 2 (its line, not its row index) rather than staying at row 1
+# (now the wrong line) or getting dropped.
+[[cases]]
+name = "mark_shifts_down_when_line_inserted_above"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "jmaggONEW<Esc>`a"
+expected_buffer = "NEW\none\ntwo\nthree\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"

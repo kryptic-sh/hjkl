@@ -43,3 +43,15 @@ keys = "gqj"
 expected_buffer = "one two\nthree four\nfive six\n"
 expected_mode = "normal"
 textwidth = 10
+
+# `gqq` at a wider textwidth=20 (G4) — a different wrap column than the other
+# cases here, to pin the harness's per-case textwidth override itself, not
+# just one specific wrap width.
+[[cases]]
+name = "reflow_gqq_textwidth_20"
+initial_buffer = "one two three four five six seven eight\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "one two three four\nfive six seven eight\n"
+expected_mode = "normal"
+textwidth = 20

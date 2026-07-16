@@ -186,3 +186,15 @@ keys = "iX<Esc>ggjjiY<Esc>g;g;iZ<Esc>g,"
 expected_buffer = "ZXa\nb\nYc\nd\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# ─── `''` last-jump mark (G2) ───────────────────────────────────────────────
+# `''` (linewise) returns to the FIRST NON-BLANK of the pre-jump line — unlike
+# `` `` `` which returns to the exact pre-jump column.
+[[cases]]
+name = "jump_single_quote_returns_to_first_nonblank"
+initial_buffer = "foo bar\nbaz\nqux\n"
+initial_cursor = [0, 0]
+keys = "0llllG''"
+expected_buffer = "foo bar\nbaz\nqux\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
