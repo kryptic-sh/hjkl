@@ -888,6 +888,14 @@ fn dispatch(
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
             }
+            // Drain the content-reset queue `set_content` just filled and feed
+            // it through the same syntax + LSP + dirty pipeline the keystroke
+            // and ex-command paths use — `settle()` alone never drains it
+            // (audit R2, fix 1). Look up the slot fresh: it's correct for both
+            // the fast (current-buffer) and non-current branches above.
+            if let Some(idx) = app.nvim_slot_index_for_buffer(buf_id) {
+                app.sync_after_direct_content_mutation(idx);
+            }
             settle(app);
             ok(stdout, msgid, Value::Nil)
         }
@@ -1687,6 +1695,12 @@ fn dispatch(
                     Some(ed) => ed.set_content(&new_content),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
+            }
+            // See the matching comment in nvim_buf_set_lines: `settle()` alone
+            // never drains the content-reset/edit queue `set_content` just
+            // filled (audit R2, fix 1).
+            if let Some(idx) = app.nvim_slot_index_for_buffer(buf_id) {
+                app.sync_after_direct_content_mutation(idx);
             }
             settle(app);
             ok(stdout, msgid, Value::Nil)
@@ -4060,6 +4074,175 @@ mod tests {
         };
         assert_eq!(lines[0], Value::from("hello there"));
         assert_eq!(lines[1], Value::from("rust lang"));
+    }
+
+    // ── nvim_buf_set_lines / nvim_buf_set_text sync chain (audit R2, fix 1) ───
+
+    /// Regression (audit R2, fix 1): `nvim_buf_set_lines` mutates via
+    /// `Editor::set_content()` + the nvim-api `settle()` helper, which only
+    /// reconciles window editors and flushes a pending recompute — it never
+    /// drains `take_content_edits`/`take_content_reset`. Before the fix the
+    /// LSP never got a `textDocument/didChange` and the content-reset flag
+    /// was left dangling for some unrelated later call to observe instead.
+    #[test]
+    fn test_nvim_buf_set_lines_syncs_lsp_and_drains_content_reset() {
+        let mut app = build_app(None).unwrap();
+        app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("hello")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let dg = app.active_editor().buffer().dirty_gen();
+        assert_eq!(
+            app.active().last_lsp_dirty_gen,
+            Some(dg),
+            "nvim_buf_set_lines must notify the LSP (didChange) — settle() alone \
+             never drains the content-reset queue set_content() fills"
+        );
+        assert!(
+            !app.active_editor_mut().take_content_reset(),
+            "the content-reset flag must already be drained by the sync helper, \
+             not left pending for whatever call happens to touch this editor next"
+        );
+
+        if let Some(mgr) = app.lsp.take() {
+            mgr.shutdown();
+        }
+    }
+
+    /// Same regression as above, but for `nvim_buf_set_text`.
+    #[test]
+    fn test_nvim_buf_set_text_syncs_lsp_and_drains_content_reset() {
+        let mut app = build_app(None).unwrap();
+        app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf.clone(),
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("hello world")]),
+            ],
+        );
+        // Reset the dirty-gen bookkeeping so the assertion below proves
+        // THIS nvim_buf_set_text call notified the LSP, not the seeding
+        // nvim_buf_set_lines above.
+        app.active_mut().last_lsp_dirty_gen = None;
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_text",
+            vec![
+                buf,
+                Value::from(0i64),
+                Value::from(6i64),
+                Value::from(0i64),
+                Value::from(11i64),
+                Value::Array(vec![Value::from("there")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let dg = app.active_editor().buffer().dirty_gen();
+        assert_eq!(
+            app.active().last_lsp_dirty_gen,
+            Some(dg),
+            "nvim_buf_set_text must notify the LSP (didChange)"
+        );
+        assert!(
+            !app.active_editor_mut().take_content_reset(),
+            "the content-reset flag must already be drained by the sync helper"
+        );
+
+        if let Some(mgr) = app.lsp.take() {
+            mgr.shutdown();
+        }
+    }
+
+    /// The sync chain must also run for a buffer that is NOT the focused
+    /// one — `nvim_buf_set_lines`/`nvim_buf_set_text` can target any open
+    /// buffer by handle, mirroring `apply_workspace_edit`'s per-slot drain
+    /// rather than assuming the active editor.
+    #[test]
+    fn test_nvim_buf_set_lines_syncs_non_current_buffer() {
+        let mut app = build_app(None).unwrap();
+        app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+        // A fresh scratch buffer that is created but never focused.
+        let other_buf = {
+            let resp = call(
+                &mut app,
+                "nvim_create_buf",
+                vec![Value::Boolean(true), Value::Boolean(false)],
+            );
+            assert_ok(resp)
+        };
+        let current_buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        assert_ne!(other_buf, current_buf, "sanity: distinct buffers");
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                other_buf.clone(),
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("side buffer content")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let other_id = match &other_buf {
+            Value::Ext(_, bytes) => {
+                let mut cursor = std::io::Cursor::new(bytes.as_slice());
+                rmpv::decode::read_value(&mut cursor)
+                    .unwrap()
+                    .as_u64()
+                    .unwrap()
+            }
+            _ => panic!("expected buffer ext handle"),
+        };
+        let dg = app.nvim_slot_editor(other_id).unwrap().buffer().dirty_gen();
+        assert_eq!(
+            app.nvim_slot_last_lsp_dirty_gen(other_id),
+            Some(dg),
+            "the non-focused slot's buffer must ALSO be didChange-notified"
+        );
+        assert!(
+            !app.nvim_slot_editor_mut(other_id)
+                .unwrap()
+                .take_content_reset(),
+            "the non-focused slot's content-reset flag must already be drained"
+        );
+
+        if let Some(mgr) = app.lsp.take() {
+            mgr.shutdown();
+        }
     }
 
     // ── nvim_get_option_value / nvim_set_option_value ─────────────────────────

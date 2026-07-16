@@ -1526,6 +1526,51 @@ impl App {
         }
     }
 
+    /// Drain the content-reset/edit queue produced by a direct
+    /// `Editor::set_content()` mutation — used by the nvim-api
+    /// `nvim_buf_set_lines` / `nvim_buf_set_text` handlers — and feed it
+    /// through the same syntax + LSP + dirty-refresh pipeline the keystroke
+    /// (`sync_after_engine_mutation`) and ex-command paths use.
+    ///
+    /// `set_content()` followed by the nvim-api `settle()` helper alone only
+    /// reconciles window editors and flushes a pending recompute; neither
+    /// drains `take_content_edits`/`take_content_reset`. Without this, a
+    /// buffer mutated via `nvim_buf_set_lines`/`nvim_buf_set_text` got no
+    /// `textDocument/didChange`, kept a stale tree-sitter tree (the parser
+    /// never saw the edit), and never refreshed its dirty flag (audit R2,
+    /// fix 1).
+    ///
+    /// `slot_idx` need not be the focused slot: `nvim_buf_set_lines` /
+    /// `nvim_buf_set_text` can target any open buffer by handle, so this
+    /// mirrors `apply_workspace_edit`'s per-slot drain (audit R2, fix 3)
+    /// rather than assuming the active editor.
+    pub(crate) fn sync_after_direct_content_mutation(&mut self, slot_idx: usize) {
+        let Some(buffer_id) = self.slots.get(slot_idx).map(|s| s.buffer_id) else {
+            return;
+        };
+        if self.slots[slot_idx].editor.take_content_reset() {
+            self.syntax.reset(buffer_id);
+            self.slots[slot_idx]
+                .editor
+                .install_ratatui_syntax_spans(Vec::new());
+        }
+        let edits = self.slots[slot_idx].editor.take_content_edits();
+        if !edits.is_empty() {
+            self.syntax.apply_edits(buffer_id, &edits);
+            self.slots[slot_idx]
+                .editor
+                .shift_syntax_spans_for_edits(&edits);
+        }
+        self.lsp_notify_change_for_slot(slot_idx, &edits);
+        if self.slots[slot_idx].editor.take_dirty() {
+            self.slots[slot_idx].refresh_dirty_against_saved();
+            if self.slots[slot_idx].dirty {
+                self.slots[slot_idx].is_new_file = false;
+            }
+        }
+        self.pending_recompute = true;
+    }
+
     /// Invalidate sibling windows' folds across `edits`, and refresh the
     /// diff-pair alignment cache / scroll-bind if a diff pair is active.
     ///

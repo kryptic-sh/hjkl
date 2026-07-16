@@ -441,6 +441,19 @@ impl App {
             .map(|s| &mut s.editor)
     }
 
+    /// `dirty_gen` of the slot's buffer the last time it was
+    /// didChange-notified to the LSP (`None` = never sent). Test-only
+    /// accessor (audit R2, fix 1) — `slots` is private to the `app` module,
+    /// so nvim-api's own test module needs this to verify a non-focused
+    /// slot got synced.
+    #[cfg(test)]
+    pub(crate) fn nvim_slot_last_lsp_dirty_gen(&self, id: u64) -> Option<u64> {
+        self.slots
+            .iter()
+            .find(|s| s.buffer_id == id)
+            .and_then(|s| s.last_lsp_dirty_gen)
+    }
+
     /// First buffer id whose stored filename string contains `name` as a
     /// substring, or `None` if no slot matches. Used by `nvim_call_function`
     /// `bufnr("name")` semantics.
