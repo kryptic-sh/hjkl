@@ -323,35 +323,62 @@ fn content_edits_from_buffer_edit(
                     });
                 }
                 hjkl_buffer::MotionKind::Line => {
-                    // Linewise delete drops rows [start.row..=end.row]. Map
-                    // to a span from start of `start.row` through start of
-                    // (end.row + 1). The buffer's own `do_delete_range`
-                    // collapses to row `start.row` after dropping.
-                    let lo = start.row;
-                    let hi = end.row.min(buf.row_count().saturating_sub(1));
-                    let start_byte = buffer_byte_of_row(buf, lo);
-                    let next_row_byte = if hi + 1 < buf.row_count() {
-                        buffer_byte_of_row(buf, hi + 1)
+                    // Linewise delete drops rows [lo..=hi] (both clamped,
+                    // matching `do_delete_range`). When `hi` is not the
+                    // last row the removed bytes are [byte_of_row(lo),
+                    // byte_of_row(hi + 1)). When `hi` IS the last row the
+                    // buffer removes through the true end of the document
+                    // and — when rows survive above — ALSO the '\n' that
+                    // ends row `lo - 1` (so no trailing-newline orphan is
+                    // left), so the edit must start at EOL of row lo-1.
+                    let n = buf.row_count();
+                    let lo = start.row.min(n.saturating_sub(1));
+                    let hi = end.row.min(n.saturating_sub(1));
+                    let rope = buf.rope();
+                    let (start_byte, start_position) = if hi + 1 < n {
+                        (buffer_byte_of_row(buf, lo), (lo as u32, 0))
+                    } else if lo > 0 {
+                        let prev_len = hjkl_buffer::rope_line_bytes(&rope, lo - 1);
+                        (
+                            buffer_byte_of_row(buf, lo) - 1,
+                            ((lo - 1) as u32, prev_len as u32),
+                        )
                     } else {
-                        // No row after; clamp to end-of-buffer byte.
-                        let last_row = buf.row_count().saturating_sub(1);
-                        buffer_byte_of_row(buf, buf.row_count())
-                            + hjkl_buffer::rope_line_bytes(&buf.rope(), last_row)
+                        (0, (0, 0))
+                    };
+                    let (old_end_byte, old_end_position) = if hi + 1 < n {
+                        (buffer_byte_of_row(buf, hi + 1), ((hi + 1) as u32, 0))
+                    } else {
+                        let len = rope.len_bytes();
+                        (len, rope_byte_to_row_col(&rope, len))
                     };
                     out.push(crate::types::ContentEdit {
                         start_byte,
-                        old_end_byte: next_row_byte,
+                        old_end_byte,
                         new_end_byte: start_byte,
-                        start_position: (lo as u32, 0),
-                        old_end_position: ((hi + 1) as u32, 0),
-                        new_end_position: (lo as u32, 0),
+                        start_position,
+                        old_end_position,
+                        new_end_position: start_position,
                     });
                 }
                 hjkl_buffer::MotionKind::Block => {
                     // Block delete removes a rectangle of chars per row.
-                    // Fan out to one ContentEdit per row.
+                    // Fan out to one ContentEdit per row, in DESCENDING
+                    // row order: consumers (tree-sitter `tree.edit`, LSP
+                    // didChange, sibling rebase) apply the batch
+                    // sequentially, each edit against the document as
+                    // already modified by the previous ones. Bottom-up,
+                    // every edit's pre-edit byte offsets stay valid
+                    // because prior edits only touched bytes strictly
+                    // after it. (Ascending emission left each later
+                    // row's byte offsets too high by the widths already
+                    // deleted above it.) Rows past the last row are
+                    // skipped, matching `do_delete_range`'s clamp —
+                    // iterating them would emit duplicate edits for the
+                    // clamped last row.
                     let (left_col, right_col) = (start.col.min(end.col), start.col.max(end.col));
-                    for row in start.row..=end.row {
+                    let hi_row = end.row.min(buf.row_count().saturating_sub(1));
+                    for row in (start.row..=hi_row).rev() {
                         let row_start_pos = Position::new(row, left_col);
                         let row_end_pos = Position::new(row, right_col + 1);
                         let (sb, sp) = position_to_byte_coords(buf, row_start_pos);
@@ -394,38 +421,50 @@ fn content_edits_from_buffer_edit(
             count,
             with_space,
         } => {
-            // Joining `count` rows after `row` collapses the bytes
-            // between EOL of `row` and EOL of `row + count` into either
-            // an empty string (gJ) or a single space per join (J — but
-            // only when both sides are non-empty; we approximate with
-            // a single space for simplicity).
-            let row = (*row).min(buf.row_count().saturating_sub(1));
-            let last_join_row = (row + count).min(buf.row_count().saturating_sub(1));
+            // Mirrors `do_join_lines` exactly: each join removes the
+            // single '\n' byte that ends `row` and, when `with_space`
+            // and BOTH the accumulated line and the incoming line are
+            // non-empty, inserts one space in its place. The joined
+            // line's content is KEPT in the buffer, so the per-join
+            // byte change is exactly `"\n" → ""` or `"\n" → " "` —
+            // never the whole span down to EOL of the last joined row.
+            // One ContentEdit per join, each expressed against the
+            // document as already modified by the previous joins (the
+            // sequential-consumer contract shared by tree-sitter
+            // `tree.edit`, LSP didChange and sibling rebase).
+            let n = buf.row_count();
+            let row = (*row).min(n.saturating_sub(1));
             let buf_rope = buf.rope();
-            let line = hjkl_buffer::rope_line_str(&buf_rope, row);
-            let row_eol_byte = buffer_byte_of_row(buf, row) + line.len();
-            let row_eol_col = line.len() as u32;
-            let next_row_after = last_join_row + 1;
-            let old_end_byte = if next_row_after < buf.row_count() {
-                buffer_byte_of_row(buf, next_row_after).saturating_sub(1)
-            } else {
-                let last_row = buf.row_count().saturating_sub(1);
-                buffer_byte_of_row(buf, buf.row_count())
-                    + hjkl_buffer::rope_line_bytes(&buf_rope, last_row)
-            };
-            let last_line = hjkl_buffer::rope_line_str(&buf_rope, last_join_row);
-            let old_end_pos = (last_join_row as u32, last_line.len() as u32);
-            let replacement_len = if *with_space { 1 } else { 0 };
-            let new_end_byte = row_eol_byte + replacement_len;
-            let new_end_pos = (row as u32, row_eol_col + replacement_len as u32);
-            out.push(crate::types::ContentEdit {
-                start_byte: row_eol_byte,
-                old_end_byte,
-                new_end_byte,
-                start_position: (row as u32, row_eol_col),
-                old_end_position: old_end_pos,
-                new_end_position: new_end_pos,
-            });
+            let row_start_byte = buffer_byte_of_row(buf, row);
+            // Evolving byte length of the merged line, and how many
+            // rows the document still has before each join.
+            let mut line_bytes = hjkl_buffer::rope_line_bytes(&buf_rope, row);
+            let mut rows_left = n;
+            for k in 0..(*count).max(1) {
+                if row + 1 >= rows_left {
+                    break; // same stop condition as `do_join_lines`
+                }
+                // Pre-edit index of the line being pulled up.
+                let next_bytes = hjkl_buffer::rope_line_bytes(&buf_rope, row + 1 + k);
+                let start_byte = row_start_byte + line_bytes;
+                let start_pos = (row as u32, line_bytes as u32);
+                let insert_space = *with_space && line_bytes > 0 && next_bytes > 0;
+                let (new_end_byte, new_end_pos) = if insert_space {
+                    (start_byte + 1, (row as u32, line_bytes as u32 + 1))
+                } else {
+                    (start_byte, start_pos)
+                };
+                out.push(crate::types::ContentEdit {
+                    start_byte,
+                    old_end_byte: start_byte + 1, // the '\n'
+                    new_end_byte,
+                    start_position: start_pos,
+                    old_end_position: ((row + 1) as u32, 0),
+                    new_end_position: new_end_pos,
+                });
+                line_bytes += next_bytes + usize::from(insert_space);
+                rows_left -= 1;
+            }
         }
         B::SplitLines {
             row,
@@ -5061,6 +5100,375 @@ mod shift_syntax_spans_tests {
             elapsed.as_millis() < 100,
             "100 snapshots of a 60k-row buffer took {elapsed:?}; budget \
              100 ms. Likely regressed to per-line cloning."
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_edit_shape_tests {
+    //! Property tests for [`content_edits_from_buffer_edit`] (audit R2).
+    //!
+    //! The ground truth is the BUFFER: for any `hjkl_buffer::Edit`, the
+    //! emitted `ContentEdit` sequence — applied to the pre-edit text by a
+    //! naive sequential byte splicer — must reproduce the post-edit buffer
+    //! text EXACTLY. The same sequence feeds tree-sitter `tree.edit`, LSP
+    //! incremental didChange, sibling-cursor rebase and fold invalidation,
+    //! all of which consume each edit against the document as already
+    //! modified by the preceding edits in the batch.
+
+    use super::*;
+    use hjkl_buffer::{Edit, MotionKind, Position, View};
+
+    /// Apply `edit` to a buffer built from `initial`, then replay the
+    /// emitted `ContentEdit`s through a naive sequential splicer and
+    /// assert the result equals the post-edit buffer text. Replacement
+    /// text for each edit is sliced from the post-edit document at
+    /// `[start_byte, new_end_byte)` — exactly how the LSP glue's
+    /// `build_text_changes` recovers it. All six coordinates are
+    /// cross-checked against the evolving document. Returns the edits
+    /// so callers can additionally pin exact shapes.
+    fn check_shapes(initial: &str, edit: Edit) -> Vec<crate::types::ContentEdit> {
+        let mut view = View::from_str(initial);
+        let edits = content_edits_from_buffer_edit(&view, &edit);
+        view.apply_edit(edit);
+        let post = view.as_string();
+
+        let mut cur = initial.to_string();
+        for (i, e) in edits.iter().enumerate() {
+            assert!(
+                e.start_byte <= e.old_end_byte,
+                "edit {i}: start_byte > old_end_byte\n{e:?}"
+            );
+            assert!(
+                e.old_end_byte <= cur.len(),
+                "edit {i}: old_end_byte {} past evolving doc len {}\n{e:?}",
+                e.old_end_byte,
+                cur.len()
+            );
+            assert_eq!(
+                byte_to_row_col(cur.as_bytes(), e.start_byte),
+                e.start_position,
+                "edit {i}: start_position disagrees with start_byte\n{e:?}"
+            );
+            assert_eq!(
+                byte_to_row_col(cur.as_bytes(), e.old_end_byte),
+                e.old_end_position,
+                "edit {i}: old_end_position disagrees with old_end_byte\n{e:?}"
+            );
+            // A pure delete inserts nothing; its (empty) new range may sit
+            // past the end of the final document, so short-circuit it the
+            // way `build_text_changes`' clamping does.
+            let replacement = if e.new_end_byte == e.start_byte {
+                ""
+            } else {
+                post.get(e.start_byte..e.new_end_byte).unwrap_or_else(|| {
+                    panic!(
+                        "edit {i}: [{}, {}) is not a valid slice of the \
+                         post-edit doc ({} bytes)\n{e:?}",
+                        e.start_byte,
+                        e.new_end_byte,
+                        post.len()
+                    )
+                })
+            };
+            assert!(
+                cur.is_char_boundary(e.start_byte) && cur.is_char_boundary(e.old_end_byte),
+                "edit {i}: old range splits a multi-byte char\n{e:?}"
+            );
+            cur.replace_range(e.start_byte..e.old_end_byte, replacement);
+            assert_eq!(
+                byte_to_row_col(cur.as_bytes(), e.new_end_byte),
+                e.new_end_position,
+                "edit {i}: new_end_position disagrees with new_end_byte\n{e:?}"
+            );
+        }
+        assert_eq!(
+            cur, post,
+            "sequential splice of the emitted ContentEdits diverged from \
+             the buffer's actual post-edit text"
+        );
+        edits
+    }
+
+    fn join(row: usize, count: usize, with_space: bool) -> Edit {
+        Edit::JoinLines {
+            row,
+            count,
+            with_space,
+        }
+    }
+
+    fn del(start: (usize, usize), end: (usize, usize), kind: MotionKind) -> Edit {
+        Edit::DeleteRange {
+            start: Position::new(start.0, start.1),
+            end: Position::new(end.0, end.1),
+            kind,
+        }
+    }
+
+    // ── Shape 1: JoinLines ────────────────────────────────────────
+
+    /// Insert-mode Backspace at col 0 of "bar": the ONLY byte change is
+    /// the '\n' at byte 3 being removed — "bar" stays in the buffer.
+    #[test]
+    fn join_backspace_at_col0_removes_only_the_newline() {
+        let edits = check_shapes("foo\nbar\nbaz", join(0, 1, false));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!(
+            (e.start_byte, e.old_end_byte, e.new_end_byte),
+            (3, 4, 3),
+            "real change is [3, 4) → \"\"; got {e:?}"
+        );
+        assert_eq!(e.start_position, (0, 3));
+        assert_eq!(e.old_end_position, (1, 0));
+        assert_eq!(e.new_end_position, (0, 3));
+    }
+
+    #[test]
+    fn join_gj_style_no_space() {
+        check_shapes("alpha\nbeta\ngamma", join(0, 1, false));
+        check_shapes("alpha\nbeta\ngamma", join(1, 1, false));
+    }
+
+    /// count=2 joins twice; each join's edit must be expressed against
+    /// the document as modified by the previous join.
+    #[test]
+    fn join_count_two_emits_one_edit_per_join() {
+        let edits = check_shapes("a\nb\nc\nd", join(0, 2, false));
+        assert_eq!(edits.len(), 2, "one ContentEdit per join");
+    }
+
+    #[test]
+    fn join_with_space_inserts_single_space() {
+        let edits = check_shapes("foo\nbar", join(0, 1, true));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte, e.new_end_byte), (3, 4, 4));
+        assert_eq!(e.new_end_position, (0, 4));
+    }
+
+    /// `do_join_lines` skips the space when the incoming line is empty.
+    #[test]
+    fn join_with_space_next_line_empty_skips_space() {
+        let edits = check_shapes("foo\n\nbar", join(0, 1, true));
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_end_byte, edits[0].start_byte, "no space");
+    }
+
+    /// count=2 with an empty middle line: join 1 inserts no space
+    /// (suffix empty), join 2 does (both sides non-empty by then).
+    #[test]
+    fn join_with_space_count_two_over_empty_line() {
+        let edits = check_shapes("foo\n\nbar", join(0, 2, true));
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].new_end_byte, edits[0].start_byte);
+        assert_eq!(edits[1].new_end_byte, edits[1].start_byte + 1);
+    }
+
+    /// `do_join_lines` skips the space when the accumulated line is empty.
+    #[test]
+    fn join_with_space_prefix_empty_skips_space() {
+        let edits = check_shapes("\nfoo", join(0, 1, true));
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            (
+                edits[0].start_byte,
+                edits[0].old_end_byte,
+                edits[0].new_end_byte
+            ),
+            (0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn join_multibyte_lines() {
+        // "héllo" = 6 bytes; the '\n' sits at byte 6.
+        let edits = check_shapes("héllo\nwörld", join(0, 1, true));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte, e.new_end_byte), (6, 7, 7));
+        assert_eq!(e.start_position, (0, 6));
+        assert_eq!(e.new_end_position, (0, 7));
+        check_shapes("日本\n語だ\nよ", join(0, 2, false));
+    }
+
+    /// The buffer stops joining when it runs out of rows; the emitted
+    /// fan-out must stop with it.
+    #[test]
+    fn join_count_exceeding_rows_stops_at_last_join() {
+        let edits = check_shapes("a\nb", join(0, 5, false));
+        assert_eq!(edits.len(), 1, "only one join is possible");
+    }
+
+    #[test]
+    fn join_at_last_row_is_noop() {
+        let edits = check_shapes("a\nb", join(1, 1, false));
+        assert!(edits.is_empty(), "nothing to join → no ContentEdits");
+    }
+
+    #[test]
+    fn join_doc_with_trailing_newline() {
+        // Lines: "foo", "" — joining consumes the trailing '\n'.
+        let edits = check_shapes("foo\n", join(0, 1, false));
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            (
+                edits[0].start_byte,
+                edits[0].old_end_byte,
+                edits[0].new_end_byte
+            ),
+            (3, 4, 3)
+        );
+    }
+
+    // ── Shape 2: linewise DeleteRange ending at the last row ─────
+
+    /// `dd` on the last row also removes the '\n' that ends the row
+    /// above (matching `do_delete_range`), so the edit must start at
+    /// EOL of row lo-1 and end at the true end of the document.
+    #[test]
+    fn linewise_delete_last_row_starts_at_prev_eol() {
+        let edits = check_shapes("a\nb\nc", del((2, 0), (2, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!(
+            (e.start_byte, e.old_end_byte, e.new_end_byte),
+            (3, 5, 3),
+            "real change is [3, 5) → \"\"; got {e:?}"
+        );
+        assert_eq!(e.start_position, (1, 1));
+        assert_eq!(e.old_end_position, (2, 1));
+        assert_eq!(e.new_end_position, (1, 1));
+    }
+
+    #[test]
+    fn linewise_delete_multi_row_to_last() {
+        let edits = check_shapes("a\nb\nc\nd", del((2, 0), (3, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            (edits[0].start_byte, edits[0].old_end_byte),
+            (3, 7),
+            "[3, 7) covers \"\\nc\\nd\""
+        );
+    }
+
+    #[test]
+    fn linewise_delete_whole_buffer() {
+        let edits = check_shapes("a\nb\nc", del((0, 0), (2, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte, e.new_end_byte), (0, 5, 0));
+        assert_eq!(e.start_position, (0, 0));
+        assert_eq!(e.old_end_position, (2, 1));
+    }
+
+    #[test]
+    fn linewise_delete_single_line_buffer() {
+        check_shapes("abc", del((0, 0), (0, 0), MotionKind::Line));
+    }
+
+    /// Regression guard: the not-at-end case was already correct.
+    #[test]
+    fn linewise_delete_interior_rows_unchanged() {
+        let edits = check_shapes("a\nb\nc", del((0, 0), (1, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte, e.new_end_byte), (0, 4, 0));
+        assert_eq!(e.old_end_position, (2, 0));
+    }
+
+    #[test]
+    fn linewise_delete_last_row_multibyte() {
+        // "aé" = 3 bytes, '\n' at 3, "bü" = 3 bytes → doc is 7 bytes.
+        let edits = check_shapes("aé\nbü", del((1, 0), (1, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte), (3, 7));
+        assert_eq!(e.start_position, (0, 3));
+        assert_eq!(e.old_end_position, (1, 3));
+    }
+
+    /// End row past the last row must clamp like the buffer does.
+    #[test]
+    fn linewise_delete_end_row_overshoot_clamps() {
+        check_shapes("a\nb\nc", del((1, 0), (9, 0), MotionKind::Line));
+    }
+
+    /// Deleting the final empty line of a trailing-newline doc.
+    #[test]
+    fn linewise_delete_trailing_empty_last_row() {
+        let edits = check_shapes("a\nb\n", del((2, 0), (2, 0), MotionKind::Line));
+        assert_eq!(edits.len(), 1);
+        assert_eq!((edits[0].start_byte, edits[0].old_end_byte), (3, 4));
+    }
+
+    // ── Shape 3: visual-block delete fan-out ─────────────────────
+
+    /// Per-row edits carry pre-edit byte offsets, so they are only
+    /// valid for a sequential consumer when emitted bottom-up.
+    #[test]
+    fn block_delete_emits_rows_descending() {
+        let edits = check_shapes("abc\ndef\nghi", del((0, 0), (2, 1), MotionKind::Block));
+        assert_eq!(edits.len(), 3);
+        let rows: Vec<u32> = edits.iter().map(|e| e.start_position.0).collect();
+        assert_eq!(
+            rows,
+            vec![2, 1, 0],
+            "bottom-up so pre-edit offsets stay valid"
+        );
+        assert_eq!(
+            (edits[0].start_byte, edits[0].old_end_byte),
+            (8, 10),
+            "row 2 cols 0..=1"
+        );
+    }
+
+    #[test]
+    fn block_delete_multibyte() {
+        // "éé" = 4 bytes + '\n' → row 1 starts at byte 5.
+        let edits = check_shapes("éé\nüü", del((0, 0), (1, 0), MotionKind::Block));
+        assert_eq!(edits.len(), 2);
+        assert_eq!((edits[0].start_byte, edits[0].old_end_byte), (5, 7));
+        assert_eq!((edits[1].start_byte, edits[1].old_end_byte), (0, 2));
+    }
+
+    /// Rows shorter than the rectangle contribute nothing (matches
+    /// `rope_cut_chars` clamping).
+    #[test]
+    fn block_delete_ragged_rows() {
+        let edits = check_shapes("abcd\nx\nabcd", del((0, 1), (2, 2), MotionKind::Block));
+        assert_eq!(edits.len(), 2, "middle row too short → skipped");
+    }
+
+    /// End row past the last row: the buffer skips those rows; the
+    /// fan-out must not emit clamped duplicates for them.
+    #[test]
+    fn block_delete_end_row_overshoot_clamps() {
+        let edits = check_shapes("ab\ncd", del((0, 0), (5, 0), MotionKind::Block));
+        assert_eq!(edits.len(), 2);
+    }
+
+    // ── Sanity: shapes that were already correct stay correct ────
+
+    #[test]
+    fn charwise_and_insert_shapes_still_hold() {
+        check_shapes("héllo wörld", del((0, 2), (0, 7), MotionKind::Char));
+        check_shapes("a\nb\nc", del((0, 1), (2, 0), MotionKind::Char));
+        check_shapes(
+            "abc",
+            Edit::InsertStr {
+                at: Position::new(0, 1),
+                text: "x\ny".to_string(),
+            },
+        );
+        check_shapes(
+            "abc\ndef",
+            Edit::Replace {
+                start: Position::new(0, 1),
+                end: Position::new(1, 1),
+                with: "Z\nQ".to_string(),
+            },
         );
     }
 }
