@@ -559,6 +559,108 @@ fn changes_handler<H: Host>(
     })
 }
 
+// ---- join --------------------------------------------------------------------
+
+/// `:[range]j[oin][!] [count]` — join lines (default: current + next line).
+///
+/// Without `!`: delegates to the same per-row join primitive as normal-mode
+/// `J` (`Editor::join_line`), so the single-space-insertion /
+/// leading-whitespace-stripping behavior is byte-for-byte identical.
+///
+/// With `!` (registered separately as `join!` / `j!`): `gJ` semantics — no
+/// separating space, no leading-whitespace strip — via `Edit::JoinLines`
+/// directly (which already implements exactly that; it's `with_space=true`
+/// that doesn't strip leading whitespace and so can't stand in for real `J`).
+///
+/// Range / count resolution mirrors `:d [count]` (verified against nvim
+/// v0.12.4): no range + no count joins the current + next line; a range with
+/// no count joins every line in the range; an explicit trailing `[count]`
+/// OVERRIDES the join to start at the range's LAST line and join `count`
+/// total lines from there.
+fn join_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    join_handler_inner(editor, args, range, false)
+}
+
+/// `:[range]j[oin]! [count]` — see [`join_handler`]; `raw = true` (gJ).
+fn join_bang_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    join_handler_inner(editor, args, range, true)
+}
+
+fn join_handler_inner<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+    raw: bool,
+) -> Option<ExEffect> {
+    let total = editor.buffer().row_count();
+    if total == 0 {
+        return Some(ExEffect::Ok);
+    }
+
+    // Resolve range to 0-based inclusive rows; default = current cursor line.
+    let (start_row, end_row) = match range {
+        Some(r) => {
+            let s = r.start_one_based().saturating_sub(1);
+            let e = (r.end_one_based().saturating_sub(1)).min(total.saturating_sub(1));
+            (s, e)
+        }
+        None => {
+            let row = editor.cursor().0;
+            (row, row)
+        }
+    };
+    if start_row > end_row {
+        return Some(ExEffect::Ok);
+    }
+
+    // Optional trailing [count]: overrides the join to start at the range's
+    // LAST line and join `count` total lines (same start-from-range-end
+    // rule as `:d [count]`).
+    let trimmed = args.trim();
+    let (join_start, total_lines) = if trimmed.is_empty() {
+        (start_row, (end_row - start_row + 1).max(2))
+    } else {
+        match trimmed.parse::<usize>() {
+            Ok(n) if n > 0 => (end_row, n),
+            _ => return Some(ExEffect::Error(format!("invalid count: {trimmed:?}"))),
+        }
+    };
+
+    editor.jump_cursor(join_start, 0);
+    if raw {
+        use hjkl_buffer::Edit;
+        editor.push_undo();
+        editor.mutate_edit(Edit::JoinLines {
+            row: join_start,
+            count: total_lines.saturating_sub(1),
+            with_space: false,
+        });
+        editor.mark_content_dirty();
+    } else {
+        use hjkl_vim::VimEditorExt;
+        editor.join_line(total_lines);
+    }
+
+    // `:j` (ex command) lands the cursor on the first non-blank of the
+    // joined line — unlike normal-mode `J`/`gJ`, which park it on the join
+    // point. `join_start` is unaffected by the join itself (it's always the
+    // TOP row of the merge), so re-derive the column here.
+    let joined_row = join_start.min(editor.buffer().row_count().saturating_sub(1));
+    let line = hjkl_buffer::rope_line_str(&editor.buffer().rope(), joined_row);
+    let first_non_blank = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    editor.jump_cursor(joined_row, first_non_blank);
+
+    Some(ExEffect::Ok)
+}
+
 // ---- delete ----------------------------------------------------------------
 
 /// `:[range]d` / `:[range]delete` — delete lines in range (default: cursor line).
@@ -1433,6 +1535,27 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 7,
         run: changes_handler::<H>,
+    });
+
+    // `:join` / `:j` (min_prefix=1; range-aware; optional trailing [count]).
+    reg.add(ExCommand {
+        name: "join",
+        aliases: &["j"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 1,
+        run: join_handler::<H>,
+    });
+
+    // `:join!` / `:j!` — gJ semantics (no space, no leading-whitespace strip).
+    // Registered as its own exact name/alias because `split_name_args` glues
+    // a trailing `!` onto the command NAME (not into `args`), so `:j!` never
+    // reaches the bare `join` entry above.
+    reg.add(ExCommand {
+        name: "join!",
+        aliases: &["j!"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 5,
+        run: join_bang_handler::<H>,
     });
 
     // `:delete` / `:d` (min_prefix=1; range-aware)

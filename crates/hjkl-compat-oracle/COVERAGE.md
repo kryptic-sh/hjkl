@@ -206,6 +206,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | :1,3d (range delete)           | —     | TODO                                       |
 | :wa                            | —     | requires files, not oracled                |
 | :put / :put!                   | —     | TODO                                       |
+| :join / :j / :j! (gJ)          | 7     | tier2_ex_join.toml                         |
 | :sort                          | —     | TODO                                       |
 | :set noignorecase              | —     | TODO                                       |
 | :set colorizer                 | —     | (not shipped)                              |

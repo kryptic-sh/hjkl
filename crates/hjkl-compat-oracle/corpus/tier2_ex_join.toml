@@ -1,0 +1,70 @@
+# B5 — `:[range]j[oin][!] [count]` ex command. Delegates to the same J
+# primitive as normal-mode `J`; `!` gives gJ semantics. Driven via the
+# nvim-api subprocess (ex commands aren't dispatched by in-process key
+# replay). Every case verified against nvim v0.12.4 via headless probes.
+
+# Bare `:j` — joins current line + next (default 2-line join).
+[[cases]]
+name = "join_bare_default_two_lines"
+initial_buffer = "a\nb\nc\nd\ne\nf\n"
+initial_cursor = [0, 0]
+keys = ":j<CR>"
+expected_buffer = "a b\nc\nd\ne\nf\n"
+expected_cursor = [0, 0]
+
+# `:1,3j` — range with no count joins every line in the range (2 joins).
+[[cases]]
+name = "join_range_no_count"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":1,3j<CR>"
+expected_buffer = "a b c\nd\n"
+expected_cursor = [0, 0]
+
+# `:1j 3` — explicit trailing [count] joins 3 lines starting at the range's
+# (here: address's) line — same result as `:1,3j`.
+[[cases]]
+name = "join_count_arg_overrides_range"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":1j 3<CR>"
+expected_buffer = "a b c\nd\n"
+expected_cursor = [0, 0]
+
+# `:1,2j 4` — [count] with a range: joins `count` lines STARTING AT THE
+# RANGE'S LAST LINE (line 2), not the range's first line.
+[[cases]]
+name = "join_count_starts_at_range_end"
+initial_buffer = "a\nb\nc\nd\ne\nf\n"
+initial_cursor = [0, 0]
+keys = ":1,2j 4<CR>"
+expected_buffer = "a\nb c d e\nf\n"
+expected_cursor = [1, 0]
+
+# `:3j` — address alone (single-line range) + no count: default 2-line join
+# at that address.
+[[cases]]
+name = "join_single_address_default_two_lines"
+initial_buffer = "a\nb\nc\nd\ne\nf\n"
+initial_cursor = [0, 0]
+keys = ":3j<CR>"
+expected_buffer = "a\nb\nc d\ne\nf\n"
+expected_cursor = [2, 0]
+
+# `:1,3j!` — gJ semantics: no separating space, no leading-whitespace strip.
+[[cases]]
+name = "join_bang_no_space_no_strip"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":1,3j!<CR>"
+expected_buffer = "abc\nd\n"
+expected_cursor = [0, 0]
+
+# Cursor lands on the first non-blank of the joined line, not col 0.
+[[cases]]
+name = "join_cursor_lands_on_first_non_blank"
+initial_buffer = "  a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ":1,2j<CR>"
+expected_buffer = "  a b\nc\n"
+expected_cursor = [0, 2]

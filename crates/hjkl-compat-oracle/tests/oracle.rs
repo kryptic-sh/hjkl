@@ -189,6 +189,12 @@ async fn tier2_bare_s_repeat_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_bare_s_repeat.toml", "tier2_bare_s_repeat").await;
 }
 
+/// B5: `:[range]j[oin][!] [count]` ex command.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_ex_join_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_ex_join.toml", "tier2_ex_join").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_case_indent_join_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
