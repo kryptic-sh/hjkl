@@ -77,3 +77,27 @@ fn syn_abbrev_resolves_to_syntax() {
     app.dispatch_ex("syn off");
     assert!(!app.syntax_enabled, ":syn off must resolve to :syntax off");
 }
+
+/// Regression (audit R2 fix 2): a terminal resize must request a syntax
+/// recompute so newly exposed rows (from a grow) get spans on the very next
+/// frame instead of staying unhighlighted until an unrelated keypress
+/// happens to set `pending_recompute`. Both `Event::Resize` arms in
+/// `App::run` now share `App::handle_resize`, which this test drives
+/// directly (the arms live inline in the terminal-backed loop and aren't
+/// otherwise reachable from a unit test).
+#[test]
+fn resize_sets_pending_recompute() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "fn main() {}\n");
+    app.pending_recompute = false;
+
+    app.handle_resize(120, 40);
+
+    assert!(
+        app.pending_recompute,
+        "resize must request a recompute so newly exposed rows get syntax spans"
+    );
+    let vp = app.active_editor().host().viewport();
+    assert_eq!(vp.width, 120);
+    assert_eq!(vp.height, 40 - STATUS_LINE_HEIGHT);
+}

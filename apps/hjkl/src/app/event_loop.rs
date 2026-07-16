@@ -283,6 +283,23 @@ impl App {
         self.pending_recompute = true;
     }
 
+    /// Handle a terminal `Event::Resize(w, h)` — update the active editor's
+    /// viewport dims and request a syntax recompute.
+    ///
+    /// Both `run()`'s primary read arm and the same-tick drain-loop mirror
+    /// previously updated the viewport dims inline but never set
+    /// `pending_recompute`, so growing the terminal exposed new rows with no
+    /// syntax spans until the next keypress forced a recompute for an
+    /// unrelated reason. Factored into one method (mirroring the
+    /// `dispatch_fallthrough_key` fix) so both call sites share the fix and a
+    /// unit test can drive it directly without a real terminal.
+    pub(crate) fn handle_resize(&mut self, w: u16, h: u16) {
+        let vp = self.active_editor_mut().host_mut().viewport_mut();
+        vp.width = w;
+        vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
+        self.pending_recompute = true;
+    }
+
     /// Poll in-flight grammar loads, git signs, format results, and anvil jobs.
     /// Called once per event loop tick before the poll wait.
     pub(crate) fn drain_async_polls(&mut self) {
@@ -1883,11 +1900,7 @@ impl App {
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);
                 }
-                Event::Resize(w, h) => {
-                    let vp = self.active_editor_mut().host_mut().viewport_mut();
-                    vp.width = w;
-                    vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
-                }
+                Event::Resize(w, h) => self.handle_resize(w, h),
                 Event::FocusGained => {
                     self.checktime_all();
                 }
@@ -1935,11 +1948,9 @@ impl App {
                         Event::Mouse(me2) => {
                             let _ = self.handle_mouse(me2);
                         }
-                        Event::Resize(w, h) => {
-                            let vp = self.active_editor_mut().host_mut().viewport_mut();
-                            vp.width = w;
-                            vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
-                        }
+                        // Drain-loop mirror of the primary Resize arm above —
+                        // shares `handle_resize` so both paths stay in sync.
+                        Event::Resize(w, h) => self.handle_resize(w, h),
                         Event::FocusGained => {
                             self.checktime_all();
                         }
