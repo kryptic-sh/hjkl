@@ -95,6 +95,36 @@ pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
     let (row, col) = list[idx];
     ed.jump_cursor(row, col);
 }
+/// Refresh the `"+`/`"*` clipboard register slot from the host's live OS
+/// clipboard right before a read that's about to consume it (`"+p`/`"*p`,
+/// `<C-r>+`, visual-mode paste). No-op for any other selector.
+///
+/// `Editor::sync_clipboard_register` (the engine's OS-clipboard import
+/// hook) had zero callers before this — the `"+`/`"*` slot only ever
+/// reflected the last in-editor `"+y`, so pasting something copied
+/// outside hjkl (a browser, another app) pasted stale or empty text.
+///
+/// `host.read_clipboard()` returning `None` (headless/CI/PTY hosts with
+/// no OS clipboard bridge, or OSC52 being unreadable over a plain
+/// terminal) falls back to leaving the existing slot untouched — mirrors
+/// how the paste path already falls back to whatever's cached rather than
+/// erroring on a clipboard miss.
+///
+/// Linewise heuristic matches `"+y`'s own writer: text ending in `\n` is
+/// linewise, matching vim's "did the yank end with a newline" rule.
+pub(crate) fn sync_clipboard_register_for<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    selector: Option<char>,
+) {
+    if !matches!(selector, Some('+') | Some('*')) {
+        return;
+    }
+    if let Some(text) = ed.host_mut().read_clipboard() {
+        let linewise = text.ends_with('\n');
+        ed.sync_clipboard_register(text, linewise);
+    }
+}
+
 /// `Ctrl-R {reg}` body — insert the named register's contents at the
 /// cursor as charwise text. Embedded newlines split lines naturally via
 /// `Edit::InsertStr`. Unknown selectors and empty slots are no-ops so
@@ -104,6 +134,7 @@ pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
     selector: char,
 ) {
     use hjkl_buffer::Edit;
+    sync_clipboard_register_for(ed, Some(selector));
     // Special read-only registers: `/` = last search pattern, `.` = last
     // inserted text. Fall back to the register store for everything else.
     let text = match selector {

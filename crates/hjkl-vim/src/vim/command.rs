@@ -559,6 +559,10 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     // selected slot rather than the global `vim.yank_linewise` so
     // pasting from `"0` after a delete still uses the yank's layout.
     let selector = vim_mut(ed).pending_register.take();
+    // `"+p`/`"*p`: refresh the register slot from the live OS clipboard
+    // before reading it below (audit-r2 fix 4) — otherwise this reads
+    // whatever the internal slot last had from an in-editor `"+y`.
+    sync_clipboard_register_for(ed, selector);
     let (yank, linewise) = {
         let regs = ed.registers();
         match selector.and_then(|c| regs.read(c)) {
@@ -709,6 +713,9 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
     // Resolve the source register (selector or unnamed) BEFORE the delete
     // overwrites the unnamed register with the cut selection.
     let selector = vim_mut(ed).pending_register.take();
+    // `"+p`/`"*p` in visual mode: same live-clipboard refresh as normal-mode
+    // paste (audit-r2 fix 4).
+    sync_clipboard_register_for(ed, selector);
     let (reg_text, reg_linewise) = {
         let regs = ed.registers();
         match selector.and_then(|c| regs.read(c)) {
