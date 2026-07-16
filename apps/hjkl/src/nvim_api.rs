@@ -2312,7 +2312,6 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     // fallback can't write escapes into the protocol stream (#264).
     crate::host::disable_clipboard_for_rpc();
     let mut app = build_app(files.into_iter().next())?;
-    let mut should_quit = false;
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -2322,9 +2321,46 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     // We need a buffered reader to pull bytes as they arrive.
     let mut reader = std::io::BufReader::new(&mut stdin_lock);
 
+    run_with_io(&mut app, &mut reader, &mut stdout_lock).map(|()| 0)
+}
+
+/// Body of [`run`], parameterized over the transport so it's testable
+/// in-process without real stdin/stdout — `run` is a thin wrapper that
+/// supplies the real stdio handles.
+///
+/// Runs [`run_loop`] to completion, THEN tears down `app` on every exit
+/// path — client closed stdin, a malformed-stream `?`-propagated error, or
+/// a `should_quit` request, not just the "loop broke cleanly" case. Mirrors
+/// the TUI's teardown pair (main.rs's `app.shutdown()` + `App::run`'s
+/// `cleanup_swaps_on_exit()`): without this, an attached LSP server
+/// (rust-analyzer, gopls, …) is orphaned — the exact bug fixed for the TUI
+/// in b00cbf11 — and stale swap files trigger false recovery prompts on the
+/// next launch (audit R2, fix 2).
+fn run_with_io<R: std::io::Read>(
+    app: &mut crate::app::App,
+    reader: &mut R,
+    stdout: &mut impl Write,
+) -> Result<()> {
+    let result = run_loop(app, reader, stdout);
+    app.cleanup_swaps_on_exit();
+    app.shutdown();
+    result
+}
+
+/// The msgpack-rpc read/dispatch loop, broken out of [`run_with_io`] so
+/// teardown (`cleanup_swaps_on_exit` + `shutdown`) runs on every exit path —
+/// including an `Err` propagated via `?` from `dispatch`, which previously
+/// skipped `run`'s post-loop cleanup entirely because it returned out of
+/// `run` itself.
+fn run_loop<R: std::io::Read>(
+    app: &mut crate::app::App,
+    reader: &mut R,
+    stdout: &mut impl Write,
+) -> Result<()> {
+    let mut should_quit = false;
     loop {
         // Read one msgpack value. Returns Err on EOF or protocol error.
-        let msg = match rmpv::decode::read_value(&mut reader) {
+        let msg = match rmpv::decode::read_value(reader) {
             Ok(v) => v,
             Err(e) => {
                 use rmpv::decode::Error;
@@ -2378,19 +2414,12 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
                 let method = match arr.get(2) {
                     Some(Value::String(s)) => s.as_str().unwrap_or("").to_owned(),
                     _ => {
-                        let _ = err(&mut stdout_lock, msgid, "missing method");
+                        let _ = err(stdout, msgid, "missing method");
                         continue;
                     }
                 };
                 let params = arr.get(3).cloned().unwrap_or(Value::Array(vec![]));
-                dispatch(
-                    &mut app,
-                    &mut should_quit,
-                    &method,
-                    &params,
-                    &mut stdout_lock,
-                    msgid,
-                )?;
+                dispatch(app, &mut should_quit, &method, &params, stdout, msgid)?;
                 if should_quit {
                     break;
                 }
@@ -2404,14 +2433,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
                 let params = arr.get(2).cloned().unwrap_or(Value::Array(vec![]));
                 // Use a dummy msgid=0; response is suppressed.
                 let mut dev_null = std::io::sink();
-                dispatch(
-                    &mut app,
-                    &mut should_quit,
-                    &method,
-                    &params,
-                    &mut dev_null,
-                    0,
-                )?;
+                dispatch(app, &mut should_quit, &method, &params, &mut dev_null, 0)?;
                 if should_quit {
                     break;
                 }
@@ -2422,7 +2444,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
         }
     }
 
-    Ok(0)
+    Ok(())
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -5269,5 +5291,70 @@ mod tests {
         assert_eq!(byte_col_to_char_col("héllo", 2), 1, "mid-é snaps down");
         assert_eq!(byte_col_to_char_col("héllo", 3), 2);
         assert_eq!(byte_col_to_char_col("héllo", 999), 5, "clamps to line end");
+    }
+
+    // ── run loop teardown (audit R2, fix 2) ────────────────────────────────
+
+    /// Regression: the nvim-api run loop used to `return Ok(0)` straight out
+    /// of `run` on every exit path (client closed stdin, protocol error, a
+    /// `should_quit` request) WITHOUT calling `app.shutdown()` — orphaning
+    /// any attached LSP server — or `app.cleanup_swaps_on_exit()` — leaving
+    /// stale swap files that trigger false recovery prompts next launch.
+    /// `run_with_io` (the testable body of `run`, parameterized over the
+    /// transport) must tear down on every exit path instead.
+    #[test]
+    fn test_run_with_io_shuts_down_lsp_on_stdin_eof() {
+        let mut app = build_app(None).unwrap();
+        app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+        // An empty reader hits EOF on the very first read, exactly like a
+        // client that closed stdin before sending anything.
+        let mut reader: &[u8] = &[];
+        let mut sink = std::io::sink();
+        let result = run_with_io(&mut app, &mut reader, &mut sink);
+
+        assert!(
+            result.is_ok(),
+            "stdin EOF must be a clean exit, got {result:?}"
+        );
+        assert!(
+            app.lsp.is_none(),
+            "run_with_io must call app.shutdown() on every exit path — \
+             including stdin EOF — so an attached LSP server is never orphaned"
+        );
+    }
+
+    /// Same regression, but for the `should_quit` exit path (a client sends
+    /// a request whose dispatch sets `exit_requested`, e.g. `nvim_command`
+    /// with `:q!`) rather than stdin EOF.
+    #[test]
+    fn test_run_with_io_shuts_down_lsp_on_quit_request() {
+        let mut app = build_app(None).unwrap();
+        app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+        // One msgpack-rpc request: nvim_command(":q!") — msgid=1, no
+        // trailing bytes, so the SECOND read (if the loop kept going) would
+        // hit EOF anyway; the point is that should_quit's `break` must be
+        // the path that exits, and teardown must still run.
+        let req = Value::Array(vec![
+            Value::from(0u64), // request
+            Value::from(1u64), // msgid
+            Value::from("nvim_command"),
+            Value::Array(vec![Value::from("q!")]),
+        ]);
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, &req).unwrap();
+        let mut reader: &[u8] = bytes.as_slice();
+        let mut out = Vec::new();
+        let result = run_with_io(&mut app, &mut reader, &mut out);
+
+        assert!(
+            result.is_ok(),
+            "quit request must be a clean exit, got {result:?}"
+        );
+        assert!(
+            app.lsp.is_none(),
+            "run_with_io must call app.shutdown() on the should_quit exit path too"
+        );
     }
 }
