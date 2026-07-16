@@ -335,7 +335,13 @@ pub fn shift_position(
             with_space,
         } => Some(after_join(p, *row, *count, *with_space, &line_len, rows)),
         Edit::InsertBlock { at, chunks } => Some(after_insert_block(p, *at, chunks)),
-        Edit::DeleteBlockChunks { at, widths } => Some(after_delete_block_chunks(p, *at, widths)),
+        // `pads` (audit-r2 fix 6) isn't modelled here — `at.col` is always
+        // valid pre-pad geometry, and `pads` is only non-zero on a path
+        // (DeleteBlockChunks as InsertBlock's own inverse) nothing
+        // currently applies; see the `Edit::DeleteBlockChunks` field doc.
+        Edit::DeleteBlockChunks { at, widths, .. } => {
+            Some(after_delete_block_chunks(p, *at, widths))
+        }
         // `SplitLines` is the undo-inverse of a join, emitted when history rewinds
         // rather than when a user edits. Undo restores a whole snapshot and does
         // not preserve secondary carets anyway, so modelling it would buy nothing
@@ -674,6 +680,7 @@ mod tests {
         let e = Edit::DeleteBlockChunks {
             at: p(0, 2),
             widths: vec![2, 2],
+            pads: vec![0, 0],
         };
         assert_eq!(head(1, 6, &e), Some(p(1, 4)));
     }
@@ -683,6 +690,7 @@ mod tests {
         let e = Edit::DeleteBlockChunks {
             at: p(0, 2),
             widths: vec![3],
+            pads: vec![0],
         };
         assert_eq!(head(0, 3, &e), Some(p(0, 2)));
     }
@@ -788,7 +796,7 @@ mod tests {
         let e = Edit::SplitLines {
             row: 0,
             cols: vec![3],
-            inserted_space: true,
+            inserted_spaces: vec![true],
         };
         assert_eq!(
             shift_sel(Sel::new(p(1, 0), p(1, 4)), &e, |_| 0, 0),
@@ -805,7 +813,7 @@ mod tests {
         let e = Edit::SplitLines {
             row: 0,
             cols: vec![3],
-            inserted_space: true,
+            inserted_spaces: vec![true],
         };
         assert_eq!(shift_position(p(5, 0), &e, |_| 0, 0), None);
     }

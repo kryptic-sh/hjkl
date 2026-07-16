@@ -74,12 +74,23 @@ pub enum Edit {
         with_space: bool,
     },
     /// Inverse of `JoinLines`. Splits `row` back at each char column
-    /// in `cols`. `inserted_space` matches the original join so the
-    /// inverse can drop the space before splitting.
+    /// in `cols`.
+    ///
+    /// `inserted_spaces[i]` records whether the join that produced
+    /// `cols[i]` ACTUALLY inserted a space there — NOT the caller's
+    /// `with_space` intent passed to `JoinLines`, which is uniform for
+    /// the whole (possibly multi-join) batch while the per-join outcome
+    /// is not: `do_join_lines` skips the space whenever either side of
+    /// that specific join is empty. A single bool here (matching the
+    /// original, uniform `with_space` intent) can't tell those joins
+    /// apart from ones that DID insert a space, so `do_split_lines` would
+    /// misidentify — and delete — an unrelated, legitimately-present
+    /// space character that happens to sit at that col (audit-r2 fix 6).
+    /// Parallel to `cols`.
     SplitLines {
         row: usize,
         cols: Vec<usize>,
-        inserted_space: bool,
+        inserted_spaces: Vec<bool>,
     },
     /// Replace `[start, end)` with `with` (charwise, may span rows).
     ///
@@ -96,10 +107,26 @@ pub enum Edit {
     /// when rows are ragged shorter than `at.col`.
     InsertBlock { at: Position, chunks: Vec<String> },
     /// Inverse of [`Edit::InsertBlock`]. Removes `widths[i]` chars
-    /// starting at `(at.row + i, at.col)`. Carrying widths instead
+    /// starting at `(at.row + i, at.col)`, plus `pads[i]` more chars
+    /// immediately BEFORE `at.col` on that row. Carrying widths instead
     /// of recomputing means a ragged-row block delete round-trips
     /// exactly.
-    DeleteBlockChunks { at: Position, widths: Vec<usize> },
+    ///
+    /// `pads` exists because `do_insert_block` space-pads a row that's
+    /// shorter than `at.col` before splicing the chunk in, so that the
+    /// chunk lands at the intended column; without recording that pad
+    /// width here too, this inverse would remove the chunk but leave the
+    /// padding behind (audit-r2 fix 6). `pads[i]` is always `0` for a row
+    /// that didn't need padding. `DeleteBlockChunks` only ever appears as
+    /// `InsertBlock`'s inverse (never constructed by a "forward" edit —
+    /// see `do_delete_range`'s `MotionKind::Block` arm, which builds its
+    /// own inverse `InsertBlock` directly via `rope_cut_chars`), so this
+    /// field has no bearing on any other call site's semantics.
+    DeleteBlockChunks {
+        at: Position,
+        widths: Vec<usize>,
+        pads: Vec<usize>,
+    },
 }
 
 impl View {
@@ -133,32 +160,41 @@ impl View {
             Edit::SplitLines {
                 row,
                 cols,
-                inserted_space,
-            } => self.do_split_lines(row, cols, inserted_space),
+                inserted_spaces,
+            } => self.do_split_lines(row, cols, inserted_spaces),
             Edit::Replace { start, end, with } => self.do_replace(start, end, with),
             Edit::InsertBlock { at, chunks } => self.do_insert_block(at, chunks),
-            Edit::DeleteBlockChunks { at, widths } => self.do_delete_block_chunks(at, widths),
+            Edit::DeleteBlockChunks { at, widths, pads } => {
+                self.do_delete_block_chunks(at, widths, pads)
+            }
         }
     }
 
     fn do_insert_block(&mut self, at: Position, chunks: Vec<String>) -> Edit {
         let mut widths: Vec<usize> = Vec::with_capacity(chunks.len());
+        let mut pads: Vec<usize> = Vec::with_capacity(chunks.len());
         for (i, chunk) in chunks.into_iter().enumerate() {
             let row = at.row + i;
             // Pad short rows with spaces so the column position exists
             // before splicing — same semantics as the old Vec<String> impl.
+            // Recorded in `pads` so the returned DeleteBlockChunks inverse
+            // can remove this padding too, not just the chunk (audit-r2
+            // fix 6): otherwise undoing an InsertBlock that padded a
+            // ragged row leaves the padding behind.
+            let mut pad = 0usize;
             {
                 let mut c = self.content.lock().unwrap();
                 let n = c.text.len_lines();
                 if row < n {
                     let lc = rope_line_char_count(&c.text, row);
                     if lc < at.col {
-                        let pad = at.col - lc;
+                        pad = at.col - lc;
                         let insert_char_idx = pos_to_char_idx(&c.text, row, lc);
                         c.text.insert(insert_char_idx, &" ".repeat(pad));
                     }
                 }
             }
+            pads.push(pad);
             widths.push(chunk.chars().count());
             // Insert chunk at (row, at.col).
             {
@@ -172,12 +208,18 @@ impl View {
         }
         self.dirty_gen_bump();
         self.set_cursor(at);
-        Edit::DeleteBlockChunks { at, widths }
+        Edit::DeleteBlockChunks { at, widths, pads }
     }
 
-    fn do_delete_block_chunks(&mut self, at: Position, widths: Vec<usize>) -> Edit {
+    fn do_delete_block_chunks(
+        &mut self,
+        at: Position,
+        widths: Vec<usize>,
+        pads: Vec<usize>,
+    ) -> Edit {
         let mut chunks: Vec<String> = Vec::with_capacity(widths.len());
         for (i, w) in widths.into_iter().enumerate() {
+            let pad = pads.get(i).copied().unwrap_or(0);
             let row = at.row + i;
             let removed = {
                 let mut c = self.content.lock().unwrap();
@@ -186,16 +228,25 @@ impl View {
                     String::new()
                 } else {
                     let lc = rope_line_char_count(&c.text, row);
-                    let col_start = at.col.min(lc);
+                    // Remove the pad (immediately before at.col) together
+                    // with the chunk (at.col..at.col+w) in one contiguous
+                    // span — do_insert_block always places them adjacently.
+                    let col_start = at.col.saturating_sub(pad).min(lc);
                     let col_end = (at.col + w).min(lc);
                     if col_start >= col_end {
                         String::new()
                     } else {
                         let char_start = pos_to_char_idx(&c.text, row, col_start);
                         let char_end = pos_to_char_idx(&c.text, row, col_end);
-                        let removed: String = c.text.slice(char_start..char_end).to_string();
+                        let removed_span: String =
+                            c.text.slice(char_start..char_end).to_string();
                         c.text.remove(char_start..char_end);
-                        removed
+                        // Discard the pad portion from the returned chunk —
+                        // it's regenerated automatically by do_insert_block
+                        // if this inverse is itself later undone (redo).
+                        let pad_end = at.col.min(lc);
+                        let pad_len = pad_end.saturating_sub(col_start);
+                        removed_span.chars().skip(pad_len).collect()
                     }
                 }
             };
@@ -329,11 +380,15 @@ impl View {
 
     fn do_join_lines(&mut self, row: usize, count: usize, with_space: bool) -> Edit {
         let count = count.max(1);
-        let (actual_row, split_cols) = {
+        let (actual_row, split_cols, inserted_spaces) = {
             let mut c = self.content.lock().unwrap();
             let n = c.text.len_lines();
             let row = row.min(n.saturating_sub(1));
             let mut split_cols: Vec<usize> = Vec::with_capacity(count);
+            // Per-join outcome (did THIS join actually insert a space),
+            // NOT the uniform `with_space` intent — see the field doc on
+            // `Edit::SplitLines::inserted_spaces` (audit-r2 fix 6).
+            let mut inserted_spaces: Vec<bool> = Vec::with_capacity(count);
 
             for _ in 0..count {
                 let n2 = c.text.len_lines();
@@ -350,38 +405,39 @@ impl View {
                 c.text.remove(newline_char..newline_char + 1);
 
                 // Now row and (what was row+1) are merged. Insert space if needed.
+                let mut this_inserted_space = false;
                 if with_space {
                     // After removing '\n', the join_col chars of original row are
                     // followed immediately by the next row's content.
                     // Insert space only if both sides are non-empty.
-                    let n3 = c.text.len_lines();
                     let merged_len = rope_line_char_count(&c.text, row);
                     let prefix_empty = join_col == 0;
                     let suffix_empty = join_col >= merged_len;
                     if !prefix_empty && !suffix_empty {
                         // Insert space at newline_char (now the join point).
                         c.text.insert_char(newline_char, ' ');
+                        this_inserted_space = true;
                         // Adjust future split_cols: the space shifts subsequent
                         // join points by 1, but split_cols[i] is the char count
                         // of the original row *before* this join, which doesn't
                         // need adjustment — the SplitLines inverse uses it to
                         // split the joined line at the right position.
                     }
-                    let _ = n3;
                 }
+                inserted_spaces.push(this_inserted_space);
             }
-            (row, split_cols)
+            (row, split_cols, inserted_spaces)
         };
         self.dirty_gen_bump();
         self.set_cursor(Position::new(actual_row, 0));
         Edit::SplitLines {
             row: actual_row,
             cols: split_cols,
-            inserted_space: with_space,
+            inserted_spaces,
         }
     }
 
-    fn do_split_lines(&mut self, row: usize, cols: Vec<usize>, inserted_space: bool) -> Edit {
+    fn do_split_lines(&mut self, row: usize, cols: Vec<usize>, inserted_spaces: Vec<bool>) -> Edit {
         let actual_row = {
             let mut c = self.content.lock().unwrap();
             let n = c.text.len_lines();
@@ -389,9 +445,12 @@ impl View {
 
             // Split right-to-left so each col still indexes into the
             // original char positions on the surviving prefix.
-            for &col in cols.iter().rev() {
+            for (idx, &col) in cols.iter().enumerate().rev() {
                 let mut split_col = col;
-                if inserted_space {
+                // Per-col: did the ORIGINAL join at this position actually
+                // insert a space? (Not a uniform flag — see the
+                // `Edit::SplitLines` field doc, audit-r2 fix 6.)
+                if inserted_spaces.get(idx).copied().unwrap_or(false) {
                     // The original join inserted a space at `col`, so the
                     // current content has a space at position `col` which
                     // we need to remove before inserting the '\n'.
@@ -423,7 +482,12 @@ impl View {
         Edit::JoinLines {
             row: actual_row,
             count: cols.len(),
-            with_space: inserted_space,
+            // Reconstructing a single with_space intent for redo: true iff
+            // ANY col in this batch actually inserted a space. When none
+            // did, redoing with with_space=false reproduces the identical
+            // result anyway (do_join_lines would skip every space here
+            // too), so this is a safe, behavior-preserving collapse.
+            with_space: inserted_spaces.iter().any(|&b| b),
         }
     }
 
@@ -625,6 +689,120 @@ mod tests {
                 start: Position::new(0, 4),
                 end: Position::new(0, 7),
                 with: "QUUX".into(),
+            },
+        );
+    }
+
+    // ── Block-op / split-lines round trips (audit-r2 fix 6) ──────────────────
+    //
+    // These inverses are dead today — nothing currently chains
+    // apply(edit) -> apply(inverse) for InsertBlock/DeleteBlockChunks or a
+    // JoinLines/SplitLines pair with mixed per-join outcomes — but the
+    // contract (`apply_edit` returns an inverse that restores the pre-edit
+    // text exactly) must hold the day something does.
+
+    #[test]
+    fn insert_block_round_trip_uniform_rows() {
+        round_trip_check(
+            "ab\ncd\nef",
+            Edit::InsertBlock {
+                at: Position::new(0, 1),
+                chunks: vec!["X".into(), "Y".into(), "Z".into()],
+            },
+        );
+    }
+
+    /// `do_insert_block` space-pads a row shorter than `at.col` before
+    /// splicing the chunk in. Round-tripping must remove that padding too,
+    /// not just the chunk — pre-fix, `DeleteBlockChunks`'s inverse only
+    /// carried the chunk width, leaving the padding behind.
+    #[test]
+    fn insert_block_round_trip_pads_short_row() {
+        // Row 1 ("x") is only 1 char; at.col=3 needs 2 chars of padding
+        // before the "Q" chunk lands.
+        round_trip_check(
+            "abcd\nx\nefgh",
+            Edit::InsertBlock {
+                at: Position::new(0, 3),
+                chunks: vec!["P".into(), "Q".into(), "R".into()],
+            },
+        );
+    }
+
+    /// Same as above but EVERY row needs padding, and by different amounts.
+    #[test]
+    fn insert_block_round_trip_ragged_pads_vary_per_row() {
+        round_trip_check(
+            "\na\nab\nabc",
+            Edit::InsertBlock {
+                at: Position::new(0, 3),
+                chunks: vec!["W".into(), "X".into(), "Y".into(), "Z".into()],
+            },
+        );
+    }
+
+    #[test]
+    fn delete_block_chunks_round_trip() {
+        // Constructed directly (DeleteBlockChunks only ever appears in
+        // practice as InsertBlock's returned inverse — see the variant's
+        // doc comment) to round-trip the OTHER direction: does re-inserting
+        // (InsertBlock) restore what DeleteBlockChunks removed?
+        round_trip_check(
+            "abcdef\nghijkl",
+            Edit::DeleteBlockChunks {
+                at: Position::new(0, 1),
+                widths: vec![2, 2],
+                pads: vec![0, 0],
+            },
+        );
+    }
+
+    /// Regression for the exact scenario fix 6 describes: a join with an
+    /// EMPTY prefix (row 0 is blank) skips inserting a space, but the
+    /// pulled-up row legitimately STARTS with its own, unrelated space.
+    /// Pre-fix, `SplitLines`'s single uniform `inserted_space` flag
+    /// couldn't tell "this join skipped the space" from "this join
+    /// inserted one", so splitting back mistook the legitimate leading
+    /// space for the (never-inserted) join space and ate it.
+    #[test]
+    fn join_then_split_empty_prefix_preserves_legitimate_leading_space() {
+        round_trip_check(
+            "\n bar",
+            Edit::JoinLines {
+                row: 0,
+                count: 1,
+                with_space: true,
+            },
+        );
+    }
+
+    /// Same failure mode from the empty-SUFFIX side: the row being joined
+    /// INTO legitimately ends with a space of its own, and the incoming
+    /// (pulled-up) row is empty, so the join skips inserting one.
+    #[test]
+    fn join_then_split_empty_suffix_preserves_legitimate_trailing_space() {
+        round_trip_check(
+            "foo \n",
+            Edit::JoinLines {
+                row: 0,
+                count: 1,
+                with_space: true,
+            },
+        );
+    }
+
+    /// count > 1 with an empty middle line mixes a skipped-space join and a
+    /// real one in the SAME batch — the scenario `content_edit_shape_tests`
+    /// (hjkl-engine) exercises for byte-exactness; here we check the
+    /// simpler round-trip-restores-original-text property instead.
+    #[test]
+    fn join_then_split_multi_count_mixed_spaces_round_trip() {
+        round_trip_check(
+            "foo\n\nbar",
+            Edit::JoinLines {
+                row: 0,
+                count: 2,
+                with_space: true,
             },
         );
     }

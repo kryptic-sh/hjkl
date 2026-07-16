@@ -115,7 +115,7 @@ fn an_untrackable_edit_drops_secondary_cursors_rather_than_leaving_them_stale() 
     e.mutate_edit(Edit::SplitLines {
         row: 0,
         cols: vec![3],
-        inserted_space: true,
+        inserted_spaces: vec![true],
     });
     assert!(
         e.extra_cursors().is_empty(),
@@ -235,6 +235,7 @@ fn a_secondary_cursor_still_points_at_the_same_char_after_each_edit() {
             Edit::DeleteBlockChunks {
                 at: pos(0, 1),
                 widths: vec![2, 2],
+                pads: vec![0, 0],
             },
         ),
     ];
@@ -369,7 +370,7 @@ fn a_fan_out_that_loses_a_caret_collapses_to_the_primary() {
     e.edit_at_all_cursors(|_| Edit::SplitLines {
         row: 0,
         cols: vec![3],
-        inserted_space: true,
+        inserted_spaces: vec![true],
     });
     assert!(e.extra_cursors().is_empty());
 }
@@ -473,7 +474,7 @@ fn an_untrackable_edit_drops_the_whole_selection_not_half_of_it() {
     e.mutate_edit(Edit::SplitLines {
         row: 0,
         cols: vec![1],
-        inserted_space: false,
+        inserted_spaces: vec![false],
     });
     assert!(e.extra_selections().is_empty());
 }

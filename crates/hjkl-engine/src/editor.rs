@@ -73,7 +73,7 @@ fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
         B::SplitLines {
             row,
             cols,
-            inserted_space: _,
+            inserted_spaces: _,
         } => {
             // SplitLines reverses a JoinLines: insert a `\n`
             // (and optional dropped space) at each col on `row`.
@@ -107,9 +107,16 @@ fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
                 })
                 .collect()
         }
-        B::DeleteBlockChunks { at, widths } => {
+        B::DeleteBlockChunks {
+            at,
+            widths,
+            pads: _,
+        } => {
             // One EditOp per row, deleting `widths[i]` chars at
-            // `(at.row + i, at.col)`.
+            // `(at.row + i, at.col)`. Best-effort: doesn't account for
+            // `pads` (see `Edit::DeleteBlockChunks` doc) — this mapping is
+            // already documented as a placeholder, and `pads` is only ever
+            // non-zero on a path nothing currently applies (audit-r2 fix 6).
             widths
                 .iter()
                 .enumerate()
@@ -469,39 +476,38 @@ fn content_edits_from_buffer_edit(
         B::SplitLines {
             row,
             cols,
-            inserted_space,
+            inserted_spaces,
         } => {
             // `do_split_lines` applies `cols` in REVERSE (right-to-left) —
             // not left-to-right — so later-processed (rightward) splits
             // never shift the byte offsets of an earlier-processed
             // (leftward) one. Mirror that order: cols.iter().rev().
             //
-            // When `inserted_space`, `do_split_lines` does NOT insert
-            // "\n " — it REPLACES the single space byte the original
-            // JoinLines inserted with '\n' (remove the space, then insert
-            // '\n' at the same index), but ONLY when that col is still
-            // within the row's *current* (shrinking, as each split
-            // truncates the row) char count AND the char actually there
-            // is a space. `cols` can repeat (do_join_lines records one
-            // join_col per join, and empty-prefix/suffix joins skip the
-            // space but still record a col) — a repeated col lands past
-            // the truncated row's new end, so `do_split_lines` treats it
-            // as a bare '\n' insert with no space check. Track a shrinking
-            // `current_lc` (the row's live char count, exactly as
-            // `do_split_lines` recomputes via `rope_line_char_count`) so
-            // this arm reproduces that exactly, byte-for-byte.
+            // `inserted_spaces[idx]` (per-col — audit-r2 fix 6; NOT a
+            // uniform flag, since a multi-join batch can mix joins that
+            // did and didn't insert a space) tells us whether THIS split
+            // REPLACES a space byte with '\n' (remove the space, then
+            // insert '\n' at the same index) rather than a bare "\n"
+            // insert — but ONLY when that col is still within the row's
+            // *current* (shrinking, as each split truncates the row) char
+            // count AND the char actually there is a space, mirroring
+            // `do_split_lines`'s own defensive double-check. Track a
+            // shrinking `current_lc` (the row's live char count, exactly
+            // as `do_split_lines` recomputes via `rope_line_char_count`)
+            // so this arm reproduces that exactly, byte-for-byte.
             let row = (*row).min(buf.row_count().saturating_sub(1));
             let split_rope = buf.rope();
             let line = hjkl_buffer::rope_line_str(&split_rope, row);
             let mut current_lc = line.chars().count();
-            for &col in cols.iter().rev() {
+            for (idx, &col) in cols.iter().enumerate().rev() {
+                let col_inserted_space = inserted_spaces.get(idx).copied().unwrap_or(false);
                 let has_space =
-                    *inserted_space && col < current_lc && line.chars().nth(col) == Some(' ');
-                // `do_split_lines` never clamps `split_col` in the
-                // `inserted_space` branch (even when out of range — see
-                // the has_space=false-past-EOL case above); only the
-                // no-space-inverse branch clamps to the live row length.
-                let split_col = if *inserted_space {
+                    col_inserted_space && col < current_lc && line.chars().nth(col) == Some(' ');
+                // `do_split_lines` never clamps `split_col` when this col's
+                // flag is set (even when out of range — see the
+                // has_space=false-past-EOL case above); only the no-space
+                // branch clamps to the live row length.
+                let split_col = if col_inserted_space {
                     col
                 } else {
                     col.min(current_lc)
@@ -558,11 +564,16 @@ fn content_edits_from_buffer_edit(
                 });
             }
         }
-        B::DeleteBlockChunks { at, widths } => {
+        B::DeleteBlockChunks { at, widths, pads } => {
             // Same descending-order requirement as InsertBlock above.
             for (i, w) in widths.iter().enumerate().rev() {
                 let row = at.row + i;
-                let start_pos = Position::new(row, at.col);
+                // `pads[i]` extends the removed span to the left of
+                // at.col (see the `Edit::DeleteBlockChunks` field doc) —
+                // include it so this stays byte-exact for the padded case
+                // too, not just the chunk-only span.
+                let pad = pads.get(i).copied().unwrap_or(0);
+                let start_pos = Position::new(row, at.col.saturating_sub(pad));
                 let end_pos = Position::new(row, at.col + *w);
                 let (sb, sp) = position_to_byte_coords(buf, start_pos);
                 let (eb, ep) = position_to_byte_coords(buf, end_pos);
@@ -5408,11 +5419,16 @@ mod content_edit_shape_tests {
         }
     }
 
+    /// `inserted_space` is a UNIFORM convenience for simple single- or
+    /// mixed-intent test cases — broadcasts to every col. Tests that need
+    /// genuinely mixed per-col outcomes (some joins inserted a space, some
+    /// didn't — audit-r2 fix 6) construct `Edit::SplitLines` directly.
     fn split(row: usize, cols: Vec<usize>, inserted_space: bool) -> Edit {
+        let inserted_spaces = vec![inserted_space; cols.len()];
         Edit::SplitLines {
             row,
             cols,
-            inserted_space,
+            inserted_spaces,
         }
     }
 
@@ -5424,9 +5440,11 @@ mod content_edit_shape_tests {
     }
 
     fn delete_block_chunks(at: (usize, usize), widths: Vec<usize>) -> Edit {
+        let pads = vec![0; widths.len()];
         Edit::DeleteBlockChunks {
             at: Position::new(at.0, at.1),
             widths,
+            pads,
         }
     }
 
@@ -5732,13 +5750,20 @@ mod content_edit_shape_tests {
         let Edit::SplitLines {
             row: _,
             ref cols,
-            inserted_space,
+            ref inserted_spaces,
         } = inverse
         else {
             panic!("join's inverse must be SplitLines, got {inverse:?}");
         };
         assert_eq!(cols.len(), 2, "one recorded col per join");
-        assert!(inserted_space, "join was called with with_space = true");
+        // First join (empty middle line as suffix) skips the space;
+        // second join (now both sides non-empty) inserts one — per-col,
+        // NOT the uniform with_space=true intent (audit-r2 fix 6).
+        assert_eq!(
+            inserted_spaces,
+            &vec![false, true],
+            "per-join outcome must reflect prefix/suffix emptiness, not just intent"
+        );
         // The join's own inverse, replayed through content_edits_from_buffer_edit
         // against the joined ("foo bar") buffer, must byte-exactly reproduce
         // splitting it back apart.
