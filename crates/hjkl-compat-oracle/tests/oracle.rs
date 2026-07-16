@@ -860,3 +860,9 @@ async fn tier2_sneak_disabled_fallback_corpus_passes() {
         failures.join("\n")
     );
 }
+
+/// B1: vertical motions must not step onto ropey's phantom trailing row.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_vertical_phantom_row_corpus_passes() {
+    run_corpus("corpus/tier2_vertical_phantom_row.toml").await;
+}

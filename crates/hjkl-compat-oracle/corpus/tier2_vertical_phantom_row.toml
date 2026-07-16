@@ -1,0 +1,99 @@
+# Tier 2 — B1: vertical motions must not step onto ropey's phantom trailing
+# row.
+#
+# `len_lines()` on a rope always counts one extra empty "line" after a
+# trailing `\n` (the empty remainder after the last line terminator). Vim
+# treats that trailing `\n` as a line *terminator*, not a separator, so the
+# phantom row must never be a landing spot for `j`/`gj`/`G` and friends. `G`
+# was already fixed for this; these cases pin the same rule for `j`/`k` and
+# combinations, plus the genuinely-empty-last-line case that must NOT be
+# clamped away.
+#
+# Live nvim compare.
+
+# `j` on a single-line buffer (no real second line) must be a no-op — the
+# only "row 1" available is the phantom trailing row.
+[[cases]]
+name = "phantom_row_j_single_line_noop"
+initial_buffer = "baz\n"
+initial_cursor = [0, 0]
+keys = "j"
+expected_buffer = "baz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `jj` on a real two-line buffer lands on the last real line, not one past it.
+[[cases]]
+name = "phantom_row_jj_two_lines"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "jj"
+expected_buffer = "foo\nbar\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `G` then `j`: `G` already lands on the last content row; a further `j` must
+# stay there (no phantom row below it).
+[[cases]]
+name = "phantom_row_G_then_j_stays"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "Gj"
+expected_buffer = "foo\nbar\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `jx`: `j` must land on the real second line so `x` deletes its first char.
+[[cases]]
+name = "phantom_row_jx_deletes_on_real_line"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "jx"
+expected_buffer = "foo\nar\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# CAUTION case: "foo\n\n" has a genuinely empty *second* line (row 1) that is
+# NOT the phantom row (the phantom row would be row 2). `j` must still reach
+# the real empty row 1.
+[[cases]]
+name = "real_empty_last_line_j_reaches_it"
+initial_buffer = "foo\n\n"
+initial_cursor = [0, 0]
+keys = "j"
+expected_buffer = "foo\n\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# Same buffer: `jj` must stop at row 1 (the real empty line) — no phantom
+# row 2 to advance into.
+[[cases]]
+name = "real_empty_last_line_jj_stops"
+initial_buffer = "foo\n\n"
+initial_cursor = [0, 0]
+keys = "jj"
+expected_buffer = "foo\n\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# Edge case: a buffer that is just `"\n"` is a single empty line. `j` is a
+# no-op (no phantom row to land on).
+[[cases]]
+name = "lone_newline_buffer_j_noop"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = "j"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Edge case: `k` from the last real line of a trailing-newline buffer must
+# still walk up correctly (sanity check that the fix doesn't disturb `k`).
+[[cases]]
+name = "phantom_row_k_from_last_real_line"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [1, 0]
+keys = "k"
+expected_buffer = "foo\nbar\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

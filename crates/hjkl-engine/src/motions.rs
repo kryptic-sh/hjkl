@@ -76,6 +76,28 @@ fn read_row_count<B: Query + ?Sized>(buf: &B) -> usize {
     Query::line_count(buf) as usize
 }
 
+/// Row count clamped to skip vim's single phantom trailing empty row.
+///
+/// `ropey`'s `len_lines()` always synthesizes one extra empty final "line"
+/// when the buffer text ends in `\n` (vim treats that `\n` as a line
+/// *terminator*, not a separator). `G` (`move_bottom`) already accounted for
+/// this; every other vertical/viewport motion that clamps against the
+/// buffer's row count (`j`/`k`/`H`/`M`/`L`/wrapped-line stepping) must use
+/// this instead of raw [`read_row_count`] so they all agree with `G` on
+/// where the buffer "ends". A buffer whose *real* last line happens to be
+/// empty (e.g. `"foo\n\n"`) is untouched — only a single trailing phantom
+/// row is ever skipped, and single-row buffers (`""`, `"\n"`) are left
+/// alone entirely (their one row is real, not phantom).
+fn content_row_count<B: Query + ?Sized>(buf: &B) -> usize {
+    let raw_count = read_row_count(buf);
+    let raw_last = raw_count.saturating_sub(1);
+    if raw_last > 0 && read_line(buf, raw_last).is_empty() {
+        raw_last
+    } else {
+        raw_count
+    }
+}
+
 // ── Generic helpers ─────────────────────────────────────────────────
 
 /// Returns the char count of `line` — the column you'd see when the
@@ -441,17 +463,12 @@ pub fn move_top<B: Cursor + Query>(buf: &mut B) {
 /// skip the trailing empty row so the cursor lands on the last
 /// content-bearing line, matching vim's behaviour.
 pub fn move_bottom<B: Cursor + Query>(buf: &mut B, count: usize) {
-    let raw_last = read_row_count(buf).saturating_sub(1);
     // Compute the last *content* row: skip a single trailing empty row
     // produced by a trailing `\n`. Applies to both the bare-G case
     // (count == 0) and the counted case (`100G`) so they stay in sync.
     // Pre-0.5.8, counted `G` used `(count-1).min(raw_last)` without the
     // clamp, landing on the phantom row after a trailing newline.
-    let last_content = if raw_last > 0 && read_line(buf, raw_last).is_empty() {
-        raw_last - 1
-    } else {
-        raw_last
-    };
+    let last_content = content_row_count(buf).saturating_sub(1);
     let target = if count == 0 {
         last_content
     } else {
@@ -711,7 +728,7 @@ pub fn move_viewport_top<B: Cursor + Query>(
     viewport: &hjkl_buffer::Viewport,
     offset: usize,
 ) {
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let target = viewport.top_row.saturating_add(offset).min(last);
     write_cursor(buf, Position::new(target, 0));
     move_first_non_blank(buf);
@@ -719,7 +736,7 @@ pub fn move_viewport_top<B: Cursor + Query>(
 
 /// `M` — middle row of the visible viewport.
 pub fn move_viewport_middle<B: Cursor + Query>(buf: &mut B, viewport: &hjkl_buffer::Viewport) {
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let height = viewport.height as usize;
     let visible_bot = viewport
         .top_row
@@ -736,7 +753,7 @@ pub fn move_viewport_bottom<B: Cursor + Query>(
     viewport: &hjkl_buffer::Viewport,
     offset: usize,
 ) {
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let height = viewport.height as usize;
     let visible_bot = viewport
         .top_row
@@ -795,7 +812,7 @@ fn step_screen<B: Cursor + Query>(
     let line = read_line(buf, cursor.row);
     let segs = wrap::wrap_segments(&line, viewport.text_width, viewport.wrap);
     let seg_idx = wrap::segment_for_col(&segs, cursor.col);
-    let row_count = read_row_count(buf);
+    let row_count = content_row_count(buf);
     if down {
         if seg_idx + 1 < segs.len() {
             let (s, e) = segs[seg_idx + 1];
@@ -846,7 +863,7 @@ fn move_vertical<B: Cursor + Query>(
     // Walk one visible row at a time so closed folds count as one
     // visual line. Stops at top/bottom of buffer.
     let mut target_row = cursor.row;
-    let row_count = read_row_count(buf);
+    let row_count = content_row_count(buf);
     if delta < 0 {
         for _ in 0..(-delta) as usize {
             match folds.prev_visible_row(target_row) {

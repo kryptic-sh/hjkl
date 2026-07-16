@@ -557,10 +557,26 @@ impl SnapshotFoldProvider {
     /// Snapshot the current fold list + row-count from `buffer`.
     /// The snapshot is decoupled from the buffer's lifetime, so the
     /// caller can immediately re-borrow the buffer mutably.
+    ///
+    /// `row_count` is clamped to skip vim's single phantom trailing
+    /// empty row — `ropey`'s `len_lines()` always synthesizes one
+    /// extra empty final "line" when the buffer text ends in `\n`.
+    /// Without this, `j`/`k` (which route through this snapshot, not
+    /// [`hjkl_buffer::View::next_visible_row`] directly) could step
+    /// the cursor onto that phantom row. Mirrors
+    /// `hjkl_engine::motions::move_bottom`'s clamp (`G`).
     pub fn from_buffer(buffer: &RopeBuffer) -> Self {
+        let raw_count = buffer.row_count();
+        let raw_last = raw_count.saturating_sub(1);
+        let row_count =
+            if raw_last > 0 && hjkl_buffer::rope_line_str(&buffer.rope(), raw_last).is_empty() {
+                raw_last
+            } else {
+                raw_count
+            };
         Self {
             folds: buffer.folds().to_vec(),
-            row_count: buffer.row_count(),
+            row_count,
         }
     }
 

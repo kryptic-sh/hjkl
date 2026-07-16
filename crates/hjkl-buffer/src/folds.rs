@@ -360,10 +360,30 @@ impl crate::View {
         changed
     }
 
+    /// Last row index containing real content — skips vim's single
+    /// phantom trailing empty row. `ropey`'s `len_lines()` always
+    /// synthesizes one extra empty final "line" when the buffer text
+    /// ends in `\n` (vim treats that `\n` as a terminator, not a
+    /// separator). Mirrors `hjkl_engine::motions::move_bottom`'s clamp
+    /// (`G`) so vertical motions agree with `G` on where the buffer
+    /// "ends". A buffer whose *real* last line happens to be empty
+    /// (e.g. `"foo\n\n"`, row 1) is untouched — only a single trailing
+    /// phantom row is ever skipped.
+    fn last_content_row(&self) -> usize {
+        let raw_last = self.row_count().saturating_sub(1);
+        if raw_last > 0 {
+            let c = self.content_lock();
+            if crate::buffer::rope_line_str(&c.text, raw_last).is_empty() {
+                return raw_last - 1;
+            }
+        }
+        raw_last
+    }
+
     /// First visible row strictly after `row`, skipping any rows hidden
     /// by closed folds. Returns `None` past the end of the buffer.
     pub fn next_visible_row(&self, row: usize) -> Option<usize> {
-        let last = self.row_count().saturating_sub(1);
+        let last = self.last_content_row();
         if last == 0 && row == 0 {
             return None;
         }
