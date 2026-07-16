@@ -329,7 +329,8 @@ impl App {
                 if idx < self.pending_code_actions.len() {
                     let action = self.pending_code_actions.remove(idx);
                     self.pending_code_actions.clear();
-                    self.apply_code_action_or_command(action);
+                    let encoding = self.pending_code_actions_encoding;
+                    self.apply_code_action_or_command(action, encoding);
                 } else {
                     self.bus.error("E: code action index out of range");
                 }

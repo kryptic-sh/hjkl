@@ -367,6 +367,13 @@ pub struct App {
     /// Code actions from the most recent `textDocument/codeAction` response.
     /// The picker uses `ApplyCodeAction(i)` to index into this list.
     pub pending_code_actions: Vec<lsp_types::CodeActionOrCommand>,
+    /// The `positionEncoding` negotiated with the server that produced
+    /// `pending_code_actions`, snapshotted alongside it — by the time the
+    /// user picks an entry from the code-action picker, the response's
+    /// positions have long since been received, so `apply_code_action_or_command`
+    /// can't re-derive "which server answered this" from current state
+    /// (audit R2, UTF-16 fix).
+    pub pending_code_actions_encoding: hjkl_lsp::PositionEncoding,
     /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
     /// Set to `true` after `Ctrl-x`; cleared after the next key.
     pub pending_ctrl_x: bool,
@@ -1963,6 +1970,7 @@ impl App {
             change_banks,
             completion: None,
             pending_code_actions: Vec::new(),
+            pending_code_actions_encoding: hjkl_lsp::PositionEncoding::default(),
             pending_ctrl_x: false,
             pending_prefix_at: None,
             which_key_active: false,

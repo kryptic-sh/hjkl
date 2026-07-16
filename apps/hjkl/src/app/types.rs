@@ -172,28 +172,41 @@ pub struct LspServerInfo {
 /// Each variant carries the buffer context and cursor origin so the result can
 /// be acted on (jump, picker, popup) without re-reading app state at response
 /// time (the active buffer may have changed by then).
+///
+/// Variants whose response carries a `Position`/`Range`/`WorkspaceEdit` that
+/// gets converted back into hjkl's internal (char-indexed) columns also carry
+/// the server's negotiated `encoding` at request-send time, for the same
+/// reason `buffer_id`/`origin` are snapshotted rather than re-read from
+/// `self.lsp_state` at response time — the server could have restarted or the
+/// buffer's language mapping could (in principle) have changed in between
+/// (audit R2, UTF-16 fix).
 #[derive(Debug, Clone)]
 pub enum LspPendingRequest {
     GotoDefinition {
         buffer_id: hjkl_lsp::BufferId,
         /// 0-based (row, col) of the cursor when the request was sent.
         origin: (usize, usize),
+        encoding: hjkl_lsp::PositionEncoding,
     },
     GotoDeclaration {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
+        encoding: hjkl_lsp::PositionEncoding,
     },
     GotoTypeDefinition {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
+        encoding: hjkl_lsp::PositionEncoding,
     },
     GotoImplementation {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
+        encoding: hjkl_lsp::PositionEncoding,
     },
     GotoReferences {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
+        encoding: hjkl_lsp::PositionEncoding,
     },
     Hover {
         buffer_id: hjkl_lsp::BufferId,
@@ -220,6 +233,7 @@ pub enum LspPendingRequest {
         buffer_id: hjkl_lsp::BufferId,
         anchor_row: usize,
         anchor_col: usize,
+        encoding: hjkl_lsp::PositionEncoding,
     },
     /// `textDocument/rename` — Phase 5.
     Rename {
@@ -227,12 +241,14 @@ pub enum LspPendingRequest {
         anchor_row: usize,
         anchor_col: usize,
         new_name: String,
+        encoding: hjkl_lsp::PositionEncoding,
     },
     /// `textDocument/formatting` — Phase 5.
     Format {
         buffer_id: hjkl_lsp::BufferId,
         /// `None` = full document; `Some((sr, sc, er, ec))` = range (Phase 5 always None).
         range: Option<(usize, usize, usize, usize)>,
+        encoding: hjkl_lsp::PositionEncoding,
     },
 }
 

@@ -77,6 +77,115 @@ fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
     rope.char_to_byte(rope.byte_to_char(b))
 }
 
+// ── Position-encoding conversion (audit R2, UTF-16 fix) ────────────────────
+//
+// hjkl's internal `Position`/`Pos` columns (cursor, diagnostics, goto
+// targets, workspace-edit ranges — everything EXCEPT the incremental
+// `didChange` path's `ContentEdit`/`TextChange`, which are byte-indexed and
+// already gated on negotiated UTF-8, see `build_text_changes`) are **char
+// indices**: the Nth Unicode scalar value on the line, not the Nth byte and
+// not the Nth UTF-16 code unit. See `hjkl_buffer::Position`'s doc comment and
+// `hjkl_engine::buffer_impl::pos_to_position`.
+//
+// The LSP wire format never speaks char indices: `character` is either a
+// UTF-8 byte offset (encoding `"utf-8"`) or a UTF-16 code-unit offset
+// (encoding `"utf-16"`, the spec default). For any line containing a
+// character whose UTF-8/UTF-16 encoded length differs from 1 — i.e. anything
+// outside ASCII — a raw cast between hjkl's char index and the wire
+// `character` field is wrong. These two helpers are the only place that
+// conversion happens; every LSP-JSON crossing that carries a `character`
+// field must go through one of them with the server's negotiated
+// [`hjkl_lsp::PositionEncoding`].
+
+/// Convert an internal char-index column on `line` to the wire unit
+/// (`character` field) expected by `encoding`.
+///
+/// `col_chars` past the line's char count is harmless: `Chars::take` simply
+/// stops early, so the full line's wire length is returned (defensive
+/// clamping — callers should never construct such a column, but a stale
+/// cursor snapshot racing a concurrent edit is cheap insurance).
+pub(crate) fn col_to_wire(
+    line: &str,
+    col_chars: usize,
+    encoding: hjkl_lsp::PositionEncoding,
+) -> u32 {
+    line.chars()
+        .take(col_chars)
+        .map(|c| match encoding {
+            hjkl_lsp::PositionEncoding::Utf8 => c.len_utf8(),
+            hjkl_lsp::PositionEncoding::Utf16 => c.len_utf16(),
+        })
+        .sum::<usize>() as u32
+}
+
+/// Convert a wire `character` column on `line` (in `encoding`'s units) back
+/// to hjkl's internal char index.
+///
+/// Sums each char's encoded width until the running total reaches
+/// `wire_col`, returning that char's index. A `wire_col` that lands in the
+/// middle of a multi-unit char (shouldn't happen for a spec-compliant
+/// server, but nothing stops a buggy one) resolves to the START of that
+/// char, matching how `snap_to_char_boundary` handles the same situation on
+/// the byte side. A `wire_col` at or past the line's total encoded length
+/// (server overshoot) clamps to the line's char count — one past the last
+/// char, same "insert mode lives there" convention `Position` uses.
+pub(crate) fn wire_to_col(
+    line: &str,
+    wire_col: u32,
+    encoding: hjkl_lsp::PositionEncoding,
+) -> usize {
+    let target = wire_col as usize;
+    let mut consumed = 0usize;
+    for (idx, c) in line.chars().enumerate() {
+        if consumed == target {
+            return idx;
+        }
+        let width = match encoding {
+            hjkl_lsp::PositionEncoding::Utf8 => c.len_utf8(),
+            hjkl_lsp::PositionEncoding::Utf16 => c.len_utf16(),
+        };
+        // `target` lands strictly inside this char (e.g. between the two
+        // UTF-16 units of a surrogate pair) — floor to this char's start,
+        // matching `snap_to_char_boundary`'s floor convention on the byte
+        // side rather than overshooting into the next char.
+        if consumed + width > target {
+            return idx;
+        }
+        consumed += width;
+    }
+    line.chars().count()
+}
+
+/// Build an `hjkl_engine::Pos` from a wire-unit LSP `Position`, converting
+/// `character` to hjkl's internal char index via [`wire_to_col`] using
+/// `rope`'s CURRENT line text for `line`. Used at the workspace-edit /
+/// formatting-edit application boundary — the single most dangerous crossing
+/// in this fix, since an unconverted UTF-16 column fed straight into
+/// [`hjkl_engine::BufferEdit::replace_range`] silently slices the wrong
+/// bytes out of the buffer (audit R2's motivating corruption case).
+///
+/// Falls back to the raw wire value when `line` is out of range for `rope`:
+/// `BufferEdit::replace_range` already rejects an out-of-bounds `Pos` as a
+/// no-op (see `hjkl_buffer::Position`'s doc comment), so an unconvertible
+/// column on an already-invalid row is harmless — and reading a
+/// nonexistent line here would panic instead (`ropey::Rope::line` panics
+/// out of range), which the pre-fix code never risked since it never
+/// touched the rope to interpret a column.
+fn wire_position_to_pos(
+    rope: &ropey::Rope,
+    line: u32,
+    character: u32,
+    encoding: hjkl_lsp::PositionEncoding,
+) -> hjkl_engine::Pos {
+    let col = if (line as usize) < rope.len_lines() {
+        let text = hjkl_buffer::rope_line_str(rope, line as usize);
+        wire_to_col(&text, character, encoding) as u32
+    } else {
+        character
+    };
+    hjkl_engine::Pos { line, col }
+}
+
 /// True when `edits`, applied in the given array order, are ascending and
 /// non-overlapping in byte space: each edit's `start_byte` is at or past
 /// the previous edit's `new_end_byte`.
@@ -248,7 +357,18 @@ impl App {
                 } => {
                     tracing::debug!(?key, method, "lsp notification");
                     if method == "textDocument/publishDiagnostics" {
-                        self.handle_publish_diagnostics(params);
+                        // The server that emitted this notification IS `key`
+                        // — look its negotiated encoding up directly rather
+                        // than via a slot/language detour (audit R2, UTF-16
+                        // fix).
+                        let encoding = self
+                            .lsp_state
+                            .get(&key)
+                            .map(|info| {
+                                hjkl_lsp::PositionEncoding::from_capabilities(&info.capabilities)
+                            })
+                            .unwrap_or_default();
+                        self.handle_publish_diagnostics(params, encoding);
                     }
                 }
                 hjkl_lsp::LspEvent::Response { request_id, result } => {
@@ -296,7 +416,19 @@ impl App {
     }
 
     /// Handle a `textDocument/publishDiagnostics` notification.
-    pub(crate) fn handle_publish_diagnostics(&mut self, params: serde_json::Value) {
+    ///
+    /// `encoding` is the negotiated encoding of the server that sent this
+    /// notification; every diagnostic's `range` is converted from that
+    /// server's wire units to hjkl's internal char-index columns before
+    /// being stored on `LspDiag` (audit R2, UTF-16 fix) — every downstream
+    /// consumer (cursor-jump navigation, gutter/underline overlays,
+    /// `:lopen` entries) already expects char-index columns per
+    /// `LspDiag`'s doc comment; only the population site was wrong.
+    pub(crate) fn handle_publish_diagnostics(
+        &mut self,
+        params: serde_json::Value,
+        encoding: hjkl_lsp::PositionEncoding,
+    ) {
         let parsed: lsp_types::PublishDiagnosticsParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => {
@@ -349,12 +481,35 @@ impl App {
         let mut lsp_diags: Vec<LspDiag> = Vec::new();
         let mut sign_map: std::collections::HashMap<usize, (DiagSeverity, char, Style, u8)> =
             std::collections::HashMap::new();
+        let rope = self.slots[slot_idx].editor.buffer().rope();
 
         for d in &parsed.diagnostics {
             let start_row = d.range.start.line as usize;
-            let start_col = d.range.start.character as usize;
             let end_row = d.range.end.line as usize;
-            let end_col = d.range.end.character as usize;
+            // Convert wire units -> char index using this line's CURRENT
+            // text. Falls back to the raw wire value when the row is out of
+            // range (a server reporting a diagnostic past EOF, or racing a
+            // concurrent truncation) — matches `wire_position_to_pos`'s
+            // reasoning: reading a nonexistent line would panic, and a
+            // column on an already-nonsensical row is moot either way.
+            let start_col = if start_row < rope.len_lines() {
+                wire_to_col(
+                    &hjkl_buffer::rope_line_str(&rope, start_row),
+                    d.range.start.character,
+                    encoding,
+                )
+            } else {
+                d.range.start.character as usize
+            };
+            let end_col = if end_row < rope.len_lines() {
+                wire_to_col(
+                    &hjkl_buffer::rope_line_str(&rope, end_row),
+                    d.range.end.character,
+                    encoding,
+                )
+            } else {
+                d.range.end.character as usize
+            };
             let severity = convert_severity(d.severity);
             let code = d.code.as_ref().map(|c| match c {
                 lsp_types::NumberOrString::Number(n) => n.to_string(),
@@ -530,32 +685,17 @@ impl App {
     /// buffer) so [`Self::lsp_notify_change_for_slot`] can gate incremental
     /// sync correctly for a non-focused slot too (audit R2, fix 3).
     fn lsp_supports_incremental_utf8_for_slot(&self, slot_idx: usize) -> bool {
-        // Find the server attached to this slot's language.
-        let lang = match self
-            .slots
-            .get(slot_idx)
-            .and_then(|s| s.filename.as_ref())
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)
-        {
-            Some(l) => l,
-            None => return false,
-        };
-        let info = match self.lsp_state.iter().find(|(k, _)| k.language == lang) {
-            Some((_, info)) => info,
-            None => return false,
-        };
-        let caps = &info.capabilities;
-
-        // positionEncoding default per spec is "utf-16" — require explicit utf-8.
-        let pos_enc = caps
-            .get("positionEncoding")
-            .and_then(|v| v.as_str())
-            .unwrap_or("utf-16");
-        if pos_enc != "utf-8" {
+        // Incremental sync only ever uses the byte-column `TextChange` path
+        // (see `build_text_changes`), which is only safe over UTF-8 —
+        // everything else falls back to full-document sync regardless of
+        // encoding (no positions to convert there).
+        if self.position_encoding_for_slot(slot_idx) != hjkl_lsp::PositionEncoding::Utf8 {
             return false;
         }
+        let Some(info) = self.lsp_server_info_for_slot(slot_idx) else {
+            return false;
+        };
+        let caps = &info.capabilities;
 
         // textDocumentSync.change == 2 = Incremental.
         // The field can be either an integer (legacy shape) or a
@@ -568,6 +708,41 @@ impl App {
             })
             .unwrap_or(0);
         change_kind == 2
+    }
+
+    /// The initialized [`LspServerInfo`] for the server attached to
+    /// `slot_idx`'s language, if any. Shared lookup used by both the
+    /// incremental-sync capability gate and [`Self::position_encoding_for_slot`].
+    fn lsp_server_info_for_slot(&self, slot_idx: usize) -> Option<&LspServerInfo> {
+        let lang = self
+            .slots
+            .get(slot_idx)
+            .and_then(|s| s.filename.as_ref())
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext)?;
+        self.lsp_state
+            .iter()
+            .find(|(k, _)| k.language == lang)
+            .map(|(_, info)| info)
+    }
+
+    /// The [`hjkl_lsp::PositionEncoding`] negotiated with the server attached
+    /// to `slot_idx`'s language. Defaults to UTF-16 (the LSP spec's default)
+    /// when no server is attached/initialized for this slot yet — the
+    /// conservative choice, since UTF-16 conversion is correct (if
+    /// unnecessary CPU) for a server that turns out to speak UTF-8, whereas
+    /// treating an unknown server as UTF-8 could silently corrupt text on a
+    /// server that actually wants UTF-16.
+    pub(crate) fn position_encoding_for_slot(&self, slot_idx: usize) -> hjkl_lsp::PositionEncoding {
+        self.lsp_server_info_for_slot(slot_idx)
+            .map(|info| hjkl_lsp::PositionEncoding::from_capabilities(&info.capabilities))
+            .unwrap_or_default()
+    }
+
+    /// [`Self::position_encoding_for_slot`] for the focused slot.
+    pub(crate) fn active_position_encoding(&self) -> hjkl_lsp::PositionEncoding {
+        self.position_encoding_for_slot(self.focused_slot_idx())
     }
 
     /// True when an *initialized* LSP server for the active buffer's language
@@ -771,21 +946,38 @@ impl App {
     // ── Request helpers ───────────────────────────────────────────────────
 
     /// Build `TextDocumentPositionParams` JSON for the current cursor position.
+    ///
+    /// `character` is converted from hjkl's internal char-index column to the
+    /// active server's negotiated wire units via [`col_to_wire`] — sending
+    /// the raw char index would be wrong for any line with a multi-byte char
+    /// before the cursor, for BOTH encodings (UTF-8 wants byte offsets,
+    /// UTF-16 wants code-unit offsets; only ASCII lines have all three
+    /// coincide) (audit R2, UTF-16 fix). The returned `(usize, usize)` origin
+    /// stays in internal char-index units — it's used for local bookkeeping
+    /// (cursor jumps, popups), never re-sent over the wire.
     fn lsp_position_params(
         &self,
-    ) -> Option<(serde_json::Value, hjkl_lsp::BufferId, (usize, usize))> {
+    ) -> Option<(
+        serde_json::Value,
+        hjkl_lsp::BufferId,
+        (usize, usize),
+        hjkl_lsp::PositionEncoding,
+    )> {
         let slot = self.active();
         let path = absolutize(slot.filename.as_ref()?);
         let uri = hjkl_lsp::uri::from_path(&path).ok()?;
         let cursor = self.active_editor().buffer().cursor();
         let row = cursor.row;
         let col = cursor.col;
+        let encoding = self.active_position_encoding();
+        let line = hjkl_buffer::rope_line_str(&self.active_editor().buffer().rope(), row);
+        let wire_col = col_to_wire(&line, col, encoding);
         let params = json!({
             "textDocument": { "uri": uri.as_str() },
-            "position": { "line": row as u32, "character": col as u32 },
+            "position": { "line": row as u32, "character": wire_col },
         });
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        Some((params, buffer_id, (row, col)))
+        Some((params, buffer_id, (row, col), encoding))
     }
 
     /// Internal: send a goto-flavour request and register it as pending.
@@ -797,7 +989,11 @@ impl App {
         &mut self,
         method: &str,
         extras: Option<serde_json::Value>,
-        make_pending: impl FnOnce(hjkl_lsp::BufferId, (usize, usize)) -> LspPendingRequest,
+        make_pending: impl FnOnce(
+            hjkl_lsp::BufferId,
+            (usize, usize),
+            hjkl_lsp::PositionEncoding,
+        ) -> LspPendingRequest,
     ) {
         if self.lsp.is_none() {
             self.bus
@@ -811,7 +1007,7 @@ impl App {
                 .error(format!("LSP: server does not support {method}"));
             return;
         }
-        let (mut params, buffer_id, origin) = match self.lsp_position_params() {
+        let (mut params, buffer_id, origin, encoding) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
                 self.bus.error(
@@ -828,7 +1024,7 @@ impl App {
             }
         }
         let request_id = self.lsp_alloc_request_id();
-        let pending = make_pending(buffer_id, origin);
+        let pending = make_pending(buffer_id, origin, encoding);
         self.lsp_pending.insert(request_id, pending);
         // Reborrow after mutable ops are done.
         if let Some(mgr) = self.lsp.as_ref() {
@@ -840,42 +1036,50 @@ impl App {
 
     /// `gd` — goto definition.
     pub(crate) fn lsp_goto_definition(&mut self) {
-        self.lsp_send_goto("textDocument/definition", None, |buf, orig| {
+        self.lsp_send_goto("textDocument/definition", None, |buf, orig, encoding| {
             LspPendingRequest::GotoDefinition {
                 buffer_id: buf,
                 origin: orig,
+                encoding,
             }
         });
     }
 
     /// `gD` — goto declaration.
     pub(crate) fn lsp_goto_declaration(&mut self) {
-        self.lsp_send_goto("textDocument/declaration", None, |buf, orig| {
+        self.lsp_send_goto("textDocument/declaration", None, |buf, orig, encoding| {
             LspPendingRequest::GotoDeclaration {
                 buffer_id: buf,
                 origin: orig,
+                encoding,
             }
         });
     }
 
     /// `gy` — goto type definition.
     pub(crate) fn lsp_goto_type_definition(&mut self) {
-        self.lsp_send_goto("textDocument/typeDefinition", None, |buf, orig| {
-            LspPendingRequest::GotoTypeDefinition {
+        self.lsp_send_goto(
+            "textDocument/typeDefinition",
+            None,
+            |buf, orig, encoding| LspPendingRequest::GotoTypeDefinition {
                 buffer_id: buf,
                 origin: orig,
-            }
-        });
+                encoding,
+            },
+        );
     }
 
     /// `gi` — goto implementation.
     pub(crate) fn lsp_goto_implementation(&mut self) {
-        self.lsp_send_goto("textDocument/implementation", None, |buf, orig| {
-            LspPendingRequest::GotoImplementation {
+        self.lsp_send_goto(
+            "textDocument/implementation",
+            None,
+            |buf, orig, encoding| LspPendingRequest::GotoImplementation {
                 buffer_id: buf,
                 origin: orig,
-            }
-        });
+                encoding,
+            },
+        );
     }
 
     /// `gr` — goto references (always opens picker). LSP requires a
@@ -886,9 +1090,10 @@ impl App {
         self.lsp_send_goto(
             "textDocument/references",
             Some(json!({ "context": { "includeDeclaration": true } })),
-            |buf, orig| LspPendingRequest::GotoReferences {
+            |buf, orig, encoding| LspPendingRequest::GotoReferences {
                 buffer_id: buf,
                 origin: orig,
+                encoding,
             },
         );
     }
@@ -908,7 +1113,7 @@ impl App {
             self.show_blame_commit_hover(row, cell);
             return;
         }
-        self.lsp_send_goto("textDocument/hover", None, |buf, orig| {
+        self.lsp_send_goto("textDocument/hover", None, |buf, orig, _encoding| {
             LspPendingRequest::Hover {
                 buffer_id: buf,
                 origin: orig,
@@ -919,6 +1124,11 @@ impl App {
     /// Mouse-hover variant: send `textDocument/hover` for an explicit doc
     /// position without moving the cursor. Used by the Phase 5 hover-popup
     /// timer so the user's cursor stays in place.
+    ///
+    /// `doc_col` is a char-index column (same convention as the cursor);
+    /// converted to the active server's wire units before sending (audit R2,
+    /// UTF-16 fix) — no encoding needs to be remembered for the response
+    /// since hover results carry no position we convert back.
     pub(crate) fn lsp_hover_at_doc(&mut self, doc_row: usize, doc_col: usize) {
         if !self.active().features.hover {
             return;
@@ -939,9 +1149,12 @@ impl App {
             Err(_) => return,
         };
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+        let encoding = self.active_position_encoding();
+        let line = hjkl_buffer::rope_line_str(&self.active_editor().buffer().rope(), doc_row);
+        let wire_col = col_to_wire(&line, doc_col, encoding);
         let params = serde_json::json!({
             "textDocument": { "uri": uri.as_str() },
-            "position": { "line": doc_row as u32, "character": doc_col as u32 },
+            "position": { "line": doc_row as u32, "character": wire_col },
         });
         let request_id = self.lsp_alloc_request_id();
         let pending = LspPendingRequest::HoverAtMouse {
@@ -963,20 +1176,40 @@ impl App {
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
     ) {
         match pending {
-            LspPendingRequest::GotoDefinition { buffer_id, origin } => {
-                self.handle_goto_response(buffer_id, origin, result, "definition");
+            LspPendingRequest::GotoDefinition {
+                buffer_id,
+                origin,
+                encoding,
+            } => {
+                self.handle_goto_response(buffer_id, origin, result, "definition", encoding);
             }
-            LspPendingRequest::GotoDeclaration { buffer_id, origin } => {
-                self.handle_goto_response(buffer_id, origin, result, "declaration");
+            LspPendingRequest::GotoDeclaration {
+                buffer_id,
+                origin,
+                encoding,
+            } => {
+                self.handle_goto_response(buffer_id, origin, result, "declaration", encoding);
             }
-            LspPendingRequest::GotoTypeDefinition { buffer_id, origin } => {
-                self.handle_goto_response(buffer_id, origin, result, "type definition");
+            LspPendingRequest::GotoTypeDefinition {
+                buffer_id,
+                origin,
+                encoding,
+            } => {
+                self.handle_goto_response(buffer_id, origin, result, "type definition", encoding);
             }
-            LspPendingRequest::GotoImplementation { buffer_id, origin } => {
-                self.handle_goto_response(buffer_id, origin, result, "implementation");
+            LspPendingRequest::GotoImplementation {
+                buffer_id,
+                origin,
+                encoding,
+            } => {
+                self.handle_goto_response(buffer_id, origin, result, "implementation", encoding);
             }
-            LspPendingRequest::GotoReferences { buffer_id, origin } => {
-                self.handle_references_response(buffer_id, origin, result);
+            LspPendingRequest::GotoReferences {
+                buffer_id,
+                origin,
+                encoding,
+            } => {
+                self.handle_references_response(buffer_id, origin, result, encoding);
             }
             LspPendingRequest::Hover { buffer_id, origin } => {
                 self.handle_hover_response(buffer_id, origin, result);
@@ -996,19 +1229,29 @@ impl App {
                 buffer_id,
                 anchor_row,
                 anchor_col,
+                encoding,
             } => {
-                self.handle_code_action_response(buffer_id, anchor_row, anchor_col, result);
+                self.handle_code_action_response(
+                    buffer_id, anchor_row, anchor_col, result, encoding,
+                );
             }
             LspPendingRequest::Rename {
                 buffer_id,
                 anchor_row,
                 anchor_col,
                 new_name,
+                encoding,
             } => {
-                self.handle_rename_response(buffer_id, anchor_row, anchor_col, new_name, result);
+                self.handle_rename_response(
+                    buffer_id, anchor_row, anchor_col, new_name, result, encoding,
+                );
             }
-            LspPendingRequest::Format { buffer_id, range } => {
-                self.handle_format_response(buffer_id, range, result);
+            LspPendingRequest::Format {
+                buffer_id,
+                range,
+                encoding,
+            } => {
+                self.handle_format_response(buffer_id, range, result, encoding);
             }
         }
     }
@@ -1046,8 +1289,69 @@ impl App {
         Vec::new()
     }
 
+    /// Read line `row` (0-based) of the file at `path`, for converting an LSP
+    /// location's wire column into hjkl's internal char index when the
+    /// target buffer may not be open yet.
+    ///
+    /// Prefers an already-open slot's rope — authoritative, reflects unsaved
+    /// edits the server doesn't know about yet — and falls back to reading
+    /// the file straight off disk (a goto/reference target is usually
+    /// unopened). Returns `None` when neither source has the line; callers
+    /// treat that as "cannot convert" and fall back to the raw wire column
+    /// rather than panic — a defensible degrade since a target file that
+    /// vanished between the response and this call is already an edge case.
+    fn line_text_for_path(&self, path: &std::path::Path, row: usize) -> Option<String> {
+        if let Some(slot) = self.slots.iter().find(|s| {
+            s.filename
+                .as_ref()
+                .map(|p| {
+                    let abs = if p.is_absolute() {
+                        p.clone()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(p)
+                    };
+                    abs == path
+                })
+                .unwrap_or(false)
+        }) {
+            let rope = slot.editor.buffer().rope();
+            return if row < rope.len_lines() {
+                Some(hjkl_buffer::rope_line_str(&rope, row).to_string())
+            } else {
+                None
+            };
+        }
+        let text = std::fs::read_to_string(path).ok()?;
+        text.lines().nth(row).map(|s| s.to_string())
+    }
+
+    /// Convert an LSP `Location`'s wire-unit start position to hjkl's
+    /// internal char-index `(row, col)`, using `encoding` and the target
+    /// file's line text (looked up via [`Self::line_text_for_path`]). Falls
+    /// back to treating the wire column as-is when the line text can't be
+    /// found (see that method's doc comment) — better than refusing to jump
+    /// at all, and only wrong on the rare path where the fallback triggers.
+    fn convert_location_start(
+        &self,
+        path: &std::path::Path,
+        loc: &lsp_types::Location,
+        encoding: hjkl_lsp::PositionEncoding,
+    ) -> (usize, usize) {
+        let row = loc.range.start.line as usize;
+        let wire_col = loc.range.start.character;
+        let col = match self.line_text_for_path(path, row) {
+            Some(line) => wire_to_col(&line, wire_col, encoding),
+            None => wire_col as usize,
+        };
+        (row, col)
+    }
+
     /// Jump the cursor (and possibly switch buffer) to `loc`.
-    fn jump_to_location(&mut self, loc: &lsp_types::Location) {
+    fn jump_to_location(
+        &mut self,
+        loc: &lsp_types::Location,
+        encoding: hjkl_lsp::PositionEncoding,
+    ) {
         let target_path: Option<PathBuf> = {
             let url: url::Url = match url::Url::parse(loc.uri.as_str()) {
                 Ok(u) => u,
@@ -1055,8 +1359,13 @@ impl App {
             };
             hjkl_lsp::uri::to_path(&url)
         };
-        let row = loc.range.start.line as usize;
-        let col = loc.range.start.character as usize;
+        let (row, col) = match target_path.as_ref() {
+            Some(tp) => self.convert_location_start(tp, loc, encoding),
+            None => (
+                loc.range.start.line as usize,
+                loc.range.start.character as usize,
+            ),
+        };
 
         // Determine if target matches an already-open slot.
         let slot_idx = if let Some(ref tp) = target_path {
@@ -1113,6 +1422,7 @@ impl App {
         _origin: (usize, usize),
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
         kind_label: &str,
+        encoding: hjkl_lsp::PositionEncoding,
     ) {
         let val = match result {
             Ok(v) => v,
@@ -1127,9 +1437,9 @@ impl App {
             return;
         }
         if locs.len() == 1 {
-            self.jump_to_location(&locs[0]);
+            self.jump_to_location(&locs[0], encoding);
         } else {
-            self.open_lsp_locations_picker(&locs, kind_label);
+            self.open_lsp_locations_picker(&locs, kind_label, encoding);
         }
     }
 
@@ -1139,6 +1449,7 @@ impl App {
         _buffer_id: hjkl_lsp::BufferId,
         _origin: (usize, usize),
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+        encoding: hjkl_lsp::PositionEncoding,
     ) {
         let val = match result {
             Ok(v) => v,
@@ -1154,21 +1465,26 @@ impl App {
         }
         // Populate the location list (#184 phase 3) so `:lopen` / `]l` / `[l`
         // work on the references, in addition to the fuzzy picker below.
-        self.set_loclist_from_locations(&locs);
-        self.open_lsp_locations_picker(&locs, "references");
+        self.set_loclist_from_locations(&locs, encoding);
+        self.open_lsp_locations_picker(&locs, "references", encoding);
     }
 
     /// Convert LSP locations into location-list entries (#184 phase 3).
-    fn set_loclist_from_locations(&mut self, locs: &[lsp_types::Location]) {
+    fn set_loclist_from_locations(
+        &mut self,
+        locs: &[lsp_types::Location],
+        encoding: hjkl_lsp::PositionEncoding,
+    ) {
         let entries: Vec<hjkl_quickfix::QfEntry> = locs
             .iter()
             .filter_map(|loc| {
                 let url: url::Url = url::Url::parse(loc.uri.as_str()).ok()?;
                 let path = hjkl_lsp::uri::to_path(&url)?;
+                let (row, col) = self.convert_location_start(&path, loc, encoding);
                 Some(hjkl_quickfix::QfEntry {
                     path,
-                    row: loc.range.start.line as usize,
-                    col: loc.range.start.character as usize,
+                    row,
+                    col,
                     kind: hjkl_quickfix::QfKind::Info,
                     message: "reference".to_string(),
                 })
@@ -1178,7 +1494,12 @@ impl App {
     }
 
     /// Open a picker over a set of LSP locations.
-    fn open_lsp_locations_picker(&mut self, locs: &[lsp_types::Location], kind_label: &str) {
+    fn open_lsp_locations_picker(
+        &mut self,
+        locs: &[lsp_types::Location],
+        kind_label: &str,
+        encoding: hjkl_lsp::PositionEncoding,
+    ) {
         use crate::picker_action::AppAction;
 
         // Strip the editor's cwd so files inside the project show as
@@ -1192,8 +1513,7 @@ impl App {
             .filter_map(|loc| {
                 let url: url::Url = url::Url::parse(loc.uri.as_str()).ok()?;
                 let path = hjkl_lsp::uri::to_path(&url)?;
-                let row = loc.range.start.line;
-                let col = loc.range.start.character as usize;
+                let (row, col) = self.convert_location_start(&path, loc, encoding);
                 let display_path = cwd
                     .as_ref()
                     .and_then(|c| path.strip_prefix(c).ok())
@@ -1201,7 +1521,7 @@ impl App {
                     .unwrap_or_else(|| path.display().to_string());
                 let label = format!("{display_path}:{}: col {}", row + 1, col + 1);
                 // Use OpenPathAtLine for the action — goto_line is 1-based.
-                Some((label, AppAction::OpenPathAtLine(path, row + 1)))
+                Some((label, AppAction::OpenPathAtLine(path, row as u32 + 1)))
             })
             .collect();
 
@@ -1468,7 +1788,7 @@ impl App {
             }
             return;
         }
-        let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
+        let (params, buffer_id, (row, col), _encoding) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
                 if !auto {
@@ -1559,11 +1879,21 @@ impl App {
             }
         };
         let cursor = self.active_editor().buffer().cursor();
+        let encoding = self.active_position_encoding();
+        let rope = self.active_editor().buffer().rope();
+        let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor.row);
+        let wire_col = col_to_wire(&cursor_line, cursor.col, encoding);
         let row = cursor.row as u32;
-        let col = cursor.col as u32;
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
 
-        // Collect diagnostics that overlap the cursor position.
+        // Collect diagnostics that overlap the cursor position. `d.start_col`
+        // / `d.end_col` are hjkl's internal char-index columns (converted
+        // from wire units when the diagnostic was received); convert them
+        // back to this server's wire units for the outgoing `context`
+        // (audit R2, UTF-16 fix) — sending the char index straight through
+        // would round-trip wrong for a multibyte line even though the value
+        // originated from this same server, since char index is neither of
+        // the two wire encodings.
         let overlapping_diags: Vec<lsp_types::Diagnostic> = slot
             .lsp_diags
             .iter()
@@ -1588,15 +1918,17 @@ impl App {
                         lsp_types::NumberOrString::String(c.clone())
                     }
                 });
+                let start_line_text = hjkl_buffer::rope_line_str(&rope, d.start_row);
+                let end_line_text = hjkl_buffer::rope_line_str(&rope, d.end_row);
                 lsp_types::Diagnostic {
                     range: lsp_types::Range {
                         start: lsp_types::Position {
                             line: d.start_row as u32,
-                            character: d.start_col as u32,
+                            character: col_to_wire(&start_line_text, d.start_col, encoding),
                         },
                         end: lsp_types::Position {
                             line: d.end_row as u32,
-                            character: d.end_col as u32,
+                            character: col_to_wire(&end_line_text, d.end_col, encoding),
                         },
                     },
                     severity,
@@ -1611,8 +1943,8 @@ impl App {
         let params = json!({
             "textDocument": { "uri": uri.as_str() },
             "range": {
-                "start": { "line": row, "character": col },
-                "end": { "line": row, "character": col },
+                "start": { "line": row, "character": wire_col },
+                "end": { "line": row, "character": wire_col },
             },
             "context": {
                 "diagnostics": overlapping_diags,
@@ -1627,6 +1959,7 @@ impl App {
                 buffer_id,
                 anchor_row: cursor.row,
                 anchor_col: cursor.col,
+                encoding,
             },
         );
         if let Some(mgr) = self.lsp.as_ref() {
@@ -1641,6 +1974,7 @@ impl App {
         _anchor_row: usize,
         _anchor_col: usize,
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+        encoding: hjkl_lsp::PositionEncoding,
     ) {
         let val = match result {
             Ok(v) => v,
@@ -1670,12 +2004,15 @@ impl App {
 
         if actions.len() == 1 {
             let action = actions.into_iter().next().unwrap();
-            self.apply_code_action_or_command(action);
+            self.apply_code_action_or_command(action, encoding);
             return;
         }
 
         // Multiple actions — open picker. Store actions in pending_code_actions
-        // so the picker can index into them via ApplyCodeAction(i).
+        // so the picker can index into them via ApplyCodeAction(i). The
+        // encoding is stashed alongside since the picker selection (and thus
+        // the eventual `apply_code_action_or_command` call) happens frames
+        // later, well after this response handler returns.
         use crate::picker_action::AppAction;
         let entries: Vec<(String, AppAction)> = actions
             .iter()
@@ -1690,6 +2027,7 @@ impl App {
             .collect();
 
         self.pending_code_actions = actions;
+        self.pending_code_actions_encoding = encoding;
         let source = Box::new(crate::picker_sources::StaticListSource::new(
             "code actions".to_string(),
             entries,
@@ -1698,12 +2036,16 @@ impl App {
     }
 
     /// Apply a single code action or command.
-    pub(crate) fn apply_code_action_or_command(&mut self, item: lsp_types::CodeActionOrCommand) {
+    pub(crate) fn apply_code_action_or_command(
+        &mut self,
+        item: lsp_types::CodeActionOrCommand,
+        encoding: hjkl_lsp::PositionEncoding,
+    ) {
         match item {
             lsp_types::CodeActionOrCommand::CodeAction(ca) => {
                 // Apply workspace edit first, then execute command if present.
                 if let Some(edit) = ca.edit {
-                    match self.apply_workspace_edit(edit) {
+                    match self.apply_workspace_edit(edit, encoding) {
                         Ok(count) => {
                             self.bus.info(format!("{count} files changed"));
                         }
@@ -1741,9 +2083,16 @@ impl App {
 
     /// Apply a `WorkspaceEdit` to the open slots (and open new ones as needed).
     /// Returns the count of files changed on success, or an error string.
+    ///
+    /// `encoding` is the negotiated encoding of the server that produced
+    /// `edit` — every `TextEdit.range` in it is relative to that ONE
+    /// server's wire units, regardless of which file (and thus which
+    /// server's own attached document) each edit targets, so a single
+    /// encoding is correct for the whole call (audit R2, UTF-16 fix).
     pub(crate) fn apply_workspace_edit(
         &mut self,
         edit: lsp_types::WorkspaceEdit,
+        encoding: hjkl_lsp::PositionEncoding,
     ) -> Result<usize, String> {
         // Collect (url, Vec<TextEdit>) pairs from either .changes or .document_changes.
         let mut file_edits: Vec<(url::Url, Vec<lsp_types::TextEdit>)> = Vec::new();
@@ -1857,16 +2206,27 @@ impl App {
                 eb.cmp(&ea)
             });
 
-            use hjkl_engine::{BufferEdit, Pos};
+            use hjkl_engine::BufferEdit;
             for te in edits {
-                let start = Pos {
-                    line: te.range.start.line,
-                    col: te.range.start.character,
-                };
-                let end = Pos {
-                    line: te.range.end.line,
-                    col: te.range.end.character,
-                };
+                // Read the CURRENT rope for this slot on every iteration:
+                // edits are sorted end-descending (see above), so by the
+                // time we reach `te` every previously-applied edit in this
+                // batch sat strictly to `te`'s right — its own line's text
+                // left of `te.range.start` (and thus the wire->char
+                // conversion below) is unaffected and still valid.
+                let rope = self.slots[slot_idx].editor.buffer().rope();
+                let start = wire_position_to_pos(
+                    &rope,
+                    te.range.start.line,
+                    te.range.start.character,
+                    encoding,
+                );
+                let end = wire_position_to_pos(
+                    &rope,
+                    te.range.end.line,
+                    te.range.end.character,
+                    encoding,
+                );
                 BufferEdit::replace_range(
                     self.slots[slot_idx].editor.buffer_mut(),
                     start..end,
@@ -1945,11 +2305,14 @@ impl App {
             }
         };
         let cursor = self.active_editor().buffer().cursor();
+        let encoding = self.active_position_encoding();
+        let line = hjkl_buffer::rope_line_str(&self.active_editor().buffer().rope(), cursor.row);
+        let wire_col = col_to_wire(&line, cursor.col, encoding);
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
 
         let params = json!({
             "textDocument": { "uri": uri.as_str() },
-            "position": { "line": cursor.row as u32, "character": cursor.col as u32 },
+            "position": { "line": cursor.row as u32, "character": wire_col },
             "newName": new_name,
         });
 
@@ -1961,6 +2324,7 @@ impl App {
                 anchor_row: cursor.row,
                 anchor_col: cursor.col,
                 new_name,
+                encoding,
             },
         );
         if let Some(mgr) = self.lsp.as_ref() {
@@ -1976,6 +2340,7 @@ impl App {
         _anchor_col: usize,
         _new_name: String,
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+        encoding: hjkl_lsp::PositionEncoding,
     ) {
         let val = match result {
             Ok(v) => v,
@@ -1998,7 +2363,7 @@ impl App {
             }
         };
 
-        match self.apply_workspace_edit(workspace_edit) {
+        match self.apply_workspace_edit(workspace_edit, encoding) {
             Ok(count) => {
                 self.bus.info(format!("renamed: {count} files changed"));
             }
@@ -2050,12 +2415,14 @@ impl App {
             },
         });
 
+        let encoding = self.active_position_encoding();
         let request_id = self.lsp_alloc_request_id();
         self.lsp_pending.insert(
             request_id,
             LspPendingRequest::Format {
                 buffer_id,
                 range: None,
+                encoding,
             },
         );
         if let Some(mgr) = self.lsp.as_ref() {
@@ -2069,6 +2436,7 @@ impl App {
         buffer_id: hjkl_lsp::BufferId,
         _range: Option<(usize, usize, usize, usize)>,
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+        encoding: hjkl_lsp::PositionEncoding,
     ) {
         let val = match result {
             Ok(v) => v,
@@ -2117,16 +2485,19 @@ impl App {
             eb.cmp(&ea)
         });
 
-        use hjkl_engine::{BufferEdit, Pos};
+        use hjkl_engine::BufferEdit;
         for te in sorted {
-            let start = Pos {
-                line: te.range.start.line,
-                col: te.range.start.character,
-            };
-            let end = Pos {
-                line: te.range.end.line,
-                col: te.range.end.character,
-            };
+            // Same descending-order + current-rope-read reasoning as
+            // `apply_workspace_edit` (audit R2, UTF-16 fix).
+            let rope = self.slots[slot_idx].editor.buffer().rope();
+            let start = wire_position_to_pos(
+                &rope,
+                te.range.start.line,
+                te.range.start.character,
+                encoding,
+            );
+            let end =
+                wire_position_to_pos(&rope, te.range.end.line, te.range.end.character, encoding);
             BufferEdit::replace_range(
                 self.slots[slot_idx].editor.buffer_mut(),
                 start..end,
@@ -2439,6 +2810,186 @@ impl App {
 }
 
 #[cfg(test)]
+mod position_encoding_tests {
+    use super::{col_to_wire, wire_to_col};
+    use hjkl_lsp::PositionEncoding;
+
+    // ── col_to_wire (internal char index -> wire units) ────────────────────
+
+    #[test]
+    fn ascii_identity_both_encodings() {
+        let line = "let x = 1;";
+        for col in [0, 1, 5, line.len()] {
+            assert_eq!(col_to_wire(line, col, PositionEncoding::Utf8), col as u32);
+            assert_eq!(col_to_wire(line, col, PositionEncoding::Utf16), col as u32);
+        }
+    }
+
+    #[test]
+    fn two_byte_char_diverges_only_under_utf8() {
+        // "héllo" — 'é' is 2 UTF-8 bytes, 1 UTF-16 code unit, 1 char.
+        let line = "héllo";
+        // char index 1 == just past 'h', before 'é'.
+        assert_eq!(col_to_wire(line, 1, PositionEncoding::Utf8), 1);
+        assert_eq!(col_to_wire(line, 1, PositionEncoding::Utf16), 1);
+        // char index 2 == just past 'é'. UTF-8: h(1)+é(2)=3. UTF-16: 1+1=2.
+        assert_eq!(col_to_wire(line, 2, PositionEncoding::Utf8), 3);
+        assert_eq!(col_to_wire(line, 2, PositionEncoding::Utf16), 2);
+        // char index 5 == end of line ("héllo" has 5 chars).
+        assert_eq!(col_to_wire(line, 5, PositionEncoding::Utf8), 6);
+        assert_eq!(col_to_wire(line, 5, PositionEncoding::Utf16), 5);
+    }
+
+    #[test]
+    fn astral_emoji_diverges_under_both_encodings() {
+        // "a🎉b" — U+1F389 is 4 UTF-8 bytes, 2 UTF-16 code units (surrogate
+        // pair), 1 char.
+        let line = "a🎉b";
+        // char index 2 == just past the emoji, before 'b'.
+        assert_eq!(col_to_wire(line, 2, PositionEncoding::Utf8), 5); // a(1)+emoji(4)
+        assert_eq!(col_to_wire(line, 2, PositionEncoding::Utf16), 3); // a(1)+emoji(2)
+        // char index 3 == end of line.
+        assert_eq!(col_to_wire(line, 3, PositionEncoding::Utf8), 6);
+        assert_eq!(col_to_wire(line, 3, PositionEncoding::Utf16), 4);
+    }
+
+    #[test]
+    fn mixed_line_utf8_and_utf16() {
+        // "héllo🎉x" — é (2 bytes/1 unit) then emoji (4 bytes/2 units).
+        let line = "héllo🎉x";
+        // char index 6 == just past the emoji ('h','é','l','l','o','🎉').
+        let byte_len_before_emoji_char = "héllo".len(); // 6
+        assert_eq!(
+            col_to_wire(line, 6, PositionEncoding::Utf8) as usize,
+            byte_len_before_emoji_char + 4
+        );
+        assert_eq!(col_to_wire(line, 6, PositionEncoding::Utf16), 5 + 2); // "héllo" is 5 units + emoji 2
+    }
+
+    #[test]
+    fn col_to_wire_overshoot_clamps_to_full_line() {
+        let line = "hé";
+        assert_eq!(
+            col_to_wire(line, 9999, PositionEncoding::Utf8),
+            line.len() as u32
+        );
+        assert_eq!(
+            col_to_wire(line, 9999, PositionEncoding::Utf16),
+            line.chars().map(|c| c.len_utf16()).sum::<usize>() as u32
+        );
+    }
+
+    // ── wire_to_col (wire units -> internal char index) ─────────────────────
+
+    #[test]
+    fn wire_to_col_ascii_identity() {
+        let line = "let x = 1;";
+        for wire in [0u32, 1, 5, line.len() as u32] {
+            assert_eq!(
+                wire_to_col(line, wire, PositionEncoding::Utf8),
+                wire as usize
+            );
+            assert_eq!(
+                wire_to_col(line, wire, PositionEncoding::Utf16),
+                wire as usize
+            );
+        }
+    }
+
+    #[test]
+    fn wire_to_col_two_byte_char() {
+        let line = "héllo";
+        // UTF-8 wire col 3 (past h(1)+é(2)) -> char index 2.
+        assert_eq!(wire_to_col(line, 3, PositionEncoding::Utf8), 2);
+        // UTF-16 wire col 2 (past h(1)+é(1)) -> char index 2.
+        assert_eq!(wire_to_col(line, 2, PositionEncoding::Utf16), 2);
+    }
+
+    #[test]
+    fn wire_to_col_astral_emoji() {
+        let line = "a🎉b";
+        // UTF-8 wire col 5 (a=1, emoji=4) -> char index 2 (just past emoji).
+        assert_eq!(wire_to_col(line, 5, PositionEncoding::Utf8), 2);
+        // UTF-16 wire col 3 (a=1, emoji=2) -> char index 2.
+        assert_eq!(wire_to_col(line, 3, PositionEncoding::Utf16), 2);
+    }
+
+    #[test]
+    fn wire_to_col_overshoot_clamps_to_line_end() {
+        let line = "hé";
+        assert_eq!(
+            wire_to_col(line, 9999, PositionEncoding::Utf8),
+            line.chars().count()
+        );
+        assert_eq!(
+            wire_to_col(line, 9999, PositionEncoding::Utf16),
+            line.chars().count()
+        );
+    }
+
+    /// A wire column landing mid-char (e.g. a buggy server reporting the
+    /// second UTF-16 unit of a surrogate pair) must resolve to the START of
+    /// that char rather than panicking or skipping past it.
+    #[test]
+    fn wire_to_col_mid_char_snaps_to_char_start() {
+        let line = "a🎉b";
+        // UTF-16 wire col 2 lands between the emoji's two surrogate units
+        // (a=1, first unit=2) — must resolve to the emoji's char index (1),
+        // not skip to 'b' (index 2).
+        assert_eq!(wire_to_col(line, 2, PositionEncoding::Utf16), 1);
+    }
+
+    // ── round-trip ───────────────────────────────────────────────────────────
+
+    /// `wire_to_col(line, col_to_wire(line, c, enc), enc) == c` for every char
+    /// boundary on a mixed line, both encodings.
+    #[test]
+    fn round_trip_every_char_boundary() {
+        let line = "héllo🎉world_x";
+        let n = line.chars().count();
+        for enc in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+            for c in 0..=n {
+                let wire = col_to_wire(line, c, enc);
+                assert_eq!(
+                    wire_to_col(line, wire, enc),
+                    c,
+                    "round-trip failed at char {c} under {enc:?}"
+                );
+            }
+        }
+    }
+
+    /// The motivating scenario from the fix: a diagnostic on line
+    /// `s = "héllo"  # x` reported by a UTF-16 server at the wire column of
+    /// `#` must convert to hjkl's char column of `#`, and converting back
+    /// must reproduce the original wire column.
+    #[test]
+    fn round_trip_hash_comment_after_multibyte_string() {
+        let line = r#"s = "héllo"  # x"#;
+        let hash_char_idx = line.chars().position(|c| c == '#').unwrap();
+        let wire_utf16 = col_to_wire(line, hash_char_idx, PositionEncoding::Utf16);
+        // "héllo" contributes 1 UTF-16 unit for 'é' (same as char count), so
+        // for this BMP-only example UTF-16 wire units equal the char index —
+        // still exercises the full helper path end-to-end.
+        assert_eq!(
+            wire_to_col(line, wire_utf16, PositionEncoding::Utf16),
+            hash_char_idx
+        );
+        assert_eq!(&line[..line.find('#').unwrap()], "s = \"héllo\"  ");
+
+        // UTF-8 wire units DO diverge here (é is 2 bytes): converting with
+        // UTF-8 must land on a different (larger) wire column than UTF-16,
+        // proving the encoding parameter actually changes behavior.
+        let wire_utf8 = col_to_wire(line, hash_char_idx, PositionEncoding::Utf8);
+        assert!(wire_utf8 > wire_utf16);
+        assert_eq!(
+            wire_to_col(line, wire_utf8, PositionEncoding::Utf8),
+            hash_char_idx
+        );
+    }
+}
+
+#[cfg(test)]
 mod lsp_glue_tests {
     use super::{build_text_changes, snap_to_char_boundary};
 
@@ -2655,7 +3206,9 @@ mod lsp_glue_tests {
             ..Default::default()
         };
 
-        let applied = app.apply_workspace_edit(edit).unwrap();
+        let applied = app
+            .apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
+            .unwrap();
         assert_eq!(applied, 1, "the out-of-root edit must still be applied");
 
         let warned = app

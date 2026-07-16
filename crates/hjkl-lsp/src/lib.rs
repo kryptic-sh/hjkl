@@ -2,6 +2,7 @@
 
 pub mod codec;
 pub mod config;
+pub mod encoding;
 pub mod event;
 mod manager;
 mod runtime;
@@ -10,6 +11,7 @@ pub mod uri;
 pub mod workspace;
 
 pub use config::{LspConfig, ServerConfig};
+pub use encoding::PositionEncoding;
 pub use event::{LspCommand, LspEvent, RpcError, ServerKey, TextChange};
 pub use manager::LspManager;
 pub use server::Server;

@@ -28,7 +28,7 @@ fn publish_diagnostics_populates_slot_diags() {
         }]),
     );
 
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     let slot = app.active();
     assert_eq!(slot.lsp_diags.len(), 1);
@@ -74,7 +74,7 @@ fn publish_diagnostics_replaces_existing() {
             }
         ]),
     );
-    app.handle_publish_diagnostics(params1);
+    app.handle_publish_diagnostics(params1, hjkl_lsp::PositionEncoding::Utf8);
     assert_eq!(app.active().lsp_diags.len(), 2);
 
     // Second publish: one diag — must replace, not append.
@@ -86,7 +86,7 @@ fn publish_diagnostics_replaces_existing() {
             "message": "info C"
         }]),
     );
-    app.handle_publish_diagnostics(params2);
+    app.handle_publish_diagnostics(params2, hjkl_lsp::PositionEncoding::Utf8);
 
     let slot = app.active();
     assert_eq!(
@@ -116,12 +116,12 @@ fn publish_diagnostics_clears_on_empty() {
             "message": "err"
         }]),
     );
-    app.handle_publish_diagnostics(params_with);
+    app.handle_publish_diagnostics(params_with, hjkl_lsp::PositionEncoding::Utf8);
     assert_eq!(app.active().lsp_diags.len(), 1);
 
     // Empty diagnostics array clears all diags.
     let params_clear = pub_diags_params(&file_url(&path), serde_json::json!([]));
-    app.handle_publish_diagnostics(params_clear);
+    app.handle_publish_diagnostics(params_clear, hjkl_lsp::PositionEncoding::Utf8);
 
     let slot = app.active();
     assert!(slot.lsp_diags.is_empty(), "empty publish must clear diags");
@@ -148,11 +148,57 @@ fn publish_diagnostics_ignores_unknown_uri() {
             "message": "err"
         }]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     assert!(
         app.active().lsp_diags.is_empty(),
         "unmatched URI must not populate diags"
+    );
+}
+
+/// Regression (audit R2, UTF-16 fix): a diagnostic reported by a
+/// UTF-16-only server on a line containing an astral char (one whose UTF-16
+/// encoding is a surrogate pair — 2 code units for 1 char, e.g. an emoji)
+/// must land on the correct hjkl-internal char column, NOT the raw UTF-16
+/// wire value. This is the round-trip scenario from the fix's spec: a
+/// diagnostic at the wire column of `#` on a line with a multibyte prefix
+/// must convert to the char column of `#`.
+#[test]
+fn publish_diagnostics_converts_utf16_wire_columns_to_char_columns() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_diag_utf16.rs");
+    app.active_mut().filename = Some(path.clone());
+    // "🎉hello world" — U+1F389 is 1 char, 2 UTF-16 code units, 4 UTF-8 bytes.
+    // Char indices: 0:🎉 1:h 2:e 3:l 4:l 5:o 6:' ' 7:w ...
+    // UTF-16 wire offsets: before 'h'=2 (past the emoji's 2 units), before
+    // 'w'=8 (2 + "hello "'s 6 ASCII units).
+    seed_buffer(&mut app, "🎉hello world");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            // Wire range covers "hello" using UTF-16 units: [2, 7).
+            "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 7 } },
+            "severity": 1,
+            "message": "utf16 diag"
+        }]),
+    );
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf16);
+
+    let slot = app.active();
+    assert_eq!(slot.lsp_diags.len(), 1);
+    let d = &slot.lsp_diags[0];
+    // Correct char columns: 1 (start of "hello") .. 6 (just past "hello",
+    // before the space). A pre-fix build would store the raw wire values
+    // 2..7 here instead, which point at "ello " (chars 2..7) — one char too
+    // far right because the emoji ate 2 wire units but only 1 char slot.
+    assert_eq!(
+        d.start_col, 1,
+        "wire col 2 (UTF-16) must convert to char col 1"
+    );
+    assert_eq!(
+        d.end_col, 6,
+        "wire col 7 (UTF-16) must convert to char col 6"
     );
 }
 
@@ -179,7 +225,7 @@ fn lnext_jumps_to_next_diag() {
             }
         ]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     // Cursor at row 0 — lnext should jump to row 1.
     app.lnext_severity(None);
@@ -646,7 +692,7 @@ fn lsp_jump_reveals_cursor_in_viewport() {
             "message": "deep"
         }]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
     app.lnext_severity(None);
 
     // Cursor must be at row 50 AND the viewport must have scrolled past
@@ -687,7 +733,7 @@ fn lprev_jumps_to_prev_diag_with_wrap() {
             }
         ]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     // Cursor at row 0 col 0 — lprev should wrap to the last diag (row 2).
     app.lprev_severity(None);
@@ -723,7 +769,7 @@ fn lnext_severity_skips_lower_severity() {
             }
         ]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     // Jump to Error-only — must skip Warning on row 1 and land on row 2.
     app.lnext_severity(Some(DiagSeverity::Error));
@@ -759,7 +805,7 @@ fn lopen_lists_diags_in_picker() {
             "message": "some error"
         }]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     app.open_diag_picker();
     assert!(app.picker.is_some(), "picker must open when diags exist");
@@ -887,7 +933,13 @@ fn goto_definition_single_jumps_cursor() {
     let loc = make_location(&uri, 2, 0);
     let result = ok_val(serde_json::to_value(vec![loc]).unwrap());
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
-    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+    app.handle_goto_response(
+        buffer_id,
+        (0, 0),
+        result,
+        "definition",
+        hjkl_lsp::PositionEncoding::Utf8,
+    );
 
     // Cursor must have moved to row 2.
     assert_eq!(app.active_editor().buffer().cursor().row, 2);
@@ -899,7 +951,13 @@ fn goto_definition_empty_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
     let result = ok_val(serde_json::Value::Null);
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
-    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+    app.handle_goto_response(
+        buffer_id,
+        (0, 0),
+        result,
+        "definition",
+        hjkl_lsp::PositionEncoding::Utf8,
+    );
 
     let msg = app.bus.last_body_or_empty();
     assert!(
@@ -920,7 +978,13 @@ fn goto_definition_multi_opens_picker() {
     ];
     let result = ok_val(serde_json::to_value(locs).unwrap());
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
-    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+    app.handle_goto_response(
+        buffer_id,
+        (0, 0),
+        result,
+        "definition",
+        hjkl_lsp::PositionEncoding::Utf8,
+    );
 
     assert!(app.picker.is_some(), "multiple results must open picker");
 }
@@ -933,7 +997,7 @@ fn goto_references_always_opens_picker() {
     let locs = vec![make_location(&file_url(&tmp_path("hjkl_gd_only.rs")), 3, 0)];
     let result = ok_val(serde_json::to_value(locs).unwrap());
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
-    app.handle_references_response(buffer_id, (0, 0), result);
+    app.handle_references_response(buffer_id, (0, 0), result, hjkl_lsp::PositionEncoding::Utf8);
 
     assert!(app.picker.is_some(), "references must always open picker");
 }
@@ -988,7 +1052,13 @@ fn goto_definition_error_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
     let result = err_val("server error");
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
-    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+    app.handle_goto_response(
+        buffer_id,
+        (0, 0),
+        result,
+        "definition",
+        hjkl_lsp::PositionEncoding::Utf8,
+    );
 
     let msg = app.bus.last_body_or_empty();
     assert!(
@@ -1402,7 +1472,7 @@ fn apply_workspace_edit_single_file() {
     let uri = file_url(&path);
     let edit = make_workspace_edit(&uri, 0, 6, 0, 11, "rust");
     let count = app
-        .apply_workspace_edit(edit)
+        .apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
         .expect("apply_workspace_edit failed");
     assert_eq!(count, 1);
 
@@ -1474,7 +1544,8 @@ fn apply_workspace_edit_sorts_edits_descending() {
         document_changes: None,
         change_annotations: None,
     };
-    app.apply_workspace_edit(edit).expect("apply failed");
+    app.apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
+        .expect("apply failed");
     let lines = app
         .active_editor()
         .buffer()
@@ -1544,7 +1615,7 @@ fn apply_workspace_edit_multi_file() {
         change_annotations: None,
     };
     let count = app
-        .apply_workspace_edit(edit)
+        .apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
         .expect("multi-file apply failed");
     assert_eq!(count, 2, "should affect 2 files");
     let _ = std::fs::remove_file(&path_a);
@@ -1614,7 +1685,7 @@ fn apply_workspace_edit_multi_file_notifies_both_buffers() {
         change_annotations: None,
     };
     let count = app
-        .apply_workspace_edit(edit)
+        .apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
         .expect("multi-file apply failed");
     assert_eq!(count, 2, "should affect 2 files");
 
@@ -1659,6 +1730,7 @@ fn rename_response_null_sets_status() {
         anchor_row: 0,
         anchor_col: 0,
         new_name: "newName".to_string(),
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     app.handle_lsp_response(pending, Ok(serde_json::Value::Null));
     let msg = app.bus.last_body_or_empty().to_string();
@@ -1683,6 +1755,7 @@ fn rename_response_applies_workspace_edit() {
         anchor_row: 0,
         anchor_col: 0,
         new_name: "new_name".to_string(),
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     app.handle_lsp_response(pending, Ok(val));
     let msg = app.bus.last_body_or_empty().to_string();
@@ -1704,12 +1777,84 @@ fn rename_response_applies_workspace_edit() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Regression (audit R2, UTF-16 fix) — THE motivating corruption case: a
+/// `workspace/applyEdit` (equally, a `textDocument/rename` response) from a
+/// UTF-16-only server whose `TextEdit.range` crosses an astral char (an
+/// emoji here — 1 char, 2 UTF-16 units, 4 UTF-8 bytes) must land on the
+/// correct chars. Feeding the raw UTF-16 wire columns straight into
+/// `hjkl_engine::Pos.col` (a CHAR index) — what the pre-fix code did —
+/// silently slices the wrong text out of the buffer.
+///
+/// Both blocks below operate on the same line, `"🎉hello world"` (char
+/// indices: 0:🎉 1:h 2:e 3:l 4:l 5:o 6:' ' 7:w 8:o 9:r 10:l 11:d). The
+/// intended edit replaces "hello" (char range [1, 6)) with "HELLO". A
+/// UTF-16 server reports that range as wire columns [2, 7) — the emoji's 2
+/// units push every char index after it two spots further right in wire
+/// space than in char space.
+#[test]
+fn workspace_edit_utf16_wire_columns_convert_to_correct_chars() {
+    let path = std::env::temp_dir().join("hjkl_ws_edit_utf16_corruption.txt");
+    std::fs::write(&path, "🎉hello world\n").unwrap();
+
+    // ── Pre-fix evidence ────────────────────────────────────────────────
+    // Simulates exactly what the old code did: build `Pos` straight from
+    // the wire `character` values with no encoding conversion, then apply
+    // via the same `BufferEdit::replace_range` the fixed path still uses.
+    // Char range [2, 7) is "ello " (e,l,l,o,space) — replacing it with
+    // "HELLO" leaves a stray leading 'h' and swallows the space before
+    // "world", corrupting the line.
+    {
+        use hjkl_engine::{BufferEdit, Pos};
+        let mut corrupt_app = App::new(Some(path.clone()), false, None, None).unwrap();
+        let start = Pos { line: 0, col: 2 }; // WRONG: raw UTF-16 wire value used as char col
+        let end = Pos { line: 0, col: 7 };
+        BufferEdit::replace_range(
+            corrupt_app.active_editor_mut().buffer_mut(),
+            start..end,
+            "HELLO",
+        );
+        let corrupted = corrupt_app
+            .active_editor()
+            .buffer()
+            .rope()
+            .line(0)
+            .to_string();
+        assert_eq!(
+            corrupted.trim_end(),
+            "🎉hHELLOworld",
+            "pre-fix evidence: raw UTF-16-wire-as-char-index corrupts the line \
+            (drops \"e\", the space before \"world\", and leaves a stray \"h\")"
+        );
+    }
+
+    // ── Post-fix ────────────────────────────────────────────────────────
+    // `apply_workspace_edit` with the server's negotiated UTF-16 encoding
+    // must convert [2, 7) (wire) -> [1, 6) (char) and replace exactly
+    // "hello".
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    let uri = file_url(&path);
+    let edit = make_workspace_edit(&uri, 0, 2, 0, 7, "HELLO");
+    match app.apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf16) {
+        Ok(count) => assert_eq!(count, 1),
+        Err(e) => panic!("apply_workspace_edit failed: {e}"),
+    }
+    let fixed = app.active_editor().buffer().rope().line(0).to_string();
+    assert_eq!(
+        fixed.trim_end(),
+        "🎉HELLO world",
+        "UTF-16 wire columns must convert to the char range covering exactly \"hello\""
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn format_response_empty_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
     let pending = LspPendingRequest::Format {
         buffer_id: 0,
         range: None,
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     // Empty array = no changes.
     app.handle_lsp_response(pending, Ok(serde_json::json!([])));
@@ -1746,6 +1891,7 @@ fn format_response_applies_text_edits() {
     let pending = LspPendingRequest::Format {
         buffer_id: buf_id,
         range: None,
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     app.handle_lsp_response(pending, Ok(val));
     let msg = app.bus.last_body_or_empty().to_string();
@@ -1772,6 +1918,7 @@ fn code_action_response_empty_sets_status() {
         buffer_id: 0,
         anchor_row: 0,
         anchor_col: 0,
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     app.handle_lsp_response(pending, Ok(serde_json::json!([])));
     let msg = app.bus.last_body_or_empty().to_string();
@@ -1788,6 +1935,7 @@ fn code_action_response_multi_opens_picker() {
         buffer_id: 0,
         anchor_row: 0,
         anchor_col: 0,
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     let actions = serde_json::json!([
         {
@@ -1831,6 +1979,7 @@ fn code_action_response_single_applies_action() {
         buffer_id: 0,
         anchor_row: 0,
         anchor_col: 0,
+        encoding: hjkl_lsp::PositionEncoding::Utf8,
     };
     app.handle_lsp_response(pending, Ok(val));
     // Single action: applied directly, no picker.
@@ -1944,7 +2093,7 @@ fn lnext_then_j_preserves_diag_col() {
             "message": "sticky col test diag"
         }]),
     );
-    app.handle_publish_diagnostics(params);
+    app.handle_publish_diagnostics(params, hjkl_lsp::PositionEncoding::Utf8);
 
     // Cursor starts at (0, 0) — lnext must jump to row 2, col 5.
     app.lnext_severity(None);
