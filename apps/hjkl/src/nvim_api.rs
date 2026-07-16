@@ -1182,10 +1182,10 @@ fn dispatch(
                         _ => "\"".to_owned(),
                     };
                     let reg_char = reg_name.chars().next().unwrap_or('"');
-                    let text = match app.active_editor().registers().read(reg_char) {
-                        Some(slot) => slot.text.clone(),
-                        None => String::new(),
-                    };
+                    let text = app
+                        .active_editor()
+                        .with_registers(|r| r.read(reg_char).map(|slot| slot.text.clone()))
+                        .unwrap_or_default();
                     ok(stdout, msgid, Value::from(text.as_str()))
                 }
 

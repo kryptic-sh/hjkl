@@ -87,8 +87,7 @@ fn build_arg_sources_data(app: &App) -> ArgSourcesData {
             if name.is_empty() { None } else { Some(name) }
         })
         .collect();
-    let registers: Vec<String> = {
-        let r = app.active_editor().registers();
+    let registers: Vec<String> = app.active_editor().with_registers(|r| {
         let mut regs: Vec<String> = Vec::new();
         if !r.unnamed.text.is_empty() {
             regs.push("\"\"".into());
@@ -107,7 +106,7 @@ fn build_arg_sources_data(app: &App) -> ArgSourcesData {
             }
         }
         regs
-    };
+    });
     let marks: Vec<String> = app
         .active_editor()
         .marks()

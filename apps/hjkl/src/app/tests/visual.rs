@@ -310,7 +310,7 @@ fn visual_d_with_named_register_writes_to_register() {
     );
 
     // Named register 'a' must contain the deleted text.
-    let reg_a = &app.active_editor().registers().named[0]; // 'a' - 'a' = 0
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone()); // 'a' - 'a' = 0
     assert!(
         reg_a.text.contains("hello"),
         "register 'a' must contain 'hello' after \"ad; got {:?}",
@@ -458,7 +458,7 @@ fn visual_block_y_yanks_rectangle_to_register() {
     );
 
     // Register 'a' must contain the yanked block text.
-    let reg_a = &app.active_editor().registers().named[0];
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert!(
         !reg_a.text.is_empty(),
         "register 'a' must be non-empty after block yank"

@@ -6,29 +6,30 @@ use hjkl_engine::Host;
 pub(crate) fn format_registers<H: Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> String {
-    let r = editor.registers();
-    let mut lines = vec!["--- Registers ---".to_string()];
-    let mut push = |sel: &str, text: &str, linewise: bool| {
-        if text.is_empty() {
-            return;
+    editor.with_registers(|r| {
+        let mut lines = vec!["--- Registers ---".to_string()];
+        let mut push = |sel: &str, text: &str, linewise: bool| {
+            if text.is_empty() {
+                return;
+            }
+            let marker = if linewise { "L" } else { " " };
+            lines.push(format!("{sel:<3} {marker} {}", display_register(text)));
+        };
+        push("\"\"", &r.unnamed.text, r.unnamed.linewise);
+        push("\"0", &r.yank_zero.text, r.yank_zero.linewise);
+        for (i, slot) in r.delete_ring.iter().enumerate() {
+            let sel = format!("\"{}", i + 1);
+            push(&sel, &slot.text, slot.linewise);
         }
-        let marker = if linewise { "L" } else { " " };
-        lines.push(format!("{sel:<3} {marker} {}", display_register(text)));
-    };
-    push("\"\"", &r.unnamed.text, r.unnamed.linewise);
-    push("\"0", &r.yank_zero.text, r.yank_zero.linewise);
-    for (i, slot) in r.delete_ring.iter().enumerate() {
-        let sel = format!("\"{}", i + 1);
-        push(&sel, &slot.text, slot.linewise);
-    }
-    for (i, slot) in r.named.iter().enumerate() {
-        let sel = format!("\"{}", (b'a' + i as u8) as char);
-        push(&sel, &slot.text, slot.linewise);
-    }
-    if lines.len() == 1 {
-        lines.push("(no registers set)".to_string());
-    }
-    lines.join("\n")
+        for (i, slot) in r.named.iter().enumerate() {
+            let sel = format!("\"{}", (b'a' + i as u8) as char);
+            push(&sel, &slot.text, slot.linewise);
+        }
+        if lines.len() == 1 {
+            lines.push("(no registers set)".to_string());
+        }
+        lines.join("\n")
+    })
 }
 
 /// Escape control chars + truncate so a multi-line register fits a single row
@@ -171,9 +172,7 @@ mod tests {
     #[test]
     fn format_registers_after_yank() {
         let editor = make_editor();
-        editor
-            .registers_mut()
-            .record_yank("hello".into(), false, None);
+        editor.with_registers_mut(|r| r.record_yank("hello".into(), false, None));
         let out = format_registers(&editor);
         assert!(out.contains("hello"), "expected 'hello' in: {out}");
         assert!(out.starts_with("--- Registers ---"));

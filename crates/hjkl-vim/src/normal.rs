@@ -676,9 +676,7 @@ fn handle_record_macro_target<H: Host>(
             // decoded back to inputs, so capital-register append
             // continues from where the previous recording left off.
             let text = ed
-                .registers()
-                .read(lower)
-                .map(|s| s.text.clone())
+                .with_registers(|r| r.read(lower).map(|s| s.text.clone()))
                 .unwrap_or_default();
             ed.set_recording_keys(hjkl_engine::decode_macro(&text));
         } else {
@@ -705,7 +703,7 @@ fn handle_play_macro_target<H: Host>(
     };
     // Read the macro text from the named register and decode back to
     // an Input stream. Empty / unset registers replay nothing.
-    let text = match ed.registers().read(reg) {
+    let text = match ed.with_registers(|r| r.read(reg).cloned()) {
         Some(slot) if !slot.text.is_empty() => slot.text.clone(),
         _ => return true,
     };

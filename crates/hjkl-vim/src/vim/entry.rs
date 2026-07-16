@@ -146,7 +146,7 @@ pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
             Some(s) if !s.is_empty() => s.clone(),
             _ => return,
         },
-        _ => match ed.registers().read(selector) {
+        _ => match ed.with_registers(|r| r.read(selector).cloned()) {
             Some(slot) if !slot.text.is_empty() => slot.text.clone(),
             _ => return,
         },

@@ -3922,7 +3922,9 @@ fn p64_big_y_yanks_to_eol() {
         "Y must not modify buffer; got {line:?}"
     );
     // Unnamed register must hold "world".
-    let reg = app.active_editor().registers().unnamed.text.clone();
+    let reg = app
+        .active_editor()
+        .with_registers(|r| r.unnamed.text.clone());
     assert_eq!(
         reg, "world",
         "Y must yank 'world' to unnamed register; got {reg:?}"

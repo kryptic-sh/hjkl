@@ -1284,8 +1284,7 @@ impl super::App {
         self.slots[idx].git_repo_present = None; // re-probe for new path
         self.slots[idx]
             .editor
-            .registers_mut()
-            .set_filename(Some(new_path.to_string_lossy().into_owned()));
+            .with_registers_mut(|r| r.set_filename(Some(new_path.to_string_lossy().into_owned())));
         // The disk baseline follows the file to its new path (content is
         // unchanged by a rename; the metadata identity is what moved).
         if let Ok(meta) = std::fs::metadata(&new_path) {
@@ -1695,7 +1694,7 @@ impl super::App {
         };
 
         // Register must hold a linewise tree block (from `dd`/`yy` of rows).
-        let slot = self.active_editor().registers().unnamed.clone();
+        let slot = self.active_editor().with_registers(|r| r.unnamed.clone());
         if !slot.linewise || slot.text.trim().is_empty() {
             return false;
         }
@@ -1745,10 +1744,12 @@ impl super::App {
 
         // Install the re-indented, id-less block as a linewise register and
         // paste below the dir line.
-        self.active_editor_mut().registers_mut().unnamed = hjkl_engine::Slot {
-            text: block,
-            linewise: true,
-        };
+        self.active_editor_mut().with_registers_mut(|r| {
+            r.unnamed = hjkl_engine::Slot {
+                text: block,
+                linewise: true,
+            };
+        });
         self.active_editor_mut().paste_after(1);
         true
     }

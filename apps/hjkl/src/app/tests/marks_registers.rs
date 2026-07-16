@@ -17,15 +17,15 @@ fn quote_a_then_dd_deletes_into_register_a() {
     drive_key(&mut app, key(KeyCode::Char('d')));
 
     // Register 'a' must contain the deleted line text.
-    let regs = app.active_editor().registers();
-    let slot = regs.read('a');
-    assert!(slot.is_some(), "register 'a' should be set after \"add");
-    let text = &slot.unwrap().text;
+    let text = app
+        .active_editor()
+        .with_registers(|r| r.read('a').map(|s| s.text.clone()));
+    assert!(text.is_some(), "register 'a' should be set after \"add");
+    let text = text.unwrap();
     assert!(
         text.contains("hello world"),
         "register 'a' should contain 'hello world', got {text:?}"
     );
-    drop(regs);
     // View should only have the second line.
     let lines = app
         .active_editor()
@@ -53,11 +53,11 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     drive_key(&mut app, key(KeyCode::Char('y')));
 
     // Verify register a has the yanked text.
-    let regs = app.active_editor().registers();
-    let slot = regs.read('a');
-    assert!(slot.is_some(), "register 'a' must be set after \"ayy");
-    let text = slot.unwrap().text.clone();
-    drop(regs);
+    let text = app
+        .active_editor()
+        .with_registers(|r| r.read('a').map(|s| s.text.clone()));
+    assert!(text.is_some(), "register 'a' must be set after \"ayy");
+    let text = text.unwrap();
     assert!(
         text.contains("first line"),
         "register 'a' should contain 'first line', got {text:?}"
@@ -105,9 +105,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
     drive_key(&mut app, key(KeyCode::Char('y')));
     let baseline = app
         .active_editor()
-        .registers()
-        .read('"')
-        .map(|s| s.text.clone())
+        .with_registers(|r| r.read('"').map(|s| s.text.clone()))
         .unwrap_or_default();
 
     // Move to second line.
@@ -122,9 +120,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
     // Unnamed register must still match the baseline yank.
     let after = app
         .active_editor()
-        .registers()
-        .read('"')
-        .map(|s| s.text.clone())
+        .with_registers(|r| r.read('"').map(|s| s.text.clone()))
         .unwrap_or_default();
     assert_eq!(
         baseline, after,
@@ -180,9 +176,7 @@ fn quote_invalid_char_no_register_set() {
     drive_key(&mut app, key(KeyCode::Char('y')));
     let baseline_unnamed = app
         .active_editor()
-        .registers()
-        .read('"')
-        .map(|s| s.text.clone())
+        .with_registers(|r| r.read('"').map(|s| s.text.clone()))
         .unwrap_or_default();
 
     // `"!dd` — '!' is not a valid register selector; engine ignores it.
@@ -196,17 +190,15 @@ fn quote_invalid_char_no_register_set() {
     );
 
     // No register named '!' exists.
-    let regs = app.active_editor().registers();
-    let slot = regs.read('!');
-    assert!(slot.is_none(), "register '!' must not exist");
-    drop(regs);
+    let exists = app
+        .active_editor()
+        .with_registers(|r| r.read('!').is_some());
+    assert!(!exists, "register '!' must not exist");
 
     // Unnamed register unchanged.
     let after = app
         .active_editor()
-        .registers()
-        .read('"')
-        .map(|s| s.text.clone())
+        .with_registers(|r| r.read('"').map(|s| s.text.clone()))
         .unwrap_or_default();
     assert_eq!(
         baseline_unnamed, after,
@@ -1278,7 +1270,7 @@ fn register_then_count_a5dd_targets_register_a() {
     );
 
     // Register 'a' must hold deleted content.
-    let reg_a = &app.active_editor().registers().named[0];
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert!(
         reg_a.text.contains("line1"),
         "register 'a' must contain deleted text; got {:?}",
@@ -1337,7 +1329,7 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
     );
 
     // Register 'a' must hold the deleted content.
-    let reg_a = &app.active_editor().registers().named[0];
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert!(
         reg_a.text.contains("line1"),
         "register 'a' must contain deleted text; got {:?}",
@@ -1398,7 +1390,7 @@ fn outer_count_inner_count_2_quote_a_5dd_total_10() {
         Some("line26"),
         "2\"a5dd with digit-accumulation semantics must delete 25 lines; got {lines:?}"
     );
-    let reg_a = &app.active_editor().registers().named[0];
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert!(
         !reg_a.text.is_empty(),
         "register 'a' must be non-empty after op"
@@ -1442,7 +1434,7 @@ fn register_prefix_then_x_targets_register() {
     );
 
     // Register 'a' must hold 'h'.
-    let reg_a = &app.active_editor().registers().named[0];
+    let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert_eq!(
         reg_a.text, "h",
         "register 'a' must contain 'h' after \"ax; got {:?}",
@@ -1460,7 +1452,9 @@ fn register_prefix_single_use_then_next_op_unnamed() {
     // `"add` — delete line1 into reg 'a'.
     rck(&mut app, &['"', 'a', 'd', 'd']);
 
-    let reg_a_text = app.active_editor().registers().named[0].text.clone();
+    let reg_a_text = app
+        .active_editor()
+        .with_registers(|r| r.named[0].text.clone());
     assert!(
         reg_a_text.contains("line1"),
         "first dd must land in reg 'a'; got {:?}",
@@ -1475,19 +1469,25 @@ fn register_prefix_single_use_then_next_op_unnamed() {
     );
 
     // Snapshot unnamed register state before second dd.
-    let unnamed_before = app.active_editor().registers().unnamed.text.clone();
+    let unnamed_before = app
+        .active_editor()
+        .with_registers(|r| r.unnamed.text.clone());
 
     // `dd` — delete line2 (now line1) to unnamed register.
     rck(&mut app, &['d', 'd']);
 
-    let unnamed_after = app.active_editor().registers().unnamed.text.clone();
+    let unnamed_after = app
+        .active_editor()
+        .with_registers(|r| r.unnamed.text.clone());
     assert_ne!(
         unnamed_after, unnamed_before,
         "second dd must update unnamed register"
     );
 
     // Register 'a' must be unchanged — still has line1.
-    let reg_a_text2 = app.active_editor().registers().named[0].text.clone();
+    let reg_a_text2 = app
+        .active_editor()
+        .with_registers(|r| r.named[0].text.clone());
     assert_eq!(
         reg_a_text, reg_a_text2,
         "register 'a' must not be overwritten by second dd; got {:?}",

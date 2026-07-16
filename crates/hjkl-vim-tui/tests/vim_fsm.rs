@@ -827,7 +827,10 @@ fn yit_yanks_inner_tag_content() {
     let mut e = editor_with("<b>hello</b>");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "yit");
-    assert_eq!(e.registers().read('"').unwrap().text, "hello");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "hello"
+    );
 }
 
 #[test]
@@ -835,7 +838,10 @@ fn yat_yanks_full_tag_pair() {
     let mut e = editor_with("hi <b>foo</b> bye");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "yat");
-    assert_eq!(e.registers().read('"').unwrap().text, "<b>foo</b>");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "<b>foo</b>"
+    );
 }
 
 #[test]
@@ -845,7 +851,10 @@ fn vit_visually_selects_inner_tag() {
     run_keys(&mut e, "vit");
     assert_eq!(e.vim_mode(), VimMode::Visual);
     run_keys(&mut e, "y");
-    assert_eq!(e.registers().read('"').unwrap().text, "hello");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "hello"
+    );
 }
 
 #[test]
@@ -855,7 +864,10 @@ fn vat_visually_selects_around_tag() {
     run_keys(&mut e, "vat");
     assert_eq!(e.vim_mode(), VimMode::Visual);
     run_keys(&mut e, "y");
-    assert_eq!(e.registers().read('"').unwrap().text, "<b>foo</b>");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "<b>foo</b>"
+    );
 }
 
 // ─── Text-object coverage (d operator, inner + around) ───────────
@@ -1108,7 +1120,10 @@ fn yis_yanks_inner_sentence() {
     let mut e = editor_with("Hello world. Bye.");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "yis");
-    assert_eq!(e.registers().read('"').unwrap().text, "Hello world.");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "Hello world."
+    );
 }
 
 #[test]
@@ -1118,7 +1133,10 @@ fn vis_visually_selects_inner_sentence() {
     run_keys(&mut e, "vis");
     assert_eq!(e.vim_mode(), VimMode::Visual);
     run_keys(&mut e, "y");
-    assert_eq!(e.registers().read('"').unwrap().text, "First.");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "First."
+    );
 }
 
 #[test]
@@ -1137,7 +1155,10 @@ fn yiw_yanks_inner_word() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 1);
     run_keys(&mut e, "yiw");
-    assert_eq!(e.registers().read('"').unwrap().text, "hello");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "hello"
+    );
 }
 
 #[test]
@@ -1147,7 +1168,10 @@ fn viw_selects_inner_word() {
     run_keys(&mut e, "viw");
     assert_eq!(e.vim_mode(), VimMode::Visual);
     run_keys(&mut e, "y");
-    assert_eq!(e.registers().read('"').unwrap().text, "hello");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "hello"
+    );
 }
 
 #[test]
@@ -1163,7 +1187,10 @@ fn yi_double_quote_yanks_inside() {
     let mut e = editor_with("say \"hi there\" then");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "yi\"");
-    assert_eq!(e.registers().read('"').unwrap().text, "hi there");
+    assert_eq!(
+        e.with_registers(|r| r.read('"').unwrap().text.clone()),
+        "hi there"
+    );
 }
 
 #[test]
@@ -1174,7 +1201,7 @@ fn vap_visual_selects_around_paragraph() {
     assert_eq!(e.vim_mode(), VimMode::VisualLine);
     run_keys(&mut e, "y");
     // Linewise yank includes the paragraph rows + trailing blank.
-    let text = e.registers().read('"').unwrap().text.clone();
+    let text = e.with_registers(|r| r.read('"').unwrap().text.clone());
     assert!(text.starts_with("a\nb"));
 }
 
@@ -4203,7 +4230,10 @@ fn named_register_yank_into_a_then_paste_from_a() {
     let mut e = editor_with("hello world\nsecond");
     run_keys(&mut e, "\"ayw");
     // `yw` over "hello world" yanks "hello " (word + trailing space).
-    assert_eq!(e.registers().read('a').unwrap().text, "hello ");
+    assert_eq!(
+        e.with_registers(|r| r.read('a').unwrap().text.clone()),
+        "hello "
+    );
     // Move to second line then paste from "a.
     run_keys(&mut e, "j0\"aP");
     assert_eq!(
@@ -4246,7 +4276,10 @@ fn ctrl_r_in_insert_pastes_named_register() {
     let mut e = editor_with("hello world");
     // Yank "hello " into "a".
     run_keys(&mut e, "\"ayw");
-    assert_eq!(e.registers().read('a').unwrap().text, "hello ");
+    assert_eq!(
+        e.with_registers(|r| r.read('a').unwrap().text.clone()),
+        "hello "
+    );
     // Open a fresh line, enter insert, Ctrl-R a.
     run_keys(&mut e, "o");
     assert_eq!(e.vim_mode(), VimMode::Insert);
@@ -4318,7 +4351,7 @@ fn ctrl_r_multiline_register_pastes_with_newlines() {
     // would append, but lowercase "b" overwrote — ensure we have a
     // multi-line payload by yanking 2 lines linewise via V.
     run_keys(&mut e, "ggVj\"by");
-    let payload = e.registers().read('b').unwrap().text.clone();
+    let payload = e.with_registers(|r| r.read('b').unwrap().text.clone());
     assert!(payload.contains('\n'));
     run_keys(&mut e, "Go");
     hjkl_vim_tui::handle_key(
@@ -4339,15 +4372,18 @@ fn ctrl_r_multiline_register_pastes_with_newlines() {
 fn yank_zero_holds_clipboard_after_delete() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "yw");
-    let yanked = e.registers().read('0').unwrap().text.clone();
+    let yanked = e.with_registers(|r| r.read('0').unwrap().text.clone());
     assert!(!yanked.is_empty());
     // Delete a word; "0 should still hold the original yank.
     run_keys(&mut e, "dw");
-    assert_eq!(e.registers().read('0').unwrap().text, yanked);
+    assert_eq!(
+        e.with_registers(|r| r.read('0').unwrap().text.clone()),
+        yanked
+    );
     // `dw` is a small (sub-line) delete → goes to the small-delete register
     // "-, not the numbered ring, which stays empty.
-    assert!(!e.registers().read('-').unwrap().text.is_empty());
-    assert!(e.registers().read('1').unwrap().text.is_empty());
+    assert!(!e.with_registers(|r| r.read('-').unwrap().text.is_empty()));
+    assert!(e.with_registers(|r| r.read('1').unwrap().text.is_empty()));
 }
 
 #[test]
@@ -4359,9 +4395,9 @@ fn delete_ring_rotates_through_one_through_nine() {
         run_keys(&mut e, "dd");
     }
     // Most recent delete is in "1.
-    let r1 = e.registers().read('1').unwrap().text.clone();
-    let r2 = e.registers().read('2').unwrap().text.clone();
-    let r3 = e.registers().read('3').unwrap().text.clone();
+    let r1 = e.with_registers(|r| r.read('1').unwrap().text.clone());
+    let r2 = e.with_registers(|r| r.read('2').unwrap().text.clone());
+    let r3 = e.with_registers(|r| r.read('3').unwrap().text.clone());
     assert!(!r1.is_empty() && !r2.is_empty() && !r3.is_empty());
     assert_ne!(r1, r2);
     assert_ne!(r2, r3);
@@ -4371,11 +4407,11 @@ fn delete_ring_rotates_through_one_through_nine() {
 fn capital_register_appends_to_lowercase() {
     let mut e = editor_with("foo bar");
     run_keys(&mut e, "\"ayw");
-    let first = e.registers().read('a').unwrap().text.clone();
+    let first = e.with_registers(|r| r.read('a').unwrap().text.clone());
     assert!(first.contains("foo"));
     // Yank again into "A — appends to "a.
     run_keys(&mut e, "w\"Ayw");
-    let combined = e.registers().read('a').unwrap().text.clone();
+    let combined = e.with_registers(|r| r.read('a').unwrap().text.clone());
     assert!(combined.starts_with(&first));
     assert!(combined.contains("bar"));
 }
@@ -4787,7 +4823,7 @@ fn macro_capital_q_appends_to_lowercase_register() {
     run_keys(&mut e, "qAhh<Esc>q");
     // Macros + named registers share storage now: register `a`
     // holds the encoded keystrokes from both recordings.
-    let text = e.registers().read('a').unwrap().text.clone();
+    let text = e.with_registers(|r| r.read('a').unwrap().text.clone());
     assert!(text.contains("ll<Esc>"));
     assert!(text.contains("hh<Esc>"));
 }
@@ -4919,7 +4955,7 @@ fn macro_recorded_text_round_trips_through_register() {
     // slot. `@a` decodes back to inputs and replays.
     let mut e = editor_with("");
     run_keys(&mut e, "qaiX<Esc>q");
-    let text = e.registers().read('a').unwrap().text.clone();
+    let text = e.with_registers(|r| r.read('a').unwrap().text.clone());
     assert!(text.starts_with("iX"));
     // Replay inserts another X at the cursor.
     run_keys(&mut e, "@a");

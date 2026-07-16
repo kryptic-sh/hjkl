@@ -91,7 +91,9 @@ impl App {
             .filename
             .as_deref()
             .map(|p| p.to_string_lossy().into_owned());
-        self.slots[idx].editor.registers_mut().set_filename(fname);
+        self.slots[idx]
+            .editor
+            .with_registers_mut(|r| r.set_filename(fname));
         // Keep the engine's current_buffer_id in sync so `mA`–`mZ` global
         // marks tag new marks with the correct slot id.
         let new_bid = self.slots[idx].buffer_id;

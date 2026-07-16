@@ -117,8 +117,7 @@ fn insert_backspace_deletes_char() {
 fn insert_ctrl_r_pastes_register() {
     // Write "hi" into the 'z' named register directly, then paste via Ctrl-R z.
     let mut e = editor_with("");
-    e.registers_mut()
-        .record_yank("hi".to_string(), false, Some('z'));
+    e.with_registers_mut(|r| r.record_yank("hi".to_string(), false, Some('z')));
     e.enter_insert_i(1);
     // Ctrl-R arms the register wait, then 'z' pastes.
     hjkl_vim::dispatch_input(&mut e, ctrl(Key::Char('r')));
@@ -304,7 +303,7 @@ fn at_digit_plays_numbered_register() {
     let mut e = editor_with("ab");
     // Register `"1` is the head of the delete ring. Seed it with a line-sized
     // delete — small (sub-line) deletes go to `"-`, not the numbered ring.
-    e.registers_mut().record_delete("x".to_string(), true, None);
+    e.with_registers_mut(|r| r.record_delete("x".to_string(), true, None));
     dispatch_keys(&mut e, "@1");
     assert!(
         e.content().starts_with('b'),
@@ -318,8 +317,7 @@ fn at_digit_plays_numbered_register() {
 #[test]
 fn recursive_macro_terminates() {
     let mut e = editor_with("hello");
-    e.registers_mut()
-        .record_yank("@a".to_string(), false, Some('a'));
+    e.with_registers_mut(|r| r.record_yank("@a".to_string(), false, Some('a')));
     dispatch_keys(&mut e, "@a");
     // Reaching here (no stack overflow) is the regression assertion.
 }

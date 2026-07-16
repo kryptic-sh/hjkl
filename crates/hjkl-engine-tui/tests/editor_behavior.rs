@@ -1410,9 +1410,7 @@ fn stop_macro_record_writes_register() {
     assert!(!e.is_recording_macro());
     // Register 'a' should contain "hl".
     let text = e
-        .registers()
-        .read('a')
-        .map(|s| s.text.clone())
+        .with_registers(|r| r.read('a').map(|s| s.text.clone()))
         .unwrap_or_default();
     assert_eq!(
         text, "hl",
@@ -2019,10 +2017,9 @@ fn yank_to_eol_fills_register() {
     // Yank does not change mode.
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
     // Unnamed register holds the yanked text (col 6 is 'w' in "world").
-    assert!(
-        e.registers().unnamed.text.starts_with("world")
-            || e.registers().unnamed.text.contains("world")
-    );
+    assert!(e.with_registers(
+        |r| r.unnamed.text.starts_with("world") || r.unnamed.text.contains("world")
+    ));
 }
 
 #[test]

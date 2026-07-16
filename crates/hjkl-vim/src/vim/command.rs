@@ -563,18 +563,15 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     // before reading it below (audit-r2 fix 4) — otherwise this reads
     // whatever the internal slot last had from an in-editor `"+y`.
     sync_clipboard_register_for(ed, selector);
-    let (yank, linewise) = {
-        let regs = ed.registers();
-        match selector.and_then(|c| regs.read(c)) {
-            Some(slot) => (slot.text.clone(), slot.linewise),
-            // Read both fields from the unnamed slot rather than mixing the
-            // slot's text with `vim.yank_linewise`. The cached vim flag is
-            // per-editor, so a register imported from another editor (e.g.
-            // cross-buffer yank/paste) carried the wrong linewise without
-            // this — pasting a linewise yank inserted at the char cursor.
-            None => (regs.unnamed.text.clone(), regs.unnamed.linewise),
-        }
-    };
+    let (yank, linewise) = ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
+        Some(slot) => (slot.text.clone(), slot.linewise),
+        // Read both fields from the unnamed slot rather than mixing the
+        // slot's text with `vim.yank_linewise`. The cached vim flag is
+        // per-editor, so a register imported from another editor (e.g.
+        // cross-buffer yank/paste) carried the wrong linewise without
+        // this — pasting a linewise yank inserted at the char cursor.
+        None => (regs.unnamed.text.clone(), regs.unnamed.linewise),
+    });
     // Vim `:h '[` / `:h ']`: after paste `[` = first inserted char of
     // the final paste, `]` = last inserted char of the final paste.
     // We track (lo, hi) across iterations; the last value wins.
@@ -716,15 +713,13 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
     // `"+p`/`"*p` in visual mode: same live-clipboard refresh as normal-mode
     // paste (audit-r2 fix 4).
     sync_clipboard_register_for(ed, selector);
-    let (reg_text, reg_linewise) = {
-        let regs = ed.registers();
-        match selector.and_then(|c| regs.read(c)) {
+    let (reg_text, reg_linewise) =
+        ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
             Some(slot) => (slot.text.clone(), slot.linewise),
             None => (regs.unnamed.text.clone(), regs.unnamed.linewise),
-        }
-    };
+        });
     // For `P`, snapshot the unnamed register so we can restore it afterwards.
-    let saved_unnamed = before.then(|| ed.registers().unnamed.clone());
+    let saved_unnamed = before.then(|| ed.with_registers(|regs| regs.unnamed.clone()));
 
     let mode = vim(ed).mode;
     ed.push_undo();
@@ -797,7 +792,7 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
 
     // `P` preserves the source register; restore the snapshot.
     if let Some(slot) = saved_unnamed {
-        ed.registers_mut().unnamed = slot;
+        ed.with_registers_mut(|regs| regs.unnamed = slot);
     }
     vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));

@@ -65,9 +65,7 @@ fn q1_register_readable_directly_after_recording() {
     press_keys(&mut e, "q1xq");
 
     let text = e
-        .registers()
-        .read('1')
-        .map(|slot| slot.text.clone())
+        .with_registers(|r| r.read('1').map(|slot| slot.text.clone()))
         .unwrap_or_default();
     assert!(
         !text.is_empty(),

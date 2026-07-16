@@ -563,8 +563,7 @@ impl App {
                 self.slots[idx].git_repo_present = None; // re-probe for new path
                 self.slots[idx]
                     .editor
-                    .registers_mut()
-                    .set_filename(Some(name.clone()));
+                    .with_registers_mut(|r| r.set_filename(Some(name.clone())));
                 self.bus.info(format!("\"{}\" [Not edited]", p.display()));
             }
             ExEffect::Cwd(new_cwd) => {
@@ -626,9 +625,7 @@ impl App {
         let idx = self.focused_slot_idx();
         let slot_text = self.slots[idx]
             .editor
-            .registers()
-            .read(reg)
-            .map(|s| s.text.clone())
+            .with_registers(|r| r.read(reg).map(|s| s.text.clone()))
             .unwrap_or_default();
         if slot_text.is_empty() {
             self.bus.warn(format!("E: register \"{reg}\" is empty"));
@@ -1143,10 +1140,9 @@ impl App {
                         self.slots[idx].filename = Some(p.clone());
                         self.slots[idx].git_repo_present = None; // re-probe for new path
                         // Keep `"%` in sync when the buffer gets a (new) filename.
-                        self.slots[idx]
-                            .editor
-                            .registers_mut()
-                            .set_filename(Some(p.to_string_lossy().into_owned()));
+                        self.slots[idx].editor.with_registers_mut(|r| {
+                            r.set_filename(Some(p.to_string_lossy().into_owned()))
+                        });
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
                         // Delete the swap file on successful save (#185).

@@ -2006,7 +2006,7 @@ impl App {
                 .filename
                 .as_deref()
                 .map(|p| p.to_string_lossy().into_owned());
-            slot.editor.registers_mut().set_filename(fname);
+            slot.editor.with_registers_mut(|r| r.set_filename(fname));
         }
 
         // Apply readonly after the slot is built — build_slot always uses

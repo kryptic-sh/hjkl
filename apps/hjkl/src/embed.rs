@@ -324,13 +324,15 @@ fn dispatch(
                     "hjkl_get_register: reg must be a single character",
                 );
             }
-            match editor.registers().read(c) {
+            match editor
+                .with_registers(|r| r.read(c).map(|slot| (slot.text.clone(), slot.linewise)))
+            {
                 None => success(id, Value::Null),
-                Some(slot) => success(
+                Some((text, linewise)) => success(
                     id,
                     json!({
-                        "text": slot.text,
-                        "linewise": slot.linewise,
+                        "text": text,
+                        "linewise": linewise,
                     }),
                 ),
             }

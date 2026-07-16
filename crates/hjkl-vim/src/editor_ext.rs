@@ -2170,9 +2170,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             // where the previous recording left off.
             let lower = reg.to_ascii_lowercase();
             let text = self
-                .registers()
-                .read(lower)
-                .map(|s| s.text.clone())
+                .with_registers(|r| r.read(lower).map(|s| s.text.clone()))
                 .unwrap_or_default();
             crate::vim_state::vim_mut(self).recording_keys =
                 hjkl_engine::input::decode_macro(&text);
@@ -2207,12 +2205,9 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         } else {
             reg.to_ascii_lowercase()
         };
-        let text = {
-            let regs = self.registers();
-            match regs.read(resolved) {
-                Some(slot) if !slot.text.is_empty() => slot.text.clone(),
-                _ => return vec![],
-            }
+        let text = match self.with_registers(|regs| regs.read(resolved).cloned()) {
+            Some(slot) if !slot.text.is_empty() => slot.text,
+            _ => return vec![],
         };
         let keys = hjkl_engine::input::decode_macro(&text);
         crate::vim_state::vim_mut(self).last_macro = Some(resolved);

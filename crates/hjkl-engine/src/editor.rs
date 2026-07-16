@@ -1751,16 +1751,24 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.registers.lock().unwrap().unnamed.text.clone()
     }
 
-    /// Borrow the full register bank — `"`, `"0`–`"9`, `"a`–`"z`.
-    pub fn registers(&self) -> std::sync::MutexGuard<'_, crate::registers::Registers> {
-        self.registers.lock().unwrap()
+    /// Run `f` with shared read access to the register bank — `"`,
+    /// `"0`–`"9`, `"a`–`"z`. The lock is scoped to the closure — the guard
+    /// can never escape into caller code, so it can't be held across
+    /// unrelated editor calls (re-entrancy/deadlock footgun). Never call
+    /// back into other `ed.` methods that might lock the register bank
+    /// from inside `f` — extract owned data first if you need to.
+    pub fn with_registers<R>(&self, f: impl FnOnce(&crate::registers::Registers) -> R) -> R {
+        f(&self.registers.lock().unwrap())
     }
 
-    /// Mutably borrow the full register bank. Returns a guard so callers
-    /// can mutate in place. Signature changed from `&mut self` to `&self`
-    /// because the interior mutability is now via `Arc<Mutex<>>`.
-    pub fn registers_mut(&self) -> std::sync::MutexGuard<'_, crate::registers::Registers> {
-        self.registers.lock().unwrap()
+    /// Mutable counterpart of [`Editor::with_registers`]. Same
+    /// closure-scoping invariant: never re-enter the editor from inside
+    /// `f`, or the mutex will deadlock.
+    pub fn with_registers_mut<R>(
+        &self,
+        f: impl FnOnce(&mut crate::registers::Registers) -> R,
+    ) -> R {
+        f(&mut self.registers.lock().unwrap())
     }
 
     /// Point this editor at a shared register bank. All editors in the
@@ -5983,12 +5991,14 @@ mod shared_registers_tests {
         let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
         b.set_registers_arc(shared.clone());
         // Write to editor A's unnamed register
-        a.registers_mut().unnamed = crate::registers::Slot {
-            text: "hello".to_string(),
-            linewise: false,
-        };
+        a.with_registers_mut(|r| {
+            r.unnamed = crate::registers::Slot {
+                text: "hello".to_string(),
+                linewise: false,
+            };
+        });
         // Read from editor B — same bank, no copy needed
-        assert_eq!(b.registers().unnamed.text, "hello");
+        assert_eq!(b.with_registers(|r| r.unnamed.text.clone()), "hello");
     }
 
     /// #279 slice 4: the `linewise` flag on a `Slot` must travel with the
@@ -6007,17 +6017,45 @@ mod shared_registers_tests {
         let mut b = Editor::new(View::new(), DefaultHost::default(), Options::default());
         b.set_registers_arc(shared.clone());
         // Write a LINEWISE yank to editor A's unnamed register.
-        a.registers_mut().unnamed = crate::registers::Slot {
-            text: "hello\n".to_string(),
-            linewise: true,
-        };
+        a.with_registers_mut(|r| {
+            r.unnamed = crate::registers::Slot {
+                text: "hello\n".to_string(),
+                linewise: true,
+            };
+        });
         // Read from editor B — same bank, so the linewise bit must be
         // visible too, not just the text.
         assert!(
-            b.registers().unnamed.linewise,
+            b.with_registers(|r| r.unnamed.linewise),
             "editor B should see editor A's linewise flag through the \
              shared register Arc"
         );
+    }
+
+    /// `with_registers` / `with_registers_mut` are the only sanctioned way
+    /// to touch the register bank from outside `editor.rs` (audit item
+    /// B4) — the lock must stay scoped to the closure, and the closure's
+    /// return value must plumb through untouched so callers can extract
+    /// owned data without holding a guard.
+    #[test]
+    fn with_registers_round_trip_and_return_value_plumbs_through() {
+        let ed = Editor::new(View::new(), DefaultHost::default(), Options::default());
+
+        // Write path: with_registers_mut mutates in place and returns a
+        // value derived from the mutation.
+        let wrote = ed.with_registers_mut(|r| {
+            r.unnamed = crate::registers::Slot {
+                text: "round-trip".to_string(),
+                linewise: false,
+            };
+            r.unnamed.text.len()
+        });
+        assert_eq!(wrote, "round-trip".len());
+
+        // Read path: with_registers sees the write and its return value
+        // is the owned data extracted inside the closure.
+        let read = ed.with_registers(|r| r.unnamed.text.clone());
+        assert_eq!(read, "round-trip");
     }
 }
 

@@ -440,9 +440,7 @@ fn file_handler<H: Host>(
         // No arg: surface filename + readonly info. Dirty state lives in the
         // app's slot (not the engine) so only readonly is checked here.
         let filename = editor
-            .registers()
-            .read('%')
-            .map(|s| s.text.clone())
+            .with_registers(|r| r.read('%').map(|s| s.text.clone()))
             .unwrap_or_else(|| "[No Name]".into());
         let ro_flag = if editor.is_readonly() { " [RO]" } else { "" };
         Some(ExEffect::Info(format!("\"{filename}\"{ro_flag}")))
