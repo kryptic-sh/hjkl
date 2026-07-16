@@ -393,12 +393,45 @@ fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 }
 
+/// True when `a` and `b` resolve to the same existing file — e.g. a pure
+/// case-change rename on a case-insensitive filesystem, where the destination
+/// "exists" but IS the source. Both sides must exist for a `true`.
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+/// Pick a non-existing temp sibling path next to `from` for the two-step
+/// rename used to break same-batch rename cycles (swap `a↔b`).
+fn temp_sibling_path(from: &Path) -> PathBuf {
+    let parent = from.parent().unwrap_or_else(|| Path::new("."));
+    let base = from
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let pid = std::process::id();
+    (0u64..)
+        .map(|n| parent.join(format!(".hjkl-rename-{pid}-{n}-{base}")))
+        .find(|cand| cand.symlink_metadata().is_err())
+        .expect("some counter yields a fresh temp name")
+}
+
 /// Apply reconcile ops to disk. Deletions go to the trash (recoverable);
 /// a `CreateFile` whose basename matches a pending trashed entry is **restored**
 /// from trash instead of created empty (this is how `dd` then `p` becomes a
 /// move). Returns the paths of genuinely newly-created FILES (to open), the
 /// concrete [`AppliedOp`] journal entries (for undo/redo), and a list of error
 /// strings from non-fatal op failures (best-effort).
+///
+/// A `Rename` whose destination already exists (and is not the same file, so
+/// case-change renames still work) is **refused** with an error — never a
+/// silent clobber — unless a *later op in the same batch* vacates the
+/// destination (name swap `a↔b`, or rename-onto-trashed). Those are routed
+/// through a unique temp sibling name: `from → temp` now, `temp → to` after
+/// the batch. The temp hop is journaled as two `Renamed` entries so undo/redo
+/// replay it without clobbering.
 ///
 /// # Arguments
 /// - `ops`: output of [`reconcile`], already in renames→trashes→creates order.
@@ -413,12 +446,61 @@ pub(crate) fn apply_ops(
     let mut applied: Vec<AppliedOp> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
+    // Paths this batch will vacate later (rename sources + trash targets).
+    // A rename whose occupied destination is in this set is a same-batch
+    // swap/cycle — parked at a temp name and finalized after the loop.
+    let will_vacate: HashSet<&Path> = ops
+        .iter()
+        .filter_map(|op| match op {
+            FsOp::Rename { from, .. } => Some(from.as_path()),
+            FsOp::Trash(p) => Some(p.as_path()),
+            _ => None,
+        })
+        .collect();
+    // Parked temp hops: (original from, temp holding it, final destination).
+    let mut deferred: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+
     for op in ops {
         match op {
             FsOp::Rename { from, to } => {
                 // Skip if the source is already gone AND the dest already
                 // exists — an ancestor directory rename already moved it.
                 if !from.exists() && to.exists() {
+                    continue;
+                }
+                // Occupied destination (`symlink_metadata` also catches a
+                // dangling symlink squatting on the name). A pure case-change
+                // rename resolves to the same file — let it through.
+                if to.symlink_metadata().is_ok() && !is_same_file(from, to) {
+                    if will_vacate.contains(to.as_path()) {
+                        // Same-batch swap/cycle: a later op moves `to` away.
+                        // Park `from` under a temp sibling; finish after the
+                        // batch. Journal the hop so undo replays it exactly.
+                        let temp = temp_sibling_path(from);
+                        let parked = if from.is_dir() {
+                            move_dir(from, &temp)
+                        } else {
+                            move_file(from, &temp)
+                        };
+                        match parked {
+                            Ok(()) => {
+                                applied.push(AppliedOp::Renamed {
+                                    from: from.clone(),
+                                    to: temp.clone(),
+                                });
+                                deferred.push((from.clone(), temp, to.clone()));
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "rename {from:?} → {to:?}: park at {temp:?} failed: {e}"
+                                ));
+                            }
+                        }
+                    } else {
+                        errors.push(format!(
+                            "rename {from:?} → {to:?}: destination exists — refusing to overwrite"
+                        ));
+                    }
                     continue;
                 }
                 if let Some(parent) = to.parent()
@@ -569,6 +651,54 @@ pub(crate) fn apply_ops(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Finalize parked temp hops: the vacating op has run, so `to` should be
+    // free now. If it is not (the vacating op failed), move the parked file
+    // back to its original name — never clobber, never leave a temp behind.
+    for (orig_from, temp, to) in deferred {
+        if to.symlink_metadata().is_ok() {
+            errors.push(format!(
+                "rename {orig_from:?} → {to:?}: destination still exists — keeping original name"
+            ));
+            let back = if temp.is_dir() {
+                move_dir(&temp, &orig_from)
+            } else {
+                move_file(&temp, &orig_from)
+            };
+            match back {
+                Ok(()) => {
+                    // Drop the park journal entry — the disk is back to where
+                    // it started, so undo must not replay the hop.
+                    if let Some(pos) = applied.iter().rposition(|a| {
+                        matches!(a, AppliedOp::Renamed { from, to }
+                            if from == &orig_from && to == &temp)
+                    }) {
+                        applied.remove(pos);
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("restore {temp:?} → {orig_from:?}: {e}"));
+                }
+            }
+            continue;
+        }
+        let result = if temp.is_dir() {
+            move_dir(&temp, &to)
+        } else {
+            move_file(&temp, &to)
+        };
+        match result {
+            Ok(()) => {
+                applied.push(AppliedOp::Renamed {
+                    from: temp.clone(),
+                    to: to.clone(),
+                });
+            }
+            Err(e) => {
+                errors.push(format!("rename {temp:?} → {to:?}: {e}"));
             }
         }
     }
@@ -1650,6 +1780,168 @@ mod tests {
             std::fs::read(&bar).unwrap(),
             b"hi",
             "content must be preserved"
+        );
+    }
+
+    /// A rename whose destination is an existing, different file must be
+    /// REFUSED (error reported, nothing journaled) — never a silent clobber.
+    /// Pre-fix this destroyed the target's content unrecoverably.
+    #[test]
+    fn apply_rename_onto_existing_file_is_refused() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+        let a = td.path().join("a.txt");
+        let b = td.path().join("b.txt");
+        std::fs::write(&a, b"AAA").unwrap();
+        std::fs::write(&b, b"BBB").unwrap();
+        let ops = vec![FsOp::Rename {
+            from: a.clone(),
+            to: b.clone(),
+        }];
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        assert!(created.is_empty());
+        assert!(
+            applied.is_empty(),
+            "refused rename must journal nothing, got {applied:?}"
+        );
+        assert_eq!(
+            errors.len(),
+            1,
+            "refusal must be reported to the user, got {errors:?}"
+        );
+        assert_eq!(std::fs::read(&a).unwrap(), b"AAA", "source must be intact");
+        assert_eq!(
+            std::fs::read(&b).unwrap(),
+            b"BBB",
+            "target content must NOT be clobbered"
+        );
+    }
+
+    /// Swapping two filenames in one explorer edit emits `Rename a→b` +
+    /// `Rename b→a` in one batch. Both must succeed via a temp hop, with each
+    /// file's CONTENT following its new name. Pre-fix the first rename
+    /// clobbered b, then the second propagated a's content into both names —
+    /// b's content was permanently lost.
+    #[test]
+    fn apply_swap_two_files_in_one_batch() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+        let a = td.path().join("a.txt");
+        let b = td.path().join("b.txt");
+        std::fs::write(&a, b"AAA").unwrap();
+        std::fs::write(&b, b"BBB").unwrap();
+        let ops = vec![
+            FsOp::Rename {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            FsOp::Rename {
+                from: b.clone(),
+                to: a.clone(),
+            },
+        ];
+        let mut trashed = Vec::new();
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty(), "swap must succeed, got {errors:?}");
+        assert!(created.is_empty());
+        assert_eq!(
+            std::fs::read(&a).unwrap(),
+            b"BBB",
+            "a must now hold b's old content"
+        );
+        assert_eq!(
+            std::fs::read(&b).unwrap(),
+            b"AAA",
+            "b must now hold a's old content"
+        );
+        // No stray temp files left behind.
+        let names: Vec<String> = std::fs::read_dir(td.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|n| n == "a.txt" || n == "b.txt"),
+            "no temp files may remain, got {names:?}"
+        );
+        // Undo must restore the original contents.
+        let (_redo, errs) = revert_ops(&applied, &mut trashed);
+        assert!(errs.is_empty(), "undo of swap: {errs:?}");
+        assert_eq!(std::fs::read(&a).unwrap(), b"AAA", "undo restores a");
+        assert_eq!(std::fs::read(&b).unwrap(), b"BBB", "undo restores b");
+    }
+
+    /// Rename `a→b` while `b` is trashed in the same batch (user deleted b's
+    /// line and renamed a to b). Reconcile orders renames before trashes, so
+    /// the rename's target is still occupied — it must defer through the temp
+    /// hop until the Trash vacates `b`, not clobber and not refuse.
+    #[test]
+    fn apply_rename_onto_trashed_target_in_one_batch() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+        let a = td.path().join("a.txt");
+        let b = td.path().join("b.txt");
+        std::fs::write(&a, b"AAA").unwrap();
+        std::fs::write(&b, b"BBB").unwrap();
+        let ops = vec![
+            FsOp::Rename {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            FsOp::Trash(b.clone()),
+        ];
+        let mut trashed = Vec::new();
+        let (_, _, errors) = apply_ops(&ops, &mut trashed);
+        assert!(errors.is_empty(), "must succeed, got {errors:?}");
+        assert!(!a.exists(), "a was renamed away");
+        assert_eq!(
+            std::fs::read(&b).unwrap(),
+            b"AAA",
+            "b must hold a's content after the trash vacated it"
+        );
+        assert_eq!(trashed.len(), 1, "old b must be in the trash");
+        assert_eq!(
+            std::fs::read(&trashed[0].1).unwrap(),
+            b"BBB",
+            "old b content must be recoverable from trash"
+        );
+    }
+
+    /// The ancestor-rename skip must survive the clobber guard: when a dir
+    /// rename already moved a child, the child's own Rename op (source gone,
+    /// dest present) is silently skipped — not refused, not an error.
+    #[test]
+    fn apply_ancestor_rename_skip_still_works() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+        let olddir = td.path().join("olddir");
+        std::fs::create_dir_all(&olddir).unwrap();
+        std::fs::write(olddir.join("child.txt"), b"C").unwrap();
+        let newdir = td.path().join("newdir");
+        let ops = vec![
+            FsOp::Rename {
+                from: olddir.clone(),
+                to: newdir.clone(),
+            },
+            FsOp::Rename {
+                from: olddir.join("child.txt"),
+                to: newdir.join("child.txt"),
+            },
+        ];
+        let (_, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        assert!(
+            errors.is_empty(),
+            "ancestor skip must not error: {errors:?}"
+        );
+        assert_eq!(
+            applied.len(),
+            1,
+            "only the dir rename is journaled (child op skipped), got {applied:?}"
+        );
+        assert_eq!(
+            std::fs::read(newdir.join("child.txt")).unwrap(),
+            b"C",
+            "child moved with its dir"
         );
     }
 
