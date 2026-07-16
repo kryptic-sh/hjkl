@@ -2114,12 +2114,32 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // hidden row (inside the fold body). Vim snaps the cursor to the fold's
         // first line (start_row). Do it here so every call site — keyboard `za`/
         // `zc` AND the gutter-click path — converges on the same behaviour.
-        let cursor_row = buf_cursor_row(&self.buffer);
-        if self.buffer.is_row_hidden(cursor_row)
-            && let Some(fold) = self.buffer.fold_at_row(cursor_row)
-        {
-            let snap_row = fold.start_row;
-            buf_set_cursor_rc(&mut self.buffer, snap_row, 0);
+        //
+        // audit-r2 fix 3(b): with NESTED folds (e.g. `zM` closing every fold at
+        // once), the innermost fold's start_row can itself be hidden by an
+        // OUTER closed fold, so a single snap can land the cursor on another
+        // hidden row. Repeatedly snap to the start_row of whichever fold hides
+        // the CURRENT candidate row, always picking the fold with the smallest
+        // start_row among those that hide it (the outermost one covering it) —
+        // each step strictly decreases the row, so this is naturally bounded
+        // by the row count; `max_iters` is just a defensive backstop.
+        let mut cursor_row = buf_cursor_row(&self.buffer);
+        let mut snapped = false;
+        let max_iters = self.buffer.folds().len() + 1;
+        for _ in 0..max_iters {
+            let folds = self.buffer.folds();
+            let Some(fold) = folds
+                .iter()
+                .filter(|f| f.hides(cursor_row))
+                .min_by_key(|f| f.start_row)
+            else {
+                break;
+            };
+            cursor_row = fold.start_row;
+            snapped = true;
+        }
+        if snapped {
+            buf_set_cursor_rc(&mut self.buffer, cursor_row, 0);
             self.sticky_col = Some(0);
         }
     }
@@ -4160,6 +4180,25 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if col > max_col {
             buf_set_cursor_rc(&mut self.buffer, row, max_col);
             self.push_buffer_cursor_to_textarea();
+        }
+        // audit-r2 fix 3(a): vim's 'foldopen' option includes "undo" — an
+        // undo/redo that lands the cursor inside a closed fold's body must
+        // reveal it, not strand the cursor on a hidden row with no way to
+        // see what it's sitting on. `reveal_row` already opens every fold
+        // (at any nesting depth) that hides a row in one pass; loop it
+        // defensively — bounded by the fold count — so a row that's
+        // somehow still hidden after one reveal (e.g. a future change to
+        // `reveal_row`'s semantics) keeps getting opened rather than
+        // silently left stranded.
+        let row = buf_cursor_row(&self.buffer);
+        let max_iters = self.buffer.folds().len() + 1;
+        for _ in 0..max_iters {
+            if !self.buffer.is_row_hidden(row) {
+                break;
+            }
+            if !self.buffer.reveal_row(row) {
+                break;
+            }
         }
     }
 
