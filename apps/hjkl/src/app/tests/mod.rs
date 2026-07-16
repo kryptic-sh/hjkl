@@ -583,6 +583,7 @@ pub mod prompt;
 pub mod quickfix;
 pub mod render_recording;
 pub mod scroll_anim;
+pub mod slot_view_handle;
 pub mod splits_windows;
 pub mod syntax;
 pub mod visual;
