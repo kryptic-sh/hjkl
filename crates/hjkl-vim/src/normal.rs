@@ -248,13 +248,13 @@ pub fn step_normal<H: Host>(
                 // row's own EOL instead, so the top row's insertion column
                 // is that row's own current length rather than a fixed
                 // `right + 1`.
-                let (top, bot, _left, right) = ed.visual_block_bounds();
+                let (top, bot, left, right) = ed.visual_block_bounds();
                 let col = if ed.block_to_eol() {
                     ed.line_char_count(top)
                 } else {
                     right + 1
                 };
-                ed.visual_block_append_at_right(top, bot, col);
+                ed.visual_block_append_at_right(top, bot, col, left);
                 return true;
             }
             _ => {}

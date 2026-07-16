@@ -614,7 +614,11 @@ pub trait VimEditorExt {
     fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize);
 
     /// VisualBlock `A` — enter Insert at the right edge of the block.
-    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize);
+    /// `col` is the append/typed column (one past the block's right edge,
+    /// or the ragged `$` column); `left` is the block's own left edge,
+    /// where the cursor lands on Esc (verified against real nvim — `A`'s
+    /// post-Esc cursor is NOT `col` on a block wider than one column).
+    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize, left: usize);
 
     /// Execute a motion, pushing to the jumplist for big jumps and updating the
     /// sticky column.
@@ -1681,11 +1685,20 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 bot,
                 col,
                 pad: false,
+                // `I`'s insertion point already IS the block's left edge —
+                // but `leave_insert_to_normal_bridge` unconditionally steps
+                // the cursor back one column after Esc (vim's generic
+                // leave-insert adjustment), so store one PAST the target
+                // and let that step-back land exactly on `col`. Verified
+                // against real nvim at a non-zero left edge (the only
+                // existing case started at col 0, where the step-back's
+                // `col > 0` guard happened to no-op and masked this).
+                cursor_col: col + 1,
             },
         );
     }
 
-    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
+    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize, left: usize) {
         // vim `v_b_A`: pad the top row to `col` with spaces before the
         // cursor lands there, same as `replicate_block_text` does for
         // every other row on Esc. Without this, `jump_cursor` clamps
@@ -1717,6 +1730,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 bot,
                 col,
                 pad: true,
+                // Same "one past the target, let the generic Esc step-back
+                // land exactly there" convention as `visual_block_insert_
+                // at_left` — see its comment.
+                cursor_col: left + 1,
             },
         );
     }

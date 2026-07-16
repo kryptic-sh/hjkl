@@ -426,11 +426,19 @@ pub enum InsertReason {
     /// so the appended text still lines up (`pad: true`); `I` skips rows
     /// that don't reach `col` entirely — no padding, no insert on that
     /// row (`pad: false`).
+    ///
+    /// `cursor_col` is where the cursor lands on Esc — the block's LEFT
+    /// edge for both `I` and `A` (verified against real nvim: `A`'s
+    /// cursor does NOT land at the append/typed position, `col`, once
+    /// the block is more than one column wide). For `I`, `cursor_col ==
+    /// col` (its insertion point already IS the left edge); for `A` they
+    /// differ whenever the block spans more than one column.
     BlockEdge {
         top: usize,
         bot: usize,
         col: usize,
         pad: bool,
+        cursor_col: usize,
     },
     /// `c` from VisualBlock: block content deleted, then user types
     /// replacement text replicated across all block rows on Esc. Cursor

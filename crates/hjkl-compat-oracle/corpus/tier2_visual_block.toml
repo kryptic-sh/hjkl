@@ -62,3 +62,31 @@ initial_cursor = [0, 0]
 keys = "<C-v>jlcZZ<Esc>"
 expected_buffer = "ZZo\nZZr\nbaz\n"
 expected_cursor = [0, 1]
+
+# ─── Blockwise append with a ragged short line (G5) ──────────────────────────
+
+# `<C-v>jjllA` selects a 3-row, 3-col block; row 1 ("ab") is shorter than the
+# block's right edge and must be padded with spaces up to the append column
+# before the typed text lands, rather than being skipped (that's `I`'s rule,
+# not `A`'s — see `:h v_b_A` / `replicate_block_text`'s `pad` doc).
+[[cases]]
+name = "visual_block_A_pads_ragged_short_line"
+initial_buffer = "abcdef\nab\nabcdef\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjllAX<Esc>"
+expected_buffer = "abcXdef\nab X\nabcXdef\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `I` at a non-zero left edge also lands the cursor on that edge — the
+# existing `visual_block_j_I_insert_before_block` case starts at col 0,
+# which happens to mask an off-by-one in the generic Esc step-back
+# interaction (see `visual_block_insert_at_left`'s doc comment).
+[[cases]]
+name = "visual_block_I_nonzero_left_edge"
+initial_buffer = "foobar\nfoobar\n"
+initial_cursor = [0, 0]
+keys = "0ll<C-v>jIXX<Esc>"
+expected_buffer = "foXXobar\nfoXXobar\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"

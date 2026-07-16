@@ -257,15 +257,30 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         }
     }
 
-    if let InsertReason::BlockEdge { top, bot, col, pad } = session.reason {
+    if let InsertReason::BlockEdge {
+        top,
+        bot,
+        col,
+        pad,
+        cursor_col,
+    } = session.reason
+    {
         // `I` / `A` from VisualBlock: replicate text across rows; cursor
-        // stays at the block-start column (vim leaves cursor there).
+        // stays at the block's LEFT column (vim leaves cursor there) —
+        // NOT `col`, which for `A` is the append/typed column, one past
+        // the block's right edge on a block wider than one column.
         // Ragged only ever applies to `A` (`pad == true`) — `I` is always
         // anchored at the block's LEFT column, unaffected by `$`.
+        //
+        // `cursor_col` is set to left-edge + 1 by both construction sites
+        // (see their doc comments) because `leave_insert_to_normal_bridge`
+        // unconditionally steps the cursor back one column right after
+        // this returns — that step-back is what actually lands on the
+        // left edge.
         let to_eol = pad && vim(ed).block_to_eol;
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
             replicate_block_text(ed, &inserted, top, bot, col, pad, to_eol);
-            buf_set_cursor_rc(ed.buffer_mut(), top, col);
+            buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
             ed.push_buffer_cursor_to_textarea();
         }
         return;
