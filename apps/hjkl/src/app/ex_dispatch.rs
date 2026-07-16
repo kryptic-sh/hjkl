@@ -507,6 +507,8 @@ impl App {
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
+                    self.lsp_notify_change_active(&edits);
+                    self.rebase_sibling_cursors(&edits);
                     self.recompute_and_install();
                 }
                 if count == 0 {

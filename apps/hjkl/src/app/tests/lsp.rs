@@ -840,6 +840,39 @@ fn notify_change_skipped_when_dirty_gen_unchanged() {
     );
 }
 
+/// Regression: `:s/foo/bar/` on an LSP-attached buffer must notify the
+/// server via `textDocument/didChange` (through `lsp_notify_change_active`),
+/// same as every other engine-mutation path. Before the fix, the
+/// `ExEffect::Substituted` handler drained the ContentEdit batch into the
+/// syntax layer but never called `lsp_notify_change_active`, so the edits
+/// were lost from the log without ever reaching the server — the server's
+/// document silently desynced and stayed that way (a later full-sync
+/// wouldn't help, but the *next* incremental edit would apply against a
+/// stale base and corrupt the server's copy permanently).
+#[test]
+fn substitute_notifies_lsp() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+    app.active_mut().filename = Some(tmp_path("hjkl_substitute_lsp.rs"));
+    seed_buffer(&mut app, "foo bar");
+    // Precondition: no didChange sent yet.
+    assert_eq!(app.active().last_lsp_dirty_gen, None);
+
+    app.dispatch_ex("s/foo/baz/");
+
+    let dg = app.active_editor().buffer().dirty_gen();
+    assert_eq!(
+        app.active().last_lsp_dirty_gen,
+        Some(dg),
+        ":s must drive lsp_notify_change_active so the server's document \
+        stays in sync with the buffer"
+    );
+
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
+}
+
 // ── Phase 3: goto + hover tests ────────────────────────────────────────────
 
 #[test]
