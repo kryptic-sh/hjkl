@@ -48,7 +48,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | [[/]] / [] / ][               | 4     | tier1.toml                                                |
 | \| (goto column)              | 2     | tier1.toml                                                |
 | { / } (paragraph)             | 2     | tier2_paragraph_word.toml                                 |
-| ( / ) (sentence)              | —     | (not oracled — sentence motion tested via text objects)   |
+| ( / ) (sentence)              | 11    | tier2_sentence.toml                                       |
 | H (viewport top)              | 1     | tier2_gaps.toml                                           |
 | M (viewport middle)           | 2     | tier2_viewport_bounds.toml                                |
 | L (viewport bottom)           | 3     | tier2_viewport_bounds.toml                                |

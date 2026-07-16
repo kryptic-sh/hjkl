@@ -39,116 +39,166 @@ pub(crate) fn text_object_range<H: hjkl_engine::types::Host>(
         }
     }
 }
+/// `.` / `?` / `!` — vim sentence terminators (`:h sentence`).
+fn is_sentence_terminator(c: char) -> bool {
+    matches!(c, '.' | '?' | '!')
+}
+
+/// Closing characters vim allows between a terminator and the trailing
+/// whitespace that completes a sentence boundary (`:h sentence`): "Any
+/// number of closing ')', ']', '"' and ''' characters may appear after
+/// the '.', '!' or '?' before the spaces, tabs or end of line."
+fn is_sentence_closing(c: char) -> bool {
+    matches!(c, ')' | ']' | '"' | '\'')
+}
+
 /// `(` / `)` — walk to the next sentence boundary in `forward` direction.
 /// Returns `(row, col)` of the boundary's first non-whitespace cell, or
 /// `None` when already at the buffer's edge in that direction.
+///
+/// Implements vim's sentence rules (`:h sentence`): a sentence ends at a
+/// terminator (`.`/`?`/`!`), optionally followed by closing punctuation
+/// (`)`/`]`/`"`/`'`), then whitespace or end-of-line. A blank line is
+/// *also* a sentence (and paragraph) boundary, independent of
+/// punctuation — moving into or out of a run of blank lines is itself a
+/// stop. When `)` finds no next sentence, it lands on the last character
+/// of the buffer (a no-op if already there or past it).
 pub(crate) fn sentence_boundary<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
-    let n_lines = rope.len_lines();
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return None;
+    }
+    let lines: Vec<Vec<char>> = (0..raw_n_lines)
+        .map(|r| rope_line_to_str(&rope, r).chars().collect())
+        .collect();
+    // Skip vim's single phantom trailing empty row — ropey's len_lines()
+    // always synthesizes one extra empty final "line" when the buffer
+    // text ends in `\n` (see hjkl_engine::motions::move_bottom / the
+    // content_row_count clamp it shares with every vertical motion). A
+    // genuinely empty *real* last line (e.g. "One.\n\n") is left alone.
+    let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+        raw_n_lines - 1
+    } else {
+        raw_n_lines
+    };
     if n_lines == 0 {
         return None;
     }
-    // Per-line char counts (excluding trailing \n) for pos↔idx conversion.
-    let line_lens: Vec<usize> = (0..n_lines)
-        .map(|r| rope_line_to_str(&rope, r).chars().count())
-        .collect();
-    let pos_to_idx = |pos: (usize, usize)| -> usize {
-        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
-        idx + pos.1
-    };
-    let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (r, &len) in line_lens.iter().enumerate() {
-            if idx <= len {
-                return (r, idx);
-            }
-            idx -= len + 1;
-        }
-        let last = n_lines.saturating_sub(1);
-        (last, line_lens[last])
-    };
-    // Build flat char vector: rope chars already include \n between lines.
-    // ropey's last line has no trailing \n; intermediate ones do.
-    let mut chars: Vec<char> = rope.chars().collect();
-    // Strip a trailing \n if ropey emitted one on the final line.
-    if chars.last() == Some(&'\n') {
-        chars.pop();
-    }
-    if chars.is_empty() {
-        return None;
-    }
-    let total = chars.len();
-    let cursor_idx = pos_to_idx(ed.cursor()).min(total - 1);
-    let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
+    let boundaries = sentence_boundaries(&lines, n_lines);
+    let cursor = ed.cursor();
+    let cursor = (cursor.0.min(n_lines - 1), cursor.1);
 
     if forward {
-        // Walk forward looking for a terminator run followed by
-        // whitespace; land on the first non-whitespace cell after.
-        let mut i = cursor_idx + 1;
-        while i < total {
-            if is_terminator(chars[i]) {
-                while i + 1 < total && is_terminator(chars[i + 1]) {
-                    i += 1;
+        if let Some(&p) = boundaries.iter().find(|&&p| p > cursor) {
+            return Some(p);
+        }
+        // No next sentence: land on the last character of the buffer,
+        // but never move backward past the cursor.
+        let end = end_of_buffer_pos(&lines, n_lines);
+        (end > cursor).then_some(end)
+    } else {
+        boundaries.into_iter().rfind(|&p| p < cursor)
+    }
+}
+
+/// Every valid sentence-boundary landing position within `lines[..n_lines]`,
+/// in ascending order (deduplicated). Always includes `(0, 0)`. Shared by
+/// both directions of [`sentence_boundary`] so `(` and `)` agree on where
+/// sentences start.
+fn sentence_boundaries(lines: &[Vec<char>], n_lines: usize) -> Vec<(usize, usize)> {
+    let mut out = vec![(0usize, 0usize)];
+    for (row, line) in lines.iter().enumerate().take(n_lines) {
+        let mut i = 0;
+        while i < line.len() {
+            if is_sentence_terminator(line[i]) {
+                let mut j = i;
+                while j + 1 < line.len() && is_sentence_terminator(line[j + 1]) {
+                    j += 1;
                 }
-                if i + 1 >= total {
-                    return None;
+                let mut k = j;
+                while k + 1 < line.len() && is_sentence_closing(line[k + 1]) {
+                    k += 1;
                 }
-                if chars[i + 1].is_whitespace() {
-                    let mut j = i + 1;
-                    while j < total && chars[j].is_whitespace() {
-                        j += 1;
+                if k + 1 < line.len() {
+                    // Terminator (+ closing run) followed by more text on
+                    // the same line: only a boundary if that text starts
+                    // with whitespace.
+                    if line[k + 1].is_whitespace()
+                        && let Some(p) = skip_sentence_ws(lines, n_lines, row, k + 1)
+                    {
+                        out.push(p);
                     }
-                    if j >= total {
-                        return None;
-                    }
-                    return Some(idx_to_pos(j));
+                    i = k + 1;
+                    continue;
                 }
+                // Terminator run reaches end of line — the boundary (if
+                // any) is whatever comes after the line break.
+                if let Some(p) = skip_sentence_ws(lines, n_lines, row, line.len()) {
+                    out.push(p);
+                }
+                break;
             }
             i += 1;
         }
-        None
-    } else {
-        // Walk backward to find the start of the current sentence (if
-        // we're already at the start, jump to the previous sentence's
-        // start instead).
-        let find_start = |from: usize| -> Option<usize> {
-            let mut start = from;
-            while start > 0 {
-                let prev = chars[start - 1];
-                if prev.is_whitespace() {
-                    let mut k = start - 1;
-                    while k > 0 && chars[k - 1].is_whitespace() {
-                        k -= 1;
-                    }
-                    if k > 0 && is_terminator(chars[k - 1]) {
-                        break;
-                    }
-                }
-                start -= 1;
+        if row + 1 < n_lines {
+            let now_blank = lines[row].is_empty();
+            let next_blank = lines[row + 1].is_empty();
+            if now_blank != next_blank {
+                out.push((row + 1, 0));
             }
-            while start < total && chars[start].is_whitespace() {
-                start += 1;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Starting at `(row, col)` — a known-whitespace cell, or `col ==
+/// lines[row].len()` (just past the line, i.e. the line break) — walk
+/// forward over whitespace to the next non-whitespace cell. Stops early
+/// at a blank-line transition even mid-skip: vim treats that as its own
+/// boundary, taking priority over wherever the terminator's trailing
+/// whitespace would otherwise land (`"One.\n\nTwo.\n"` stops at the blank
+/// line, not at `"Two."`). `None` when the walk runs off the end of the
+/// buffer without finding one.
+fn skip_sentence_ws(
+    lines: &[Vec<char>],
+    n_lines: usize,
+    mut row: usize,
+    mut col: usize,
+) -> Option<(usize, usize)> {
+    loop {
+        if col < lines[row].len() {
+            if lines[row][col].is_whitespace() {
+                col += 1;
+                continue;
             }
-            (start < total).then_some(start)
-        };
-        let current_start = find_start(cursor_idx)?;
-        if current_start < cursor_idx {
-            return Some(idx_to_pos(current_start));
+            return Some((row, col));
         }
-        // Already at the sentence start — step over the boundary into
-        // the previous sentence and find its start.
-        let mut k = current_start;
-        while k > 0 && chars[k - 1].is_whitespace() {
-            k -= 1;
-        }
-        if k == 0 {
+        if row + 1 >= n_lines {
             return None;
         }
-        let prev_start = find_start(k - 1)?;
-        Some(idx_to_pos(prev_start))
+        let was_blank = lines[row].is_empty();
+        row += 1;
+        col = 0;
+        let now_blank = lines[row].is_empty();
+        if now_blank != was_blank {
+            return Some((row, 0));
+        }
     }
+}
+
+/// The last valid cursor cell in `lines[..n_lines]` — vim's `)` landing
+/// spot when there's no next sentence. The last row's last character, or
+/// column 0 if that row happens to be empty.
+fn end_of_buffer_pos(lines: &[Vec<char>], n_lines: usize) -> (usize, usize) {
+    let last = n_lines - 1;
+    let col = lines[last].len().saturating_sub(1);
+    (last, col)
 }
 /// `is` / `as` — sentence: text up to and including the next sentence
 /// terminator (`.`, `?`, `!`). Vim treats `.`/`?`/`!` followed by

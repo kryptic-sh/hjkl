@@ -873,3 +873,10 @@ async fn tier2_vertical_phantom_row_corpus_passes() {
 async fn tier2_viewport_bounds_corpus_passes() {
     run_corpus("corpus/tier2_viewport_bounds.toml").await;
 }
+
+/// B3: `(` / `)` sentence motion blank-line / closing-punctuation / EOF
+/// boundary rules.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_sentence_corpus_passes() {
+    run_corpus("corpus/tier2_sentence.toml").await;
+}

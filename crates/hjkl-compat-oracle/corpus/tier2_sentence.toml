@@ -1,0 +1,129 @@
+# Tier 2 — B3: sentence motion `(` / `)` boundary rules.
+#
+# Vim's sentence rules (`:h sentence`): a sentence ends at `.`, `!`, or `?`
+# followed by any run of closing `)`, `]`, `"`, `'` and then whitespace or
+# end-of-line. A blank line is *also* a sentence (and paragraph) boundary —
+# moving into or out of a run of blank lines is itself a stop, independent
+# of terminator punctuation. When there is no next sentence, `)` lands on
+# the last character of the buffer (and is a no-op if already there or
+# past it).
+#
+# Live nvim compare.
+
+# A blank line is a sentence boundary even with no preceding terminator.
+[[cases]]
+name = "sentence_next_blank_line_boundary"
+initial_buffer = "One two\n\nThree four\n"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "One two\n\nThree four\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# From within a single blank line, the next boundary is the start of the
+# following paragraph (the "exit" transition), not another blank-line stop.
+[[cases]]
+name = "sentence_next_from_blank_line_exits_to_next_paragraph"
+initial_buffer = "One two\n\nThree four\n"
+initial_cursor = [1, 0]
+keys = ")"
+expected_buffer = "One two\n\nThree four\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# A run of two consecutive blank lines collapses to one boundary each way:
+# entry (row 1) then exit (row 3), never stopping on the middle blank row.
+[[cases]]
+name = "sentence_next_two_blank_lines_entry_then_exit"
+initial_buffer = "One two\n\n\nThree four\n"
+initial_cursor = [0, 0]
+keys = "))"
+expected_buffer = "One two\n\n\nThree four\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+
+# Closing double-quote between `.` and whitespace is part of the same
+# sentence boundary.
+[[cases]]
+name = "sentence_next_closing_quote_after_terminator"
+initial_buffer = "He said \"Hi.\" Then left.\n"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "He said \"Hi.\" Then left.\n"
+expected_cursor = [0, 14]
+expected_mode = "normal"
+
+# Closing paren then closing quote — multiple closing chars in a row are
+# all skipped before the required whitespace.
+[[cases]]
+name = "sentence_next_multiple_closing_chars"
+initial_buffer = "Said \"(hi.)\" Bye.\n"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "Said \"(hi.)\" Bye.\n"
+expected_cursor = [0, 13]
+expected_mode = "normal"
+
+# At the last sentence, `)` goes to the end of the file (last character),
+# not a no-op.
+[[cases]]
+name = "sentence_next_last_sentence_goes_to_eof"
+initial_buffer = "One. Two.\n"
+initial_cursor = [0, 6]
+keys = ")"
+expected_buffer = "One. Two.\n"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+
+# Already at the end-of-file landing spot: `)` is a no-op.
+[[cases]]
+name = "sentence_next_already_at_eof_noop"
+initial_buffer = "One. Two.\n"
+initial_cursor = [0, 8]
+keys = ")"
+expected_buffer = "One. Two.\n"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+
+# A buffer with no terminator at all still sends `)` to the last character
+# (pure EOF-fallback path, no boundary found).
+[[cases]]
+name = "sentence_next_no_terminator_goes_to_eof"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+
+# ─── Mirrored `(` (SentencePrev) rules ─────────────────────────────────────
+
+# `(` from inside a blank-line run steps back to the entry boundary.
+[[cases]]
+name = "sentence_prev_blank_line_boundary"
+initial_buffer = "One two\n\nThree four\n"
+initial_cursor = [2, 0]
+keys = "("
+expected_buffer = "One two\n\nThree four\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `(` skips back over a closing-quote sentence boundary correctly.
+[[cases]]
+name = "sentence_prev_closing_quote_after_terminator"
+initial_buffer = "He said \"Hi.\" Then left.\n"
+initial_cursor = [0, 14]
+keys = "("
+expected_buffer = "He said \"Hi.\" Then left.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `(` at the very start of the buffer is a no-op (no previous sentence).
+[[cases]]
+name = "sentence_prev_at_start_noop"
+initial_buffer = "One. Two.\n"
+initial_cursor = [0, 0]
+keys = "("
+expected_buffer = "One. Two.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
