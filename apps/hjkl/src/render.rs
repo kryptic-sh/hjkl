@@ -1828,17 +1828,23 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     // FOCUSED window's rect (not `buf_area`) so the popup lands correctly when
     // the window is offset — e.g. the editor sits right of the explorer sidebar.
     let fw = app.focused_window();
-    let slot_idx = app.windows[fw].as_ref().map(|w| w.slot).unwrap_or(0);
     let win_rect = app.windows[fw].as_ref().and_then(|w| w.last_rect);
     let (base_x, base_y) = win_rect
         .map(|r| (r.x, r.y))
         .unwrap_or((buf_area.x, buf_area.y));
-    let vp = app.slots()[slot_idx].editor.host().viewport();
+    // Per-window viewport lives on the window's own editor (#151 Phase D) —
+    // per-window editors own scroll, but the SLOT bridge editor's viewport
+    // stays pinned at its creation top_row. Reading the slot viewport here
+    // (as this used to) anchored the popup using a stale top_row once the
+    // window had scrolled independently of the slot (mouse.rs's
+    // `hit_test_window` reads the window editor first for the same reason).
+    let focused_editor = app.window_editor(fw);
+    let vp = focused_editor.host().viewport();
     let vp_top = vp.top_row;
     // Stable cross-buffer gutter width (matches render_window) so the popup
     // anchors under the cursor even when the number/sign/fold columns are
     // widened to the open-buffer max.
-    let own_lnum = app.slots()[slot_idx].editor.lnum_width();
+    let own_lnum = focused_editor.lnum_width();
     let eff_lnum = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     let (sign_w, fold_w) = stable_gutter_extra(app);
     let gw = eff_lnum + sign_w + fold_w;
@@ -3333,6 +3339,89 @@ mod tests {
             zone,
             Zone::StatusLine,
             "row 23 (the real bottom row) must hit-test as the status line; got {zone:?}"
+        );
+    }
+
+    // ── Fix 5: completion popup anchored to the stale slot-editor viewport ──
+
+    /// `completion_popup` used to read `app.slots()[slot_idx].editor.host().viewport()`
+    /// — the SLOT bridge editor's viewport, which stays pinned at its
+    /// creation `top_row` (#151: per-window editors own scroll, not the
+    /// slot bridge). Scroll a window deep, open a completion popup anchored
+    /// near the new (scrolled) cursor row, and check the popup actually
+    /// renders near that row instead of computing a huge/garbage row from
+    /// the stale `top_row=0` and vanishing off the 24-row screen entirely.
+    #[test]
+    fn completion_popup_anchors_to_scrolled_window_not_stale_slot_viewport() {
+        use crate::app::App;
+        use crate::completion::{Completion, CompletionItem};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("completion_scroll.txt");
+        let content: String = (0..100).map(|i| format!("line{i}\n")).collect();
+        std::fs::write(&path, &content).unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // First frame settles window rects/viewports/text_width.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+
+        // Scroll the WINDOW's own editor deep (mirrors real scroll: #151
+        // per-window editors own top_row) while leaving the SLOT bridge
+        // editor's viewport at its creation value (top_row=0) — exactly the
+        // divergence the bug depends on.
+        let fw = app.focused_window();
+        if let Some(e) = app.window_editors.get_mut(&fw) {
+            e.host_mut().viewport_mut().top_row = 50;
+        }
+
+        // Anchor the popup near the NEW (scrolled) cursor row: doc row 55,
+        // i.e. screen row 5 relative to the real top_row=50. Pre-fix (stale
+        // top_row=0), this computes screen row 55 — off the 24-row screen,
+        // and the popup's own overflow-clamp math still can't pull a
+        // `y=55`-anchored popup back into a 24-row buffer, so it renders
+        // nowhere on screen at all.
+        app.completion = Some(Completion::new(
+            55,
+            0,
+            vec![CompletionItem::new("uniqueitemlabel")],
+        ));
+
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut found_row: Option<u16> = None;
+        'scan: for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y))
+                    && c.symbol() == "u"
+                {
+                    let mut s = String::new();
+                    for i in 0..15u16 {
+                        if let Some(cc) = buf.cell((x + i, y)) {
+                            s.push_str(cc.symbol());
+                        }
+                    }
+                    if s.starts_with("uniqueitemlabe") {
+                        found_row = Some(y);
+                        break 'scan;
+                    }
+                }
+            }
+        }
+
+        let row = found_row.expect(
+            "completion item must render somewhere on the 24-row screen — \
+             pre-fix it anchored off-screen using the stale slot viewport",
+        );
+        assert!(
+            row <= 10,
+            "completion popup must anchor NEAR the scrolled cursor row \
+             (doc row 55, window top_row 50 → screen row ~5); got row {row}, \
+             too far down to be anchored correctly"
         );
     }
 }
