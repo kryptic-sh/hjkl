@@ -774,7 +774,6 @@ fn tabnew_no_arg_uses_empty_buffer() {
         "tabnew with no arg must use an unnamed buffer"
     );
     let lines = app.slots[slot_idx]
-        .editor
         .buffer()
         .rope()
         .lines()

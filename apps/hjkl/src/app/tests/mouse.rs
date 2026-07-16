@@ -138,14 +138,14 @@ fn shift_click_enters_visual_and_extends_selection() {
     // Set up a multi-line buffer and window geometry.
     {
         use hjkl_engine::BufferEdit;
-        let buf = app.slots_mut()[0].editor.buffer_mut();
+        let buf = app.slots_mut()[0].buffer_mut();
         BufferEdit::replace_all(buf, "hello world\nsecond line\nthird\n");
     }
     if let Some(Some(win)) = app.windows.get_mut(0) {
         win.last_rect = Some(window::LayoutRect::new(0, 1, 80, 20)); // row 1: below a status bar
     }
     {
-        let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
         vp.width = 80;
         vp.height = 20;
         vp.text_width = 80;
@@ -521,14 +521,14 @@ mod border_drag_tests {
         use hjkl_engine::BufferEdit;
         let mut app = App::new(None, false, None, None).unwrap();
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             BufferEdit::replace_all(buf, content);
         }
         if let Some(Some(win)) = app.windows.get_mut(0) {
             win.last_rect = Some(window::rect_to_layout(area));
         }
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = area.width;
             vp.height = area.height;
             vp.text_width = area.width;

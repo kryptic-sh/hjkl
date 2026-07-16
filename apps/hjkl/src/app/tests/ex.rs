@@ -812,9 +812,9 @@ fn wa_writes_dirty_named_slots() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     // Mark both slots dirty with new content
     app.slots[0].dirty = true;
-    BufferEdit::replace_all(app.slots[0].editor.buffer_mut(), "edited a");
+    BufferEdit::replace_all(app.slots[0].buffer_mut(), "edited a");
     app.slots[1].dirty = true;
-    BufferEdit::replace_all(app.slots[1].editor.buffer_mut(), "edited b");
+    BufferEdit::replace_all(app.slots[1].buffer_mut(), "edited b");
     app.dispatch_ex("wa");
     assert!(!app.slots[0].dirty, "slot 0 should be clean after :wa");
     assert!(!app.slots[1].dirty, "slot 1 should be clean after :wa");
@@ -1173,7 +1173,6 @@ fn checktime_recovers_after_file_recreated() {
 /// Read a slot's lines with trailing newlines stripped.
 fn fsw_lines(app: &App, idx: usize) -> Vec<String> {
     app.slots[idx]
-        .editor
         .buffer()
         .rope()
         .lines()
@@ -3096,7 +3095,7 @@ fn locked_secondary_slot_is_readonly_not_removed() {
         "locked secondary slot must NOT be removed — the file was requested"
     );
     assert!(
-        app.slots[idx2].editor.is_readonly(),
+        app.slots[idx2].is_readonly(),
         "locked secondary slot must open read-only"
     );
     assert!(
@@ -3194,7 +3193,7 @@ fn recover_orphan_scratch_loads_buffer() {
     assert!(new_slot.dirty, "recovered slot must be dirty");
 
     // Check content contains the recovered text.
-    let content = new_slot.editor.buffer().rope().to_string();
+    let content = new_slot.buffer().rope().to_string();
     assert!(
         content.contains("unsaved work"),
         "recovered buffer content must contain 'unsaved work', got {content:?}"
@@ -3699,16 +3698,13 @@ fn diff_orig_opens_readonly_diff_split_with_hunks() {
         "diff buffer must be an unnamed scratch slot"
     );
     assert_eq!(
-        slot.editor.settings().filetype,
+        slot.settings().filetype,
         "diff",
         "diff buffer filetype must be `diff`"
     );
-    assert!(
-        !slot.editor.is_modifiable(),
-        "diff buffer must be read-only"
-    );
+    assert!(!slot.is_modifiable(), "diff buffer must be read-only");
 
-    let content = slot.editor.buffer().rope().to_string();
+    let content = slot.buffer().rope().to_string();
     assert!(
         content.contains("@@"),
         "diff must contain a hunk header: {content}"
@@ -3736,7 +3732,7 @@ fn diff_orig_no_changes_shows_no_difference_message() {
 
     let new_win = app.focused_window();
     let new_slot = app.windows[new_win].as_ref().unwrap().slot;
-    let content = app.slots[new_slot].editor.buffer().rope().to_string();
+    let content = app.slots[new_slot].buffer().rope().to_string();
     assert!(
         content.contains("no differences"),
         "clean buffer must report no differences: {content}"
@@ -3780,7 +3776,7 @@ fn diff_orig_file_deleted_on_disk_shows_all_additions() {
 
     let new_win = app.focused_window();
     let new_slot = app.windows[new_win].as_ref().unwrap().slot;
-    let content = app.slots[new_slot].editor.buffer().rope().to_string();
+    let content = app.slots[new_slot].buffer().rope().to_string();
     assert!(
         content.contains("+line one"),
         "expected added line: {content}"
@@ -3811,14 +3807,11 @@ fn diff_orig_leaves_original_buffer_untouched() {
     // The source buffer keeps its (still-unsaved) content and stays modifiable.
     let src = &app.slots[original_slot];
     assert_eq!(
-        src.editor.buffer().rope().to_string(),
+        src.buffer().rope().to_string(),
         "edited\n",
         "source buffer content must be unchanged by :DiffOrig"
     );
-    assert!(
-        src.editor.is_modifiable(),
-        "source buffer must remain modifiable"
-    );
+    assert!(src.is_modifiable(), "source buffer must remain modifiable");
     assert_eq!(
         src.filename.as_deref(),
         Some(path.as_path()),
@@ -3920,8 +3913,8 @@ fn disk_change_prompt_diff_opens_readonly_split() {
     );
     let win = app.focused_window();
     let slot = app.windows[win].as_ref().unwrap().slot;
-    assert_eq!(app.slots[slot].editor.settings().filetype, "diff");
-    assert!(!app.slots[slot].editor.is_modifiable());
+    assert_eq!(app.slots[slot].settings().filetype, "diff");
+    assert!(!app.slots[slot].is_modifiable());
     let _ = std::fs::remove_file(&path);
 }
 

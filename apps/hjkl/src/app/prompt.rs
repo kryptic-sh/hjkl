@@ -3,7 +3,7 @@ use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey};
 use hjkl_form::TextFieldEditor;
 use hjkl_prompt::{history_next, history_prev, push_history};
 
-use super::{App, CmdLineKind, CmdLineWindow, STATUS_LINE_HEIGHT, SearchDir};
+use super::{App, CmdLineKind, CmdLineWindow, SearchDir};
 use crate::completion::{Completion, CompletionItem, CompletionKind};
 
 /// Replace the full text of a TextFieldEditor, leaving cursor at the end in
@@ -869,9 +869,8 @@ impl App {
         prefill: Option<(String, usize)>,
     ) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        use crate::host::TuiHost;
         use hjkl_buffer::View;
-        use hjkl_engine::{BufferEdit, Host, Options};
+        use hjkl_engine::BufferEdit;
         use std::time::Instant;
 
         if self.cmdline_win.is_some() {
@@ -897,37 +896,21 @@ impl App {
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-        if let Ok(size) = crossterm::terminal::size() {
-            let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = h;
-            }
-            editor.set_viewport_height(h);
-        }
+        let mut view = View::new();
         if !content.is_empty() {
-            BufferEdit::replace_all(editor.buffer_mut(), &content);
+            BufferEdit::replace_all(&mut view, &content);
         }
-        let line_count = editor.buffer().row_count();
-        // Position cursor: when prefill is Some, land at (last_row, prefill_col);
-        // otherwise land at last history row col 0 (existing behaviour).
-        let (cursor_row, cursor_col) = if let Some((_, col)) = prefill {
-            (line_count.saturating_sub(1), col)
-        } else {
-            (line_count.saturating_sub(1), 0)
-        };
-        editor.jump_cursor(cursor_row, cursor_col);
-        let _ = editor.take_content_edits();
-        let _ = editor.take_content_reset();
+        // No manual cursor placement / viewport sizing / editor-channel drain
+        // here (#151 Stage 2b — see `build_slot`'s doc): this slot has no
+        // Editor, and `seed_window_editor` below places the real cursor on
+        // the window editor once it exists, superseding any placement here.
 
         let slot = super::BufferSlot {
             buffer_id,
             is_explorer: false,
             features: crate::app::BufferFeatures::default(),
-            editor,
+            view,
+            settings: hjkl_engine::Settings::default(),
             filename: None,
             dirty: false,
             is_new_file: true,

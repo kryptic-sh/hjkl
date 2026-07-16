@@ -1,5 +1,5 @@
 use hjkl_bonsai::DotFallbackTheme;
-use hjkl_engine::{Host, Query};
+use hjkl_engine::Query;
 use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_ex::ExEffect;
 use hjkl_info_popup::InfoPopup;
@@ -13,23 +13,23 @@ use crate::host::TuiHost;
 
 use super::{App, DiskState, ex_host_cmds};
 
-/// Strip trailing `[ \t]` from every line in the buffer in-place.
+/// Strip trailing `[ \t]` from every line of `slot`'s buffer, returning the
+/// new joined content if anything changed (`None` — no allocation, no
+/// dirty-gen bump — when no line had trailing whitespace).
 ///
-/// Used by the `trim_trailing_whitespace` pre-save hook in [`App::save_slot`].
-/// Walks every line of the buffer; if any line has trailing whitespace the
-/// whole-buffer content is replaced via `set_content_undoable` so the
-/// operation is a single undoable step and the syntax / LSP pipelines see a
-/// clean `ContentReset` signal. When no line has trailing whitespace this is a
-/// no-op (no allocation, no dirty-gen bump).
-fn trim_trailing_whitespace_in_place<H: hjkl_engine::types::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
-) {
+/// Used by the `trim_trailing_whitespace` pre-save hook in [`App::save_slot`],
+/// which installs the result via `set_content_undoable` (a single undoable
+/// step; the syntax / LSP pipelines see a clean `ContentReset` signal) — that
+/// needs a live `Editor`, hence the split: this half only needs read access
+/// to the shared buffer (#151 Stage 2b).
+fn trimmed_trailing_whitespace(slot: &super::BufferSlot) -> Option<String> {
     use hjkl_engine::Query;
-    let n = editor.buffer().line_count() as usize;
+    let buf = slot.buffer();
+    let n = buf.line_count() as usize;
     let mut changed = false;
     let lines: Vec<String> = (0..n)
         .map(|r| {
-            let line = editor.buffer().line(r as u32);
+            let line = buf.line(r as u32);
             let trimmed = line.trim_end_matches([' ', '\t']);
             if trimmed.len() != line.len() {
                 changed = true;
@@ -40,12 +40,11 @@ fn trim_trailing_whitespace_in_place<H: hjkl_engine::types::Host>(
         })
         .collect();
     if !changed {
-        return;
+        return None;
     }
     // Preserve line count — don't collapse trailing blank lines. The per-line
     // trim above already stripped the whitespace; just rejoin and replace.
-    let new_content = lines.join("\n");
-    editor.set_content_undoable(&new_content);
+    Some(lines.join("\n"))
 }
 
 impl App {
@@ -496,14 +495,14 @@ impl App {
                 // Engine applied the substitution in-place; propagate dirty
                 // and fan ContentEdits into the syntax tree.
                 let aslot = self.focused_slot_idx();
-                if self.slots[aslot].editor.take_dirty() {
+                if self.slots[aslot].take_dirty() {
                     let elapsed = self.slots[aslot].refresh_dirty_against_saved();
                     self.last_signature_us = elapsed;
                     let buffer_id = self.slots[aslot].buffer_id;
-                    if self.slots[aslot].editor.take_content_reset() {
+                    if self.slots[aslot].take_content_reset() {
                         self.syntax.reset(buffer_id);
                     }
-                    let edits = self.slots[aslot].editor.take_content_edits();
+                    let edits = self.slots[aslot].take_content_edits();
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
@@ -561,9 +560,10 @@ impl App {
                 let p = PathBuf::from(&name);
                 self.slots[idx].filename = Some(p.clone());
                 self.slots[idx].git_repo_present = None; // re-probe for new path
-                self.slots[idx]
-                    .editor
-                    .with_registers_mut(|r| r.set_filename(Some(name.clone())));
+                self.registers
+                    .lock()
+                    .unwrap()
+                    .set_filename(Some(name.clone()));
                 self.bus.info(format!("\"{}\" [Not edited]", p.display()));
             }
             ExEffect::Cwd(new_cwd) => {
@@ -623,9 +623,14 @@ impl App {
     fn do_put_register(&mut self, reg: char, above: bool) {
         use hjkl_buffer::{Edit, Position};
         let idx = self.focused_slot_idx();
-        let slot_text = self.slots[idx]
-            .editor
-            .with_registers(|r| r.read(reg).map(|s| s.text.clone()))
+        // Register bank is a session-shared Arc, same one the active editor
+        // is wired to — read it directly (#151 Stage 2b, rule 4).
+        let slot_text = self
+            .registers
+            .lock()
+            .unwrap()
+            .read(reg)
+            .map(|s| s.text.clone())
             .unwrap_or_default();
         if slot_text.is_empty() {
             self.bus.warn(format!("E: register \"{reg}\" is empty"));
@@ -634,7 +639,10 @@ impl App {
         // Strip trailing newline that linewise yanks carry so we don't
         // introduce a blank line at the end.
         let text = slot_text.trim_end_matches('\n').to_string();
-        let editor = &mut self.slots[idx].editor;
+        // `idx` is always the focused slot, so the focused window's own
+        // editor is the right (and only meaningfully cursor-visible) target
+        // for the paste (#151 Stage 2b — was the slot bridge editor).
+        let editor = self.active_editor_mut();
         let (row, _) = editor.cursor();
         if above {
             editor.mutate_edit(Edit::InsertStr {
@@ -651,7 +659,7 @@ impl App {
         }
         // Sync dirty state and propagate to syntax engine.
         let slot = &mut self.slots[idx];
-        if slot.editor.take_dirty() {
+        if slot.take_dirty() {
             slot.refresh_dirty_against_saved();
         }
     }
@@ -772,35 +780,22 @@ impl App {
         // Inherit the source window's scroll from its own editor (#151 Phase D).
         let (top_row, top_col) = self.window_scroll(focused);
 
-        // Create a fresh empty unnamed slot.
-        use crate::app::STATUS_LINE_HEIGHT;
-        use crate::host::TuiHost;
+        // Create a fresh empty unnamed slot. No editor built here (#151
+        // Stage 2b — see `build_slot`'s doc): bank wiring and viewport
+        // sizing happen on the window editor via `reconcile_window_editors`
+        // / `make_view_editor` below, and `seed_window_editor` places the
+        // real cursor/scroll.
         use hjkl_buffer::View;
-        use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            editor.set_search_arc(self.search.clone());
-            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
                 features: super::BufferFeatures::default(),
-                editor,
+                view: View::new(),
+                settings: hjkl_engine::Settings::default(),
                 filename: None,
                 dirty: false,
                 is_new_file: false,
@@ -859,35 +854,19 @@ impl App {
         // Inherit the source window's scroll from its own editor (#151 Phase D).
         let (top_row, top_col) = self.window_scroll(focused);
 
-        // Create a fresh empty unnamed slot.
-        use crate::app::STATUS_LINE_HEIGHT;
-        use crate::host::TuiHost;
+        // Create a fresh empty unnamed slot. No editor built here (#151
+        // Stage 2b — see `do_vnew` / `build_slot`'s doc).
         use hjkl_buffer::View;
-        use hjkl_engine::Options;
 
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            editor.set_search_arc(self.search.clone());
-            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
                 features: super::BufferFeatures::default(),
-                editor,
+                view: View::new(),
+                settings: hjkl_engine::Settings::default(),
                 filename: None,
                 dirty: false,
                 is_new_file: false,
@@ -992,11 +971,12 @@ impl App {
         // and only when not forced (`:w!` overrides). Writing to a different path
         // (`:w other` / `:saveas`) is always allowed regardless of readonly.
         // `readonly` is per-window (#151): read the focused window editor when
-        // saving the focused slot, else the slot bridge (background save).
+        // saving the focused slot, else the slot's settings template
+        // (background save — #151 Stage 2b: no slot-level editor anymore).
         let readonly = if idx == self.focused_slot_idx() {
             self.active_editor().is_readonly()
         } else {
-            self.slots[idx].editor.is_readonly()
+            self.slots[idx].is_readonly()
         };
         if readonly {
             let writing_own =
@@ -1031,10 +1011,12 @@ impl App {
                     let s = if idx == self.focused_slot_idx() {
                         self.active_editor().settings().clone()
                     } else {
-                        self.slots[idx].editor.settings().clone()
+                        self.slots[idx].settings().clone()
                     };
-                    if s.trim_trailing_whitespace {
-                        trim_trailing_whitespace_in_place(&mut self.slots[idx].editor);
+                    if s.trim_trailing_whitespace
+                        && let Some(new_content) = trimmed_trailing_whitespace(&self.slots[idx])
+                    {
+                        self.set_content_undoable_for_slot(idx, &new_content);
                     }
                     if s.format_on_save
                         && let Some(formatter) = hjkl_mangler::formatter_for_path(&p)
@@ -1045,7 +1027,7 @@ impl App {
                                 formatter.tool_name()
                             ));
                         } else {
-                            let content = self.slots[idx].editor.buffer().content_joined();
+                            let content = self.slots[idx].buffer().content_joined();
                             // `Path::parent()` of a bare relative filename is
                             // `Some("")`, not `None`; an empty working dir makes
                             // the formatter spawn fail with NotFound (misread as
@@ -1064,7 +1046,7 @@ impl App {
                                     // empty last line after format-on-save.
                                     let formatted =
                                         formatted.strip_suffix('\n').unwrap_or(&formatted);
-                                    self.slots[idx].editor.set_content_undoable(formatted);
+                                    self.set_content_undoable_for_slot(idx, formatted);
                                 }
                                 Err(e) => {
                                     self.bus.error(format!("format-on-save error: {e}"));
@@ -1086,11 +1068,11 @@ impl App {
                 // panics `ropey::byte_slice`.
                 {
                     let bid = self.slots[idx].buffer_id;
-                    let was_reset = self.slots[idx].editor.take_content_reset();
+                    let was_reset = self.slots[idx].take_content_reset();
                     if was_reset {
                         self.syntax.reset(bid);
                     }
-                    let edits = self.slots[idx].editor.take_content_edits();
+                    let edits = self.slots[idx].take_content_edits();
                     if !edits.is_empty() {
                         self.syntax.apply_edits(bid, &edits);
                     }
@@ -1107,10 +1089,10 @@ impl App {
                 // Write in two pieces so the trailing newline doesn't force a
                 // full-buffer clone just to push a byte.
                 use hjkl_engine::Query;
-                let joined = self.slots[idx].editor.buffer().content_joined();
+                let joined = self.slots[idx].buffer().content_joined();
                 let body: &[u8] = joined.as_bytes();
                 let needs_trailing_nl = !body.is_empty() && !body.ends_with(b"\n");
-                let line_count = self.slots[idx].editor.buffer().line_count() as usize;
+                let line_count = self.slots[idx].buffer().line_count() as usize;
                 let byte_count = body.len() + usize::from(needs_trailing_nl);
                 // Create parent dir(s) if missing so writing into a fresh
                 // path like ~/.config/hjkl/config.toml works first try.
@@ -1140,9 +1122,10 @@ impl App {
                         self.slots[idx].filename = Some(p.clone());
                         self.slots[idx].git_repo_present = None; // re-probe for new path
                         // Keep `"%` in sync when the buffer gets a (new) filename.
-                        self.slots[idx].editor.with_registers_mut(|r| {
-                            r.set_filename(Some(p.to_string_lossy().into_owned()))
-                        });
+                        self.registers
+                            .lock()
+                            .unwrap()
+                            .set_filename(Some(p.to_string_lossy().into_owned()));
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
                         // Delete the swap file on successful save (#185).
@@ -1217,7 +1200,7 @@ impl App {
         if is_scratch {
             // Skip if the buffer is empty — no content worth recovering.
             // byte_len() == 0 means the rope is empty.
-            let byte_len = self.slots[idx].editor.buffer().byte_len();
+            let byte_len = self.slots[idx].buffer().byte_len();
             if byte_len == 0 {
                 return;
             }
@@ -1243,7 +1226,7 @@ impl App {
         }
 
         let swap_path = self.slots[idx].swap_path.as_ref().unwrap().clone();
-        let current_gen = self.slots[idx].editor.buffer().dirty_gen();
+        let current_gen = self.slots[idx].buffer().dirty_gen();
         if self.slots[idx].last_swap_dirty_gen == Some(current_gen) {
             return; // Nothing changed since last swap.
         }
@@ -1281,7 +1264,7 @@ impl App {
             writer_pid: std::process::id(),
         };
 
-        let rope = self.slots[idx].editor.buffer().rope().clone();
+        let rope = self.slots[idx].buffer().rope().clone();
         if let Err(e) = swap::write_swap(&swap_path, &header, &rope) {
             tracing::debug!(path = %swap_path.display(), err = %e, "swap write failed");
             return;
@@ -1345,11 +1328,8 @@ impl App {
     /// loaded — NOT from `App::new` (keeps tests and every App::new free of
     /// real-XDG scanning).
     pub(crate) fn recover_orphan_scratch_buffers_from(&mut self, dir: &std::path::Path) -> usize {
-        use crate::app::STATUS_LINE_HEIGHT;
-        use crate::host::TuiHost;
         use hjkl_app::swap;
         use hjkl_buffer::View;
-        use hjkl_engine::Options;
 
         let orphans = swap::scan_orphan_scratch_swaps_in(dir);
         let n = orphans.len();
@@ -1359,39 +1339,35 @@ impl App {
 
         for orphan in orphans {
             // Build a fresh unnamed slot (mirrors build_slot with path=None).
+            // No editor here (#151 Stage 2b): these buffers are pushed as
+            // background slots that may never get a window this session
+            // (focus is NOT switched — see doc above), so the recovered
+            // cursor is stashed directly on the slot's own `View` — exactly
+            // what `make_view_editor` reads as the initial cursor whenever a
+            // window is eventually opened on this slot (`:bnext`, picker).
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            editor.set_search_arc(self.search.clone());
-            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            // Drain initial (empty) content signals so they don't confuse syntax.
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
-
-            // Install recovered content via set_content (full reset path so
-            // syntax gets a clean parse_initial, not a stale incremental edit).
+            let mut view = View::new();
+            // Install recovered content via BufferEdit::replace_all — a full
+            // reset, matching the old `Editor::set_content`'s reset-not-
+            // incremental semantics (there's no live syntax tree yet for a
+            // slot that was never wired into `App`, so there's nothing to
+            // signal a `ContentReset` to here).
             let stripped = orphan.body.strip_suffix('\n').unwrap_or(&orphan.body);
-            editor.set_content(stripped);
+            hjkl_engine::BufferEdit::replace_all(&mut view, stripped);
 
             // Restore cursor from swap header.
             let (row, col) = orphan.header.cursor;
-            editor.jump_cursor(row as usize, col as usize);
+            let clamped =
+                view.clamp_position(hjkl_buffer::Position::new(row as usize, col as usize));
+            view.set_cursor(clamped);
 
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
                 features: super::BufferFeatures::default(),
-                editor,
+                view,
+                settings: hjkl_engine::Settings::default(),
                 filename: None,
                 dirty: true, // nudge user to :w as <name>
                 is_new_file: false,
@@ -1599,7 +1575,7 @@ impl App {
         if header.writer_pid != our_pid && swap::pid_is_alive(header.writer_pid) {
             let name = filename.display().to_string();
             let pid = header.writer_pid;
-            self.slots[slot_idx].editor.settings_mut().readonly = true;
+            self.slots[slot_idx].settings_mut().readonly = true;
             // readonly is a per-window setting (#151 Phase D); also set it on the
             // focused window's editor so :w guard + status reflect it immediately.
             if slot_idx == self.focused_slot_idx() {
@@ -1657,8 +1633,17 @@ impl App {
     ) {
         // Strip trailing newline — the engine's content format omits it.
         let stripped = body.strip_suffix('\n').unwrap_or(body);
-        self.slots[slot_idx].editor.set_content(stripped);
-        self.slots[slot_idx].editor.jump_cursor(row, col);
+        self.slots[slot_idx].set_content(stripped);
+        // Persist the cursor on the slot's own `View` too (#151 Stage 2b) —
+        // the source `make_view_editor` reads from for any window opened on
+        // this slot LATER (e.g. a background CLI-arg slot not yet switched
+        // to). Windows showing it RIGHT NOW are updated explicitly below.
+        {
+            let clamped = self.slots[slot_idx]
+                .buffer()
+                .clamp_position(hjkl_buffer::Position::new(row, col));
+            self.slots[slot_idx].buffer_mut().set_cursor(clamped);
+        }
         // Land the recovered cursor on every window editor showing the slot
         // (#151 View) — the shared-content swap doesn't move their cursors.
         let recover_wins: Vec<usize> = self
@@ -2065,7 +2050,7 @@ impl App {
                 let autoreload = if idx == self.focused_slot_idx() {
                     self.active_editor().settings().autoreload
                 } else {
-                    self.slots[idx].editor.settings().autoreload
+                    self.slots[idx].settings().autoreload
                 };
                 if self.slots[idx].dirty || !autoreload {
                     let prev = self.slots[idx].disk_state;
@@ -2104,11 +2089,22 @@ impl App {
                     let trimmed = content.strip_suffix('\n').unwrap_or(&content);
                     // Preserve cursor row + column, clamped to the new
                     // content (vim's autoread keeps the cursor where it was).
-                    let (cur_row, cur_col) = self.slots[idx].editor.cursor();
-                    self.slots[idx].editor.set_content(trimmed);
-                    let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
+                    let (cur_row, cur_col) = {
+                        let c = self.slots[idx].buffer().cursor();
+                        (c.row, c.col)
+                    };
+                    self.slots[idx].set_content(trimmed);
+                    let new_line_count = self.slots[idx].buffer().line_count() as usize;
                     let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
-                    self.slots[idx].editor.jump_cursor(clamped_row, cur_col);
+                    // Slot's own View cursor (#151 Stage 2b — read by
+                    // `make_view_editor` for any not-yet-windowed case);
+                    // windows showing this slot right now are updated below.
+                    {
+                        let clamped = self.slots[idx]
+                            .buffer()
+                            .clamp_position(hjkl_buffer::Position::new(clamped_row, cur_col));
+                        self.slots[idx].buffer_mut().set_cursor(clamped);
+                    }
                     // Each window editor (#151 View) keeps its own cursor; the
                     // shared-content swap can leave it past EOF — clamp per view.
                     let reload_wins: Vec<usize> = self
@@ -2137,9 +2133,7 @@ impl App {
                     self.syntax.reset(buffer_id);
 
                     if idx == self.focused_slot_idx() {
-                        self.slots[idx]
-                            .editor
-                            .install_ratatui_syntax_spans(Vec::new());
+                        self.install_syntax_spans_for_slot(idx, Vec::new());
                         // recompute_and_install runs render_viewport sync — no
                         // preview warm-up needed.
                         self.recompute_and_install();
@@ -2320,40 +2314,24 @@ impl App {
     /// Without: open an empty unnamed buffer. The new tab gets its own layout
     /// and focused window; windows and slots are shared globally.
     pub(super) fn do_tabnew(&mut self, arg: &str) {
-        use crate::app::STATUS_LINE_HEIGHT;
         use crate::app::window::{LayoutTree, Tab, Window};
-        use crate::host::TuiHost;
         use hjkl_buffer::View;
-        use hjkl_engine::Options;
 
         // Save current tab's viewport state before switching.
         self.sync_viewport_from_editor();
 
         // Determine the slot for the new tab.
         let new_slot_idx = if arg.is_empty() {
-            // Empty scratch buffer.
+            // Empty scratch buffer. No editor built here (#151 Stage 2b —
+            // see `do_vnew` / `build_slot`'s doc).
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            editor.set_registers_arc(self.registers.clone());
-            editor.set_global_marks_arc(self.global_marks.clone());
-            editor.set_last_substitute_arc(self.last_substitute.clone());
-            editor.set_abbrevs_arc(self.abbrevs.clone());
-            editor.set_search_arc(self.search.clone());
-            editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
                 features: super::BufferFeatures::default(),
-                editor,
+                view: View::new(),
+                settings: hjkl_engine::Settings::default(),
                 filename: None,
                 dirty: false,
                 is_new_file: false,
@@ -2402,6 +2380,13 @@ impl App {
         self.tabs
             .push(Tab::new(LayoutTree::Leaf(new_win_id), new_win_id));
         self.active_tab = self.tabs.len() - 1;
+
+        // Build the new window's editor (#151 Stage 2b — previously implicit:
+        // `active_editor_mut()` fell back to the now-removed slot bridge
+        // editor when `window_editors` had no entry yet; there is no such
+        // fallback anymore, so this must run before `sync_viewport_to_editor`
+        // below touches `active_editor_mut()`).
+        self.reconcile_window_editors();
 
         // Sync viewport for the new tab's editor.
         self.sync_viewport_to_editor();

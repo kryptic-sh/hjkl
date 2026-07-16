@@ -177,10 +177,9 @@ pub struct App {
     /// Per-window editor, keyed by `WindowId` (#151 Phase D). Each is a
     /// [`View::new_view`] of its slot's shared `Buffer`, so it owns an
     /// independent cursor / viewport / vim FSM while editing the same document.
-    /// Invariant: a key exists here iff `windows[id]` is `Some`. The slot's own
-    /// editor is retained as a content bridge during the migration (Stage 2b
-    /// removes it); content reads via either editor agree because they share
-    /// the same `Arc<Mutex<Buffer>>`.
+    /// Invariant: a key exists here iff `windows[id]` is `Some`. Content reads
+    /// via any window editor on the same slot agree because they share the
+    /// same `Arc<Mutex<Buffer>>` as [`BufferSlot::view`].
     pub(crate) window_editors: std::collections::HashMap<window::WindowId, Editor<View, TuiHost>>,
     /// All open tabs. Each tab owns its own layout tree + focused window.
     /// Never empty — always at least one tab.
@@ -764,7 +763,6 @@ pub(super) fn build_slot(
         }
     }
 
-    let host = TuiHost::new();
     // Seed Options from user config — editorconfig overlay (if any) takes
     // precedence over the user-config fallback values.
     let mut ec_opts = Options {
@@ -785,21 +783,8 @@ pub(super) fn build_slot(
         let scan_depth = ec_opts.modelines as usize;
         hjkl_app::modeline::overlay_modeline_for_content(&mut ec_opts, content, scan_depth);
     }
-    let mut editor = hjkl_vim::vim_editor(buffer, host, ec_opts);
-    // Tag the editor with its stable buffer_id so `mA`–`mZ` global marks
-    // record the correct id from the first keystroke.
-    editor.set_current_buffer_id(buffer_id);
-    if let Ok(size) = crossterm::terminal::size() {
-        let viewport_height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-        let vp = editor.host_mut().viewport_mut();
-        vp.width = size.0;
-        vp.height = viewport_height;
-        // Publish the viewport height to the engine's atomic so any
-        // pre-event-loop scroll math (e.g. ensure_cursor_in_scrolloff
-        // after a +/pat startup search) takes the scrolloff path
-        // instead of the no-margin fallback.
-        editor.set_viewport_height(viewport_height);
-    }
+    let mut settings = hjkl_engine::Settings::default();
+    settings.apply_options(&ec_opts);
     // Non-blocking: returns immediately; Loading case is handled by
     // poll_grammar_loads each tick.
     if let Some(ref p) = path {
@@ -811,22 +796,16 @@ pub(super) fn build_slot(
         // automatically on file open. Cheap synchronous extension lookup;
         // no grammar load.
         if let Some(lang) = syntax.language_name_for_path(p) {
-            editor.set_filetype(&lang);
+            settings.filetype = lang;
         }
     }
 
-    let (vp_top, vp_height) = {
-        let vp = editor.host().viewport();
-        (vp.top_row, vp.height as usize)
-    };
-    // Sync render for immediate paint on open. recompute_and_install can't
-    // be called here (slot isn't wired into App.slots yet), so go through
-    // the layer directly.
-    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height) {
-        editor.install_ratatui_syntax_spans(out.spans);
-    }
-    let _ = editor.take_content_edits();
-    let _ = editor.take_content_reset();
+    // No manual "sync render for immediate paint" here (#151 Stage 2b removed
+    // it): styled_spans live on the per-window Editor, and this slot has no
+    // window yet. `App::new`'s `pending_recompute = true` and every
+    // `switch_to` call already run `recompute_and_install` synchronously
+    // before the first paint of a slot, so a pre-render here would be
+    // redundant work discarded when the eventual window editor is built.
 
     // Compute swap path for named files (best-effort; ignore errors here —
     // the write path handles errors per-write).
@@ -841,7 +820,8 @@ pub(super) fn build_slot(
         buffer_id,
         is_explorer: false,
         features: BufferFeatures::default(),
-        editor,
+        view: buffer,
+        settings,
         filename: path,
         dirty: false,
         is_new_file,
@@ -874,7 +854,7 @@ pub(super) fn build_slot(
         && !slot.is_new_file
         && !is_path_writable(p)
     {
-        slot.editor.settings_mut().readonly = true;
+        slot.settings_mut().readonly = true;
     }
     Ok(slot)
 }
@@ -1091,8 +1071,8 @@ impl App {
         // write — so the scratch arm must NOT require `swap_path.is_some()`,
         // else the idle writer would never fire for a scratch buffer.
         let has_target =
-            s.swap_path.is_some() || (s.filename.is_none() && s.editor.buffer().byte_len() > 0);
-        has_target && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
+            s.swap_path.is_some() || (s.filename.is_none() && s.buffer().byte_len() > 0);
+        has_target && s.last_swap_dirty_gen != Some(s.buffer().dirty_gen())
     }
 
     /// `true` when ANY slot — focused or not — has a pending swap write.
@@ -1105,29 +1085,97 @@ impl App {
         (0..self.slots.len()).any(|idx| self.slot_swap_pending(idx))
     }
 
-    /// Cursor `(row, col)` of window `win_id`, read from its own editor (#151
-    /// Phase D — the single source of truth). Falls back to the legacy
-    /// `layout::Window` mirror if the window editor is somehow absent, then
-    /// `(0, 0)`.
+    /// Every `WindowId` currently displaying slot `idx` (#151 Stage 2b —
+    /// used to fan a per-slot update, e.g. freshly rendered syntax spans,
+    /// out to every split showing the buffer, since spans live on the
+    /// window's `Editor`, not the shared `Buffer`).
+    pub(crate) fn windows_for_slot(&self, idx: usize) -> Vec<window::WindowId> {
+        self.windows
+            .iter()
+            .enumerate()
+            .filter_map(|(id, w)| w.as_ref().filter(|w| w.slot == idx).map(|_| id))
+            .collect()
+    }
+
+    /// Install fresh ratatui-styled syntax spans into every window editor
+    /// showing slot `idx` (#151 Stage 2b — `styled_spans` live on the
+    /// window's `Editor`, not the shared `Buffer`, so a buffer open in N
+    /// splits needs N installs).
+    pub(crate) fn install_syntax_spans_for_slot(
+        &mut self,
+        idx: usize,
+        spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
+    ) {
+        for wid in self.windows_for_slot(idx) {
+            if let Some(ed) = self.window_editors.get_mut(&wid) {
+                ed.install_ratatui_syntax_spans(spans.clone());
+            }
+        }
+    }
+
+    /// Patch a row range of ratatui-styled syntax spans into every window
+    /// editor showing slot `idx`. See [`Self::install_syntax_spans_for_slot`].
+    pub(crate) fn patch_syntax_spans_for_slot(
+        &mut self,
+        idx: usize,
+        rows: std::ops::Range<usize>,
+        spans: &[Vec<(usize, usize, ratatui::style::Style)>],
+    ) {
+        for wid in self.windows_for_slot(idx) {
+            if let Some(ed) = self.window_editors.get_mut(&wid) {
+                ed.patch_ratatui_syntax_spans_range(rows.clone(), spans);
+            }
+        }
+    }
+
+    /// Shift installed syntax spans across `edits` in every window editor
+    /// showing slot `idx`. See [`Self::install_syntax_spans_for_slot`].
+    pub(crate) fn shift_syntax_spans_for_slot(
+        &mut self,
+        idx: usize,
+        edits: &[hjkl_engine::types::ContentEdit],
+    ) {
+        for wid in self.windows_for_slot(idx) {
+            if let Some(ed) = self.window_editors.get_mut(&wid) {
+                ed.shift_syntax_spans_for_edits(edits);
+            }
+        }
+    }
+
+    /// Undo-preserving whole-buffer content replace for slot `idx`, from a
+    /// site with no specific window in scope (e.g. an async format-worker
+    /// result). Routes through a live window editor showing the slot when
+    /// one exists (matches interactive `Editor::set_content_undoable`
+    /// exactly); otherwise falls back to the slot-level headless path (#151
+    /// Stage 2b rule 5 escape hatch — see `BufferSlot::set_content_undoable_headless`).
+    pub(crate) fn set_content_undoable_for_slot(&mut self, idx: usize, text: &str) {
+        if let Some(&wid) = self.windows_for_slot(idx).first()
+            && let Some(ed) = self.window_editors.get_mut(&wid)
+        {
+            ed.set_content_undoable(text);
+            return;
+        }
+        self.slots[idx].set_content_undoable_headless(text);
+    }
+
     /// The editor for window `win_id` (the View — single source of per-window
-    /// cursor/viewport/is_blame, #151). Falls back to the slot bridge editor
-    /// when no window editor exists yet (pre-reconcile / headless paths).
+    /// cursor/viewport/is_blame, #151). `window_editors` no longer has a
+    /// static per-slot fallback to reach for (#151 Stage 2b removed the slot
+    /// bridge editor) — panics if the entry is missing, which the invariant
+    /// (a key exists here iff `windows[id]` is `Some`) guarantees never
+    /// happens once `reconcile_window_editors` has run at least once (always
+    /// true after `App::new` returns).
     pub(crate) fn window_editor(&self, win_id: window::WindowId) -> &Editor<View, TuiHost> {
-        self.window_editors.get(&win_id).unwrap_or_else(|| {
-            let slot = self
-                .windows
-                .get(win_id)
-                .and_then(|w| w.as_ref())
-                .map(|w| w.slot)
-                .unwrap_or_else(|| self.focused_slot_idx());
-            &self.slots[slot].editor
-        })
+        self.window_editors
+            .get(&win_id)
+            .expect("window_editors must have an entry for every open window")
     }
 
     /// Cursor `(row, col)` for slot `idx`, read from a window editor showing it
     /// (#151 single source of truth) — the focused window if it shows the slot,
-    /// else any window on the slot, else the slot bridge editor. For per-slot
-    /// machinery (swap metadata, autoreload) that must pick one view's cursor.
+    /// else any window on the slot, else the slot's own (not generally
+    /// meaningful) `View` cursor. For per-slot machinery (swap metadata,
+    /// autoreload) that must pick one view's cursor.
     pub(crate) fn slot_cursor(&self, idx: usize) -> (usize, usize) {
         let win_id = if self
             .windows
@@ -1148,7 +1196,10 @@ impl App {
                 let c = e.buffer().cursor();
                 (c.row, c.col)
             }
-            None => self.slots[idx].editor.cursor(),
+            None => {
+                let c = self.slots[idx].buffer().cursor();
+                (c.row, c.col)
+            }
         }
     }
 
@@ -1276,31 +1327,22 @@ impl App {
     }
 
     /// Shared reference to the focused window's editor (#151 Phase D). Each
-    /// window owns its editor in [`window_editors`]; this resolves the focused
-    /// one. Falls back to the focused slot's bridge editor only if the window
-    /// editor is somehow absent (should not happen — the invariant keeps them
-    /// in lockstep).
+    /// window owns its editor in [`window_editors`]; this resolves the
+    /// focused one. Panics if absent — see [`Self::window_editor`].
     pub fn active_editor(&self) -> &Editor<View, TuiHost> {
-        let fw = self.focused_window();
-        self.window_editors
-            .get(&fw)
-            .unwrap_or_else(|| &self.slots[self.focused_slot_idx()].editor)
+        self.window_editor(self.focused_window())
     }
 
     /// Mutable reference to the focused window's editor. See [`active_editor`].
     pub fn active_editor_mut(&mut self) -> &mut Editor<View, TuiHost> {
         let fw = self.focused_window();
-        if self.window_editors.contains_key(&fw) {
-            self.window_editors.get_mut(&fw).unwrap()
-        } else {
-            let slot_idx = self.focused_slot_idx();
-            &mut self.slots[slot_idx].editor
-        }
+        self.window_editors
+            .get_mut(&fw)
+            .expect("window_editors must have an entry for every open window")
     }
 
     /// Fetch (or create) the shared changelist bank for `buffer_id` (audit
-    /// B3). All editors currently attached to the same `buffer_id` — the
-    /// slot's own bridge editor plus every window's view editor onto it —
+    /// B3). Every window's view editor attached to the same `buffer_id`
     /// must be wired to the SAME `Arc` so `g;`/`` `. `` in one split see
     /// edits made from another split on that buffer. Callers pair this with
     /// `Editor::set_current_buffer_id(buffer_id)` /
@@ -1320,32 +1362,51 @@ impl App {
     }
 
     /// Build a fresh per-window view editor onto `slot_idx`'s shared `Buffer`.
-    /// Copies the slot editor's settings + viewport dims so the new view
-    /// renders identically; the cursor starts at the slot editor's cursor.
+    /// Copies the slot's settings template so the new view renders
+    /// identically; the cursor starts at the slot's own (not-generally-
+    /// meaningful) `View` cursor — callers positioning a specific window
+    /// (splits, swap recovery, startup `+N`/`+/pat`) explicitly re-seed via
+    /// [`Self::seed_window_editor`] or by driving the window editor directly
+    /// after this returns. Viewport dims default to the focused window's
+    /// CURRENT editor dims when one exists (reasonable placeholder for a
+    /// split, and correct for headless/`--nvim-api` mode, where
+    /// `build_app` seeds the focused window's dims once up front and every
+    /// later window should inherit that rather than a real terminal size
+    /// that doesn't exist); falls back to the real terminal size for the
+    /// very first window (nothing in `window_editors` yet). Either way the
+    /// renderer publishes each window's real pane size on the next frame
+    /// regardless (`render_window`), so this is only a placeholder until then.
     pub(crate) fn make_view_editor(&self, slot_idx: usize) -> Editor<View, TuiHost> {
-        let src = &self.slots[slot_idx].editor;
-        let view = View::new_view(src.buffer().content_arc());
+        let slot = &self.slots[slot_idx];
+        let view = View::new_view(slot.buffer().content_arc());
         let mut ed = hjkl_vim::vim_editor(view, TuiHost::new(), Options::default());
-        *ed.settings_mut() = src.settings().clone();
-        ed.set_current_buffer_id(self.slots[slot_idx].buffer_id);
-        // Inherit the slot editor's cursor so the first view onto a buffer keeps
+        *ed.settings_mut() = slot.settings().clone();
+        ed.set_current_buffer_id(slot.buffer_id);
+        // Inherit the slot's own cursor so the first view onto a buffer keeps
         // any pre-window positioning (startup `+/pat` search, `+N`, a split
-        // inheriting the source cursor).
-        let src_cursor = src.buffer().cursor();
+        // inheriting the source cursor) that a caller stashed there.
+        let src_cursor = slot.buffer().cursor();
         ed.set_cursor_quiet(src_cursor.row, src_cursor.col);
         // Last-search is a shared bank (audit B2) wired by the caller
         // (`reconcile_window_editors`) via `set_search_arc` right after this
         // returns — no per-window copy needed, `n`/`N` see it live.
-        let (w, h, top_row, top_col) = {
-            let vp = src.host().viewport();
-            (vp.width, vp.height, vp.top_row, vp.top_col)
-        };
+        let (w, h) = self
+            .window_editors
+            .get(&self.focused_window())
+            .map(|e| {
+                let vp = e.host().viewport();
+                (vp.width, vp.height)
+            })
+            .or_else(|| {
+                crossterm::terminal::size()
+                    .ok()
+                    .map(|(w, h)| (w, h.saturating_sub(STATUS_LINE_HEIGHT)))
+            })
+            .unwrap_or((80, 24));
         {
             let vp = ed.host_mut().viewport_mut();
             vp.width = w;
             vp.height = h;
-            vp.top_row = top_row;
-            vp.top_col = top_col;
         }
         ed.set_viewport_height(h);
         ed
@@ -1370,7 +1431,7 @@ impl App {
             if slot >= self.slots.len() {
                 continue;
             }
-            let slot_content = self.slots[slot].editor.buffer().content_arc();
+            let slot_content = self.slots[slot].buffer().content_arc();
             let needs = match self.window_editors.get(&wid) {
                 Some(e) => !std::sync::Arc::ptr_eq(&e.buffer().content_arc(), &slot_content),
                 None => true,
@@ -1394,12 +1455,6 @@ impl App {
                 self.window_editors.insert(wid, ed);
             }
         }
-    }
-
-    /// Return a mutable reference to the active buffer slot.
-    pub fn active_slot_mut(&mut self) -> &mut BufferSlot {
-        let slot_idx = self.focused_slot_idx();
-        &mut self.slots[slot_idx]
     }
 
     /// Return a shared slice of all buffer slots.
@@ -1592,21 +1647,17 @@ impl App {
         let Some(buffer_id) = self.slots.get(slot_idx).map(|s| s.buffer_id) else {
             return;
         };
-        if self.slots[slot_idx].editor.take_content_reset() {
+        if self.slots[slot_idx].take_content_reset() {
             self.syntax.reset(buffer_id);
-            self.slots[slot_idx]
-                .editor
-                .install_ratatui_syntax_spans(Vec::new());
+            self.install_syntax_spans_for_slot(slot_idx, Vec::new());
         }
-        let edits = self.slots[slot_idx].editor.take_content_edits();
+        let edits = self.slots[slot_idx].take_content_edits();
         if !edits.is_empty() {
             self.syntax.apply_edits(buffer_id, &edits);
-            self.slots[slot_idx]
-                .editor
-                .shift_syntax_spans_for_edits(&edits);
+            self.shift_syntax_spans_for_slot(slot_idx, &edits);
         }
         self.lsp_notify_change_for_slot(slot_idx, &edits);
-        if self.slots[slot_idx].editor.take_dirty() {
+        if self.slots[slot_idx].take_dirty() {
             self.slots[slot_idx].refresh_dirty_against_saved();
             if self.slots[slot_idx].dirty {
                 self.slots[slot_idx].is_new_file = false;
@@ -1848,7 +1899,7 @@ impl App {
             // the per-window fold install) bump `dirty_gen` without changing the
             // text, which made `==` falsely reject every valid format result.
             let unchanged = {
-                let current = self.slots[slot_idx].editor.buffer().content_joined();
+                let current = self.slots[slot_idx].buffer().content_joined();
                 *current == *result.source
             };
             if !unchanged {
@@ -1876,7 +1927,7 @@ impl App {
                     // press `u` to revert the formatter's changes as a single
                     // undo step. pending_content_reset is set inside, which
                     // sync_after_engine_mutation picks up for the syntax layer.
-                    self.slots[slot_idx].editor.set_content_undoable(&content);
+                    self.set_content_undoable_for_slot(slot_idx, &content);
 
                     // Note: the indent flash was armed at submit time in
                     // `submit_external_format` so the user gets immediate
@@ -1950,39 +2001,35 @@ impl App {
         let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
             .map_err(|s| anyhow::anyhow!(s))?;
 
-        // Create the app-wide shared register bank and inject it into the
-        // initial slot's editor so all editors share one bank from the start.
+        // App-wide shared banks — one `Arc` for the whole session, wired
+        // into every window editor identically by `reconcile_window_editors`
+        // (below). No editor exists yet at this point (#151 Stage 2b removed
+        // the slot bridge editor), so there is nothing to wire these into
+        // until then.
         let shared_registers: std::sync::Arc<std::sync::Mutex<hjkl_engine::Registers>> =
             std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::Registers::default()));
-        slot.editor.set_registers_arc(shared_registers.clone());
 
         // Same treatment for uppercase (global) marks — session-global in
         // vim, so every editor must share one bank from the start.
         let shared_global_marks: std::sync::Arc<std::sync::Mutex<hjkl_engine::GlobalMarks>> =
             std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::GlobalMarks::new()));
-        slot.editor
-            .set_global_marks_arc(shared_global_marks.clone());
 
         // Same treatment for the last `:s` command — session-global in vim,
         // so every editor must share one bank from the start.
         let shared_last_substitute: std::sync::Arc<
             std::sync::Mutex<Option<hjkl_engine::SubstituteCmd>>,
         > = std::sync::Arc::new(std::sync::Mutex::new(None));
-        slot.editor
-            .set_last_substitute_arc(shared_last_substitute.clone());
 
         // Same treatment for abbreviations — session-global in vim, so
         // every editor must share one bank from the start.
         let shared_abbrevs: std::sync::Arc<std::sync::Mutex<Vec<hjkl_engine::Abbrev>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        slot.editor.set_abbrevs_arc(shared_abbrevs.clone());
 
         // Same treatment for the last search pattern (the `"/` register) —
         // session-global in vim, so every editor must share one bank from
         // the start (audit B2).
         let shared_search: std::sync::Arc<std::sync::Mutex<hjkl_engine::SearchBank>> =
             std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::SearchBank::default()));
-        slot.editor.set_search_arc(shared_search.clone());
 
         // Per-buffer changelist bank (audit B3). UNLIKE the banks above —
         // one Arc shared by the whole app session — this one is keyed by
@@ -1994,57 +2041,31 @@ impl App {
             u64,
             std::sync::Arc<std::sync::Mutex<hjkl_engine::ChangeBank>>,
         > = std::collections::HashMap::new();
-        let initial_change_bank =
-            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::ChangeBank::default()));
-        change_banks.insert(buffer_id, initial_change_bank.clone());
-        slot.editor.set_change_bank_arc(initial_change_bank);
+        change_banks.insert(
+            buffer_id,
+            std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::ChangeBank::default())),
+        );
 
         // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
         // work from the first keystroke without requiring a buffer switch.
+        // Written straight into the bank — no editor needed for a register op.
         {
             let fname = slot
                 .filename
                 .as_deref()
                 .map(|p| p.to_string_lossy().into_owned());
-            slot.editor.with_registers_mut(|r| r.set_filename(fname));
+            shared_registers.lock().unwrap().set_filename(fname);
         }
 
         // Apply readonly after the slot is built — build_slot always uses
-        // Options::default(); override here when requested.
+        // Options::default(); override here when requested. Writes the
+        // settings TEMPLATE directly (no editor exists yet); `reconcile_window_editors`
+        // (below) copies it into the initial window's editor.
         if readonly {
-            slot.editor.apply_options(&Options {
+            slot.settings.apply_options(&Options {
                 readonly: true,
                 ..Options::default()
             });
-        }
-
-        // +N line jump — 1-based, clamp to buffer.
-        if let Some(n) = goto_line {
-            slot.editor.goto_line(n);
-        }
-
-        // +/pattern initial search — compile the pattern and set it.
-        if let Some(pat) = search_pattern {
-            match regex::Regex::new(&pat) {
-                Ok(re) => {
-                    slot.editor.set_search_pattern(Some(re));
-                    slot.editor.search_advance_forward(false);
-                    // search_advance_forward moves the cursor without
-                    // going through vim::step's end-of-step scrolloff
-                    // hook, so the editor's viewport stays at row 0.
-                    // Reveal the cursor here so the focused window's
-                    // initial top_row (read below) picks up the scroll.
-                    slot.editor.ensure_cursor_in_scrolloff();
-                    // Persist direction so a subsequent `n` repeats
-                    // forward; without this, vim.last_search_forward
-                    // stays at its bool default (false) and `n` jumps
-                    // backward as if `?pat<CR>` had been typed.
-                    slot.editor.set_last_search(Some(pat), true);
-                }
-                Err(e) => {
-                    eprintln!("hjkl: bad search pattern: {e}");
-                }
-            }
         }
 
         let start_screen = if no_file {
@@ -2054,9 +2075,7 @@ impl App {
         };
 
         // Single window pointing at slot 0. Its view editor is built by
-        // `reconcile_window_editors()` (below), which copies the slot editor's
-        // viewport — so any pre-event-loop scroll (e.g. +/pat search-on-open) is
-        // preserved without a separate scroll mirror (#151 Phase D).
+        // `reconcile_window_editors()` (below).
         let initial_window = window::Window::new(0);
 
         let default_leader = hjkl_app::config::Config::default().editor.leader;
@@ -2199,6 +2218,42 @@ impl App {
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();
+
+        // +N line jump / +/pattern initial search — now that the initial
+        // window's editor exists, drive it directly (#151 Stage 2b: this
+        // used to run on the slot bridge editor before any window existed,
+        // relying on `reconcile_window_editors` to copy the resulting
+        // cursor/scroll into the window; now it runs after reconcile, on
+        // the window editor itself, which is simpler and needs no copy).
+        //
+        // +N line jump — 1-based, clamp to buffer.
+        if let Some(n) = goto_line {
+            app.active_editor_mut().goto_line(n);
+        }
+        // +/pattern initial search — compile the pattern and set it.
+        if let Some(pat) = search_pattern {
+            match regex::Regex::new(&pat) {
+                Ok(re) => {
+                    app.active_editor_mut().set_search_pattern(Some(re));
+                    app.active_editor_mut().search_advance_forward(false);
+                    // search_advance_forward moves the cursor without
+                    // going through vim::step's end-of-step scrolloff
+                    // hook, so the editor's viewport stays at row 0.
+                    // Reveal the cursor here so the focused window's
+                    // initial top_row (read below) picks up the scroll.
+                    app.active_editor_mut().ensure_cursor_in_scrolloff();
+                    // Persist direction so a subsequent `n` repeats
+                    // forward; without this, vim.last_search_forward
+                    // stays at its bool default (false) and `n` jumps
+                    // backward as if `?pat<CR>` had been typed.
+                    app.active_editor_mut().set_last_search(Some(pat), true);
+                }
+                Err(e) => {
+                    eprintln!("hjkl: bad search pattern: {e}");
+                }
+            }
+        }
+
         // Check for crash recovery on the initial file slot (#185).
         // If no recovery prompt is needed, arm the PID-lock swap immediately so
         // a concurrent second open of the same file sees it (even on unmodified
@@ -2285,8 +2340,9 @@ impl App {
         self.icon_mode = hjkl_icons::IconMode::from_config(&config.editor.icons)
             .unwrap_or(hjkl_icons::IconMode::Nerd);
         self.config = config;
-        for slot in &mut self.slots {
-            let was_readonly = slot.editor.is_readonly();
+        for idx in 0..self.slots.len() {
+            let slot = &mut self.slots[idx];
+            let was_readonly = slot.is_readonly();
             let mut opts = Options {
                 expandtab: self.config.editor.expandtab,
                 tabstop: self.config.editor.tab_width as u32,
@@ -2298,7 +2354,18 @@ impl App {
             if let Some(p) = slot.filename.as_ref() {
                 hjkl_app::editorconfig::overlay_for_path(&mut opts, p);
             }
-            slot.editor.apply_options(&opts);
+            // Update the settings TEMPLATE so any future window opened on
+            // this slot inherits the re-applied config (#151 Stage 2b — no
+            // slot bridge editor to hold this anymore).
+            slot.settings_mut().apply_options(&opts);
+            // Also push it into every window ALREADY showing this slot, for
+            // immediate effect (mirrors the readonly-swap-lock dual-write in
+            // `ex_dispatch::check_recovery_on_open`).
+            for wid in self.windows_for_slot(idx) {
+                if let Some(ed) = self.window_editors.get_mut(&wid) {
+                    ed.apply_options(&opts);
+                }
+            }
         }
         self
     }

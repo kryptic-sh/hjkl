@@ -4,34 +4,32 @@
 //! renderer-agnostic types and adds the `App`-specific dispatch methods that
 //! bridge `LayoutRect` ↔ `ratatui::layout::Rect`.
 //!
-//! ## Per-window cursor state (v0.22.0)
+//! ## Per-window cursor state (#151 Phase D / Stage 2b)
 //!
-//! Each [`AppWindow`] is the source of truth for cursor, scroll, and
-//! sticky-column state for that specific window.
+//! [`AppWindow`] (aliased from `hjkl_layout::Window`) is geometry-only: it
+//! carries `slot` (which [`crate::app::BufferSlot`] this window shows) and
+//! `last_rect` (the pane rect from the most recent render). It does NOT
+//! carry cursor or scroll state.
 //!
-//! In the previous design, `App` held per-window cursor/scroll in `Window`
-//! and synced them into the slot editor before *every* keypress.  That
-//! per-keypress sync was the root cause of the sticky-column regression
-//! (issue #151): syncing set `sticky_col` on every frame, breaking `j`/`k`
-//! column preservation across empty lines.
+//! Cursor, scroll, and vim-FSM state instead live on a per-window
+//! [`hjkl_engine::Editor`] in [`crate::app::App::window_editors`], keyed by
+//! [`WindowId`] — one real `Editor` per open window, each an independent
+//! [`hjkl_buffer::View`] onto its slot's shared `Buffer`. A window's editor
+//! is the single source of truth for its cursor/scroll at all times; no
+//! per-keypress or per-focus-change sync is needed because dispatch always
+//! operates on the focused window's own editor directly
+//! ([`crate::app::App::active_editor_mut`]).
 //!
-//! The new design:
-//! - `AppWindow.{cursor_row, cursor_col, top_row, top_col}` are the
-//!   per-window cursor/scroll snapshots, kept authoritative at all times.
-//! - The slot editor's cursor is only touched on *focus change*: when a
-//!   window gains focus its saved cursor/scroll are loaded into the editor;
-//!   when it loses focus the editor's cursor/scroll are saved back.
-//! - During dispatch the editor's cursor is already correct from the
-//!   previous dispatch — no pre-dispatch restore is needed.
+//! `BufferSlot` itself holds no per-window state at all (Stage 2b removed
+//! its own `Editor`) — just the document handle (content, shared across
+//! every window on the buffer) and a settings template used to seed a
+//! freshly (re)targeted window's editor.
 
 pub use hjkl_layout::{Axis, LayoutRect, LayoutTree, SplitDir, Tab, WindowId};
 
 // Re-export hjkl_layout::Window as AppWindow so callers that imported Window
 // continue to compile. This also preserves the public field shape (slot,
-// cursor_row, cursor_col, top_row, top_col, last_rect) used across the app.
-//
-// In v0.22.0 the structural change is that the slot editor is now only synced
-// on focus-change, not before every keypress.
+// last_rect) used across the app.
 pub use hjkl_layout::Window as AppWindow;
 
 // Keep `Window` importable as well for backward compat within this crate.
@@ -519,15 +517,10 @@ impl App {
         if !self.nvim_window_is_valid(id) {
             return false;
         }
-        if let Some(ed) = self.window_editors.get_mut(&win_id) {
-            ed.jump_cursor(row, col);
-        } else {
-            let slot = self.windows[win_id]
-                .as_ref()
-                .map(|w| w.slot)
-                .unwrap_or_else(|| self.focused_slot_idx());
-            self.slots[slot].editor.jump_cursor(row, col);
-        }
+        self.window_editors
+            .get_mut(&win_id)
+            .expect("window_editors must have an entry for every open window")
+            .jump_cursor(row, col);
         true
     }
 

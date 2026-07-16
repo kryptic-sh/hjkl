@@ -5,11 +5,9 @@ use crate::picker_action::AppAction;
 
 use git2::{BranchType, ErrorCode, ObjectType};
 use hjkl_buffer::View;
-use hjkl_engine::{BufferEdit, Host, Options};
-use hjkl_engine_tui::EditorRatatuiExt;
+use hjkl_engine::{BufferEdit, Host, Options, Settings};
 
-use super::{App, BufferSlot, DiskState, STATUS_LINE_HEIGHT};
-use crate::host::TuiHost;
+use super::{App, BufferSlot, DiskState};
 use crate::picker_sources::{FileSourceWithOpen, RgSourceWithOpen};
 use crate::syntax::BufferId;
 
@@ -60,10 +58,10 @@ impl App {
                     .to_owned()
             },
             |s| s.dirty,
-            |s| snapshot_buffer_window(s.editor.buffer()).0,
+            |s| snapshot_buffer_window(s.buffer()).0,
             |s| s.filename.clone(),
-            |s| snapshot_buffer_window(s.editor.buffer()).1,
-            |s| snapshot_buffer_window(s.editor.buffer()).2,
+            |s| snapshot_buffer_window(s.buffer()).1,
+            |s| snapshot_buffer_window(s.buffer()).2,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
     }
@@ -712,12 +710,7 @@ impl App {
         };
         let content = crate::picker_git::render_commit(&repo, &commit);
         let short_sha = &sha[..7.min(sha.len())];
-        match build_scratch_slot(
-            &mut self.syntax,
-            self.next_buffer_id,
-            &content,
-            &self.config,
-        ) {
+        match build_scratch_slot(self.next_buffer_id, &content, &self.config) {
             Ok(slot) => {
                 self.next_buffer_id += 1;
                 self.slots.push(slot);
@@ -736,7 +729,6 @@ impl App {
 /// `build_slot`'s file-read path but injects content directly instead of
 /// reading from disk, avoiding a file round-trip for ephemeral commit views.
 fn build_scratch_slot(
-    syntax: &mut crate::syntax::SyntaxLayer,
     buffer_id: BufferId,
     content: &str,
     config: &hjkl_app::config::Config,
@@ -744,8 +736,10 @@ fn build_scratch_slot(
     let mut buffer = View::new();
     let content = content.strip_suffix('\n').unwrap_or(content);
     BufferEdit::replace_all(&mut buffer, content);
+    // No manual pre-render here (#151 Stage 2b — see `build_slot`'s doc):
+    // `switch_to` (the only caller's next step) runs `recompute_and_install`
+    // synchronously before the first paint.
 
-    let host = TuiHost::new();
     let opts = Options {
         expandtab: config.editor.expandtab,
         tabstop: config.editor.tab_width as u32,
@@ -754,28 +748,15 @@ fn build_scratch_slot(
         readonly: true,
         ..Options::default()
     };
-    let mut editor = hjkl_vim::vim_editor(buffer, host, opts);
-    if let Ok(size) = crossterm::terminal::size() {
-        let vp = editor.host_mut().viewport_mut();
-        vp.width = size.0;
-        vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-    }
-    let _ = editor.take_content_edits();
-    let _ = editor.take_content_reset();
-
-    let (vp_top, vp_height) = {
-        let vp = editor.host().viewport();
-        (vp.top_row, vp.height as usize)
-    };
-    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height) {
-        editor.install_ratatui_syntax_spans(out.spans);
-    }
+    let mut settings = Settings::default();
+    settings.apply_options(&opts);
 
     let mut slot = BufferSlot {
         buffer_id,
         is_explorer: false,
         features: super::BufferFeatures::default(),
-        editor,
+        view: buffer,
+        settings,
         filename: None,
         dirty: false,
         is_new_file: false,

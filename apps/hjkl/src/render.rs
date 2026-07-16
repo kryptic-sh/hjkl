@@ -432,7 +432,7 @@ pub(crate) fn max_lnum_width(app: &App) -> u16 {
     app.slots()
         .iter()
         .filter(|s| !s.is_explorer)
-        .map(|s| s.editor.lnum_width())
+        .map(|s| s.lnum_width())
         .max()
         .unwrap_or(0)
 }
@@ -450,7 +450,7 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
     let mut sign_w = 0u16;
     let mut fold_w = 0u16;
     for slot in app.slots().iter().filter(|s| !s.is_explorer) {
-        let st = slot.editor.settings();
+        let st = slot.settings();
         let has_any_signs = !slot.diag_signs.is_empty()
             || !slot.diag_signs_lsp.is_empty()
             || !slot.git_signs.is_empty();
@@ -466,7 +466,7 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
             }
         };
         sign_w = sign_w.max(sw);
-        let has_folds = !slot.editor.buffer().folds().is_empty();
+        let has_folds = !slot.buffer().folds().is_empty();
         let fw = (st.foldcolumn.min(12) as u16).max(if has_folds { 1 } else { 0 });
         fold_w = fold_w.max(fw);
     }
@@ -503,7 +503,7 @@ pub(crate) fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 
         .window_editors
         .get(&win_id)
         .map(|e| e.lnum_width())
-        .unwrap_or_else(|| slot.editor.lnum_width());
+        .unwrap_or_else(|| slot.lnum_width());
     let num_gw = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     sign_w + num_gw + fold_w
 }
@@ -777,16 +777,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .window_editors
         .get(&win_id)
         .map(|e| e.settings().clone())
-        .unwrap_or_else(|| app.slots()[slot_idx].editor.settings().clone());
+        .unwrap_or_else(|| app.slots()[slot_idx].settings().clone());
     let s = &win_settings;
+    // `is_blame` has no slot-level counterpart (#151 Stage 2b — it's
+    // transient per-window UI state, never meant to persist beyond a
+    // window's life); default it off in the (should-not-happen) fallback.
     let (w_cursor_row, w_is_blame) = app
         .window_editors
         .get(&win_id)
         .map(|e| (e.buffer().cursor().row, e.is_blame()))
-        .unwrap_or_else(|| {
-            let e = &app.slots()[slot_idx].editor;
-            (e.buffer().cursor().row, e.is_blame())
-        });
+        .unwrap_or_else(|| (app.slots()[slot_idx].buffer().cursor().row, false));
     let (nu, rnu) = (s.number, s.relativenumber);
     let (cul, cuc) = (s.cursorline, s.cursorcolumn);
     let colorcolumn = s.colorcolumn.clone();
@@ -814,7 +814,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .window_editors
         .get(&win_id)
         .map(|e| e.lnum_width())
-        .unwrap_or_else(|| app.slots()[slot_idx].editor.lnum_width());
+        .unwrap_or_else(|| app.slots()[slot_idx].lnum_width());
     let num_gw_for_text = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     // Extra padding added to the number column beyond the buffer's own width —
     // folded into the cursor's gutter offset below so the caret stays aligned.
@@ -948,7 +948,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     } else {
         None
     };
-    let buffer_spans = app.slots()[slot_idx].editor.buffer_spans();
+    // styled_spans / style_table live on the window editor, not the slot
+    // (#151 Stage 2b — see `App::install_syntax_spans_for_slot`): a buffer
+    // open in N splits gets N independent installs, and a span's `style` id
+    // only resolves correctly against the SAME editor's style table that
+    // assigned it. `syntax_glue::recompute_and_install` installs into every
+    // window showing a slot, so a live window editor always has spans by the
+    // time it's focused enough to render with signs/gutter; the fallback
+    // here (no window editor yet) is the same "should not happen" case as
+    // elsewhere and just renders unstyled.
+    let buffer_spans: &[Vec<hjkl_buffer::Span>] = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.buffer_spans())
+        .unwrap_or(&[]);
     let search_pattern_owned = app
         .window_editors
         .get(&win_id)
@@ -963,7 +976,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         Style::default()
     };
 
-    let style_table = app.slots()[slot_idx].editor.style_table().to_owned();
+    let style_table = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.style_table().to_owned())
+        .unwrap_or_default();
     let resolver = move |id: u32| {
         hjkl_engine_tui::style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
     };
@@ -1003,7 +1020,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let indent_guide_active_col: Option<usize> =
         if is_focused && indent_guides_enabled && indent_guide_shiftwidth > 0 {
             let cursor_row = w_cursor_row;
-            let rope = app.slots()[slot_idx].editor.buffer().rope();
+            let rope = app.slots()[slot_idx].buffer().rope();
             let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor_row);
             let tab_width = indent_guide_tabstop.max(1);
             let mut leading_vcols: usize = 0;
@@ -1123,12 +1140,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let blame_box_plan: Vec<hjkl_buffer_tui::render::BlameRow> = if box_mode {
         let s = &app.slots()[slot_idx];
         let vp_top = viewport_owned.top_row;
-        let line_count = s.editor.buffer().line_count() as usize;
+        let line_count = s.buffer().line_count() as usize;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let buf = s.editor.buffer();
+        let buf = s.buffer();
         crate::app::git_hunks::build_blame_box_plan(
             &s.blame,
             line_count,
@@ -1150,7 +1167,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // differ. In debug_mode the raw ids are shown for diagnostics.
     let explorer_conceals: Vec<hjkl_buffer_tui::Conceal> = if is_explorer_slot && !app.debug_mode {
         use crate::app::explorer_reconcile::ID_SEP;
-        let buf_text = app.slots()[slot_idx].editor.buffer().as_string();
+        let buf_text = app.slots()[slot_idx].buffer().as_string();
         buf_text
             .lines()
             .enumerate()
@@ -1174,7 +1191,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let diff_filler_plan = app.diff_filler_plan(win_id);
 
     let view = BufferView {
-        buffer: app.slots()[slot_idx].editor.buffer(),
+        buffer: app.slots()[slot_idx].buffer(),
         viewport: viewport_ref,
         selection,
         resolver: &resolver,
@@ -1292,7 +1309,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // overlay from the drawn rows and garbles the tree.
         let (explorer_folds, buf_text): (Vec<hjkl_buffer::Fold>, String) =
             if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
-                let b = app.slots()[slot_idx].editor.buffer();
+                let b = app.slots()[slot_idx].buffer();
                 let folds = if is_focused {
                     b.folds()
                 } else {
@@ -1603,7 +1620,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 }
                 // Char-level DiffText over the changed byte ranges.
                 if !class.text_ranges.is_empty() {
-                    let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].editor.buffer());
+                    let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].buffer());
                     let lt = hjkl_buffer::rope_line_str(&rope, line);
                     let lt = lt.trim_end_matches('\n');
                     let len = lt.len();
@@ -1642,7 +1659,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         if match_row >= vp_top && match_row < vp_bot {
             let screen_row = area.y + (match_row - vp_top) as u16;
             // Convert byte offsets to char columns for rendering.
-            let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].editor.buffer());
+            let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].buffer());
             let line = hjkl_buffer::rope_line_str(&rope, match_row);
             let line_no_nl = line.trim_end_matches('\n');
             let char_start = line_no_nl[..m.byte_start as usize].chars().count();
@@ -1827,13 +1844,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // anim settles (`vp_top == target_top_row`, shift = 0).
             let shift: i64 = match vp_top.cmp(&target_top_row) {
                 std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Less => app.slots()[slot_idx]
-                    .editor
-                    .buffer()
-                    .screen_rows_between(viewport_ref, vp_top, target_top_row - 1)
-                    as i64,
+                std::cmp::Ordering::Less => app.slots()[slot_idx].buffer().screen_rows_between(
+                    viewport_ref,
+                    vp_top,
+                    target_top_row - 1,
+                ) as i64,
                 std::cmp::Ordering::Greater => {
-                    -(app.slots()[slot_idx].editor.buffer().screen_rows_between(
+                    -(app.slots()[slot_idx].buffer().screen_rows_between(
                         viewport_ref,
                         target_top_row,
                         vp_top - 1,

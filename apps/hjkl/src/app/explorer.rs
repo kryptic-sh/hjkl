@@ -699,11 +699,9 @@ impl super::App {
 
     /// Open the explorer window (left vertical split of the current tab).
     fn open_explorer(&mut self) {
-        use super::STATUS_LINE_HEIGHT;
         use super::window::{LayoutTree, SplitDir, Window};
-        use crate::host::TuiHost;
         use hjkl_buffer::View;
-        use hjkl_engine::{BufferEdit, Host, Options};
+        use hjkl_engine::{BufferEdit, Settings};
         use std::time::Instant;
 
         // Capture the file the user was editing so we can reveal it.
@@ -728,38 +726,27 @@ impl super::App {
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
 
-        let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-        editor.set_registers_arc(self.registers.clone());
-        editor.set_global_marks_arc(self.global_marks.clone());
-        editor.set_last_substitute_arc(self.last_substitute.clone());
-        editor.set_abbrevs_arc(self.abbrevs.clone());
-        editor.set_search_arc(self.search.clone());
-        editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-        if let Ok(size) = crossterm::terminal::size() {
-            let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            let vp = editor.host_mut().viewport_mut();
-            vp.width = super::explorer::EXPLORER_WINDOW_WIDTH;
-            vp.height = h;
-        }
-        editor.set_current_buffer_id(buffer_id);
+        // No editor built here (#151 Stage 2b — see `build_slot`'s doc): the
+        // register/marks/search/change-bank Arcs and the viewport are wired
+        // onto the window editor by `reconcile_window_editors` below, and
+        // the reveal cursor is applied to the real window editor afterward
+        // via `set_explorer_window_cursor`.
+        let mut view = View::new();
         if !text.is_empty() {
-            BufferEdit::replace_all(editor.buffer_mut(), &text);
+            BufferEdit::replace_all(&mut view, &text);
         }
         // Apply initial folds so collapsed dirs hide their subtrees on open.
-        editor.buffer_mut().set_folds(&initial_folds);
-        editor.set_filetype("explorer");
+        view.set_folds(&initial_folds);
         // Settings for the explorer: no line numbers, no sign column, cursorline on.
-        {
-            let s = editor.settings_mut();
-            s.number = false;
-            s.relativenumber = false;
-            s.signcolumn = hjkl_engine::types::SignColumnMode::No;
-            s.cursorline = true;
-            s.foldcolumn = 0;
-        }
-        let _ = editor.take_content_edits();
-        let _ = editor.take_content_reset();
+        let settings = Settings {
+            filetype: "explorer".to_string(),
+            number: false,
+            relativenumber: false,
+            signcolumn: hjkl_engine::types::SignColumnMode::No,
+            cursorline: true,
+            foldcolumn: 0,
+            ..Settings::default()
+        };
 
         let slot = super::BufferSlot {
             buffer_id,
@@ -770,7 +757,8 @@ impl super::App {
                 hover: false,
                 end_of_buffer: false,
             },
-            editor,
+            view,
+            settings,
             filename: None,
             dirty: false,
             is_new_file: false,
@@ -847,7 +835,7 @@ impl super::App {
             .iter()
             .rev()
             .find(|s| s.is_explorer)
-            .map(|s| s.editor.buffer().dirty_gen())
+            .map(|s| s.buffer().dirty_gen())
             .unwrap_or(0);
 
         self.explorer = Some(ExplorerPane {
@@ -929,9 +917,9 @@ impl super::App {
 
         // Write new content directly (bypasses readonly guard intentionally).
         // set_content clears undo/redo — correct for structural nav (toggle/root).
-        self.slots[slot_idx].editor.set_content(&text);
-        let _ = self.slots[slot_idx].editor.take_content_edits();
-        let _ = self.slots[slot_idx].editor.take_content_reset();
+        self.slots[slot_idx].set_content(&text);
+        let _ = self.slots[slot_idx].take_content_edits();
+        let _ = self.slots[slot_idx].take_content_reset();
 
         // Apply folds derived from the current `expanded` set so collapsed dirs
         // hide their subtrees. Must happen after set_content so row indices are
@@ -941,7 +929,7 @@ impl super::App {
             .as_ref()
             .map(|ep| ep.tree.compute_folds())
             .unwrap_or_default();
-        self.slots[slot_idx].editor.buffer_mut().set_folds(&folds);
+        self.slots[slot_idx].buffer_mut().set_folds(&folds);
         self.sync_explorer_window_folds();
 
         // Sync the baseline from the freshly-rendered tree so the next
@@ -960,7 +948,7 @@ impl super::App {
                     .collect()
             })
             .unwrap_or_default();
-        let new_gen = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let new_gen = self.slots[slot_idx].buffer().dirty_gen();
         if let Some(ep) = self.explorer.as_mut() {
             ep.baseline = new_baseline;
             ep.last_reconcile_gen = new_gen;
@@ -1010,23 +998,24 @@ impl super::App {
         };
 
         // Must be in Normal mode — don't reconcile mid-edit. The mode lives on
-        // the explorer window's editor (#151 Phase D), not the slot bridge
-        // editor (which is never dispatched and would read a stale Normal).
+        // the explorer window's editor (#151 Phase D). When no window editor
+        // exists yet (e.g. unit tests that drive the explorer without running
+        // the reconcile tick — #151 Stage 2b: there's no slot-level editor to
+        // fall back to anymore), default to Normal — an editor that was never
+        // dispatched is always at rest in Normal mode, which is exactly what
+        // the old slot-bridge-editor fallback always read too.
         let vim_mode = self
             .explorer
             .as_ref()
             .and_then(|e| self.window_editors.get(&e.win_id))
             .map(|ed| ed.vim_mode())
-            // Fall back to the slot bridge editor (matches active_editor's
-            // fallback) when no window editor exists yet — e.g. unit tests that
-            // drive the explorer without running the reconcile tick.
-            .unwrap_or_else(|| self.slots[slot_idx].editor.vim_mode());
+            .unwrap_or(VimMode::Normal);
         if vim_mode != VimMode::Normal {
             return;
         }
 
         // Read the buffer's current dirty_gen.
-        let cur_gen = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let cur_gen = self.slots[slot_idx].buffer().dirty_gen();
 
         // Guard: nothing changed since last reconcile.
         let last_gen = self
@@ -1042,7 +1031,7 @@ impl super::App {
         let (baseline, text, root) = {
             let ep = self.explorer.as_ref().unwrap();
             let baseline = ep.baseline.clone();
-            let text = self.slots[slot_idx].editor.buffer().as_string();
+            let text = self.slots[slot_idx].buffer().as_string();
             let root = ep.tree.root.clone();
             (baseline, text, root)
         };
@@ -1282,9 +1271,13 @@ impl super::App {
 
         self.slots[idx].filename = Some(new_path.clone());
         self.slots[idx].git_repo_present = None; // re-probe for new path
-        self.slots[idx]
-            .editor
-            .with_registers_mut(|r| r.set_filename(Some(new_path.to_string_lossy().into_owned())));
+        // `%` register — session-shared Arc, same one every editor (window or
+        // otherwise) is wired to, so writing it directly needs no live editor
+        // (#151 Stage 2b).
+        self.registers
+            .lock()
+            .unwrap()
+            .set_filename(Some(new_path.to_string_lossy().into_owned()));
         // The disk baseline follows the file to its new path (content is
         // unchanged by a rename; the metadata identity is what moved).
         if let Ok(meta) = std::fs::metadata(&new_path) {
@@ -1296,7 +1289,7 @@ impl super::App {
         let bid = self.slots[idx].buffer_id;
         let _ = self.syntax.set_language_for_path(bid, &new_path);
         if let Some(lang) = self.syntax.language_name_for_path(&new_path) {
-            self.slots[idx].editor.set_filetype(&lang);
+            self.slots[idx].set_filetype(&lang);
         }
         if idx == self.focused_slot_idx() {
             self.pending_recompute = true;
@@ -1423,15 +1416,23 @@ impl super::App {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
-        let folds = self.slots[slot_idx].editor.buffer().folds();
+        let folds = self.slots[slot_idx].buffer().folds();
         self.window_folds.insert(win_id, folds);
     }
 
     /// Set the explorer window editor's cursor (and optionally scroll top)
     /// directly (#151 Phase D, B' step 2). The per-window editor is the single
     /// source of truth — callers pass the target row/col instead of staging it
-    /// in the now-removed `layout::Window` cursor mirror. `top = None` leaves the
-    /// current scroll. Falls back to the slot bridge editor if no window editor.
+    /// in the now-removed `layout::Window` cursor mirror. `top = None` leaves
+    /// the current scroll.
+    ///
+    /// Falls back to setting the slot's own `View` cursor (#151 Stage 2b — no
+    /// slot bridge editor anymore) when no window editor exists yet — e.g. a
+    /// unit test driving the explorer without a reconcile tick. That cursor
+    /// becomes the initial cursor the next `make_view_editor` call picks up
+    /// for this slot. `top` is dropped in that fallback (no viewport to set):
+    /// the only caller passing `Some` already reads a live window editor's
+    /// viewport to compute it, so it can never hit this branch.
     pub(crate) fn set_explorer_window_cursor(
         &mut self,
         row: usize,
@@ -1444,13 +1445,19 @@ impl super::App {
         let Some(slot_idx) = self.slots.iter().position(|s| s.is_explorer) else {
             return;
         };
-        let editor = match self.window_editors.get_mut(&win_id) {
-            Some(e) => e,
-            None => &mut self.slots[slot_idx].editor,
-        };
-        editor.jump_cursor(row, col);
-        if let Some(t) = top {
-            editor.host_mut().viewport_mut().top_row = t;
+        match self.window_editors.get_mut(&win_id) {
+            Some(editor) => {
+                editor.jump_cursor(row, col);
+                if let Some(t) = top {
+                    editor.host_mut().viewport_mut().top_row = t;
+                }
+            }
+            None => {
+                let clamped = self.slots[slot_idx]
+                    .buffer()
+                    .clamp_position(hjkl_buffer::Position::new(row, col));
+                self.slots[slot_idx].buffer_mut().set_cursor(clamped);
+            }
         }
     }
 
@@ -1515,7 +1522,7 @@ impl super::App {
             // the full `set_content` + fold-recompute reset that collapsed
             // search-revealed dirs, hid the target row (cursorline landed on
             // the wrong line), and reshuffled the scroll position.
-            self.slots[slot_idx].editor.buffer_mut().reveal_row(row);
+            self.slots[slot_idx].buffer_mut().reveal_row(row);
             self.sync_explorer_window_folds();
         }
 
@@ -1539,7 +1546,7 @@ impl super::App {
             row
         } else {
             // Is `row` among the `height` visible rows starting at `cur_top`?
-            let buf = self.slots[slot_idx].editor.buffer();
+            let buf = self.slots[slot_idx].buffer();
             let mut r = cur_top;
             let mut visible = false;
             for _ in 0..height {
@@ -2343,9 +2350,9 @@ mod tests {
         app.dispatch_action(AppAction::ToggleExplorer, 1);
         let idx = app.explorer_slot_idx().expect("explorer slot");
         // Append a new file line at the root depth (name_col = 2).
-        let cur = app.slots[idx].editor.buffer().as_string();
+        let cur = app.slots[idx].buffer().as_string();
         let newtext = format!("{cur}\n  newfile.rs");
-        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
+        BufferEdit::replace_all(app.slots[idx].buffer_mut(), &newtext);
         // Explorer is in Normal mode by default; run the reconcile.
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
@@ -2397,7 +2404,7 @@ mod tests {
         let exists = created.exists();
         // The list must reflect disk: the created file appears in the buffer.
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
         assert!(exists, "o + type + Esc must create the file on disk");
         assert!(
             buf.contains("made.rs"),
@@ -2420,9 +2427,9 @@ mod tests {
         let idx = app.explorer_slot_idx().unwrap();
 
         // Append a root-level line for a nested create (2-space indent = depth 1).
-        let cur = app.slots[idx].editor.buffer().as_string();
+        let cur = app.slots[idx].buffer().as_string();
         let newtext = format!("{cur}\n  somedir/test.txt");
-        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &newtext);
+        BufferEdit::replace_all(app.slots[idx].buffer_mut(), &newtext);
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
@@ -2485,7 +2492,7 @@ mod tests {
 
         let on_disk = tmp.path().join("victim.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
         assert!(!on_disk, "dd must remove victim.txt from disk (to trash)");
         assert!(
             !buf.contains("victim.txt"),
@@ -2523,10 +2530,10 @@ mod tests {
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
         let idx = app.explorer_slot_idx().unwrap();
-        let cur = app.slots[idx].editor.buffer().as_string();
+        let cur = app.slots[idx].buffer().as_string();
         let renamed = cur.replace(&format!("a.txt{ID_SEP}"), &format!("b.txt{ID_SEP}"));
         assert_ne!(cur, renamed, "buffer must contain the a.txt line");
-        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &renamed);
+        BufferEdit::replace_all(app.slots[idx].buffer_mut(), &renamed);
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
@@ -2600,10 +2607,10 @@ mod tests {
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
         let idx = app.explorer_slot_idx().unwrap();
-        let cur = app.slots[idx].editor.buffer().as_string();
+        let cur = app.slots[idx].buffer().as_string();
         let renamed = cur.replace(&format!("d/{ID_SEP}"), &format!("e/{ID_SEP}"));
         assert_ne!(cur, renamed, "buffer must contain the d/ dir line");
-        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &renamed);
+        BufferEdit::replace_all(app.slots[idx].buffer_mut(), &renamed);
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
@@ -2651,14 +2658,14 @@ mod tests {
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
         let idx = app.explorer_slot_idx().unwrap();
-        let cur = app.slots[idx].editor.buffer().as_string();
+        let cur = app.slots[idx].buffer().as_string();
         let without: String = cur
             .lines()
             .filter(|l| !l.contains("a.txt"))
             .collect::<Vec<_>>()
             .join("\n");
         assert_ne!(cur, without, "buffer must contain the a.txt line");
-        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &without);
+        BufferEdit::replace_all(app.slots[idx].buffer_mut(), &without);
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
 
@@ -2668,7 +2675,7 @@ mod tests {
         );
         // Buffer content survives, filename is kept, slot flagged deleted.
         assert_eq!(
-            app.slots[file_slot].editor.buffer().as_string(),
+            app.slots[file_slot].buffer().as_string(),
             "alpha",
             "the open buffer's content must survive the trash"
         );
@@ -3135,7 +3142,7 @@ mod tests {
             .expect("explorer slot must exist after ToggleExplorer");
         let exp = &app.slots[explorer_idx];
         assert!(
-            exp.editor.is_modifiable(),
+            exp.is_modifiable(),
             "explorer slot must be modifiable (oil.nvim-style editing)"
         );
     }
@@ -3374,7 +3381,7 @@ mod tests {
         press(&mut app, KeyCode::Char('p'));
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
-        let buf = app.slots[slot].editor.buffer().as_string();
+        let buf = app.slots[slot].buffer().as_string();
         let inside = base.join("target").join("mover").join("inner.txt");
         let at_root = base.join("mover").join("inner.txt");
         let inside_exists = inside.exists();
@@ -3509,9 +3516,8 @@ mod tests {
             .position(|n| n.path == aaa)
             .unwrap();
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
-        app.slots[slot].editor.buffer_mut().open_fold_at(aaa_row);
+        app.slots[slot].buffer_mut().open_fold_at(aaa_row);
         let aaa_open = !app.slots[slot]
-            .editor
             .buffer()
             .folds()
             .iter()
@@ -3535,7 +3541,6 @@ mod tests {
             .position(|n| n.path == aaa)
             .unwrap();
         let aaa_still_open = !app.slots[slot]
-            .editor
             .buffer()
             .folds()
             .iter()
@@ -3643,7 +3648,6 @@ mod tests {
         let fold_open_at = |app: &super::super::App, row: usize| -> bool {
             let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
             !app.slots[slot]
-                .editor
                 .buffer()
                 .folds()
                 .iter()
@@ -3729,7 +3733,7 @@ mod tests {
         press(&mut app, KeyCode::Esc);
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
-        let text = app.slots[slot].editor.buffer().as_string();
+        let text = app.slots[slot].buffer().as_string();
         assert!(
             !text.split('\n').any(|l| l.trim().is_empty()),
             "o<Esc> must not leave a blank line; buffer was {text:?}"
@@ -3774,7 +3778,7 @@ mod tests {
         app.explorer_activate();
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
-        let buf_folds = app.slots[slot].editor.buffer().folds();
+        let buf_folds = app.slots[slot].buffer().folds();
         let snap = app.window_folds.get(&win_id).cloned().unwrap();
         assert_eq!(
             snap, buf_folds,
@@ -3846,14 +3850,14 @@ mod tests {
 
         let on_disk_after_dd = tmp.path().join("victim.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf_after_dd = app.slots[idx].editor.buffer().as_string();
+        let buf_after_dd = app.slots[idx].buffer().as_string();
         let root_child_after_dd = has_root_child(&app, "victim.txt");
 
         // u → undo the buffer deletion; reconcile should restore the file.
         press(&mut app, KeyCode::Char('u'));
 
         let on_disk_after_u = tmp.path().join("victim.txt").exists();
-        let buf_after_u = app.slots[idx].editor.buffer().as_string();
+        let buf_after_u = app.slots[idx].buffer().as_string();
         let root_child_after_u = has_root_child(&app, "victim.txt");
 
         assert!(!on_disk_after_dd, "dd must trash victim.txt");
@@ -3893,7 +3897,7 @@ mod tests {
 
         let on_disk_after_create = tmp.path().join("fresh.rs").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf_after_create = app.slots[idx].editor.buffer().as_string();
+        let buf_after_create = app.slots[idx].buffer().as_string();
         let root_child_after_create = has_root_child(&app, "fresh.rs");
 
         // Creating a new file opens it in the main window (focus moves there).
@@ -3906,7 +3910,7 @@ mod tests {
         press(&mut app, KeyCode::Char('u'));
 
         let on_disk_after_u = tmp.path().join("fresh.rs").exists();
-        let buf_after_u = app.slots[idx].editor.buffer().as_string();
+        let buf_after_u = app.slots[idx].buffer().as_string();
         let root_child_after_u = has_root_child(&app, "fresh.rs");
 
         assert!(
@@ -3972,7 +3976,7 @@ mod tests {
 
         let on_disk = tmp.path().join("tracked.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
 
         // Check that the node has Deleted git status.
         let node_git = app
@@ -4020,7 +4024,7 @@ mod tests {
 
         let on_disk = tmp.path().join("untracked.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
 
         assert!(!on_disk, "dd must remove untracked.txt from disk");
         assert!(
@@ -4064,7 +4068,7 @@ mod tests {
         press(&mut app, KeyCode::Char('u'));
         let on_disk = tmp.path().join("recover.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
         let undo_len2 = app
             .explorer
             .as_ref()
@@ -4122,7 +4126,7 @@ mod tests {
 
         let on_disk = tmp.path().join("trashable.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
 
         assert!(!on_disk, "<C-r> must re-trash trashable.txt");
         assert!(
@@ -4164,7 +4168,7 @@ mod tests {
 
         let on_disk = tmp.path().join("newborn.rs").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
 
         assert!(!on_disk, "u must remove newborn.rs (trash it)");
         assert!(
@@ -4213,7 +4217,7 @@ mod tests {
 
         let on_disk = tmp.path().join("victim.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
-        let buf = app.slots[idx].editor.buffer().as_string();
+        let buf = app.slots[idx].buffer().as_string();
 
         assert!(!on_disk, "<C-r> must re-trash victim.txt");
         assert!(

@@ -999,7 +999,7 @@ fn explorer_buffer_is_modifiable() {
         .find(|s| s.is_explorer)
         .expect("explorer slot must exist after toggle");
     assert!(
-        explorer_slot.editor.is_modifiable(),
+        explorer_slot.is_modifiable(),
         "explorer buffer must be modifiable (oil.nvim-style editing)"
     );
 }

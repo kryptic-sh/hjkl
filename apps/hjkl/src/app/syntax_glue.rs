@@ -382,9 +382,7 @@ impl App {
     pub(crate) fn handle_active_content_reset(&mut self, buffer_id: crate::syntax::BufferId) {
         self.syntax.reset(buffer_id);
         let active_idx = self.focused_slot_idx();
-        self.slots[active_idx]
-            .editor
-            .install_ratatui_syntax_spans(Vec::new());
+        self.install_syntax_spans_for_slot(active_idx, Vec::new());
     }
 
     /// Run `render_viewport` for the active buffer and install the result.
@@ -431,7 +429,7 @@ impl App {
         // rendering — Options own the source of truth, SyntaxLayer mirrors so
         // walk_rows can gate without a re-borrow into the editor.
         let (clz, clz_ft, rb) = {
-            let s = self.slots[active_idx].editor.settings();
+            let s = self.active_editor().settings();
             (
                 s.colorizer,
                 s.colorizer_filetypes.clone(),
@@ -440,7 +438,7 @@ impl App {
         };
         self.syntax.set_colorizer(clz, clz_ft);
         self.syntax.set_rainbow_brackets(rb);
-        let buf = self.slots[active_idx].editor.buffer();
+        let buf = self.slots[active_idx].buffer();
 
         // BUG 1 fix: `height` is measured in SCREEN rows, but closed folds
         // hide doc rows without consuming a screen row.  The renderer walks
@@ -480,9 +478,7 @@ impl App {
         if let Some(out) = out {
             let start = out.key.1;
             let end = start + out.spans.len();
-            self.slots[active_idx]
-                .editor
-                .patch_ratatui_syntax_spans_range(start..end, &out.spans);
+            self.patch_syntax_spans_for_slot(active_idx, start..end, &out.spans);
             self.slots[active_idx].diag_signs = if suppress_ts_diag_signs {
                 Vec::new()
             } else {
@@ -491,9 +487,7 @@ impl App {
         } else {
             // No spans available (no language or grammar still loading).
             // Clear stale spans and let the renderer draw plain text.
-            self.slots[active_idx]
-                .editor
-                .install_ratatui_syntax_spans(Vec::new());
+            self.install_syntax_spans_for_slot(active_idx, Vec::new());
         }
 
         self.refresh_git_signs();
@@ -509,7 +503,7 @@ impl App {
             let s = self.active_editor().settings();
             (s.foldmethod, s.foldenable, s.foldlevelstart)
         };
-        let dg = self.slots[active_idx].editor.buffer().dirty_gen();
+        let dg = self.slots[active_idx].buffer().dirty_gen();
         let last_fold_dg = self.slots[active_idx].last_fold_dirty_gen;
 
         if fen && last_fold_dg != Some(dg) {
@@ -525,7 +519,7 @@ impl App {
                     // see `last_fold_dg != Some(dg)` and re-run against the
                     // now-ready tree.
                     let ranges_opt = {
-                        let buf = self.slots[active_idx].editor.buffer();
+                        let buf = self.slots[active_idx].buffer();
                         self.syntax.extract_fold_ranges(buffer_id, buf)
                     };
                     if let Some(ranges) = ranges_opt {
@@ -535,7 +529,6 @@ impl App {
                             // open (fls >= 99) or closed (fls == 0); manual
                             // folds are never touched.
                             self.slots[active_idx]
-                                .editor
                                 .buffer_mut()
                                 .set_auto_folds(&ranges, default_closed);
                         }
@@ -567,7 +560,7 @@ impl App {
                     // Always call set_auto_folds (even with an empty range list)
                     // so that removing the last marker also removes its fold.
                     let ranges = {
-                        let buf = self.slots[active_idx].editor.buffer();
+                        let buf = self.slots[active_idx].buffer();
                         hjkl_bonsai::extract_marker_fold_ranges_rope_multi(
                             &buf.rope(),
                             &[
@@ -580,7 +573,6 @@ impl App {
                         )
                     };
                     self.slots[active_idx]
-                        .editor
                         .buffer_mut()
                         .set_auto_folds(&ranges, default_closed);
                     self.slots[active_idx].last_fold_dirty_gen = Some(dg);
@@ -668,10 +660,10 @@ impl App {
         self.syntax_enabled = enabled;
         if !enabled {
             for slot in &mut self.slots {
-                slot.editor.install_ratatui_syntax_spans(Vec::new());
                 slot.diag_signs.clear();
             }
-            // Window editors hold their own span cache (#151 Phase D) — clear too.
+            // styled_spans live on the window editors, not the slot (#151
+            // Stage 2b) — clear those.
             for ed in self.window_editors.values_mut() {
                 ed.install_ratatui_syntax_spans(Vec::new());
             }

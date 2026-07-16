@@ -481,7 +481,7 @@ impl App {
         let mut lsp_diags: Vec<LspDiag> = Vec::new();
         let mut sign_map: std::collections::HashMap<usize, (DiagSeverity, char, Style, u8)> =
             std::collections::HashMap::new();
-        let rope = self.slots[slot_idx].editor.buffer().rope();
+        let rope = self.slots[slot_idx].buffer().rope();
 
         for d in &parsed.diagnostics {
             let start_row = d.range.start.line as usize;
@@ -612,7 +612,7 @@ impl App {
         let Some(slot) = self.slots.get_mut(slot_idx) else {
             return;
         };
-        let dg = slot.editor.buffer().dirty_gen();
+        let dg = slot.buffer().dirty_gen();
 
         // Skip if dirty_gen unchanged since last send.
         if slot.last_lsp_dirty_gen == Some(dg) {
@@ -626,7 +626,7 @@ impl App {
             // Slice per-edit text directly from the rope — avoids the
             // ~3 MB content_joined build that dominated the LSP path on
             // huge files. `View::rope()` is an O(1) Arc-clone.
-            let rope = slot.editor.buffer().rope();
+            let rope = slot.buffer().rope();
             let changes = build_text_changes(&rope, edits).expect(
                 "use_incremental already checked edits_ascending_disjoint, \
                 so build_text_changes must succeed",
@@ -642,7 +642,7 @@ impl App {
             // Full-sync fallback (server doesn't support incremental,
             // or `:e!` / formatter wiped the edit log): we still need
             // the whole document, so pay for `content_joined` here.
-            let text = slot.editor.buffer().content_joined();
+            let text = slot.buffer().content_joined();
             tracing::debug!(
                 buffer_id,
                 dg,
@@ -667,8 +667,8 @@ impl App {
             return;
         };
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        let text = slot.editor.buffer().content_joined();
-        let dg = slot.editor.buffer().dirty_gen();
+        let text = slot.buffer().content_joined();
+        let dg = slot.buffer().dirty_gen();
         if let Some(mgr) = self.lsp.as_ref() {
             mgr.notify_change(buffer_id, text);
             mgr.notify_save(buffer_id);
@@ -920,7 +920,7 @@ impl App {
         // `content_joined()` returns a `dirty_gen`-cached `Arc<String>`,
         // shared with any other per-tick consumer. Beats `lines().join`,
         // which clones every row out of the rope.
-        let text = self.slots[slot_idx].editor.buffer().content_joined();
+        let text = self.slots[slot_idx].buffer().content_joined();
 
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
         mgr.attach_buffer(buffer_id, &path, language_id, &text);
@@ -1314,7 +1314,7 @@ impl App {
                 })
                 .unwrap_or(false)
         }) {
-            let rope = slot.editor.buffer().rope();
+            let rope = slot.buffer().rope();
             return if row < rope.len_lines() {
                 Some(hjkl_buffer::rope_line_str(&rope, row).to_string())
             } else {
@@ -1704,7 +1704,7 @@ impl App {
         let is_word_start = |c: char| c.is_alphabetic() || c == '_';
 
         'buffers: for slot in &self.slots {
-            let rope = slot.editor.buffer().rope();
+            let rope = slot.buffer().rope();
             let mut word = String::new();
             let mut scanned = 0usize;
             for ch in rope.chars() {
@@ -2213,7 +2213,7 @@ impl App {
                 // batch sat strictly to `te`'s right — its own line's text
                 // left of `te.range.start` (and thus the wire->char
                 // conversion below) is unaffected and still valid.
-                let rope = self.slots[slot_idx].editor.buffer().rope();
+                let rope = self.slots[slot_idx].buffer().rope();
                 let start = wire_position_to_pos(
                     &rope,
                     te.range.start.line,
@@ -2227,14 +2227,14 @@ impl App {
                     encoding,
                 );
                 BufferEdit::replace_range(
-                    self.slots[slot_idx].editor.buffer_mut(),
+                    self.slots[slot_idx].buffer_mut(),
                     start..end,
                     &te.new_text,
                 );
             }
 
             // Mark dirty.
-            let _ = self.slots[slot_idx].editor.take_dirty();
+            let _ = self.slots[slot_idx].take_dirty();
             self.slots[slot_idx].dirty = true;
 
             // Drain this slot's engine-emitted edits into syntax + LSP
@@ -2244,10 +2244,10 @@ impl App {
             // diagnostics / cross-file positions) until the user happened
             // to focus it (audit R2, fix 3).
             let buffer_id = self.slots[slot_idx].buffer_id;
-            if self.slots[slot_idx].editor.take_content_reset() {
+            if self.slots[slot_idx].take_content_reset() {
                 self.syntax.reset(buffer_id);
             }
-            let slot_edits = self.slots[slot_idx].editor.take_content_edits();
+            let slot_edits = self.slots[slot_idx].take_content_edits();
             if !slot_edits.is_empty() {
                 self.syntax.apply_edits(buffer_id, &slot_edits);
             }
@@ -2488,7 +2488,7 @@ impl App {
         for te in sorted {
             // Same descending-order + current-rope-read reasoning as
             // `apply_workspace_edit` (audit R2, UTF-16 fix).
-            let rope = self.slots[slot_idx].editor.buffer().rope();
+            let rope = self.slots[slot_idx].buffer().rope();
             let start = wire_position_to_pos(
                 &rope,
                 te.range.start.line,
@@ -2497,14 +2497,10 @@ impl App {
             );
             let end =
                 wire_position_to_pos(&rope, te.range.end.line, te.range.end.character, encoding);
-            BufferEdit::replace_range(
-                self.slots[slot_idx].editor.buffer_mut(),
-                start..end,
-                &te.new_text,
-            );
+            BufferEdit::replace_range(self.slots[slot_idx].buffer_mut(), start..end, &te.new_text);
         }
 
-        let _ = self.slots[slot_idx].editor.take_dirty();
+        let _ = self.slots[slot_idx].take_dirty();
         self.slots[slot_idx].dirty = true;
         self.bus.info("formatted");
     }

@@ -168,20 +168,15 @@ fn build_app(first_file: Option<PathBuf>) -> anyhow::Result<crate::app::App> {
 
     let mut app = crate::app::App::new(first_file, false, None, None)?;
     {
-        // Set the SLOT editor so make_view_editor() (called on every split)
-        // copies the correct buffer-pane height to newly created window editors.
-        {
-            let vp = app.active_slot_mut().editor.host_mut().viewport_mut();
-            vp.width = HEADLESS_W;
-            vp.height = buf_h;
-        }
-        // Also propagate to the initial window editor (created by App::new's
-        // reconcile_window_editors() call before we set the slot above).
-        {
-            let vp = app.active_editor_mut().host_mut().viewport_mut();
-            vp.width = HEADLESS_W;
-            vp.height = buf_h;
-        }
+        // Set the initial window editor's viewport (created by App::new's
+        // reconcile_window_editors() call above). `make_view_editor` (#151
+        // Stage 2b) seeds every LATER window from the focused window's
+        // current dims rather than the real terminal size — there is none
+        // in headless mode — so setting it here once is enough to propagate
+        // to every subsequent split.
+        let vp = app.active_editor_mut().host_mut().viewport_mut();
+        vp.width = HEADLESS_W;
+        vp.height = buf_h;
     }
     Ok(app)
 }
@@ -887,7 +882,7 @@ fn dispatch(
                 }
             } else {
                 // Non-current buffer: operate on the slot's own editor.
-                let rope = match app.nvim_slot_editor(buf_id) {
+                let rope = match app.nvim_slot(buf_id) {
                     Some(ed) => ed.buffer().rope(),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 };
@@ -906,7 +901,7 @@ fn dispatch(
                     result.push(hjkl_buffer::rope_line_str(&rope, i));
                 }
                 let content = result.join("\n");
-                match app.nvim_slot_editor_mut(buf_id) {
+                match app.nvim_slot_mut(buf_id) {
                     Some(ed) => ed.set_content(&content),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
@@ -948,7 +943,7 @@ fn dispatch(
             let rope = if buf_id == current_id {
                 app.active_editor().buffer().rope()
             } else {
-                match app.nvim_slot_editor(buf_id) {
+                match app.nvim_slot(buf_id) {
                     Some(ed) => ed.buffer().rope(),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
@@ -1023,7 +1018,7 @@ fn dispatch(
                             let current_id = app.nvim_current_buffer_id();
                             if bid == current_id {
                                 app.active_editor().buffer().rope()
-                            } else if let Some(ed) = app.nvim_slot_editor(bid) {
+                            } else if let Some(ed) = app.nvim_slot(bid) {
                                 ed.buffer().rope()
                             } else {
                                 app.active_editor().buffer().rope()
@@ -1078,7 +1073,7 @@ fn dispatch(
                     let current_id = app.nvim_current_buffer_id();
                     if bid == current_id {
                         app.active_editor().buffer().rope()
-                    } else if let Some(ed) = app.nvim_slot_editor(bid) {
+                    } else if let Some(ed) = app.nvim_slot(bid) {
                         ed.buffer().rope()
                     } else {
                         app.active_editor().buffer().rope()
@@ -1489,7 +1484,7 @@ fn dispatch(
             let rope = if buf_id == current_id {
                 app.active_editor().buffer().rope()
             } else {
-                match app.nvim_slot_editor(buf_id) {
+                match app.nvim_slot(buf_id) {
                     Some(ed) => ed.buffer().rope(),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
@@ -1575,7 +1570,7 @@ fn dispatch(
             let rope = if buf_id == current_id {
                 app.active_editor().buffer().rope()
             } else {
-                match app.nvim_slot_editor(buf_id) {
+                match app.nvim_slot(buf_id) {
                     Some(ed) => ed.buffer().rope(),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
@@ -1656,7 +1651,7 @@ fn dispatch(
                 let rope = if is_current {
                     app.active_editor().buffer().rope()
                 } else {
-                    match app.nvim_slot_editor(buf_id) {
+                    match app.nvim_slot(buf_id) {
                         Some(ed) => ed.buffer().rope(),
                         None => return err(stdout, msgid, "invalid buffer id"),
                     }
@@ -1714,7 +1709,7 @@ fn dispatch(
             if is_current {
                 app.active_editor_mut().set_content(&new_content);
             } else {
-                match app.nvim_slot_editor_mut(buf_id) {
+                match app.nvim_slot_mut(buf_id) {
                     Some(ed) => ed.set_content(&new_content),
                     None => return err(stdout, msgid, "invalid buffer id"),
                 }
@@ -4272,16 +4267,14 @@ mod tests {
             }
             _ => panic!("expected buffer ext handle"),
         };
-        let dg = app.nvim_slot_editor(other_id).unwrap().buffer().dirty_gen();
+        let dg = app.nvim_slot(other_id).unwrap().buffer().dirty_gen();
         assert_eq!(
             app.nvim_slot_last_lsp_dirty_gen(other_id),
             Some(dg),
             "the non-focused slot's buffer must ALSO be didChange-notified"
         );
         assert!(
-            !app.nvim_slot_editor_mut(other_id)
-                .unwrap()
-                .take_content_reset(),
+            !app.nvim_slot_mut(other_id).unwrap().take_content_reset(),
             "the non-focused slot's content-reset flag must already be drained"
         );
 

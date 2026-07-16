@@ -6,9 +6,8 @@ use std::time::{Instant, SystemTime};
 
 use hjkl_buffer::View;
 use hjkl_buffer_tui::Sign;
-use hjkl_engine::{Editor, VimMode};
+use hjkl_engine::{Settings, VimMode, types::ContentEdit};
 
-use crate::host::TuiHost;
 use crate::syntax::BufferId;
 
 /// Per-mode mouse-enable flags — mirrors Vim's `:set mouse=<flags>`.
@@ -262,10 +261,10 @@ pub enum LspPendingRequest {
 /// than `ahash` on multi-MB inputs. Profile on a busy edit run showed
 /// ~10 % of per-keystroke self time inside `SipHasher::write`; ahash
 /// brings that to ~1–2 %.
-fn buffer_signature(editor: &Editor<View, TuiHost>) -> (u64, usize) {
+fn buffer_signature(view: &View) -> (u64, usize) {
     // Stream the rope chunks straight into ahash — no full-document
     // `Arc<String>` materialization. `View::rope()` is an O(1) Arc-clone.
-    let rope = editor.buffer().rope();
+    let rope = view.rope();
     let mut hasher = ahash::AHasher::default();
     let mut len = 0usize;
     for chunk in rope.chunks() {
@@ -315,11 +314,23 @@ pub(crate) struct CommitCtx {
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 ///
-/// After v0.22.0 the per-window [`Editor`] lives on [`AppWindow`] rather than
-/// here. `BufferSlot` continues to hold one editor for backward compatibility
-/// with LSP / syntax / save paths that need buffer content from a slot — they
-/// use `slot.editor` when no specific window is in scope. Focused-window
-/// operations go through `App::active_window().editor` / `App::active_window_mut().editor`.
+/// #151 Phase D moved the per-window cursor/scroll/vim-FSM onto each
+/// window's own `Editor` in [`crate::app::App::window_editors`]; Stage 2b
+/// finished the split by removing `BufferSlot`'s own `Editor` entirely.
+/// What's left here is document-level state only:
+///
+/// - [`BufferSlot::view`] — the document handle (content, undo/redo, folds,
+///   dirty flag, edit channels) via the `Arc<Mutex<Buffer>>` shared with
+///   every window's `View`. LSP / syntax / save paths that need buffer
+///   content with no specific window in scope read/write through this.
+/// - [`BufferSlot::settings`] — the buffer-local `:set`-style options
+///   template, seeded from editorconfig / modeline / user config at slot
+///   creation. `App::make_view_editor` copies it into a freshly (re)targeted
+///   window's `Editor::settings`; call sites that must change a
+///   buffer-local option while the slot may not be focused (e.g. the
+///   swap-lock readonly flip) write here so future windows inherit it,
+///   alongside a direct write to any currently-live window editor for
+///   immediate effect.
 pub struct BufferSlot {
     /// Stable id used to multiplex the SyntaxLayer / Worker.
     pub buffer_id: BufferId,
@@ -328,13 +339,17 @@ pub struct BufferSlot {
     pub(crate) is_explorer: bool,
     /// Per-buffer feature opt-outs. Default: all enabled.
     pub(crate) features: BufferFeatures,
-    /// The slot-level editor. Holds buffer content, undo stack, syntax spans,
-    /// LSP attachment. The focused window's [`AppWindow::editor`] is the
-    /// source of truth for cursor and scroll during dispatch; after each key
-    /// dispatch `sync_slot_from_window` writes cursor/scroll back here so
-    /// slot-level operations (`:w`, dirty-check, LSP didChange) see the
-    /// current buffer state.
-    pub editor: Editor<View, TuiHost>,
+    /// Document handle: content, undo/redo, folds, dirty flag, and edit
+    /// channels — shared with every window's `View` onto the same `Buffer`
+    /// (see the struct doc). Carries its own `cursor` field (part of the
+    /// `View` type) but that cursor is not meaningful here: it is only ever
+    /// read as a last-resort default for a freshly created window editor
+    /// ([`crate::app::App::make_view_editor`]) or as a defensive fallback
+    /// when no window shows this slot. Window editors are the per-window
+    /// cursor/viewport/vim-FSM source of truth.
+    pub(crate) view: View,
+    /// Buffer-local settings template — see the struct doc.
+    pub(crate) settings: Settings,
     /// File path shown in status line and used for `:w` saves.
     pub filename: Option<PathBuf>,
     /// Persistent dirty flag. Set when `editor.take_dirty()` returns `true`;
@@ -477,7 +492,7 @@ impl BufferSlot {
         // join, no allocation. `content_joined().len()` was forcing the
         // full ~3 MB joined `String` build on huge files just to read
         // a single integer.
-        let current_len = self.editor.buffer().byte_len();
+        let current_len = self.view.byte_len();
         if current_len != self.saved_len {
             self.dirty = true;
             return t.elapsed().as_micros();
@@ -493,14 +508,127 @@ impl BufferSlot {
     /// re-hashes the full `content_joined()` Arc (~3 MB on a 100 K-line
     /// file, ~9 % of per-keystroke CPU in profiling).
     fn cached_signature(&mut self) -> (u64, usize) {
-        let dg = self.editor.buffer().dirty_gen();
+        let dg = self.view.dirty_gen();
         if let Some((cached_dg, sig)) = self.signature_cache
             && cached_dg == dg
         {
             return sig;
         }
-        let sig = buffer_signature(&self.editor);
+        let sig = buffer_signature(&self.view);
         self.signature_cache = Some((dg, sig));
         sig
+    }
+
+    // ── Document-handle accessors (#151 Stage 2b) ────────────────────────
+    //
+    // Thin forwarders onto `self.view` / `self.settings` so call sites that
+    // used to read `slot.editor.X()` now read `slot.X()` — same shape,
+    // smaller diff. `take_dirty` / `take_content_edits` / `take_content_reset`
+    // drain the one-shot channels on the shared `Buffer`; callers must keep
+    // exactly one drain site per channel (see `Buffer` doc).
+
+    /// Shared reference to the document handle (content + edit channels).
+    pub(crate) fn buffer(&self) -> &View {
+        &self.view
+    }
+
+    /// Mutable reference to the document handle.
+    pub(crate) fn buffer_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+
+    /// Drain the shared Buffer's dirty flag (`true` if content changed
+    /// since the last call on ANY view of this buffer).
+    pub(crate) fn take_dirty(&self) -> bool {
+        self.view.take_dirty()
+    }
+
+    /// Drain the shared Buffer's pending `ContentEdit` queue.
+    pub(crate) fn take_content_edits(&self) -> Vec<ContentEdit> {
+        self.view.take_pending_content_edits()
+    }
+
+    /// Drain the shared Buffer's pending content-reset flag.
+    pub(crate) fn take_content_reset(&self) -> bool {
+        self.view.take_pending_content_reset()
+    }
+
+    /// Whole-buffer content replace (no undo entry). Mirrors
+    /// `Editor::set_content` — expressible purely in terms of the shared
+    /// `Buffer` (no cursor/settings involved), so it lives here instead of
+    /// needing a live `Editor`.
+    pub(crate) fn set_content(&mut self, text: &str) {
+        hjkl_engine::BufferEdit::replace_all(&mut self.view, text);
+        self.view.clear_undo_redo();
+        self.view.clear_pending_content_edits();
+        self.view.set_pending_content_reset(true);
+        self.view.mark_content_dirty();
+    }
+
+    /// Whole-buffer content replace that preserves undo history — headless
+    /// counterpart of `Editor::set_content_undoable`, for a slot with no
+    /// live window editor to drive (#151 Stage 2b escape hatch, rule 5: e.g.
+    /// an async format-worker result landing after the buffer's window was
+    /// closed). Prefer routing through a live window editor
+    /// (`Editor::set_content_undoable`) when one exists — this uses the
+    /// slot's own `View` cursor (not necessarily where a user last looked)
+    /// and an empty `MarkSnapshot` (explicitly supported as a no-op restore
+    /// target — see `hjkl_buffer::UndoEntry` doc) since a windowless slot
+    /// has no live marks/jumplist/changelist to snapshot.
+    pub(crate) fn set_content_undoable_headless(&mut self, text: &str) {
+        let entry = hjkl_buffer::UndoEntry {
+            rope: self.view.rope(),
+            cursor: {
+                let c = self.view.cursor();
+                (c.row, c.col)
+            },
+            timestamp: SystemTime::now(),
+            marks: hjkl_buffer::MarkSnapshot::default(),
+        };
+        self.view.push_undo_entry(entry);
+        self.view.cap_undo(self.settings.undo_levels as usize);
+        self.view.clear_redo();
+        self.set_content(text);
+    }
+
+    /// Live settings (read-only) — the buffer-local template; see the
+    /// struct doc.
+    pub(crate) fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    /// Live settings (mutable).
+    pub(crate) fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
+    }
+
+    /// `true` when the slot's settings template has `readonly` set.
+    pub(crate) fn is_readonly(&self) -> bool {
+        self.settings.readonly
+    }
+
+    /// `true` when the slot's settings template allows edits. Test-only
+    /// today (production sites all check the live editor's modifiable flag
+    /// via `Editor::is_modifiable`, since edit-blocking only matters for a
+    /// window that's actually being typed into).
+    #[cfg(test)]
+    pub(crate) fn is_modifiable(&self) -> bool {
+        self.settings.modifiable
+    }
+
+    /// Set the buffer-local filetype on the settings template.
+    pub(crate) fn set_filetype(&mut self, lang: &str) {
+        self.settings.filetype = lang.to_string();
+    }
+
+    /// Gutter width for line numbers, mirroring `Editor::lnum_width`: a pure
+    /// function of the settings template + current row count.
+    pub(crate) fn lnum_width(&self) -> u16 {
+        if self.settings.number || self.settings.relativenumber {
+            let needed = self.view.row_count().to_string().len() + 1;
+            needed.max(self.settings.numberwidth) as u16
+        } else {
+            0
+        }
     }
 }

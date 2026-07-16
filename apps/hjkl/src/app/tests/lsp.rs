@@ -1742,8 +1742,8 @@ fn apply_workspace_edit_multi_file_notifies_both_buffers() {
         .expect("slot b must have been opened by apply_workspace_edit");
     assert_ne!(slot_a, slot_b, "sanity: two distinct slots");
 
-    let dg_a = app.slots[slot_a].editor.buffer().dirty_gen();
-    let dg_b = app.slots[slot_b].editor.buffer().dirty_gen();
+    let dg_a = app.slots[slot_a].buffer().dirty_gen();
+    let dg_b = app.slots[slot_b].buffer().dirty_gen();
     assert_eq!(
         app.slots[slot_a].last_lsp_dirty_gen,
         Some(dg_a),

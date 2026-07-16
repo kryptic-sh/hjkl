@@ -136,7 +136,7 @@ fn q_colon_opens_cmdline_window() {
 
     // View should contain 3 history lines.
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    let line_count = app.slots()[slot_idx].editor.buffer().row_count();
+    let line_count = app.slots()[slot_idx].buffer().row_count();
     assert_eq!(line_count, 3, "buffer must have 3 history lines");
 }
 
@@ -150,9 +150,10 @@ fn q_colon_window_cr_on_history_line_re_executes() {
     // Cmdline window has 1 line: "set nu". Cursor is on it.
     assert!(app.cmdline_win.is_some());
 
-    // Move cursor to row 0 (the history line).
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    app.slots_mut()[slot_idx].editor.jump_cursor(0, 0);
+    // Move cursor to row 0 (the history line). The cmdline window is
+    // focused after `open_cmdline_window` (#151 Stage 2b: cursor lives on
+    // the window's own editor, not the slot).
+    app.active_editor_mut().jump_cursor(0, 0);
 
     let wins_before = app.windows.iter().filter(|w| w.is_some()).count();
     app.commit_cmdline_window();
@@ -249,7 +250,7 @@ fn c_f_from_ex_prompt_opens_q_colon_with_inprogress_text() {
     );
 
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    let buffer = app.slots()[slot_idx].editor.buffer();
+    let buffer = app.slots()[slot_idx].buffer();
     // View: 1 history line + 1 prefill line = 2 rows.
     assert_eq!(
         buffer.row_count(),
@@ -265,7 +266,9 @@ fn c_f_from_ex_prompt_opens_q_colon_with_inprogress_text() {
     );
 
     // Cursor must be at the last row, col == text length (cursor was at end).
-    let (cur_row, cur_col) = app.slots()[slot_idx].editor.cursor();
+    // The cmdline window is focused, so its own editor is the cursor's
+    // source of truth (#151 Stage 2b).
+    let (cur_row, cur_col) = app.active_editor().cursor();
     assert_eq!(cur_row, last_row, "cursor must be on the trailing line");
     assert_eq!(
         cur_col,
@@ -297,7 +300,7 @@ fn c_f_from_search_forward_prompt_opens_q_slash() {
     );
 
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    let buffer = app.slots()[slot_idx].editor.buffer();
+    let buffer = app.slots()[slot_idx].buffer();
     let last_row = buffer.row_count() - 1;
     let last_line = hjkl_buffer::rope_line_str(&buffer.rope(), last_row);
     assert_eq!(last_line, "foo", "trailing line must be the search text");
@@ -325,7 +328,7 @@ fn c_f_from_search_backward_prompt_opens_q_question() {
     );
 
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    let buffer = app.slots()[slot_idx].editor.buffer();
+    let buffer = app.slots()[slot_idx].buffer();
     let last_row = buffer.row_count() - 1;
     let last_line = hjkl_buffer::rope_line_str(&buffer.rope(), last_row);
     assert_eq!(last_line, "bar", "trailing line must be the search text");
@@ -346,7 +349,7 @@ fn c_f_empty_ex_prompt_opens_q_colon_with_empty_trailing_line() {
     assert!(app.cmdline_win.is_some());
 
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
-    let buffer = app.slots()[slot_idx].editor.buffer();
+    let buffer = app.slots()[slot_idx].buffer();
     // 1 history + 1 empty prefill = 2 rows.
     assert_eq!(
         buffer.row_count(),

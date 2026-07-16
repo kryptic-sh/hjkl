@@ -22,9 +22,9 @@ fn buffer_source_new_produces_n_entries() {
                 .to_owned()
         },
         |s| s.dirty,
-        |s| s.editor.buffer().as_string(),
+        |s| s.buffer().as_string(),
         |s| s.filename.clone(),
-        |s| s.editor.buffer().cursor().row,
+        |s| s.buffer().cursor().row,
         |_| 0,
     ));
     // Build a Picker from the source — it calls enumerate internally.
@@ -53,9 +53,9 @@ fn buffer_source_select_returns_switch_buffer() {
                 .to_owned()
         },
         |s| s.dirty,
-        |s| s.editor.buffer().as_string(),
+        |s| s.buffer().as_string(),
         |s| s.filename.clone(),
-        |s| s.editor.buffer().cursor().row,
+        |s| s.buffer().cursor().row,
         |_| 0,
     );
     // Index 0 corresponds to the first entry (the only slot).
@@ -127,7 +127,6 @@ fn open_extra_adds_slot_and_leaves_active_zero() {
     );
     assert_eq!(
         app.slots[0]
-            .editor
             .buffer()
             .rope()
             .lines()
@@ -140,7 +139,6 @@ fn open_extra_adds_slot_and_leaves_active_zero() {
     );
     assert_eq!(
         app.slots[1]
-            .editor
             .buffer()
             .rope()
             .lines()

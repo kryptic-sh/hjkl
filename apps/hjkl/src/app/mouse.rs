@@ -191,7 +191,7 @@ pub(crate) fn doc_row_at_screen_offset(
 /// - The click lands past the last doc row (past EOF).
 ///
 /// The `line_fn` callback looks up a line by 0-based doc row. Pass a closure
-/// over `app.slots()[slot].editor.buffer().line(row)` (or similar).
+/// over `app.slots()[slot].buffer().line(row)` (or similar).
 /// Resolve the document row shown at screen offset `rel_y` (rows from the
 /// window top) in the boxed-blame view, via the render plan. Returns `None`
 /// when that screen row is a box border (no doc row) or past the plan.
@@ -202,7 +202,7 @@ pub(crate) fn box_plan_doc_row(
     rel_y: usize,
 ) -> Option<usize> {
     use hjkl_buffer_tui::render::BlameRow;
-    let buf = slot.editor.buffer();
+    let buf = slot.buffer();
     let plan = crate::app::git_hunks::build_blame_box_plan(
         &slot.blame,
         buf.row_count(),
@@ -359,7 +359,7 @@ pub fn cell_to_doc(
     // Per-window viewport/is_blame from the window editor (#151); buffer content
     // is shared, blame is per-slot.
     let ed = app.window_editor(win_id);
-    let buf = slot.editor.buffer();
+    let buf = slot.buffer();
     let line_count = buf.line_count() as usize;
     let vp = ed.host().viewport();
 
@@ -478,7 +478,7 @@ pub fn doc_to_cell(
     // Per-window viewport/is_blame from the window editor (#151).
     let ed = app.window_editor(win_id);
     let vp = ed.host().viewport();
-    let buf = slot.editor.buffer();
+    let buf = slot.buffer();
 
     // Row must be at or after the viewport top. Folds can only pull rows
     // BELOW vp_top onto screen (never above it), so this stays a valid
@@ -1111,18 +1111,13 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         return Zone::None;
     };
 
-    let line_count = slot.editor.buffer().line_count() as usize;
+    let line_count = slot.buffer().line_count() as usize;
     // Per-window viewport + blame view live on the window's own editor (#151
-    // Phase D); fall back to the slot bridge editor if absent.
-    let (eff_top_row, wrap, win_is_blame) = match app.window_editors.get(&win_id) {
-        Some(e) => {
-            let vp = e.host().viewport();
-            (vp.top_row, vp.wrap, e.is_blame())
-        }
-        None => {
-            let vp = slot.editor.host().viewport();
-            (vp.top_row, vp.wrap, slot.editor.is_blame())
-        }
+    // Phase D / Stage 2b — no slot-level fallback anymore).
+    let (eff_top_row, wrap, win_is_blame) = {
+        let we = app.window_editor(win_id);
+        let vp = we.host().viewport();
+        (vp.top_row, vp.wrap, we.is_blame())
     };
 
     // Same rendered gutter width as render_window / cell_to_doc.
@@ -1143,7 +1138,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
                 None => return Zone::None, // border row
             }
         } else {
-            doc_row_at_screen_offset(slot.editor.buffer(), eff_top_row, rel_y as usize)
+            doc_row_at_screen_offset(slot.buffer(), eff_top_row, rel_y as usize)
         };
         if doc_row < line_count {
             return Zone::Gutter { win_id, doc_row };
@@ -1337,9 +1332,10 @@ mod tests {
 
         let mut app = App::new(None, false, None, None).expect("App::new");
 
-        // Replace slot 0's buffer with the test content.
+        // Replace slot 0's buffer with the test content. Content is shared
+        // via the `Buffer` `Arc`, so window 0's editor sees it too.
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             BufferEdit::replace_all(buf, content);
         }
 
@@ -1349,9 +1345,11 @@ mod tests {
             win.last_rect = Some(window::rect_to_layout(area));
         }
 
-        // Set viewport dims to match the area minus a small status-line gap.
+        // Set window 0's own editor viewport to match the area (#151 Stage
+        // 2b: viewport is per-window, not on the slot — set it directly on
+        // the window editor `cell_to_doc` actually reads).
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = area.width;
             vp.height = area.height;
             vp.text_width = area.width;
@@ -1359,9 +1357,6 @@ mod tests {
             vp.top_col = 0;
             vp.tab_width = 4;
         }
-        // Build window 0's view editor (#151 Phase D) — make_view_editor copies
-        // the slot editor viewport set above, which is what cell_to_doc reads.
-        app.reconcile_window_editors();
 
         app
     }
@@ -1518,7 +1513,7 @@ mod tests {
             Rect::new(0, 0, 80, 24),
         );
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             buf.add_fold(0, 2, true);
         }
         app.reconcile_window_editors();
@@ -1563,7 +1558,7 @@ mod tests {
             Rect::new(0, 0, 80, 24),
         );
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             buf.add_fold(0, 2, true);
         }
         app.reconcile_window_editors();
@@ -1587,7 +1582,7 @@ mod tests {
             Rect::new(0, 0, 80, 24),
         );
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             buf.add_fold(0, 2, true);
         }
         app.reconcile_window_editors();
@@ -1607,7 +1602,7 @@ mod tests {
             Rect::new(0, 0, 80, 24),
         );
         {
-            let buf = app.slots_mut()[0].editor.buffer_mut();
+            let buf = app.slots_mut()[0].buffer_mut();
             buf.add_fold(0, 2, true);
         }
         app.reconcile_window_editors();
@@ -1709,7 +1704,7 @@ mod tests {
         }
         // Need viewport published so cell_to_doc has dims.
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = 80;
             vp.height = 24;
             vp.text_width = 80;
@@ -1880,6 +1875,7 @@ mod tests {
         let win1 = app.next_window_id;
         app.next_window_id += 1;
         app.windows.push(Some(Window::new(0)));
+        app.reconcile_window_editors();
 
         // Build: VSplit(ratio=0.5, Leaf(0), Leaf(1)), total area 80x24.
         // With ratio=0.5 and width=80: a_w = round(80*0.5)=40
@@ -1914,6 +1910,7 @@ mod tests {
         let win1 = app.next_window_id;
         app.next_window_id += 1;
         app.windows.push(Some(Window::new(0)));
+        app.reconcile_window_editors();
 
         // HSplit(ratio=0.5, Leaf(0), Leaf(1)), area 80x24
         // a_h = round(24*0.5) = 12; sep_row = 0 + 12 - 1 = 11
@@ -1946,14 +1943,12 @@ mod tests {
     fn cell_to_doc_unfocused_window_uses_window_scroll() {
         let mut app = make_vsplit_app();
         // Shared multi-line buffer (slot 0 is viewed by both windows).
-        app.slots_mut()[0]
-            .editor
-            .set_content("l0\nl1\nl2\nl3\nl4\nl5");
+        app.slots_mut()[0].set_content("l0\nl1\nl2\nl3\nl4\nl5");
         // Focus the LEFT window (0); the RIGHT window (1) is unfocused.
         app.set_focused_window(0);
-        // Focused-origin viewport at the top…
-        app.slots_mut()[0].editor.host_mut().viewport_mut().top_row = 0;
         app.reconcile_window_editors();
+        // Focused-origin viewport at the top…
+        app.active_editor_mut().host_mut().viewport_mut().top_row = 0;
         // …but the unfocused right pane is scrolled down to row 3 (#151 Phase D:
         // scroll lives on the window's own editor).
         if let Some(e) = app.window_editors.get_mut(&1) {
@@ -1984,16 +1979,16 @@ mod tests {
             .map(|i| format!("line{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.slots_mut()[0].editor.set_content(&content);
-        {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
-            vp.height = 24;
-            vp.top_row = 0;
-        }
+        app.slots_mut()[0].set_content(&content);
         // Focus the LEFT window; the RIGHT pane (win 1) is unfocused, drawn from
         // the TOP, but its saved cursor is deep — focusing it scrolls down.
         app.set_focused_window(0);
         app.reconcile_window_editors();
+        {
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
+            vp.height = 24;
+            vp.top_row = 0;
+        }
         if let Some(e) = app.window_editors.get_mut(&1) {
             e.jump_cursor(60, 0);
             e.host_mut().viewport_mut().top_row = 0;
@@ -2135,7 +2130,7 @@ mod tests {
             win.last_rect = Some(window::LayoutRect::new(0, 0, 80, 24));
         }
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = 80;
             vp.height = 24;
             vp.text_width = 80;
@@ -2160,7 +2155,7 @@ mod tests {
             win.last_rect = Some(window::LayoutRect::new(0, 0, 80, 24));
         }
         {
-            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            let vp = app.active_editor_mut().host_mut().viewport_mut();
             vp.width = 80;
             vp.height = 24;
             vp.text_width = 80;

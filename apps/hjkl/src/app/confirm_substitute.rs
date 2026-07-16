@@ -91,10 +91,17 @@ impl App {
         }
 
         let idx = self.focused_slot_idx();
-        self.slots[idx].editor.push_undo();
-
-        let applied =
-            apply_collected_matches(&mut self.slots[idx].editor, &cs.matches, &cs.accepted);
+        // Apply through a throwaway editor onto the slot's shared Buffer
+        // (#151 Stage 2b): `apply_collected_matches` needs a real `Editor`
+        // (it funnels through `mark_content_dirty` / sets a post-apply
+        // cursor), but that cursor write is not meant to move the visible
+        // window cursor — matching the pre-refactor behavior where it
+        // landed on the (unobserved) slot bridge editor's own cursor, not
+        // the active window's. Content + dirty-gen changes are visible to
+        // every window regardless, since they live on the shared `Buffer`.
+        let mut scratch = self.make_view_editor(idx);
+        scratch.push_undo();
+        let applied = apply_collected_matches(&mut scratch, &cs.matches, &cs.accepted);
 
         // Count distinct lines changed.
         let lines_changed = {
@@ -110,14 +117,14 @@ impl App {
         };
 
         // Propagate dirty state through the usual pipeline.
-        if self.slots[idx].editor.take_dirty() {
+        if self.slots[idx].take_dirty() {
             let elapsed = self.slots[idx].refresh_dirty_against_saved();
             self.last_signature_us = elapsed;
             let buffer_id = self.slots[idx].buffer_id;
-            if self.slots[idx].editor.take_content_reset() {
+            if self.slots[idx].take_content_reset() {
                 self.syntax.reset(buffer_id);
             }
-            let edits = self.slots[idx].editor.take_content_edits();
+            let edits = self.slots[idx].take_content_edits();
             if !edits.is_empty() {
                 self.syntax.apply_edits(buffer_id, &edits);
             }

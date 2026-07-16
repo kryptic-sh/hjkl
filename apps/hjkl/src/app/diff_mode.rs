@@ -111,12 +111,12 @@ impl App {
 
     /// Materialize a slot's buffer to a `String` (rope chunks joined).
     fn slot_text(&self, slot: usize) -> String {
-        self.slots[slot].editor.buffer().rope().to_string()
+        self.slots[slot].buffer().rope().to_string()
     }
 
     /// A single line's text (newline stripped) from a slot's buffer.
     fn line_text(&self, slot: usize, idx: usize) -> String {
-        let rope = self.slots[slot].editor.buffer().rope();
+        let rope = self.slots[slot].buffer().rope();
         hjkl_buffer::rope_line_str(&rope, idx)
             .trim_end_matches('\n')
             .to_string()
@@ -208,7 +208,7 @@ impl App {
         }
         let side = |r: &hjkl_app::diff::AlignedRow| if is_a { r.a } else { r.b };
         let slot = self.windows[win].as_ref()?.slot;
-        let total = self.slots[slot].editor.buffer().line_count() as usize;
+        let total = self.slots[slot].buffer().line_count() as usize;
 
         let mut before: Vec<(usize, usize)> = Vec::new();
         let mut pending = 0usize; // filler rows awaiting the next real this-side line
@@ -368,8 +368,8 @@ impl App {
         };
         let a_slot = self.windows[a_win].as_ref().unwrap().slot;
         let b_slot = self.windows[b_win].as_ref().unwrap().slot;
-        let a_gen = self.slots[a_slot].editor.buffer().dirty_gen();
-        let b_gen = self.slots[b_slot].editor.buffer().dirty_gen();
+        let a_gen = self.slots[a_slot].buffer().dirty_gen();
+        let b_gen = self.slots[b_slot].buffer().dirty_gen();
         if let Some(c) = &self.diff_cache
             && c.a_win == a_win
             && c.b_win == b_win

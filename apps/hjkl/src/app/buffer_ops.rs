@@ -1,25 +1,26 @@
 use hjkl_buffer::View;
-use hjkl_engine::{Host, MarkJump, Options};
+use hjkl_engine::{Host, MarkJump, Settings};
 use hjkl_vim::VimEditorExt;
 use std::path::PathBuf;
 
 use super::{App, DiskState, STATUS_LINE_HEIGHT};
-use crate::host::TuiHost;
 
 impl App {
-    /// Reset slot `idx`'s editor to a fresh, empty, unnamed scratch buffer,
-    /// discarding its content, undo history, and file identity. Used
-    /// whenever the sole remaining slot must fall back to `[No Name]`
+    /// Reset slot `idx`'s document to a fresh, empty, unnamed scratch
+    /// buffer, discarding its content, undo history, and file identity.
+    /// Used whenever the sole remaining slot must fall back to `[No Name]`
     /// instead of being removed (`:bdelete`/`:bwipeout` on the only
     /// buffer; aborting a stale-swap recovery prompt on a single-file
     /// launch).
     ///
-    /// Only replaces the editor instance and the file-identity/disk-state
-    /// slot fields. Callers remain responsible for anything else that
-    /// should be discarded first (e.g. `:bwipeout` explicitly clears marks
-    /// and jumplists before calling this), for LSP detach/diagnostics, and
-    /// for post-reset bookkeeping (window slot pointers,
-    /// `reconcile_window_editors`, `fs_watch_sync`, the status message).
+    /// Only replaces the document handle + settings template and the
+    /// file-identity/disk-state slot fields. Callers remain responsible for
+    /// anything else that should be discarded first, for LSP
+    /// detach/diagnostics, and for post-reset bookkeeping (window slot
+    /// pointers, `reconcile_window_editors` — which rebuilds every window
+    /// editor showing this slot from scratch, since the content `Arc`
+    /// changes, discarding their marks/jumplists/undo too — `fs_watch_sync`,
+    /// the status message).
     pub(crate) fn reset_slot_to_scratch(&mut self, idx: usize) {
         let old_id = self.slots[idx].buffer_id;
         self.syntax.forget(old_id);
@@ -29,25 +30,10 @@ impl App {
         self.change_banks.remove(&old_id);
         let new_id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-        editor.set_current_buffer_id(new_id);
-        editor.set_registers_arc(self.registers.clone());
-        editor.set_global_marks_arc(self.global_marks.clone());
-        editor.set_last_substitute_arc(self.last_substitute.clone());
-        editor.set_abbrevs_arc(self.abbrevs.clone());
-        editor.set_search_arc(self.search.clone());
-        editor.set_change_bank_arc(self.change_bank_for(new_id));
-        if let Ok(size) = crossterm::terminal::size() {
-            let vp = editor.host_mut().viewport_mut();
-            vp.width = size.0;
-            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-        }
-        let _ = editor.take_content_edits();
-        let _ = editor.take_content_reset();
         let slot = &mut self.slots[idx];
         slot.buffer_id = new_id;
-        slot.editor = editor;
+        slot.view = View::new();
+        slot.settings = Settings::default();
         slot.filename = None;
         slot.dirty = false;
         slot.is_new_file = false;
@@ -91,13 +77,7 @@ impl App {
             .filename
             .as_deref()
             .map(|p| p.to_string_lossy().into_owned());
-        self.slots[idx]
-            .editor
-            .with_registers_mut(|r| r.set_filename(fname));
-        // Keep the engine's current_buffer_id in sync so `mA`–`mZ` global
-        // marks tag new marks with the correct slot id.
-        let new_bid = self.slots[idx].buffer_id;
-        self.slots[idx].editor.set_current_buffer_id(new_bid);
+        self.registers.lock().unwrap().set_filename(fname);
         // Point the focused window at the new slot.
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;
@@ -268,17 +248,15 @@ impl App {
         }
         let active_slot = self.focused_slot_idx();
         if self.slots.len() == 1 {
-            // Explicitly wipe marks and jumplists before discarding the editor
-            // so no state leaks into the replacement scratch buffer.
-            {
-                let editor = &mut self.slots[0].editor;
-                let mark_chars: Vec<char> = editor.marks().map(|(c, _)| c).collect();
-                for c in mark_chars {
-                    editor.clear_mark(c);
-                }
-                editor.jump_back_list_mut().clear();
-                editor.jump_fwd_list_mut().clear();
-            }
+            // No explicit mark/jumplist wipe needed here (#151 Stage 2b
+            // removed it as dead weight): `reset_slot_to_scratch` below
+            // installs a brand-new `View` (fresh `Arc<Mutex<Buffer>>`, so
+            // the old shared marks map is simply dropped) and
+            // `reconcile_window_editors` rebuilds every window editor
+            // showing this slot from scratch (fresh `jump_back`/`jump_fwd`)
+            // since the content `Arc` changed — old state can't leak in
+            // either case.
+            //
             // Also clear LSP diagnostics for the wiped buffer.
             {
                 let slot = &mut self.slots[0];
@@ -421,26 +399,18 @@ impl App {
         }
     }
 
-    /// Shared reference to the slot-level editor for the given buffer id.
-    pub(crate) fn nvim_slot_editor(
-        &self,
-        id: u64,
-    ) -> Option<&hjkl_engine::Editor<hjkl_buffer::View, crate::host::TuiHost>> {
-        self.slots
-            .iter()
-            .find(|s| s.buffer_id == id)
-            .map(|s| &s.editor)
+    /// Shared reference to the slot with the given buffer id — used by
+    /// nvim-api handlers that need buffer content for a buffer id that may
+    /// not be the currently-focused one (#151 Stage 2b: was "the slot-level
+    /// editor"; slots no longer carry one, so callers now read/write
+    /// through the `BufferSlot` document-handle accessors directly).
+    pub(crate) fn nvim_slot(&self, id: u64) -> Option<&super::BufferSlot> {
+        self.slots.iter().find(|s| s.buffer_id == id)
     }
 
-    /// Mutable reference to the slot-level editor for the given buffer id.
-    pub(crate) fn nvim_slot_editor_mut(
-        &mut self,
-        id: u64,
-    ) -> Option<&mut hjkl_engine::Editor<hjkl_buffer::View, crate::host::TuiHost>> {
-        self.slots
-            .iter_mut()
-            .find(|s| s.buffer_id == id)
-            .map(|s| &mut s.editor)
+    /// Mutable reference to the slot with the given buffer id.
+    pub(crate) fn nvim_slot_mut(&mut self, id: u64) -> Option<&mut super::BufferSlot> {
+        self.slots.iter_mut().find(|s| s.buffer_id == id)
     }
 
     /// `dirty_gen` of the slot's buffer the last time it was
@@ -474,37 +444,21 @@ impl App {
     /// The slot is appended but NOT switched to; returns the new buffer id.
     pub(crate) fn nvim_create_buffer(&mut self) -> u64 {
         use super::{BufferFeatures, BufferSlot, DiskState};
-        use crate::app::STATUS_LINE_HEIGHT;
-        use crate::host::TuiHost;
         use hjkl_buffer::View;
-        use hjkl_engine::Options;
         use std::time::Instant;
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let host = TuiHost::new();
-        let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-        editor.set_current_buffer_id(buffer_id);
-        editor.set_registers_arc(self.registers.clone());
-        editor.set_global_marks_arc(self.global_marks.clone());
-        editor.set_last_substitute_arc(self.last_substitute.clone());
-        editor.set_abbrevs_arc(self.abbrevs.clone());
-        editor.set_search_arc(self.search.clone());
-        editor.set_change_bank_arc(self.change_bank_for(buffer_id));
-        // Mirror the nvim_api build_app viewport (80×24) for headless paths;
-        // in the real TUI crossterm::terminal::size() wins.
-        if let Ok(size) = crossterm::terminal::size() {
-            let vp = editor.host_mut().viewport_mut();
-            vp.width = size.0;
-            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-        }
-        let _ = editor.take_content_edits();
-        let _ = editor.take_content_reset();
+        // No editor to build here (#151 Stage 2b) — the register/marks/
+        // search/change-bank Arcs and the viewport are wired onto the
+        // window editor whenever this slot is first shown in a window
+        // (`reconcile_window_editors` / `make_view_editor`), not here.
         let mut slot = BufferSlot {
             buffer_id,
             is_explorer: false,
             features: BufferFeatures::default(),
-            editor,
+            view: View::new(),
+            settings: Settings::default(),
             filename: None,
             dirty: false,
             is_new_file: false,

@@ -14,11 +14,9 @@ impl App {
     /// `:DiffOrig` — open a read-only split with the unified diff of the active
     /// buffer vs its on-disk file.
     pub(crate) fn diff_orig(&mut self) {
-        use crate::app::STATUS_LINE_HEIGHT;
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        use crate::host::TuiHost;
         use hjkl_buffer::View;
-        use hjkl_engine::{BufferEdit, Host, Options};
+        use hjkl_engine::{BufferEdit, Settings};
 
         // Must be a real on-disk file (not a scratch / explorer buffer).
         let Some(path) = self.active().filename.clone() else {
@@ -69,25 +67,20 @@ impl App {
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let host = TuiHost::new();
-            let mut editor = hjkl_vim::vim_editor(View::new(), host, Options::default());
-            if let Ok(size) = crossterm::terminal::size() {
-                let vp = editor.host_mut().viewport_mut();
-                vp.width = size.0;
-                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-            }
-            editor.set_current_buffer_id(buffer_id);
-            BufferEdit::replace_all(editor.buffer_mut(), &body);
-            editor.set_filetype("diff");
+            let mut view = View::new();
+            BufferEdit::replace_all(&mut view, &body);
             // Read-only view: block edits/insert-mode entry.
-            editor.settings_mut().modifiable = false;
-            let _ = editor.take_content_edits();
-            let _ = editor.take_content_reset();
+            let settings = Settings {
+                filetype: "diff".to_string(),
+                modifiable: false,
+                ..Settings::default()
+            };
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
                 features: super::BufferFeatures::default(),
-                editor,
+                view,
+                settings,
                 filename: None,
                 dirty: false,
                 is_new_file: false,
