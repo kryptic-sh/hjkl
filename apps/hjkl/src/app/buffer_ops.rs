@@ -562,7 +562,21 @@ impl App {
         use crate::keymap_actions::AppAction;
         match action {
             AppAction::Tabnext => {
-                for _ in 0..count {
+                // `{count}gt` is an ABSOLUTE jump to tab page {count} (vim
+                // 1-indexes tab pages; `:h gt`), while bare `gt` (no explicit
+                // count) is RELATIVE — next tab, wrapping from last to first.
+                // `count` here is already defaulted to 1 by `dispatch_action`,
+                // so explicit-`1gt` and bare-`gt` are indistinguishable by
+                // value alone; `g_chord_explicit_count` (captured at
+                // `BeginPendingAfterG` time, before the default was applied)
+                // disambiguates them.
+                if self.g_chord_explicit_count {
+                    let target = count.saturating_sub(1).min(self.tabs.len() - 1);
+                    self.switch_tab(target);
+                    let n = self.active_tab + 1;
+                    let m = self.tabs.len();
+                    self.bus.info(format!("tab {n}/{m}"));
+                } else {
                     self.dispatch_ex("tabnext");
                 }
             }

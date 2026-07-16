@@ -49,6 +49,10 @@ impl App {
             AppAction::BeginPendingAfterG {
                 count: action_count,
             } => {
+                // Capture explicitness before `take_or` consumes/resets the
+                // buffer — needed to distinguish `2gt` (absolute) from bare
+                // `gt` (relative); see `g_chord_explicit_count` doc comment.
+                self.g_chord_explicit_count = !self.pending_count.is_empty();
                 // Use buffered count-prefix if present, otherwise the action count.
                 let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::AfterG { count: n });

@@ -890,6 +890,39 @@ fn gt_switches_tab_backward() {
 }
 
 #[test]
+fn gt_with_explicit_count_is_absolute() {
+    // `:h gt` — `{count}gt` goes to tab page {count} (1-indexed, ABSOLUTE),
+    // unlike bare `gt` which goes to the next tab (relative, with wrap).
+    // Pre-fix, `{count}gt` ran `count` repetitions of relative tabnext:
+    // from tab 1 (index 0) with 3 tabs, `2gt` would land on tab 3 (index 2)
+    // instead of tab 2 (index 1).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3, "setup: need 3 tabs");
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+
+    app.pending_count.try_accumulate('2');
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('t')));
+    assert_eq!(
+        app.active_tab, 1,
+        "2gt must land on tab page 2 (index 1), absolute"
+    );
+
+    // `1gt` (explicit count=1) must jump to tab page 1, even though the
+    // count value alone is indistinguishable from a bare `gt`'s default.
+    app.pending_count.try_accumulate('1');
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('t')));
+    assert_eq!(
+        app.active_tab, 0,
+        "1gt must land on tab page 1 (index 0), absolute — not act like bare gt"
+    );
+}
+
+#[test]
 fn each_tab_keeps_independent_layout() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Tab 0: split into 2 windows.

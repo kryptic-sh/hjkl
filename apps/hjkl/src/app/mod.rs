@@ -243,6 +243,15 @@ pub struct App {
     /// Digits are replayed to the engine when the non-digit key is
     /// engine-handled, or consumed when the key is app-handled.
     pub pending_count: hjkl_vim::CountAccumulator,
+    /// True iff the in-flight `g<x>` chord was preceded by an explicit
+    /// digit-prefix count (e.g. the `2` in `2gt`), as opposed to no count at
+    /// all (bare `gt`). `{count}gt` in vim is an *absolute* tab-page jump
+    /// while bare `gt` is *relative* (next, with wrap) — by the time the
+    /// second chord key resolves, `pending_count` has already been consumed
+    /// into `PendingState::AfterG`'s count field (which defaults explicit-1
+    /// and implicit-none to the same `1`), so this flag is captured earlier,
+    /// at `BeginPendingAfterG` time, to preserve the distinction (#audit-r2).
+    pub(crate) g_chord_explicit_count: bool,
     /// Direction of the active `search_field`.
     pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal.
@@ -2064,6 +2073,7 @@ impl App {
             explorer_git_discard_confirm: None,
             icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
+            g_chord_explicit_count: false,
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
