@@ -1166,7 +1166,8 @@ impl Highlighter {
                     metadata: span.metadata.clone(),
                 });
             }
-            self.child_cache.insert_spans(lang_name, content_hash, spans);
+            self.child_cache
+                .insert_spans(lang_name, content_hash, spans);
             injected_ranges.push(content_range.clone());
         }
 

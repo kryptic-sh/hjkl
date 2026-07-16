@@ -290,6 +290,17 @@ impl CommentMarkerPass {
                 // dropped newline.
                 v.insert(0, newline_positions[0] + 1);
             }
+            // When the newline immediately preceding `first_comment_start`
+            // sits right at `first_comment_start - 1` (the common case: the
+            // viewport's first comment is the first thing on its line), the
+            // loop above pushes a spurious final entry equal to
+            // `first_comment_start` itself. That "line" is empty (its start
+            // and end coincide), so it always fails the delimiter check
+            // below and resets `active` to `None` on the very last
+            // iteration — silently discarding whatever the real preceding
+            // lines found. Drop any entry that isn't strictly before
+            // `first_comment_start`; it doesn't represent a real prior line.
+            v.retain(|&s| s < first_comment_start);
             v
         };
 
@@ -305,7 +316,12 @@ impl CommentMarkerPass {
             let line_bytes = &bytes[ls..le];
             // String-scan fallback: look for comment delimiters.
             if let Some(del_off) = find_comment_delimiter(line_bytes) {
-                let body_start = ls + del_off + 2;
+                // Skip by the matched delimiter's actual length via
+                // `delimiter_skip` (2 bytes for `--`/`//`/`/*`, 1 byte for
+                // `#`) instead of a hardcoded `+ 2` — the hardcoded skip ate
+                // one byte of the body after a `#`, turning `#TODO:` into
+                // `ODO:` and losing the marker match.
+                let body_start = ls + delimiter_skip(line_bytes, del_off);
                 let body_end = le;
                 if body_start < body_end {
                     let found = scan_markers(bytes, body_start, body_end, &self.markers);
@@ -987,6 +1003,50 @@ mod tests {
             assert_eq!(b.capture, r.capture, "capture name mismatch");
             assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
         }
+    }
+
+    /// Regression: `seed_active`'s string-scan fallback used to hardcode a
+    /// 2-byte delimiter skip (`del_off + 2`) after locating a comment
+    /// delimiter, which is correct for `--`/`//`/`/*` but wrong for the
+    /// 1-byte `#` delimiter — it eats one byte of the comment body along
+    /// with the `#`, so `#TODO: ...` is scanned as `ODO: ...` and the
+    /// `TODO` word never matches. A `#TODO:` line sitting just above a
+    /// scrolled viewport should still seed the inherited marker state.
+    #[test]
+    fn seed_active_recognizes_one_byte_hash_delimiter() {
+        let src = b"#TODO: fix this\n// next line\n";
+        let first_comment_start = src
+            .iter()
+            .position(|&b| b == b'/')
+            .expect("test fixture must contain a `//` comment");
+
+        let pass = CommentMarkerPass::new();
+        let active = pass.seed_active(src, first_comment_start);
+
+        assert!(
+            active.is_some_and(|m| m.word == "TODO"),
+            "seed scan must recognize `#TODO:` (1-byte delimiter) just above \
+             the viewport; got {:?}",
+            active.map(|m| m.word)
+        );
+    }
+
+    /// Companion: the 2-byte `//` delimiter path must keep working exactly
+    /// as before — this pins the non-regression side of the fix.
+    #[test]
+    fn seed_active_still_recognizes_two_byte_slash_delimiter() {
+        let src = b"// TODO: fix this\n// next line\n";
+        let first_comment_start = src.len() - b"// next line\n".len();
+
+        let pass = CommentMarkerPass::new();
+        let active = pass.seed_active(src, first_comment_start);
+
+        assert!(
+            active.is_some_and(|m| m.word == "TODO"),
+            "seed scan must still recognize `// TODO:` (2-byte delimiter); \
+             got {:?}",
+            active.map(|m| m.word)
+        );
     }
 
     /// Regression: the fixed `CAP * 200` seed-window offset must not panic
