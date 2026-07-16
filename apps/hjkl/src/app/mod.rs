@@ -1483,38 +1483,13 @@ impl App {
                 .shift_syntax_spans_for_edits(&edits);
         }
         self.lsp_notify_change_active(&edits);
-        // Window-level folds: an edit invalidates any overlapping fold in OTHER
-        // windows showing this same slot, mirroring the engine's
-        // `FoldOp::Invalidate` on the focused window (whose folds were already
-        // saved by `sync_viewport_from_editor`). Keeps sibling snapshots from
-        // stranding closed-fold markers over rows the edit moved.
-        if !edits.is_empty() {
-            let fw = self.focused_window();
-            let slot = self
-                .windows
-                .get(fw)
-                .and_then(|w| w.as_ref())
-                .map(|w| w.slot);
-            if let Some(slot) = slot {
-                let siblings: Vec<usize> = self
-                    .windows
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(id, w)| w.as_ref().map(|w| (id, w.slot)))
-                    .filter(|&(id, s)| s == slot && id != fw)
-                    .map(|(id, _)| id)
-                    .collect();
-                for sid in siblings {
-                    if let Some(folds) = self.window_folds.get_mut(&sid) {
-                        for e in &edits {
-                            let lo = e.start_position.0 as usize;
-                            let hi = e.old_end_position.0.max(e.new_end_position.0) as usize;
-                            hjkl_buffer::invalidate_folds(folds, lo, hi);
-                        }
-                    }
-                }
-            }
-        }
+        // Sibling-window fold invalidation + diff-pair realignment. Factored
+        // into a shared method (see its doc comment) so the event-loop
+        // fall-through key-dispatch paths, which build their own `edits` via
+        // the same `take_content_edits()` primitive but historically did NOT
+        // call this function, can share the exact same logic instead of
+        // drifting out of sync with it.
+        self.sync_diff_and_fold_siblings(&edits);
         // Rebase sibling windows' cursor + scroll against this edit (#151 Phase
         // E) so a window showing the same buffer keeps pointing at the same
         // logical line when another window inserts/deletes lines above it.
@@ -1547,6 +1522,64 @@ impl App {
                 self.pending_recompute = true;
             } else {
                 self.recompute_and_install();
+            }
+        }
+    }
+
+    /// Invalidate sibling windows' folds across `edits`, and refresh the
+    /// diff-pair alignment cache / scroll-bind if a diff pair is active.
+    ///
+    /// Factored out of [`sync_after_engine_mutation_inner`] so every
+    /// edit-producing call site can share it. History: `event_loop.rs`'s
+    /// inline post-dispatch sync blocks (the primary key-read arm, the
+    /// same-tick drain-loop mirror, and the completion-popup insert-char /
+    /// backspace / auto-trigger arms) each hand-duplicated pieces of
+    /// [`sync_after_engine_mutation_inner`] instead of calling it, and this
+    /// piece — sibling `window_folds` invalidation plus diff realignment —
+    /// was dropped from every copy. With a diff pair active, an edit on any
+    /// of those paths left `diff_cache` stale: the next frame's
+    /// `diff_line_classes` (`diff_mode.rs`) indexes a row that no longer
+    /// exists once the buffer shrank past it (e.g. `dG` near EOF), and
+    /// `rope.line(row)` panics. `refresh_diff_alignment` and
+    /// `sync_diff_scroll` are gen-keyed / pair-gated, so calling them
+    /// unconditionally here is a cheap no-op when no diff pair is active or
+    /// nothing relevant changed.
+    ///
+    /// [`sync_after_engine_mutation_inner`]: Self::sync_after_engine_mutation_inner
+    pub(crate) fn sync_diff_and_fold_siblings(
+        &mut self,
+        edits: &[hjkl_engine::types::ContentEdit],
+    ) {
+        // Window-level folds: an edit invalidates any overlapping fold in OTHER
+        // windows showing this same slot, mirroring the engine's
+        // `FoldOp::Invalidate` on the focused window (whose folds were already
+        // saved by `sync_viewport_from_editor`). Keeps sibling snapshots from
+        // stranding closed-fold markers over rows the edit moved.
+        if !edits.is_empty() {
+            let fw = self.focused_window();
+            let slot = self
+                .windows
+                .get(fw)
+                .and_then(|w| w.as_ref())
+                .map(|w| w.slot);
+            if let Some(slot) = slot {
+                let siblings: Vec<usize> = self
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, w)| w.as_ref().map(|w| (id, w.slot)))
+                    .filter(|&(id, s)| s == slot && id != fw)
+                    .map(|(id, _)| id)
+                    .collect();
+                for sid in siblings {
+                    if let Some(folds) = self.window_folds.get_mut(&sid) {
+                        for e in edits {
+                            let lo = e.start_position.0 as usize;
+                            let hi = e.old_end_position.0.max(e.new_end_position.0) as usize;
+                            hjkl_buffer::invalidate_folds(folds, lo, hi);
+                        }
+                    }
+                }
             }
         }
         // Keep the diff alignment current when a diff-mode buffer is edited.

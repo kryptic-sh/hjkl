@@ -171,6 +171,89 @@ impl App {
         }
     }
 
+    /// Dispatch a key that fell through [`App::handle_keypress`] (i.e. wasn't
+    /// consumed by any overlay/prefix handler) to the engine — Insert-mode
+    /// primitives via [`App::dispatch_insert_key`], or the Normal/Visual FSM
+    /// via `hjkl_vim_tui::handle_key` — then run the full post-mutation sync:
+    /// viewport, dirty/reset/edits, syntax-span shift, LSP notify, sibling
+    /// cursor rebase, sibling-fold + diff-pair sync, and scroll-anim
+    /// bookkeeping.
+    ///
+    /// This is the single canonical fall-through sync path. It used to be
+    /// duplicated inline at two call sites — the primary key-read arm and the
+    /// same-tick drain-loop mirror in [`App::run`] — which drifted apart from
+    /// [`App::sync_after_engine_mutation`] (mod.rs): both copies omitted
+    /// sibling `window_folds` invalidation and diff-pair realignment. With a
+    /// diff pair active, an edit on either path left `diff_cache` stale,
+    /// eventually panicking in `rope.line(row)` (`diff_mode.rs`) once the
+    /// buffer shrank past a cached row (e.g. `dG` near EOF). Factoring both
+    /// call sites through this one method closes that gap for good.
+    ///
+    /// Deliberately does **not** call `ensure_cursor_in_scrolloff()` the way
+    /// [`App::sync_after_engine_mutation`] does: both `dispatch_insert_key`'s
+    /// primitives and the engine FSM's `step()` (reached via
+    /// `hjkl_vim_tui::handle_key`) already clamp scrolloff internally, so an
+    /// extra call here would be redundant (harmless, but pure noise).
+    /// Likewise `pending_recompute` is set unconditionally rather than
+    /// gated on whether the syntax view actually changed — see the module
+    /// doc on [`App::run`]: keystroke arms must always defer a recompute,
+    /// full stop, rather than special-case the gate mouse-drag bursts use.
+    pub(crate) fn dispatch_fallthrough_key(&mut self, key: KeyEvent) {
+        self.scroll_anim = None; // any new key cancels a running animation
+        let prev_top = self.window_scroll(self.focused_window()).0;
+        let mode_was_insert = self.active_editor().vim_mode() == VimMode::Insert;
+        if mode_was_insert {
+            self.dispatch_insert_key(key);
+            self.active_editor_mut().emit_cursor_shape_if_changed();
+        } else {
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), key);
+        }
+
+        self.sync_viewport_from_editor();
+        if self.active_editor_mut().take_dirty() {
+            let elapsed = self.active_mut().refresh_dirty_against_saved();
+            self.last_signature_us = elapsed;
+            if self.active().dirty {
+                self.active_mut().is_new_file = false;
+            }
+        }
+        let buffer_id = self.active().buffer_id;
+        if self.active_editor_mut().take_content_reset() {
+            self.handle_active_content_reset(buffer_id);
+        }
+        let edits = self.active_editor_mut().take_content_edits();
+        if !edits.is_empty() {
+            self.syntax.apply_edits(buffer_id, &edits);
+            self.active_editor_mut()
+                .shift_syntax_spans_for_edits(&edits);
+        }
+        self.lsp_notify_change_active(&edits);
+        self.rebase_sibling_cursors(&edits);
+        self.sync_diff_and_fold_siblings(&edits);
+        // Drain pending fold ops to prevent unbounded growth;
+        // `recompute_and_install` (via `pending_recompute`)
+        // handles the visual refresh.
+        let _ = self.active_editor_mut().take_fold_ops();
+        {
+            let hint = self.active_editor_mut().take_scroll_anim_hint();
+            if hint {
+                let ms = self.active_editor().settings().scroll_duration_ms;
+                let win = self.focused_window();
+                let new_top = self.window_scroll(win).0;
+                if ms > 0 && new_top != prev_top {
+                    self.scroll_anim = Some(crate::app::ScrollAnim {
+                        win_id: win,
+                        start_top: prev_top,
+                        target_top: new_top,
+                        started_at: std::time::Instant::now(),
+                        duration: std::time::Duration::from_millis(ms as u64),
+                    });
+                }
+            }
+        }
+        self.pending_recompute = true;
+    }
+
     /// Handle a terminal bracketed-paste (`Event::Paste`) — the whole pasted
     /// blob arrives as one atomic string with real newlines.
     ///
@@ -874,6 +957,13 @@ impl App {
                         }
                         self.lsp_notify_change_active(&edits);
                         self.rebase_sibling_cursors(&edits);
+                        // Sibling-window fold invalidation + diff-pair
+                        // realignment — see the doc comment on
+                        // `sync_diff_and_fold_siblings` for why this
+                        // completion-popup arm must call it too (it's one of
+                        // the sites that historically drifted from
+                        // `sync_after_engine_mutation`).
+                        self.sync_diff_and_fold_siblings(&edits);
                         // Defer TS reparse to the end-of-drain flush so a
                         // burst of insert-mode keys folds into one parse
                         // instead of paying per-keystroke sync cost.
@@ -949,6 +1039,13 @@ impl App {
                         }
                         self.lsp_notify_change_active(&edits);
                         self.rebase_sibling_cursors(&edits);
+                        // Sibling-window fold invalidation + diff-pair
+                        // realignment — see the doc comment on
+                        // `sync_diff_and_fold_siblings` for why this
+                        // completion-popup arm must call it too (it's one of
+                        // the sites that historically drifted from
+                        // `sync_after_engine_mutation`).
+                        self.sync_diff_and_fold_siblings(&edits);
                         // Defer TS reparse to the end-of-drain flush so a
                         // burst of insert-mode keys folds into one parse
                         // instead of paying per-keystroke sync cost.
@@ -1030,6 +1127,9 @@ impl App {
                     }
                     self.lsp_notify_change_active(&edits);
                     self.rebase_sibling_cursors(&edits);
+                    // Sibling-window fold invalidation + diff-pair realignment
+                    // — same drift class as the two arms above.
+                    self.sync_diff_and_fold_siblings(&edits);
                     self.pending_recompute = true;
                     self.maybe_auto_trigger_completion(c);
                     return KeyOutcome::Continue;
@@ -1777,62 +1877,7 @@ impl App {
                     };
 
                     if !consumed_inline {
-                        // ── Normal editor key handling ────────────────
-                        // Insert mode uses the inline dispatcher which calls
-                        // Editor::insert_* primitives directly. Normal / Visual
-                        // modes route through the FSM via hjkl_vim_tui::handle_key.
-                        self.scroll_anim = None; // any new key cancels running animation
-                        let prev_top = self.window_scroll(self.focused_window()).0;
-                        let mode_was_insert = self.active_editor().vim_mode() == VimMode::Insert;
-                        if mode_was_insert {
-                            self.dispatch_insert_key(key);
-                            self.active_editor_mut().emit_cursor_shape_if_changed();
-                        } else {
-                            hjkl_vim_tui::handle_key(self.active_editor_mut(), key);
-                        }
-
-                        self.sync_viewport_from_editor();
-                        if self.active_editor_mut().take_dirty() {
-                            let elapsed = self.active_mut().refresh_dirty_against_saved();
-                            self.last_signature_us = elapsed;
-                            if self.active().dirty {
-                                self.active_mut().is_new_file = false;
-                            }
-                        }
-                        let buffer_id = self.active().buffer_id;
-                        if self.active_editor_mut().take_content_reset() {
-                            self.handle_active_content_reset(buffer_id);
-                        }
-                        let edits = self.active_editor_mut().take_content_edits();
-                        if !edits.is_empty() {
-                            self.syntax.apply_edits(buffer_id, &edits);
-                            self.active_editor_mut()
-                                .shift_syntax_spans_for_edits(&edits);
-                        }
-                        self.lsp_notify_change_active(&edits);
-                        self.rebase_sibling_cursors(&edits);
-                        // Drain pending fold ops to prevent unbounded growth;
-                        // `recompute_and_install` (via `pending_recompute`)
-                        // handles the visual refresh.
-                        let _ = self.active_editor_mut().take_fold_ops();
-                        {
-                            let hint = self.active_editor_mut().take_scroll_anim_hint();
-                            if hint {
-                                let ms = self.active_editor().settings().scroll_duration_ms;
-                                let win = self.focused_window();
-                                let new_top = self.window_scroll(win).0;
-                                if ms > 0 && new_top != prev_top {
-                                    self.scroll_anim = Some(crate::app::ScrollAnim {
-                                        win_id: win,
-                                        start_top: prev_top,
-                                        target_top: new_top,
-                                        started_at: std::time::Instant::now(),
-                                        duration: std::time::Duration::from_millis(ms as u64),
-                                    });
-                                }
-                            }
-                        }
-                        self.pending_recompute = true;
+                        self.dispatch_fallthrough_key(key);
                     }
                 }
                 Event::Mouse(me) => {
@@ -1881,63 +1926,10 @@ impl App {
                                     break;
                                 }
                                 KeyOutcome::Continue => continue,
-                                KeyOutcome::FallThrough => {
-                                    self.scroll_anim = None;
-                                    let prev_top = self.window_scroll(self.focused_window()).0;
-                                    let mode_was_insert =
-                                        self.active_editor().vim_mode() == VimMode::Insert;
-                                    if mode_was_insert {
-                                        self.dispatch_insert_key(k);
-                                        self.active_editor_mut().emit_cursor_shape_if_changed();
-                                    } else {
-                                        hjkl_vim_tui::handle_key(self.active_editor_mut(), k);
-                                    }
-                                    self.sync_viewport_from_editor();
-                                    if self.active_editor_mut().take_dirty() {
-                                        let elapsed =
-                                            self.active_mut().refresh_dirty_against_saved();
-                                        self.last_signature_us = elapsed;
-                                        if self.active().dirty {
-                                            self.active_mut().is_new_file = false;
-                                        }
-                                    }
-                                    let bid = self.active().buffer_id;
-                                    if self.active_editor_mut().take_content_reset() {
-                                        self.handle_active_content_reset(bid);
-                                    }
-                                    let edits = self.active_editor_mut().take_content_edits();
-                                    if !edits.is_empty() {
-                                        self.syntax.apply_edits(bid, &edits);
-                                        self.active_editor_mut()
-                                            .shift_syntax_spans_for_edits(&edits);
-                                    }
-                                    self.lsp_notify_change_active(&edits);
-                                    self.rebase_sibling_cursors(&edits);
-                                    // Drain pending fold ops (drain-loop mirror of
-                                    // the primary key arm above).
-                                    let _ = self.active_editor_mut().take_fold_ops();
-                                    {
-                                        let hint = self.active_editor_mut().take_scroll_anim_hint();
-                                        if hint {
-                                            let ms =
-                                                self.active_editor().settings().scroll_duration_ms;
-                                            let win = self.focused_window();
-                                            let new_top = self.window_scroll(win).0;
-                                            if ms > 0 && new_top != prev_top {
-                                                self.scroll_anim = Some(crate::app::ScrollAnim {
-                                                    win_id: win,
-                                                    start_top: prev_top,
-                                                    target_top: new_top,
-                                                    started_at: std::time::Instant::now(),
-                                                    duration: std::time::Duration::from_millis(
-                                                        ms as u64,
-                                                    ),
-                                                });
-                                            }
-                                        }
-                                    }
-                                    self.pending_recompute = true;
-                                }
+                                // Drain-loop mirror of the primary key arm above —
+                                // routes through the same shared method so the two
+                                // fall-through paths cannot drift out of sync again.
+                                KeyOutcome::FallThrough => self.dispatch_fallthrough_key(k),
                             }
                         }
                         Event::Mouse(me2) => {

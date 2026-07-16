@@ -1,6 +1,7 @@
 //! Diff mode (#208 Phase 2) — state, ex commands, and alignment cache.
 
 use super::*;
+use crate::app::event_loop::KeyOutcome;
 use crate::keymap_actions::AppAction;
 use hjkl_app::diff::DiffRowKind;
 
@@ -137,6 +138,93 @@ fn diff_scroll_binds_partner_top_row() {
         2,
         "partner window must scroll-bind to the aligned line"
     );
+
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+}
+
+/// Regression for the `dispatch_fallthrough_key` drift bug (audit R2 fix 1):
+/// a fall-through key edit — here repeated Insert-mode `<Delete>`, which (like
+/// Backspace/Enter/Ctrl-w/etc.) is NOT intercepted by any of `handle_keypress`'s
+/// overlay/completion arms and so reaches `KeyOutcome::FallThrough` — must
+/// refresh the diff alignment cache exactly like `sync_after_engine_mutation`
+/// does, and must never leave `diff_cache` pointing at rows the shrunk buffer
+/// no longer has.
+///
+/// Drives keys through the SAME path `App::run` uses in production —
+/// `handle_keypress` first, falling through to `dispatch_fallthrough_key` on
+/// `KeyOutcome::FallThrough` — rather than calling engine primitives directly,
+/// so this exercises the exact call site that drifted from
+/// `sync_after_engine_mutation` and dropped diff-cache refresh + sibling fold
+/// invalidation. Before the fix, deleting buffer `b` down to fewer lines than
+/// the stale cache's `Change` row indexes panics exactly like the bug report's
+/// `dG`-near-EOF repro:
+/// `thread '...' panicked at .../ropey-.../src/rope.rs:826:13: Attempt to
+/// index past end of Rope: line index 2, Rope line length 2` — raised from
+/// `hjkl_buffer::rope_line_str` (`line_text` in `diff_mode.rs`) when
+/// `diff_line_classes` reads a `Change` row whose cached `b` index the
+/// shrunk buffer no longer has. That's exactly what a diff-mode render calls
+/// every frame, so this is a straight-line panic repro, not just a staleness
+/// check.
+#[test]
+fn fallthrough_key_edit_refreshes_diff_alignment_and_avoids_stale_row_panic() {
+    let a = tmp_path("hjkl_diff_dg_a.txt");
+    let b = tmp_path("hjkl_diff_dg_b.txt");
+    std::fs::write(&a, "one\ntwo\nthree\nfour\nfive\n").unwrap();
+    std::fs::write(&b, "one\ntwo\nTHREE\nfour\nfive\n").unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("diffsplit {}", b.display()));
+    let (_, b_win) = app.diff_pair().expect("diffsplit must form a pair");
+    // Sanity: alignment cache has 5 aligned rows, one `Change` at b-line 2
+    // ("THREE" vs "three") — the row whose stale index must not survive.
+    assert_eq!(app.diff_cache.as_ref().unwrap().diff.rows.len(), 5);
+
+    // Focus (after diffsplit) is on the opened `b` window. Enter Insert mode
+    // at the start of line 1 ("two") and hold <Delete> down: each press
+    // merges/eats forward, eventually deleting "two\nTHREE\nfour\nfive\n"
+    // entirely and leaving just "one\n" — shrinking `b` well past the stale
+    // cache's `Change` row (b-line 2), which is exactly what triggers the
+    // rope-index panic if the cache isn't refreshed.
+    app.active_editor_mut().jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+    app.active_editor_mut().enter_insert_i(1);
+    app.sync_after_engine_mutation();
+    let delete_key =
+        crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Delete, KeyModifiers::NONE);
+    for _ in 0..40 {
+        // Mirror `App::run` exactly: `handle_keypress` first, and only on
+        // `FallThrough` call `dispatch_fallthrough_key` — the method this fix
+        // introduced to close the drift gap. Plain <Delete> in Insert mode
+        // (no completion popup open) is one of the keys that actually reaches
+        // this path in production (unlike most Normal-mode operators, which
+        // route entirely through `route_chord_key` + `sync_after_engine_mutation`
+        // already).
+        if let KeyOutcome::FallThrough = app.handle_keypress(delete_key) {
+            app.dispatch_fallthrough_key(delete_key);
+        }
+    }
+    assert_eq!(
+        app.active_editor().buffer().rope().to_string(),
+        "one\n",
+        "buffer b must have shrunk to just the first line"
+    );
+
+    // The alignment cache must have been refreshed against the shrunk
+    // buffer — no aligned row may reference a `b` line that no longer
+    // exists (a stale row referencing b-line 2 is exactly what panics below).
+    let cache = app.diff_cache.as_ref().expect("cache must still exist");
+    for row in &cache.diff.rows {
+        if let Some(bi) = row.b {
+            assert!(
+                bi < 1,
+                "stale diff row references deleted b-line {bi} — diff_cache was not refreshed"
+            );
+        }
+    }
+
+    // The actual panic repro: rendering calls this every frame. Must not
+    // panic even though the buffer shrank past the old cache's row count.
+    let _ = app.diff_line_classes(b_win);
 
     let _ = std::fs::remove_file(&a);
     let _ = std::fs::remove_file(&b);
