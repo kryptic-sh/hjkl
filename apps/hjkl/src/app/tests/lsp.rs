@@ -1202,10 +1202,11 @@ fn completion_request_pending_routes_to_handler() {
 #[test]
 fn identifier_start_col_snaps_to_word_boundary() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // "compute" begins at byte 10; cursor at end of line.
+    // "compute" begins at CHAR col 10; cursor at end of line (all-ASCII, so
+    // char and byte columns coincide here).
     seed_buffer(&mut app, "let val = compute");
     assert_eq!(
-        app.identifier_start_col(0, "let val = compute".len()),
+        app.identifier_start_col(0, "let val = compute".chars().count()),
         10,
         "anchor should snap to the start of the identifier under the cursor"
     );
@@ -1217,31 +1218,71 @@ fn identifier_start_col_snaps_to_word_boundary() {
     assert_eq!(app.identifier_start_col(0, 4), 4);
 }
 
+/// Regression (audit-r2 fix 7): `col` is a CHAR column (matching
+/// `View::cursor().col`), not a byte column — treating it as a byte offset
+/// silently mis-scanned the identifier boundary on any line with multibyte
+/// content before the cursor.
 #[test]
-fn identifier_start_col_handles_col_inside_multibyte_char() {
-    // A byte column landing inside a multibyte char (e.g. a nerd-font icon in
-    // the explorer tree) must not panic the internal `line[..end]` slice.
+fn identifier_start_col_multibyte_prefix_scans_correctly() {
     let mut app = App::new(None, false, None, None).unwrap();
-    seed_buffer(&mut app, "\u{f1617} buffer_ops.rs"); // icon is 4 bytes (0..4)
-    // col 2 is inside the icon — must clamp to a boundary and return safely.
-    let _ = app.identifier_start_col(0, 2);
-    // A col past the line length also clamps without panicking.
-    let _ = app.identifier_start_col(0, 9999);
+    // "héllo wor" = 9 chars (h,é,l,l,o,' ',w,o,r) but 10 bytes (é is 2
+    // bytes) — a byte-offset bug would slice one char short and miss the
+    // trailing 'r', still anchoring at 'w' here but truncating the token
+    // (see `token_between_multibyte_prefix_returns_full_token` below).
+    seed_buffer(&mut app, "héllo wor");
+    let cursor_col = "héllo wor".chars().count(); // 9
+    assert_eq!(
+        app.identifier_start_col(0, cursor_col),
+        6,
+        "anchor must land on 'w' (char col 6), not shifted by é's extra byte"
+    );
+
+    // The identifier itself contains the multibyte char: cursor right after
+    // "héllo" must anchor at its start (char col 0), not misplaced by é's
+    // extra byte the way a byte-offset scan would.
+    seed_buffer(&mut app, "héllo");
+    assert_eq!(app.identifier_start_col(0, "héllo".chars().count()), 0);
 }
 
 #[test]
-fn token_between_handles_col_inside_multibyte_char() {
-    // A byte column landing inside a multibyte char (e.g. an em-dash in a
-    // comment) must not panic the internal `line[lo..hi]` slice — regression
-    // for the `<C-n>` word-completion crash on UTF-8 content.
+fn identifier_start_col_out_of_range_col_clamps_without_panicking() {
     let mut app = App::new(None, false, None, None).unwrap();
-    seed_buffer(&mut app, "ab — cd"); // em-dash U+2014 is 3 bytes at 3..6
-    // hi inside the em-dash (byte 4) snaps down to the boundary (3) — no panic.
-    assert_eq!(app.token_between(0, 0, 4), "ab ");
-    // lo inside the em-dash also snaps down rather than panicking.
-    let _ = app.token_between(0, 4, 7);
-    // Out-of-range columns clamp safely.
+    seed_buffer(&mut app, "\u{f1617} buffer_ops.rs");
+    // A col past the line's char count clamps safely rather than panicking.
+    let _ = app.identifier_start_col(0, 9999);
+}
+
+/// Regression (audit-r2 fix 7): companion to
+/// `identifier_start_col_multibyte_prefix_scans_correctly` — the full
+/// completion-prefix path (`identifier_start_col` anchor feeding
+/// `token_between`) must recover the WHOLE identifier, not a byte-shortened
+/// prefix, when multibyte content precedes the cursor.
+#[test]
+fn token_between_multibyte_prefix_returns_full_token() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "héllo wor");
+    let cursor_col = "héllo wor".chars().count();
+    let anchor = app.identifier_start_col(0, cursor_col);
+    assert_eq!(
+        app.token_between(0, anchor, cursor_col),
+        "wor",
+        "must recover the full typed prefix, not truncated by é's extra byte"
+    );
+
+    seed_buffer(&mut app, "héllo");
+    let cursor_col = "héllo".chars().count();
+    let anchor = app.identifier_start_col(0, cursor_col);
+    assert_eq!(app.token_between(0, anchor, cursor_col), "héllo");
+}
+
+#[test]
+fn token_between_out_of_range_cols_clamp_without_panicking() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "ab — cd"); // em-dash U+2014, CHAR col 3
+    assert_eq!(app.token_between(0, 0, 4), "ab —");
+    // Out-of-range columns clamp safely rather than panicking.
     let _ = app.token_between(0, 0, 9999);
+    let _ = app.token_between(0, 9999, 9999);
 }
 
 #[test]

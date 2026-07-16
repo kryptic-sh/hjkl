@@ -1656,31 +1656,30 @@ impl App {
         self.completion = Some(popup);
     }
 
-    /// The text between byte columns `[lo, hi)` on `row` (the partial word
+    /// The text between CHAR columns `[lo, hi)` on `row` (the partial word
     /// under the cursor). Empty when out of range.
+    ///
+    /// `lo`/`hi` are CHAR indices — the same unit as `View::cursor().col`,
+    /// `Completion::anchor_col`, and every caller of this method (audit-r2
+    /// fix 7: this used to slice `line[lo..hi]` treating them as BYTE
+    /// offsets, silently truncating or misaligning the token on any line
+    /// with multibyte content before the cursor). Convert to byte offsets
+    /// via [`hjkl_buffer::Position::byte_offset`] before slicing.
     pub(crate) fn token_between(&self, row: usize, lo: usize, hi: usize) -> String {
         let rope = self.active_editor().buffer().rope();
         if row >= rope.len_lines() {
             return String::new();
         }
         let line = hjkl_buffer::rope_line_str(&rope, row);
-        // `lo`/`hi` are byte columns but may land inside a multibyte char (e.g.
-        // an em-dash in a comment), which would panic the `line[lo..hi]` slice.
-        // Clamp to len and snap each down to a char boundary, mirroring
-        // `identifier_start_col`.
-        let mut lo = lo.min(line.len());
-        while lo > 0 && !line.is_char_boundary(lo) {
-            lo -= 1;
+        let char_count = line.chars().count();
+        let lo = lo.min(char_count);
+        let hi = hi.min(char_count);
+        if lo > hi {
+            return String::new();
         }
-        let mut hi = hi.min(line.len());
-        while hi > 0 && !line.is_char_boundary(hi) {
-            hi -= 1;
-        }
-        if lo <= hi {
-            line[lo..hi].to_string()
-        } else {
-            String::new()
-        }
+        let byte_lo = hjkl_buffer::Position::new(row, lo).byte_offset(&line);
+        let byte_hi = hjkl_buffer::Position::new(row, hi).byte_offset(&line);
+        line[byte_lo..byte_hi].to_string()
     }
 
     /// Collect unique identifier tokens from every open buffer as completion
@@ -1815,32 +1814,32 @@ impl App {
         }
     }
 
-    /// Scan left from byte column `col` on `row` over identifier characters
-    /// (alphanumeric / `_`) and return the byte column where the current word
+    /// Scan left from CHAR column `col` on `row` over identifier characters
+    /// (alphanumeric / `_`) and return the CHAR column where the current word
     /// begins. When the character before the cursor is not an identifier char
     /// (e.g. right after a `.`), this returns `col` unchanged.
     ///
-    /// Byte-based to match the cursor column (UTF-8 `positionEncoding`) and the
-    /// byte-slice prefix tracking in the insert-mode key handler.
+    /// CHAR-based to match `View::cursor().col`, `Completion::anchor_col`,
+    /// and `token_between` — every real caller passes a char column (audit-r2
+    /// fix 7: this used to slice `line[..end]` treating `col` as a BYTE
+    /// offset, which silently mis-scanned on any line with multibyte content
+    /// before the cursor — e.g. an accented letter or emoji shifted every
+    /// identifier boundary after it left by however many extra bytes it
+    /// contributed, truncating the completion prefix).
     pub(crate) fn identifier_start_col(&self, row: usize, col: usize) -> usize {
         let rope = self.active_editor().buffer().rope();
         if row >= rope.len_lines() {
             return col;
         }
         let line = hjkl_buffer::rope_line_str(&rope, row);
-        // Clamp to the line length AND down to a char boundary: `col` is a byte
-        // column but may land inside a multibyte char (e.g. a nerd-font icon in
-        // the explorer tree), which would panic the `line[..end]` slice below.
-        let mut end = col.min(line.len());
-        while end > 0 && !line.is_char_boundary(end) {
-            end -= 1;
-        }
+        let chars: Vec<char> = line.chars().collect();
+        let end = col.min(chars.len());
         let mut start = end;
-        // `char_indices` is double-ended, so walk back from the cursor over the
-        // contiguous run of identifier chars; `b` is the char's byte offset.
-        for (b, c) in line[..end].char_indices().rev() {
-            if c.is_alphanumeric() || c == '_' {
-                start = b;
+        // Walk back from the cursor over the contiguous run of identifier
+        // chars, in char-index space throughout — no byte offsets needed.
+        for i in (0..end).rev() {
+            if chars[i].is_alphanumeric() || chars[i] == '_' {
+                start = i;
             } else {
                 break;
             }
