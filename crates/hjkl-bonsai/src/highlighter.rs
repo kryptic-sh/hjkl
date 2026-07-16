@@ -161,11 +161,19 @@ struct ChildCache {
     /// One Highlighter per language (compile_query is the expensive part —
     /// retained across content changes).
     map: HashMap<String, CachedChild>,
-    /// Span cache keyed by content hash. Multiple `<style>` blocks (HTML +
-    /// N CSS chunks) all share the per-lang highlighter but get their own
-    /// spans entry, so scrolling past a 19-chunk doc doesn't redo the CSS
-    /// query 19 times per tick.
-    spans_by_hash: HashMap<u64, Vec<HighlightSpan>>,
+    /// Span cache keyed by `(language, content_hash)`. Multiple `<style>`
+    /// blocks (HTML + N CSS chunks) all share the per-lang highlighter but
+    /// get their own spans entry, so scrolling past a 19-chunk doc doesn't
+    /// redo the CSS query 19 times per tick.
+    ///
+    /// Keying by content hash ALONE is unsound: two injections with
+    /// byte-identical content but different languages (e.g. two fenced code
+    /// blocks in the same markdown doc, one ```js and one ```python, both
+    /// containing `x = 1`) hash to the same `content_hash`. A hash-only key
+    /// would let the second lookup silently reuse the first block's
+    /// wrong-language spans. Nesting by language name first keeps each
+    /// language's hash space independent.
+    spans_by_hash: HashMap<String, HashMap<u64, Vec<HighlightSpan>>>,
 }
 
 impl ChildCache {
@@ -173,12 +181,15 @@ impl ChildCache {
         self.map.get_mut(lang)
     }
 
-    fn get_spans(&self, content_hash: u64) -> Option<&Vec<HighlightSpan>> {
-        self.spans_by_hash.get(&content_hash)
+    fn get_spans(&self, lang: &str, content_hash: u64) -> Option<&Vec<HighlightSpan>> {
+        self.spans_by_hash.get(lang)?.get(&content_hash)
     }
 
-    fn insert_spans(&mut self, content_hash: u64, spans: Vec<HighlightSpan>) {
-        self.spans_by_hash.insert(content_hash, spans);
+    fn insert_spans(&mut self, lang: &str, content_hash: u64, spans: Vec<HighlightSpan>) {
+        self.spans_by_hash
+            .entry(lang.to_string())
+            .or_default()
+            .insert(content_hash, spans);
     }
 
     /// Insert a freshly built `Highlighter` for `lang`.
@@ -194,9 +205,18 @@ impl ChildCache {
 
     /// Remove highlighter entries for unused langs + span entries for unused
     /// content hashes. Bounds memory at the working set this render touched.
+    /// Consistent with the `(lang, hash)` key: langs not in `keep_langs` lose
+    /// their whole inner map, and surviving langs are pruned to only the
+    /// hashes still referenced this render.
     fn evict_stale(&mut self, keep_langs: &[String], keep_hashes: &[u64]) {
         self.map.retain(|k, _| keep_langs.iter().any(|kk| kk == k));
-        self.spans_by_hash.retain(|h, _| keep_hashes.contains(h));
+        self.spans_by_hash.retain(|lang, hashes| {
+            let keep = keep_langs.iter().any(|kk| kk == lang);
+            if keep {
+                hashes.retain(|h, _| keep_hashes.contains(h));
+            }
+            keep
+        });
     }
 }
 
@@ -482,10 +502,11 @@ impl Highlighter {
     ///
     /// The parent-spans cache was removed (bonsai cache redesign). The tree
     /// is the only cache — `highlight_range` walks the tree on every call.
-    /// Child caches stay intact: `spans_by_hash` is keyed by content hash,
-    /// so unchanged injection blocks survive the edit; changed blocks miss
-    /// naturally because their bytes hash differently, and `evict_stale`
-    /// prunes entries whose hashes no longer appear in the current render.
+    /// Child caches stay intact: `spans_by_hash` is keyed by
+    /// `(language, content_hash)`, so unchanged injection blocks survive the
+    /// edit; changed blocks miss naturally because their bytes hash
+    /// differently, and `evict_stale` prunes entries whose `(lang, hash)`
+    /// pairs no longer appear in the current render.
     pub fn edit(&mut self, edit: &tree_sitter::InputEdit) {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(edit);
@@ -1107,7 +1128,7 @@ impl Highlighter {
             cache_hashes.push(content_hash);
 
             // Span cache hit — skip parse + highlight entirely.
-            if let Some(cached) = self.child_cache.get_spans(content_hash) {
+            if let Some(cached) = self.child_cache.get_spans(lang_name, content_hash) {
                 for span in cached {
                     child_spans.push(HighlightSpan {
                         byte_range: (span.byte_range.start + offset)
@@ -1145,7 +1166,7 @@ impl Highlighter {
                     metadata: span.metadata.clone(),
                 });
             }
-            self.child_cache.insert_spans(content_hash, spans);
+            self.child_cache.insert_spans(lang_name, content_hash, spans);
             injected_ranges.push(content_range.clone());
         }
 
@@ -1309,14 +1330,15 @@ impl Highlighter {
             cache_hashes.push(content_hash);
 
             let cached_spans_opt: Option<Vec<HighlightSpan>> =
-                self.child_cache.get_spans(content_hash).cloned();
+                self.child_cache.get_spans(lang_name, content_hash).cloned();
             let spans = if let Some(s) = cached_spans_opt {
                 s
             } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
                 cached.highlighter.parse_initial(slice);
                 cached.source_hash = content_hash;
                 let s = cached.highlighter.highlight_range(slice, 0..slice.len());
-                self.child_cache.insert_spans(content_hash, s.clone());
+                self.child_cache
+                    .insert_spans(lang_name, content_hash, s.clone());
                 s
             } else {
                 let Some(child_grammar) = resolve(lang_name) else {
@@ -1329,7 +1351,8 @@ impl Highlighter {
                 let s = new_hl.highlight_range(slice, 0..slice.len());
                 self.child_cache
                     .insert_highlighter(lang_name.clone(), new_hl, content_hash);
-                self.child_cache.insert_spans(content_hash, s.clone());
+                self.child_cache
+                    .insert_spans(lang_name, content_hash, s.clone());
                 s
             };
 
@@ -1726,14 +1749,15 @@ impl Highlighter {
             cache_hashes.push(content_hash);
 
             let cached_spans_opt: Option<Vec<HighlightSpan>> =
-                self.child_cache.get_spans(content_hash).cloned();
+                self.child_cache.get_spans(lang_name, content_hash).cloned();
             let spans = if let Some(s) = cached_spans_opt {
                 s
             } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
                 cached.highlighter.parse_initial(&slice);
                 cached.source_hash = content_hash;
                 let s = cached.highlighter.highlight_range(&slice, 0..slice.len());
-                self.child_cache.insert_spans(content_hash, s.clone());
+                self.child_cache
+                    .insert_spans(lang_name, content_hash, s.clone());
                 s
             } else {
                 let Some(child_grammar) = resolve(lang_name) else {
@@ -1746,7 +1770,8 @@ impl Highlighter {
                 let s = new_hl.highlight_range(&slice, 0..slice.len());
                 self.child_cache
                     .insert_highlighter(lang_name.clone(), new_hl, content_hash);
-                self.child_cache.insert_spans(content_hash, s.clone());
+                self.child_cache
+                    .insert_spans(lang_name, content_hash, s.clone());
                 s
             };
 
@@ -2021,6 +2046,39 @@ mod tests {
         assert_eq!(spans[1].byte_range.start, 10);
         assert_eq!(spans[1].capture, "markup.link");
         assert_eq!(spans[2].byte_range.start, 20);
+    }
+
+    // ── ChildCache: injection span cache must be keyed by (lang, hash) ────────
+
+    /// Regression: `ChildCache::spans_by_hash` used to be keyed by content
+    /// hash alone. A markdown file with two identical-content fenced code
+    /// blocks — one ```js, one ```python — hashes to the SAME `content_hash`
+    /// for both blocks even though the languages differ. Keying by hash alone
+    /// means the second block's lookup silently reuses the FIRST block's
+    /// (wrong-language) spans instead of resolving its own. Keying by
+    /// `(language, content_hash)` keeps them distinct even when the
+    /// underlying text collides.
+    #[test]
+    fn child_cache_spans_keyed_by_lang_and_hash_not_hash_alone() {
+        let mut cache = ChildCache::default();
+        let content_hash = hash_bytes(b"x = 1");
+
+        let js_spans = vec![span(0, 1, "variable.js")];
+        let py_spans = vec![span(0, 1, "variable.python")];
+
+        cache.insert_spans("javascript", content_hash, js_spans.clone());
+        cache.insert_spans("python", content_hash, py_spans.clone());
+
+        assert_eq!(
+            cache.get_spans("javascript", content_hash),
+            Some(&js_spans),
+            "javascript entry must survive the python insert with the same content hash"
+        );
+        assert_eq!(
+            cache.get_spans("python", content_hash),
+            Some(&py_spans),
+            "python entry must be its own cache slot, not reuse javascript's spans"
+        );
     }
 
     fn c_grammar_loader() -> (Arc<Grammar>, tempfile::TempDir) {
