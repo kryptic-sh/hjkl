@@ -853,6 +853,48 @@ fn tabclose_removes_current_tab() {
 }
 
 #[test]
+fn tabclose_prunes_window_folds_and_editors_for_split_tab() {
+    // Close a tab that has an internal split — both window ids it owned
+    // must be dropped from window_folds and window_editors, not just from
+    // `windows`. Otherwise the dead ids keep pinning the old slot's rope
+    // Arc, and (in the worst case) get silently reused as fresh window ids
+    // pick up stale fold state.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew"); // tab 1 (active) — populates window_folds for its window.
+    app.dispatch_ex("sp"); // split tab 1 into two windows; new one inherits folds.
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab, 1);
+    let closing_wids = app.tabs[1].layout.leaves();
+    assert_eq!(closing_wids.len(), 2, "setup: tab 1 must have a split");
+    assert!(
+        closing_wids
+            .iter()
+            .all(|w| app.window_folds.contains_key(w)),
+        "setup: both split windows must have a folds entry"
+    );
+    assert!(
+        closing_wids
+            .iter()
+            .all(|w| app.window_editors.contains_key(w)),
+        "setup: both split windows must have a view editor"
+    );
+
+    app.dispatch_ex("tabclose");
+    assert_eq!(app.tabs.len(), 1, "tabclose must remove tab 1");
+
+    for wid in &closing_wids {
+        assert!(
+            !app.window_folds.contains_key(wid),
+            "tabclose must prune window_folds for closed window {wid:?}"
+        );
+        assert!(
+            !app.window_editors.contains_key(wid),
+            "tabclose must prune window_editors for closed window {wid:?}"
+        );
+    }
+}
+
+#[test]
 fn tabclose_last_tab_errors() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert_eq!(app.tabs.len(), 1);
@@ -1024,12 +1066,35 @@ fn tabonly_drops_other_tabs() {
     app.dispatch_ex("tabnew");
     app.dispatch_ex("tabnew");
     assert_eq!(app.tabs.len(), 3);
+    // Window ids that belong to the tabs about to be closed (0 and 1).
+    let closing_wids: Vec<_> = app.tabs[0]
+        .layout
+        .leaves()
+        .into_iter()
+        .chain(app.tabs[1].layout.leaves())
+        .collect();
+    assert!(
+        closing_wids
+            .iter()
+            .any(|w| app.window_folds.contains_key(w)),
+        "setup: at least one closing window must have a folds entry"
+    );
     // Stay on tab 2. Run tabonly — should reduce to 1 tab.
     app.dispatch_ex("tabonly");
     assert_eq!(app.tabs.len(), 1, "tabonly must close all other tabs");
     assert_eq!(app.active_tab, 0, "active_tab must be reset to 0");
     let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "tabonly");
+    for wid in &closing_wids {
+        assert!(
+            !app.window_folds.contains_key(wid),
+            "tabonly must prune window_folds for closed window {wid:?}"
+        );
+        assert!(
+            !app.window_editors.contains_key(wid),
+            "tabonly must prune window_editors for closed window {wid:?}"
+        );
+    }
 }
 
 #[test]
@@ -1064,9 +1129,22 @@ fn close_tabs_to_right_leaves_active_and_earlier() {
     // Navigate back to tab 2.
     app.dispatch_ex("tabprev");
     assert_eq!(app.active_tab, 2);
+    let closing_wid = app.tabs[3].layout.leaves()[0];
+    assert!(
+        app.window_folds.contains_key(&closing_wid),
+        "setup: closing window must have a folds entry"
+    );
     app.close_tabs_to_right();
     assert_eq!(app.tabs.len(), 3, "expected 3 tabs remaining (0, 1, 2)");
     assert_eq!(app.active_tab, 2, "active_tab must stay at 2");
+    assert!(
+        !app.window_folds.contains_key(&closing_wid),
+        "close_tabs_to_right must prune window_folds for closed window {closing_wid:?}"
+    );
+    assert!(
+        !app.window_editors.contains_key(&closing_wid),
+        "close_tabs_to_right must prune window_editors for closed window {closing_wid:?}"
+    );
 }
 
 #[test]
@@ -1079,6 +1157,18 @@ fn close_tabs_to_left_shifts_active_to_zero() {
     // Navigate back to tab 2.
     app.dispatch_ex("tabprev");
     assert_eq!(app.active_tab, 2);
+    let closing_wids: Vec<_> = app.tabs[0]
+        .layout
+        .leaves()
+        .into_iter()
+        .chain(app.tabs[1].layout.leaves())
+        .collect();
+    assert!(
+        closing_wids
+            .iter()
+            .any(|w| app.window_folds.contains_key(w)),
+        "setup: at least one closing window must have a folds entry"
+    );
     app.close_tabs_to_left();
     assert_eq!(
         app.tabs.len(),
@@ -1086,6 +1176,16 @@ fn close_tabs_to_left_shifts_active_to_zero() {
         "expected 2 tabs remaining (originally 2, 3)"
     );
     assert_eq!(app.active_tab, 0, "active_tab must shift to 0");
+    for wid in &closing_wids {
+        assert!(
+            !app.window_folds.contains_key(wid),
+            "close_tabs_to_left must prune window_folds for closed window {wid:?}"
+        );
+        assert!(
+            !app.window_editors.contains_key(wid),
+            "close_tabs_to_left must prune window_editors for closed window {wid:?}"
+        );
+    }
 }
 
 #[test]

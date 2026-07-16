@@ -2196,6 +2196,7 @@ impl App {
             }
             for wid in tab.layout.leaves() {
                 self.windows[wid] = None;
+                self.window_folds.remove(&wid);
             }
         }
 
@@ -2203,6 +2204,9 @@ impl App {
         let active_tab = self.tabs[self.active_tab].clone();
         self.tabs = vec![active_tab];
         self.active_tab = 0;
+        // Drop window_editors entries for the windows just closed above —
+        // otherwise their dead ids keep pinning the old slots' rope Arcs.
+        self.reconcile_window_editors();
 
         self.bus.info("tabonly");
     }
@@ -2221,10 +2225,14 @@ impl App {
         for i in (active + 1)..self.tabs.len() {
             for wid in self.tabs[i].layout.leaves() {
                 self.windows[wid] = None;
+                self.window_folds.remove(&wid);
             }
         }
         self.tabs.truncate(active + 1);
         // active_tab index is unchanged; it still points to the same tab.
+        // Drop window_editors entries for the windows just closed above —
+        // otherwise their dead ids keep pinning the old slots' rope Arcs.
+        self.reconcile_window_editors();
     }
 
     /// Close all tabs whose index is strictly less than `active_tab`.
@@ -2241,11 +2249,15 @@ impl App {
         for i in 0..active {
             for wid in self.tabs[i].layout.leaves() {
                 self.windows[wid] = None;
+                self.window_folds.remove(&wid);
             }
         }
         // Drain the prefix, shifting remaining tabs to the front.
         self.tabs.drain(0..active);
         self.active_tab = 0;
+        // Drop window_editors entries for the windows just closed above —
+        // otherwise their dead ids keep pinning the old slots' rope Arcs.
+        self.reconcile_window_editors();
     }
 
     /// `:tabmove [N|+N|-N]` — reorder tabs.
@@ -2440,6 +2452,7 @@ impl App {
         // Drop those windows.
         for wid in closing_leaves {
             self.windows[wid] = None;
+            self.window_folds.remove(&wid);
         }
 
         // Remove the tab.
@@ -2450,6 +2463,9 @@ impl App {
             self.active_tab = self.tabs.len() - 1;
         }
 
+        // Drop window_editors entries for the windows just closed above —
+        // otherwise their dead ids keep pinning the old slots' rope Arcs.
+        self.reconcile_window_editors();
         // Restore the new active tab's cursor/scroll into the editor.
         self.sync_viewport_to_editor();
         let n = self.active_tab + 1;
