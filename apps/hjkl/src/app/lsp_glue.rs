@@ -94,7 +94,9 @@ fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
 /// applied after them, so later (leftward) edits shift the earlier ones'
 /// byte ranges in the final rope out from under this slicing approach.
 fn edits_ascending_disjoint(edits: &[hjkl_engine::ContentEdit]) -> bool {
-    edits.windows(2).all(|w| w[0].new_end_byte <= w[1].start_byte)
+    edits
+        .windows(2)
+        .all(|w| w[0].new_end_byte <= w[1].start_byte)
 }
 
 /// Build the `TextChange[]` array for `textDocument/didChange` incremental
@@ -418,22 +420,43 @@ impl App {
     /// (`:e!` / formatter), the server uses a non-UTF-8 position
     /// encoding, or no edits are tracked.
     pub(crate) fn lsp_notify_change_active(&mut self, edits: &[hjkl_engine::ContentEdit]) {
+        let slot_idx = self.focused_slot_idx();
+        self.lsp_notify_change_for_slot(slot_idx, edits);
+    }
+
+    /// Send a `textDocument/didChange` notification for the buffer in
+    /// `slot_idx`, which need not be the focused slot — `apply_workspace_edit`
+    /// uses this to keep OTHER files' server-side documents in sync when a
+    /// workspace edit touches buffers the user hasn't focused (audit R2, fix
+    /// 3). Without a per-slot notify, a non-focused buffer's server copy
+    /// stayed stale — wrong diagnostics / cross-file positions — until the
+    /// user happened to focus that slot.
+    ///
+    /// Only sends when the buffer's `dirty_gen` has advanced since the last
+    /// send to `slot_idx` — this naturally batches rapid keystroke edits on
+    /// the focused slot and is a no-op resend guard for every other slot.
+    pub(crate) fn lsp_notify_change_for_slot(
+        &mut self,
+        slot_idx: usize,
+        edits: &[hjkl_engine::ContentEdit],
+    ) {
         if self.lsp.as_ref().is_none() {
             return;
         }
         // Compute sync-mode decision before taking the mutable slot
-        // borrow — `lsp_supports_incremental_utf8` walks `self.lsp_state`.
-        // `edits_ascending_disjoint` also gates incremental sync: a batch
-        // recorded in end-descending order (e.g. `apply_workspace_edit`)
-        // can't be safely sliced from the final rope — see
-        // `build_text_changes`'s doc comment (audit R2, fix 2).
+        // borrow — `lsp_supports_incremental_utf8_for_slot` walks
+        // `self.lsp_state`. `edits_ascending_disjoint` also gates
+        // incremental sync: a batch recorded in end-descending order (e.g.
+        // `apply_workspace_edit`) can't be safely sliced from the final
+        // rope — see `build_text_changes`'s doc comment (audit R2, fix 2).
         let use_incremental = !edits.is_empty()
-            && self.lsp_supports_incremental_utf8()
+            && self.lsp_supports_incremental_utf8_for_slot(slot_idx)
             && edits_ascending_disjoint(edits);
 
         let mgr = self.lsp.as_ref().unwrap();
-        let slot_idx = self.focused_slot_idx();
-        let slot = &mut self.slots[slot_idx];
+        let Some(slot) = self.slots.get_mut(slot_idx) else {
+            return;
+        };
         let dg = slot.editor.buffer().dirty_gen();
 
         // Skip if dirty_gen unchanged since last send.
@@ -500,15 +523,18 @@ impl App {
         self.slots[slot_idx].last_lsp_dirty_gen = Some(dg);
     }
 
-    /// True when the active buffer's LSP server announced both incremental
-    /// sync (`textDocumentSync.change == 2`) and UTF-8 `positionEncoding`.
-    /// Falls back conservatively when capabilities are missing.
-    fn lsp_supports_incremental_utf8(&self) -> bool {
-        // Find the server attached to the active buffer's language.
+    /// True when the LSP server attached to `slot_idx`'s language announced
+    /// both incremental sync (`textDocumentSync.change == 2`) and UTF-8
+    /// `positionEncoding`. Falls back conservatively when capabilities are
+    /// missing. Parameterized on `slot_idx` (rather than always the focused
+    /// buffer) so [`Self::lsp_notify_change_for_slot`] can gate incremental
+    /// sync correctly for a non-focused slot too (audit R2, fix 3).
+    fn lsp_supports_incremental_utf8_for_slot(&self, slot_idx: usize) -> bool {
+        // Find the server attached to this slot's language.
         let lang = match self
-            .active()
-            .filename
-            .as_ref()
+            .slots
+            .get(slot_idx)
+            .and_then(|s| s.filename.as_ref())
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
             .and_then(language_id_for_ext)
@@ -1851,7 +1877,28 @@ impl App {
             // Mark dirty.
             let _ = self.slots[slot_idx].editor.take_dirty();
             self.slots[slot_idx].dirty = true;
+
+            // Drain this slot's engine-emitted edits into syntax + LSP
+            // immediately — for every touched slot, not just the focused
+            // one. Without this, a slot the workspace edit reached but the
+            // user hadn't focused kept a stale server-side document (wrong
+            // diagnostics / cross-file positions) until the user happened
+            // to focus it (audit R2, fix 3).
+            let buffer_id = self.slots[slot_idx].buffer_id;
+            if self.slots[slot_idx].editor.take_content_reset() {
+                self.syntax.reset(buffer_id);
+            }
+            let slot_edits = self.slots[slot_idx].editor.take_content_edits();
+            if !slot_edits.is_empty() {
+                self.syntax.apply_edits(buffer_id, &slot_edits);
+            }
+            self.lsp_notify_change_for_slot(slot_idx, &slot_edits);
         }
+        // The active buffer's syntax spans may now be stale (if it was
+        // among the touched slots) — refresh on the next frame flush
+        // rather than reparsing inline here (event-loop invariant: only
+        // keystroke arms and the top-of-loop flush call recompute_and_install).
+        self.pending_recompute = true;
 
         if !out_of_root.is_empty() {
             let names = out_of_root

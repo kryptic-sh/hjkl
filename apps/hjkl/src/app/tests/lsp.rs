@@ -1551,6 +1551,106 @@ fn apply_workspace_edit_multi_file() {
     let _ = std::fs::remove_file(&path_b);
 }
 
+/// Regression (audit R2, fix 3): a multi-file workspace edit must send
+/// `textDocument/didChange` for EVERY touched buffer, not just the focused
+/// one. Before the fix, `apply_workspace_edit` mutated non-focused slots'
+/// buffers but never drained their ContentEdits, so those buffers' server
+/// copies stayed stale (wrong diagnostics / cross-file positions) until the
+/// user happened to focus that slot.
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_multi_file_notifies_both_buffers() {
+    let path_a = std::env::temp_dir().join("hjkl_ws_multi_notify_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_ws_multi_notify_b.txt");
+    std::fs::write(&path_a, "file a content\n").unwrap();
+    std::fs::write(&path_b, "file b content\n").unwrap();
+
+    // path_a is opened (and focused) up front; path_b is only opened as a
+    // side effect of apply_workspace_edit, so it starts out unfocused.
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+
+    let uri_a = file_url(&path_a);
+    let uri_b = file_url(&path_b);
+    let url_a = uri_a.parse::<lsp_types::Uri>().expect("valid URI a");
+    let url_b = uri_b.parse::<lsp_types::Uri>().expect("valid URI b");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url_a,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 4,
+                },
+            },
+            new_text: "FILE".to_string(),
+        }],
+    );
+    changes.insert(
+        url_b,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 4,
+                },
+            },
+            new_text: "FILE".to_string(),
+        }],
+    );
+
+    let edit = lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    };
+    let count = app
+        .apply_workspace_edit(edit)
+        .expect("multi-file apply failed");
+    assert_eq!(count, 2, "should affect 2 files");
+
+    let slot_a = app
+        .slots
+        .iter()
+        .position(|s| s.filename.as_deref() == Some(path_a.as_path()))
+        .expect("slot a must exist");
+    let slot_b = app
+        .slots
+        .iter()
+        .position(|s| s.filename.as_deref() == Some(path_b.as_path()))
+        .expect("slot b must have been opened by apply_workspace_edit");
+    assert_ne!(slot_a, slot_b, "sanity: two distinct slots");
+
+    let dg_a = app.slots[slot_a].editor.buffer().dirty_gen();
+    let dg_b = app.slots[slot_b].editor.buffer().dirty_gen();
+    assert_eq!(
+        app.slots[slot_a].last_lsp_dirty_gen,
+        Some(dg_a),
+        "focused slot's buffer must be didChange-notified"
+    );
+    assert_eq!(
+        app.slots[slot_b].last_lsp_dirty_gen,
+        Some(dg_b),
+        "non-focused slot's buffer must ALSO be didChange-notified, not \
+        left stale until the user focuses it"
+    );
+
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
 #[test]
 fn rename_response_null_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
