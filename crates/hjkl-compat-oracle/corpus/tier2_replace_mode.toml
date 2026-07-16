@@ -37,3 +37,47 @@ initial_cursor = [0, 0]
 keys = "RXY<Esc>l."
 expected_buffer = "XYXYef\n"
 expected_mode = "normal"
+
+# `<BS>` in Replace mode restores the overwritten characters rather than
+# deleting them (`:h Replace-mode`).
+[[cases]]
+name = "replace_backspace_restores_overtyped"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "RXY<BS><BS><Esc>"
+expected_buffer = "hello\n"
+expected_mode = "normal"
+
+# Backspacing past the point where Replace mode was entered just moves the
+# cursor left — no further restoration, no deletion, no crossing into text
+# from before the session (the first 3 <BS> restore X/Y/Z on top of "llo";
+# the 4th and beyond just walk the cursor left over already-restored /
+# never-touched columns).
+[[cases]]
+name = "replace_backspace_past_entry_point"
+initial_buffer = "hello\n"
+initial_cursor = [0, 2]
+keys = "RXYZ<BS><BS><BS><BS><Esc>"
+expected_buffer = "hello\n"
+expected_mode = "normal"
+
+# Backspacing over characters typed PAST the original end-of-line (a pure
+# append, nothing to restore) deletes them instead, shrinking the line back.
+[[cases]]
+name = "replace_backspace_deletes_past_eol_append"
+initial_buffer = "ab\n"
+initial_cursor = [0, 0]
+keys = "RXYZ<BS><BS><BS><BS><Esc>"
+expected_buffer = "ab\n"
+expected_mode = "normal"
+
+# Dot-repeat of an `R` session still repeats only the text that survived a
+# mid-session backspace (Y got backspaced away, so `.` only re-overtypes
+# "X").
+[[cases]]
+name = "replace_dot_repeat_after_backspace"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "RXY<BS><Esc>l."
+expected_buffer = "XXcdef\n"
+expected_mode = "normal"

@@ -370,8 +370,20 @@ pub(crate) fn insert_tab_bridge<H: hjkl_engine::types::Host>(
 pub(crate) fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
-    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
+    if matches!(
+        vim(ed).insert_session.as_ref().map(|s| &s.reason),
+        Some(InsertReason::Replace)
+    ) {
+        return replace_backspace(ed);
+    }
+    generic_backspace(ed)
+}
+
+/// The plain-insert-mode `<BS>` body (shared by [`insert_backspace_bridge`]
+/// and, as the past-the-session-start fallback, [`replace_backspace`]).
+fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
     let cursor = buf_cursor_pos(ed.buffer());
 
     // Comment-continuation backspace: if the line is just the prefix (with no
@@ -435,6 +447,61 @@ pub(crate) fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
     ed.push_buffer_cursor_to_textarea();
     result
 }
+
+/// Replace-mode `<BS>` (`:h Replace-mode`): restores the character that was
+/// overtyped at the position one left of the cursor, rather than deleting
+/// it. If that position was typed *past* the line's original end (a pure
+/// append — there was nothing there to overtype), the char is deleted
+/// instead, undoing the append. Backspacing before the point where this
+/// Replace run started (`InsertSession::start_row` / `start_col`) just
+/// moves the cursor left without touching text — vim won't undo edits
+/// outside the current Replace session. Falls back to
+/// [`generic_backspace`] at column 0 (BOL-join with the previous line is
+/// unrelated to overtype/restore and behaves the same in both modes).
+fn replace_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    let cursor = buf_cursor_pos(ed.buffer());
+    if cursor.col == 0 {
+        return generic_backspace(ed);
+    }
+    let new_col = cursor.col - 1;
+
+    let Some(session) = vim(ed).insert_session.as_ref() else {
+        return generic_backspace(ed);
+    };
+    let start_row = session.start_row;
+    let start_col = session.start_col;
+    let before_rope = session.before_rope.clone(); // Arc-clone, not a byte copy.
+
+    if cursor.row != start_row || new_col < start_col {
+        // Before where this Replace run started — move left, no restore.
+        buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
+        ed.push_buffer_cursor_to_textarea();
+        return false;
+    }
+
+    let before_line = hjkl_buffer::rope_line_str(&before_rope, start_row);
+    let orig_ch = before_line.chars().nth(new_col);
+    ed.mutate_edit(Edit::DeleteRange {
+        start: Position::new(cursor.row, new_col),
+        end: cursor,
+        kind: MotionKind::Char,
+    });
+    if let Some(ch) = orig_ch {
+        // This column had a real character before the session began —
+        // restore it (overtype, not delete).
+        ed.mutate_edit(Edit::InsertChar {
+            at: Position::new(cursor.row, new_col),
+            ch,
+        });
+    }
+    // Else: `new_col` was past the original line end (a pure append past
+    // EOL) — the DeleteRange above already undid it; nothing to restore.
+    buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
 /// Delete the character under the cursor (vim `Delete`). Joins with the
 /// next line when at end-of-line. Returns `true` when something was deleted.
 pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(

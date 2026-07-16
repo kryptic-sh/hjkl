@@ -110,7 +110,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | visual block (C-v)   | 5                   | tier2_visual_block.toml                   |
 | command-line (:)     | via nvim-api driver | nvim_api_tier.toml, tier2_substitute.toml |
 | terminal             | —                   | (not shipped)                             |
-| replace (R)          | —                   | TODO                                      |
+| replace (R)          | 8                   | tier2_replace_mode.toml                   |
 
 ## Insert Primitives
 
