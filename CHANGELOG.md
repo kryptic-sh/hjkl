@@ -8,6 +8,66 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-07-17
+
+Two full-codebase audit rounds (~60 fixes, every one regression-tested with
+unit + e2e coverage; the vim-parity oracle held at exactly 57 throughout).
+
+### Fixed
+
+- **Crash / data-loss class:**
+  - Self-referential macros (`qaj@aq`-style) overflowed the stack; huge counts
+    (`999999999@a`) allocated gigabytes. Replay is now an iterative, bounded
+    queue with a vim-style `E169` abort.
+  - Explorer renames silently clobbered existing files (a two-file name swap
+    destroyed one file's content). Renames onto an occupied destination are
+    refused; same-batch swaps route through a temp name; open buffers retarget
+    to the renamed path (`:w` no longer forks the old path).
+  - Language servers were orphaned on quit and never reaped when a language's
+    last buffer closed; the nvim-api server also skipped teardown.
+  - Diff mode could panic (`rope.line` past end) after insert-path edits — the
+    event loop's inline sync blocks had drifted from the canonical sync path.
+  - Bare `Ctrl-C` with dirty buffers exited AND deleted their swap files (the
+    only recovery copy); it now refuses like `:qa`.
+- **Silent desync class (tree-sitter / LSP / sibling splits):**
+  - The `Edit → ContentEdit` mapping emitted wrong byte ranges for line joins
+    (insert-mode Backspace at col 0, `gJ`), linewise deletes ending at the last
+    row, visual-block deletes, and the undo-side shapes (`SplitLines`, block
+    insert/delete chunks) — silently corrupting incremental reparse, LSP
+    didChange, sibling-cursor rebase, and fold invalidation. All shapes are now
+    byte-exact (property-checked against the buffer).
+  - `:substitute` never sent LSP didChange; multi-file workspace edits left
+    non-focused buffers' servers stale; multi-edit workspace batches could
+    corrupt the server document (now full-sync fallback).
+  - **UTF-16 position encoding**: positions now convert at every LSP wire
+    crossing per the server's negotiated encoding — UTF-16-only servers
+    (pyright, tsserver, lua-ls) no longer corrupt buffers or misplace
+    diagnostics on multibyte lines.
+  - `nvim_buf_set_lines`/`set_text` skipped the whole sync chain.
+- **Vim parity:**
+  - Dot-repeat honored `[count].` for insert changes; `:+N`/`:-N` relative
+    addresses; backward ranges error `E493`; `:s/…/\r/` cursor lands on the last
+    changed line; visual-block `A` appends per-row (not top-row-clamped), `I`
+    skips short rows, `$` selects ragged to-EOL; `{count}gt` is absolute;
+    `q{0-9}` records into numbered registers; `"+p` reads the OS clipboard; text
+    objects use char (not byte) columns; global marks / search pattern /
+    changelist now shared across windows at vim's scopes.
+  - Manual folds row-shift with edits; undo restores marks/jumplist/changelist;
+    the cursor is never stranded on a fold-hidden row.
+- **Mouse / render:** picker mouse support was dead code; click math ignored
+  soft wrap; popup anchoring ignored folds and stale viewports; `screen_rect`
+  used the focused pane instead of the terminal; smooth scroll was visually
+  inert with misaligned overlays; diagnostics/EOL hints rescanned every
+  diagnostic per frame (now viewport-clipped).
+- **Syntax (bonsai):** injection span cache reused wrong-language spans for
+  identical content; query directive indices miscounted string/bracket patterns;
+  1-byte comment delimiters (`#`) lost marker tints above the viewport.
+- **Misc:** `gcc`/`:%!` no longer rebuild the whole document per keystroke
+  (O(edit), not O(document)); swap files now cover all dirty buffers, not just
+  the focused one; tab-close no longer leaks window state; headless mode shares
+  registers/marks across files; `hjkl-anvil` tests run fully parallel (env-var
+  collisions root-caused and removed).
+
 ## [0.34.1] - 2026-07-16
 
 ### Fixed
