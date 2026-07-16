@@ -1,0 +1,45 @@
+# B6 — `:[range]y[ank] [{register}] [count]` ex command. Writes a linewise
+# register without mutating the buffer or moving the cursor. Verified via a
+# paste-back (`p` / `"ap`) since the nvim-api driver harness doesn't assert
+# register contents directly — only buffer + cursor. Driven via the
+# nvim-api subprocess (ex commands aren't dispatched by in-process key
+# replay). Every case verified against nvim v0.12.4 via headless probes.
+
+# `:y a 2` yanks 2 lines into "a; `G"ap` pastes them back after the last line.
+[[cases]]
+name = "yank_named_register_with_count_then_paste"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":y a 2<CR>G\"ap"
+expected_buffer = "a\nb\nc\nd\na\nb\n"
+expected_cursor = [4, 0]
+
+# `:y 3` (bare count, no register) yanks into unnamed + "0; `Gp` pastes it.
+[[cases]]
+name = "yank_bare_count_then_paste_unnamed"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":y 3<CR>Gp"
+expected_buffer = "a\nb\nc\nd\na\nb\nc\n"
+expected_cursor = [4, 0]
+
+# `:2y` (no register, no count) yanks the addressed line into unnamed; `Gp`
+# pastes it. Also proves the buffer itself is untouched by the yank alone
+# (only the trailing paste changes it).
+[[cases]]
+name = "yank_addressed_line_no_reg_no_count"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ":2y<CR>Gp"
+expected_buffer = "a\nb\nc\nb\n"
+expected_cursor = [3, 0]
+
+# `:1,2y 3` — [count] with a range: yanks `count` lines starting at the
+# range's LAST line (line 2), same start-from-range-end rule as `:d`/`:j`.
+[[cases]]
+name = "yank_count_starts_at_range_end"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = ":1,2y 3<CR>Gp"
+expected_buffer = "a\nb\nc\nd\ne\nb\nc\nd\n"
+expected_cursor = [5, 0]

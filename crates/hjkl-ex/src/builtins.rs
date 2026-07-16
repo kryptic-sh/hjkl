@@ -559,6 +559,106 @@ fn changes_handler<H: Host>(
     })
 }
 
+// ---- register/count arg parsing (shared by :y and :d) ----------------------
+
+/// Parse a `[{register}] [count]` ex-command argument tail (e.g. `:y a 3` /
+/// `:y a3` / `:y 3` / `:y a` / `:y`). Verified against nvim v0.12.4: a
+/// non-digit first char is a register selector (optionally immediately
+/// followed by digits, no space required); a digit-first tail is a bare
+/// count with no register.
+fn parse_reg_count(args: &str) -> Result<(Option<char>, Option<usize>), String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok((None, None));
+    }
+    let mut chars = trimmed.chars();
+    let first = chars.next().expect("trimmed is non-empty");
+    if first.is_ascii_digit() {
+        return match trimmed.parse::<usize>() {
+            Ok(n) if n > 0 => Ok((None, Some(n))),
+            _ => Err(format!("invalid count: {trimmed:?}")),
+        };
+    }
+    let rest = chars.as_str().trim();
+    if rest.is_empty() {
+        Ok((Some(first), None))
+    } else {
+        match rest.parse::<usize>() {
+            Ok(n) if n > 0 => Ok((Some(first), Some(n))),
+            _ => Err(format!("invalid count: {rest:?}")),
+        }
+    }
+}
+
+/// Resolve `[range]` (default: current cursor line, 0-based) and an optional
+/// trailing `[count]` into the final `(start_row, end_row)` 0-based
+/// inclusive span to operate on. When `count` is `Some`, it OVERRIDES the
+/// span to start at the range's LAST line and cover `count` lines from
+/// there (vim semantics, shared by `:d [count]` / `:y [count]` / `:j
+/// [count]` — verified against nvim v0.12.4).
+fn resolve_range_with_count<H: Host>(
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+    range: Option<LineRange>,
+    count: Option<usize>,
+) -> Option<(usize, usize)> {
+    let total = editor.buffer().row_count();
+    if total == 0 {
+        return None;
+    }
+    let (start_row, end_row) = match range {
+        Some(r) => {
+            let s = r.start_one_based().saturating_sub(1);
+            let e = (r.end_one_based().saturating_sub(1)).min(total.saturating_sub(1));
+            (s, e)
+        }
+        None => {
+            let row = editor.cursor().0;
+            (row, row)
+        }
+    };
+    if start_row > end_row {
+        return None;
+    }
+    Some(match count {
+        Some(n) => {
+            let s = end_row;
+            let e = (s + n - 1).min(total.saturating_sub(1));
+            (s, e)
+        }
+        None => (start_row, end_row),
+    })
+}
+
+// ---- yank --------------------------------------------------------------------
+
+/// `:[range]y[ank] [{register}] [count]` — yank lines into a register
+/// (linewise), without mutating the buffer or moving the cursor.
+fn yank_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let (reg, count) = match parse_reg_count(args) {
+        Ok(rc) => rc,
+        Err(e) => return Some(ExEffect::Error(e)),
+    };
+    let Some((yank_start, yank_end)) = resolve_range_with_count(editor, range, count) else {
+        return Some(ExEffect::Ok);
+    };
+
+    let rope = editor.buffer().rope();
+    let mut text = String::new();
+    for row in yank_start..=yank_end {
+        text.push_str(&hjkl_buffer::rope_line_str(&rope, row));
+        text.push('\n');
+    }
+    drop(rope);
+
+    editor.with_registers_mut(|r| r.record_yank(text, true, reg));
+
+    Some(ExEffect::Ok)
+}
+
 // ---- join --------------------------------------------------------------------
 
 /// `:[range]j[oin][!] [count]` — join lines (default: current + next line).
@@ -1535,6 +1635,15 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 7,
         run: changes_handler::<H>,
+    });
+
+    // `:yank` / `:y` (min_prefix=1; range-aware; optional [register] [count]).
+    reg.add(ExCommand {
+        name: "yank",
+        aliases: &["y"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 1,
+        run: yank_handler::<H>,
     });
 
     // `:join` / `:j` (min_prefix=1; range-aware; optional trailing [count]).
