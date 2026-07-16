@@ -42,7 +42,12 @@ fn multi_row_backslash_r_substitute_lands_cursor_on_last_split_line() {
     // renders a line-number column before the content (e.g. "  1 a"), so
     // check the trailing letter rather than an exact match.
     fn ends_with_letter(line: &str, letter: char) -> bool {
-        line.trim_end().ends_with(letter)
+        // The cursor line may carry the inline git-blame EOL hint
+        // ("d  // You · Not Committed Yet") once the 400ms blame idle delay
+        // elapses — slow CI runners (macos) lose that race reliably. Strip
+        // any comment-style hint before checking the trailing letter.
+        let content = line.split("//").next().unwrap_or(line);
+        content.trim_end().ends_with(letter)
     }
 
     let mut ok = false;
