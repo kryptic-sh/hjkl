@@ -89,3 +89,17 @@ initial_cursor = [0, 0]
 keys = "3x."
 expected_buffer = "ghij\n"
 expected_cursor = [0, 0]
+
+
+# `.` reuses the explicit register of the change it repeats (G6): `"add`
+# deletes into `"a`, `.` repeats the delete into `"a` again (not the
+# unnamed register) — `"ap` afterward proves it by pasting the SECOND
+# deleted line, not the first.
+[[cases]]
+name = "dot_repeat_reuses_explicit_register"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "\"add.\"ap"
+expected_buffer = "three\ntwo\nfour\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"

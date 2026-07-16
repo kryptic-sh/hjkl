@@ -316,6 +316,10 @@ pub enum LastChange {
         op: Operator,
         count: usize,
         inserted: Option<String>,
+        /// The explicit register (`"add`, `"ayy`, ...) the original change
+        /// used, if any. `.` must reuse it (`:h redo-register`) rather than
+        /// falling back to the unnamed register.
+        register: Option<char>,
     },
     /// `x`, `X` with a count.
     CharDel { forward: bool, count: usize },

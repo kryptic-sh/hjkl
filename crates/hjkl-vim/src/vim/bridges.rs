@@ -202,12 +202,14 @@ pub(crate) fn substitute_line_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
+    let register = vim(ed).pending_register;
     execute_line_op(ed, Operator::Change, count.max(1));
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::LineOp {
             op: Operator::Change,
             count: count.max(1),
             inserted: None,
+            register,
         });
     }
 }

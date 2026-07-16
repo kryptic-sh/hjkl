@@ -94,16 +94,22 @@ pub(crate) fn apply_op_double<H: hjkl_engine::types::Host>(
                 op,
                 count: total_count,
                 inserted: None,
+                register: None,
             });
         }
         return;
     }
+    // Peek (not take) the pending register BEFORE `execute_line_op` consumes
+    // it, so dot-repeat can restore it later (`"add.` must delete into `"a`
+    // again, not the unnamed register — `:h redo-register`).
+    let register = vim(ed).pending_register;
     execute_line_op(ed, op, total_count);
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::LineOp {
             op,
             count: total_count,
             inserted: None,
+            register,
         });
     }
 }
@@ -261,6 +267,7 @@ pub(crate) fn apply_op_g_inner<H: hjkl_engine::types::Host>(
                     op,
                     count: total_count,
                     inserted: None,
+                    register: None,
                 });
             }
             return;

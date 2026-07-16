@@ -80,8 +80,14 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
             op,
             count,
             inserted,
+            register,
         } => {
             let total = scaled(count.max(1));
+            // Restore the original change's explicit register (if any) so
+            // `"add.` deletes into `"a` again, not the unnamed register
+            // (`:h redo-register`) — `execute_line_op` consumes
+            // `pending_register` internally, same as the live FSM path.
+            vim_mut(ed).pending_register = register;
             execute_line_op(ed, op, total);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
