@@ -419,7 +419,8 @@ pub fn cell_to_doc(
         if doc_row >= line_count {
             return None; // past EOF
         }
-        let char_col = hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
+        let char_col =
+            hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
         (doc_row, char_col)
     } else if wrap_active {
         let seg_width = if vp.text_width > 0 {
@@ -444,7 +445,8 @@ pub fn cell_to_doc(
         if doc_row >= line_count {
             return None; // past EOF
         }
-        let char_col = hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
+        let char_col =
+            hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
         (doc_row, char_col)
     };
 
@@ -521,7 +523,8 @@ pub fn doc_to_cell(
         let idx = plan
             .iter()
             .position(|r| matches!(r, BlameRow::Buffer(d) if *d == doc_row))?;
-        let visual_col = hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
+        let visual_col =
+            hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
         (idx, visual_col.saturating_sub(vp.top_col))
     } else if wrap_active {
         let seg_width = if vp.text_width > 0 {
@@ -551,11 +554,8 @@ pub fn doc_to_cell(
                 } else {
                     let segs = hjkl_buffer::wrap_segments(&line, seg_width, vp.wrap);
                     let seg_idx = hjkl_buffer::wrap::segment_for_col(&segs, char_col);
-                    let rel_x = hjkl_buffer::visual_offset_for_char_col(
-                        &line,
-                        segs[seg_idx].0,
-                        char_col,
-                    );
+                    let rel_x =
+                        hjkl_buffer::visual_offset_for_char_col(&line, segs[seg_idx].0, char_col);
                     (screen_offset + seg_idx, rel_x)
                 };
             }
@@ -582,7 +582,8 @@ pub fn doc_to_cell(
         if row != doc_row {
             return None; // doc_row itself is hidden by a closed fold
         }
-        let visual_col = hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
+        let visual_col =
+            hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
         (screen_offset, visual_col.saturating_sub(vp.top_col))
     };
 
@@ -2436,7 +2437,10 @@ mod tests {
 
         let mut app = make_basic_app_80x24();
         let source = Box::new(StubSource(
-            ["a", "b", "c", "d", "e"].iter().map(|s| s.to_string()).collect(),
+            ["a", "b", "c", "d", "e"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         ));
         app.picker = Some(Picker::new(source));
 
@@ -2467,7 +2471,10 @@ mod tests {
         let _ = app.handle_mouse(me);
 
         assert_eq!(
-            app.picker.as_ref().expect("picker stays open on left-click").selected,
+            app.picker
+                .as_ref()
+                .expect("picker stays open on left-click")
+                .selected,
             2,
             "left-click on the 3rd list row should select item_idx=2"
         );
@@ -2490,7 +2497,11 @@ mod tests {
         };
         let _ = app.handle_mouse(me);
 
-        assert_eq!(app.picker.as_ref().unwrap().selected, 2, "right-click also selects the row");
+        assert_eq!(
+            app.picker.as_ref().unwrap().selected,
+            2,
+            "right-click also selects the row"
+        );
         assert!(
             app.context_menu.is_some(),
             "right-click on a picker row should open the picker context menu"

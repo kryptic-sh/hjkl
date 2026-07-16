@@ -1212,9 +1212,7 @@ impl App {
         use crossterm::event::{MouseButton, MouseEventKind};
         // Skip while these overlays are active — no mouse handling exists
         // for them yet.
-        if self.command_field.is_some()
-            || self.search_field.is_some()
-            || self.info_popup.is_some()
+        if self.command_field.is_some() || self.search_field.is_some() || self.info_popup.is_some()
         {
             return MouseOutcome::Continue;
         }
@@ -1779,18 +1777,14 @@ impl App {
     /// - Everything else (drag, middle-click, hover) is swallowed: no
     ///   behavior exists for it, and letting it fall through would reach
     ///   the window/editor behind the overlay.
-    pub(crate) fn handle_picker_mouse(
-        &mut self,
-        me: crossterm::event::MouseEvent,
-    ) -> MouseOutcome {
+    pub(crate) fn handle_picker_mouse(&mut self, me: crossterm::event::MouseEvent) -> MouseOutcome {
         use crate::app::mouse;
         use crossterm::event::{MouseButton, MouseEventKind};
 
         match me.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let zone = mouse::hit_test_zone(self, me.column, me.row);
-                if let (mouse::Zone::PickerRow { row_idx }, Some(p)) =
-                    (zone, self.picker.as_mut())
+                if let (mouse::Zone::PickerRow { row_idx }, Some(p)) = (zone, self.picker.as_mut())
                 {
                     p.selected = row_idx;
                 }

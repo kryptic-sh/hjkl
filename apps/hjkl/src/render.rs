@@ -877,6 +877,35 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     viewport_owned.width = text_width;
     viewport_owned.height = area.height;
     viewport_owned.text_width = text_width;
+
+    // Smooth-scroll (#195): interpolate the RENDER top so the text
+    // `BufferView` paints below and the overlays that key off `vp_top`
+    // (signs, matchparen, hop, diff bands, the explorer devicon pass) all
+    // agree on which doc rows are on screen during an active anim.
+    //
+    // Before this fix, `vp_top` was computed (as below) and used ONLY by
+    // the overlays — `viewport_owned.top_row` (what `BufferView` actually
+    // draws from, `viewport_ref` below) stayed at the FINAL target the
+    // whole time. So the feature was visually inert (text never moved
+    // during the anim) AND the overlays were misaligned relative to that
+    // static text by up to `|target - start|` rows while a scroll was
+    // mid-flight. Writing the animated top back into `viewport_owned`
+    // before `viewport_ref` is taken fixes both at once.
+    //
+    // `target_top_row` (the real, un-animated top) is kept for the cursor
+    // block further down: `Editor::cursor_screen_pos` reads the ENGINE's
+    // own live viewport (a separate object from this function's local
+    // `viewport_owned` snapshot, so it's untouched by the write below) and
+    // has no "compute from an arbitrary top" variant — it always resolves
+    // the cursor's screen row from the target top. Left alone, the cursor
+    // would now be the thing that disagrees with the animated text (the
+    // exact bug this fix is closing, just moved from overlays to the
+    // cursor); the cursor block re-derives the screen row from `vp_top`
+    // using the same fold/wrap-aware row counting the engine uses
+    // (`View::screen_rows_between`) to keep it in step.
+    let target_top_row = viewport_owned.top_row;
+    let vp_top = app.scroll_anim_render_top(win_id).unwrap_or(target_top_row);
+    viewport_owned.top_row = vp_top;
     let viewport_ref: &Viewport = &viewport_owned;
 
     let in_prompt = app.command_field.is_some()
@@ -886,9 +915,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.explorer_git_discard_confirm.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
-    let vp_top = app
-        .scroll_anim_render_top(win_id)
-        .unwrap_or(viewport_ref.top_row);
     let vp_bot = vp_top + area.height as usize;
     let mut visible_signs: Vec<hjkl_buffer_tui::Sign> = app.slots()[slot_idx]
         .diag_signs
@@ -1791,7 +1817,38 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 Some((cx, cy))
             }
         } else {
-            Some((cx, cy))
+            // Plain case (no box mode, no diff filler): `cy` came from
+            // `cursor_screen_pos`, which resolves the cursor's screen row
+            // from the ENGINE's own (target-top) viewport — see the
+            // `target_top_row` comment above. Re-derive it from `vp_top`
+            // instead, using the same fold/wrap-aware row counting the
+            // engine itself uses, so the cursor tracks the animated text
+            // rather than the target it's about to reach. A no-op once the
+            // anim settles (`vp_top == target_top_row`, shift = 0).
+            let shift: i64 = match vp_top.cmp(&target_top_row) {
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Less => app.slots()[slot_idx]
+                    .editor
+                    .buffer()
+                    .screen_rows_between(viewport_ref, vp_top, target_top_row - 1)
+                    as i64,
+                std::cmp::Ordering::Greater => {
+                    -(app.slots()[slot_idx].editor.buffer().screen_rows_between(
+                        viewport_ref,
+                        target_top_row,
+                        vp_top - 1,
+                    ) as i64)
+                }
+            };
+            let adj_cy = cy as i64 + shift;
+            if adj_cy >= area.y as i64 && adj_cy < (area.y as i64 + area.height as i64) {
+                Some((cx, adj_cy as u16))
+            } else {
+                // Shifted row falls off the animated viewport mid-scroll —
+                // skip drawing the cursor this frame rather than clamp it
+                // to a misleading edge position.
+                None
+            }
         };
         if let Some((cx, cy)) = pos {
             let shape = app.active_editor().host().cursor_shape();
@@ -3422,6 +3479,94 @@ mod tests {
             "completion popup must anchor NEAR the scrolled cursor row \
              (doc row 55, window top_row 50 → screen row ~5); got row {row}, \
              too far down to be anchored correctly"
+        );
+    }
+
+    // ── Fix 6: smooth-scroll interpolated top never reached the renderer ───
+
+    /// `render_window` computed the animated render top (`vp_top`, via
+    /// `scroll_anim_render_top`) but only ever used it for overlays (signs,
+    /// matchparen, hop, diff bands) — `viewport_owned.top_row`, the
+    /// viewport `BufferView` actually paints text from, stayed at the
+    /// FINAL target the whole time. So the feature was visually inert: the
+    /// TEXT never moved during a scroll anim, only the (invisible without
+    /// text moving too) overlay math.
+    ///
+    /// With an active mid-flight anim from top 0 toward target 100, the
+    /// rendered text's top row must show the line at the ANIMATED top
+    /// (strictly between 0 and 100), not `line100` (the target).
+    #[test]
+    fn scroll_anim_render_top_reaches_the_text_renderer() {
+        use crate::app::{App, ScrollAnim};
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::time::{Duration, Instant};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("scroll_anim.txt");
+        let content: String = (0..200).map(|i| format!("line{i}\n")).collect();
+        std::fs::write(&path, &content).unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // First frame settles window rects/viewports/text_width.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+
+        // Force the REAL (target) viewport top to 100, then arm a
+        // long-duration (10s) mid-flight anim from 0 toward it, 5s in
+        // (p=0.5). The long duration means the few microseconds between
+        // reading `expected_top` below and the render call can't shift the
+        // eased fraction enough to change the rounded row.
+        let fw = app.focused_window();
+        if let Some(e) = app.window_editors.get_mut(&fw) {
+            e.host_mut().viewport_mut().top_row = 100;
+        }
+        app.scroll_anim = Some(ScrollAnim {
+            win_id: fw,
+            start_top: 0,
+            target_top: 100,
+            started_at: Instant::now() - Duration::from_secs(5),
+            duration: Duration::from_secs(10),
+        });
+
+        let expected_top = app
+            .scroll_anim_render_top(fw)
+            .expect("mid-flight anim must return Some");
+        assert!(
+            expected_top > 0 && expected_top < 100,
+            "test setup sanity: expected_top must be strictly between the \
+             anim's start (0) and target (100); got {expected_top}"
+        );
+
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut rows: Vec<String> = Vec::with_capacity(24);
+        for y in 0..24u16 {
+            let mut row = String::new();
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    row.push_str(c.symbol());
+                }
+            }
+            rows.push(row);
+        }
+        let rendered = rows.join("\n");
+
+        let needle = format!("line{expected_top}");
+        assert!(
+            rendered.contains(&needle),
+            "rendered text must show {needle:?} (the line at the ANIMATED \
+             top) somewhere on screen — pre-fix, text always drew from the \
+             target top (\"line100\") regardless of the animation. \
+             rendered:\n{rendered}"
+        );
+        assert!(
+            !rows[0].trim_start().starts_with("line100"),
+            "the top screen row must show the animated line, not the \
+             target's — got top row {:?}",
+            rows[0]
         );
     }
 }
