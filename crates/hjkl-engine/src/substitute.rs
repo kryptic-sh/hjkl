@@ -640,35 +640,61 @@ fn split_on_slash(s: &str) -> Vec<String> {
     out
 }
 
-/// Active case transformation while expanding a replacement.
+/// The persistent (span) case transformation set by `\U` / `\L`, cleared by
+/// `\E` / `\e`.
 #[derive(Clone, Copy, PartialEq)]
-enum CaseState {
+enum SpanCase {
     None,
-    /// `\u` — uppercase the next char, then reset.
-    OneUpper,
-    /// `\l` — lowercase the next char, then reset.
-    OneLower,
     /// `\U` — uppercase until `\E`.
-    AllUpper,
+    Upper,
     /// `\L` — lowercase until `\E`.
-    AllLower,
+    Lower,
 }
 
-/// Push `ch` into `out`, applying (and, for the one-shot modes, consuming) the
-/// active case state.
+/// The one-shot case transformation set by `\u` / `\l`. Takes priority over
+/// [`SpanCase`] for exactly the next char, then reverts to whatever span was
+/// active — it does NOT clear the span (vim: `\U\l&` on `"hello"` produces
+/// `"hELLO"`, not `"hello"` — the lowercase-next-char applies, then the
+/// active `\U` span resumes for the rest of the match).
+#[derive(Clone, Copy, PartialEq)]
+enum OneShotCase {
+    Upper,
+    Lower,
+}
+
+/// Combined case-transformation state threaded through [`expand_into`].
+#[derive(Clone, Copy, PartialEq)]
+struct CaseState {
+    span: SpanCase,
+    one_shot: Option<OneShotCase>,
+}
+
+impl CaseState {
+    fn new() -> Self {
+        Self {
+            span: SpanCase::None,
+            one_shot: None,
+        }
+    }
+}
+
+/// Push `ch` into `out`, applying the active case state. A pending one-shot
+/// (`\u`/`\l`) wins for this single char and is then consumed, falling back
+/// to the span (`\U`/`\L`) state — which persists — for subsequent chars.
 fn push_cased(out: &mut String, case: &mut CaseState, ch: char) {
-    match *case {
-        CaseState::None => out.push(ch),
-        CaseState::OneUpper => {
-            out.extend(ch.to_uppercase());
-            *case = CaseState::None;
-        }
-        CaseState::OneLower => {
-            out.extend(ch.to_lowercase());
-            *case = CaseState::None;
-        }
-        CaseState::AllUpper => out.extend(ch.to_uppercase()),
-        CaseState::AllLower => out.extend(ch.to_lowercase()),
+    let effective = match case.one_shot.take() {
+        Some(OneShotCase::Upper) => Some(SpanCase::Upper),
+        Some(OneShotCase::Lower) => Some(SpanCase::Lower),
+        None => match case.span {
+            SpanCase::None => None,
+            other => Some(other),
+        },
+    };
+    match effective {
+        None => out.push(ch),
+        Some(SpanCase::Upper) => out.extend(ch.to_uppercase()),
+        Some(SpanCase::Lower) => out.extend(ch.to_lowercase()),
+        Some(SpanCase::None) => unreachable!(),
     }
 }
 
@@ -692,7 +718,7 @@ fn expand_replacement(raw: &str, caps: &regex::Captures, prev: &str) -> String {
 }
 
 fn expand_into(out: &mut String, raw: &str, caps: &regex::Captures, prev: &str, allow_tilde: bool) {
-    let mut case = CaseState::None;
+    let mut case = CaseState::new();
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
         match c {
@@ -726,11 +752,11 @@ fn expand_into(out: &mut String, raw: &str, caps: &regex::Captures, prev: &str, 
                         push_cased(out, &mut case, ch);
                     }
                 }
-                Some('u') => case = CaseState::OneUpper,
-                Some('l') => case = CaseState::OneLower,
-                Some('U') => case = CaseState::AllUpper,
-                Some('L') => case = CaseState::AllLower,
-                Some('e') | Some('E') => case = CaseState::None,
+                Some('u') => case.one_shot = Some(OneShotCase::Upper),
+                Some('l') => case.one_shot = Some(OneShotCase::Lower),
+                Some('U') => case.span = SpanCase::Upper,
+                Some('L') => case.span = SpanCase::Lower,
+                Some('e') | Some('E') => case.span = SpanCase::None,
                 Some(other) => push_cased(out, &mut case, other),
                 None => {} // trailing backslash ignored
             },
@@ -1143,6 +1169,29 @@ mod tests {
     fn expand_case_applies_to_group() {
         // Case escape applied across a capture group and a following literal.
         assert_eq!(expand("\\U\\1-y\\E", "(f)oo", "foo", ""), "F-Y");
+    }
+
+    /// B18: `\u&` on a whole-word match — matches vim's
+    /// `:s/\w\+/\u&/` on `"hello world"` → `"Hello world"` (verified
+    /// against nvim v0.12.4).
+    #[test]
+    fn expand_backslash_u_uppercases_first_char_of_group() {
+        assert_eq!(expand("\\u\\1", "(\\w+)", "hello world", ""), "Hello");
+    }
+
+    /// A one-shot `\u`/`\l` takes priority for exactly the next char, then
+    /// FALLS BACK to any active `\U`/`\L` span rather than clearing it —
+    /// verified against nvim: `:s/\w\+/\U\l&/` on `"hello"` → `"hELLO"`
+    /// (not `"hello"`, and not `"HELLO"`).
+    #[test]
+    fn expand_one_shot_falls_back_to_active_span() {
+        assert_eq!(expand("\\U\\l\\0", "hello", "hello", ""), "hELLO");
+        // Same interaction the other way around: `\l\U\1 \2` on
+        // "hello world" → "hELLO WORLD" (nvim-verified).
+        assert_eq!(
+            expand("\\l\\U\\1 \\2", "(\\w+) (\\w+)", "hello world", ""),
+            "hELLO WORLD"
+        );
     }
 
     #[test]

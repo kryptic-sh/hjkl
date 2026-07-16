@@ -178,6 +178,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | word boundary \b         | 1     | tier2_search.toml                         |
 | vim default-magic regex (\( \) \+ \? \| \{n,m}, literal ( ) + ? \| {}) | 5 | tier2_regex_magic.toml |
 | \v / \V magic-mode switches | 3  | tier2_regex_magic.toml                    |
+| :s replacement \u / \l (+ \U/\L interaction) | 2 | tier2_regex_magic.toml   |
 | :s/pat/rep/              | 4     | tier2_substitute.toml, nvim_api_tier.toml |
 | :s/g flag                | 2     | tier2_substitute.toml                     |
 | :s/i flag (case)         | 2     | tier2_substitute.toml, nvim_api_tier.toml |

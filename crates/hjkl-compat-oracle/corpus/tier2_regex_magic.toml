@@ -88,3 +88,24 @@ initial_cursor = [0, 0]
 keys = "/\\Va.b<CR>"
 expected_buffer = "acb\na.b\n"
 expected_cursor = [1, 0]
+
+# ---- B18: \u / \l single-char case modifiers in the replacement ------------
+
+# `\u&` uppercases just the first char of the whole match.
+[[cases]]
+name = "b18_backslash_u_first_char"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/\\w\\+/\\u&/<CR>"
+expected_buffer = "Hello world\n"
+expected_cursor = [0, 0]
+
+# `\U\l&` — a one-shot `\l` wins for exactly the next char, then falls back
+# to the still-active `\U` span (does NOT clear it).
+[[cases]]
+name = "b18_one_shot_falls_back_to_active_span"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":s/\\w\\+/\\U\\l&/<CR>"
+expected_buffer = "hELLO\n"
+expected_cursor = [0, 0]
