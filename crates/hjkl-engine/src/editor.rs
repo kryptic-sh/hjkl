@@ -1758,15 +1758,24 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .record_yank(text, linewise, target);
     }
 
-    /// Direct write to a named register slot — bypasses the unnamed
-    /// `"` and `"0` updates that `record_yank` does. Used by the
-    /// macro recorder so finishing a `q{reg}` recording doesn't
-    /// pollute the user's last yank.
+    /// Direct write to a named OR numbered register slot — bypasses the
+    /// unnamed `"` and `"0` updates that `record_yank` does. Used by the
+    /// macro recorder so finishing a `q{reg}` recording doesn't pollute
+    /// the user's last yank.
+    ///
+    /// vim's `q{0-9a-zA-Z"}` accepts digit targets too (`:h q`) — `q1`
+    /// records into `"1`, shadowing whatever the delete/change ring had
+    /// there, exactly like `qa` overwrites `"a` (audit-r2 fix 5). Digits
+    /// route to the SAME slots `Registers::read` resolves `'0'`-`'9'`
+    /// against (`yank_zero` / `delete_ring`), so `@1` replays what `q1`
+    /// recorded.
     pub fn set_named_register_text(&mut self, reg: char, text: String) {
         let mut regs = self.registers.lock().unwrap();
         if let Some(slot) = match reg {
             'a'..='z' => Some(&mut regs.named[(reg as u8 - b'a') as usize]),
             'A'..='Z' => Some(&mut regs.named[(reg.to_ascii_lowercase() as u8 - b'a') as usize]),
+            '0' => Some(&mut regs.yank_zero),
+            '1'..='9' => Some(&mut regs.delete_ring[(reg as u8 - b'1') as usize]),
             _ => None,
         } {
             slot.text = text;

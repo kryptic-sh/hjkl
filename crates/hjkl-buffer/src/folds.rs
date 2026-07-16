@@ -526,15 +526,15 @@ pub fn shift_folds_after_edit(
     if delta == 0 {
         return;
     }
-    folds.retain_mut(|f| {
-        match shift_fold(*f, edit_start, drop_end, shift_threshold, delta) {
+    folds.retain_mut(
+        |f| match shift_fold(*f, edit_start, drop_end, shift_threshold, delta) {
             Some(shifted) => {
                 *f = shifted;
                 true
             }
             None => false,
-        }
-    });
+        },
+    );
 }
 
 #[cfg(test)]
