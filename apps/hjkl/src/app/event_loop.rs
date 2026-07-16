@@ -1210,14 +1210,25 @@ impl App {
     /// whether the loop should `continue` or fall through.
     pub(crate) fn handle_mouse(&mut self, me: crossterm::event::MouseEvent) -> MouseOutcome {
         use crossterm::event::{MouseButton, MouseEventKind};
-        // Skip while overlays are active — Phase 8 will handle
-        // mouse in overlays.
+        // Skip while these overlays are active — no mouse handling exists
+        // for them yet.
         if self.command_field.is_some()
             || self.search_field.is_some()
-            || self.picker.is_some()
             || self.info_popup.is_some()
         {
             return MouseOutcome::Continue;
+        }
+        // Picker is exclusive: mirrors `mouse::hit_test_zone`'s "Picker
+        // exclusive" resolution order (see its doc comment) — nothing else
+        // (border-drag, explorer clicks, context menu, text drag/scroll)
+        // should fire underneath the modal overlay. Previously the picker
+        // was lumped into the blanket return above with a "Phase 8 will
+        // handle mouse in overlays" comment, but Phase 8 WAS built (the
+        // `Zone::PickerRow` right-click menu below, plus `hit_test_zone` /
+        // `hit_test_picker_row` / `picker_overlay_rect` in mouse.rs) — the
+        // blanket return just made all of it unreachable.
+        if self.picker.is_some() {
+            return self.handle_picker_mouse(me);
         }
         // P11.3 — gate events by per-mode mouse flags.
         // Command-field overlay already handled above; here we gate
@@ -1602,8 +1613,8 @@ impl App {
             MouseEventKind::Down(MouseButton::Right) => {
                 use crate::app::mouse;
                 use crate::menu::{
-                    ContextMenu, build_code_menu, build_picker_menu, build_split_border_menu,
-                    build_status_line_menu, build_tab_menu,
+                    ContextMenu, build_code_menu, build_split_border_menu, build_status_line_menu,
+                    build_tab_menu,
                 };
 
                 // Dismiss hover popup — same rationale as left-click.
@@ -1667,20 +1678,12 @@ impl App {
                     }
                     // ── Phase 7: split-border menu ─────────────────
                     mouse::Zone::SplitBorder { .. } => build_split_border_menu(),
-                    // ── Phase 8: picker overlay row menu ───────────
-                    mouse::Zone::PickerRow { row_idx } => {
-                        // Move picker selection to the clicked row.
-                        if let Some(ref mut p) = self.picker {
-                            p.selected = row_idx;
-                        }
-                        let has_path = self
-                            .picker
-                            .as_ref()
-                            .and_then(|p| p.path_for_visible_row(p.selected))
-                            .is_some();
-                        build_picker_menu(has_path)
-                    }
-                    mouse::Zone::None => {
+                    // `Zone::PickerRow` is handled by `handle_picker_mouse`,
+                    // which returns before this match is ever reached while
+                    // a picker is open (see the picker-exclusive check at
+                    // the top of `handle_mouse`); kept here only so the
+                    // match stays exhaustive.
+                    mouse::Zone::PickerRow { .. } | mouse::Zone::None => {
                         return MouseOutcome::Continue;
                     }
                 };
@@ -1751,6 +1754,77 @@ impl App {
             _ => {}
         }
         MouseOutcome::FallThrough
+    }
+
+    /// Route a mouse event while the picker overlay is open. Only called
+    /// from `handle_mouse`'s picker-exclusive check, so `self.picker` is
+    /// always `Some` on entry.
+    ///
+    /// - Left click on a list row selects it — mirrors what the right-click
+    ///   arm already did before selecting the clicked row and opening the
+    ///   menu (below); there's no existing single/double-click *confirm*
+    ///   behavior anywhere else in the codebase to make reachable, so this
+    ///   intentionally stops at selecting (confirm is still `<CR>` via
+    ///   `handle_picker_key`).
+    /// - Right click on a list row moves the selection there and opens the
+    ///   existing `build_picker_menu` context menu (this used to be the
+    ///   `Zone::PickerRow` arm of the right-click match in `handle_mouse`,
+    ///   which was unreachable dead code for the same reason as the rest of
+    ///   picker mouse support).
+    /// - Wheel scroll moves the selection via `Picker::select_prev` /
+    ///   `select_next`. There's no dedicated scroll `Zone` (the overlay is
+    ///   modal, so any scroll while it's open targets the picker, not
+    ///   whatever pane happens to be under the pointer) — gated on
+    ///   `self.picker.is_some()` rather than a cell hit-test.
+    /// - Everything else (drag, middle-click, hover) is swallowed: no
+    ///   behavior exists for it, and letting it fall through would reach
+    ///   the window/editor behind the overlay.
+    pub(crate) fn handle_picker_mouse(
+        &mut self,
+        me: crossterm::event::MouseEvent,
+    ) -> MouseOutcome {
+        use crate::app::mouse;
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        match me.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let zone = mouse::hit_test_zone(self, me.column, me.row);
+                if let (mouse::Zone::PickerRow { row_idx }, Some(p)) =
+                    (zone, self.picker.as_mut())
+                {
+                    p.selected = row_idx;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                use crate::menu::{ContextMenu, build_picker_menu};
+                if let mouse::Zone::PickerRow { row_idx } =
+                    mouse::hit_test_zone(self, me.column, me.row)
+                {
+                    if let Some(ref mut p) = self.picker {
+                        p.selected = row_idx;
+                    }
+                    let has_path = self
+                        .picker
+                        .as_ref()
+                        .and_then(|p| p.path_for_visible_row(p.selected))
+                        .is_some();
+                    let items = build_picker_menu(has_path);
+                    self.context_menu = Some(ContextMenu::new(items, (me.column, me.row)));
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if let Some(ref mut p) = self.picker {
+                    p.select_prev();
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(ref mut p) = self.picker {
+                    p.select_next();
+                }
+            }
+            _ => {}
+        }
+        MouseOutcome::Continue
     }
 
     /// Main event loop. Draws every frame, routes key events through

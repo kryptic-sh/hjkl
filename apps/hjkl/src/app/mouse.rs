@@ -2017,4 +2017,143 @@ mod tests {
             );
         }
     }
+
+    // ── Fix 1: picker mouse support was dead code ───────────────────────────
+    //
+    // `handle_mouse` used to bail out with `MouseOutcome::Continue` whenever
+    // `self.picker.is_some()`, with a "Phase 8 will handle mouse in
+    // overlays" comment — but Phase 8 WAS built (the `Zone::PickerRow`
+    // right-click menu, `hit_test_picker_row`, `picker_overlay_rect`), it
+    // was just unreachable. These tests drive `App::handle_mouse` (not just
+    // the zone hit-test) with a picker open and assert the picker's own
+    // state actually changes.
+
+    /// In-memory stub source shared by the Fix 1 tests below — mirrors the
+    /// one in `hit_test_zone_picker_is_exclusive` (no background I/O, so the
+    /// picker's item list is deterministic immediately after `Picker::new`).
+    struct StubSource(Vec<String>);
+    impl hjkl_picker::PickerLogic for StubSource {
+        fn title(&self) -> &str {
+            "stub"
+        }
+        fn item_count(&self) -> usize {
+            self.0.len()
+        }
+        fn label(&self, i: usize) -> String {
+            self.0[i].clone()
+        }
+        fn match_text(&self, i: usize) -> String {
+            self.0[i].clone()
+        }
+        fn has_preview(&self) -> bool {
+            false
+        }
+        fn select(&self, _i: usize) -> hjkl_picker::PickerAction {
+            hjkl_picker::PickerAction::None
+        }
+        fn requery_mode(&self) -> hjkl_picker::RequeryMode {
+            hjkl_picker::RequeryMode::FilterInMemory
+        }
+        fn enumerate(
+            &mut self,
+            _q: Option<&str>,
+            _c: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        ) -> Option<std::thread::JoinHandle<()>> {
+            None
+        }
+    }
+
+    /// Build an 80x24 app with a 5-entry picker open, and the terminal cell
+    /// (col, row) that hits the 3rd visible list row (item_idx = 2).
+    fn make_app_with_open_picker() -> (App, u16, u16) {
+        use crate::picker::Picker;
+
+        let mut app = make_basic_app_80x24();
+        let source = Box::new(StubSource(
+            ["a", "b", "c", "d", "e"].iter().map(|s| s.to_string()).collect(),
+        ));
+        app.picker = Some(Picker::new(source));
+
+        let area = picker_overlay_rect(&app).expect("picker must be open");
+        let list_y = area.y + 3; // input block is 3 rows
+        let list_inner_y = list_y + 1; // inside the list block's border
+        let target_row = list_inner_y + 2; // item_idx = 2
+        let col = area.x + 2;
+        (app, col, target_row)
+    }
+
+    /// Left-click on a picker list row must select it. Pre-fix this was
+    /// unreachable: `handle_mouse` returned `Continue` before ever calling
+    /// `hit_test_zone`, so `picker.selected` stayed at its initial value 0.
+    #[test]
+    fn handle_mouse_picker_left_click_selects_row() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut app, col, row) = make_app_with_open_picker();
+        assert_eq!(app.picker.as_ref().unwrap().selected, 0, "starts at row 0");
+
+        let me = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = app.handle_mouse(me);
+
+        assert_eq!(
+            app.picker.as_ref().expect("picker stays open on left-click").selected,
+            2,
+            "left-click on the 3rd list row should select item_idx=2"
+        );
+    }
+
+    /// Right-click on a picker list row must move the selection there AND
+    /// open the existing picker context menu (`build_picker_menu`). Pre-fix
+    /// this whole zone was unreachable — `context_menu` stayed `None`.
+    #[test]
+    fn handle_mouse_picker_right_click_opens_menu() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut app, col, row) = make_app_with_open_picker();
+
+        let me = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = app.handle_mouse(me);
+
+        assert_eq!(app.picker.as_ref().unwrap().selected, 2, "right-click also selects the row");
+        assert!(
+            app.context_menu.is_some(),
+            "right-click on a picker row should open the picker context menu"
+        );
+    }
+
+    /// Scroll wheel over an open picker moves the selection instead of
+    /// scrolling whatever pane is underneath the modal overlay. Pre-fix,
+    /// `handle_mouse` returned `Continue` immediately so `selected` never
+    /// moved.
+    #[test]
+    fn handle_mouse_picker_scroll_moves_selection() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+        let (mut app, col, row) = make_app_with_open_picker();
+        assert_eq!(app.picker.as_ref().unwrap().selected, 0);
+
+        let me = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = app.handle_mouse(me);
+
+        assert_eq!(
+            app.picker.as_ref().unwrap().selected,
+            1,
+            "ScrollDown over an open picker should move selection to the next row"
+        );
+    }
 }
