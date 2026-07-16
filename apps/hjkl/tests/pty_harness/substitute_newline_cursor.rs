@@ -28,6 +28,14 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn multi_row_backslash_r_substitute_lands_cursor_on_last_split_line() {
     let mut s = TerminalSession::spawn_with_file(&fixture("substitute_newline_split.txt"));
 
+    // Wait for the fixture to actually render before typing — on slow CI
+    // runners (macos) the `:%s` otherwise races startup and the 4-line
+    // assertion below can time out against a blank screen.
+    assert!(
+        s.wait_for_line(0, "a,b", 5000),
+        "fixture line `a,b` never rendered"
+    );
+
     s.keys(":%s/,/\\r/<Enter>");
 
     // Buffer must have split into four lines in the right order. The gutter
@@ -39,7 +47,9 @@ fn multi_row_backslash_r_substitute_lands_cursor_on_last_split_line() {
 
     let mut ok = false;
     let mut lines = [String::new(), String::new(), String::new(), String::new()];
-    for _ in 0..200 {
+    // 600 x 10ms = 6s budget — slow CI runners need more than the 2s this
+    // originally allowed (macos runner flaked at 2s).
+    for _ in 0..600 {
         lines = [s.line(0), s.line(1), s.line(2), s.line(3)];
         if ends_with_letter(&lines[0], 'a')
             && ends_with_letter(&lines[1], 'b')
