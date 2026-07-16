@@ -278,6 +278,36 @@ impl App {
         } else {
             text
         };
+        // A paste while the completion popup is open otherwise inserts text
+        // without ever updating/dismissing the popup: its prefix filtering
+        // goes stale and it keeps floating over text the paste just changed.
+        // Vim dismisses the popup on paste-like input (`<C-r>` register
+        // paste, `<C-o>p`, etc.); mirror that — dismissing is simplest and
+        // correct since a pasted blob rarely matches the in-flight prefix.
+        if self.completion.is_some() {
+            self.dismiss_completion();
+        }
+        // Record the paste into an active macro recording the same way
+        // typed keys are recorded (see the Insert-mode recorder hook in
+        // `handle_keypress`), so `@q` replay reproduces the paste instead of
+        // silently dropping it. `Input` has no dedicated paste variant, so
+        // record the equivalent sequence of per-char keystrokes a real
+        // keyboard paste would have produced (`\n` as `Enter`).
+        if self.active_editor().is_recording_macro() && !self.active_editor().is_replaying_macro() {
+            for ch in normalised.chars() {
+                let key = if ch == '\n' {
+                    hjkl_engine::Key::Enter
+                } else {
+                    hjkl_engine::Key::Char(ch)
+                };
+                self.active_editor_mut().record_input(hjkl_engine::Input {
+                    key,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+            }
+        }
         self.active_editor_mut().insert_str(&normalised);
         self.sync_after_engine_mutation();
         self.pending_recompute = true;

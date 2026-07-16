@@ -576,6 +576,7 @@ pub mod lsp;
 pub mod marks_registers;
 pub mod misc;
 pub mod mouse;
+pub mod paste;
 pub mod pickers;
 pub mod pre_save_hooks;
 pub mod prompt;
