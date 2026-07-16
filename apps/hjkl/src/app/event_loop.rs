@@ -424,7 +424,21 @@ impl App {
                 self.close_cmdline_window();
                 return KeyOutcome::Continue;
             }
-            return KeyOutcome::Break;
+            // Bare <C-c> exits like `:qa` — reuse its all-slots dirty check
+            // (skips explorer scratch buffers, same as `:qa`) instead of
+            // exiting unconditionally. An accidental Ctrl-C used to exit
+            // even with dirty buffers, and the graceful-exit path
+            // (`cleanup_swaps_on_exit`) then deletes every slot's swap
+            // file — destroying the only recovery copy of unsaved work a
+            // crash (which skips that cleanup) would have preserved.
+            // `quit_all(false)` shows the same E37 message `:qa` does and
+            // leaves `exit_requested` false when any buffer is dirty;
+            // `:qa!` / `:wqa` remain available to force the exit.
+            self.quit_all(false);
+            if self.exit_requested {
+                return KeyOutcome::Break;
+            }
+            return KeyOutcome::Continue;
         }
 
         // ── Hop / easymotion overlay (#197) ──────────────────────

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::event_loop::KeyOutcome;
 
 // ── :write / :write! disk-state guard tests ─────────────────────────────
 
@@ -910,6 +911,73 @@ fn q_bang_force_quits_dirty_buffer_via_hjkl_ex() {
         app.exit_requested,
         "`:q!` must force-quit a dirty buffer (hjkl-ex Phase 1 routing)"
     );
+}
+
+// ── Bare <C-c> exit vs dirty buffers (audit R2 fix 4) ────────────────────
+//
+// A bare Ctrl-C used to break the event loop unconditionally, and the
+// graceful-exit path (`cleanup_swaps_on_exit`) then deletes every slot's
+// swap file. An accidental Ctrl-C with unsaved changes silently destroyed
+// the only recovery copy of that work — a crash (which skips the cleanup)
+// would have preserved it. Fixed by routing bare <C-c> through the same
+// `quit_all` dirty check `:qa` uses.
+
+/// Ctrl-C with a dirty buffer must NOT exit, and must show the same E37
+/// message `:qa` (without `!`) shows.
+#[test]
+fn ctrl_c_with_dirty_buffer_does_not_exit() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "unsaved work");
+    app.active_mut().dirty = true;
+
+    let outcome = app.handle_keypress(ctrl_key('c'));
+
+    assert!(
+        !app.exit_requested,
+        "bare <C-c> must not exit while a buffer is dirty"
+    );
+    assert!(
+        matches!(outcome, KeyOutcome::Continue),
+        "handle_keypress must consume the key, not fall through"
+    );
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(msg.contains("E37"), "expected E37, got: {msg}");
+}
+
+/// Ctrl-C with every buffer clean exits normally, exactly like a plain
+/// `:qa` would.
+#[test]
+fn ctrl_c_with_clean_buffers_exits_normally() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(!app.active().dirty);
+
+    let outcome = app.handle_keypress(ctrl_key('c'));
+
+    assert!(
+        app.exit_requested,
+        "bare <C-c> must exit when no buffer is dirty"
+    );
+    assert!(
+        matches!(outcome, KeyOutcome::Break),
+        "handle_keypress must return Break so `run()` stops the loop"
+    );
+}
+
+/// A dirty EXPLORER scratch buffer must not block Ctrl-C — explorer buffers
+/// are programmatic and never user-saved, mirroring `:qa`'s own carve-out.
+#[test]
+fn ctrl_c_ignores_dirty_explorer_scratch_buffer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().dirty = true;
+    app.active_mut().is_explorer = true;
+
+    let outcome = app.handle_keypress(ctrl_key('c'));
+
+    assert!(
+        app.exit_requested,
+        "a dirty explorer scratch buffer must not block bare <C-c>"
+    );
+    assert!(matches!(outcome, KeyOutcome::Break));
 }
 
 // ── checktime / disk-change detection tests ────────────────────────────

@@ -1790,7 +1790,11 @@ impl App {
     }
 
     /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
-    fn quit_all(&mut self, force: bool) {
+    ///
+    /// `pub(crate)` so `event_loop.rs`'s bare `<C-c>` handler can reuse the
+    /// exact same all-slots dirty check and E37 message instead of exiting
+    /// unconditionally (see the doc comment at that call site).
+    pub(crate) fn quit_all(&mut self, force: bool) {
         // Explorer scratch buffers are programmatic (no file, never user-saved)
         // — they must never block quit, like they're skipped by :bnext/pickers.
         if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_explorer) {
