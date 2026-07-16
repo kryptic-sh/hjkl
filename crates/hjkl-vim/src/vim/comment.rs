@@ -216,20 +216,30 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
             }
         }
     }
-    // Helper: replicate `inserted` text across block rows top+1..=bot at `col`,
-    // padding short rows to reach `col` first. Returns without touching the
-    // cursor — callers position the cursor afterward according to their needs.
+    // Helper: replicate `inserted` text across block rows top+1..=bot at
+    // `col`. `pad` distinguishes vim's two block-edge behaviours (`:h
+    // v_b_I` vs `:h v_b_A`): when `pad` is true, rows shorter than `col`
+    // are padded with spaces first so the text still lands at `col` (`A`);
+    // when `pad` is false, rows shorter than `col` are skipped entirely —
+    // no padding, no insert on that row (`I`). Returns without touching
+    // the cursor — callers position the cursor afterward as needed.
     fn replicate_block_text<H: hjkl_engine::types::Host>(
         ed: &mut Editor<hjkl_buffer::View, H>,
         inserted: &str,
         top: usize,
         bot: usize,
         col: usize,
+        pad: bool,
     ) {
         use hjkl_buffer::{Edit, Position};
         for r in (top + 1)..=bot {
             let line_len = buf_line_chars(ed.buffer(), r);
             if col > line_len {
+                if !pad {
+                    // vim `v_b_I`: row doesn't reach the block's left
+                    // column — skip it, no padding, no insert.
+                    continue;
+                }
                 let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(r, line_len),
@@ -243,11 +253,11 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         }
     }
 
-    if let InsertReason::BlockEdge { top, bot, col } = session.reason {
+    if let InsertReason::BlockEdge { top, bot, col, pad } = session.reason {
         // `I` / `A` from VisualBlock: replicate text across rows; cursor
         // stays at the block-start column (vim leaves cursor there).
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col);
+            replicate_block_text(ed, &inserted, top, bot, col, pad);
             buf_set_cursor_rc(ed.buffer_mut(), top, col);
             ed.push_buffer_cursor_to_textarea();
         }
@@ -257,8 +267,11 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         // `c` from VisualBlock: replicate text across rows; cursor advances
         // to `col + ins_chars` (pre-step-back) so the Esc step-back lands
         // on the last typed char (col + ins_chars - 1), matching nvim.
+        // Like `I`, vim `v_b_c` (`:h v_b_c`) skips rows that don't reach
+        // the block's left column rather than padding them — verified
+        // against `nvim --headless`.
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col);
+            replicate_block_text(ed, &inserted, top, bot, col, false);
             let ins_chars = inserted.chars().count();
             let line_len = buf_line_chars(ed.buffer(), top);
             let target_col = (col + ins_chars).min(line_len);

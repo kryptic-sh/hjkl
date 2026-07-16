@@ -1644,7 +1644,16 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize) {
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
-        crate::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+        crate::vim::begin_insert(
+            self,
+            1,
+            InsertReason::BlockEdge {
+                top,
+                bot,
+                col,
+                pad: false,
+            },
+        );
     }
 
     fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
@@ -1671,7 +1680,16 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         }
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
-        crate::vim::begin_insert_noundo(self, 1, InsertReason::BlockEdge { top, bot, col });
+        crate::vim::begin_insert_noundo(
+            self,
+            1,
+            InsertReason::BlockEdge {
+                top,
+                bot,
+                col,
+                pad: true,
+            },
+        );
     }
 
     fn execute_motion(&mut self, motion: Motion, count: usize) {

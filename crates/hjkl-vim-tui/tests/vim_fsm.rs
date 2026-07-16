@@ -2572,9 +2572,12 @@ fn visual_block_with_empty_line_in_middle() {
 }
 
 #[test]
-fn block_insert_pads_empty_lines_to_block_column() {
-    // Middle line is empty; block I at column 3 should pad the empty
-    // line with spaces so the inserted text lines up.
+fn block_insert_skips_empty_lines_shorter_than_block_column() {
+    // Regression (audit-r2 Fix 2): vim `v_b_I` (`:h v_b_I`) SKIPS rows that
+    // don't reach the block's left column — it never pads them (padding
+    // is `A`-only). Middle line is empty; block `I` at column 3 must leave
+    // it untouched. Verified against `nvim --headless`, which leaves the
+    // blank line exactly as-is.
     let mut e = editor_with("this is a line\n\nthis is a line");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "<C-v>");
@@ -2592,21 +2595,24 @@ fn block_insert_pads_empty_lines_to_block_column() {
             .collect::<Vec<_>>(),
         &[
             "thiXXs is a line".to_string(),
-            "   XX".to_string(),
+            "".to_string(),
             "thiXXs is a line".to_string()
         ]
     );
 }
 
 #[test]
-fn block_insert_pads_short_lines_to_block_column() {
+fn block_insert_skips_short_lines_shorter_than_block_column() {
+    // Regression (audit-r2 Fix 2): same as above but with a non-empty
+    // short row. Verified against `nvim --headless`, which leaves "bb"
+    // untouched (no padding, no insert).
     let mut e = editor_with("aaaaa\nbb\naaaaa");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "<C-v>");
     run_keys(&mut e, "jj");
     run_keys(&mut e, "I");
     run_keys(&mut e, "Y<Esc>");
-    // Row 1 "bb" is shorter than col 3 — pad with one space then Y.
+    // Row 1 "bb" is shorter than col 3 — skip it entirely.
     assert_eq!(
         e.buffer()
             .rope()
@@ -2618,9 +2624,33 @@ fn block_insert_pads_short_lines_to_block_column() {
             .collect::<Vec<_>>(),
         &[
             "aaaYaa".to_string(),
-            "bb Y".to_string(),
+            "bb".to_string(),
             "aaaYaa".to_string()
         ]
+    );
+}
+
+#[test]
+fn block_change_skips_short_lines_shorter_than_block_column() {
+    // vim `v_b_c` (`:h v_b_c`) shares `I`'s skip-short-rows semantics, not
+    // `A`'s pad semantics — verified against `nvim --headless`, which
+    // leaves "x" completely untouched (no delete, no insert).
+    let mut e = editor_with("aaaa\nx\nbbbb");
+    e.jump_cursor(0, 2);
+    run_keys(&mut e, "<C-v>");
+    run_keys(&mut e, "jj");
+    run_keys(&mut e, "c");
+    run_keys(&mut e, "Z<Esc>");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["aaZa".to_string(), "x".to_string(), "bbZb".to_string()]
     );
 }
 

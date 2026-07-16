@@ -412,3 +412,48 @@ fn dot_repeat_without_count_reuses_recorded_count() {
         e.content()
     );
 }
+
+// ── VisualBlock `A` / `I` / `c` edge-column resolution (audit-r2) ──────────
+
+fn lines_of(e: &Editor) -> Vec<String> {
+    e.buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect()
+}
+
+#[test]
+fn block_append_pads_rows_shorter_than_the_top_row_to_the_block_edge() {
+    // Fix 1: block `A`'s append column used to be clamped by the TOP row's
+    // length alone, so on rows LONGER than the top row the typed text
+    // landed inside the block instead of past its right edge. vim `v_b_A`
+    // (`:h v_b_A`) pads every row shorter than the block's right edge to
+    // reach it, then appends there — verified against `nvim --headless`.
+    let mut e = editor_with("ab\nabcdef");
+    e.jump_cursor(1, 5);
+    dispatch_keys(&mut e, "<C-v>k");
+    dispatch_keys(&mut e, "A");
+    dispatch_keys(&mut e, "X<Esc>");
+    assert_eq!(lines_of(&e), &["ab    X".to_string(), "abcdefX".to_string()]);
+}
+
+#[test]
+fn block_insert_skips_rows_shorter_than_the_block_column() {
+    // Fix 2: block `I` used to pad rows shorter than the block's left
+    // column (same padding `A` uses). vim `v_b_I` (`:h v_b_I`) SKIPS those
+    // rows entirely instead — no padding, no insert — verified against
+    // `nvim --headless`.
+    let mut e = editor_with("aaaa\nx\nbbbb");
+    e.jump_cursor(0, 2);
+    dispatch_keys(&mut e, "<C-v>jj");
+    dispatch_keys(&mut e, "I");
+    dispatch_keys(&mut e, "Z<Esc>");
+    assert_eq!(
+        lines_of(&e),
+        &["aaZaa".to_string(), "x".to_string(), "bbZbb".to_string()]
+    );
+}

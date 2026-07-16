@@ -414,9 +414,20 @@ pub enum InsertReason {
     /// last_change because the outer replay will restore it.
     ReplayOnly,
     /// `I` or `A` from VisualBlock: insert the typed text at `col` on
-    /// every row in `top..=bot`. `col` is the start column for `I`, the
+    /// rows in `top..=bot`. `col` is the start column for `I`, the
     /// one-past-block-end column for `A`.
-    BlockEdge { top: usize, bot: usize, col: usize },
+    ///
+    /// `pad` distinguishes the two vim behaviours at rows shorter than
+    /// `col` (`:h v_b_I` vs `:h v_b_A`): `A` pads short rows with spaces
+    /// so the appended text still lines up (`pad: true`); `I` skips rows
+    /// that don't reach `col` entirely — no padding, no insert on that
+    /// row (`pad: false`).
+    BlockEdge {
+        top: usize,
+        bot: usize,
+        col: usize,
+        pad: bool,
+    },
     /// `c` from VisualBlock: block content deleted, then user types
     /// replacement text replicated across all block rows on Esc. Cursor
     /// advances to the last typed char after replication (unlike BlockEdge
