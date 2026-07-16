@@ -8,7 +8,8 @@
 //!
 //! 2. **Pre-extractor** ([`extract_capture_set_directives`]) — scans a raw
 //!    query text for `(#set! @cap key val)` forms, maps each to its top-level
-//!    pattern index (by counting balanced patterns), returns a
+//!    pattern index (by counting top-level pattern forms — parenthesized
+//!    groups, bracket alternations, and string literals all count), returns a
 //!    `Vec<CaptureSetDirective>`, and rewrites the query text with those forms
 //!    removed so `Query::new` succeeds.  The [`Highlighter`] stores these
 //!    alongside the compiled query and re-applies them at match-iteration time.
@@ -40,10 +41,17 @@ pub struct ExtractResult {
 /// Extract all `(#set! @cap key val)` forms from `src`, rewrite the query text
 /// without them, and return both the cleaned text and the extracted directives.
 ///
-/// Pattern indices are assigned by counting top-level balanced `(...)` groups
-/// in the original text (before removal).  The same counting applies to the
-/// rewritten text — removing a `(#set! @cap ...)` from *inside* a pattern does
-/// not change the pattern count.
+/// Pattern indices are assigned by counting top-level pattern forms in the
+/// original text (before removal).  A "top-level pattern form" is anything
+/// that can stand on its own as a whole pattern per tree-sitter's query
+/// grammar: a parenthesized group `(...)`, a bracket alternation `[...]`
+/// (counted once for the whole alternation, not once per member — its
+/// members sit at nesting depth > 0), or a bare string literal `"..."` (which
+/// has no parens at all). `(`/`[`/`)`/`]` share one nesting-depth counter so
+/// members nested inside a `[...]` alternation are never mistaken for
+/// top-level patterns of their own. The same counting applies to the
+/// rewritten text — removing a `(#set! @cap ...)` from *inside* a pattern
+/// does not change the pattern count.
 pub fn extract_capture_set_directives(src: &str) -> ExtractResult {
     let bytes = src.as_bytes();
     let len = bytes.len();
@@ -71,6 +79,14 @@ pub fn extract_capture_set_directives(src: &str) -> ExtractResult {
     while pos < len {
         match bytes[pos] {
             b'"' => {
+                // A string literal at depth 0 is itself a complete top-level
+                // pattern (e.g. `"if" @kw`), not a member of some enclosing
+                // paren group — tree-sitter counts it as one pattern. Nested
+                // strings (inside a predicate's arguments, or as a member of
+                // a `[...]` alternation) are just skipped, same as before.
+                if depth == 0 {
+                    pattern_count += 1;
+                }
                 // Skip string literal.
                 pos += 1;
                 while pos < len {
@@ -136,7 +152,19 @@ pub fn extract_capture_set_directives(src: &str) -> ExtractResult {
                 depth += 1;
                 pos += 1;
             }
-            b')' => {
+            b'[' => {
+                // A `[...]` alternation is ONE top-level pattern regardless
+                // of how many parenthesized members it contains — tracked
+                // with the same `depth` counter as `(...)` so members inside
+                // it (which sit at `depth > 0`) don't each get miscounted as
+                // their own top-level pattern.
+                if depth == 0 {
+                    pattern_count += 1;
+                }
+                depth += 1;
+                pos += 1;
+            }
+            b')' | b']' => {
                 depth = depth.saturating_sub(1);
                 pos += 1;
             }
@@ -582,6 +610,51 @@ mod tests {
         );
         // Rewritten text must still contain the literal set.
         assert!(result.rewritten.contains("#set! priority"));
+    }
+
+    #[test]
+    fn extract_pattern_index_counts_string_and_bracket_patterns_correctly() {
+        // Three top-level patterns precede none; the query has exactly three
+        // top-level patterns total, and the directive lives in the third:
+        //   0: a string-literal pattern ("if" @kw) — has no `(` at all, so
+        //      naive "count depth-0 `(`" logic never counts it.
+        //   1: a `[...]` bracket alternation containing THREE parenthesized
+        //      members — tree-sitter counts the whole alternation as ONE
+        //      pattern, but naive depth-0-paren counting (which doesn't
+        //      track bracket depth) sees each member's `(` sitting at
+        //      "depth 0" and counts three separate patterns for it.
+        //   2: the pattern carrying the `#set!` directive.
+        //
+        // A 2-member bracket would let the missing-string undercount (-1)
+        // and the bracket-member overcount (+1) cancel out by coincidence,
+        // so this test uses three members to force a real, unambiguous
+        // mismatch: naive counting reaches pattern_count = 4 (1 for the
+        // first bracket member treated as top-level, 2 for the second, 3
+        // for the third, 4 for the outer `(...)`) and assigns the
+        // directive index 3 (pattern_count - 1), not the correct 2.
+        let src = r#""if" @kw
+[
+  (foo) @a
+  (bar) @b
+  (baz) @c
+] @alt
+((qux) @q
+  (#set! @q key val))
+"#;
+
+        let result = extract_capture_set_directives(src);
+        assert_eq!(result.directives.len(), 1, "expected 1 extracted directive");
+        assert_eq!(
+            result.directives[0].pattern_index, 2,
+            "directive must bind to the third top-level pattern (index 2): \
+             0=string literal, 1=bracket alternation, 2=the #set! pattern"
+        );
+        assert_eq!(result.directives[0].capture_name, "q");
+        assert_eq!(result.directives[0].key, "key");
+        assert_eq!(result.directives[0].value.as_deref(), Some("val"));
+
+        assert!(!result.rewritten.contains("#set!"));
+        assert_eq!(paren_balance(&result.rewritten), 0);
     }
 
     #[test]
