@@ -291,25 +291,48 @@ fn mode_code(editor: &hjkl_engine::Editor<View, TuiHost>) -> &'static str {
 /// line) into a concrete Rust range over the buffer's lines. Both `start` and
 /// `end` are 0-based. Returns an error string if out of bounds.
 ///
+/// Matches nvim's documented `nvim_buf_get_lines`/`nvim_buf_set_lines`
+/// semantics: "Out-of-bounds indices are clamped to the nearest valid value,
+/// unless strict_indexing is set" (then it's `"Index out of bounds"`). An
+/// index counts as out-of-bounds when, after negative-index resolution, it
+/// still falls outside `[0, line_count]` — e.g. `start=100` on a 3-line
+/// buffer, or `start=-100` on the same buffer (resolves to a still-negative
+/// value). `strict=true` rejects that with an error instead of silently
+/// clamping; `strict=false` clamps (so `start > line_count` yields an empty
+/// range `(line_count, line_count)`, not an error).
+///
 /// Uses saturating arithmetic — extreme negative values from a hostile client
 /// (e.g. `i64::MIN`) must clamp instead of overflowing.
 fn resolve_line_range(
     line_count: usize,
     start: i64,
     end: i64,
+    strict: bool,
 ) -> std::result::Result<(usize, usize), String> {
     let n = line_count as i64;
-    let s = if start < 0 {
-        n.saturating_add(start).max(0) as usize
+    // Resolve negative indices (counting from the end) WITHOUT clamping yet —
+    // clamping here would hide an out-of-bounds resolution (e.g. start deep
+    // enough negative that `n + start` is still negative) from the
+    // strict_indexing check below.
+    let s_resolved = if start < 0 {
+        n.saturating_add(start)
     } else {
-        start as usize
+        start
     };
-    let e = if end < 0 {
-        n.saturating_add(end).saturating_add(1).max(0) as usize
+    let e_resolved = if end < 0 {
+        n.saturating_add(end).saturating_add(1)
     } else {
-        end as usize
+        end
     };
-    let e = e.min(line_count);
+
+    let s_oob = s_resolved < 0 || s_resolved > n;
+    let e_oob = e_resolved < 0 || e_resolved > n;
+    if strict && (s_oob || e_oob) {
+        return Err("Index out of bounds".to_string());
+    }
+
+    let s = s_resolved.clamp(0, n) as usize;
+    let e = e_resolved.clamp(0, n) as usize;
     if s > e {
         return Err(format!(
             "line range out of order: start={start} end={end} (resolved {s}..{e})"
@@ -819,7 +842,7 @@ fn dispatch(
                 Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
-            let _strict = param_bool(p, 3).unwrap_or(false);
+            let strict = param_bool(p, 3).unwrap_or(false);
             let new_lines = match param_string_array(p, 4) {
                 Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
@@ -830,7 +853,7 @@ fn dispatch(
                 // Fast path: operate on the active editor (oracle-parity path).
                 let rope = app.active_editor().buffer().rope();
                 let line_count = rope.len_lines();
-                let (s, e) = match resolve_line_range(line_count, start, end) {
+                let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                     Ok(r) => r,
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
@@ -869,7 +892,7 @@ fn dispatch(
                     None => return err(stdout, msgid, "invalid buffer id"),
                 };
                 let line_count = rope.len_lines();
-                let (s, e) = match resolve_line_range(line_count, start, end) {
+                let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                     Ok(r) => r,
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
@@ -919,7 +942,7 @@ fn dispatch(
                 Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
-            let _strict = param_bool(p, 3).unwrap_or(false);
+            let strict = param_bool(p, 3).unwrap_or(false);
 
             let current_id = app.nvim_current_buffer_id();
             let rope = if buf_id == current_id {
@@ -931,7 +954,7 @@ fn dispatch(
                 }
             };
             let line_count = rope.len_lines();
-            let (s, e) = match resolve_line_range(line_count, start, end) {
+            let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                 Ok(r) => r,
                 Err(msg) => return err(stdout, msgid, &msg),
             };
@@ -5169,9 +5192,13 @@ mod tests {
     /// clamp, not overflow (debug builds would panic on `i64::MIN - 1`).
     #[test]
     fn test_extreme_negative_values_do_not_overflow() {
-        // resolve_line_range with i64::MIN must not overflow.
-        assert!(resolve_line_range(3, i64::MIN, -1).is_ok());
-        assert!(resolve_line_range(0, i64::MIN, i64::MIN).is_ok());
+        // resolve_line_range with i64::MIN must not overflow, non-strict
+        // (clamps) or strict (must still return cleanly, as an `Err`, not
+        // panic).
+        assert!(resolve_line_range(3, i64::MIN, -1, false).is_ok());
+        assert!(resolve_line_range(0, i64::MIN, i64::MIN, false).is_ok());
+        assert!(resolve_line_range(3, i64::MIN, -1, true).is_err());
+        assert!(resolve_line_range(0, i64::MIN, i64::MIN, true).is_err());
 
         // nvim_win_set_cursor with row = i64::MIN must not overflow.
         let mut app = build_app(None).unwrap();
@@ -5280,6 +5307,228 @@ mod tests {
             Value::Array(vec![Value::from("abc"), Value::from("def")]),
             "buffer must be unchanged after a rejected inverted-range edit"
         );
+    }
+
+    // ── strict_indexing (audit R2, fix 3) ──────────────────────────────────
+
+    /// `nvim_buf_get_lines` with `strict_indexing=true` and a `start` beyond
+    /// the line count must error `"Index out of bounds"`, matching nvim's
+    /// documented `nvim_buf_get_lines`/`nvim_buf_set_lines` semantics.
+    #[test]
+    fn test_nvim_buf_get_lines_strict_oob_errors() {
+        let mut app = build_app(None).unwrap();
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("a"), Value::from("b"), Value::from("c")]),
+            ],
+        );
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(100i64), // start way past line_count=3
+                Value::from(-1i64),
+                Value::Boolean(true), // strict_indexing
+            ],
+        );
+        let msg = match &resp[2] {
+            Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
+            other => panic!("expected an error array, got {other:?}"),
+        };
+        assert_eq!(
+            msg, "Index out of bounds",
+            "strict OOB must use nvim's exact error text, not a generic \
+             'line range out of order' (which non-strict OOB used to trigger \
+             too, masking the strict/non-strict distinction)"
+        );
+    }
+
+    /// The same out-of-bounds `start` with `strict_indexing=false` must
+    /// clamp to an empty result instead of erroring — the bug this fix
+    /// addresses (`resolve_line_range` used to reject `start > line_count`
+    /// as "line range out of order" unconditionally).
+    #[test]
+    fn test_nvim_buf_get_lines_nonstrict_oob_clamps_to_empty() {
+        let mut app = build_app(None).unwrap();
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("a"), Value::from("b"), Value::from("c")]),
+            ],
+        );
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(100i64),
+                Value::from(-1i64),
+                Value::Boolean(false), // non-strict
+            ],
+        );
+        let got = assert_ok(resp);
+        assert_eq!(
+            got,
+            Value::Array(vec![]),
+            "non-strict OOB start must clamp to an empty range, not error"
+        );
+    }
+
+    /// `nvim_buf_set_lines` with `strict_indexing=true` and an OOB `start`
+    /// must error and must NOT touch the buffer.
+    #[test]
+    fn test_nvim_buf_set_lines_strict_oob_errors() {
+        let mut app = build_app(None).unwrap();
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("a"), Value::from("b")]),
+            ],
+        );
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(100i64),
+                Value::from(-1i64),
+                Value::Boolean(true), // strict_indexing
+                Value::Array(vec![Value::from("X")]),
+            ],
+        );
+        let msg = match &resp[2] {
+            Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
+            other => panic!("expected an error array, got {other:?}"),
+        };
+        assert_eq!(msg, "Index out of bounds", "strict OOB must use nvim's exact error text");
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+            ],
+        );
+        assert_eq!(
+            assert_ok(resp),
+            Value::Array(vec![Value::from("a"), Value::from("b")]),
+            "buffer must be unchanged after a rejected strict OOB set_lines"
+        );
+    }
+
+    /// `nvim_buf_set_lines` with `strict_indexing=false` and an OOB `start`
+    /// must clamp to an append at the end of the buffer, matching nvim
+    /// (previously errored "line range out of order" instead).
+    #[test]
+    fn test_nvim_buf_set_lines_nonstrict_oob_appends() {
+        let mut app = build_app(None).unwrap();
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("a"), Value::from("b")]),
+            ],
+        );
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(100i64),
+                Value::from(-1i64),
+                Value::Boolean(false), // non-strict
+                Value::Array(vec![Value::from("appended")]),
+            ],
+        );
+        assert_ok(resp);
+
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+            ],
+        );
+        assert_eq!(
+            assert_ok(resp),
+            Value::Array(vec![
+                Value::from("a"),
+                Value::from("b"),
+                Value::from("appended"),
+            ]),
+            "non-strict OOB start must clamp to an append, not error"
+        );
+    }
+
+    /// In-range calls must be unaffected by the strict/non-strict plumbing,
+    /// under either flag value.
+    #[test]
+    fn test_nvim_buf_get_lines_in_range_unaffected_by_strict() {
+        let mut app = build_app(None).unwrap();
+        call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("a"), Value::from("b"), Value::from("c")]),
+            ],
+        );
+
+        for strict in [true, false] {
+            let resp = call(
+                &mut app,
+                "nvim_buf_get_lines",
+                vec![
+                    Value::Nil,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(strict),
+                ],
+            );
+            assert_eq!(
+                assert_ok(resp),
+                Value::Array(vec![
+                    Value::from("a"),
+                    Value::from("b"),
+                    Value::from("c"),
+                ]),
+                "in-range get_lines(0,-1) must return all lines regardless of strict={strict}"
+            );
+        }
     }
 
     /// byte_col_to_char_col: boundary snapping and clamping semantics.
