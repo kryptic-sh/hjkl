@@ -3,19 +3,29 @@
 //! These tests use fixture files under `tests/fixtures/` to exercise the
 //! extraction and validation paths without any network access.
 //!
-//! Tests that mutate XDG env vars are serialized via the `anvil-env` nextest
-//! group (`max-threads = 1`) defined in the workspace's `.config/nextest.toml`
-//! and via an in-process `static ENV_LOCK` for plain `cargo test` runs.
+//! Every test that drives `install_github_inner` passes an explicit
+//! `AnvilPaths` built from its own `TempDir` (via [`temp_paths`]) instead of
+//! mutating `XDG_DATA_HOME` / `XDG_CACHE_HOME` — env vars are process-global,
+//! so two tests mutating them in parallel race no matter how carefully a
+//! `Mutex` tries to serialize it. Explicit paths mean tests can run fully
+//! parallel, even when they reuse the same tool `name` (audit-r2 fix 4).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-// Serializes env-mutating tests within a single `cargo test` process.
-// Under nextest the `anvil-env` group (max-threads = 1) provides the same
-// guarantee across processes.
-#[allow(dead_code)]
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use hjkl_anvil::store::AnvilPaths;
+
+/// Build an [`AnvilPaths`] rooted at a fresh `TempDir`'s `data` / `cache`
+/// subdirs. Returned alongside the `TempDir` so callers keep it alive for
+/// the duration of the test.
+fn temp_paths() -> (tempfile::TempDir, AnvilPaths) {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = AnvilPaths {
+        data_root: tmp.path().join("data").join("anvil"),
+        cache_root: tmp.path().join("cache").join("anvil"),
+    };
+    (tmp, paths)
+}
 
 use hjkl_anvil::installer::{InstallError, InstallStatus};
 use hjkl_anvil::manifest::{GithubMethod, InstallMethod, ToolCategory, ToolSpec};
@@ -243,12 +253,18 @@ fn path_traversal_in_tar_is_rejected_with_path_escape() {
 
 #[test]
 fn sha256_mismatch_returns_checksum_mismatch() {
+    // Explicit per-test paths (audit-r2 fix 4) — this test used to run with
+    // NO env override and NO lock, so it wrote to the developer's REAL
+    // `~/.cache/anvil` / `~/.local/share/anvil` and collided with every
+    // other test using tool name "hello".
+    let (_tmp, paths) = temp_paths();
     let triple = host_triple_or_skip!();
     let spec = github_spec(triple, "deadbeef", "hello-{triple}.tar.gz", "hello");
 
     let result = hjkl_anvil::installer::install_github_inner(
         "hello",
         &spec,
+        &paths,
         |_url, dest, progress| {
             let bytes = fixture_bytes("hello.tar.gz");
             std::fs::write(dest, &bytes)?;
@@ -276,7 +292,8 @@ fn missing_triple_falls_through_to_tofu() {
     // sha256_file returns Io(NotFound) — never MissingChecksum.
     // On unsupported platforms, UnsupportedTriple fires first.
     //
-    // Unique tool name to avoid staging-file pollution from other tests.
+    // Explicit per-test paths, plus a unique tool name as a second layer.
+    let (_tmp, paths) = temp_paths();
     let mut sha256 = BTreeMap::new();
     sha256.insert("nonexistent-triple".to_string(), "abc123".to_string());
     let spec = ToolSpec {
@@ -294,6 +311,7 @@ fn missing_triple_falls_through_to_tofu() {
     let result = hjkl_anvil::installer::install_github_inner(
         "noop-tofu-integ-tool-unique",
         &spec,
+        &paths,
         |_, _, _| Ok(()),
         &|_| {},
     );
@@ -313,6 +331,10 @@ fn missing_triple_falls_through_to_tofu() {
 
 #[test]
 fn bin_not_found_in_archive_returns_bin_not_found() {
+    // Explicit per-test paths (audit-r2 fix 4) — see comment on
+    // `sha256_mismatch_returns_checksum_mismatch` above: this test used to
+    // touch the real XDG store with no isolation at all.
+    let (_tmp, paths) = temp_paths();
     let triple = host_triple_or_skip!();
     // hello.tar.gz contains bin/hello; request a bin named "doesnotexist".
     let spec = github_spec(
@@ -325,6 +347,7 @@ fn bin_not_found_in_archive_returns_bin_not_found() {
     let result = hjkl_anvil::installer::install_github_inner(
         "doesnotexist",
         &spec,
+        &paths,
         stub_download("hello.tar.gz"),
         &|_| {},
     );
@@ -335,20 +358,15 @@ fn bin_not_found_in_archive_returns_bin_not_found() {
     );
 }
 
-// ── Full pipeline (env-mutating, serialized via nextest anvil-env group) ─────
+// ── Full pipeline (explicit per-test AnvilPaths — fully parallel-safe) ───────
 
-/// Full tar.gz install pipeline with stub downloader and temp XDG dirs.
+/// Full tar.gz install pipeline with stub downloader and a per-test
+/// `AnvilPaths` — no env mutation, so no lock or nextest group needed.
 #[cfg(unix)]
 #[test]
 fn full_github_pipeline_tar_gz_end_to_end() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_tmp, paths) = temp_paths();
     let triple = host_triple_or_skip!();
-    let data_dir = tempfile::tempdir().unwrap();
-    let cache_dir = tempfile::tempdir().unwrap();
-    unsafe {
-        std::env::set_var("XDG_DATA_HOME", data_dir.path());
-        std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-    }
 
     let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
     let statuses: std::sync::Mutex<Vec<InstallStatus>> = std::sync::Mutex::new(Vec::new());
@@ -356,14 +374,10 @@ fn full_github_pipeline_tar_gz_end_to_end() {
     let result = hjkl_anvil::installer::install_github_inner(
         "hello",
         &spec,
+        &paths,
         stub_download("hello.tar.gz"),
         &|s| statuses.lock().unwrap().push(s.clone()),
     );
-
-    unsafe {
-        std::env::remove_var("XDG_DATA_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
-    }
 
     let bin_path = result.expect("tar.gz pipeline must succeed");
     assert!(
@@ -380,8 +394,7 @@ fn full_github_pipeline_tar_gz_end_to_end() {
     );
 
     // Verify .rev sidecar was written.
-    let rev_content =
-        std::fs::read_to_string(data_dir.path().join("anvil/packages/hello/.rev")).unwrap();
+    let rev_content = std::fs::read_to_string(paths.data_root.join("packages/hello/.rev")).unwrap();
     assert!(
         rev_content.contains(HELLO_TAR_GZ_SHA),
         "rev sidecar must contain sha"
@@ -392,28 +405,18 @@ fn full_github_pipeline_tar_gz_end_to_end() {
 #[cfg(unix)]
 #[test]
 fn full_github_pipeline_zip_end_to_end() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_tmp, paths) = temp_paths();
     let triple = host_triple_or_skip!();
-    let data_dir = tempfile::tempdir().unwrap();
-    let cache_dir = tempfile::tempdir().unwrap();
-    unsafe {
-        std::env::set_var("XDG_DATA_HOME", data_dir.path());
-        std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-    }
 
     let spec = github_spec(triple, HELLO_ZIP_SHA, "hello-{triple}.zip", "hello");
 
     let result = hjkl_anvil::installer::install_github_inner(
         "hello",
         &spec,
+        &paths,
         stub_download("hello.zip"),
         &|_| {},
     );
-
-    unsafe {
-        std::env::remove_var("XDG_DATA_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
-    }
 
     let bin_path = result.expect("zip pipeline must succeed");
     assert!(bin_path.exists());

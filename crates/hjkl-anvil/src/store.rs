@@ -16,12 +16,16 @@
 //! $XDG_CACHE_HOME/anvil/    # download staging, extraction scratch
 //! ```
 //!
-//! ## Env-override tests
+//! ## Testing without XDG env mutation
 //!
-//! The path-resolution tests that mutate `XDG_DATA_HOME` / `XDG_CACHE_HOME`
-//! via `std::env::set_var` run under the `anvil-env` nextest group
-//! (`max-threads = 1`) defined in `.config/nextest.toml` at the workspace
-//! root. They are serialized automatically by `cargo nextest run`.
+//! [`AnvilPaths`] carries an explicit `data_root` / `cache_root` pair through
+//! every path helper (the `_in` variants below); production resolves it once
+//! via [`AnvilPaths::from_xdg`]. Tests build an `AnvilPaths` from a per-test
+//! `TempDir` instead of `std::env::set_var`-ing `XDG_DATA_HOME` /
+//! `XDG_CACHE_HOME` — env vars are process-global, so mutating them from
+//! parallel tests races no matter how carefully a `Mutex` tries to serialize
+//! it (audit-r2 fix 4). This is the same pattern `hjkl_xdg::resolve_xdg`
+//! uses one layer down.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -61,51 +65,120 @@ fn validate_name(name: &str) -> Result<(), StoreError> {
     }
 }
 
+// ── Explicit path roots (audit-r2 fix 4) ────────────────────────────────────
+
+/// Explicit data/cache roots for the anvil store.
+///
+/// Every path helper below has an `_in(paths, ..)` variant that composes
+/// from this struct instead of reading `XDG_DATA_HOME` / `XDG_CACHE_HOME`
+/// off the process environment. This is what lets the install pipeline
+/// (`install_github_inner` and friends) be driven with a per-test `TempDir`
+/// instead of `std::env::set_var` — env vars are process-global, so mutating
+/// them from parallel tests is inherently racy no matter how carefully a
+/// `Mutex` tries to serialize it (a stray un-locked test anywhere in the
+/// binary still collides). Explicit paths sidestep the race entirely: two
+/// tests using the SAME tool name against DIFFERENT `AnvilPaths` simply
+/// can't collide on disk.
+///
+/// The plain (non-`_in`) helpers below are kept for API compatibility and
+/// resolve via [`AnvilPaths::from_xdg`], matching pre-fix behavior exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnvilPaths {
+    pub data_root: PathBuf,
+    pub cache_root: PathBuf,
+}
+
+impl AnvilPaths {
+    /// Resolve from the process's `XDG_DATA_HOME` / `XDG_CACHE_HOME` (or
+    /// their fallbacks) — the production default.
+    pub fn from_xdg() -> Result<Self, StoreError> {
+        Ok(Self {
+            data_root: data_home()?.join("anvil"),
+            cache_root: cache_home()?.join("anvil"),
+        })
+    }
+}
+
 // ── Path helpers ─────────────────────────────────────────────────────────────
+
+/// `<paths.data_root>/`.
+pub fn data_root_in(paths: &AnvilPaths) -> PathBuf {
+    paths.data_root.clone()
+}
 
 /// `<XDG_DATA_HOME>/anvil/`.
 pub fn data_root() -> Result<PathBuf, StoreError> {
-    Ok(data_home()?.join("anvil"))
+    Ok(data_root_in(&AnvilPaths::from_xdg()?))
+}
+
+/// `<paths.cache_root>/`.
+pub fn cache_root_in(paths: &AnvilPaths) -> PathBuf {
+    paths.cache_root.clone()
 }
 
 /// `<XDG_CACHE_HOME>/anvil/`.
 pub fn cache_root() -> Result<PathBuf, StoreError> {
-    Ok(cache_home()?.join("anvil"))
+    Ok(cache_root_in(&AnvilPaths::from_xdg()?))
+}
+
+/// `<data_root>/packages/`.
+pub fn packages_dir_in(paths: &AnvilPaths) -> PathBuf {
+    paths.data_root.join("packages")
 }
 
 /// `<data_root>/packages/`.
 pub fn packages_dir() -> Result<PathBuf, StoreError> {
-    Ok(data_root()?.join("packages"))
+    Ok(packages_dir_in(&AnvilPaths::from_xdg()?))
+}
+
+/// `<data_root>/packages/<name>/`.
+pub fn package_dir_in(paths: &AnvilPaths, name: &str) -> Result<PathBuf, StoreError> {
+    validate_name(name)?;
+    Ok(packages_dir_in(paths).join(name))
 }
 
 /// `<data_root>/packages/<name>/`.
 pub fn package_dir(name: &str) -> Result<PathBuf, StoreError> {
-    validate_name(name)?;
-    Ok(packages_dir()?.join(name))
+    package_dir_in(&AnvilPaths::from_xdg()?, name)
 }
 
 /// `<data_root>/packages/<name>/.rev`.
 ///
 /// Sidecar file recording the pinned version + sha that produced the install.
 /// Format: `<version>:<sha256>` on a single line.
+pub fn rev_file_in(paths: &AnvilPaths, name: &str) -> Result<PathBuf, StoreError> {
+    Ok(package_dir_in(paths, name)?.join(".rev"))
+}
+
+/// `<data_root>/packages/<name>/.rev`.
 pub fn rev_file(name: &str) -> Result<PathBuf, StoreError> {
-    Ok(package_dir(name)?.join(".rev"))
+    rev_file_in(&AnvilPaths::from_xdg()?, name)
 }
 
 /// `<data_root>/checksums/`.
 ///
 /// Directory of per-tool TOFU checksum sidecars. Created on first call.
-pub fn checksums_dir() -> Result<PathBuf, StoreError> {
-    let dir = data_root()?.join("checksums");
+pub fn checksums_dir_in(paths: &AnvilPaths) -> Result<PathBuf, StoreError> {
+    let dir = paths.data_root.join("checksums");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// `<data_root>/checksums/`.
+pub fn checksums_dir() -> Result<PathBuf, StoreError> {
+    checksums_dir_in(&AnvilPaths::from_xdg()?)
 }
 
 /// `<data_root>/bin/`.
 ///
 /// Flat directory of symlinks that consumers prepend to `$PATH`.
+pub fn bin_dir_in(paths: &AnvilPaths) -> PathBuf {
+    paths.data_root.join("bin")
+}
+
+/// `<data_root>/bin/`.
 pub fn bin_dir() -> Result<PathBuf, StoreError> {
-    Ok(data_root()?.join("bin"))
+    Ok(bin_dir_in(&AnvilPaths::from_xdg()?))
 }
 
 // ── Rev sidecar ──────────────────────────────────────────────────────────────
@@ -151,8 +224,8 @@ impl RevSidecar {
 ///
 /// Returns `Ok(None)` when the file is absent (tool not installed).
 /// Returns `Err` on other I/O errors or a malformed sidecar.
-pub fn read_rev(name: &str) -> Result<Option<RevSidecar>, StoreError> {
-    let path = rev_file(name)?;
+pub fn read_rev_in(paths: &AnvilPaths, name: &str) -> Result<Option<RevSidecar>, StoreError> {
+    let path = rev_file_in(paths, name)?;
     match std::fs::read_to_string(&path) {
         Ok(s) => Ok(RevSidecar::parse(&s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -160,19 +233,29 @@ pub fn read_rev(name: &str) -> Result<Option<RevSidecar>, StoreError> {
     }
 }
 
+/// Read the `<package>/.rev` sidecar.
+pub fn read_rev(name: &str) -> Result<Option<RevSidecar>, StoreError> {
+    read_rev_in(&AnvilPaths::from_xdg()?, name)
+}
+
 /// Write `<package>/.rev` atomically via a staging file + rename.
 ///
 /// Creates the package directory if it doesn't exist.
-pub fn write_rev(name: &str, rev: &RevSidecar) -> Result<(), StoreError> {
-    let pkg_dir = package_dir(name)?;
+pub fn write_rev_in(paths: &AnvilPaths, name: &str, rev: &RevSidecar) -> Result<(), StoreError> {
+    let pkg_dir = package_dir_in(paths, name)?;
     std::fs::create_dir_all(&pkg_dir)?;
 
-    let target = rev_file(name)?;
+    let target = rev_file_in(paths, name)?;
     // Write to a staging file alongside the target, then rename atomically.
     let staging = target.with_extension("rev.tmp");
     std::fs::write(&staging, rev.to_string())?;
     std::fs::rename(&staging, &target)?;
     Ok(())
+}
+
+/// Write `<package>/.rev` atomically via a staging file + rename.
+pub fn write_rev(name: &str, rev: &RevSidecar) -> Result<(), StoreError> {
+    write_rev_in(&AnvilPaths::from_xdg()?, name, rev)
 }
 
 // ── Checksum sidecar ─────────────────────────────────────────────────────────
@@ -283,11 +366,11 @@ impl ChecksumSidecar {
     /// Read the checksum sidecar for `tool`.
     ///
     /// Returns `Ok(None)` when the file is absent (no prior TOFU installs).
-    pub fn read(tool: &str) -> Result<Option<Self>, StoreError> {
+    pub fn read_in(paths: &AnvilPaths, tool: &str) -> Result<Option<Self>, StoreError> {
         // `tool` is joined into the checksums path — reject names that could
         // escape `checksums/` (e.g. `../…` or an absolute path).
         validate_name(tool)?;
-        let path = checksums_dir()?.join(format!("{tool}.toml"));
+        let path = checksums_dir_in(paths)?.join(format!("{tool}.toml"));
         match std::fs::read_to_string(&path) {
             Ok(s) => Ok(Some(Self::from_toml(&s)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -295,16 +378,26 @@ impl ChecksumSidecar {
         }
     }
 
+    /// Read the checksum sidecar for `tool`.
+    pub fn read(tool: &str) -> Result<Option<Self>, StoreError> {
+        Self::read_in(&AnvilPaths::from_xdg()?, tool)
+    }
+
     /// Write the checksum sidecar for `tool` atomically (tmpfile + rename).
-    pub fn write(&self, tool: &str) -> Result<(), StoreError> {
+    pub fn write_in(&self, paths: &AnvilPaths, tool: &str) -> Result<(), StoreError> {
         // Same escape guard as `read` — this path is written to.
         validate_name(tool)?;
-        let dir = checksums_dir()?;
+        let dir = checksums_dir_in(paths)?;
         let target = dir.join(format!("{tool}.toml"));
         let staging = target.with_extension("toml.tmp");
         std::fs::write(&staging, self.to_toml())?;
         std::fs::rename(&staging, &target)?;
         Ok(())
+    }
+
+    /// Write the checksum sidecar for `tool` atomically (tmpfile + rename).
+    pub fn write(&self, tool: &str) -> Result<(), StoreError> {
+        self.write_in(&AnvilPaths::from_xdg()?, tool)
     }
 }
 
@@ -377,12 +470,18 @@ fn strip_one_quote(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // Serializes all env-mutating tests within a single `cargo test` process.
-    // Under nextest the `anvil-env` group (max-threads = 1) provides the same
-    // guarantee across processes.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// Build an [`AnvilPaths`] rooted at a fresh `TempDir`'s `data` / `cache`
+    /// subdirs. Returned alongside the `TempDir` so callers keep it alive for
+    /// the duration of the test (it deletes its contents on drop).
+    fn temp_paths() -> (tempfile::TempDir, AnvilPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AnvilPaths {
+            data_root: tmp.path().join("data").join("anvil"),
+            cache_root: tmp.path().join("cache").join("anvil"),
+        };
+        (tmp, paths)
+    }
 
     // ── Name validation (no I/O, parallel-safe) ─────────────────────────────
 
@@ -500,115 +599,60 @@ mod tests {
         assert_eq!(parsed, rev);
     }
 
-    // ── Path resolution tests (env-mutating — serialized via nextest group) ──
+    // ── Path resolution tests (explicit AnvilPaths — no env, parallel-safe) ──
 
     #[test]
     fn data_root_honors_xdg_data_home() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-        let root = data_root().unwrap();
-        assert_eq!(root, tmp.path().join("anvil"));
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        let (_tmp, paths) = temp_paths();
+        let root = data_root_in(&paths);
+        assert_eq!(root, paths.data_root);
     }
 
     #[test]
     fn cache_root_honors_xdg_cache_home() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", tmp.path());
-        }
-        let root = cache_root().unwrap();
-        assert_eq!(root, tmp.path().join("anvil"));
-        unsafe {
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let (_tmp, paths) = temp_paths();
+        let root = cache_root_in(&paths);
+        assert_eq!(root, paths.cache_root);
     }
 
     #[test]
     fn packages_dir_is_under_data_root() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-        let pd = packages_dir().unwrap();
-        assert_eq!(pd, tmp.path().join("anvil").join("packages"));
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        let (_tmp, paths) = temp_paths();
+        let pd = packages_dir_in(&paths);
+        assert_eq!(pd, paths.data_root.join("packages"));
     }
 
     #[test]
     fn package_dir_appends_name() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-        let pd = package_dir("rust-analyzer").unwrap();
-        assert_eq!(
-            pd,
-            tmp.path()
-                .join("anvil")
-                .join("packages")
-                .join("rust-analyzer")
-        );
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        let (_tmp, paths) = temp_paths();
+        let pd = package_dir_in(&paths, "rust-analyzer").unwrap();
+        assert_eq!(pd, paths.data_root.join("packages").join("rust-analyzer"));
     }
 
     #[test]
     fn bin_dir_is_under_data_root() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-        let bd = bin_dir().unwrap();
-        assert_eq!(bd, tmp.path().join("anvil").join("bin"));
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        let (_tmp, paths) = temp_paths();
+        let bd = bin_dir_in(&paths);
+        assert_eq!(bd, paths.data_root.join("bin"));
     }
 
     #[test]
     fn read_rev_returns_none_for_absent_package() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-        let result = read_rev("nonexistent-tool").unwrap();
+        let (_tmp, paths) = temp_paths();
+        let result = read_rev_in(&paths, "nonexistent-tool").unwrap();
         assert!(result.is_none());
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
     }
 
     #[test]
     fn write_then_read_rev_round_trip() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
+        let (_tmp, paths) = temp_paths();
         let rev = RevSidecar {
             version: "2025-01-13".to_string(),
             sha256: "deadbeef".to_string(),
         };
-        write_rev("rust-analyzer", &rev).unwrap();
-        let read_back = read_rev("rust-analyzer").unwrap();
+        write_rev_in(&paths, "rust-analyzer", &rev).unwrap();
+        let read_back = read_rev_in(&paths, "rust-analyzer").unwrap();
         assert_eq!(read_back, Some(rev));
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
     }
 
     // ── I/O tests that use a tempdir without env mutation ────────────────────
@@ -814,15 +858,11 @@ mod tests {
         assert_eq!(parsed, sidecar);
     }
 
-    // ── ChecksumSidecar env-mutating I/O tests (XDG_DATA_HOME respected) ────
+    // ── ChecksumSidecar I/O tests (explicit AnvilPaths — no env) ────────────
 
     #[test]
     fn checksum_sidecar_xdg_data_home_respected() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         let mut sidecar = ChecksumSidecar::default();
         sidecar.set(
@@ -830,37 +870,32 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567",
         );
-        sidecar.write("my-tool").unwrap();
+        sidecar.write_in(&paths, "my-tool").unwrap();
 
-        let read_back = ChecksumSidecar::read("my-tool").unwrap();
+        let read_back = ChecksumSidecar::read_in(&paths, "my-tool").unwrap();
         assert_eq!(read_back, Some(sidecar));
 
-        // Path must be inside XDG_DATA_HOME.
-        let expected_path = tmp
-            .path()
-            .join("anvil")
-            .join("checksums")
-            .join("my-tool.toml");
-        assert!(expected_path.exists(), "sidecar must live in XDG_DATA_HOME");
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        // Path must be inside the injected data root.
+        let expected_path = paths.data_root.join("checksums").join("my-tool.toml");
+        assert!(
+            expected_path.exists(),
+            "sidecar must live under paths.data_root"
+        );
     }
 
     #[test]
     fn checksum_sidecar_read_returns_none_for_absent_tool() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", tmp.path());
-        }
-
-        let result = ChecksumSidecar::read("nonexistent-tool").unwrap();
+        let (_tmp, paths) = temp_paths();
+        let result = ChecksumSidecar::read_in(&paths, "nonexistent-tool").unwrap();
         assert!(result.is_none());
+    }
 
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+    // ── AnvilPaths::from_xdg smoke test (reads live env, never mutates it) ──
+
+    #[test]
+    fn anvil_paths_from_xdg_resolves_anvil_suffix() {
+        let paths = AnvilPaths::from_xdg().unwrap();
+        assert!(paths.data_root.ends_with("anvil"));
+        assert!(paths.cache_root.ends_with("anvil"));
     }
 }

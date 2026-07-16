@@ -394,6 +394,7 @@ pub fn resolve_expected_sha(
     tool: &str,
     version: &str,
     triple: &str,
+    paths: &store::AnvilPaths,
 ) -> Result<ExpectedSha, InstallError> {
     // 1. Check manifest pin.
     if let Some(manifest_sha) = gh.sha256.get(triple)
@@ -403,7 +404,7 @@ pub fn resolve_expected_sha(
     }
 
     // 2. Check sidecar cache.
-    if let Some(sidecar) = ChecksumSidecar::read(tool)?
+    if let Some(sidecar) = ChecksumSidecar::read_in(paths, tool)?
         && let Some(cached) = sidecar.get(version, triple)
     {
         return Ok(ExpectedSha::Cached(cached.to_string()));
@@ -424,7 +425,8 @@ impl Install for GithubInstaller {
         spec: &ToolSpec,
         progress: &dyn Fn(InstallStatus),
     ) -> Result<PathBuf, InstallError> {
-        install_github_inner(name, spec, real_download, progress)
+        let paths = store::AnvilPaths::from_xdg()?;
+        install_github_inner(name, spec, &paths, real_download, progress)
     }
 }
 
@@ -470,11 +472,17 @@ fn real_download(
 
 /// Testable core of the Github install pipeline.
 ///
+/// `paths` selects the data/cache roots — production callers pass
+/// `store::AnvilPaths::from_xdg()`; tests pass an `AnvilPaths` built from a
+/// per-test `TempDir` so parallel tests can never collide on disk, even when
+/// reusing the same `name` (audit-r2 fix 4).
+///
 /// `download` is a closure `(url, dest_path, progress) -> Result<(), InstallError>`.
 /// Production: `real_download`. Tests: copy fixture bytes.
 pub fn install_github_inner(
     name: &str,
     spec: &ToolSpec,
+    paths: &store::AnvilPaths,
     download: impl Fn(&str, &Path, &dyn Fn(InstallStatus)) -> Result<(), InstallError>,
     progress: &dyn Fn(InstallStatus),
 ) -> Result<PathBuf, InstallError> {
@@ -495,7 +503,7 @@ pub fn install_github_inner(
 
     // 1. Detect triple → resolve expected sha (manifest pin | cached TOFU | first-time TOFU).
     let triple = host_triple()?;
-    let expected = resolve_expected_sha(gh, name, &spec.version, triple)?;
+    let expected = resolve_expected_sha(gh, name, &spec.version, triple, paths)?;
 
     // 2. Build download URL.
     let asset = gh
@@ -508,8 +516,7 @@ pub fn install_github_inner(
     );
 
     // 3. Download to staging file.
-    let cache = store::cache_root()?;
-    let staging_dir = cache.join("staging").join(name);
+    let staging_dir = paths.cache_root.join("staging").join(name);
     std::fs::create_dir_all(&staging_dir)?;
 
     let ext = asset_ext(&asset);
@@ -562,9 +569,9 @@ pub fn install_github_inner(
     // 6b. TOFU: only now — the archive extracted cleanly and contains the
     // expected binary — do we trust this hash and record it as the baseline.
     if is_tofu {
-        let mut sidecar = ChecksumSidecar::read(name)?.unwrap_or_default();
+        let mut sidecar = ChecksumSidecar::read_in(paths, name)?.unwrap_or_default();
         sidecar.set(&spec.version, triple, &actual_sha);
-        sidecar.write(name)?;
+        sidecar.write_in(paths, name)?;
         progress(InstallStatus::TofuRecorded {
             triple: triple.to_string(),
             sha256: actual_sha.clone(),
@@ -576,7 +583,7 @@ pub fn install_github_inner(
 
     // 8. Two-stage rename: staging → final.
     progress(InstallStatus::Installing);
-    let final_pkg = store::package_dir(name)?;
+    let final_pkg = store::package_dir_in(paths, name)?;
     // Ensure the parent packages/ directory exists before attempting rename.
     if let Some(parent) = final_pkg.parent() {
         std::fs::create_dir_all(parent)?;
@@ -607,7 +614,7 @@ pub fn install_github_inner(
     }
 
     // 9. Symlink into bin/.
-    let bin_dir = store::bin_dir()?;
+    let bin_dir = store::bin_dir_in(paths);
     std::fs::create_dir_all(&bin_dir)?;
     let link = bin_dir.join(&spec.bin);
     let bin_abs = final_pkg.join(&rel_bin);
@@ -618,7 +625,7 @@ pub fn install_github_inner(
         version: spec.version.clone(),
         sha256: recorded_sha,
     };
-    store::write_rev(name, &rev)?;
+    store::write_rev_in(paths, name, &rev)?;
 
     // 11. Done.
     let bin_path = bin_abs;
@@ -798,10 +805,11 @@ fn finalize_install(
     spec: &ToolSpec,
     bin_path_in_pkg: &Path,
     sha: &str,
+    paths: &store::AnvilPaths,
     progress: &dyn Fn(InstallStatus),
 ) -> Result<PathBuf, InstallError> {
     // 1. Symlink into bin/.
-    let bin_dir = store::bin_dir()?;
+    let bin_dir = store::bin_dir_in(paths);
     std::fs::create_dir_all(&bin_dir)?;
     let link = bin_dir.join(&spec.bin);
     atomic_symlink(&link, bin_path_in_pkg)?;
@@ -811,7 +819,7 @@ fn finalize_install(
         version: spec.version.clone(),
         sha256: sha.to_string(),
     };
-    store::write_rev(name, &rev)?;
+    store::write_rev_in(paths, name, &rev)?;
 
     // 3. Done.
     let bin_path = bin_path_in_pkg.to_path_buf();
@@ -840,8 +848,10 @@ impl Install for CargoInstaller {
         // an option-like value (e.g. `--path=…`) would be argument injection.
         reject_option_like(&cargo.crate_name)?;
 
+        let paths = store::AnvilPaths::from_xdg()?;
+
         // 1. Build the install root.
-        let install_root = store::package_dir(name)?;
+        let install_root = store::package_dir_in(&paths, name)?;
         std::fs::create_dir_all(&install_root)?;
 
         progress(InstallStatus::Installing);
@@ -873,7 +883,7 @@ impl Install for CargoInstaller {
         }
 
         // 3. Symlink, .rev, Done.
-        finalize_install(name, spec, &bin_path, "", progress)
+        finalize_install(name, spec, &bin_path, "", &paths, progress)
     }
 }
 
@@ -936,8 +946,10 @@ impl Install for NpmInstaller {
         // option-like value (e.g. `-g`) would be argument injection.
         reject_option_like(&npm.package)?;
 
+        let paths = store::AnvilPaths::from_xdg()?;
+
         // 1. Prepare package directory.
-        let pkg_dir = store::package_dir(name)?;
+        let pkg_dir = store::package_dir_in(&paths, name)?;
         let node_modules_bin = pkg_dir.join("node_modules").join(".bin");
         std::fs::create_dir_all(&node_modules_bin)?;
 
@@ -964,7 +976,7 @@ impl Install for NpmInstaller {
         }
 
         // 4. Symlink, .rev, Done.
-        finalize_install(name, spec, &bin_in_pkg, "", progress)
+        finalize_install(name, spec, &bin_in_pkg, "", &paths, progress)
     }
 }
 
@@ -996,7 +1008,8 @@ impl Install for PipInstaller {
         // option-like value would be argument injection into pip.
         reject_option_like(&pip.package)?;
 
-        let pkg_dir = store::package_dir(name)?;
+        let paths = store::AnvilPaths::from_xdg()?;
+        let pkg_dir = store::package_dir_in(&paths, name)?;
         let venv_dir = pkg_dir.join("venv");
         std::fs::create_dir_all(&pkg_dir)?;
 
@@ -1031,7 +1044,7 @@ impl Install for PipInstaller {
         }
 
         // 4. Symlink, .rev, Done.
-        finalize_install(name, spec, &bin_in_venv, "", progress)
+        finalize_install(name, spec, &bin_in_venv, "", &paths, progress)
     }
 }
 
@@ -1059,8 +1072,10 @@ impl Install for GoInstaller {
         // option-like value would be argument injection into `go install`.
         reject_option_like(&go.module)?;
 
+        let paths = store::AnvilPaths::from_xdg()?;
+
         // 1. Prepare isolated GOBIN directory.
-        let pkg_dir = store::package_dir(name)?;
+        let pkg_dir = store::package_dir_in(&paths, name)?;
         let gobin_dir = pkg_dir.join("bin");
         std::fs::create_dir_all(&gobin_dir)?;
 
@@ -1086,7 +1101,7 @@ impl Install for GoInstaller {
         }
 
         // 4. Symlink, .rev, Done.
-        finalize_install(name, spec, &bin_in_pkg, "", progress)
+        finalize_install(name, spec, &bin_in_pkg, "", &paths, progress)
     }
 }
 
@@ -1096,9 +1111,23 @@ impl Install for GoInstaller {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
 
     use crate::manifest::{GithubMethod, ToolCategory};
+
+    /// Build a `store::AnvilPaths` rooted at a fresh `TempDir`'s `data` /
+    /// `cache` subdirs — the per-test-isolation seam that replaces
+    /// `std::env::set_var(XDG_DATA_HOME/XDG_CACHE_HOME)` (audit-r2 fix 4).
+    /// Two tests using the SAME tool `name` against two different
+    /// `temp_paths()` results can never collide on disk, so nothing here
+    /// needs a `Mutex` or nextest's `anvil-env` serialization group anymore.
+    fn temp_paths() -> (tempfile::TempDir, store::AnvilPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = store::AnvilPaths {
+            data_root: tmp.path().join("data").join("anvil"),
+            cache_root: tmp.path().join("cache").join("anvil"),
+        };
+        (tmp, paths)
+    }
 
     #[test]
     fn copy_capped_bounds_output() {
@@ -1122,11 +1151,6 @@ mod tests {
         );
         assert!(err.is_err(), "copy beyond remaining budget must error");
     }
-
-    // Serializes all env-mutating tests within a single `cargo test` process.
-    // Under nextest the `anvil-env` group (max-threads = 1) provides the same
-    // guarantee across processes.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // SHA-256 of the fixture files (computed once, stored here).
     // Re-run `sha256sum tests/fixtures/hello.*` to verify.
@@ -1317,8 +1341,15 @@ mod tests {
             Err(_) => return, // skip on unsupported platform
         };
         let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
-        let err = install_github_inner("../evil", &spec, stub_download("hello.tar.gz"), &|_| {})
-            .unwrap_err();
+        let (_tmp, paths) = temp_paths();
+        let err = install_github_inner(
+            "../evil",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        )
+        .unwrap_err();
         assert!(
             matches!(err, InstallError::PathEscape(_)),
             "expected PathEscape, got {err:?}"
@@ -1389,7 +1420,10 @@ mod tests {
 
     #[test]
     fn sha256_mismatch_returns_checksum_mismatch() {
-        let tmp = tempfile::tempdir().unwrap();
+        // Explicit per-test paths (audit-r2 fix 4) — this test used to touch
+        // the REAL XDG store (no env override, no lock) and collide with
+        // every other test using tool name "hello".
+        let (_tmp, paths) = temp_paths();
 
         // Use current host triple so host_triple() succeeds.
         let triple = host_triple().unwrap();
@@ -1398,6 +1432,7 @@ mod tests {
         let result = install_github_inner(
             "hello",
             &spec,
+            &paths,
             |_url, dest, progress| {
                 let bytes = fixture_bytes("hello.tar.gz");
                 std::fs::write(dest, &bytes)?;
@@ -1410,14 +1445,10 @@ mod tests {
             &|_| {},
         );
 
-        // Override XDG paths to tmp so we don't touch the real store.
-        // We cannot easily override XDG here, so just check we get a
-        // ChecksumMismatch before any I/O to the store happens.
         assert!(
             matches!(result, Err(InstallError::ChecksumMismatch { .. })),
             "got: {result:?}"
         );
-        let _ = tmp;
     }
 
     // ── missing triple falls through to TOFU ─────────────────────────────────
@@ -1429,8 +1460,9 @@ mod tests {
         // return Io(NotFound) — we never reach MissingChecksum.
         // On unsupported platforms, UnsupportedTriple fires first.
         //
-        // Use a unique tool name to avoid interference from staging files
-        // left by other tests running against the same real XDG cache.
+        // Explicit per-test paths (audit-r2 fix 4), plus a unique tool name
+        // as a second layer of isolation.
+        let (_tmp, paths) = temp_paths();
         let mut sha256 = BTreeMap::new();
         sha256.insert("nonexistent-triple".to_string(), "abc".to_string());
         let spec = ToolSpec {
@@ -1448,6 +1480,7 @@ mod tests {
         let result = install_github_inner(
             "noop-tofu-test-tool-unique",
             &spec,
+            &paths,
             |_, _, _| Ok(()),
             &|_| {},
         );
@@ -1475,6 +1508,10 @@ mod tests {
             Err(_) => return, // skip on unsupported platform
         };
 
+        // Explicit per-test paths (audit-r2 fix 4) — this test used to touch
+        // the REAL XDG store (no env override, no lock).
+        let (_tmp, paths) = temp_paths();
+
         // The hello.tar.gz contains `bin/hello` — requesting `nonexistent`
         // should trigger BinNotFound.
         let spec = github_spec(
@@ -1484,8 +1521,13 @@ mod tests {
             "nonexistent",
         );
 
-        let result =
-            install_github_inner("nonexistent", &spec, stub_download("hello.tar.gz"), &|_| {});
+        let result = install_github_inner(
+            "nonexistent",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        );
 
         assert!(
             matches!(result, Err(InstallError::BinNotFound(_))),
@@ -1513,35 +1555,27 @@ mod tests {
         }
     }
 
-    // ── full Github pipeline (with temp XDG dirs via env override) ────────────
+    // ── full Github pipeline (explicit per-test AnvilPaths) ───────────────────
 
-    /// Full end-to-end Github pipeline exercised via environment-variable
-    /// XDG override and stub downloader.  Serialized via the `anvil-env`
-    /// nextest group (`max-threads = 1`) at the workspace root.
+    /// Full end-to-end Github pipeline against a per-test `AnvilPaths` and
+    /// stub downloader — no env mutation, so no lock or nextest group needed.
     #[cfg(unix)]
     #[test]
     fn full_github_pipeline_tar_gz() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         let triple = host_triple().unwrap();
         let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
 
         let statuses: std::sync::Mutex<Vec<InstallStatus>> = std::sync::Mutex::new(Vec::new());
 
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|s| {
-            statuses.lock().unwrap().push(s.clone())
-        });
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|s| statuses.lock().unwrap().push(s.clone()),
+        );
 
         let bin_path = result.expect("full pipeline must succeed");
         assert!(bin_path.exists(), "installed binary must exist");
@@ -1559,18 +1593,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stale_extract_dir_is_cleared_before_extraction() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         // Simulate a leftover partial extraction from a failed run.
-        let stale = cache_dir
-            .path()
-            .join("anvil")
+        let stale = paths
+            .cache_root
             .join("staging")
             .join("hello")
             .join("extract")
@@ -1580,15 +1607,16 @@ mod tests {
 
         let triple = host_triple().unwrap();
         let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|_| {});
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        );
 
         result.expect("pipeline must succeed");
-        let final_pkg = data_dir.path().join("anvil").join("packages").join("hello");
+        let final_pkg = paths.data_root.join("packages").join("hello");
         assert!(
             final_pkg.join("bin").join("hello").exists(),
             "fresh bin must be installed"
@@ -1603,23 +1631,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn full_github_pipeline_zip() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         let triple = host_triple().unwrap();
         let spec = github_spec(triple, HELLO_ZIP_SHA, "hello-{triple}.zip", "hello");
 
-        let result = install_github_inner("hello", &spec, stub_download("hello.zip"), &|_| {});
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result =
+            install_github_inner("hello", &spec, &paths, stub_download("hello.zip"), &|_| {});
 
         let bin_path = result.expect("zip pipeline must succeed");
         assert!(bin_path.exists());
@@ -1727,15 +1745,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn finalize_install_creates_symlink_and_rev() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let data_dir = tempfile::tempdir().unwrap();
-        let _cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         // Create a fake binary inside a fake package dir.
-        let pkg_dir = data_dir.path().join("anvil").join("packages").join("taplo");
+        let pkg_dir = paths.data_root.join("packages").join("taplo");
         std::fs::create_dir_all(&pkg_dir).unwrap();
         let fake_bin = pkg_dir.join("bin").join("taplo");
         std::fs::create_dir_all(fake_bin.parent().unwrap()).unwrap();
@@ -1744,19 +1757,15 @@ mod tests {
         let spec = make_cargo_spec("taplo");
         let statuses: std::sync::Mutex<Vec<InstallStatus>> = std::sync::Mutex::new(Vec::new());
 
-        let result = finalize_install("taplo", &spec, &fake_bin, "", &|s| {
+        let result = finalize_install("taplo", &spec, &fake_bin, "", &paths, &|s| {
             statuses.lock().unwrap().push(s.clone());
         });
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
 
         let bin_path = result.expect("finalize_install must succeed");
         assert_eq!(bin_path, fake_bin);
 
         // Symlink must exist in bin/.
-        let link = data_dir.path().join("anvil").join("bin").join("taplo");
+        let link = paths.data_root.join("bin").join("taplo");
         assert!(link.exists(), "symlink must exist at {}", link.display());
 
         // .rev sidecar must contain the version.
@@ -1781,31 +1790,23 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn finalize_install_overwrites_stale_symlink() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let data_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         // Bin dir with a stale symlink pointing nowhere.
-        let bin_dir = data_dir.path().join("anvil").join("bin");
+        let bin_dir = paths.data_root.join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let stale_link = bin_dir.join("taplo");
         #[cfg(unix)]
         std::os::unix::fs::symlink("/nonexistent/old/taplo", &stale_link).unwrap();
 
         // Fresh fake binary.
-        let pkg_dir = data_dir.path().join("anvil").join("packages").join("taplo");
+        let pkg_dir = paths.data_root.join("packages").join("taplo");
         let fake_bin = pkg_dir.join("bin").join("taplo");
         std::fs::create_dir_all(fake_bin.parent().unwrap()).unwrap();
         std::fs::write(&fake_bin, b"#!/bin/sh\necho hi\n").unwrap();
 
         let spec = make_cargo_spec("taplo");
-        let result = finalize_install("taplo", &spec, &fake_bin, "", &|_| {});
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
+        let result = finalize_install("taplo", &spec, &fake_bin, "", &paths, &|_| {});
 
         result.expect("finalize_install must succeed over stale link");
 
@@ -1842,30 +1843,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tofu_first_install_records_sha_to_sidecar() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::store::ChecksumSidecar;
 
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         let triple = host_triple().unwrap();
         let spec = tofu_github_spec(triple, "hello-{triple}.tar.gz", "hello");
 
         let recorded_tofu = std::cell::Cell::new(false);
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|s| {
-            if matches!(s, InstallStatus::TofuRecorded { .. }) {
-                recorded_tofu.set(true);
-            }
-        });
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|s| {
+                if matches!(s, InstallStatus::TofuRecorded { .. }) {
+                    recorded_tofu.set(true);
+                }
+            },
+        );
 
         result.expect("TOFU first install must succeed");
         assert!(
@@ -1874,11 +1870,7 @@ mod tests {
         );
 
         // Sidecar must have been written with the correct hash.
-        let sidecar_path = data_dir
-            .path()
-            .join("anvil")
-            .join("checksums")
-            .join("hello.toml");
+        let sidecar_path = paths.data_root.join("checksums").join("hello.toml");
         assert!(
             sidecar_path.exists(),
             "checksum sidecar must exist after TOFU install"
@@ -1904,14 +1896,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tofu_does_not_record_when_bin_missing() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
+        let (_tmp, paths) = temp_paths();
 
         let triple = host_triple().unwrap();
         // The fixture archive contains `hello`, not `nonexistent-bin`, so
@@ -1919,23 +1904,20 @@ mod tests {
         let spec = tofu_github_spec(triple, "hello-{triple}.tar.gz", "nonexistent-bin");
 
         let recorded_tofu = std::cell::Cell::new(false);
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|s| {
-            if matches!(s, InstallStatus::TofuRecorded { .. }) {
-                recorded_tofu.set(true);
-            }
-        });
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|s| {
+                if matches!(s, InstallStatus::TofuRecorded { .. }) {
+                    recorded_tofu.set(true);
+                }
+            },
+        );
 
-        let sidecar_path = data_dir
-            .path()
-            .join("anvil")
-            .join("checksums")
-            .join("hello.toml");
+        let sidecar_path = paths.data_root.join("checksums").join("hello.toml");
         let sidecar_exists = sidecar_path.exists();
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
 
         assert!(
             matches!(result, Err(InstallError::BinNotFound(_))),
@@ -1954,32 +1936,26 @@ mod tests {
     /// Second TOFU install (sidecar present) enforces the cached SHA.
     #[test]
     fn tofu_second_install_enforces_cached_sha() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::store::ChecksumSidecar;
 
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
-
+        let (_tmp, paths) = temp_paths();
         let triple = host_triple().unwrap();
 
         // Pre-populate the sidecar with a different hash.
         let stale_hash = "aaaa000000000000000000000000000000000000000000000000000000000001";
         let mut sidecar = ChecksumSidecar::default();
         sidecar.set("v1.0", triple, stale_hash);
-        sidecar.write("hello").unwrap();
+        sidecar.write_in(&paths, "hello").unwrap();
 
         let spec = tofu_github_spec(triple, "hello-{triple}.tar.gz", "hello");
 
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|_| {});
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        );
 
         // The actual fixture hash differs from the stale_hash → ChecksumMismatch.
         assert!(
@@ -1992,33 +1968,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pinned_manifest_sha_overrides_sidecar() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::store::ChecksumSidecar;
 
-        let data_dir = tempfile::tempdir().unwrap();
-        let cache_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", data_dir.path());
-            std::env::set_var("XDG_CACHE_HOME", cache_dir.path());
-        }
-
+        let (_tmp, paths) = temp_paths();
         let triple = host_triple().unwrap();
 
         // Sidecar has a stale/wrong hash.
         let stale_hash = "bbbb000000000000000000000000000000000000000000000000000000000002";
         let mut sidecar = ChecksumSidecar::default();
         sidecar.set("v1.0", triple, stale_hash);
-        sidecar.write("hello").unwrap();
+        sidecar.write_in(&paths, "hello").unwrap();
 
         // Manifest is pinned to the CORRECT fixture hash — should succeed.
         let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
 
-        let result = install_github_inner("hello", &spec, stub_download("hello.tar.gz"), &|_| {});
-
-        unsafe {
-            std::env::remove_var("XDG_DATA_HOME");
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        );
 
         // Manifest pin overrides the stale sidecar → install succeeds.
         result.expect("pinned manifest hash must override stale sidecar and succeed");

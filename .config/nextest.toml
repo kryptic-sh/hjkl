@@ -13,17 +13,16 @@
 # payload bytes", spurious unwrap panics). `cargo test`'s single-binary thread
 # pool happened to honour the Mutex.
 #
-# ── anvil-env ────────────────────────────────────────────────────────────────
-# `hjkl-anvil`'s XDG path-resolution and full-pipeline tests mutate
-# `XDG_DATA_HOME` / `XDG_CACHE_HOME` via `std::env::set_var`. An in-process
-# `static ENV_LOCK: Mutex<()>` serializes them within a single `cargo test`
-# binary, but nextest's process-per-test model makes that lock useless across
-# processes. This group caps concurrent anvil test processes to 1 — same
-# effect as `--test-threads=1` but only for hjkl-anvil. The other ~1800+
-# workspace tests stay fully parallel.
-#
-# Proper fix (follow-up): use `std::env::var` lookup-at-call-time + per-test
-# temp dir injection so no global env mutation is needed.
+# ── anvil-env (REMOVED, audit-r2 fix 4) ───────────────────────────────────────
+# `hjkl-anvil`'s install-pipeline tests used to mutate `XDG_DATA_HOME` /
+# `XDG_CACHE_HOME` via `std::env::set_var`, serialized by an in-process
+# `static ENV_LOCK: Mutex<()>` that nextest's process-per-test model made
+# useless across processes (hence this group, capping concurrent anvil test
+# processes to 1). Two tests didn't even take the lock, colliding on the real
+# XDG store via the shared tool name "hello". Fixed properly: `AnvilPaths`
+# threads explicit `data_root`/`cache_root` through `install_github_inner` and
+# every `store::` path helper, so tests inject a per-test `TempDir` instead of
+# touching process env at all. No serialization needed anymore — removed.
 #
 # ── grammar-cache ────────────────────────────────────────────────────────────
 # The `#[ignore]`'d real-grammar tests (run only by the dedicated "grammar
@@ -41,7 +40,6 @@
 
 [test-groups]
 clipboard-display = { max-threads = 1 }
-anvil-env = { max-threads = 1 }
 grammar-cache = { max-threads = 1 }
 pty-e2e = { max-threads = 1 }
 oracle-serial = { max-threads = 1 }
@@ -70,10 +68,6 @@ test-group = 'oracle-serial'
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
 test-group = 'clipboard-display'
-
-[[profile.default.overrides]]
-filter = 'package(hjkl-anvil)'
-test-group = 'anvil-env'
 
 [[profile.default.overrides]]
 # All grammar-cloning bonsai fold tests share the on-disk grammar cache; run
