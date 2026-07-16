@@ -55,3 +55,58 @@ initial_cursor = [0, 0]
 keys = "3J"
 expected_buffer = "a b c\nd\n"
 expected_mode = "normal"
+
+# ─── B6: leading-zero width preservation ───────────────────────────────────
+
+# `<C-x>` on a zero-padded decimal preserves the digit width.
+[[cases]]
+name = "leading_zero_ctrl_x"
+initial_buffer = "007\n"
+initial_cursor = [0, 0]
+keys = "<C-x>"
+expected_buffer = "006\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# Carrying into a new digit no longer needs padding — "099" + 1 = "100"
+# already fills the original width naturally.
+[[cases]]
+name = "leading_zero_carry_no_extra_padding"
+initial_buffer = "099\n"
+initial_cursor = [0, 0]
+keys = "<C-a>"
+expected_buffer = "100\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# Negative zero-padded numbers: the `-` sign is never part of the padded
+# width, only the digits are.
+[[cases]]
+name = "leading_zero_negative"
+initial_buffer = "-007\n"
+initial_cursor = [0, 0]
+keys = "<C-a>"
+expected_buffer = "-006\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# Crossing zero into negative still zero-pads the digit portion.
+[[cases]]
+name = "leading_zero_crosses_into_negative"
+initial_buffer = "009\n"
+initial_cursor = [0, 0]
+keys = "20<C-x>"
+expected_buffer = "-011\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# No leading zero in the original — never pad the result, even when it
+# shrinks a digit ("10" -> "9", not "09").
+[[cases]]
+name = "no_leading_zero_no_padding_on_shrink"
+initial_buffer = "10\n"
+initial_cursor = [0, 0]
+keys = "<C-x>"
+expected_buffer = "9\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

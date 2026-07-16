@@ -279,7 +279,26 @@ pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
         let Ok(n) = s.parse::<i64>() else {
             return false;
         };
-        (span_start, span_end, n.saturating_add(delta).to_string())
+        let new_val = n as i128 + delta as i128;
+        // Vim zero-pads the result back to the original digit width, but
+        // only when the original number actually had a leading zero
+        // (`:h CTRL-A`): "10" <C-x> -> "9", not "09"; "007" <C-x> -> "006".
+        // The `-` sign is never part of the padded width — "-007" <C-a> ->
+        // "-006", and crossing zero into negative still pads the digits
+        // ("009" 20<C-x> -> "-011").
+        let digits: String = chars[digit_start..span_end].iter().collect();
+        let width = digits.len();
+        let new_s = if width > 1 && digits.starts_with('0') {
+            if new_val < 0 {
+                let mag = new_val.unsigned_abs();
+                format!("-{mag:0width$}")
+            } else {
+                format!("{new_val:0width$}")
+            }
+        } else {
+            new_val.to_string()
+        };
+        (span_start, span_end, new_s)
     };
 
     ed.push_undo();
