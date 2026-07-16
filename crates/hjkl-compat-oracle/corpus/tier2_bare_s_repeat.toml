@@ -1,0 +1,47 @@
+# B17 — bare `:s` (no /pattern/replacement/) repeats the last substitute's
+# pattern AND replacement. `:2s` (range, no args) repeats on line 2. `:s g`
+# / `:s 3` parse a bare flags/count tail. Driven via the nvim-api subprocess
+# (ex commands aren't dispatched by in-process key replay).
+
+# `:s/foo/X/<CR>:2s<CR>` — repeats the same pattern/replacement on line 2.
+[[cases]]
+name = "bare_s_repeats_on_addressed_line"
+initial_buffer = "foo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/<CR>:2s<CR>"
+expected_buffer = "X bar\nX baz\n"
+expected_cursor = [1, 0]
+
+# `:s/foo/X/<CR>:2<CR>:s<CR>` — bare `:s` on the CURRENT line (no explicit
+# range) repeats at the cursor's line. `:2` (address-only ex command) moves
+# the cursor there first — a normal-mode `j` motion can't be used here
+# because the nvim-api driver only routes segments starting with `:` through
+# `nvim_command`; a mixed "j:s" segment would fall through to `nvim_input`,
+# which hjkl's engine FSM doesn't dispatch `:` from (see driver notes).
+[[cases]]
+name = "bare_s_repeats_on_current_line"
+initial_buffer = "foo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/<CR>:2<CR>:s<CR>"
+expected_buffer = "X bar\nX baz\n"
+expected_cursor = [1, 0]
+
+# `:s/foo/X/g<CR>:2s<CR>` — bare `:s` does NOT reuse the /g flag: only the
+# first match on line 2 is replaced.
+[[cases]]
+name = "bare_s_does_not_reuse_flags"
+initial_buffer = "foo foo\nfoo foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/g<CR>:2s<CR>"
+expected_buffer = "X X\nX foo\n"
+expected_cursor = [1, 0]
+
+# `:s/foo/X/<CR>:2s g<CR>` — bare `:s` WITH an explicit trailing flag DOES
+# apply that flag.
+[[cases]]
+name = "bare_s_with_explicit_g_flag"
+initial_buffer = "foo foo\nfoo foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/<CR>:2s g<CR>"
+expected_buffer = "X foo\nX X\n"
+expected_cursor = [1, 0]

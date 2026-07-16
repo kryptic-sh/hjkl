@@ -830,17 +830,51 @@ fn extract_leading_number(line: &str) -> i64 {
 ///
 /// On success the parsed `SubstituteCmd` is stored on the editor so `:&` / `:&&`
 /// can repeat it (part of #171).
+///
+/// # B17: bare `:s` (repeat last substitute)
+///
+/// When `args` (trimmed) is empty or doesn't start with `/`, vim treats this
+/// as "repeat the last substitute": both the PATTERN and the REPLACEMENT are
+/// reused from `editor.last_substitute()` (unlike `:s//rep/`, which reuses
+/// only `last_search()`'s pattern). Flags are NOT reused — `:s` alone always
+/// runs with default (no) flags; `:s g` / `:s 3` parse `args` as a bare
+/// flags+count tail via `parse_flags` (verified against nvim v0.12.4).
 fn substitute_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    use hjkl_engine::substitute::{apply_substitute, collect_substitute_matches, parse_substitute};
+    use hjkl_engine::substitute::{
+        SubstituteCmd, apply_substitute, collect_substitute_matches, parse_flags, parse_substitute,
+    };
 
-    // args already starts with `/` (the delimiter); pass straight to engine.
-    let mut cmd = match parse_substitute(args) {
-        Ok(c) => c,
-        Err(e) => return Some(ExEffect::Error(e.to_string())),
+    let trimmed = args.trim_start();
+    let mut cmd = if trimmed.starts_with('/') {
+        // args already starts with `/` (the delimiter); pass straight to engine.
+        match parse_substitute(args) {
+            Ok(c) => c,
+            Err(e) => return Some(ExEffect::Error(e.to_string())),
+        }
+    } else {
+        // Bare `:s [flags] [count]` — repeat the last substitute's pattern
+        // AND replacement (`:h :s` — "If a pattern is not given ... the
+        // pattern and replacement string ... are used from the last
+        // substitute").
+        let Some(prev) = editor.last_substitute() else {
+            return Some(ExEffect::Error(
+                "E33: No previous substitute regular expression".into(),
+            ));
+        };
+        let (flags, count) = match parse_flags(trimmed) {
+            Ok(fc) => fc,
+            Err(e) => return Some(ExEffect::Error(e.to_string())),
+        };
+        SubstituteCmd {
+            pattern: prev.pattern,
+            replacement: prev.replacement,
+            flags,
+            count,
+        }
     };
 
     // `&` flag: reuse the previous substitute's flags (`:h :s_flags`), unioned

@@ -182,6 +182,13 @@ async fn tier2_regex_magic_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_regex_magic.toml", "tier2_regex_magic").await;
 }
 
+/// B17: bare `:s` (no `/pattern/replacement/`) repeats the last substitute's
+/// pattern AND replacement — see `substitute_handler`'s bare-form branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_bare_s_repeat_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_bare_s_repeat.toml", "tier2_bare_s_repeat").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_case_indent_join_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

@@ -184,6 +184,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | :s/i flag (case)         | 2     | tier2_substitute.toml, nvim_api_tier.toml |
 | :g/ global               | 1     | tier2_substitute.toml                     |
 | & / :&                   | —     | TODO                                      |
+| bare :s (repeat last sub)| 4     | tier2_bare_s_repeat.toml                  |
 | g&                       | 2     | nvim_api_tier.toml                        |
 | smartcase + \c/\C        | 4     | nvim_api_tier.toml                        |
 | :s/c interactive confirm | —     | oracle skipped (#171)                     |

@@ -158,8 +158,27 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
     // capture refs, case escapes, and `~` per match.
     let replacement = raw_replacement.clone();
 
-    // The flags segment is `[flag-chars][ optional trailing count]`, e.g.
-    // `g 3`. Parse the leading flag characters, then an optional numeric count.
+    let (flags, count) = parse_flags(raw_flags)?;
+
+    Ok(SubstituteCmd {
+        pattern,
+        replacement,
+        flags,
+        count,
+    })
+}
+
+/// Parse a substitute flags+count tail: `[flag-chars][ optional trailing
+/// count]`, e.g. `"g"`, `"gi 3"`, `""`. This is the segment after the
+/// closing `/` delimiter in `:s/pat/rep/flags`, and — for [B17] bare
+/// `:s [flags] [count]` (repeat-last-substitute) — the ENTIRE argument
+/// string, since there's no delimiter at all in that form.
+///
+/// # Errors
+///
+/// Returns an error on an unrecognized flag character or non-numeric
+/// trailing text.
+pub fn parse_flags(raw_flags: &str) -> Result<(SubstFlags, Option<usize>), SubstError> {
     let mut flags = SubstFlags::default();
     let mut count: Option<usize> = None;
     let mut chars = raw_flags.chars().peekable();
@@ -198,13 +217,7 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
             _ => return Err(format!("trailing characters in substitute: {rest:?}")),
         }
     }
-
-    Ok(SubstituteCmd {
-        pattern,
-        replacement,
-        flags,
-        count,
-    })
+    Ok((flags, count))
 }
 
 /// Apply a parsed substitute command to `line_range` (0-based inclusive)
