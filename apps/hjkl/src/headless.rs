@@ -56,6 +56,15 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
     let mut exit_code = 0i32;
 
+    // Session-shared banks (registers, global marks, last :s command,
+    // abbrevs, search pattern, changelist), created ONCE up front and wired
+    // into every file's editor below — mirroring how `App::new` shares one
+    // bank across every window/split. Without this, each file got a fresh
+    // `vim_editor` with its own private banks, so e.g. a yank while
+    // processing one file was invisible while processing the next — unlike
+    // the TUI, where all editors share the six banks (audit R2, fix 4).
+    let banks = SharedBanks::new();
+
     for maybe_path in targets {
         let display_name = maybe_path
             .as_ref()
@@ -88,6 +97,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
         // --- build editor ---
         let host = DefaultHost::new();
         let mut editor = hjkl_vim::vim_editor(buffer, host, Options::default());
+        // Wire in the session-shared banks (see above) so registers/marks/
+        // last-substitute/abbrevs/search/changelist state set while
+        // processing one file is visible while processing the next.
+        banks.apply(&mut editor);
 
         // Track current save target. Starts as the source path; `:w <path>`
         // updates it so subsequent `:w` writes to the new location.
@@ -252,5 +265,139 @@ fn write_buffer(
             }
             std::fs::write(p, &content).map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
+    }
+}
+
+/// The six session-shared banks (registers, global marks, last `:s`
+/// command, abbrevs, search pattern, changelist) that every buffer-slot
+/// editor shares in the TUI (`App::new` / `App::nvim_create_buffer`), so
+/// e.g. a yank in one window is pasteable in another. `--headless` gave
+/// each file's editor its own private banks instead, so state set while
+/// processing one file (a register, a global mark, `&hlsearch` pattern, …)
+/// was lost by the time the next file's editor was built (audit R2, fix 4).
+///
+/// One `SharedBanks` is created per [`run`] call and applied to every
+/// file's editor via [`SharedBanks::apply`].
+struct SharedBanks {
+    registers: std::sync::Arc<std::sync::Mutex<hjkl_engine::Registers>>,
+    global_marks: std::sync::Arc<std::sync::Mutex<hjkl_engine::GlobalMarks>>,
+    last_substitute: std::sync::Arc<std::sync::Mutex<Option<hjkl_engine::SubstituteCmd>>>,
+    abbrevs: std::sync::Arc<std::sync::Mutex<Vec<hjkl_engine::Abbrev>>>,
+    search: std::sync::Arc<std::sync::Mutex<hjkl_engine::SearchBank>>,
+    // UNLIKE the TUI's per-`buffer_id`-keyed map (`App::change_banks`),
+    // headless files are processed strictly one at a time — there is no
+    // "switch back to a still-open earlier buffer" to preserve a distinct
+    // changelist for — so a single shared bank for the whole session
+    // suffices here.
+    change_bank: std::sync::Arc<std::sync::Mutex<hjkl_engine::ChangeBank>>,
+}
+
+impl SharedBanks {
+    fn new() -> Self {
+        Self {
+            registers: std::sync::Arc::new(
+                std::sync::Mutex::new(hjkl_engine::Registers::default()),
+            ),
+            global_marks: std::sync::Arc::new(std::sync::Mutex::new(
+                hjkl_engine::GlobalMarks::new(),
+            )),
+            last_substitute: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            abbrevs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            search: std::sync::Arc::new(std::sync::Mutex::new(hjkl_engine::SearchBank::default())),
+            change_bank: std::sync::Arc::new(std::sync::Mutex::new(
+                hjkl_engine::ChangeBank::default(),
+            )),
+        }
+    }
+
+    /// Point `editor` at this session's shared banks — the same six-setter
+    /// pattern `App::new`/`App::nvim_create_buffer` use to wire a freshly
+    /// created editor into the app-wide banks.
+    fn apply(&self, editor: &mut Editor<View, DefaultHost>) {
+        editor.set_registers_arc(self.registers.clone());
+        editor.set_global_marks_arc(self.global_marks.clone());
+        editor.set_last_substitute_arc(self.last_substitute.clone());
+        editor.set_abbrevs_arc(self.abbrevs.clone());
+        editor.set_search_arc(self.search.clone());
+        editor.set_change_bank_arc(self.change_bank.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression (audit R2, fix 4): before the fix, each file in a
+    /// `--headless a b …` run got a fresh `vim_editor` with NO shared
+    /// banks, so a register populated while processing one file was gone
+    /// by the time the next file's (independent) editor was built. Drives
+    /// real keystrokes (`yy` / `p`) through two SEPARATE editors — mirroring
+    /// how `run` builds one editor per file — wired to the same
+    /// `SharedBanks`, exactly as `run` wires every file's editor.
+    ///
+    /// (There is no ex-command-level way to exercise this: `:normal` is not
+    /// implemented and no other ex command currently writes a register, so
+    /// this has to drive the editor directly rather than through
+    /// `hjkl_ex::try_dispatch` — see the crate-level docs on `run`'s command
+    /// dispatch.)
+    #[test]
+    fn shared_banks_carry_a_yank_across_separate_editors() {
+        let banks = SharedBanks::new();
+
+        // "File A": yank its only line into the unnamed register.
+        let mut view_a = View::new();
+        BufferEdit::replace_all(&mut view_a, "hello from file a");
+        let mut editor_a = hjkl_vim::vim_editor(view_a, DefaultHost::new(), Options::default());
+        banks.apply(&mut editor_a);
+        for input in hjkl_engine::decode_macro("yy") {
+            hjkl_vim::dispatch_input(&mut editor_a, input);
+        }
+
+        // "File B": a wholly separate editor/buffer (as `run` builds fresh
+        // per file), wired to the SAME `SharedBanks`. Paste with no yank of
+        // its own first.
+        let mut view_b = View::new();
+        BufferEdit::replace_all(&mut view_b, "line already in file b");
+        let mut editor_b = hjkl_vim::vim_editor(view_b, DefaultHost::new(), Options::default());
+        banks.apply(&mut editor_b);
+        for input in hjkl_engine::decode_macro("p") {
+            hjkl_vim::dispatch_input(&mut editor_b, input);
+        }
+
+        let content_b = editor_b.buffer().content_joined();
+        assert!(
+            content_b.contains("hello from file a"),
+            "pasting in editor B must see the yank from editor A when both \
+             are wired to the same SharedBanks (mirrors --headless processing \
+             file A, then file B); got: {content_b:?}"
+        );
+    }
+
+    /// Sanity check for the regression test above: WITHOUT `SharedBanks`
+    /// (i.e. each editor's own default private registers), the same paste
+    /// must NOT see the other editor's yank — proving the assertion above
+    /// actually exercises bank-sharing and isn't trivially true.
+    #[test]
+    fn unshared_editors_do_not_carry_a_yank_across() {
+        let mut view_a = View::new();
+        BufferEdit::replace_all(&mut view_a, "hello from file a");
+        let mut editor_a = hjkl_vim::vim_editor(view_a, DefaultHost::new(), Options::default());
+        for input in hjkl_engine::decode_macro("yy") {
+            hjkl_vim::dispatch_input(&mut editor_a, input);
+        }
+
+        let mut view_b = View::new();
+        BufferEdit::replace_all(&mut view_b, "line already in file b");
+        let mut editor_b = hjkl_vim::vim_editor(view_b, DefaultHost::new(), Options::default());
+        for input in hjkl_engine::decode_macro("p") {
+            hjkl_vim::dispatch_input(&mut editor_b, input);
+        }
+
+        let content_b = editor_b.buffer().content_joined();
+        assert!(
+            !content_b.contains("hello from file a"),
+            "editors with independent (non-shared) registers must not see \
+             each other's yanks; got: {content_b:?}"
+        );
     }
 }

@@ -5420,7 +5420,10 @@ mod tests {
             Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
             other => panic!("expected an error array, got {other:?}"),
         };
-        assert_eq!(msg, "Index out of bounds", "strict OOB must use nvim's exact error text");
+        assert_eq!(
+            msg, "Index out of bounds",
+            "strict OOB must use nvim's exact error text"
+        );
 
         let resp = call(
             &mut app,
@@ -5521,11 +5524,7 @@ mod tests {
             );
             assert_eq!(
                 assert_ok(resp),
-                Value::Array(vec![
-                    Value::from("a"),
-                    Value::from("b"),
-                    Value::from("c"),
-                ]),
+                Value::Array(vec![Value::from("a"), Value::from("b"), Value::from("c"),]),
                 "in-range get_lines(0,-1) must return all lines regardless of strict={strict}"
             );
         }
