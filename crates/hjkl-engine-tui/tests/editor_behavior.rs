@@ -1435,7 +1435,7 @@ fn play_macro_returns_decoded_inputs() {
     let mut e = fresh_editor("hello");
     // Write "jj" into register 'a'.
     e.set_named_register_text('a', "jj".to_string());
-    let inputs = e.play_macro('a', 1);
+    let inputs = e.play_macro('a');
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[0].key, hjkl_engine::Key::Char('j'));
     assert_eq!(inputs[1].key, hjkl_engine::Key::Char('j'));
@@ -1449,21 +1449,24 @@ fn play_macro_at_uses_last_macro() {
     let mut e = fresh_editor("hello");
     e.set_named_register_text('a', "k".to_string());
     // Play 'a' first to set last_macro.
-    let _ = e.play_macro('a', 1);
+    let _ = e.play_macro('a');
     e.end_macro_replay();
     // Now `@@` should replay 'a' again.
-    let inputs = e.play_macro('@', 1);
+    let inputs = e.play_macro('@');
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].key, hjkl_engine::Key::Char('k'));
     e.end_macro_replay();
 }
 
 #[test]
-fn play_macro_with_count_repeats() {
+fn play_macro_returns_one_iteration_regardless_of_count() {
+    // Audit R2: the count in `3@a` is looped by the HOST — play_macro
+    // itself returns a single iteration so a huge count prefix can never
+    // materialize count x keys.len() inputs up front.
     let mut e = fresh_editor("hello");
     e.set_named_register_text('a', "j".to_string());
-    let inputs = e.play_macro('a', 3);
-    assert_eq!(inputs.len(), 3, "3@a must produce 3 inputs");
+    let inputs = e.play_macro('a');
+    assert_eq!(inputs.len(), 1, "play_macro must return one iteration");
     e.end_macro_replay();
 }
 

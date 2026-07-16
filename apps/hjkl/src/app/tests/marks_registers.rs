@@ -802,11 +802,12 @@ fn at_at_repeats_last_macro() {
 }
 
 #[test]
-fn play_macro_with_count_3() {
-    // Verify that Editor::play_macro with count=3 produces 3× the inputs,
-    // which is the mechanism underlying `3@a`. We call play_macro directly
-    // here because count-prefix buffering lives in the event_loop, above
-    // route_chord_key, and cannot be easily injected in unit-test context.
+fn play_macro_returns_single_iteration() {
+    // Audit R2: Editor::play_macro returns ONE iteration of the macro keys —
+    // the count is replayed iteratively by the host (`play_macro_chord`),
+    // never materialized as `keys × count` (the old `keys.repeat(count)`
+    // made `999999999@a` allocate multi-GB up front). The count-looping
+    // itself is covered by `count_then_play_macro_3at_a_plays_three_times`.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4\nline5\nline6");
     app.active_editor_mut().jump_cursor(0, 0);
@@ -820,30 +821,22 @@ fn play_macro_with_count_3() {
     });
     app.active_editor_mut().stop_macro_record();
 
-    // play_macro('a', 3) must return 3 inputs.
-    let inputs = app.active_editor_mut().play_macro('a', 3);
+    // play_macro('a') must return exactly one iteration (1 input).
+    let inputs = app.active_editor_mut().play_macro('a');
     app.active_editor_mut().end_macro_replay();
     assert_eq!(
         inputs.len(),
-        3,
-        "play_macro with count=3 must return 3 inputs"
+        1,
+        "play_macro must return one iteration of the macro keys"
     );
 
-    // Re-feed them through route_chord_key.
-    for input in inputs {
-        let ct_key = engine_input_to_key_event(input);
-        if ct_key.code != KeyCode::Null {
-            let consumed = app.route_chord_key(ct_key);
-            if !consumed {
-                hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
-            }
-            app.sync_viewport_from_editor();
-        }
-    }
+    // The host-side count loop replays it N times: `3@a` → row 3.
+    app.play_macro_chord('a', 3);
+    app.sync_viewport_from_editor();
     assert_eq!(
         app.active_editor().cursor().0,
         3,
-        "3× j motions must move cursor to row 3"
+        "play_macro_chord with count=3 must move cursor to row 3"
     );
 }
 
@@ -873,6 +866,121 @@ fn record_capital_appends_to_lowercase() {
         app.active_editor().cursor().0,
         start_row,
         "@a with capital append must replay j+k (net zero from row {start_row})"
+    );
+}
+
+// ── Audit R2: iterative / bounded macro replay ──────────────────────────────
+
+#[test]
+fn self_referential_macro_terminates_without_stack_overflow() {
+    // The classic recursive-macro idiom: register 'a' plays itself (`x@a`).
+    // Pre-fix this recursed one Rust stack frame per iteration through
+    // `route_chord_key` → stack overflow → process crash. Post-fix the replay
+    // is a flat work queue bounded by the nesting-depth cap, so it must
+    // TERMINATE with a user-visible abort error and a coherent editor state.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdef");
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.active_editor_mut()
+        .set_named_register_text('a', "x@a".to_string());
+
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+
+    // Replay finished (aborted at the depth cap) — flags and queue reset.
+    assert!(
+        !app.active_editor().is_replaying_macro(),
+        "replaying_macro must be cleared after an aborted replay"
+    );
+    assert!(
+        app.macro_replay.is_none(),
+        "macro replay queue must be torn down after abort"
+    );
+    // The abort must surface vim's E169 to the user.
+    assert!(
+        app.bus.last_body_or_empty().contains("E169"),
+        "aborted recursive replay must emit E169, got {:?}",
+        app.bus.last_body_or_empty()
+    );
+    // Each nesting level deleted at most one char; the 6-char line is empty
+    // long before the depth cap fires (x on an empty line is a no-op).
+    let text = app.active_editor().buffer().rope().to_string();
+    assert_eq!(
+        text.trim_end_matches('\n'),
+        "",
+        "recursive x@a must have consumed the whole line before aborting"
+    );
+}
+
+#[test]
+fn huge_count_macro_replay_is_bounded() {
+    // `999999999@a` — pre-fix `play_macro` materialized count × keys.len()
+    // Inputs up front (`keys.repeat(count)`) → multi-GB allocation. Post-fix
+    // the count is replayed iteratively (memory O(keys.len())) and the
+    // total-input cap aborts the replay with an error instead of freezing
+    // the UI for hours.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc");
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.active_editor_mut()
+        .set_named_register_text('a', "x".to_string());
+
+    // Accumulate the maximum count, then @a.
+    for _ in 0..9 {
+        app.pending_count.try_accumulate('9');
+    }
+    rck(&mut app, &['@', 'a']);
+
+    assert!(
+        !app.active_editor().is_replaying_macro(),
+        "replaying_macro must be cleared after the capped replay"
+    );
+    assert!(app.macro_replay.is_none(), "replay queue must be torn down");
+    assert!(
+        app.bus.last_body_or_empty().contains("E169"),
+        "input-cap abort must emit E169, got {:?}",
+        app.bus.last_body_or_empty()
+    );
+    // The three chars were consumed; the remaining reps were no-ops.
+    let text = app.active_editor().buffer().rope().to_string();
+    assert_eq!(
+        text.trim_end_matches('\n'),
+        "",
+        "xxx must have emptied the line"
+    );
+}
+
+#[test]
+fn nested_finite_macro_replays() {
+    // Register 'a' calls register 'b' (`x@b`), 'b' is a plain `x`.
+    // Finite nesting must splice into the same work queue and complete
+    // without hitting any cap: two chars deleted total.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdef");
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.active_editor_mut()
+        .set_named_register_text('a', "x@b".to_string());
+    app.active_editor_mut()
+        .set_named_register_text('b', "x".to_string());
+
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+
+    let text = app.active_editor().buffer().rope().to_string();
+    assert_eq!(
+        text.trim_end_matches('\n'),
+        "cdef",
+        "@a (x@b) must delete exactly two chars"
+    );
+    assert!(!app.active_editor().is_replaying_macro());
+    assert!(app.macro_replay.is_none());
+    assert!(
+        !app.bus.last_body_or_empty().contains("E169"),
+        "finite nesting must not trip the recursion guard"
     );
 }
 

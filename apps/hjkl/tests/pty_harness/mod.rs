@@ -28,6 +28,7 @@ pub mod filter;
 pub mod global_marks;
 pub mod harness;
 pub mod indent;
+pub mod macro_replay;
 pub mod paste;
 pub mod recovery;
 pub mod register_count;

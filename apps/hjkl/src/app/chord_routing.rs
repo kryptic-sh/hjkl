@@ -8,6 +8,50 @@ use super::App;
 use super::keymap_build::engine_input_to_key_event;
 use hjkl_vim::VimEditorExt;
 
+/// Maximum nested `@{reg}` expansion depth during a single macro replay.
+/// Mirrors vim's `'maxmapdepth'`-style guard: a register that (transitively)
+/// plays itself pushes one level per expansion; at the cap the whole replay
+/// chain aborts with E169 instead of overflowing the stack. The buffer is
+/// left in whatever state the replay reached (vim semantics — no rollback).
+const MACRO_MAX_DEPTH: usize = 100;
+
+/// Cap on the total number of inputs fed by one top-level `@{reg}`
+/// invocation (all repetitions and nested expansions included). The replay
+/// loop is synchronous — the UI cannot repaint or take Ctrl-C until it
+/// finishes — so a runaway `999999999@a` must abort with an error rather
+/// than freeze the editor. 200k inputs is far beyond any interactive macro
+/// workload while still aborting a runaway replay in well under a second.
+const MACRO_MAX_INPUTS: usize = 200_000;
+
+/// One entry in the macro-replay work queue.
+enum ReplayItem {
+    /// A decoded keystroke to feed through the routing stack.
+    Input(hjkl_engine::input::Input),
+    /// Sentinel marking the end of a nested `@{reg}` expansion: popping it
+    /// decrements the nesting depth counter.
+    DepthPop,
+}
+
+/// Explicit work queue for `@{reg}` macro replay (audit R2).
+///
+/// Replay is iterative: the top-level `PlayMacro` commit arm drains this
+/// queue in a flat loop, and a nested `@{reg}` encountered *during* the
+/// drain splices the callee's keys into the FRONT of the queue instead of
+/// recursing into `route_chord_key`'s replay arm. The Rust call stack
+/// therefore stays O(1) in replay depth; `depth`/`fed` bound the expansion
+/// (see [`MACRO_MAX_DEPTH`] / [`MACRO_MAX_INPUTS`]).
+#[derive(Default)]
+pub(crate) struct MacroReplayState {
+    /// Pending items, drained front-to-back.
+    queue: std::collections::VecDeque<ReplayItem>,
+    /// Current nested `@` expansion depth (top-level splice is depth 0).
+    depth: usize,
+    /// Total inputs fed to the routing stack this top-level invocation.
+    fed: usize,
+    /// Set when a cap fires; the drain loop stops and discards the queue.
+    aborted: bool,
+}
+
 impl App {
     /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
     /// for replaying unbound sequences to the engine.
@@ -92,6 +136,164 @@ impl App {
                 if !self.dispatch_keymap(ev, self.pending_count.peek().max(1), &mut replay) {
                     self.replay_to_engine(&replay);
                 }
+            }
+        }
+    }
+
+    /// `@{reg}` / `@@` — canonical entry for the `PlayMacro` commit arm
+    /// (production routing AND the `drive_key` test helper).
+    ///
+    /// Top-level invocation (no replay active) starts the iterative drain
+    /// loop; a nested invocation (a replayed input was itself `@{reg}`)
+    /// splices the callee's keys into the front of the active work queue.
+    /// Either way the Rust call stack stays O(1) in replay depth.
+    pub(crate) fn play_macro_chord(&mut self, reg: char, count: usize) {
+        if self.macro_replay.is_some() {
+            self.splice_macro_replay(reg, count);
+        } else {
+            self.run_macro_replay(reg, count);
+        }
+    }
+
+    /// Top-level `@{reg}` replay: drain the work queue iteratively.
+    ///
+    /// `count` repetitions are replayed by re-splicing `keys` once per round
+    /// (memory O(keys.len())), NOT by materializing `keys × count`. Replayed
+    /// inputs are re-fed through `route_chord_key`, falling through to the
+    /// engine for keys the chord layer does not consume — the same pattern
+    /// as the live event-loop key path. During replay
+    /// `is_replaying_macro() == true` so the recorder hook skips the
+    /// replayed inputs; `end_macro_replay` runs exactly once at the end, as
+    /// does `sync_after_engine_mutation` (including on abort — vim
+    /// semantics: the buffer keeps whatever state the replay reached).
+    fn run_macro_replay(&mut self, reg: char, count: usize) {
+        use crossterm::event::KeyCode;
+        debug_assert!(
+            self.macro_replay.is_none(),
+            "run_macro_replay must only start at top level"
+        );
+        let keys = self.active_editor_mut().play_macro(reg);
+        if keys.is_empty() {
+            // Unset / empty register — nothing to replay (play_macro leaves
+            // the replaying flag untouched in this case; clearing it anyway
+            // is harmless and preserves the previous arm's behavior).
+            self.active_editor_mut().end_macro_replay();
+            self.sync_after_engine_mutation();
+            return;
+        }
+        let reps = count.clamp(1, hjkl_vim::vim::MAX_COUNT);
+        self.macro_replay = Some(MacroReplayState::default());
+        'reps: for _ in 0..reps {
+            // Splice one repetition into the (empty-between-rounds) queue.
+            self.macro_replay
+                .as_mut()
+                .expect("macro_replay alive during drain")
+                .queue
+                .extend(keys.iter().copied().map(ReplayItem::Input));
+            while let Some(item) = self
+                .macro_replay
+                .as_mut()
+                .expect("macro_replay alive during drain")
+                .queue
+                .pop_front()
+            {
+                let input = match item {
+                    ReplayItem::DepthPop => {
+                        let st = self
+                            .macro_replay
+                            .as_mut()
+                            .expect("macro_replay alive during drain");
+                        st.depth = st.depth.saturating_sub(1);
+                        continue;
+                    }
+                    ReplayItem::Input(input) => input,
+                };
+                let over_cap = {
+                    let st = self
+                        .macro_replay
+                        .as_mut()
+                        .expect("macro_replay alive during drain");
+                    st.fed += 1;
+                    st.fed > MACRO_MAX_INPUTS
+                };
+                if over_cap {
+                    self.bus
+                        .error("E169: Command too recursive (macro replay input cap)");
+                    break 'reps;
+                }
+                let ct_key = engine_input_to_key_event(input);
+                if ct_key.code == KeyCode::Null {
+                    continue;
+                }
+                if !self.route_chord_key(ct_key) {
+                    hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_key);
+                }
+                // A nested `@{reg}` splice may have tripped a cap — abort the
+                // entire replay chain (vim stops the whole replay on error).
+                if self
+                    .macro_replay
+                    .as_ref()
+                    .expect("macro_replay alive during drain")
+                    .aborted
+                {
+                    break 'reps;
+                }
+            }
+        }
+        self.macro_replay = None;
+        self.active_editor_mut().end_macro_replay();
+        self.sync_after_engine_mutation();
+    }
+
+    /// Nested `@{reg}` during an active replay: splice the callee's keys
+    /// into the FRONT of the work queue (so they play before the caller's
+    /// remaining keys — the order recursion would have produced), bounded by
+    /// the depth cap and the total-input budget.
+    fn splice_macro_replay(&mut self, reg: char, count: usize) {
+        if self.macro_replay.as_ref().is_none_or(|st| st.aborted) {
+            return;
+        }
+        // Resolve first: play_macro re-sets `last_macro` (so a later `@@`
+        // resolves correctly) and keeps `replaying_macro = true`.
+        let keys = self.active_editor_mut().play_macro(reg);
+        if keys.is_empty() {
+            return; // unset / empty register — replays nothing, no error
+        }
+        let reps = count.clamp(1, hjkl_vim::vim::MAX_COUNT);
+        let (too_deep, over_budget) = {
+            let st = self
+                .macro_replay
+                .as_ref()
+                .expect("splice only runs during an active replay");
+            let need = reps.saturating_mul(keys.len());
+            (
+                st.depth >= MACRO_MAX_DEPTH,
+                // Budget check BEFORE materializing: a nested `999999999@b`
+                // must abort here, not allocate count × keys.len() items.
+                st.fed.saturating_add(st.queue.len()).saturating_add(need) > MACRO_MAX_INPUTS,
+            )
+        };
+        if too_deep || over_budget {
+            self.macro_replay
+                .as_mut()
+                .expect("splice only runs during an active replay")
+                .aborted = true;
+            self.bus.error(if too_deep {
+                "E169: Command too recursive"
+            } else {
+                "E169: Command too recursive (macro replay input cap)"
+            });
+            return;
+        }
+        let st = self
+            .macro_replay
+            .as_mut()
+            .expect("splice only runs during an active replay");
+        st.depth += 1;
+        st.queue.push_front(ReplayItem::DepthPop);
+        for _ in 0..reps {
+            for &k in keys.iter().rev() {
+                st.queue.push_front(ReplayItem::Input(k));
             }
         }
     }
@@ -636,26 +838,12 @@ impl App {
                             }
                             return true;
                         }
-                        // `@{reg}` chord completed — decode and re-feed the macro.
-                        let inputs = self.active_editor_mut().play_macro(reg, count);
-                        // Re-feed each Input through route_chord_key by converting
-                        // it back to a crossterm KeyEvent. During replay,
-                        // is_replaying_macro() == true so the recorder hook skips
-                        // the replayed inputs. Keys that the chord layer does not
-                        // consume (insert-mode chars, motions in normal mode that
-                        // don't bind to an app chord) must fall through to the
-                        // engine — same pattern as the live event-loop key path.
-                        for input in inputs {
-                            let ct_key = engine_input_to_key_event(input);
-                            if ct_key.code == KeyCode::Null {
-                                continue;
-                            }
-                            if !self.route_chord_key(ct_key) {
-                                hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_key);
-                            }
-                        }
-                        self.active_editor_mut().end_macro_replay();
-                        self.sync_after_engine_mutation();
+                        // `@{reg}` chord completed — run (or splice into) the
+                        // iterative replay work queue. NEVER recurses: a
+                        // nested `@{reg}` inside a playing macro splices its
+                        // keys into the front of the active queue instead of
+                        // re-entering this arm's drain loop (audit R2).
+                        self.play_macro_chord(reg, count);
                         return true;
                     }
                     Outcome::Cancel => {

@@ -976,8 +976,14 @@ pub trait VimEditorExt {
     fn is_replaying_macro(&self) -> bool;
 
     /// Decode the named register `reg` into a `Vec<hjkl_engine::input::Input>` and
-    /// prepare for replay, returning the inputs the app should re-feed through
-    /// `route_chord_key`.
+    /// prepare for replay, returning ONE iteration of the inputs the app
+    /// should re-feed through `route_chord_key`.
+    ///
+    /// Count semantics live in the HOST: `3@a` replays the returned keys
+    /// three times by looping (or re-splicing a work queue), never by
+    /// materializing `keys × count` up front — an unclamped `999999999@a`
+    /// would otherwise allocate multi-GB before the first key plays
+    /// (audit R2).
     ///
     /// Resolves `reg`:
     /// - `'@'` → use `vim.last_macro`; returns empty vec if none.
@@ -990,7 +996,7 @@ pub trait VimEditorExt {
     ///
     /// Returns an empty vec (and no side-effects for `'@'`) if the register is
     /// unset or empty.
-    fn play_macro(&mut self, reg: char, count: usize) -> Vec<hjkl_engine::input::Input>;
+    fn play_macro(&mut self, reg: char) -> Vec<hjkl_engine::input::Input>;
 
     /// Clear the `replaying_macro` flag. Called by the app after the
     /// re-feed loop in the `PlayMacro` commit arm completes (or aborts).
@@ -2124,7 +2130,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         crate::vim_state::vim(self).replaying_macro
     }
 
-    fn play_macro(&mut self, reg: char, count: usize) -> Vec<hjkl_engine::input::Input> {
+    fn play_macro(&mut self, reg: char) -> Vec<hjkl_engine::input::Input> {
         let resolved = if reg == '@' {
             match crate::vim_state::vim(self).last_macro {
                 Some(r) => r,
@@ -2143,10 +2149,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let keys = hjkl_engine::input::decode_macro(&text);
         crate::vim_state::vim_mut(self).last_macro = Some(resolved);
         crate::vim_state::vim_mut(self).replaying_macro = true;
-        // Multiply by count (minimum 1). Clamp to vim's count limit
-        // (`:h count` — counts are capped at 999999999); an unclamped
-        // saturated prefix would overflow `Vec` capacity in `repeat`.
-        keys.repeat(count.clamp(1, crate::vim::MAX_COUNT))
+        // ONE iteration only — the host loops the count (audit R2). The old
+        // `keys.repeat(count)` materialized count × keys.len() Inputs up
+        // front, so `999999999@a` allocated multi-GB before playing a key.
+        keys
     }
 
     fn end_macro_replay(&mut self) {

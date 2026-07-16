@@ -402,6 +402,11 @@ pub struct App {
     /// stack overflow. The per-Replay-frame `steps` counter only catches
     /// horizontal cycles; this catches vertical (re-entrant) cycles too.
     pub(crate) replay_depth: usize,
+    /// Active `@{reg}` macro-replay work queue. `Some` only while the
+    /// top-level `PlayMacro` commit arm is draining a replay; nested
+    /// `@{reg}` inputs splice into this queue instead of recursing
+    /// (audit R2 — see `chord_routing::MacroReplayState`).
+    pub(crate) macro_replay: Option<chord_routing::MacroReplayState>,
     /// Mouse-capture state. Mirrors the terminal's
     /// EnableMouseCapture / DisableMouseCapture mode. Initialised from
     /// `config.editor.mouse`; runtime-togglable via `:set [no]mouse`.
@@ -849,10 +854,7 @@ pub(super) fn build_slot(
     Ok(slot)
 }
 
-// build_app_keymap and engine_input_to_key_event moved to keymap_build.rs
-// Re-exported here for backwards compatibility with the tests sub-module.
-#[cfg(test)]
-pub(crate) use keymap_build::engine_input_to_key_event;
+// build_app_keymap and engine_input_to_key_event moved to keymap_build.rs.
 
 impl App {
     /// Clear the LSP hover popup + its arming timer. Called by the
@@ -1971,6 +1973,7 @@ impl App {
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),
             replay_depth: 0,
+            macro_replay: None,
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: hjkl_app::config::Config::default().editor.mouse,

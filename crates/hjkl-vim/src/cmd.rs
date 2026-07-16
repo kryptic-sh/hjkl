@@ -101,10 +101,12 @@ pub enum EngineCmd {
     StartMacroRecord {
         reg: char,
     },
-    /// `@{reg}` / `@@` chord completion. Host calls `Editor::play_macro(reg,
-    /// count)` to obtain the decoded `Input` stream and re-feeds it through
-    /// `route_chord_key`. `reg == '@'` means "repeat last macro" — the host
-    /// resolves the actual register via `Editor::play_macro`'s internal logic.
+    /// `@{reg}` / `@@` chord completion. Host calls `Editor::play_macro(reg)`
+    /// to obtain ONE iteration of the decoded `Input` stream and re-feeds it
+    /// through `route_chord_key` `count` times (iteratively — never
+    /// materializing `keys × count`). `reg == '@'` means "repeat last
+    /// macro" — the host resolves the actual register via
+    /// `Editor::play_macro`'s internal logic.
     PlayMacro {
         reg: char,
         count: usize,

@@ -378,14 +378,9 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::PlayMacro { reg, count }) => {
                     app.pending_state = None;
-                    let inputs = app.active_editor_mut().play_macro(reg, count);
-                    for input in inputs {
-                        let ct_key = engine_input_to_key_event(input);
-                        if ct_key.code != KeyCode::Null {
-                            drive_key(app, ct_key);
-                        }
-                    }
-                    app.active_editor_mut().end_macro_replay();
+                    // Same iterative work-queue replay as production
+                    // (chord_routing's PlayMacro arm) — never recurses.
+                    app.play_macro_chord(reg, count);
                     app.sync_viewport_from_editor();
                     return;
                 }
