@@ -40,3 +40,31 @@ fn block_append_pads_rows_shorter_than_the_top_row_to_the_block_edge() {
     let got = run_block("ab\nabcdef\n", "j$<C-v>kAX<Esc>", want);
     assert_eq!(got, want);
 }
+
+#[test]
+fn block_dollar_delete_removes_to_each_rows_own_eol() {
+    // Fix 3: `$` in VisualBlock makes the block ragged — every row is
+    // selected to its OWN end of line, not a fixed-width rectangle capped
+    // by whatever row the cursor was on when `$` was pressed (`:h v_b_$`).
+    // Left column 1 (one `l` first), `$` pressed on the SHORT ("short")
+    // row, THEN `j` extends the block down to the long row — this key
+    // order is what exposes the bug: the pre-fix code freezes `right` at
+    // "short"'s own EOL (col 4) and reuses it for every row, so `d`
+    // leaves the tail of "muchlongerline" behind. Verified against
+    // `nvim --headless`: pre-fix hjkl produced "s\nmongerline\n".
+    let want = "s\nm\n";
+    let got = run_block("short\nmuchlongerline\n", "l<C-v>$jd", want);
+    assert_eq!(got, want);
+}
+
+#[test]
+fn block_dollar_append_appends_at_every_rows_own_eol() {
+    // Fix 3: ragged `A` after `$` — EVERY row in the block appends at its
+    // OWN EOL (not just the rows below the one `$` was pressed on).
+    // `<C-v>j$` starts on the short row, moves down, then presses `$` on
+    // the long row — the top ("short") row must still append at its own
+    // EOL, not get skipped or use the long row's column.
+    let want = "shortX\nmuchlongerlineX\n";
+    let got = run_block("short\nmuchlongerline\n", "<C-v>j$AX<Esc>", want);
+    assert_eq!(got, want);
+}

@@ -518,6 +518,12 @@ pub trait VimEditorExt {
     fn block_vcol(&self) -> usize;
     /// Set the VisualBlock sticky (virtual) column.
     fn set_block_vcol(&mut self, vcol: usize);
+    /// Whether the VisualBlock selection is "ragged" (`$` was pressed —
+    /// `:h v_b_$`): every row resolves its own right edge to its own EOL
+    /// instead of the block's fixed `right` column.
+    fn block_to_eol(&self) -> bool;
+    /// Set the VisualBlock ragged (`$`) flag.
+    fn set_block_to_eol(&mut self, to_eol: bool);
 
     // ─── Yank / register staging ───────────────────────────────────────────
 
@@ -1161,9 +1167,26 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }),
             VimMode::VisualBlock => {
                 let (ar, ac) = crate::vim_state::vim(self).block_anchor;
+                let vcol = crate::vim_state::vim(self).block_vcol;
+                if crate::vim_state::vim(self).block_to_eol {
+                    // Ragged (`$` — `:h v_b_$`): `Selection::Block::row_span`
+                    // only ever resolves one fixed `(left, right)` pair for
+                    // every row. Reuse the SAME `usize::MAX` "cap at the
+                    // row's actual length" convention `Selection::Line`
+                    // already uses (see `hjkl_buffer::selection::RowSpan`)
+                    // by forcing the right corner's col to `usize::MAX` —
+                    // the renderer then extends every row to its own EOL.
+                    // Normalise which corner carries `MAX` so it's always
+                    // the "right" one regardless of anchor/cursor order.
+                    let left = ac.min(vcol);
+                    return Some(Selection::Block {
+                        anchor: Position::new(ar, left),
+                        head: Position::new(cr, usize::MAX),
+                    });
+                }
                 Some(Selection::Block {
                     anchor: Position::new(ar, ac),
-                    head: Position::new(cr, crate::vim_state::vim(self).block_vcol),
+                    head: Position::new(cr, vcol),
                 })
             }
             _ => None,
@@ -1535,6 +1558,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
     fn set_block_vcol(&mut self, vcol: usize) {
         crate::vim_state::vim_mut(self).block_vcol = vcol;
+    }
+    fn block_to_eol(&self) -> bool {
+        crate::vim_state::vim(self).block_to_eol
+    }
+    fn set_block_to_eol(&mut self, to_eol: bool) {
+        crate::vim_state::vim_mut(self).block_to_eol = to_eol;
     }
 
     // ─── Yank / register staging ───────────────────────────────────────────

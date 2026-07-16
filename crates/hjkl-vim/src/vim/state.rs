@@ -60,6 +60,14 @@ pub struct VimState {
     /// separately and use it for block bounds / insert-column
     /// computations. Updated by h/l only.
     pub block_vcol: usize,
+    /// `$` pressed in VisualBlock (`:h v_b_$`): makes the block "ragged" —
+    /// every row resolves its own right edge to that row's own EOL
+    /// instead of the block's fixed `right` column. Set by
+    /// `update_block_vcol` on `Motion::LineEnd`; cleared by any OTHER
+    /// horizontal motion that re-establishes a fixed column. Vertical
+    /// motions (j/k/gg/G/…) preserve it, matching vim. Reset to `false`
+    /// on every fresh `<C-v>` entry.
+    pub block_to_eol: bool,
     /// Track whether the last yank/cut was linewise (drives `p`/`P` layout).
     /// Active register selector — set by `"reg` prefix, consumed by
     /// the next y / d / c / p. `None` falls back to the unnamed `"`.

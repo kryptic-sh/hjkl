@@ -438,7 +438,38 @@ fn block_append_pads_rows_shorter_than_the_top_row_to_the_block_edge() {
     dispatch_keys(&mut e, "<C-v>k");
     dispatch_keys(&mut e, "A");
     dispatch_keys(&mut e, "X<Esc>");
-    assert_eq!(lines_of(&e), &["ab    X".to_string(), "abcdefX".to_string()]);
+    assert_eq!(
+        lines_of(&e),
+        &["ab    X".to_string(), "abcdefX".to_string()]
+    );
+}
+
+#[test]
+fn block_highlight_delete_bridge_honors_ragged_flag() {
+    // Regression: the REAL app never calls `apply_visual_operator` for
+    // VisualBlock `d`/`y`/`c` — its keymap intercepts those keys with
+    // `AppAction::VisualOp`, which reads `block_highlight()` (a static
+    // (top,bot,left,right) snapshot) and calls `delete_block` /
+    // `yank_block` / `change_block` (see apps/hjkl/src/app/engine_
+    // actions.rs). Those bridges must still resolve a ragged (`$`) block
+    // per row rather than reusing the snapshotted `right_col` — this is
+    // the exact call shape `engine_actions.rs` uses.
+    let mut e = editor_with("short\nmuchlongerline");
+    dispatch_keys(&mut e, "l<C-v>$j");
+    let (top, bot, left, right) = e.block_highlight().expect("in VisualBlock mode");
+    e.delete_block(top, bot, left, right, '"');
+    assert_eq!(lines_of(&e), &["s".to_string(), "m".to_string()]);
+}
+
+#[test]
+fn block_dollar_delete_removes_to_each_rows_own_eol() {
+    // Fix 3: `$` in VisualBlock makes the block ragged (`:h v_b_$`) — every
+    // row deletes to ITS OWN EOL, not a fixed-width rectangle capped by
+    // whichever row the cursor was on when `$` was pressed. Verified
+    // against `nvim --headless`.
+    let mut e = editor_with("short\nmuchlongerline");
+    dispatch_keys(&mut e, "l<C-v>$jd");
+    assert_eq!(lines_of(&e), &["s".to_string(), "m".to_string()]);
 }
 
 #[test]

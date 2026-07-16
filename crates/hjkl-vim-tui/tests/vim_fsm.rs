@@ -2622,11 +2622,7 @@ fn block_insert_skips_short_lines_shorter_than_block_column() {
                 s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
             })
             .collect::<Vec<_>>(),
-        &[
-            "aaaYaa".to_string(),
-            "bb".to_string(),
-            "aaaYaa".to_string()
-        ]
+        &["aaaYaa".to_string(), "bb".to_string(), "aaaYaa".to_string()]
     );
 }
 
@@ -2724,6 +2720,88 @@ fn visual_block_append_pad_and_replication_undo_in_one_step() {
             })
             .collect::<Vec<_>>(),
         &["ab".to_string(), "abcdef".to_string()]
+    );
+}
+
+#[test]
+fn visual_block_dollar_delete_removes_to_each_rows_own_eol() {
+    // Fix 3: `$` in VisualBlock makes the block ragged (`:h v_b_$`) —
+    // every row deletes to ITS OWN EOL, not a fixed-width rectangle
+    // capped by whichever row the cursor was on when `$` was pressed.
+    // `$` fires on the SHORT row, THEN `j` extends down to the long row —
+    // pre-fix this froze `right` at "short"'s own EOL and reused it for
+    // "muchlongerline" too, leaving "mongerline" behind. Verified against
+    // `nvim --headless`.
+    let mut e = editor_with("short\nmuchlongerline");
+    run_keys(&mut e, "l");
+    run_keys(&mut e, "<C-v>");
+    run_keys(&mut e, "$");
+    run_keys(&mut e, "j");
+    run_keys(&mut e, "d");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["s".to_string(), "m".to_string()]
+    );
+}
+
+#[test]
+fn visual_block_dollar_yank_captures_each_rows_own_tail() {
+    // Same ragged (`:h v_b_$`) resolution for `y` — verified against
+    // `nvim --headless`.
+    let mut e = editor_with("short\nmuchlongerline");
+    run_keys(&mut e, "l<C-v>$jy");
+    assert_eq!(
+        e.host_mut().read_clipboard().as_deref(),
+        Some("hort\nuchlongerline")
+    );
+}
+
+#[test]
+fn visual_block_dollar_replace_fills_to_each_rows_own_eol() {
+    // Same ragged (`:h v_b_$`) resolution for `r` — verified against
+    // `nvim --headless`.
+    let mut e = editor_with("short\nmuchlongerline");
+    run_keys(&mut e, "l<C-v>$jrX");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["sXXXX".to_string(), "mXXXXXXXXXXXXX".to_string()]
+    );
+}
+
+#[test]
+fn visual_block_dollar_flag_survives_vertical_motion_clears_on_horizontal() {
+    // `:h v_b_$`: the ragged flag survives j/k (vertical) but clears on
+    // any motion that re-establishes a fixed column (here `0`). After
+    // `$` then `0` then `j`, the block must behave like an ordinary
+    // fixed-width rectangle again (col 0 only, both rows) — verified
+    // against `nvim --headless`.
+    let mut e = editor_with("short\nmuchlongerline");
+    run_keys(&mut e, "<C-v>$0"); // ragged set by $, then cleared by 0
+    run_keys(&mut e, "jd");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["hort".to_string(), "uchlongerline".to_string()]
     );
 }
 

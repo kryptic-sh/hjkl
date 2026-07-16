@@ -160,6 +160,7 @@ pub fn step_normal<H: Host>(
             let cur = ed.cursor();
             ed.set_block_anchor(cur);
             ed.set_block_vcol(cur.1);
+            ed.set_block_to_eol(false);
             ed.set_mode(VimMode::VisualBlock);
             return true;
         }
@@ -242,8 +243,17 @@ pub fn step_normal<H: Host>(
                 // longer rows the typed text landed inside the block
                 // instead of past its right edge — `visual_block_append_
                 // at_right` now does the per-row padding itself.
+                //
+                // Ragged (`$` was pressed — `:h v_b_$`): append at EACH
+                // row's own EOL instead, so the top row's insertion column
+                // is that row's own current length rather than a fixed
+                // `right + 1`.
                 let (top, bot, _left, right) = ed.visual_block_bounds();
-                let col = right + 1;
+                let col = if ed.block_to_eol() {
+                    ed.line_char_count(top)
+                } else {
+                    right + 1
+                };
                 ed.visual_block_append_at_right(top, bot, col);
                 return true;
             }

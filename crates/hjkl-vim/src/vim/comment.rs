@@ -221,8 +221,10 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
     // v_b_I` vs `:h v_b_A`): when `pad` is true, rows shorter than `col`
     // are padded with spaces first so the text still lands at `col` (`A`);
     // when `pad` is false, rows shorter than `col` are skipped entirely —
-    // no padding, no insert on that row (`I`). Returns without touching
-    // the cursor — callers position the cursor afterward as needed.
+    // no padding, no insert on that row (`I`). `to_eol` (`:h v_b_$`, `A`
+    // only) overrides `col` per row with that row's own current EOL —
+    // always exactly reachable, so it never pads or skips. Returns
+    // without touching the cursor — callers position it afterward.
     fn replicate_block_text<H: hjkl_engine::types::Host>(
         ed: &mut Editor<hjkl_buffer::View, H>,
         inserted: &str,
@@ -230,24 +232,26 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         bot: usize,
         col: usize,
         pad: bool,
+        to_eol: bool,
     ) {
         use hjkl_buffer::{Edit, Position};
         for r in (top + 1)..=bot {
             let line_len = buf_line_chars(ed.buffer(), r);
-            if col > line_len {
+            let row_col = if to_eol { line_len } else { col };
+            if row_col > line_len {
                 if !pad {
                     // vim `v_b_I`: row doesn't reach the block's left
                     // column — skip it, no padding, no insert.
                     continue;
                 }
-                let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
+                let pad_str: String = std::iter::repeat_n(' ', row_col - line_len).collect();
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(r, line_len),
-                    text: pad,
+                    text: pad_str,
                 });
             }
             ed.mutate_edit(Edit::InsertStr {
-                at: Position::new(r, col),
+                at: Position::new(r, row_col),
                 text: inserted.to_string(),
             });
         }
@@ -256,8 +260,11 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
     if let InsertReason::BlockEdge { top, bot, col, pad } = session.reason {
         // `I` / `A` from VisualBlock: replicate text across rows; cursor
         // stays at the block-start column (vim leaves cursor there).
+        // Ragged only ever applies to `A` (`pad == true`) — `I` is always
+        // anchored at the block's LEFT column, unaffected by `$`.
+        let to_eol = pad && vim(ed).block_to_eol;
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col, pad);
+            replicate_block_text(ed, &inserted, top, bot, col, pad, to_eol);
             buf_set_cursor_rc(ed.buffer_mut(), top, col);
             ed.push_buffer_cursor_to_textarea();
         }
@@ -268,10 +275,11 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         // to `col + ins_chars` (pre-step-back) so the Esc step-back lands
         // on the last typed char (col + ins_chars - 1), matching nvim.
         // Like `I`, vim `v_b_c` (`:h v_b_c`) skips rows that don't reach
-        // the block's left column rather than padding them — verified
-        // against `nvim --headless`.
+        // the block's left column rather than padding them, and the
+        // replicated text always lands at the LEFT column regardless of
+        // a ragged right edge — verified against `nvim --headless`.
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col, false);
+            replicate_block_text(ed, &inserted, top, bot, col, false, false);
             let ins_chars = inserted.chars().count();
             let line_len = buf_line_chars(ed.buffer(), top);
             let target_col = (col + ins_chars).min(line_len);

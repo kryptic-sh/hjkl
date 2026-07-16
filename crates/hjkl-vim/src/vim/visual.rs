@@ -61,6 +61,7 @@ pub(crate) fn enter_visual_block_bridge<H: hjkl_engine::types::Host>(
     let cur = ed.cursor();
     vim_mut(ed).block_anchor = cur;
     vim_mut(ed).block_vcol = cur.1;
+    vim_mut(ed).block_to_eol = false;
     set_vim_mode_bridge(ed, Mode::VisualBlock);
 }
 /// Esc from any visual mode — set `<` / `>` marks (per `:h v_:`), stash the

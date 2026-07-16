@@ -118,6 +118,14 @@ pub(crate) fn delete_block_bridge<H: hjkl_engine::types::Host>(
     let saved_vcol = vim(ed).block_vcol;
     vim_mut(ed).block_anchor = (top_row, left_col);
     vim_mut(ed).block_vcol = right_col;
+    // Deliberately do NOT touch `block_to_eol` here: this bridge is the
+    // app's live keystroke path for VisualBlock `d` (`AppAction::VisualOp`
+    // reads `block_highlight()` then calls this), so the caller is still
+    // in VisualBlock mode and `block_to_eol` correctly reflects whether
+    // `$` (`:h v_b_$`) is active. `apply_block_operator` resolves its own
+    // per-row right edge when ragged, ignoring `right_col` entirely, so
+    // passing a stale/snapshotted `right_col` through is harmless either
+    // way.
     // Compute clamped col before the mutable borrow for buf_set_cursor_rc.
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     // Place cursor at bot_row / right_col so block_bounds resolves correctly.
@@ -143,6 +151,7 @@ pub(crate) fn yank_block_bridge<H: hjkl_engine::types::Host>(
     let saved_vcol = vim(ed).block_vcol;
     vim_mut(ed).block_anchor = (top_row, left_col);
     vim_mut(ed).block_vcol = right_col;
+    // See `delete_block_bridge` — `block_to_eol` is deliberately preserved.
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Yank, 1);
@@ -164,6 +173,7 @@ pub(crate) fn change_block_bridge<H: hjkl_engine::types::Host>(
     let saved_vcol = vim(ed).block_vcol;
     vim_mut(ed).block_anchor = (top_row, left_col);
     vim_mut(ed).block_vcol = right_col;
+    // See `delete_block_bridge` — `block_to_eol` is deliberately preserved.
     let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
     buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
     apply_block_operator(ed, Operator::Change, 1);
