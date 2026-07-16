@@ -4028,6 +4028,66 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         (Query::rope(&self.buffer), rc)
     }
 
+    /// Snapshot the buffer-scoped "edit coherence" state alongside a rope
+    /// snapshot, so undo/redo can restore marks/jumplist/changelist, not
+    /// just text (audit-r2 fix 2).
+    ///
+    /// Called at all three `UndoEntry` construction sites
+    /// (`push_undo_at`, `undo_core`, `redo_core`) with the LIVE state at
+    /// push time — never the popped entry's own snapshot, since the entry
+    /// being pushed describes "the other side" of the history walk (e.g.
+    /// `undo_core`'s redo-push needs the CURRENT, post-edit marks so a
+    /// later redo restores them, not the pre-edit marks it's about to
+    /// pop).
+    pub(super) fn snapshot_marks(&self) -> hjkl_buffer::MarkSnapshot {
+        let cur_bid = self.current_buffer_id;
+        let global_marks = self
+            .global_marks
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, (bid, _, _))| *bid == cur_bid)
+            .map(|(c, (_, row, col))| (*c, (*row, *col)))
+            .collect();
+        let bank = self.change_bank.lock().unwrap();
+        hjkl_buffer::MarkSnapshot {
+            local_marks: self.buffer.marks_cloned(),
+            jump_back: self.jump_back.clone(),
+            jump_fwd: self.jump_fwd.clone(),
+            change_last_edit: bank.last_edit,
+            change_list: bank.list.clone(),
+            change_cursor: bank.cursor,
+            global_marks,
+        }
+    }
+
+    /// Restore the buffer-scoped state captured by [`Editor::snapshot_marks`]
+    /// — the undo/redo counterpart to `restore_rope`/`restore_text`.
+    ///
+    /// Only entries belonging to THIS buffer (`current_buffer_id`) are
+    /// touched in the session-global `global_marks` map: other buffers'
+    /// global marks are left completely alone. Local marks and the
+    /// changelist bank are already per-buffer (shared via `Arc` across
+    /// windows on the same buffer, same as the text), so restoring them
+    /// here is visible to every window on this buffer, matching vim.
+    pub(super) fn restore_marks(&mut self, snap: &hjkl_buffer::MarkSnapshot) {
+        self.buffer.set_marks(snap.local_marks.clone());
+        self.jump_back = snap.jump_back.clone();
+        self.jump_fwd = snap.jump_fwd.clone();
+        {
+            let mut bank = self.change_bank.lock().unwrap();
+            bank.last_edit = snap.change_last_edit;
+            bank.list = snap.change_list.clone();
+            bank.cursor = snap.change_cursor;
+        }
+        let cur_bid = self.current_buffer_id;
+        let mut global_marks = self.global_marks.lock().unwrap();
+        global_marks.retain(|_, (bid, _, _)| *bid != cur_bid);
+        for (c, (row, col)) in snap.global_marks.iter() {
+            global_marks.insert(*c, (cur_bid, *row, *col));
+        }
+    }
+
     // ── Undo / redo (discipline-agnostic, #265) ──────────────────────────────
     //
     // The rope-level work is generic — every discipline undoes. The only
@@ -4039,12 +4099,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     fn undo_core(&mut self) {
         if let Some(entry) = self.buffer.pop_undo_entry() {
             let (cur_rope, cur_cursor) = self.snapshot();
+            let cur_marks = self.snapshot_marks();
             self.buffer.push_redo_entry(hjkl_buffer::UndoEntry {
                 rope: cur_rope,
                 cursor: cur_cursor,
                 timestamp: entry.timestamp,
+                marks: cur_marks,
             });
             self.restore_rope(entry.rope, entry.cursor);
+            self.restore_marks(&entry.marks);
         }
         self.settle_after_history_jump();
     }
@@ -4053,14 +4116,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     fn redo_core(&mut self) {
         if let Some(entry) = self.buffer.pop_redo_entry() {
             let (cur_rope, cur_cursor) = self.snapshot();
+            let cur_marks = self.snapshot_marks();
             let before = cur_rope.clone();
             self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
                 rope: cur_rope,
                 cursor: cur_cursor,
                 timestamp: entry.timestamp,
+                marks: cur_marks,
             });
             self.cap_undo();
             self.restore_rope(entry.rope, entry.cursor);
+            self.restore_marks(&entry.marks);
             // Park the cursor at the START of the reapplied change rather than
             // the end-of-insert position stored in the redo snapshot (vim
             // parity). Recompute from the first differing character.
@@ -4194,10 +4260,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     #[doc(hidden)]
     pub fn push_undo_at(&mut self, timestamp: SystemTime) {
         let (rope, cursor) = self.snapshot();
+        let marks = self.snapshot_marks();
         self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
             rope,
             cursor,
             timestamp,
+            marks,
         });
         self.cap_undo();
         self.buffer.clear_redo();

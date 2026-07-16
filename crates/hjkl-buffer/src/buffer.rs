@@ -838,6 +838,7 @@ mod tests {
             rope: view_a.rope(),
             cursor: (0, 0),
             timestamp: SystemTime::UNIX_EPOCH,
+            marks: Default::default(),
         });
 
         // Push via view_a is visible via view_b.
@@ -862,6 +863,7 @@ mod tests {
             rope: view_b.rope(),
             cursor: (0, 2),
             timestamp: SystemTime::UNIX_EPOCH,
+            marks: Default::default(),
         });
 
         let entry = view_a.pop_redo_entry();
@@ -884,11 +886,13 @@ mod tests {
             rope: view_a.rope(),
             cursor: (0, 0),
             timestamp: SystemTime::UNIX_EPOCH,
+            marks: Default::default(),
         });
         view_a.push_redo_entry(UndoEntry {
             rope: view_a.rope(),
             cursor: (0, 1),
             timestamp: SystemTime::UNIX_EPOCH,
+            marks: Default::default(),
         });
 
         view_b.clear_undo_redo();

@@ -68,7 +68,7 @@ pub use motion::is_keyword_char;
 pub use position::Position;
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
-pub use undo::UndoEntry;
+pub use undo::{MarkSnapshot, UndoEntry};
 pub use viewport::{Viewport, is_big_viewport_jump};
 pub use wrap::Wrap;
 
