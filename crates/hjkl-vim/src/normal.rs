@@ -621,6 +621,13 @@ fn handle_normal_only<H: Host>(
             ed.earlier_by_steps(count.max(1));
             true
         }
+        Key::Char('U') => {
+            // `U` — restore the last-changed line (`:h U`). Vim ignores
+            // any count. `undo_line` handles the "nothing to restore"
+            // no-op and the undo/toggle semantics itself.
+            ed.undo_line();
+            true
+        }
         Key::Char('r') => {
             ed.set_count(count);
             ed.set_pending(Pending::Replace);

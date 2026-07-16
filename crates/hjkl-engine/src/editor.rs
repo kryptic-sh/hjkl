@@ -707,6 +707,13 @@ pub struct ChangeBank {
     /// Index into `list` while walking; `None` outside a walk (any new
     /// edit clears it and trims forward entries).
     pub cursor: Option<usize>,
+    /// `U` (`:h U`) bookkeeping: `(row, text)` — the text of `row` before
+    /// the *first* change landed on it since the tracked row last
+    /// changed. Reset (row + fresh snapshot) whenever an edit's pre-edit
+    /// cursor row differs from the currently tracked row.
+    /// [`Editor::undo_line`] swaps this to the pre-`U` text on each call
+    /// so a second `U` redoes what the first one undid.
+    pub u_line: Option<(usize, String)>,
 }
 
 pub struct Editor<
@@ -784,6 +791,12 @@ pub struct Editor<
     /// goto-definition). The host app drains this each step and fires
     /// the matching request against its own LSP client.
     pub(super) pending_lsp: Option<LspIntent>,
+    /// Re-entrancy guard for [`Editor::undo_line`] (`U`): while its own
+    /// line-replacing edits run through [`Editor::mutate_edit`], the
+    /// generic `ChangeBank::u_line` auto-snapshot logic must NOT treat
+    /// them as a fresh "first change on this row" — `undo_line` manages
+    /// the swap itself.
+    pub(super) suppress_u_line_track: bool,
     /// View storage.
     ///
     /// 0.1.0 (Patch C-δ): generic over `B: View` per SPEC §"Editor
@@ -1481,6 +1494,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             change_bank: std::sync::Arc::new(std::sync::Mutex::new(ChangeBank::default())),
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
+            suppress_u_line_track: false,
             buffer,
             style_table: Vec::new(),
             registers: std::sync::Arc::new(std::sync::Mutex::new(
@@ -2404,6 +2418,19 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         }
         let pre_row = buf_cursor_row(&self.buffer);
         let pre_rows = buf_row_count(&self.buffer);
+        // `U` (`:h U`) bookkeeping: remember `pre_row`'s text before the
+        // first change lands on it, so `undo_line` can restore it later.
+        // Reset (fresh snapshot) whenever a change lands on a DIFFERENT
+        // row than the one currently tracked. `undo_line` sets
+        // `suppress_u_line_track` around its own restoring edits so this
+        // generic path doesn't clobber the toggle swap it just performed.
+        if !self.suppress_u_line_track {
+            let mut bank = self.change_bank.lock().unwrap();
+            let fresh = !matches!(&bank.u_line, Some((row, _)) if *row == pre_row);
+            if fresh {
+                bank.u_line = Some((pre_row, buf_line(&self.buffer, pre_row).unwrap_or_default()));
+            }
+        }
         // Capture the pre-edit cursor for the dot mark (`'.` / `` `. ``).
         // Vim's `:h '.` says "the position where the last change was made",
         // meaning the change-start, not the post-insert cursor. We snap it
@@ -4313,6 +4340,47 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// `<C-r>` in normal mode.
     pub fn redo(&mut self) {
         self.redo_core();
+    }
+
+    /// `U` (`:h U`): restore the line where the latest change was made to
+    /// its state before that run of changes began — NOT necessarily the
+    /// line the cursor is currently on (moving the cursor away without
+    /// editing doesn't retarget `U`). A no-op when nothing has changed
+    /// on the tracked line relative to the stored snapshot (either
+    /// nothing has been edited yet, or a prior `U` already restored it).
+    ///
+    /// `U` is itself a change: it pushes one undo entry (so a plain `u`
+    /// right after `U` undoes the restore), and it swaps the stored
+    /// snapshot to the text it just replaced, so a second `U` toggles
+    /// back and re-applies the changes the first one undid.
+    pub fn undo_line(&mut self) {
+        let target = self.change_bank.lock().unwrap().u_line.clone();
+        let Some((row, snapshot)) = target else {
+            return;
+        };
+        if row >= buf_row_count(&self.buffer) {
+            return;
+        }
+        let current = buf_line(&self.buffer, row).unwrap_or_default();
+        if current == snapshot {
+            return;
+        }
+        self.push_undo();
+        let line_chars = buf_line_chars(&self.buffer, row);
+        self.suppress_u_line_track = true;
+        self.mutate_edit(hjkl_buffer::Edit::DeleteRange {
+            start: hjkl_buffer::Position::new(row, 0),
+            end: hjkl_buffer::Position::new(row, line_chars),
+            kind: hjkl_buffer::MotionKind::Char,
+        });
+        self.mutate_edit(hjkl_buffer::Edit::InsertStr {
+            at: hjkl_buffer::Position::new(row, 0),
+            text: snapshot,
+        });
+        self.suppress_u_line_track = false;
+        self.change_bank.lock().unwrap().u_line = Some((row, current));
+        buf_set_cursor_rc(&mut self.buffer, row, 0);
+        self.push_buffer_cursor_to_textarea();
     }
 
     /// Undo `n` steps. Returns the number of steps actually applied

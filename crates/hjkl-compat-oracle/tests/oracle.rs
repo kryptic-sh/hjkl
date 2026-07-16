@@ -880,3 +880,13 @@ async fn tier2_viewport_bounds_corpus_passes() {
 async fn tier2_sentence_corpus_passes() {
     run_corpus("corpus/tier2_sentence.toml").await;
 }
+
+// B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
+// each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
+// system treats as a genuine change — `U`'s restore-target line
+// (`b_u_line_ptr`) ends up pointing at the pre-seed empty buffer instead of
+// the seeded content, an artifact of the RPC-based seeding rather than real
+// vim behaviour (confirmed against `nvim --headless <file> -c 'normal! ...'`,
+// which does not go through that RPC path and behaves as expected). Pinned
+// instead as unit tests in `crates/hjkl-vim/tests/undo_line.rs`, each
+// annotated with the real-nvim-file invocation it was verified against.

@@ -225,18 +225,19 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Misc
 
-| Feature               | Cases | File(s)                    |
-| --------------------- | ----- | -------------------------- |
-| . (dot repeat)        | 7     | tier2_dot_repeat.toml      |
-| . with count (3.)     | 1     | tier2_gaps.toml            |
-| J. (join dot)         | 1     | tier2_gaps.toml            |
-| u (undo)              | 2     | tier1.toml                 |
-| C-r (redo)            | 1     | tier1.toml                 |
-| ZZ / ZQ               | —     | exit commands, not oracled |
-| C-a / C-x (incr/decr) | 2     | tier2_advanced.toml        |
-| gv (reselect)         | 1     | tier2_visual.toml          |
-| :earlier / :later     | 3     | nvim_api_tier.toml         |
-| modeline              | 3     | nvim_api_tier.toml         |
+| Feature               | Cases | File(s)                                                                                                                                                                                                                                                                                |
+| --------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| . (dot repeat)        | 7     | tier2_dot_repeat.toml                                                                                                                                                                                                                                                                  |
+| . with count (3.)     | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
+| J. (join dot)         | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
+| u (undo)              | 2     | tier1.toml                                                                                                                                                                                                                                                                             |
+| U (undo line)         | 5     | not oracled — `nvim_buf_set_lines` seeding is itself undo-tracked by real nvim, so `U`'s restore target ends up pointing at the pre-seed empty buffer; pinned as unit tests in `hjkl-vim/tests/undo_line.rs` instead, each verified against a real `nvim --headless <file>` invocation |
+| C-r (redo)            | 1     | tier1.toml                                                                                                                                                                                                                                                                             |
+| ZZ / ZQ               | —     | exit commands, not oracled                                                                                                                                                                                                                                                             |
+| C-a / C-x (incr/decr) | 2     | tier2_advanced.toml                                                                                                                                                                                                                                                                    |
+| gv (reselect)         | 1     | tier2_visual.toml                                                                                                                                                                                                                                                                      |
+| :earlier / :later     | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
+| modeline              | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
 
 ---
 
