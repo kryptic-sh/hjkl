@@ -2242,17 +2242,30 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // no longer carries a `self.buffer.<inherent>` hop.
         let inverse = apply_buffer_edit(&mut self.buffer, edit);
         let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
-        // Drop any folds the edit's range overlapped — vim opens the
-        // surrounding fold automatically when you edit inside it. The
-        // approximation here invalidates folds covering either the
-        // pre-edit cursor row or the post-edit cursor row, which
-        // catches the common single-line / multi-line edit shapes.
-        let lo = pre_row.min(pos_row);
-        let hi = pre_row.max(pos_row);
-        self.apply_fold_op(crate::types::FoldOp::Invalidate {
-            start_row: lo,
-            end_row: hi,
-        });
+        // Row-count delta the edit produced, needed both to decide how
+        // folds react (below) and to shift marks/jumplist (below).
+        // Computed here, right after the buffer mutation, so both use
+        // the same value.
+        let post_rows = buf_row_count(&self.buffer);
+        let delta = post_rows as isize - pre_rows as isize;
+        if delta == 0 {
+            // No row-count change: approximate vim's "opening the fold
+            // you just edited inside" by dropping any fold covering
+            // either the pre-edit or post-edit cursor row. This catches
+            // the common single-line edit shapes but is a blunt
+            // approximation — see `apply_fold_op`'s Invalidate doc.
+            //
+            // When the edit DOES change the row count, folds instead go
+            // through `shift_marks_after_edit` -> `rebase_folds` below,
+            // which grows/shrinks/clips/drops a fold precisely instead of
+            // always dropping it (#audit-r2 fix 1).
+            let lo = pre_row.min(pos_row);
+            let hi = pre_row.max(pos_row);
+            self.apply_fold_op(crate::types::FoldOp::Invalidate {
+                start_row: lo,
+                end_row: hi,
+            });
+        }
         // Dot mark records the PRE-edit position (change start), matching
         // vim's `:h '.` semantics. Previously this stored the post-edit
         // cursor, which diverged from nvim on `iX<Esc>j`.
@@ -2279,11 +2292,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         }
         bank.cursor = None;
         drop(bank);
-        // Shift / drop marks + jump-list entries to track the row
+        // Shift / drop marks + jump-list entries (and folds, via
+        // `rebase_folds` inside `shift_marks_after_edit`) to track the row
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
-        let post_rows = buf_row_count(&self.buffer);
-        let delta = post_rows as isize - pre_rows as isize;
         if delta != 0 {
             self.shift_marks_after_edit(pre_row, delta);
         }
@@ -2311,6 +2323,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
         self.buffer
             .rebase_marks(edit_start, drop_end, shift_threshold, delta);
+
+        // Manual folds (`zf`) are row-ranges living on the same shared
+        // buffer as marks; without this shift a fold below/above an edit
+        // keeps stale row numbers forever (#audit-r2 fix 1). `delta != 0`
+        // here means `mutate_edit` skipped its cursor-band `Invalidate`
+        // (that only fires for same-row-count edits), so every surviving
+        // fold reaches this call and is shifted/clipped/grown/shrunk
+        // (or dropped, if the edit's deleted band fully consumed it) by
+        // `rebase_folds` precisely instead of just vanishing.
+        self.buffer
+            .rebase_folds(edit_start, drop_end, shift_threshold, delta);
 
         // Shift global marks that belong to the current buffer.
         let cur_bid = self.current_buffer_id;

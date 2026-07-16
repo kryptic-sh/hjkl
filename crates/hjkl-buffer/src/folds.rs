@@ -392,6 +392,23 @@ impl crate::View {
         }
     }
 
+    /// Shift every buffer fold by an edit's row-delta band. Mirrors
+    /// [`crate::buffer::View::rebase_marks`] for the shared fold storage —
+    /// see [`shift_folds_after_edit`] for the per-fold rules.
+    pub fn rebase_folds(
+        &mut self,
+        edit_start: usize,
+        drop_end: usize,
+        shift_threshold: usize,
+        delta: isize,
+    ) {
+        if delta == 0 {
+            return;
+        }
+        let mut c = self.content_lock_mut();
+        shift_folds_after_edit(&mut c.folds, edit_start, drop_end, shift_threshold, delta);
+    }
+
     /// Replace the entire fold set wholesale. Used to install a per-window fold
     /// snapshot into the shared buffer on focus change (window-level folds): the
     /// app keeps each window's open/closed state and swaps it in before dispatch,
@@ -416,6 +433,108 @@ impl crate::View {
 /// opens/forgets any fold the edit overlapped.
 pub fn invalidate_folds(folds: &mut Vec<Fold>, start_row: usize, end_row: usize) {
     folds.retain(|f| f.end_row < start_row || f.start_row > end_row);
+}
+
+// ── Row-delta shifting (edit-coherence) ──────────────────────────────────
+//
+// A manual (`zf`) fold is a row-range that has to track the same
+// insert/delete row-shift the engine already applies to marks and the
+// jumplist (see `Editor::shift_marks_after_edit`). Without this, a fold
+// below an edit keeps stale row numbers and the renderer / fold-aware ops
+// (`dd`, `p`, …) act on the wrong rows (#audit-r2 fix 1).
+//
+// The four `(edit_start, drop_end, shift_threshold, delta)` parameters are
+// the exact same band description `Editor::shift_marks_after_edit` computes
+// for marks: `[edit_start, drop_end)` is the row band the edit deleted
+// (empty for inserts), and any row `>= shift_threshold` moves by `delta`.
+// Reusing the identical band keeps folds, marks, and jumplist entries
+// shifting in lockstep for the same edit.
+
+/// Shift a single fold's `start_row` / `end_row` by an edit's row-delta band.
+/// Returns `None` when the edit's deleted band fully consumes the fold.
+///
+/// Each endpoint is mapped independently through the same drop/shift rule
+/// [`crate::buffer::View::rebase_marks`] applies to a point mark. Mapping
+/// the two endpoints independently is what produces the vim-shaped "edit
+/// inside a fold" semantics for free:
+/// - Both endpoints below `shift_threshold` and outside the deleted band →
+///   fold untouched (edit happened entirely outside the fold).
+/// - `start_row` outside the deleted band but `end_row` inside it → the
+///   edit deleted the fold's tail; it clips to end at the last surviving
+///   row (`edit_start - 1`).
+/// - `start_row` inside the deleted band but `end_row` outside it → the
+///   edit deleted the fold's head; it clips to start at `edit_start` (the
+///   row the surviving tail now occupies).
+/// - Both endpoints inside the deleted band → the edit consumed the whole
+///   fold; it's dropped.
+/// - `start_row` below the threshold and `end_row` at/above it (an insert
+///   or a deletion landing strictly inside the fold) → `start_row` stays,
+///   `end_row` shifts by `delta`: the fold grows (insert) or shrinks
+///   (delete) around the edit, matching vim.
+/// - Both endpoints at/above the threshold → the fold shifts wholesale.
+pub fn shift_fold(
+    fold: Fold,
+    edit_start: usize,
+    drop_end: usize,
+    shift_threshold: usize,
+    delta: isize,
+) -> Option<Fold> {
+    if delta == 0 {
+        return Some(fold);
+    }
+    let map_row = |row: usize| -> Option<usize> {
+        if (edit_start..drop_end).contains(&row) {
+            None
+        } else if row >= shift_threshold {
+            Some(((row as isize) + delta).max(0) as usize)
+        } else {
+            Some(row)
+        }
+    };
+    let mapped_start = map_row(fold.start_row);
+    let mapped_end = map_row(fold.end_row);
+    if mapped_start.is_none() && mapped_end.is_none() {
+        return None;
+    }
+    let new_start = mapped_start.unwrap_or(edit_start);
+    let new_end = mapped_end.unwrap_or_else(|| edit_start.saturating_sub(1));
+    if new_end < new_start {
+        return None;
+    }
+    Some(Fold {
+        start_row: new_start,
+        end_row: new_end,
+        closed: fold.closed,
+        auto_generated: fold.auto_generated,
+    })
+}
+
+/// Shift every fold in `folds` by an edit's row-delta band, in place.
+/// Folds the edit's deleted band fully consumes are dropped (mirrors
+/// [`invalidate_folds`] for the folds that DO survive but move).
+///
+/// Shared by [`crate::View::rebase_folds`] (engine-side, the buffer's own
+/// fold storage) and the app's sibling-window fold snapshot shift, so both
+/// converge on the identical row-shift rule.
+pub fn shift_folds_after_edit(
+    folds: &mut Vec<Fold>,
+    edit_start: usize,
+    drop_end: usize,
+    shift_threshold: usize,
+    delta: isize,
+) {
+    if delta == 0 {
+        return;
+    }
+    folds.retain_mut(|f| {
+        match shift_fold(*f, edit_start, drop_end, shift_threshold, delta) {
+            Some(shifted) => {
+                *f = shifted;
+                true
+            }
+            None => false,
+        }
+    });
 }
 
 #[cfg(test)]
@@ -640,5 +759,116 @@ mod tests {
             !buf2.folds()[0].closed,
             "brand-new auto fold must start open when default_closed=false"
         );
+    }
+
+    // ── row-delta shifting (audit-r2 fix 1) ───────────────────────────────
+
+    fn fold(s: usize, e: usize) -> super::Fold {
+        super::Fold {
+            start_row: s,
+            end_row: e,
+            closed: true,
+            auto_generated: false,
+        }
+    }
+
+    #[test]
+    fn shift_fold_insert_above_shifts_down() {
+        // 10-line file, fold at rows 4..6, insert one row at row 0
+        // (`ggO x<Esc>`): vim shifts the fold to 5..7.
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 0, 0, 1, 1).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (5, 7));
+    }
+
+    #[test]
+    fn shift_fold_delete_above_shifts_up() {
+        // Fold at rows 4..6, one row deleted above at row 0.
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 0, 1, 1, -1).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (3, 5));
+    }
+
+    #[test]
+    fn shift_fold_delete_fully_overlapping_drops() {
+        // Fold at rows 4..6, deletion covers rows 4..6 entirely.
+        let f = fold(4, 6);
+        assert!(super::shift_fold(f, 4, 7, 7, -3).is_none());
+    }
+
+    #[test]
+    fn shift_fold_delete_overlapping_tail_clips() {
+        // Fold at rows 4..6, deletion of rows 6..8 (tail only) clips the
+        // fold to end at the last surviving row.
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 6, 9, 9, -3).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (4, 5));
+    }
+
+    #[test]
+    fn shift_fold_delete_overlapping_head_clips() {
+        // Fold at rows 4..6, deletion of rows 3..4 (head only) clips the
+        // fold to start where the surviving tail now sits.
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 3, 5, 5, -2).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (3, 4));
+    }
+
+    #[test]
+    fn shift_fold_edit_inside_grows_on_insert() {
+        // Fold at rows 4..6, a line inserted at row 5 (strictly inside):
+        // vim grows the fold's end, leaves the start alone.
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 5, 5, 6, 1).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (4, 7));
+    }
+
+    #[test]
+    fn shift_fold_edit_inside_shrinks_on_delete() {
+        // Fold at rows 4..8, rows 5..6 deleted (strictly inside): the fold
+        // shrinks around the deletion instead of clipping or dropping.
+        let f = fold(4, 8);
+        let shifted = super::shift_fold(f, 5, 7, 7, -2).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (4, 6));
+    }
+
+    #[test]
+    fn shift_fold_unaffected_when_entirely_before_edit() {
+        let f = fold(1, 2);
+        let shifted = super::shift_fold(f, 10, 11, 11, 1).unwrap();
+        assert_eq!((shifted.start_row, shifted.end_row), (1, 2));
+    }
+
+    #[test]
+    fn shift_fold_zero_delta_is_noop() {
+        let f = fold(4, 6);
+        let shifted = super::shift_fold(f, 0, 0, 0, 0).unwrap();
+        assert_eq!(shifted, f);
+    }
+
+    #[test]
+    fn shift_folds_after_edit_shifts_vec_in_place() {
+        let mut folds = vec![fold(4, 6), fold(1, 2)];
+        // Insert one row at row 0: both folds shift down.
+        super::shift_folds_after_edit(&mut folds, 0, 0, 1, 1);
+        let ranges: Vec<(usize, usize)> = folds.iter().map(|f| (f.start_row, f.end_row)).collect();
+        assert_eq!(ranges, vec![(5, 7), (2, 3)]);
+    }
+
+    #[test]
+    fn shift_folds_after_edit_drops_fully_consumed() {
+        let mut folds = vec![fold(4, 6)];
+        super::shift_folds_after_edit(&mut folds, 4, 7, 7, -3);
+        assert!(folds.is_empty());
+    }
+
+    #[test]
+    fn rebase_folds_shifts_buffer_fold_storage() {
+        let mut buf = View::from_str("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        buf.add_fold(4, 6, true);
+        buf.rebase_folds(0, 0, 1, 1);
+        let folds = buf.folds();
+        assert_eq!(folds.len(), 1);
+        assert_eq!((folds[0].start_row, folds[0].end_row), (5, 7));
     }
 }

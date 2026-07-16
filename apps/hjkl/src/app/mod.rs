@@ -1595,11 +1595,18 @@ impl App {
         &mut self,
         edits: &[hjkl_engine::types::ContentEdit],
     ) {
-        // Window-level folds: an edit invalidates any overlapping fold in OTHER
-        // windows showing this same slot, mirroring the engine's
-        // `FoldOp::Invalidate` on the focused window (whose folds were already
-        // saved by `sync_viewport_from_editor`). Keeps sibling snapshots from
-        // stranding closed-fold markers over rows the edit moved.
+        // Window-level folds: an edit updates any fold in OTHER windows
+        // showing this same slot, mirroring what the engine now does for the
+        // focused window's own (shared-buffer) folds (audit-r2 fix 1):
+        // a same-row-count edit (delta == 0) still just invalidates
+        // (drops) any fold it overlapped — matching `mutate_edit`'s
+        // cursor-band `Invalidate` — but a row-count-changing edit shifts
+        // survivors by the row delta (growing/shrinking/clipping/dropping
+        // as appropriate) via `shift_folds_after_edit`, the exact rule
+        // `Editor::shift_marks_after_edit` -> `rebase_folds` applies to the
+        // focused window. Without this, a sibling split's fold snapshot
+        // would keep the stale-row bug fix 1 just closed, just for
+        // unfocused windows.
         if !edits.is_empty() {
             let fw = self.focused_window();
             let slot = self
@@ -1619,9 +1626,25 @@ impl App {
                 for sid in siblings {
                     if let Some(folds) = self.window_folds.get_mut(&sid) {
                         for e in edits {
-                            let lo = e.start_position.0 as usize;
-                            let hi = e.old_end_position.0.max(e.new_end_position.0) as usize;
-                            hjkl_buffer::invalidate_folds(folds, lo, hi);
+                            let edit_start = e.start_position.0 as usize;
+                            let old_end_row = e.old_end_position.0 as usize;
+                            let new_end_row = e.new_end_position.0 as usize;
+                            let delta = new_end_row as isize - old_end_row as isize;
+                            if delta == 0 {
+                                let lo = edit_start;
+                                let hi = old_end_row.max(new_end_row);
+                                hjkl_buffer::invalidate_folds(folds, lo, hi);
+                            } else {
+                                let drop_end = old_end_row.max(edit_start);
+                                let shift_threshold = drop_end.max(edit_start + 1);
+                                hjkl_buffer::shift_folds_after_edit(
+                                    folds,
+                                    edit_start,
+                                    drop_end,
+                                    shift_threshold,
+                                    delta,
+                                );
+                            }
                         }
                     }
                 }
