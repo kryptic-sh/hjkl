@@ -11,10 +11,12 @@
 //! - The `c` (confirm) flag triggers interactive replacement. Each match
 //!   is presented one-by-one; the user chooses y/n/a/q/l. See
 //!   [`collect_substitute_matches`] and [`apply_collected_matches`].
-//! - The `\v` very-magic mode is not supported. The regex crate uses
-//!   ERE syntax by default. Most ERE patterns work, but vim-specific
-//!   extensions (`\<`, `\>`, `\s`, `\+`) may not. Use POSIX ERE
-//!   equivalents or the `regex` crate's syntax.
+//! - Patterns are translated from vim's default-magic syntax (and the
+//!   `\v` / `\V` / `\m` / `\M` mode switches) into rust-`regex` syntax by
+//!   [`crate::search::resolve_case_mode`] before compiling — see that
+//!   module for the full transform table. `\1`-`\9` **backreferences in the
+//!   pattern** (as opposed to the replacement, which supports them) are not
+//!   supported by the rust `regex` crate (no backtracking engine).
 //! - The replacement is kept in raw vim notation and expanded per match by
 //!   [`expand_replacement`]: capture refs (`&`, `\0`…`\9`), case escapes
 //!   (`\u`/`\l`/`\U`/`\L`/`\E`), control chars (`\r`/`\t`/`\n`), and `~` (the
@@ -1009,7 +1011,8 @@ mod tests {
     #[test]
     fn apply_capture_group_reference() {
         let mut e = editor_with("hello world");
-        let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
+        // Vim default magic: groups need `\(` `\)`; `+` needs `\+`.
+        let cmd = parse_substitute("/\\(\\w\\+\\)/<<\\1>>/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
     }
@@ -1109,7 +1112,7 @@ mod tests {
     fn apply_group_ref_then_literal_digits() {
         // Braced capture refs let a digit follow a group ref: `\1` then `1`.
         let mut e = editor_with("ab");
-        let cmd = parse_substitute("/(.)/\\11/g").unwrap();
+        let cmd = parse_substitute("/\\(.\\)/\\11/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(buf_line(&e, 0), "a1b1");
     }
@@ -1259,8 +1262,8 @@ mod tests {
     #[test]
     fn collect_substitute_matches_expands_template() {
         let e = editor_with("hello world");
-        // /(\\w+)/<<\\1>>/ — the replacement template has a capture group.
-        let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
+        // /\(\w\+\)/<<\1>>/ — the replacement template has a capture group.
+        let cmd = parse_substitute("/\\(\\w\\+\\)/<<\\1>>/g").unwrap();
         let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].replacement, "<<hello>>");
@@ -1275,7 +1278,7 @@ mod tests {
         // Applying in forward order would shift byte offsets; reverse must
         // keep the final buffer consistent.
         let mut e = editor_with("foo bar baz");
-        let cmd = parse_substitute("/(foo|bar|baz)/X/g").unwrap();
+        let cmd = parse_substitute("/\\(foo\\|bar\\|baz\\)/X/g").unwrap();
         let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
         assert_eq!(matches.len(), 3);
         let accepted = vec![true; 3];
@@ -1313,7 +1316,7 @@ mod tests {
     #[test]
     fn apply_collected_matches_expands_template() {
         let mut e = editor_with("hello world");
-        let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
+        let cmd = parse_substitute("/\\(\\w\\+\\)/<<\\1>>/g").unwrap();
         let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
         let accepted = vec![true; matches.len()];
         let applied = apply_collected_matches(&mut e, &matches, &accepted);

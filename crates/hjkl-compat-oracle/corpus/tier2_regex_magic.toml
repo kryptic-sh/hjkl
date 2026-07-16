@@ -1,0 +1,90 @@
+# B8/B9 — vim default-magic regex translation (`\( \) \+ \? \= \| \{n,m}`,
+# the inverse literal-unless-escaped rule for `( ) + ? | { }`) plus the
+# `\v` / `\V` mode-switch prefixes.
+#
+# `:s` cases go through the `hjkl --nvim-api` subprocess driver (ex commands
+# aren't dispatched by in-process key replay — see README). Plain `/` search
+# cases use the in-process key-replay driver.
+
+# ---- groups + backreference in the REPLACEMENT (pattern-side groups) -------
+
+# `\(hello\) \(world\)` groups + `\2 \1` swap in the replacement.
+[[cases]]
+name = "magic_groups_and_backref_swap"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/\\(hello\\) \\(world\\)/\\2 \\1/<CR>"
+expected_buffer = "world hello\n"
+expected_cursor = [0, 0]
+
+# ---- quantifiers / alternation ----------------------------------------------
+
+# `\+` — one or more of the preceding atom.
+[[cases]]
+name = "magic_plus_quantifier"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = ":s/fo\\+/X/<CR>"
+expected_buffer = "X\n"
+expected_cursor = [0, 0]
+
+# `\|` — alternation.
+[[cases]]
+name = "magic_alternation"
+initial_buffer = "cat and dog\n"
+initial_cursor = [0, 0]
+keys = ":s/cat\\|dog/pet/<CR>"
+expected_buffer = "pet and dog\n"
+expected_cursor = [0, 0]
+
+# `\{1,2}` — counted repeat with vim's permissive unescaped closing brace.
+# Greedy: matches "foo" (2 trailing o's) inside "fooo", leaving "Xo".
+[[cases]]
+name = "magic_counted_repeat_bare_close"
+initial_buffer = "fooo\n"
+initial_cursor = [0, 0]
+keys = ":s/fo\\{1,2}/X/<CR>"
+expected_buffer = "Xo\n"
+expected_cursor = [0, 0]
+
+# ---- inverse: unescaped ( ) are LITERAL in default magic -------------------
+
+[[cases]]
+name = "magic_unescaped_parens_are_literal"
+initial_buffer = "(a)\n"
+initial_cursor = [0, 0]
+keys = ":s/(a)/X/<CR>"
+expected_buffer = "X\n"
+expected_cursor = [0, 0]
+
+# ---- \v very magic -----------------------------------------------------------
+
+# `\v(\w+) (\w+)` — groups/quantifiers magic unescaped in very-magic mode.
+[[cases]]
+name = "very_magic_groups_and_backref_swap"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/\\v(\\w+) (\\w+)/\\2 \\1/<CR>"
+expected_buffer = "world hello\n"
+expected_cursor = [0, 0]
+
+# `\v\d+` search — lands on the first digit run.
+[[cases]]
+name = "very_magic_digit_search"
+initial_buffer = "abc 123 def\n"
+initial_cursor = [0, 0]
+keys = "/\\v\\d+<CR>"
+expected_buffer = "abc 123 def\n"
+expected_cursor = [0, 4]
+
+# ---- \V very nomagic ----------------------------------------------------------
+
+# `\Va.b` — `.` is a LITERAL dot, so "acb" on row 0 (which would match
+# default-magic `a.b`) is skipped; only the literal "a.b" on row 1 matches.
+[[cases]]
+name = "very_nomagic_literal_dot_search"
+initial_buffer = "acb\na.b\n"
+initial_cursor = [0, 0]
+keys = "/\\Va.b<CR>"
+expected_buffer = "acb\na.b\n"
+expected_cursor = [1, 0]

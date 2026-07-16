@@ -170,6 +170,18 @@ async fn tier2_ex_lineops_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_ex_lineops.toml", "tier2_ex_lineops").await;
 }
 
+/// B8/B9: vim default-magic regex translation (`\( \) \+ \? \= \| \{n,m}`,
+/// the literal-unless-escaped inverse, and the `\v`/`\V` mode switches).
+/// `:s` cases need the nvim-api subprocess driver (ex commands aren't
+/// dispatched by in-process key replay); the plain `/` search cases in this
+/// file are routed to `nvim_input` by the same driver's non-`:` fallback
+/// (see `hjkl_driver::run_case_via_nvim_api_inner`), so one driver covers
+/// the whole corpus.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_regex_magic_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_regex_magic.toml", "tier2_regex_magic").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_case_indent_join_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

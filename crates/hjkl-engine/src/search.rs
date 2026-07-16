@@ -73,6 +73,222 @@ impl CaseMode {
     }
 }
 
+/// Vim's regex "magic" level — controls which characters are special
+/// (regex metacharacters) without a backslash prefix. See `:help magic`.
+///
+/// Ordering (most → least magic): `VeryMagic > Magic > NoMagic > VeryNoMagic`.
+/// A character's inherent level determines its behavior: it is special
+/// unescaped when the current level is *at or above* its inherent level, and
+/// backslash toggles that (forces the opposite treatment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MagicLevel {
+    /// `\v` — nearly every non-alnum/underscore ASCII character is special
+    /// unescaped (groups, quantifiers, alternation, anchors, boundaries).
+    VeryMagic,
+    /// Default / `\m` — vim's normal mode: `. * [ ] ~` are magic unescaped;
+    /// groups/quantifiers/alternation/boundaries need a backslash.
+    Magic,
+    /// `\M` — only `^ $` are magic unescaped; everything else (including
+    /// `. * [ ]`) is literal unless backslashed.
+    NoMagic,
+    /// `\V` — only `\` is special; every other character is literal unless
+    /// backslashed (mirrors `Magic`'s "very magic" meta chars).
+    VeryNoMagic,
+}
+
+/// Characters whose inherent magic level is "very magic" (`( ) + ? | { } = < >`).
+fn very_magic_special(ch: char) -> bool {
+    matches!(
+        ch,
+        '(' | ')' | '+' | '?' | '|' | '{' | '}' | '=' | '<' | '>'
+    )
+}
+
+/// Characters whose inherent magic level is "magic" (`. * [ ] ~`).
+fn magic_special(ch: char) -> bool {
+    matches!(ch, '.' | '*' | '[' | ']' | '~')
+}
+
+/// Characters whose inherent magic level is "nomagic" (`^ $`).
+fn nomagic_special(ch: char) -> bool {
+    matches!(ch, '^' | '$')
+}
+
+/// `true` when `ch` is a rust-`regex` metacharacter that must be
+/// backslash-escaped to appear as a literal.
+fn regex_meta(ch: char) -> bool {
+    matches!(
+        ch,
+        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+    )
+}
+
+/// Whether `ch` is special-without-a-backslash at the given magic `level`.
+fn is_special_unescaped(ch: char, level: MagicLevel) -> bool {
+    if very_magic_special(ch) {
+        level == MagicLevel::VeryMagic
+    } else if magic_special(ch) {
+        matches!(level, MagicLevel::VeryMagic | MagicLevel::Magic)
+    } else if nomagic_special(ch) {
+        level != MagicLevel::VeryNoMagic
+    } else {
+        false
+    }
+}
+
+/// Emit `ch`'s regex-special meaning into `out`. `chars` is consumed further
+/// only for `{` (counted-repeat body) and `[` (character class) is handled by
+/// the caller since it needs to flip a "bracket mode" flag.
+fn emit_special(out: &mut String, ch: char, chars: &mut std::iter::Peekable<std::str::Chars>) {
+    match ch {
+        '(' => out.push('('),
+        ')' => out.push(')'),
+        '+' => out.push('+'),
+        '?' => out.push('?'),
+        '=' => out.push('?'), // vim `\=` / very-magic `=` — same as `\?`.
+        '|' => out.push('|'),
+        '<' | '>' => out.push_str(r"\b"),
+        '{' => {
+            out.push('{');
+            emit_counted_repeat(out, chars);
+        }
+        '}' => out.push('}'), // stray close — harmless as a literal.
+        '.' => out.push('.'),
+        '*' => out.push('*'),
+        ']' => out.push_str(r"\]"), // stray close — harmless as a literal.
+        // Magic `~` ("last substitute string" in a pattern) is not
+        // implemented — treated as a literal tilde (see DIVERGE.md).
+        '~' => out.push('~'),
+        '^' => out.push('^'),
+        '$' => out.push('$'),
+        _ => out.push(ch),
+    }
+}
+
+/// Copy a `\{n,m}` / `{n,m}` counted-repeat body through to `out`, closing on
+/// either a bare `}` (vim's permissive default-magic form, `\{n,m}`) or an
+/// escaped `\}`. Assumes the opening `{` has already been pushed to `out`.
+fn emit_counted_repeat(out: &mut String, chars: &mut std::iter::Peekable<std::str::Chars>) {
+    loop {
+        match chars.next() {
+            Some('\\') => {
+                if chars.peek() == Some(&'}') {
+                    chars.next();
+                    out.push('}');
+                    return;
+                } else if let Some(c2) = chars.next() {
+                    out.push(c2);
+                } else {
+                    return;
+                }
+            }
+            Some('}') => {
+                out.push('}');
+                return;
+            }
+            Some(c2) => out.push(c2),
+            None => return,
+        }
+    }
+}
+
+/// Emit `ch` as a literal character, escaping it if it happens to be a rust
+/// `regex` metacharacter.
+fn emit_literal(out: &mut String, ch: char) {
+    if regex_meta(ch) {
+        out.push('\\');
+    }
+    out.push(ch);
+}
+
+/// Translate a raw vim pattern into rust-`regex` syntax and extract any
+/// `\c`/`\C` case override. This is the core of [`resolve_case_mode`].
+///
+/// Handles vim's default-magic transforms (`\( \) \+ \? \= \|` → group /
+/// quantifier / alternation syntax; the inverse — unescaped `( ) + ? | { }`
+/// become literals), the `\<` / `\>` word-boundary rewrite (already
+/// magic-level-independent), `\{n,m}` counted repeats (including vim's
+/// permissive unescaped-closing-brace form), and the `\v` / `\V` / `\m` /
+/// `\M` magic-level mode switches (mid-pattern, not just at the start).
+///
+/// `\1`-`\9` backreferences in the PATTERN (not the replacement) are not
+/// supported by the rust `regex` crate (no backtracking engine) — they pass
+/// through unchanged, which either fails to compile or fails to match,
+/// preserving the pre-fix "silent no-match" behavior rather than corrupting
+/// text. See `DIVERGE.md`.
+///
+/// A simple bracket-depth flag skips translation inside `[...]` character
+/// classes, mirroring how vim (and rust-regex) treat class contents mostly
+/// literally.
+fn translate_pattern(pat: &str) -> (String, Option<bool>) {
+    let mut out = String::with_capacity(pat.len());
+    let mut level = MagicLevel::Magic;
+    let mut override_mode: Option<bool> = None;
+    let mut chars = pat.chars().peekable();
+    let mut in_bracket = false;
+
+    while let Some(ch) = chars.next() {
+        if in_bracket {
+            out.push(ch);
+            if ch == ']' {
+                in_bracket = false;
+            }
+            continue;
+        }
+
+        if ch == '\\' {
+            match chars.next() {
+                Some('c') => override_mode = Some(true),  // \c → insensitive
+                Some('C') => override_mode = Some(false), // \C → sensitive
+                Some('v') => level = MagicLevel::VeryMagic,
+                Some('V') => level = MagicLevel::VeryNoMagic,
+                Some('m') => level = MagicLevel::Magic,
+                Some('M') => level = MagicLevel::NoMagic,
+                Some(d @ '0'..='9') => {
+                    // Backreference — unsupported by rust-regex. Pass through
+                    // unchanged (keeps prior no-match/error behavior).
+                    out.push('\\');
+                    out.push(d);
+                }
+                Some(c2) if very_magic_special(c2) || magic_special(c2) || nomagic_special(c2) => {
+                    if is_special_unescaped(c2, level) {
+                        // Already special unescaped at this level — backslash
+                        // forces the literal reading.
+                        emit_literal(&mut out, c2);
+                    } else if c2 == '[' {
+                        out.push('[');
+                        in_bracket = true;
+                    } else {
+                        emit_special(&mut out, c2, &mut chars);
+                    }
+                }
+                Some(other) => {
+                    // \d \s \w \b \B \a \A \n \t \r \& \~ \\ etc. — already
+                    // valid rust-regex syntax (or handled by the caller) and
+                    // identical in vim's default magic. Pass through.
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+            continue;
+        }
+
+        if is_special_unescaped(ch, level) {
+            if ch == '[' {
+                out.push('[');
+                in_bracket = true;
+            } else {
+                emit_special(&mut out, ch, &mut chars);
+            }
+        } else {
+            emit_literal(&mut out, ch);
+        }
+    }
+
+    (out, override_mode)
+}
+
 /// Strip `\c` / `\C` overrides from `pat`, resolve the effective
 /// [`CaseMode`], and return the cleaned pattern together with the
 /// resolved mode.
@@ -83,6 +299,13 @@ impl CaseMode {
 /// - `\C` anywhere in `pat` forces case-sensitive.
 /// - When both appear the **last** one wins.
 /// - Both are stripped from the returned pattern.
+///
+/// ### Magic-mode translation
+///
+/// As of the default-magic regex fix, this function also translates vim's
+/// default-magic (and `\v`/`\V`/`\m`/`\M`-switched) regex syntax into
+/// rust-`regex` syntax — see [`translate_pattern`] for the full transform
+/// list. `vim_to_rust_regex` is a thin wrapper that discards the case mode.
 ///
 /// ### Smart-case detection
 ///
@@ -96,48 +319,18 @@ impl CaseMode {
 /// `apply_substitute` **before** calling this function (they
 /// short-circuit entirely). This function is not involved.
 pub fn resolve_case_mode(pat: &str, base: CaseMode) -> (String, CaseMode) {
-    let mut out = String::with_capacity(pat.len());
-    let mut chars = pat.chars().peekable();
-    // None = no override seen yet; Some(true) = \c (insensitive); Some(false) = \C (sensitive).
-    let mut override_mode: Option<bool> = None;
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.peek() {
-                Some('c') => {
-                    chars.next();
-                    override_mode = Some(true); // \c → insensitive
-                }
-                Some('C') => {
-                    chars.next();
-                    override_mode = Some(false); // \C → sensitive
-                }
-                Some('<') => {
-                    chars.next();
-                    out.push_str(r"\b");
-                }
-                Some('>') => {
-                    chars.next();
-                    out.push_str(r"\b");
-                }
-                _ => {
-                    out.push('\\');
-                    if let Some(next) = chars.next() {
-                        out.push(next);
-                    }
-                }
-            }
-        } else {
-            out.push(ch);
-        }
-    }
+    let (out, override_mode) = translate_pattern(pat);
 
     let resolved = match override_mode {
         Some(true) => CaseMode::Insensitive,
         Some(false) => CaseMode::Sensitive,
         None => match base {
             CaseMode::Smart => {
-                // Any uppercase rune → sensitive.
+                // Any uppercase rune → sensitive. Scan the TRANSLATED
+                // pattern so control sequences consumed during translation
+                // (`\c` `\C` `\v` `\V` `\m` `\M`) don't spuriously count —
+                // matches the pre-existing behavior this function had before
+                // magic-mode translation was added.
                 if out.chars().any(|c| c.is_uppercase()) {
                     CaseMode::Sensitive
                 } else {
@@ -391,14 +584,19 @@ mod tests {
     fn other_escapes_unchanged() {
         assert_eq!(vim_to_rust_regex(r"\b"), r"\b");
         assert_eq!(vim_to_rust_regex(r"\B"), r"\B");
-        assert_eq!(vim_to_rust_regex(r"\d+"), r"\d+");
-        assert_eq!(vim_to_rust_regex(r"^\w+$"), r"^\w+$");
+        // vim default magic: `+` is a literal unless backslashed. `\d\+`
+        // (digit class, one-or-more quantifier) translates to `\d\+` in
+        // rust-regex syntax (identical spelling — `\+` IS rust-regex's own
+        // escaped-literal-plus, but since the quantifier here is coming from
+        // vim's `\+` we want the rust-regex QUANTIFIER `+`, unescaped).
+        assert_eq!(vim_to_rust_regex(r"\d\+"), r"\d+");
+        assert_eq!(vim_to_rust_regex(r"^\w\+$"), r"^\w+$");
     }
 
-    /// Mixed: `\<\w+\>` rewrites to `\b\w+\b` — matches whole words.
+    /// Mixed: `\<\w\+\>` rewrites to `\b\w+\b` — matches whole words.
     #[test]
     fn mixed_boundary_and_word_class() {
-        assert_eq!(vim_to_rust_regex(r"\<\w+\>"), r"\b\w+\b");
+        assert_eq!(vim_to_rust_regex(r"\<\w\+\>"), r"\b\w+\b");
     }
 
     // ── Integration: compiled vim patterns match correctly ───────────────────
@@ -451,7 +649,7 @@ mod tests {
     /// Mixed: `\<\w+\>` matches whole words only.
     #[test]
     fn vim_whole_word_pattern() {
-        let re = vim_re(r"\<\w+\>");
+        let re = vim_re(r"\<\w\+\>");
         let matches: Vec<_> = re.find_iter("foo bar baz").map(|m| m.as_str()).collect();
         assert_eq!(matches, vec!["foo", "bar", "baz"]);
     }
@@ -462,6 +660,115 @@ mod tests {
         let mut s = SearchState::new();
         assert!(!search_forward(&mut b, &mut s, false));
         assert!(!search_backward(&mut b, &mut s, false));
+    }
+
+    // ── B8/B9: default-magic + \v/\V/\m/\M translation ───────────────────────
+
+    #[test]
+    fn default_magic_groups_and_backref_replacement_side() {
+        // \( \) → real groups; the PATTERN side is exercised end-to-end via
+        // substitute.rs (replacement-side \1 already worked before this fix).
+        assert_eq!(
+            vim_to_rust_regex(r"\(hello\) \(world\)"),
+            r"(hello) (world)"
+        );
+    }
+
+    #[test]
+    fn default_magic_quantifiers_and_alternation() {
+        assert_eq!(vim_to_rust_regex(r"a\+"), r"a+");
+        assert_eq!(vim_to_rust_regex(r"a\?"), r"a?");
+        assert_eq!(vim_to_rust_regex(r"a\="), r"a?");
+        assert_eq!(vim_to_rust_regex(r"a\|b"), r"a|b");
+    }
+
+    #[test]
+    fn default_magic_counted_repeat_bare_close() {
+        // vim allows `\{n,m}` with an UNESCAPED closing brace.
+        assert_eq!(vim_to_rust_regex(r"a\{1,2}"), r"a{1,2}");
+        // Fully-escaped form also works.
+        assert_eq!(vim_to_rust_regex(r"a\{1,2\}"), r"a{1,2}");
+    }
+
+    #[test]
+    fn default_magic_unescaped_group_chars_are_literal() {
+        // The INVERSE: unescaped ( ) + ? | { } are literals in default magic.
+        assert_eq!(vim_to_rust_regex("(a)"), r"\(a\)");
+        assert_eq!(vim_to_rust_regex("a+b"), r"a\+b");
+        assert_eq!(vim_to_rust_regex("a|b"), r"a\|b");
+        assert_eq!(vim_to_rust_regex("a?b"), r"a\?b");
+    }
+
+    #[test]
+    fn default_magic_dot_star_bracket_caret_dollar_stay_magic() {
+        assert_eq!(vim_to_rust_regex("a.b"), "a.b");
+        assert_eq!(vim_to_rust_regex("a*"), "a*");
+        assert_eq!(vim_to_rust_regex("[0-9]"), "[0-9]");
+        assert_eq!(vim_to_rust_regex("^foo$"), "^foo$");
+    }
+
+    #[test]
+    fn magic_tilde_is_literal_not_special() {
+        // Magic `~` ("last substitute text") is unimplemented — treated as a
+        // literal tilde (see DIVERGE.md).
+        assert_eq!(vim_to_rust_regex("a~b"), "a~b");
+    }
+
+    #[test]
+    fn very_magic_mode_switch_at_start() {
+        // \v: groups/quantifiers/alternation/boundaries are magic unescaped.
+        assert_eq!(vim_to_rust_regex(r"\v(\w+) (\w+)"), r"(\w+) (\w+)");
+        assert_eq!(vim_to_rust_regex(r"\v\d+"), r"\d+");
+        assert_eq!(vim_to_rust_regex(r"\v<foo>"), r"\bfoo\b");
+        assert_eq!(vim_to_rust_regex(r"\va=b"), r"a?b");
+    }
+
+    #[test]
+    fn very_magic_mode_escaped_chars_are_literal() {
+        // In \v mode, backslash forces the LITERAL reading of an
+        // otherwise-special char.
+        assert_eq!(vim_to_rust_regex(r"\v\(a\)"), r"\(a\)");
+        assert_eq!(vim_to_rust_regex(r"\va\+b"), r"a\+b");
+    }
+
+    #[test]
+    fn very_nomagic_mode_is_all_literal_except_backslash() {
+        // \V: everything literal except `\`-escaped.
+        assert_eq!(vim_to_rust_regex(r"\Va.b"), r"a\.b");
+        assert_eq!(vim_to_rust_regex(r"\V(a)"), r"\(a\)");
+        // Backslash still activates special meaning (mirrors \v).
+        assert_eq!(vim_to_rust_regex(r"\Va\.b"), r"a.b");
+    }
+
+    #[test]
+    fn nomagic_mode_only_caret_dollar_special() {
+        // \M: only ^ $ special unescaped; `.` `*` `[` become literal.
+        assert_eq!(vim_to_rust_regex(r"\M^a.b$"), r"^a\.b$");
+        assert_eq!(vim_to_rust_regex(r"\Ma\.b"), r"a.b");
+    }
+
+    #[test]
+    fn mode_switch_mid_pattern() {
+        // Switching mode partway through the pattern applies from that point on.
+        assert_eq!(vim_to_rust_regex(r"(a)\v(b)"), r"\(a\)(b)");
+        assert_eq!(vim_to_rust_regex(r"\va\mb+"), r"ab\+");
+    }
+
+    #[test]
+    fn backreference_in_pattern_passes_through_unchanged() {
+        // \1-\9 in the PATTERN aren't supported by rust-regex (no
+        // backtracking) — kept as a literal backslash-digit escape so the
+        // net effect (no match / compile error) matches pre-fix behavior
+        // rather than silently corrupting text. See DIVERGE.md.
+        assert_eq!(vim_to_rust_regex(r"\(a\)\1"), r"(a)\1");
+    }
+
+    #[test]
+    fn character_class_contents_not_translated() {
+        // Unescaped `(` `)` inside `[...]` are literal class members in both
+        // vim and rust-regex — bracket tracking must not turn them into a
+        // group by escaping/unescaping their contents.
+        assert_eq!(vim_to_rust_regex("[()]"), "[()]");
     }
 
     // ── search reveals folds ─────────────────────────────────────────────────
