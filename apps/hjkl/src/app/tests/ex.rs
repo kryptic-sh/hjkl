@@ -3207,23 +3207,75 @@ fn recover_orphan_scratch_loads_buffer() {
     );
 }
 
+/// Two dirty buffers, only one focused — an idle tick must refresh BOTH
+/// swap files, not just the focused slot's (audit-r2 fix 3). Pre-fix, the
+/// idle writer only ever wrote `focused_slot_idx()`, so a defocused dirty
+/// buffer's edits had no crash protection at all until it was refocused.
+#[test]
+fn idle_swap_sweep_writes_all_dirty_slots_not_just_focused() {
+    let td = tempfile::tempdir().unwrap();
+    let path_a = td.path().join("sweep_a.txt");
+    let path_b = td.path().join("sweep_b.txt");
+    std::fs::write(&path_a, "alpha\n").unwrap();
+    std::fs::write(&path_b, "beta\n").unwrap();
+
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Slot 0 (path_a): inject a swap path, dirty it — then defocus by
+    // opening path_b.
+    let swap_path_a = td.path().join("sweep_a.swp");
+    app.active_mut().swap_path = Some(swap_path_a.clone());
+    seed_buffer(&mut app, "changed alpha");
+    app.active_mut().dirty = true;
+    assert_eq!(app.active_index(), 0);
+
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    assert_eq!(app.slots.len(), 2);
+    assert_eq!(app.active_index(), 1, "path_b must now be focused");
+
+    // Slot 1 (path_b, focused): inject a swap path, dirty it too.
+    let swap_path_b = td.path().join("sweep_b.swp");
+    app.active_mut().swap_path = Some(swap_path_b.clone());
+    seed_buffer(&mut app, "changed beta");
+    app.active_mut().dirty = true;
+
+    assert!(!swap_path_a.exists(), "setup: no swap files written yet");
+    assert!(!swap_path_b.exists(), "setup: no swap files written yet");
+
+    // Simulate updatetime (default 4000ms) having elapsed since the last
+    // keystroke, then run the idle sweep.
+    app.last_input_at = std::time::Instant::now() - std::time::Duration::from_millis(5000);
+    app.tick_idle_swap_write(std::time::Instant::now());
+
+    assert!(
+        swap_path_b.exists(),
+        "focused slot's swap must be written by the idle sweep"
+    );
+    assert!(
+        swap_path_a.exists(),
+        "defocused dirty slot's swap must ALSO be written by the idle sweep"
+    );
+}
+
 #[test]
 fn active_swap_pending_true_for_dirty_scratch_buffer() {
     // Regression: scratch slots start with swap_path = None, so the idle
-    // writer's active_swap_pending() gate must still fire for a non-empty
+    // writer's slot_swap_pending() gate must still fire for a non-empty
     // unnamed buffer — otherwise the scratch swap is never written at runtime.
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(
         app.active().filename.is_none(),
         "precondition: scratch buffer"
     );
+    let idx = app.focused_slot_idx();
     assert!(
-        !app.active_swap_pending(),
+        !app.slot_swap_pending(idx),
         "empty scratch buffer has nothing to protect yet"
     );
     seed_buffer(&mut app, "unsaved scratch work\n");
     assert!(
-        app.active_swap_pending(),
+        app.slot_swap_pending(idx),
         "dirty non-empty scratch buffer must arm the idle swap writer"
     );
 }

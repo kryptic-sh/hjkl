@@ -393,7 +393,9 @@ impl App {
         // fires promptly. Gated on swap_pending (gen changed since last swap),
         // NOT bare `dirty` — otherwise the deadline stays in the past after the
         // swap is written and the poll timeout collapses to 0 (busy loop).
-        if self.active_swap_pending() {
+        // `any_swap_pending` (not just the focused slot) so a dirty buffer
+        // left in the background still wakes the sweep promptly (fix 3).
+        if self.any_swap_pending() {
             let ut_ms = self.active_editor().settings().updatetime;
             let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
             t = t.min(deadline.saturating_duration_since(now));
@@ -402,6 +404,36 @@ impl App {
             t = t.min(std::time::Duration::from_millis(16));
         }
         t
+    }
+
+    /// Idle swap-write sweep (issue #185, audit-r2 fix 3).
+    ///
+    /// Once `updatetime` ms have elapsed since the last keystroke, write the
+    /// swap for EVERY slot with a pending swap write — not just the focused
+    /// one. Previously only the focused slot's swap was refreshed on idle,
+    /// and nothing flushed a defocused slot's swap on buffer switch either,
+    /// so a dirty background buffer had no crash protection at all.
+    ///
+    /// The deadline is a single global one (based on `last_input_at` and the
+    /// active editor's `updatetime`) rather than per-slot, matching the
+    /// pre-existing pacing: a sweep only runs at most once per `updatetime`
+    /// window, and `slot_swap_pending` (a cheap `dirty_gen` comparison) skips
+    /// every already-current slot, so the sweep stays cheap even with many
+    /// open buffers.
+    pub(crate) fn tick_idle_swap_write(&mut self, now: std::time::Instant) {
+        if !self.any_swap_pending() {
+            return;
+        }
+        let ut_ms = self.active_editor().settings().updatetime;
+        let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
+        if now < deadline {
+            return;
+        }
+        for idx in 0..self.slots.len() {
+            if self.slot_swap_pending(idx) {
+                self.write_swap_for_slot(idx);
+            }
+        }
     }
 
     /// Handle a single key event. Returns a [`KeyOutcome`] that tells `run()`
@@ -1958,17 +1990,8 @@ impl App {
                     replay_to_engine(self, &replay);
                     self.sync_after_engine_mutation();
                 }
-                // ── Idle swap-write (issue #185) ──────────────────────
-                // Write the swap for the active slot when the buffer is dirty
-                // and `updatetime` ms have elapsed since the last keystroke.
-                {
-                    let ut_ms = self.active_editor().settings().updatetime;
-                    let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
-                    if self.active_swap_pending() && now >= deadline {
-                        let idx = self.focused_slot_idx();
-                        self.write_swap_for_slot(idx);
-                    }
-                }
+                // ── Idle swap-write (issue #185, audit-r2 fix 3) ───────
+                self.tick_idle_swap_write(now);
                 self.tick_hover_timer();
                 if self
                     .hover_popup

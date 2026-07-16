@@ -1076,13 +1076,13 @@ impl App {
         &self.slots[self.focused_slot_idx()]
     }
 
-    /// `true` when the active slot has buffer changes not yet written to its
-    /// swap file (`dirty_gen` advanced past the last-swapped gen) AND has a
-    /// swap path. Drives the idle swap-write timer; gating on this rather than
-    /// bare `dirty` prevents a busy-loop: once the swap is current, the
-    /// `updatetime` deadline stops shortening the poll timeout.
-    pub(crate) fn active_swap_pending(&self) -> bool {
-        let s = self.active();
+    /// `true` when slot `idx` has buffer changes not yet written to its swap
+    /// file (`dirty_gen` advanced past the last-swapped gen) AND has a swap
+    /// path. Drives the idle swap-write sweep; gating on this rather than
+    /// bare `dirty` prevents a busy-loop: once a slot's swap is current, it
+    /// stops shortening the poll timeout.
+    pub(crate) fn slot_swap_pending(&self, idx: usize) -> bool {
+        let s = &self.slots[idx];
         // A swap write is due when the buffer changed since the last swap AND
         // there is something to protect: either a named buffer with a swap path
         // already assigned, OR an unnamed (scratch) buffer that now holds
@@ -1093,6 +1093,16 @@ impl App {
         let has_target =
             s.swap_path.is_some() || (s.filename.is_none() && s.editor.buffer().byte_len() > 0);
         has_target && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
+    }
+
+    /// `true` when ANY slot — focused or not — has a pending swap write.
+    /// Used to gate the idle sweep and the poll-timeout deadline so a
+    /// defocused dirty buffer still gets crash protection (audit-r2 fix 3):
+    /// previously only the focused slot's `dirty_gen` was consulted, so a
+    /// buffer left dirty in the background never got its swap refreshed
+    /// (and never shortened the poll timeout to make sure it would).
+    pub(crate) fn any_swap_pending(&self) -> bool {
+        (0..self.slots.len()).any(|idx| self.slot_swap_pending(idx))
     }
 
     /// Cursor `(row, col)` of window `win_id`, read from its own editor (#151
