@@ -1105,6 +1105,10 @@ impl super::App {
             self.bus.error(format!("explorer: {err}"));
         }
 
+        // Keep open buffers consistent with what just happened on disk:
+        // renamed files/dirs retarget their slots, trashed files flag theirs.
+        self.retarget_slots_after_fs_ops(&applied);
+
         // Push to undo stack if ops actually happened; clear redo stack.
         if !applied.is_empty()
             && let Some(ep) = self.explorer.as_mut()
@@ -1174,6 +1178,133 @@ impl super::App {
                 let _ = self.open_new_slot(path);
             }
         }
+    }
+
+    /// After a reconcile transaction touched disk, keep open buffers
+    /// consistent with it:
+    /// - `Renamed{from,to}`: any slot whose file IS `from`, or lives UNDER a
+    ///   renamed directory `from`, is retargeted to the rebased path — so the
+    ///   next `:w` writes the new location instead of silently recreating the
+    ///   old path (which would fork the file).
+    /// - `Trashed{original,..}`: a slot open on the trashed path (or under a
+    ///   trashed directory) keeps its buffer + content and is flagged
+    ///   [`super::DiskState::DeletedOnDisk`] with a one-shot warning —
+    ///   mirroring the fs-watch/checktime delete path. An explicit `:w`
+    ///   re-creates the file (vim semantics for an externally-deleted file).
+    ///
+    /// Ops are processed in journal order so multi-step transactions (the
+    /// temp hop `a→tmp, b→a, tmp→b` of a name swap) resolve each slot to its
+    /// correct final path.
+    fn retarget_slots_after_fs_ops(&mut self, applied: &[super::explorer_reconcile::AppliedOp]) {
+        use super::explorer_reconcile::AppliedOp;
+        let mut any_rename = false;
+        for op in applied {
+            match op {
+                AppliedOp::Renamed { from, to } => {
+                    // Component-wise prefix match (Path::strip_prefix), NOT a
+                    // string prefix — renaming dir `d` must rebase `d/inner.txt`
+                    // but never the sibling `dx.txt`.
+                    let targets: Vec<(usize, PathBuf)> = self
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, s)| {
+                            if s.is_explorer {
+                                return None;
+                            }
+                            let p = s.filename.as_deref()?;
+                            let rel = super::canon_for_match(p)
+                                .strip_prefix(from)
+                                .ok()?
+                                .to_path_buf();
+                            let new_path = if rel.as_os_str().is_empty() {
+                                to.clone()
+                            } else {
+                                to.join(rel)
+                            };
+                            Some((i, new_path))
+                        })
+                        .collect();
+                    for (i, new_path) in targets {
+                        self.retarget_slot_file(i, new_path);
+                        any_rename = true;
+                    }
+                }
+                AppliedOp::Trashed { original, .. } => {
+                    for i in 0..self.slots.len() {
+                        if self.slots[i].is_explorer {
+                            continue;
+                        }
+                        let Some(p) = self.slots[i].filename.clone() else {
+                            continue;
+                        };
+                        if super::canon_for_match(&p).strip_prefix(original).is_err() {
+                            continue;
+                        }
+                        // Keep the buffer + content; flag + warn once — the
+                        // same treatment checktime gives an external delete.
+                        let prev = self.slots[i].disk_state;
+                        self.slots[i].disk_state = super::DiskState::DeletedOnDisk;
+                        if prev != super::DiskState::DeletedOnDisk {
+                            self.bus.warn(format!(
+                                "W: \"{}\" deleted on disk (moved to trash)",
+                                p.display()
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if any_rename {
+            // Watch the new parent dirs / drop watches on the old ones.
+            self.fs_watch_sync();
+        }
+    }
+
+    /// Point slot `idx` at `new_path`, migrating every piece of state that
+    /// hangs off the filename — the same set `:saveas` (`save_slot` with a
+    /// new path) maintains, plus the pieces armed at open time:
+    /// - LSP: `didClose` the old URI before the identity changes, `didOpen`
+    ///   the new one after (the detach/attach pair `restart_lsp` uses).
+    /// - swap: remove the old path's swap file, derive + re-arm the new one.
+    /// - `"%` register, git re-probe, disk mtime/len baseline.
+    /// - syntax: re-detect the language (the extension may have changed).
+    fn retarget_slot_file(&mut self, idx: usize, new_path: PathBuf) {
+        self.lsp_detach_buffer(idx);
+
+        if let Some(old_swap) = self.slots[idx].swap_path.take() {
+            let _ = hjkl_app::swap::remove_swap(&old_swap);
+        }
+        self.slots[idx].last_swap_dirty_gen = None;
+        let canonical = std::fs::canonicalize(&new_path).unwrap_or_else(|_| new_path.clone());
+        self.slots[idx].swap_path = hjkl_app::swap::swap_path_for(&canonical).ok();
+
+        self.slots[idx].filename = Some(new_path.clone());
+        self.slots[idx].git_repo_present = None; // re-probe for new path
+        self.slots[idx]
+            .editor
+            .registers_mut()
+            .set_filename(Some(new_path.to_string_lossy().into_owned()));
+        // The disk baseline follows the file to its new path (content is
+        // unchanged by a rename; the metadata identity is what moved).
+        if let Ok(meta) = std::fs::metadata(&new_path) {
+            self.slots[idx].disk_mtime = meta.modified().ok();
+            self.slots[idx].disk_len = Some(meta.len());
+        }
+
+        // Language may change with the extension (`notes.txt` → `notes.rs`).
+        let bid = self.slots[idx].buffer_id;
+        let _ = self.syntax.set_language_for_path(bid, &new_path);
+        if let Some(lang) = self.syntax.language_name_for_path(&new_path) {
+            self.slots[idx].editor.set_filetype(&lang);
+        }
+        if idx == self.focused_slot_idx() {
+            self.pending_recompute = true;
+        }
+
+        self.lsp_attach_buffer(idx);
+        self.arm_swap_on_open(idx);
     }
 
     /// Undo the last explorer filesystem transaction.
@@ -2358,6 +2489,200 @@ mod tests {
         assert!(
             !buf.contains("victim.txt"),
             "dd'd file must drop from the list; buf=<<<{buf}>>>"
+        );
+    }
+
+    /// Renaming a file in the explorer must retarget any open buffer on that
+    /// file: the slot's filename follows the rename, and a subsequent `:w`
+    /// writes the NEW path instead of silently recreating the old one
+    /// (forking the file).
+    #[test]
+    fn explorer_rename_retargets_open_buffer() {
+        use crate::app::explorer_reconcile::ID_SEP;
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        let cache_tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "alpha\n").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_ex("edit a.txt");
+        let file_slot = app
+            .slots
+            .iter()
+            .position(|s| {
+                s.filename
+                    .as_deref()
+                    .map(|p| p.ends_with("a.txt"))
+                    .unwrap_or(false)
+            })
+            .expect("a.txt must be open in a slot");
+
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let idx = app.explorer_slot_idx().unwrap();
+        let cur = app.slots[idx].editor.buffer().as_string();
+        let renamed = cur.replace(&format!("a.txt{ID_SEP}"), &format!("b.txt{ID_SEP}"));
+        assert_ne!(cur, renamed, "buffer must contain the a.txt line");
+        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &renamed);
+        app.reconcile_window_editors();
+        app.maybe_reconcile_explorer();
+
+        // Disk: renamed.
+        assert!(!tmp.path().join("a.txt").exists(), "a.txt renamed away");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("b.txt")).unwrap(),
+            "alpha\n"
+        );
+        // Open buffer must follow the rename.
+        let fname = app.slots[file_slot].filename.clone().expect("filename");
+        assert!(
+            fname.ends_with("b.txt"),
+            "open buffer must be retargeted to the new path, got {fname:?}"
+        );
+        // `:w` from the file window writes the NEW path; the old path must
+        // NOT be recreated (that would fork the file).
+        app.dispatch_action(AppAction::FocusRight, 1);
+        assert_eq!(app.focused_slot_idx(), file_slot, "file window focused");
+        app.dispatch_ex("w");
+        assert!(
+            !tmp.path().join("a.txt").exists(),
+            ":w must not recreate the pre-rename path"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("b.txt")).unwrap(),
+            "alpha\n"
+        );
+    }
+
+    /// Renaming a DIRECTORY in the explorer must rebase open buffers on files
+    /// nested under it (path-component prefix, not string prefix).
+    #[test]
+    fn explorer_dir_rename_rebases_nested_open_buffer() {
+        use crate::app::explorer_reconcile::ID_SEP;
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        let cache_tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("d")).unwrap();
+        std::fs::write(tmp.path().join("d").join("inner.txt"), "nested").unwrap();
+        // A sibling whose name merely string-starts with "d" must NOT be
+        // rebased by the dir rename.
+        std::fs::write(tmp.path().join("dx.txt"), "decoy").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_ex("edit d/inner.txt");
+        app.dispatch_ex("edit dx.txt");
+        let inner_slot = app
+            .slots
+            .iter()
+            .position(|s| {
+                s.filename
+                    .as_deref()
+                    .map(|p| p.ends_with("d/inner.txt"))
+                    .unwrap_or(false)
+            })
+            .expect("d/inner.txt open");
+        let decoy_slot = app
+            .slots
+            .iter()
+            .position(|s| {
+                s.filename
+                    .as_deref()
+                    .map(|p| p.ends_with("dx.txt"))
+                    .unwrap_or(false)
+            })
+            .expect("dx.txt open");
+
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let idx = app.explorer_slot_idx().unwrap();
+        let cur = app.slots[idx].editor.buffer().as_string();
+        let renamed = cur.replace(&format!("d/{ID_SEP}"), &format!("e/{ID_SEP}"));
+        assert_ne!(cur, renamed, "buffer must contain the d/ dir line");
+        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &renamed);
+        app.reconcile_window_editors();
+        app.maybe_reconcile_explorer();
+
+        assert!(
+            tmp.path().join("e").join("inner.txt").exists(),
+            "dir renamed on disk"
+        );
+        let fname = app.slots[inner_slot].filename.clone().expect("filename");
+        assert!(
+            fname.ends_with("e/inner.txt"),
+            "nested open buffer must be rebased under the renamed dir, got {fname:?}"
+        );
+        let decoy = app.slots[decoy_slot].filename.clone().expect("filename");
+        assert!(
+            decoy.ends_with("dx.txt") && !decoy.ends_with("e/dx.txt"),
+            "sibling with a string-prefix name must NOT be rebased, got {decoy:?}"
+        );
+    }
+
+    /// Trashing a file that is open in a buffer must keep the buffer's
+    /// content and flag it deleted-on-disk (same as the fs-watch delete
+    /// path) — the reconcile itself must not silently write the file back.
+    #[test]
+    fn explorer_trash_flags_open_buffer_deleted_keeps_content() {
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        let cache_tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "alpha").unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_ex("edit a.txt");
+        let file_slot = app
+            .slots
+            .iter()
+            .position(|s| {
+                s.filename
+                    .as_deref()
+                    .map(|p| p.ends_with("a.txt"))
+                    .unwrap_or(false)
+            })
+            .expect("a.txt open");
+
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let idx = app.explorer_slot_idx().unwrap();
+        let cur = app.slots[idx].editor.buffer().as_string();
+        let without: String = cur
+            .lines()
+            .filter(|l| !l.contains("a.txt"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(cur, without, "buffer must contain the a.txt line");
+        BufferEdit::replace_all(app.slots[idx].editor.buffer_mut(), &without);
+        app.reconcile_window_editors();
+        app.maybe_reconcile_explorer();
+
+        assert!(
+            !tmp.path().join("a.txt").exists(),
+            "a.txt trashed on disk — the reconcile must not write it back"
+        );
+        // Buffer content survives, filename is kept, slot flagged deleted.
+        assert_eq!(
+            app.slots[file_slot].editor.buffer().as_string(),
+            "alpha",
+            "the open buffer's content must survive the trash"
+        );
+        assert!(
+            app.slots[file_slot]
+                .filename
+                .as_deref()
+                .map(|p| p.ends_with("a.txt"))
+                .unwrap_or(false),
+            "filename kept so an explicit :w can bring the file back"
+        );
+        assert_eq!(
+            app.slots[file_slot].disk_state,
+            super::super::DiskState::DeletedOnDisk,
+            "trashed open buffer must be flagged deleted-on-disk"
         );
     }
 

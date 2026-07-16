@@ -1854,15 +1854,17 @@ mod tests {
             b"AAA",
             "b must now hold a's old content"
         );
-        // No stray temp files left behind.
+        // No stray temp-hop files left behind. (Other concurrent tests may
+        // drop unrelated entries — e.g. the XDG cache dir — into this tempdir,
+        // so only check for our `.hjkl-rename-*` names.)
         let names: Vec<String> = std::fs::read_dir(td.path())
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert!(
-            names.iter().all(|n| n == "a.txt" || n == "b.txt"),
-            "no temp files may remain, got {names:?}"
+            names.iter().all(|n| !n.starts_with(".hjkl-rename-")),
+            "no temp-hop files may remain, got {names:?}"
         );
         // Undo must restore the original contents.
         let (_redo, errs) = revert_ops(&applied, &mut trashed);
