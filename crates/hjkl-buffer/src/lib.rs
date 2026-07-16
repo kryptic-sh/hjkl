@@ -70,7 +70,7 @@ pub use selection::{RowSpan, Selection};
 pub use span::Span;
 pub use undo::{MarkSnapshot, UndoEntry};
 pub use viewport::{Viewport, is_big_viewport_jump};
-pub use wrap::{Wrap, char_col_for_visual_offset, wrap_segments};
+pub use wrap::{Wrap, char_col_for_visual_offset, visual_offset_for_char_col, wrap_segments};
 
 /// Stable per-buffer identifier carried through async pipelines
 /// (syntax, git-signs, format-worker) so workers can multiplex per-buffer

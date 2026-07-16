@@ -459,8 +459,9 @@ pub fn cell_to_doc(
 /// geometry. Used to anchor the K-key hover popup at the cursor cell so it
 /// reuses the same compact, content-sized popup as mouse hover.
 ///
-/// Returns `None` when the doc row is outside the visible viewport or the cell
-/// would fall outside the window's text area.
+/// Returns `None` when the doc row is outside the visible viewport, hidden by
+/// a closed fold, or the resolved cell would fall outside the window's text
+/// area.
 pub fn doc_to_cell(
     app: &App,
     win_id: window::WindowId,
@@ -475,24 +476,40 @@ pub fn doc_to_cell(
     // Per-window viewport/is_blame from the window editor (#151).
     let ed = app.window_editor(win_id);
     let vp = ed.host().viewport();
+    let buf = slot.editor.buffer();
 
-    // Row must be within the visible viewport.
+    // Row must be at or after the viewport top. Folds can only pull rows
+    // BELOW vp_top onto screen (never above it), so this stays a valid
+    // pre-filter even though a fold-aware screen row no longer equals
+    // `doc_row - vp_top` (see the fold-aware walks below).
     let vp_top = vp.top_row;
-    let vp_bot = vp_top + rect.h as usize;
-    if doc_row < vp_top || doc_row >= vp_bot {
+    if doc_row < vp_top {
         return None;
     }
 
-    // Gutter width — same rendered width as render_window / cell_to_doc.
     let gw = crate::render::rendered_gutter_width(app, win_id);
+    let tab_width = vp.effective_tab_width();
+    let line_at = |row: usize| -> String {
+        let rope = buf.rope();
+        if row < rope.len_lines() {
+            hjkl_buffer::rope_line_str(&rope, row)
+        } else {
+            String::new()
+        }
+    };
 
     // Box mode (BLAME, no soft-wrap) inserts virtual border rows and reserves a
     // 1-col left frame, so the screen row is the doc row's index in the render
     // plan (not `doc_row - vp_top`) and the text shifts right by the frame.
     let box_mode = ed.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
-    let cell_y = if box_mode {
+    // Soft wrap needs the full per-row `wrap_segments` expansion (Fix 3's
+    // forward-mapping counterpart) since each doc row can be several screen
+    // rows; box mode is exclusive with wrap already.
+    let wrap_active = !box_mode && !matches!(vp.wrap, hjkl_buffer::Wrap::None);
+
+    // `(screen_row_offset_from_vp_top, visual_x_offset_from_text_area_left)`.
+    let (row_offset, rel_x) = if box_mode {
         use hjkl_buffer_tui::render::BlameRow;
-        let buf = slot.editor.buffer();
         let plan = crate::app::git_hunks::build_blame_box_plan(
             &slot.blame,
             buf.row_count(),
@@ -504,23 +521,76 @@ pub fn doc_to_cell(
         let idx = plan
             .iter()
             .position(|r| matches!(r, BlameRow::Buffer(d) if *d == doc_row))?;
-        rect.y + idx as u16
+        let visual_col = hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
+        (idx, visual_col.saturating_sub(vp.top_col))
+    } else if wrap_active {
+        let seg_width = if vp.text_width > 0 {
+            vp.text_width
+        } else {
+            rect.w.saturating_sub(gw)
+        };
+        let mut row = vp_top;
+        let mut screen_offset = 0usize;
+        loop {
+            if row > doc_row {
+                return None; // doc_row is hidden by a closed fold
+            }
+            let line = line_at(row);
+            let is_fold_header = buf
+                .fold_at_row(row)
+                .is_some_and(|f| f.closed && f.start_row == row);
+            if row == doc_row {
+                break if is_fold_header {
+                    // Fold headers always render as ONE screen row,
+                    // top_col-relative — mirrors the renderer's fold-marker
+                    // branch (`seg_start: top_col, seg_end: MAX`), same as
+                    // `Wrap::None`.
+                    let visual_col =
+                        hjkl_buffer::char_col_to_visual_col(&line, char_col, tab_width);
+                    (screen_offset, visual_col.saturating_sub(vp.top_col))
+                } else {
+                    let segs = hjkl_buffer::wrap_segments(&line, seg_width, vp.wrap);
+                    let seg_idx = hjkl_buffer::wrap::segment_for_col(&segs, char_col);
+                    let rel_x = hjkl_buffer::visual_offset_for_char_col(
+                        &line,
+                        segs[seg_idx].0,
+                        char_col,
+                    );
+                    (screen_offset + seg_idx, rel_x)
+                };
+            }
+            let rows_here = if is_fold_header {
+                1
+            } else {
+                hjkl_buffer::wrap_segments(&line, seg_width, vp.wrap).len()
+            };
+            screen_offset += rows_here;
+            row = buf.next_visible_row(row)?;
+        }
     } else {
-        rect.y + (doc_row - vp_top) as u16
+        // Fold-aware, non-wrap: count only VISIBLE rows between vp_top and
+        // doc_row — the exact inverse of `doc_row_at_screen_offset`. A naive
+        // `doc_row - vp_top` (the pre-fix math) overcounts by however many
+        // rows a closed fold above the target swallows, anchoring popups
+        // too low (Fix 4).
+        let mut row = vp_top;
+        let mut screen_offset = 0usize;
+        while row < doc_row {
+            row = buf.next_visible_row(row)?;
+            screen_offset += 1;
+        }
+        if row != doc_row {
+            return None; // doc_row itself is hidden by a closed fold
+        }
+        let visual_col = hjkl_buffer::char_col_to_visual_col(&line_at(doc_row), char_col, tab_width);
+        (screen_offset, visual_col.saturating_sub(vp.top_col))
     };
 
-    // char col → visual col (tab expansion) → screen cell, accounting for
-    // horizontal scroll. The exact inverse of cell_to_doc's column math.
-    let tab_width = vp.effective_tab_width();
-    let rope = slot.editor.buffer().rope();
-    let line_str = if doc_row < rope.len_lines() {
-        hjkl_buffer::rope_line_str(&rope, doc_row)
-    } else {
-        String::new()
-    };
-    let visual_col = hjkl_buffer::char_col_to_visual_col(&line_str, char_col, tab_width);
-    let text_rel_x = visual_col.saturating_sub(vp.top_col) as u16;
-    let cell_x = rect.x + gw + u16::from(box_mode) + text_rel_x;
+    if row_offset >= rect.h as usize {
+        return None; // resolved screen row falls past the window's bottom
+    }
+    let cell_y = rect.y + row_offset as u16;
+    let cell_x = rect.x + gw + u16::from(box_mode) + rel_x as u16;
 
     if cell_x >= rect.x + rect.w {
         return None;
@@ -1473,6 +1543,82 @@ mod tests {
             got_tail,
             Some((4, 0)),
             "screen row 4 must resolve to doc row 4 ('tail'); got {got_tail:?}"
+        );
+    }
+
+    // ── Fix 4: doc_to_cell ignores folds (and wrap) ─────────────────────────
+
+    /// A closed fold above the target row must not be counted as visible
+    /// rows: `doc_to_cell` used to compute `cell_y = rect.y + (doc_row -
+    /// vp_top)`, which counts every doc row including the ones a closed
+    /// fold hides — anchoring popups too low. Rows: 0 = fold header (closes
+    /// 0..=2, hiding rows 1-2), 3 = "after_fold", 4 = "line5". Only rows
+    /// {0, 3, 4} are visible, so doc row 3 is the SECOND visible row
+    /// (screen offset 1), not the fourth.
+    #[test]
+    fn doc_to_cell_closed_fold_above_row_does_not_inflate_screen_row() {
+        let mut app = make_app_with_content(
+            "fold_head\nhidden1\nhidden2\nafter_fold\nline5",
+            Rect::new(0, 0, 80, 24),
+        );
+        {
+            let buf = app.slots_mut()[0].editor.buffer_mut();
+            buf.add_fold(0, 2, true);
+        }
+        app.reconcile_window_editors();
+        let gw = crate::render::rendered_gutter_width(&app, 0);
+
+        let got = doc_to_cell(&app, 0, 3, 0);
+        assert_eq!(
+            got,
+            Some((gw, 1)),
+            "doc row 3 is the 2nd VISIBLE row (fold header=row 0, then row \
+             3) — screen row 1, not row 3 (a naive doc_row - vp_top count); \
+             got {got:?}"
+        );
+    }
+
+    /// Companion: a doc row hidden BY the closed fold has no on-screen cell.
+    #[test]
+    fn doc_to_cell_hidden_row_inside_closed_fold_returns_none() {
+        let mut app = make_app_with_content(
+            "fold_head\nhidden1\nhidden2\nafter_fold\nline5",
+            Rect::new(0, 0, 80, 24),
+        );
+        {
+            let buf = app.slots_mut()[0].editor.buffer_mut();
+            buf.add_fold(0, 2, true);
+        }
+        app.reconcile_window_editors();
+
+        let got = doc_to_cell(&app, 0, 1, 0);
+        assert_eq!(got, None, "row 1 is hidden by the closed fold; got {got:?}");
+    }
+
+    /// Round-trips with the Fix 3 combined fold+wrap test above: the SAME
+    /// setup (`cell_to_doc_wrap_after_closed_fold_accounts_for_one_header_row`)
+    /// maps screen cell (gw+1, 2) → doc (3, 5); `doc_to_cell` must invert
+    /// that exactly.
+    #[test]
+    fn doc_to_cell_wrap_after_closed_fold_round_trips_with_cell_to_doc() {
+        let mut app = make_app_with_content(
+            "fold_head\nhidden1\nhidden2\nabcdefghijkl\ntail",
+            Rect::new(0, 0, 80, 24),
+        );
+        {
+            let buf = app.slots_mut()[0].editor.buffer_mut();
+            buf.add_fold(0, 2, true);
+        }
+        app.reconcile_window_editors();
+        set_win0_wrap(&mut app, hjkl_buffer::Wrap::Char, 4);
+        let gw = crate::render::rendered_gutter_width(&app, 0);
+
+        let got = doc_to_cell(&app, 0, 3, 5);
+        assert_eq!(
+            got,
+            Some((gw + 1, 2)),
+            "doc (3, 5) must invert to screen cell (gw+1, 2), matching \
+             cell_to_doc's forward mapping for the same setup; got {got:?}"
         );
     }
 

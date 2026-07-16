@@ -135,6 +135,24 @@ pub fn char_col_for_visual_offset(line: &str, seg: (usize, usize), visual_offset
     end
 }
 
+/// Forward companion to [`char_col_for_visual_offset`]: map a char column
+/// (within a segment starting at `seg_start`) to its visual x offset, in
+/// cells counted from the segment's OWN left edge — the exact inverse
+/// relationship, using the same per-char width formula. `char_col` should
+/// be `>= seg_start` (typically chosen via [`segment_for_col`] first); a
+/// `char_col` before `seg_start` is treated as `seg_start` (offset 0).
+pub fn visual_offset_for_char_col(line: &str, seg_start: usize, char_col: usize) -> usize {
+    if char_col <= seg_start {
+        return 0;
+    }
+    line.chars()
+        .enumerate()
+        .skip(seg_start)
+        .take(char_col - seg_start)
+        .map(|(_, c)| c.width().unwrap_or(1).max(1))
+        .sum()
+}
+
 /// Returns the index into `segments` whose `[start, end)` covers
 /// `col`. The past-end cursor (`col == last segment's end`) maps to
 /// the last segment, matching vim's "EOL on the visual row that
@@ -263,6 +281,53 @@ mod tests {
                         idx,
                         "width={width} seg={seg:?} off={off} resolved to char {col} \
                          which segment_for_col assigns to a different segment"
+                    );
+                }
+            }
+        }
+    }
+
+    // ── visual_offset_for_char_col (Fix 4: doc_to_cell wrap inverse) ───────
+
+    #[test]
+    fn visual_offset_for_char_col_at_segment_start_is_zero() {
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        assert_eq!(visual_offset_for_char_col(line, segs[1].0, segs[1].0), 0);
+    }
+
+    #[test]
+    fn visual_offset_for_char_col_is_relative_to_segment_start() {
+        // char 6 ('g') is inside segment 1 ([4,8)); its offset from THAT
+        // segment's own left edge is 2, not 6 (offset from the line start).
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        assert_eq!(visual_offset_for_char_col(line, segs[1].0, 6), 2);
+    }
+
+    #[test]
+    fn visual_offset_for_char_col_before_seg_start_clamps_to_zero() {
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        assert_eq!(visual_offset_for_char_col(line, segs[1].0, 0), 0);
+    }
+
+    #[test]
+    fn visual_offset_and_char_col_for_visual_offset_round_trip() {
+        // For every segment, every char inside it must round-trip through
+        // visual_offset_for_char_col → char_col_for_visual_offset back to
+        // itself — the two are exact inverses of each other.
+        let line = "the quick brown fox jumps over lazy dogs";
+        for width in [3u16, 5, 8, 12] {
+            let segs = wrap_segments(line, width, Wrap::Word);
+            for &seg in &segs {
+                for col in seg.0..seg.1 {
+                    let off = visual_offset_for_char_col(line, seg.0, col);
+                    let back = char_col_for_visual_offset(line, seg, off);
+                    assert_eq!(
+                        back, col,
+                        "seg={seg:?} col={col} → offset {off} → back {back}, \
+                         expected round-trip to {col}"
                     );
                 }
             }
