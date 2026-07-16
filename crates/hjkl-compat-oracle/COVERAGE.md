@@ -21,6 +21,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | ----------------------------- | ----- | --------------------------------------------------------- |
 | h                             | 1     | tier1.toml                                                |
 | j                             | 1     | tier1.toml                                                |
+| j / k phantom trailing row    | 8     | tier2_vertical_phantom_row.toml                           |
 | k                             | 1     | tier1.toml                                                |
 | l                             | 2     | sample.toml, tier1.toml                                   |
 | w                             | 1     | tier1.toml                                                |
@@ -49,8 +50,8 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | { / } (paragraph)             | 2     | tier2_paragraph_word.toml                                 |
 | ( / ) (sentence)              | —     | (not oracled — sentence motion tested via text objects)   |
 | H (viewport top)              | 1     | tier2_gaps.toml                                           |
-| M (viewport middle)           | —     | TODO: depends on viewport height agreement                |
-| L (viewport bottom)           | —     | TODO: depends on viewport height agreement                |
+| M (viewport middle)           | 2     | tier2_viewport_bounds.toml                                |
+| L (viewport bottom)           | 3     | tier2_viewport_bounds.toml                                |
 | zz / zt / zb                  | —     | TODO: not yet implemented (#63)                           |
 | sneak s/S (ON)                | —     | intentional divergence — see corpus/tier2_sneak.toml note |
 | sneak s/S (disabled fallback) | 2     | tier2_sneak.toml                                          |

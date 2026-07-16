@@ -1,0 +1,69 @@
+# Tier 2 — B2: `M` / `L` viewport-relative motions.
+#
+# These depend on `viewport.height` agreeing between hjkl and nvim's headless
+# default (24 rows, matching `DefaultHost::DEFAULT_VIEWPORT`). Previously
+# untestable (see COVERAGE.md) because `Editor::sync_buffer_from_textarea`
+# clobbered the host's viewport height with the engine's cached
+# `viewport_height_value()` — an `AtomicU16` that starts at 0 and is only
+# ever written by a real TUI render loop — on the very first vim step. A
+# headless/embedded host like this oracle's `TestHost` never calls
+# `set_viewport_height`, so `M`/`L` silently collapsed to `H` (both saw
+# height 0, so `visible_bot` == `top_row`).
+#
+# Buffers here are small enough (9 real lines) to fit entirely inside a
+# 24-row window with `top_row = 0`, so `M`/`L` are meaningfully distinct from
+# `H` — a regression back to the height-zeroing bug flattens all three to
+# the same row.
+#
+# Live nvim compare.
+
+[[cases]]
+name = "viewport_M_middle_of_small_buffer"
+initial_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+initial_cursor = [0, 0]
+keys = "M"
+expected_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "viewport_L_bottom_of_small_buffer"
+initial_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+initial_cursor = [0, 0]
+keys = "L"
+expected_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+expected_cursor = [8, 0]
+expected_mode = "normal"
+
+# `L` with an offset (`2L` = bottom minus 1).
+[[cases]]
+name = "viewport_2L_bottom_minus_offset"
+initial_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+initial_cursor = [0, 0]
+keys = "2L"
+expected_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+expected_cursor = [7, 0]
+expected_mode = "normal"
+
+# `L` on a buffer whose content ends in a trailing `\n` (the phantom-row
+# case from B1) must still land on the last *real* content line, not the
+# synthetic empty row past it.
+[[cases]]
+name = "viewport_L_stops_before_phantom_row"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "L"
+expected_buffer = "foo\nbar\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `M` from a non-zero cursor row still measures from the window, not the
+# cursor.
+[[cases]]
+name = "viewport_M_independent_of_cursor_row"
+initial_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+initial_cursor = [8, 0]
+keys = "M"
+expected_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"

@@ -2304,9 +2304,20 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// put View in charge. 0.0.28 hoisted sticky_col out of
     /// `View`. 0.0.34 (Patch C-δ.1) routes the height write through
     /// `Host::viewport_mut`.
+    ///
+    /// `viewport_height_value()` is an `AtomicU16` that starts at 0 and
+    /// is only ever written by [`Editor::set_viewport_height`], which a
+    /// real TUI render loop calls every frame. Headless / embedded
+    /// hosts (tests, the oracle, `--nvim-api`) never call it, so 0 here
+    /// means "unset", not "the window is zero rows tall". Treat it as
+    /// such and leave the host's own (already-correct) viewport height
+    /// alone — otherwise `M`/`L` and scrolloff math on those hosts see
+    /// a phantom zero-height window and collapse to `H`.
     pub fn sync_buffer_from_textarea(&mut self) {
         let height = self.viewport_height_value();
-        self.host.viewport_mut().height = height;
+        if height != 0 {
+            self.host.viewport_mut().height = height;
+        }
     }
 
     /// Was the full textarea → buffer content sync. View is the

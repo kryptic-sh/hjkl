@@ -866,3 +866,10 @@ async fn tier2_sneak_disabled_fallback_corpus_passes() {
 async fn tier2_vertical_phantom_row_corpus_passes() {
     run_corpus("corpus/tier2_vertical_phantom_row.toml").await;
 }
+
+/// B2: `M` / `L` viewport-relative motions, previously untestable because
+/// the engine's viewport height got clobbered to 0 on headless hosts.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_viewport_bounds_corpus_passes() {
+    run_corpus("corpus/tier2_viewport_bounds.toml").await;
+}

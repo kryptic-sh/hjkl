@@ -43,6 +43,15 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // 2. Construct editor.
     let mut editor = hjkl_vim::vim_editor(buffer, TestHost::new(), Options::default());
 
+    // 2a. Publish the viewport height explicitly, mirroring what a real TUI
+    // render loop does every frame via `set_viewport_height`. Matches
+    // `nvim --headless --embed`'s default window size (24 rows, no UI
+    // attached) so `H`/`M`/`L` and scrolloff math agree between drivers.
+    // (`DefaultHost::DEFAULT_VIEWPORT` already starts at 24; this call is
+    // belt-and-suspenders so the oracle doesn't silently drift if that
+    // default ever changes.)
+    editor.set_viewport_height(24);
+
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {
         editor.settings_mut().shiftwidth = sw;
