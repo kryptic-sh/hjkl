@@ -471,37 +471,80 @@ fn content_edits_from_buffer_edit(
             cols,
             inserted_space,
         } => {
-            // Splits insert "\n" (or "\n " inverse) at each col on `row`.
-            // The buffer applies all splits left-to-right via the
-            // do_split_lines path; we emit one ContentEdit per col,
-            // each treated as an insert at that col on `row`. Note: the
-            // buffer state during emission is *pre-edit*, so all cols
-            // index into the same pre-edit row.
+            // `do_split_lines` applies `cols` in REVERSE (right-to-left) —
+            // not left-to-right — so later-processed (rightward) splits
+            // never shift the byte offsets of an earlier-processed
+            // (leftward) one. Mirror that order: cols.iter().rev().
+            //
+            // When `inserted_space`, `do_split_lines` does NOT insert
+            // "\n " — it REPLACES the single space byte the original
+            // JoinLines inserted with '\n' (remove the space, then insert
+            // '\n' at the same index), but ONLY when that col is still
+            // within the row's *current* (shrinking, as each split
+            // truncates the row) char count AND the char actually there
+            // is a space. `cols` can repeat (do_join_lines records one
+            // join_col per join, and empty-prefix/suffix joins skip the
+            // space but still record a col) — a repeated col lands past
+            // the truncated row's new end, so `do_split_lines` treats it
+            // as a bare '\n' insert with no space check. Track a shrinking
+            // `current_lc` (the row's live char count, exactly as
+            // `do_split_lines` recomputes via `rope_line_char_count`) so
+            // this arm reproduces that exactly, byte-for-byte.
             let row = (*row).min(buf.row_count().saturating_sub(1));
             let split_rope = buf.rope();
             let line = hjkl_buffer::rope_line_str(&split_rope, row);
-            let row_byte = buffer_byte_of_row(buf, row);
-            let insert = if *inserted_space { "\n " } else { "\n" };
-            for &c in cols {
-                let pos = Position::new(row, c);
-                let col_byte = pos.byte_offset(&line);
-                let start_byte = row_byte + col_byte;
-                let start_pos = (row as u32, col_byte as u32);
-                let (new_end_byte, new_end_pos) = advance_by_text(insert, start_byte, start_pos);
-                out.push(crate::types::ContentEdit {
-                    start_byte,
-                    old_end_byte: start_byte,
-                    new_end_byte,
-                    start_position: start_pos,
-                    old_end_position: start_pos,
-                    new_end_position: new_end_pos,
-                });
+            let mut current_lc = line.chars().count();
+            for &col in cols.iter().rev() {
+                let has_space =
+                    *inserted_space && col < current_lc && line.chars().nth(col) == Some(' ');
+                // `do_split_lines` never clamps `split_col` in the
+                // `inserted_space` branch (even when out of range — see
+                // the has_space=false-past-EOL case above); only the
+                // no-space-inverse branch clamps to the live row length.
+                let split_col = if *inserted_space {
+                    col
+                } else {
+                    col.min(current_lc)
+                };
+                let start_pos = Position::new(row, split_col);
+                let (start_byte, start_p) = position_to_byte_coords(buf, start_pos);
+                if has_space {
+                    // Space (1 byte) replaced by '\n' (1 byte).
+                    let end_pos = Position::new(row, split_col + 1);
+                    let (old_end_byte, old_end_p) = position_to_byte_coords(buf, end_pos);
+                    out.push(crate::types::ContentEdit {
+                        start_byte,
+                        old_end_byte,
+                        new_end_byte: start_byte + 1,
+                        start_position: start_p,
+                        old_end_position: old_end_p,
+                        new_end_position: (start_p.0 + 1, 0),
+                    });
+                } else {
+                    let (new_end_byte, new_end_pos) = advance_by_text("\n", start_byte, start_p);
+                    out.push(crate::types::ContentEdit {
+                        start_byte,
+                        old_end_byte: start_byte,
+                        new_end_byte,
+                        start_position: start_p,
+                        old_end_position: start_p,
+                        new_end_position: new_end_pos,
+                    });
+                }
+                current_lc = split_col;
             }
         }
         B::InsertBlock { at, chunks } => {
-            // One ContentEdit per chunk; each lands at `(at.row + i,
-            // at.col)` in the pre-edit buffer.
-            for (i, chunk) in chunks.iter().enumerate() {
+            // One ContentEdit per chunk, each landing at `(at.row + i,
+            // at.col)` in the pre-edit buffer. Rows share one contiguous
+            // rope, so inserting into an upper row shifts the byte
+            // offsets of every row below it — emit DESCENDING (bottom
+            // row first), same fix as block-delete (commit a57161d8):
+            // a lower row's edit, applied first by a sequential
+            // consumer, never touches bytes above it, so every row's
+            // pre-edit offset (computed once here, against `buf`) stays
+            // valid through the whole batch.
+            for (i, chunk) in chunks.iter().enumerate().rev() {
                 let pos = Position::new(at.row + i, at.col);
                 let (start_byte, start_pos) = position_to_byte_coords(buf, pos);
                 let (new_end_byte, new_end_pos) = advance_by_text(chunk, start_byte, start_pos);
@@ -516,7 +559,8 @@ fn content_edits_from_buffer_edit(
             }
         }
         B::DeleteBlockChunks { at, widths } => {
-            for (i, w) in widths.iter().enumerate() {
+            // Same descending-order requirement as InsertBlock above.
+            for (i, w) in widths.iter().enumerate().rev() {
                 let row = at.row + i;
                 let start_pos = Position::new(row, at.col);
                 let end_pos = Position::new(row, at.col + *w);
@@ -5260,12 +5304,24 @@ mod content_edit_shape_tests {
 
     /// Apply `edit` to a buffer built from `initial`, then replay the
     /// emitted `ContentEdit`s through a naive sequential splicer and
-    /// assert the result equals the post-edit buffer text. Replacement
-    /// text for each edit is sliced from the post-edit document at
-    /// `[start_byte, new_end_byte)` — exactly how the LSP glue's
-    /// `build_text_changes` recovers it. All six coordinates are
-    /// cross-checked against the evolving document. Returns the edits
-    /// so callers can additionally pin exact shapes.
+    /// assert the result equals the post-edit buffer text.
+    ///
+    /// Replacement text for edit `i` is sliced from the post-edit document
+    /// at `[start_byte, new_end_byte)` shifted by the net byte delta of any
+    /// edit that (a) hasn't been applied to the running splice yet (index
+    /// `> i`) and (b) sits textually BEFORE edit `i` in the pre-edit
+    /// document — such an edit is already baked into `post`'s layout at
+    /// edit `i`'s position but hasn't been reflected in the splice yet.
+    /// For an ascending-disjoint batch (`build_text_changes`'s own
+    /// contract) no edit satisfies both conditions — every not-yet-applied
+    /// edit sits AFTER, not before — so the shift is always 0 and this is
+    /// exactly the plain `[start_byte, new_end_byte)` slice. For a
+    /// descending fan-out (block ops, SplitLines — audit-r2 fix 5) EVERY
+    /// not-yet-applied edit sits before, so this exactly cancels the
+    /// layout shift their (already-baked-into-`post`) insertions cause.
+    /// All six coordinates are cross-checked against the evolving
+    /// document. Returns the edits so callers can additionally pin exact
+    /// shapes.
     fn check_shapes(initial: &str, edit: Edit) -> Vec<crate::types::ContentEdit> {
         let mut view = View::from_str(initial);
         let edits = content_edits_from_buffer_edit(&view, &edit);
@@ -5294,16 +5350,23 @@ mod content_edit_shape_tests {
                 e.old_end_position,
                 "edit {i}: old_end_position disagrees with old_end_byte\n{e:?}"
             );
+            let shift: i64 = edits[i + 1..]
+                .iter()
+                .filter(|other| other.start_byte < e.start_byte)
+                .map(|other| other.new_end_byte as i64 - other.old_end_byte as i64)
+                .sum();
+            let post_start = (e.start_byte as i64 + shift) as usize;
+            let post_new_end = (e.new_end_byte as i64 + shift) as usize;
             // A pure delete inserts nothing; its (empty) new range may sit
             // past the end of the final document, so short-circuit it the
             // way `build_text_changes`' clamping does.
             let replacement = if e.new_end_byte == e.start_byte {
                 ""
             } else {
-                post.get(e.start_byte..e.new_end_byte).unwrap_or_else(|| {
+                post.get(post_start..post_new_end).unwrap_or_else(|| {
                     panic!(
-                        "edit {i}: [{}, {}) is not a valid slice of the \
-                         post-edit doc ({} bytes)\n{e:?}",
+                        "edit {i}: shifted [{post_start}, {post_new_end}) (raw [{}, {})) \
+                         is not a valid slice of the post-edit doc ({} bytes)\n{e:?}",
                         e.start_byte,
                         e.new_end_byte,
                         post.len()
@@ -5342,6 +5405,28 @@ mod content_edit_shape_tests {
             start: Position::new(start.0, start.1),
             end: Position::new(end.0, end.1),
             kind,
+        }
+    }
+
+    fn split(row: usize, cols: Vec<usize>, inserted_space: bool) -> Edit {
+        Edit::SplitLines {
+            row,
+            cols,
+            inserted_space,
+        }
+    }
+
+    fn insert_block(at: (usize, usize), chunks: &[&str]) -> Edit {
+        Edit::InsertBlock {
+            at: Position::new(at.0, at.1),
+            chunks: chunks.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn delete_block_chunks(at: (usize, usize), widths: Vec<usize>) -> Edit {
+        Edit::DeleteBlockChunks {
+            at: Position::new(at.0, at.1),
+            widths,
         }
     }
 
@@ -5586,6 +5671,148 @@ mod content_edit_shape_tests {
     fn block_delete_end_row_overshoot_clamps() {
         let edits = check_shapes("ab\ncd", del((0, 0), (5, 0), MotionKind::Block));
         assert_eq!(edits.len(), 2);
+    }
+
+    // ── Shape 4: SplitLines (JoinLines inverse) ──────────────────
+
+    /// A single no-space split: the ONLY byte change is a '\n' inserted
+    /// at the split col — mirrors `join_backspace_at_col0`'s inverse.
+    #[test]
+    fn split_single_col_no_space_inserts_newline() {
+        let edits = check_shapes("foobar", split(0, vec![3], false));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!((e.start_byte, e.old_end_byte, e.new_end_byte), (3, 3, 4));
+        assert_eq!(e.start_position, (0, 3));
+        assert_eq!(e.new_end_position, (1, 0));
+    }
+
+    /// `inserted_space` REPLACES the space at the split col with '\n' —
+    /// NOT a pure "\n " insert. `do_split_lines` removes the space then
+    /// inserts '\n' at the same index: net 1 byte in, 1 byte out.
+    #[test]
+    fn split_with_space_replaces_the_space_not_inserts() {
+        let edits = check_shapes("foo bar", split(0, vec![3], true));
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        assert_eq!(
+            (e.start_byte, e.old_end_byte, e.new_end_byte),
+            (3, 4, 4),
+            "space at byte 3 replaced by '\\n' — 1 byte in, 1 byte out"
+        );
+        assert_eq!(e.new_end_position, (1, 0));
+    }
+
+    /// Multiple splits (inverse of a count>1 join) apply RIGHT-TO-LEFT
+    /// in the real buffer (`do_split_lines` iterates `cols.iter().rev()`)
+    /// — same-row ascending pre-edit offsets would be wrong for a
+    /// sequential consumer.
+    #[test]
+    fn split_multi_col_emits_descending() {
+        // Inverse of joining "a", "b", "c" into "abc": cols = [1, 2].
+        let edits = check_shapes("abc", split(0, vec![1, 2], false));
+        assert_eq!(edits.len(), 2);
+        let cols: Vec<u32> = edits.iter().map(|e| e.start_position.1).collect();
+        assert_eq!(
+            cols,
+            vec![2, 1],
+            "rightmost split first, matching do_split_lines"
+        );
+    }
+
+    /// Real round-trip: join then split the SAME buffer via the actual
+    /// `do_join_lines`-produced inverse, count > 1 with an empty middle
+    /// line — one join inserts no space (suffix empty), the other does.
+    /// `check_shapes` cross-validates the SplitLines shape byte-exactly
+    /// against this exact inverse, not a hand-picked one.
+    #[test]
+    fn split_round_trips_real_join_inverse_with_mixed_spaces() {
+        let mut probe = View::from_str("foo\n\nbar");
+        let inverse = probe.apply_edit(join(0, 2, true));
+        let Edit::SplitLines {
+            row: _,
+            ref cols,
+            inserted_space,
+        } = inverse
+        else {
+            panic!("join's inverse must be SplitLines, got {inverse:?}");
+        };
+        assert_eq!(cols.len(), 2, "one recorded col per join");
+        assert!(inserted_space, "join was called with with_space = true");
+        // The join's own inverse, replayed through content_edits_from_buffer_edit
+        // against the joined ("foo bar") buffer, must byte-exactly reproduce
+        // splitting it back apart.
+        check_shapes("foo bar", inverse);
+    }
+
+    /// A col at (or past) the split row's live end after a prior split
+    /// truncated it: `do_split_lines` skips the space check (guard is
+    /// `col < lc`) and falls through to a bare '\n' insert.
+    #[test]
+    fn split_duplicate_col_past_truncated_row_is_plain_insert() {
+        let edits = check_shapes("foo bar", split(0, vec![3, 3], true));
+        assert_eq!(edits.len(), 2);
+        // First-processed (reverse order) col=3: space replaced by '\n'.
+        assert_eq!(
+            (
+                edits[0].start_byte,
+                edits[0].old_end_byte,
+                edits[0].new_end_byte
+            ),
+            (3, 4, 4)
+        );
+        // Second-processed (also col=3, but now `3 < current_lc(=3)` is
+        // false): plain '\n' insert, no deletion.
+        assert_eq!(
+            (
+                edits[1].start_byte,
+                edits[1].old_end_byte,
+                edits[1].new_end_byte
+            ),
+            (3, 3, 4)
+        );
+    }
+
+    // ── Shape 5: InsertBlock fan-out ──────────────────────────────
+
+    /// Per-row edits carry pre-edit byte offsets, so — like block-delete
+    /// — they are only valid for a sequential consumer when emitted
+    /// bottom-up.
+    #[test]
+    fn insert_block_emits_rows_descending() {
+        let edits = check_shapes("abc\ndef\nghi", insert_block((0, 1), &["X", "Y", "Z"]));
+        assert_eq!(edits.len(), 3);
+        let rows: Vec<u32> = edits.iter().map(|e| e.start_position.0).collect();
+        assert_eq!(
+            rows,
+            vec![2, 1, 0],
+            "bottom-up so pre-edit offsets stay valid"
+        );
+    }
+
+    #[test]
+    fn insert_block_multibyte() {
+        // "éé" = 4 bytes + '\n' → row 1 starts at byte 5.
+        let edits = check_shapes("éé\nüü", insert_block((0, 1), &["x", "y"]));
+        assert_eq!(edits.len(), 2);
+    }
+
+    // ── Shape 6: DeleteBlockChunks fan-out ────────────────────────
+
+    #[test]
+    fn delete_block_chunks_emits_rows_descending() {
+        let edits = check_shapes("abc\ndef\nghi", delete_block_chunks((0, 0), vec![1, 1, 1]));
+        assert_eq!(edits.len(), 3);
+        let rows: Vec<u32> = edits.iter().map(|e| e.start_position.0).collect();
+        assert_eq!(rows, vec![2, 1, 0]);
+    }
+
+    /// A row too short for the block's column contributes nothing —
+    /// matches `do_delete_block_chunks`'s per-row clamp.
+    #[test]
+    fn delete_block_chunks_ragged_rows_skip_empty() {
+        let edits = check_shapes("abcd\nx\nabcd", delete_block_chunks((0, 2), vec![1, 1, 1]));
+        assert_eq!(edits.len(), 2, "middle row too short → skipped");
     }
 
     // ── Sanity: shapes that were already correct stay correct ────
