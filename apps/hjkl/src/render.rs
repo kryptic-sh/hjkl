@@ -1865,6 +1865,11 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    // Record the real terminal rect for `App::screen_rect` (fix: screen_rect
+    // used to be derived from the focused window's viewport, which the
+    // renderer sets to the pane's dims — wrong with any split open). This is
+    // the one place that unconditionally sees the full frame every draw.
+    app.last_frame_rect = Some(area);
 
     // Explorer slots don't count as additional user buffers for the top-bar
     // visibility decision — otherwise opening the explorer alone would show the bar.
@@ -3273,6 +3278,61 @@ mod tests {
         assert!(
             !rendered.contains("offscreen diagnostic"),
             "the far off-screen diagnostic must never reach the screen buffer"
+        );
+    }
+
+    // ── Fix 2: screen_rect derived from the focused window's viewport ──────
+
+    /// `App::screen_rect()` must return the real terminal size even with a
+    /// split open. Before the fix it derived from the FOCUSED window's
+    /// viewport — but this render loop sets each window's viewport to its
+    /// PANE dims (`render_window`, `vp.height = area.height` above), so
+    /// with a horizontal split the old `screen_rect()` returned the
+    /// focused pane's height, not the terminal's. That broke the
+    /// status-line hit-test (mouse.rs) and context-menu clamping/hover
+    /// (event_loop.rs): right-clicking the real bottom row resolved to a
+    /// mid-screen zone instead of `Zone::StatusLine`.
+    #[test]
+    fn screen_rect_is_real_terminal_rect_with_split() {
+        use crate::app::App;
+        use crate::app::mouse::{Zone, hit_test_zone};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("split_screen_rect.txt");
+        std::fs::write(&path, "l0\nl1\nl2\nl3\nl4\n").unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        // Horizontal split: the focused window's pane is roughly half the
+        // terminal height, so a bug in `screen_rect()` shows up as a wrong
+        // height rather than accidentally matching by coincidence.
+        app.dispatch_ex("sp");
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Draw twice: the first frame settles window rects/viewports (same
+        // pattern as the other TestBackend tests in this file).
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+
+        let screen = app.screen_rect();
+        assert_eq!(
+            (screen.width, screen.height),
+            (80, 24),
+            "screen_rect() must report the real 80x24 terminal, not the \
+             focused pane's shrunken dims"
+        );
+
+        // The real bottom row (23, 0-based on a 24-row terminal) must
+        // hit-test as the status line. With the pre-fix `screen_rect()`
+        // undercounting the height, this row is ABOVE the (wrongly
+        // computed) status row, so it fell through to whatever window pane
+        // occupies row 23 instead.
+        let zone = hit_test_zone(&app, 10, 23);
+        assert_eq!(
+            zone,
+            Zone::StatusLine,
+            "row 23 (the real bottom row) must hit-test as the status line; got {zone:?}"
         );
     }
 }

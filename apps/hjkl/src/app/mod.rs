@@ -575,6 +575,15 @@ pub struct App {
     /// Window-local variable store (`w:` namespace). Keyed by `(window_id, name)`.
     /// Populated by `nvim_win_set_var` / `nvim_win_get_var` / `nvim_win_del_var`.
     pub(crate) nvim_wvars: std::collections::HashMap<(u64, String), rmpv::Value>,
+    /// Full terminal `Rect` from the most recent `render::frame` call
+    /// (`frame.area()`). `None` before the first frame is drawn.
+    ///
+    /// `screen_rect()` used to derive this from the FOCUSED window's
+    /// viewport, but the renderer sets each window's viewport to its PANE
+    /// dims (not the terminal) — so with any split open, that derivation
+    /// returned the focused pane's size instead of the real screen. This
+    /// is the actual terminal geometry, recorded where it's known for free.
+    pub(crate) last_frame_rect: Option<ratatui::layout::Rect>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -971,9 +980,22 @@ impl App {
     }
 
     /// Full-screen rect for clamping popups / context menus to the
-    /// terminal area. Matches the layout `render::frame` computes:
-    /// optional top bar (tabs + buffer line, when multiple slots OR
-    /// tabs are open) + editor viewport + bottom status line.
+    /// terminal area.
+    ///
+    /// Returns `last_frame_rect` — the real terminal `Rect` recorded by
+    /// `render::frame` on the most recent draw — when available. Before the
+    /// first frame (no draw has happened yet, e.g. in some unit tests) falls
+    /// back to the old derivation from the focused window's viewport,
+    /// matching the layout `render::frame` computes: optional top bar
+    /// (tabs and buffer line, when multiple slots OR tabs are open) plus
+    /// the editor viewport plus the bottom status line.
+    ///
+    /// That fallback derivation is WRONG once any split exists: the
+    /// renderer sets each window's viewport to its PANE dims, not the
+    /// terminal (render.rs `render_window`), so it silently returns the
+    /// focused pane's size instead of the screen's. `last_frame_rect` is
+    /// always correct because it's the actual `frame.area()` the renderer
+    /// drew into, regardless of how many splits are open.
     ///
     /// MUST include the top bar when it's visible — otherwise this
     /// underestimates total height by 1 row and a popup anchored near
@@ -981,6 +1003,9 @@ impl App {
     /// `Moved`-handler's row→item math out of sync with what
     /// `bounding_rect` produces at render time.
     pub(crate) fn screen_rect(&self) -> ratatui::layout::Rect {
+        if let Some(rect) = self.last_frame_rect {
+            return rect;
+        }
         let vp = self.active_editor().host().viewport();
         let real_slots = self.slots.iter().filter(|s| !s.is_explorer).count();
         let show_top_bar = self.tabs.len() > 1 || real_slots > 1;
@@ -2150,6 +2175,7 @@ impl App {
             nvim_gvars: std::collections::HashMap::new(),
             nvim_bvars: std::collections::HashMap::new(),
             nvim_wvars: std::collections::HashMap::new(),
+            last_frame_rect: None,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();
