@@ -1290,6 +1290,88 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// Read these settings as a SPEC [`crate::types::Options`] snapshot.
+    /// Pure [`Settings`] surface — usable without an [`Editor`] (#151 Phase
+    /// D / Stage 2b: `BufferSlot` holds a bare `Settings` template for
+    /// windowless slots). [`Editor::current_options`] delegates here.
+    pub fn to_options(&self) -> crate::types::Options {
+        crate::types::Options {
+            shiftwidth: self.shiftwidth as u32,
+            tabstop: self.tabstop as u32,
+            softtabstop: self.softtabstop as u32,
+            textwidth: self.textwidth as u32,
+            expandtab: self.expandtab,
+            ignorecase: self.ignore_case,
+            smartcase: self.smartcase,
+            wrapscan: self.wrapscan,
+            wrap: match self.wrap {
+                hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
+                hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
+                hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
+            },
+            readonly: self.readonly,
+            modifiable: self.modifiable,
+            autoindent: self.autoindent,
+            smartindent: self.smartindent,
+            undo_levels: self.undo_levels,
+            undo_break_on_motion: self.undo_break_on_motion,
+            iskeyword: self.iskeyword.clone(),
+            timeout_len: self.timeout_len,
+            ..crate::types::Options::default()
+        }
+    }
+
+    /// Apply a SPEC [`crate::types::Options`] overlay onto these settings.
+    /// Pure [`Settings`] surface — see [`Settings::to_options`].
+    /// [`Editor::apply_options`] delegates here.
+    pub fn apply_options(&mut self, opts: &crate::types::Options) {
+        self.shiftwidth = opts.shiftwidth as usize;
+        self.tabstop = opts.tabstop as usize;
+        self.softtabstop = opts.softtabstop as usize;
+        self.textwidth = opts.textwidth as usize;
+        self.expandtab = opts.expandtab;
+        self.ignore_case = opts.ignorecase;
+        self.smartcase = opts.smartcase;
+        self.wrapscan = opts.wrapscan;
+        self.wrap = match opts.wrap {
+            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
+            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
+            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
+        };
+        self.readonly = opts.readonly;
+        self.modifiable = opts.modifiable;
+        self.autoindent = opts.autoindent;
+        self.smartindent = opts.smartindent;
+        self.undo_levels = opts.undo_levels;
+        self.undo_break_on_motion = opts.undo_break_on_motion;
+        self.iskeyword = opts.iskeyword.clone();
+        self.timeout_len = opts.timeout_len;
+        self.number = opts.number;
+        self.relativenumber = opts.relativenumber;
+        self.numberwidth = opts.numberwidth;
+        self.cursorline = opts.cursorline;
+        self.cursorcolumn = opts.cursorcolumn;
+        self.signcolumn = opts.signcolumn;
+        self.foldcolumn = opts.foldcolumn;
+        self.foldmethod = opts.foldmethod;
+        self.foldenable = opts.foldenable;
+        self.foldlevelstart = opts.foldlevelstart;
+        self.colorcolumn = opts.colorcolumn.clone();
+        self.scrolloff = opts.scrolloff;
+        self.sidescrolloff = opts.sidescrolloff;
+        self.autoreload = opts.autoreload;
+        self.list = opts.list;
+        self.listchars = opts.listchars.clone();
+        self.colorizer = opts.colorizer;
+        self.colorizer_filetypes = opts.colorizer_filetypes.clone();
+        self.format_on_save = opts.format_on_save;
+        self.trim_trailing_whitespace = opts.trim_trailing_whitespace;
+        self.rainbow_brackets = opts.rainbow_brackets;
+        self.matchparen = opts.matchparen;
+    }
+}
+
 /// Translate a SPEC [`crate::types::Options`] into the engine's
 /// internal [`Settings`] representation. Field-by-field map; the
 /// shapes are isomorphic except for type widths
@@ -3403,30 +3485,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Once trait extraction lands, this becomes the canonical config
     /// reader and `Settings` retires.
     pub fn current_options(&self) -> crate::types::Options {
-        crate::types::Options {
-            shiftwidth: self.settings.shiftwidth as u32,
-            tabstop: self.settings.tabstop as u32,
-            softtabstop: self.settings.softtabstop as u32,
-            textwidth: self.settings.textwidth as u32,
-            expandtab: self.settings.expandtab,
-            ignorecase: self.settings.ignore_case,
-            smartcase: self.settings.smartcase,
-            wrapscan: self.settings.wrapscan,
-            wrap: match self.settings.wrap {
-                hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
-                hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
-                hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
-            },
-            readonly: self.settings.readonly,
-            modifiable: self.settings.modifiable,
-            autoindent: self.settings.autoindent,
-            smartindent: self.settings.smartindent,
-            undo_levels: self.settings.undo_levels,
-            undo_break_on_motion: self.settings.undo_break_on_motion,
-            iskeyword: self.settings.iskeyword.clone(),
-            timeout_len: self.settings.timeout_len,
-            ..crate::types::Options::default()
-        }
+        self.settings.to_options()
     }
 
     /// Apply a SPEC [`crate::types::Options`] to the engine's settings.
@@ -3434,49 +3493,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// remaining options become live once trait extraction wires them
     /// through.
     pub fn apply_options(&mut self, opts: &crate::types::Options) {
-        self.settings.shiftwidth = opts.shiftwidth as usize;
-        self.settings.tabstop = opts.tabstop as usize;
-        self.settings.softtabstop = opts.softtabstop as usize;
-        self.settings.textwidth = opts.textwidth as usize;
-        self.settings.expandtab = opts.expandtab;
-        self.settings.ignore_case = opts.ignorecase;
-        self.settings.smartcase = opts.smartcase;
-        self.settings.wrapscan = opts.wrapscan;
-        self.settings.wrap = match opts.wrap {
-            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
-            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
-            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
-        };
-        self.settings.readonly = opts.readonly;
-        self.settings.modifiable = opts.modifiable;
-        self.settings.autoindent = opts.autoindent;
-        self.settings.smartindent = opts.smartindent;
-        self.settings.undo_levels = opts.undo_levels;
-        self.settings.undo_break_on_motion = opts.undo_break_on_motion;
-        self.set_iskeyword(opts.iskeyword.clone());
-        self.settings.timeout_len = opts.timeout_len;
-        self.settings.number = opts.number;
-        self.settings.relativenumber = opts.relativenumber;
-        self.settings.numberwidth = opts.numberwidth;
-        self.settings.cursorline = opts.cursorline;
-        self.settings.cursorcolumn = opts.cursorcolumn;
-        self.settings.signcolumn = opts.signcolumn;
-        self.settings.foldcolumn = opts.foldcolumn;
-        self.settings.foldmethod = opts.foldmethod;
-        self.settings.foldenable = opts.foldenable;
-        self.settings.foldlevelstart = opts.foldlevelstart;
-        self.settings.colorcolumn = opts.colorcolumn.clone();
-        self.settings.scrolloff = opts.scrolloff;
-        self.settings.sidescrolloff = opts.sidescrolloff;
-        self.settings.autoreload = opts.autoreload;
-        self.settings.list = opts.list;
-        self.settings.listchars = opts.listchars.clone();
-        self.settings.colorizer = opts.colorizer;
-        self.settings.colorizer_filetypes = opts.colorizer_filetypes.clone();
-        self.settings.format_on_save = opts.format_on_save;
-        self.settings.trim_trailing_whitespace = opts.trim_trailing_whitespace;
-        self.settings.rainbow_brackets = opts.rainbow_brackets;
-        self.settings.matchparen = opts.matchparen;
+        self.settings.apply_options(opts);
     }
 
     /// SPEC-typed highlights for `line`.
