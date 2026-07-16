@@ -2,8 +2,10 @@
 # mark. These move only the cursor, so `expected_buffer` equals the input and the
 # oracle checks the cursor hjkl-vs-nvim. nvim cursor truth (0-based) noted below.
 #
-# (Changelist `g;` / `g,` is intentionally omitted — its semantics under
-# `-u NONE` are subtle and deferred to a focused pass.)
+# B7: changelist `g;` cases below. `g;` lands on the change's START position
+# (the pre-edit cursor), not wherever the cursor ended up after typing —
+# verified against real nvim across single-/multi-char inserts, appends,
+# `dw`, `dd`, and `x`.
 
 # `G` records a jump from line 0; `<C-o>` returns to it.
 [[cases]]
@@ -53,4 +55,134 @@ initial_cursor = [0, 0]
 keys = "3GG``"
 expected_buffer = "a\nb\nc\nd\ne\n"
 expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# ─── Changelist `g;` (B7) ───────────────────────────────────────────────────
+
+# The original bug repro: append `X` to line 0, then append `Y` to line 1.
+# `g;` from line 2 must land ON the Y (change start), not one column past it.
+[[cases]]
+name = "changelist_semicolon_multiline_append"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>ggjAY<Esc>g;"
+expected_buffer = "oneX\ntwoY\nthree\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+
+# (i) Single-char append: degenerate case (pre-edit == post-Esc position for
+# a 1-char change) but pins the baseline.
+[[cases]]
+name = "changelist_semicolon_single_char_append"
+initial_buffer = "one\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>0g;"
+expected_buffer = "oneX\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# (ii) Multi-char insert mid-line: `g;` lands at the insertion point, not on
+# the last typed character.
+[[cases]]
+name = "changelist_semicolon_multichar_insert_midline"
+initial_buffer = "abc def\n"
+initial_cursor = [0, 0]
+keys = "4liXYZ<Esc>0g;"
+expected_buffer = "abc XYZdef\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+# (iii) Multi-char append: `g;` lands at the append point (col 3), not on
+# the last typed character (col 5) — this is the non-degenerate version of
+# the single-char case above.
+[[cases]]
+name = "changelist_semicolon_multichar_append"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "AXYZ<Esc>0g;"
+expected_buffer = "abcXYZ\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# (iv) `dw` delete: `g;` returns to the operator's start position.
+[[cases]]
+name = "changelist_semicolon_dw_delete"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "dwGg;"
+expected_buffer = "bar\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# (v) `dd` delete: `g;` returns to the deleted line's row.
+[[cases]]
+name = "changelist_semicolon_dd_delete"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "ddGg;"
+expected_buffer = "bar\nbaz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# (vi) `x` char delete: `g;` returns to the deleted char's column.
+[[cases]]
+name = "changelist_semicolon_x_delete"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "llxGg;"
+expected_buffer = "helo\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# `` `. `` (dot mark) agrees with `g;` on a multi-char append — both record
+# the change's start, not the post-insert cursor.
+[[cases]]
+name = "dot_mark_multichar_append_matches_changelist"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "AXYZ<Esc>0`."
+expected_buffer = "abcXYZ\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# `g;` from a fresh cursor lands on the most recent entry first (a
+# no-op move here — Esc already left the cursor there).
+[[cases]]
+name = "changelist_semicolon_single_press_lands_on_newest"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>ggjjiY<Esc>g;"
+expected_buffer = "Xalpha\nbeta\nYgamma\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# A second `g;` walks to the older entry.
+[[cases]]
+name = "changelist_semicolon_walks_back_twice"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>ggjjiY<Esc>g;g;"
+expected_buffer = "Xalpha\nbeta\nYgamma\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `g,` walks forward again after `g;` walked back.
+[[cases]]
+name = "changelist_comma_walks_forward_after_semicolon"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>ggjjiY<Esc>g;g;g,"
+expected_buffer = "Xa\nb\nYc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# A new edit made while walking the ring discards every entry forward of
+# the current walk position.
+[[cases]]
+name = "changelist_new_edit_during_walk_trims_forward_entries"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>ggjjiY<Esc>g;g;iZ<Esc>g,"
+expected_buffer = "ZXa\nb\nYc\nd\n"
+expected_cursor = [0, 0]
 expected_mode = "normal"

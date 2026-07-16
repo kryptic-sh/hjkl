@@ -3546,26 +3546,34 @@ fn mark_survives_document_shrink_via_clamp() {
 
 #[test]
 fn g_semicolon_walks_back_through_edits() {
+    // B7: the changelist records the PRE-edit cursor position (where the
+    // change started), not wherever the cursor ended up after typing —
+    // verified against real nvim (see the `mutate_edit` comment at the
+    // changelist push site, and crates/hjkl-compat-oracle/corpus/
+    // tier2_jumps.toml's `changelist_semicolon_*` cases). Both edits here
+    // are single-char `i`-inserts starting at col 0, so the entry sits at
+    // (row, 0), not (row, 1) — a `i`-insert doesn't shift the insertion
+    // point itself, only the cursor after typing.
     let mut e = editor_with("alpha\nbeta\ngamma");
-    // Two distinct edits — cells (0, 0) → InsertChar lands cursor
-    // at (0, 1), (2, 0) → (2, 1).
     e.jump_cursor(0, 0);
     run_keys(&mut e, "iX<Esc>");
     e.jump_cursor(2, 0);
     run_keys(&mut e, "iY<Esc>");
     // First g; lands on the most recent entry's exact cell.
     run_keys(&mut e, "g;");
-    assert_eq!(e.cursor(), (2, 1));
+    assert_eq!(e.cursor(), (2, 0));
     // Second g; walks to the older entry.
     run_keys(&mut e, "g;");
-    assert_eq!(e.cursor(), (0, 1));
+    assert_eq!(e.cursor(), (0, 0));
     // Past the oldest — no-op.
     run_keys(&mut e, "g;");
-    assert_eq!(e.cursor(), (0, 1));
+    assert_eq!(e.cursor(), (0, 0));
 }
 
 #[test]
 fn g_comma_walks_forward_after_g_semicolon() {
+    // See `g_semicolon_walks_back_through_edits` — entries record the
+    // pre-edit (insertion) position, not the post-typing cursor.
     let mut e = editor_with("a\nb\nc");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "iX<Esc>");
@@ -3573,28 +3581,30 @@ fn g_comma_walks_forward_after_g_semicolon() {
     run_keys(&mut e, "iY<Esc>");
     run_keys(&mut e, "g;");
     run_keys(&mut e, "g;");
-    assert_eq!(e.cursor(), (0, 1));
+    assert_eq!(e.cursor(), (0, 0));
     run_keys(&mut e, "g,");
-    assert_eq!(e.cursor(), (2, 1));
+    assert_eq!(e.cursor(), (2, 0));
 }
 
 #[test]
 fn new_edit_during_walk_trims_forward_entries() {
+    // See `g_semicolon_walks_back_through_edits` — entries record the
+    // pre-edit (insertion) position, not the post-typing cursor.
     let mut e = editor_with("a\nb\nc\nd");
     e.jump_cursor(0, 0);
-    run_keys(&mut e, "iX<Esc>"); // entry 0 → (0, 1)
+    run_keys(&mut e, "iX<Esc>"); // entry 0 → (0, 0)
     e.jump_cursor(2, 0);
-    run_keys(&mut e, "iY<Esc>"); // entry 1 → (2, 1)
+    run_keys(&mut e, "iY<Esc>"); // entry 1 → (2, 0)
     // Walk back twice to land on entry 0.
     run_keys(&mut e, "g;");
     run_keys(&mut e, "g;");
-    assert_eq!(e.cursor(), (0, 1));
+    assert_eq!(e.cursor(), (0, 0));
     // New edit while walking discards entries forward of the cursor.
     run_keys(&mut e, "iZ<Esc>");
     // No newer entry left to walk to.
     run_keys(&mut e, "g,");
     // Cursor stays where the latest edit landed it.
-    assert_ne!(e.cursor(), (2, 1));
+    assert_ne!(e.cursor(), (2, 0));
 }
 
 // gq* tests moved to crates/hjkl-editor/tests/vim_ex_integration.rs

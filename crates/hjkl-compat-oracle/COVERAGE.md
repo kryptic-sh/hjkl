@@ -139,16 +139,17 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Marks
 
-| Feature                 | Cases | File(s)          |
-| ----------------------- | ----- | ---------------- |
-| ma / 'a (line jump)     | 1     | tier2_marks.toml |
-| ma / \`a (char jump)    | 1     | tier2_marks.toml |
-| '< / '> (visual bounds) | 2     | tier2_marks.toml |
-| '[ / '] (change bounds) | 2     | tier2_marks.toml |
-| '. (last edit)          | 1     | tier2_marks.toml |
-| mA-Z (global marks)     | —     | TODO             |
-| '' / \`\` (last jump)   | —     | TODO             |
-| '0-'9 (viminfo marks)   | —     | (not shipped)    |
+| Feature                 | Cases | File(s)                            |
+| ----------------------- | ----- | ---------------------------------- |
+| ma / 'a (line jump)     | 1     | tier2_marks.toml                   |
+| ma / \`a (char jump)    | 1     | tier2_marks.toml                   |
+| '< / '> (visual bounds) | 2     | tier2_marks.toml                   |
+| '[ / '] (change bounds) | 2     | tier2_marks.toml                   |
+| '. (last edit)          | 2     | tier2_marks.toml, tier2_jumps.toml |
+| g; / g, (changelist)    | 8     | tier2_jumps.toml                   |
+| mA-Z (global marks)     | —     | TODO                               |
+| '' / \`\` (last jump)   | —     | TODO                               |
+| '0-'9 (viminfo marks)   | —     | (not shipped)                      |
 
 ## Registers
 

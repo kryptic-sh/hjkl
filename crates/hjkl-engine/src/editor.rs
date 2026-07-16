@@ -714,6 +714,17 @@ pub struct ChangeBank {
     /// [`Editor::undo_line`] swaps this to the pre-`U` text on each call
     /// so a second `U` redoes what the first one undid.
     pub u_line: Option<(usize, String)>,
+    /// Post-edit cursor position of the most recent `mutate_edit` call —
+    /// NOT part of any undo/redo snapshot (deliberately: after an undo/
+    /// redo this goes stale and the next edit correctly starts a fresh
+    /// burst). Lets `mutate_edit` tell whether the *next* edit is a
+    /// continuation of the same typing burst (its pre-edit position
+    /// picks up exactly where this one left the cursor) or the start of
+    /// a new one — see the `entry` comment in `mutate_edit` for why this
+    /// matters for `g;` / `` `. ``: a whole `AXYZ<Esc>` insert session is
+    /// ONE vim change, not three, and `g;` from a fresh cursor lands on
+    /// its start column, not the last-typed character's.
+    pub last_edit_end: Option<(usize, usize)>,
 }
 
 pub struct Editor<
@@ -2454,6 +2465,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // no longer carries a `self.buffer.<inherent>` hop.
         let inverse = apply_buffer_edit(&mut self.buffer, edit);
         let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
+        let post_edit_pos = (pos_row, pos_col);
         // Row-count delta the edit produced, needed both to decide how
         // folds react (below) and to shift marks/jumplist (below).
         // Computed here, right after the buffer mutation, so both use
@@ -2478,31 +2490,54 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 end_row: hi,
             });
         }
-        // Dot mark records the PRE-edit position (change start), matching
-        // vim's `:h '.` semantics. Previously this stored the post-edit
-        // cursor, which diverged from nvim on `iX<Esc>j`.
+        // Dot mark / changelist record the PRE-edit position (change
+        // start), matching vim's `:h '.` semantics — verified against real
+        // nvim across single-/multi-char inserts, appends, `dw`, `dd`, and
+        // `x`: `g;` / `` `. `` always land at the change's *start*, never
+        // wherever the cursor ended up after typing. Previously `'.` used
+        // the post-edit cursor (diverged from nvim on `iX<Esc>j`) and `g;`
+        // used it too (diverged on any multi-char change: `AY<Esc>` at the
+        // end of a 3-char line landed `g;` on col 4, past the Y, instead
+        // of col 3, on it).
+        //
+        // A whole insert-mode session (`AXYZ<Esc>`) is vim's ONE change,
+        // not three, even though each keystroke is its own `mutate_edit`
+        // call — confirmed against real nvim (a second `g;` right after
+        // `AXYZ<Esc>` errors "at start of changelist" rather than finding
+        // a second entry). Detect burst continuation by comparing this
+        // edit's pre-edit position against the PREVIOUS call's post-edit
+        // position: an unbroken typing stream leaves the cursor exactly
+        // where the next keystroke's edit begins. A `cw`-style
+        // delete-then-insert combo also chains this way naturally (the
+        // delete's post-edit cursor is the insert's start), so it lands
+        // `g;` at the deletion point — matching vim's "one logical
+        // change" treatment of the whole combo.
         //
         // Per-buffer (audit B3): both the dot mark and the change-list ring
         // live in the shared `ChangeBank`, so an edit here is visible to
         // `` `. `` / `g;` from any other window/split on this same buffer.
         let mut bank = self.change_bank.lock().unwrap();
-        bank.last_edit = Some((pre_edit_row, pre_edit_col));
-        // Append to the change-list ring (skip when the cursor sits on
-        // the same cell as the last entry — back-to-back keystrokes on
-        // one column shouldn't pollute the ring). A new edit while
-        // walking the ring trims the forward half, vim style.
-        let entry = (pos_row, pos_col);
-        if bank.list.last() != Some(&entry) {
-            if let Some(idx) = bank.cursor.take() {
-                bank.list.truncate(idx + 1);
-            }
-            bank.list.push(entry);
-            let len = bank.list.len();
-            if len > crate::types::CHANGE_LIST_MAX {
-                bank.list.drain(0..len - crate::types::CHANGE_LIST_MAX);
+        let same_burst = bank.last_edit_end == Some((pre_edit_row, pre_edit_col));
+        if !same_burst {
+            bank.last_edit = Some((pre_edit_row, pre_edit_col));
+            // Append to the change-list ring (skip when the cursor sits on
+            // the same cell as the last entry — back-to-back keystrokes on
+            // one column shouldn't pollute the ring). A new edit while
+            // walking the ring trims the forward half, vim style.
+            let entry = (pre_edit_row, pre_edit_col);
+            if bank.list.last() != Some(&entry) {
+                if let Some(idx) = bank.cursor.take() {
+                    bank.list.truncate(idx + 1);
+                }
+                bank.list.push(entry);
+                let len = bank.list.len();
+                if len > crate::types::CHANGE_LIST_MAX {
+                    bank.list.drain(0..len - crate::types::CHANGE_LIST_MAX);
+                }
             }
         }
         bank.cursor = None;
+        bank.last_edit_end = Some(post_edit_pos);
         drop(bank);
         // Shift / drop marks + jump-list entries (and folds, via
         // `rebase_folds` inside `shift_marks_after_edit`) to track the row
@@ -6339,10 +6374,14 @@ mod shared_change_bank_tests {
         record_insert(&mut a, 1, 0, "X");
 
         // Editor B (a sibling window on the SAME buffer) must see A's edit
-        // in both the dot mark and the changelist ring.
+        // in both the dot mark and the changelist ring. Both record the
+        // PRE-edit cursor position — (1, 0), where `record_insert` placed
+        // the cursor before inserting "X" — matching vim's `g;` landing on
+        // the start of a change, not one past it (verified against real
+        // nvim; see the `mutate_edit` comment at the changelist push site).
         assert_eq!(b.last_edit_pos(), Some((1, 0)));
         let (list, _) = b.change_list();
-        assert_eq!(list, vec![(1, 1)]);
+        assert_eq!(list, vec![(1, 0)]);
     }
 
     /// (2) NEGATIVE — two editors on DIFFERENT buffers (independent banks,
