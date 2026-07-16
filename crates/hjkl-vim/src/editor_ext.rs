@@ -1648,9 +1648,30 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize) {
+        // vim `v_b_A`: pad the top row to `col` with spaces before the
+        // cursor lands there, same as `replicate_block_text` does for
+        // every other row on Esc. Without this, `jump_cursor` clamps
+        // `col` down to the row's current length and the typed text
+        // lands inside the block instead of past its right edge.
+        //
+        // The pad must land in the SAME undo group as the insert session
+        // (vim's block `A` is one `u` step — pad, typed text, and the
+        // replicated rows all revert together). So push the undo
+        // checkpoint ourselves before padding, then use
+        // `begin_insert_noundo` — mirrors the `Operator::Change` block
+        // path (push_undo, mutate, begin_insert_noundo) in `visual_ops`.
+        self.push_undo();
+        let line_len = hjkl_engine::buf_helpers::buf_line_chars(self.buffer(), top);
+        if col > line_len {
+            let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
+            self.mutate_edit(hjkl_buffer::Edit::InsertStr {
+                at: hjkl_buffer::Position::new(top, line_len),
+                text: pad,
+            });
+        }
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
-        crate::vim::begin_insert(self, 1, InsertReason::BlockEdge { top, bot, col });
+        crate::vim::begin_insert_noundo(self, 1, InsertReason::BlockEdge { top, bot, col });
     }
 
     fn execute_motion(&mut self, motion: Motion, count: usize) {

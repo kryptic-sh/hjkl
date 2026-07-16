@@ -38,4 +38,5 @@ pub mod substitute;
 pub mod substitute_newline_cursor;
 pub mod tabline_icons;
 pub mod text_object_bracket;
+pub mod visual_block;
 pub mod yank_linewise;

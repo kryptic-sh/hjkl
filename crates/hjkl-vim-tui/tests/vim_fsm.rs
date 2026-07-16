@@ -2646,6 +2646,57 @@ fn visual_block_append_repeats_across_rows() {
     );
 }
 
+#[test]
+fn visual_block_append_pads_rows_shorter_than_the_top_row_to_the_block_edge() {
+    // Regression (audit-r2 Fix 1): block `A`'s append column used to be
+    // clamped by the TOP row's length alone (`(right+1).min(line_char_
+    // count(top))`), so on rows LONGER than the top row the typed text
+    // landed inside the block instead of past its right edge. vim `v_b_A`
+    // (`:h v_b_A`) pads every row that's shorter than the block's right
+    // edge to reach it, then appends there — verified against
+    // `nvim --headless`.
+    let mut e = editor_with("ab\nabcdef");
+    e.jump_cursor(1, 5); // row 1, col 5 (the 'f')
+    run_keys(&mut e, "<C-v>k"); // block spans rows 0..=1, col 5 (block_vcol preserved)
+    run_keys(&mut e, "A");
+    run_keys(&mut e, "X<Esc>");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["ab    X".to_string(), "abcdefX".to_string()]
+    );
+}
+
+#[test]
+fn visual_block_append_pad_and_replication_undo_in_one_step() {
+    // The top-row pad, the typed text, and the replicated rows must all
+    // land in the same undo group — vim reverts a block `A` in a single
+    // `u` (verified against `nvim --headless`).
+    let mut e = editor_with("ab\nabcdef");
+    e.jump_cursor(1, 5);
+    run_keys(&mut e, "<C-v>k");
+    run_keys(&mut e, "A");
+    run_keys(&mut e, "X<Esc>");
+    run_keys(&mut e, "u");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["ab".to_string(), "abcdef".to_string()]
+    );
+}
+
 // ─── `/` / `?` search prompt ─────────────────────────────────────────
 
 #[test]

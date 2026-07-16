@@ -235,9 +235,15 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             Key::Char('A') => {
+                // vim `v_b_A`: append one past the block's right column on
+                // EVERY row, padding short rows to reach it first (`:h
+                // v_b_A`). The old `.min(line_char_count(top))` clamp here
+                // capped the column by the TOP row's length alone, so on
+                // longer rows the typed text landed inside the block
+                // instead of past its right edge — `visual_block_append_
+                // at_right` now does the per-row padding itself.
                 let (top, bot, _left, right) = ed.visual_block_bounds();
-                let line_len = ed.line_char_count(top);
-                let col = (right + 1).min(line_len);
+                let col = right + 1;
                 ed.visual_block_append_at_right(top, bot, col);
                 return true;
             }
