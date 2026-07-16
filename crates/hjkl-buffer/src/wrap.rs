@@ -97,6 +97,44 @@ pub fn wrap_segments(line: &str, width: u16, mode: Wrap) -> Vec<(usize, usize)> 
     })
 }
 
+/// Inverse of the per-char accounting `wrap_segments` uses to find where a
+/// segment breaks: map a visual x offset (`visual_offset`, cells counted
+/// from the segment's OWN left edge — i.e. 0 at `seg.0`, matching how the
+/// renderer paints each wrapped row starting at its text area's left
+/// column regardless of `seg.0`) to the char index within `seg = [start,
+/// end)` it lands on.
+///
+/// Uses the exact same per-char width formula `wrap_segments` sums to find
+/// segment boundaries (`char::width().unwrap_or(1).max(1)`), so a click
+/// that `wrap_segments` would consider inside this segment resolves to the
+/// same character `wrap_segments` wrapped around. This does NOT reproduce
+/// the renderer's real tab-stop expansion (`wrap_segments` itself counts a
+/// tab as 1 cell, not `tabstop` cells) — that mismatch predates this
+/// function and is `wrap_segments`' own documented simplification; mouse
+/// click mapping mirrors it for round-trip consistency with the wrap
+/// engine rather than inventing a different tab model for wrapped rows.
+///
+/// Clamps to `end` (one past the segment's last char) once cumulative
+/// width reaches or exceeds `visual_offset` — vim's "past EOL on this
+/// visual row" landing spot.
+pub fn char_col_for_visual_offset(line: &str, seg: (usize, usize), visual_offset: usize) -> usize {
+    let (start, end) = seg;
+    let mut cells = 0usize;
+    for (i, ch) in line
+        .chars()
+        .enumerate()
+        .skip(start)
+        .take(end.saturating_sub(start))
+    {
+        let w = ch.width().unwrap_or(1).max(1);
+        if cells + w > visual_offset {
+            return i;
+        }
+        cells += w;
+    }
+    end
+}
+
 /// Returns the index into `segments` whose `[start, end)` covers
 /// `col`. The past-end cursor (`col == last segment's end`) maps to
 /// the last segment, matching vim's "EOL on the visual row that
@@ -146,5 +184,88 @@ mod tests {
         // Past-end col clamps to last segment.
         assert_eq!(segment_for_col(&segs, 10), 2);
         assert_eq!(segment_for_col(&segs, 99), 2);
+    }
+
+    // ── char_col_for_visual_offset (Fix 3: cell_to_doc soft-wrap inverse) ──
+
+    #[test]
+    fn char_col_for_visual_offset_first_segment_start() {
+        // "abcdefghij" @ width=4, Char wrap → segs (0,4)(4,8)(8,10).
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        assert_eq!(segs, vec![(0, 4), (4, 8), (8, 10)]);
+        // Offset 0 in segment 0 → char 'a' (index 0).
+        assert_eq!(char_col_for_visual_offset(line, segs[0], 0), 0);
+        // Offset 3 in segment 0 → char 'd' (index 3, last char of the segment).
+        assert_eq!(char_col_for_visual_offset(line, segs[0], 3), 3);
+    }
+
+    #[test]
+    fn char_col_for_visual_offset_is_relative_to_segment_start_not_line_start() {
+        // A click on the SECOND visual row (segment 1, chars [4,8) = "efgh")
+        // at offset 0 must resolve to char index 4 ('e'), not 0 ('a') — the
+        // whole point of Fix 3: continuation-row clicks must not collapse
+        // back to the start of the line.
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        assert_eq!(
+            char_col_for_visual_offset(line, segs[1], 0),
+            4,
+            "offset 0 within segment 1 must land on 'e' (char index 4), not the line start"
+        );
+        assert_eq!(
+            char_col_for_visual_offset(line, segs[1], 2),
+            6,
+            "offset 2 within segment 1 must land on 'g' (char index 6)"
+        );
+    }
+
+    #[test]
+    fn char_col_for_visual_offset_past_segment_end_clamps() {
+        let line = "abcdefghij";
+        let segs = wrap_segments(line, 4, Wrap::Char);
+        // Offset past the segment's width clamps to `end` (one past the
+        // segment's last char) — vim's past-EOL-on-this-row landing spot.
+        assert_eq!(char_col_for_visual_offset(line, segs[0], 99), segs[0].1);
+        assert_eq!(char_col_for_visual_offset(line, segs[2], 99), segs[2].1);
+    }
+
+    #[test]
+    fn char_col_for_visual_offset_wide_char_consumes_two_cells() {
+        // "你好" @ width=1, Char wrap → segs (0,1)(1,2), one wide char each.
+        let line = "你好";
+        let segs = wrap_segments(line, 1, Wrap::Char);
+        assert_eq!(segs, vec![(0, 1), (1, 2)]);
+        assert_eq!(char_col_for_visual_offset(line, segs[0], 0), 0);
+        assert_eq!(char_col_for_visual_offset(line, segs[1], 0), 1);
+    }
+
+    #[test]
+    fn char_col_for_visual_offset_round_trips_with_wrap_segments() {
+        // For every segment, every offset inside [0, segment_display_width)
+        // must resolve to a char whose OWN segment (per `segment_for_col`)
+        // is the same segment — i.e. this never "escapes" into a
+        // neighboring segment's characters.
+        let line = "the quick brown fox jumps over lazy dogs";
+        for width in [3u16, 5, 8, 12] {
+            let segs = wrap_segments(line, width, Wrap::Word);
+            for (idx, &seg) in segs.iter().enumerate() {
+                let seg_width: usize = line
+                    .chars()
+                    .skip(seg.0)
+                    .take(seg.1 - seg.0)
+                    .map(|c| c.width().unwrap_or(1).max(1))
+                    .sum();
+                for off in 0..seg_width {
+                    let col = char_col_for_visual_offset(line, seg, off);
+                    assert_eq!(
+                        segment_for_col(&segs, col),
+                        idx,
+                        "width={width} seg={seg:?} off={off} resolved to char {col} \
+                         which segment_for_col assigns to a different segment"
+                    );
+                }
+            }
+        }
     }
 }

@@ -266,6 +266,81 @@ pub(crate) fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize
     }
 }
 
+/// Inverse of the renderer's soft-wrap row expansion — mirrors
+/// `hjkl_buffer::View::cursor_screen_row_from`'s forward walk (buffer.rs)
+/// backward. Starting at `top_row`, walks VISIBLE doc rows (skipping
+/// fold-hidden interiors exactly like [`doc_row_at_screen_offset`]),
+/// expanding each into its wrap segments via the SAME `wrap_segments` the
+/// renderer used, and counts screen rows until `target_screen_row` is
+/// reached.
+///
+/// A closed fold's header row is a special case: like the renderer's
+/// fold-marker branch (`render.rs` "Render the fold's first line exactly
+/// like a normal line... Only the first screen segment... is needed since a
+/// closed fold collapses to exactly one screen row") it always consumes
+/// exactly ONE screen row regardless of wrap mode, and is mapped with the
+/// plain `top_col`-relative `visual_col_to_char_col` — the same as
+/// `Wrap::None` — because that's what the renderer paints it with
+/// (`seg_start: top_col, seg_end: MAX`).
+///
+/// Clicking past the last visible row clamps to the last char of the last
+/// row's last segment, matching `doc_row_at_screen_offset`'s
+/// clamp-to-last-row behavior for `Wrap::None`. Returns `None` only when
+/// the buffer has no rows at all.
+#[allow(clippy::too_many_arguments)]
+fn wrap_cell_to_doc(
+    buf: &hjkl_buffer::View,
+    top_row: usize,
+    target_screen_row: usize,
+    seg_rel_x: usize,
+    fold_header_visual_col: usize,
+    seg_width: u16,
+    wrap: hjkl_buffer::Wrap,
+    tab_width: usize,
+    line_count: usize,
+    line_at: &dyn Fn(usize) -> String,
+) -> Option<(usize, usize)> {
+    if line_count == 0 || top_row >= line_count {
+        return None;
+    }
+    let mut row = top_row;
+    let mut remaining = target_screen_row;
+    loop {
+        let line = line_at(row);
+        let is_fold_header = buf
+            .fold_at_row(row)
+            .is_some_and(|f| f.closed && f.start_row == row);
+        // `rows_here` = screen rows this doc row consumes. `resolve_at[i]` =
+        // the char col landed on if `remaining == i`; its LAST entry also
+        // doubles as the clamp target if the walk runs off the buffer end.
+        let (rows_here, resolve_at): (usize, Vec<usize>) = if is_fold_header {
+            (
+                1,
+                vec![hjkl_buffer::visual_col_to_char_col(
+                    &line,
+                    fold_header_visual_col,
+                    tab_width,
+                )],
+            )
+        } else {
+            let segs = hjkl_buffer::wrap_segments(&line, seg_width, wrap);
+            let cols = segs
+                .iter()
+                .map(|&seg| hjkl_buffer::char_col_for_visual_offset(&line, seg, seg_rel_x))
+                .collect();
+            (segs.len(), cols)
+        };
+        if remaining < rows_here {
+            return Some((row, resolve_at[remaining]));
+        }
+        remaining -= rows_here;
+        match buf.next_visible_row(row) {
+            Some(r) => row = r,
+            None => return Some((row, *resolve_at.last().unwrap())),
+        }
+    }
+}
+
 pub fn cell_to_doc(
     app: &App,
     win_id: window::WindowId,
@@ -284,7 +359,8 @@ pub fn cell_to_doc(
     // Per-window viewport/is_blame from the window editor (#151); buffer content
     // is shared, blame is per-slot.
     let ed = app.window_editor(win_id);
-    let line_count = slot.editor.buffer().line_count() as usize;
+    let buf = slot.editor.buffer();
+    let line_count = buf.line_count() as usize;
     let vp = ed.host().viewport();
 
     // Scroll origin MUST match what `render_window` drew with: the FOCUSED
@@ -320,28 +396,57 @@ pub fn cell_to_doc(
     // Visual column inside the text area (already accounting for viewport horizontal scroll).
     let text_rel_x = rel_x - gw; // cells from text-area left edge
     let visual_col = eff_top_col.saturating_add(text_rel_x as usize);
-
-    // Doc row. In box mode resolve via the render plan (border rows have no
-    // doc row); otherwise fold-aware walk from the viewport top.
-    let doc_row = if box_mode {
-        // `None` (border row / past the plan) propagates as "not a text click".
-        box_plan_doc_row(slot, eff_top_row, rect.h as usize, rel_y as usize)?
-    } else {
-        doc_row_at_screen_offset(slot.editor.buffer(), eff_top_row, rel_y as usize)
-    };
-    if doc_row >= line_count {
-        return None; // past EOF
-    }
-
-    // Char column via tab-expansion inverse.
     let tab_width = vp.effective_tab_width();
-    let rope = slot.editor.buffer().rope();
-    let line_str = if doc_row < rope.len_lines() {
-        hjkl_buffer::rope_line_str(&rope, doc_row)
-    } else {
-        String::new()
+
+    let line_at = |row: usize| -> String {
+        let rope = buf.rope();
+        if row < rope.len_lines() {
+            hjkl_buffer::rope_line_str(&rope, row)
+        } else {
+            String::new()
+        }
     };
-    let char_col = hjkl_buffer::visual_col_to_char_col(&line_str, visual_col, tab_width);
+
+    // Soft wrap (`:set wrap`) turns each doc row into potentially several
+    // screen rows via `wrap_segments`; the plain screen-row-per-doc-row walk
+    // below can't invert that, so it gets its own branch. Box-blame is
+    // exclusive with wrap (`box_mode` already requires `Wrap::None`).
+    let wrap_active = !box_mode && !matches!(vp.wrap, hjkl_buffer::Wrap::None);
+
+    let (doc_row, char_col) = if box_mode {
+        // `None` (border row / past the plan) propagates as "not a text click".
+        let doc_row = box_plan_doc_row(slot, eff_top_row, rect.h as usize, rel_y as usize)?;
+        if doc_row >= line_count {
+            return None; // past EOF
+        }
+        let char_col = hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
+        (doc_row, char_col)
+    } else if wrap_active {
+        let seg_width = if vp.text_width > 0 {
+            vp.text_width
+        } else {
+            rect.w.saturating_sub(gw)
+        };
+        wrap_cell_to_doc(
+            buf,
+            eff_top_row,
+            rel_y as usize,
+            text_rel_x as usize,
+            visual_col,
+            seg_width,
+            vp.wrap,
+            tab_width,
+            line_count,
+            &line_at,
+        )?
+    } else {
+        let doc_row = doc_row_at_screen_offset(buf, eff_top_row, rel_y as usize);
+        if doc_row >= line_count {
+            return None; // past EOF
+        }
+        let char_col = hjkl_buffer::visual_col_to_char_col(&line_at(doc_row), visual_col, tab_width);
+        (doc_row, char_col)
+    };
 
     Some((doc_row, char_col))
 }
@@ -1254,6 +1359,121 @@ mod tests {
         // Click on cell 6 maps to col=1.
         let got2 = cell_to_doc(&app, 0, 6, 0);
         assert_eq!(got2, Some((0, 1)), "click on cell 6 should map to col 1");
+    }
+
+    // ── Fix 3: cell_to_doc ignores soft wrap ────────────────────────────────
+
+    /// Set window 0's wrap mode + text_width directly on its WINDOW editor's
+    /// viewport (not the slot editor) — `cell_to_doc` reads
+    /// `app.window_editor(win_id)` / `app.window_scroll(win_id)`, which after
+    /// `reconcile_window_editors()` is a distinct copy from the slot editor
+    /// (mirrors `cell_to_doc_unfocused_window_uses_window_scroll` above).
+    fn set_win0_wrap(app: &mut App, wrap: hjkl_buffer::Wrap, text_width: u16) {
+        if let Some(e) = app.window_editors.get_mut(&0) {
+            let vp = e.host_mut().viewport_mut();
+            vp.wrap = wrap;
+            vp.text_width = text_width;
+        }
+    }
+
+    /// Doc row 0 is a single long line that wraps into 3 char-wrap segments
+    /// of 4 chars each at `text_width=4`: `(0,4) (4,8) (8,12)`. gw=4 (no
+    /// signs, matches `cell_to_doc_no_signs_first_text_cell_is_col_zero`
+    /// above — 2-line buffer still gets num_gw=4).
+    ///
+    /// Pre-fix, `cell_to_doc` mapped one screen row to one doc row
+    /// (`next_visible_row` per row): a click on screen row 1 (the SECOND
+    /// visual segment of doc row 0) fell through to doc row 1 ("line2") at
+    /// char col 2 — Some((1, 2)) — instead of staying on doc row 0.
+    #[test]
+    fn cell_to_doc_wrap_second_segment_stays_on_same_doc_row() {
+        let mut app = make_app_with_content("abcdefghijkl\nline2", Rect::new(0, 0, 80, 24));
+        set_win0_wrap(&mut app, hjkl_buffer::Wrap::Char, 4);
+        let gw = 4u16;
+
+        // Screen row 1 = the 2nd visual segment (chars [4,8) = "efgh"). Click
+        // at rel_x=2 within that segment → char col 6 ('g'): same doc row
+        // (0, not 1) and col (6) > the segment's own start (4).
+        let got = cell_to_doc(&app, 0, gw + 2, 1);
+        assert_eq!(
+            got,
+            Some((0, 6)),
+            "click on the 2nd wrap segment must stay on doc row 0 with \
+             col (6) > the segment start (4); got {got:?}"
+        );
+    }
+
+    /// Companion to the test above: a click on the segment's own FIRST cell
+    /// (rel_x=0) must resolve to the segment's start char (4), not 0 — the
+    /// continuation row must not collapse back to the start of the line.
+    #[test]
+    fn cell_to_doc_wrap_continuation_row_does_not_reset_to_line_start() {
+        let mut app = make_app_with_content("abcdefghijkl\nline2", Rect::new(0, 0, 80, 24));
+        set_win0_wrap(&mut app, hjkl_buffer::Wrap::Char, 4);
+        let gw = 4u16;
+
+        let got = cell_to_doc(&app, 0, gw, 1);
+        assert_eq!(
+            got,
+            Some((0, 4)),
+            "click on the 2nd wrap segment's own first cell must land on \
+             char 4 ('e'), not char 0 ('a'); got {got:?}"
+        );
+
+        // Third visual segment (chars [8,12) = "ijkl") behaves the same way.
+        let got3 = cell_to_doc(&app, 0, gw + 1, 2);
+        assert_eq!(
+            got3,
+            Some((0, 9)),
+            "click on the 3rd wrap segment at rel_x=1 must land on char 9 \
+             ('j'); got {got3:?}"
+        );
+    }
+
+    /// Fold + wrap combined: a closed fold's header row always renders as
+    /// exactly ONE screen row (never wrapped — mirrors the renderer's
+    /// fold-marker branch), so the wrapped row AFTER it must still land on
+    /// the correct screen row once the fold's one-row contribution is
+    /// accounted for.
+    ///
+    /// Rows: 0 = fold header (closes over rows 0..=2, hiding rows 1-2), 3 =
+    /// long line wrapping into 3 segments, 4 = trailing short line.
+    /// Screen rows: 0 → doc 0 (header), 1 → doc 3 seg 0, 2 → doc 3 seg 1,
+    /// 3 → doc 3 seg 2, 4 → doc 4.
+    #[test]
+    fn cell_to_doc_wrap_after_closed_fold_accounts_for_one_header_row() {
+        let mut app = make_app_with_content(
+            "fold_head\nhidden1\nhidden2\nabcdefghijkl\ntail",
+            Rect::new(0, 0, 80, 24),
+        );
+        {
+            let buf = app.slots_mut()[0].editor.buffer_mut();
+            buf.add_fold(0, 2, true);
+        }
+        app.reconcile_window_editors();
+        set_win0_wrap(&mut app, hjkl_buffer::Wrap::Char, 4);
+        // A closed fold reserves the fold column (`stable_gutter_extra`), so
+        // gw is 1 wider here than the fold-free wrap tests above — compute
+        // it instead of assuming 4.
+        let gw = crate::render::rendered_gutter_width(&app, 0);
+
+        // Screen row 2 = doc row 3's SECOND wrap segment ([4,8) = "efgh").
+        let got = cell_to_doc(&app, 0, gw + 1, 2);
+        assert_eq!(
+            got,
+            Some((3, 5)),
+            "screen row 2 must resolve to doc row 3 (past the 1-row-tall \
+             folded header) at char col 5, inside its 2nd wrap segment; \
+             got {got:?}"
+        );
+
+        // Screen row 4 = doc row 4 ("tail"), single unwrapped segment.
+        let got_tail = cell_to_doc(&app, 0, gw, 4);
+        assert_eq!(
+            got_tail,
+            Some((4, 0)),
+            "screen row 4 must resolve to doc row 4 ('tail'); got {got_tail:?}"
+        );
     }
 
     // ── View line zone ──────────────────────────────────────────────────────
