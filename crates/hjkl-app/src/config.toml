@@ -48,10 +48,23 @@ name = "dark"
 # your config file so it persists across sessions.
 width = 36
 
+# Whether the left file-explorer dock is open. Toggling it (`<leader>e` or
+# `<C-w>c` on the dock) writes this value back to your config file, so hjkl
+# reopens the explorer on the next launch iff you left it open. Does not
+# affect the bottom quickfix/location-list dock, which is never restored —
+# see `[panel]` below for why.
+open = false
+
 [panel]
-# Height (rows) of the bottom panel dock. Reserved for the quickfix /
-# location-list dock (unused today; plumbed ahead of that landing).
+# Height (rows) of the bottom panel dock (quickfix / location-list).
+# Interactively resizable the same way `[explorer].width` is.
 height = 12
+
+# There is deliberately no `open`/`which` key here to mirror
+# `[explorer].open`: the quickfix/location-list ENTRIES are never persisted
+# to disk (they're rebuilt fresh by `:grep`/`:make`/etc. every run), so
+# restoring an empty dock on startup would just show a blank read-only
+# buffer with nothing in it — not worth the config surface.
 
 [which_key]
 # Show a popup listing available bindings when a prefix key is held

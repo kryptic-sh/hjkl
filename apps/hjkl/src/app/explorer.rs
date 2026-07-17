@@ -688,13 +688,17 @@ impl super::App {
             .unwrap_or(false)
     }
 
-    /// `<leader>e` toggle: closed → open + focus; open → close.
+    /// `<leader>e` toggle: closed → open + focus; open → close. Persists the
+    /// resulting open/closed state to the user's config (`explorer.open`,
+    /// #63 Phase C) so it's restored on the next launch — see
+    /// `dock::App::persist_explorer_open` / `restore_dock_state_from_config`.
     pub(crate) fn toggle_explorer(&mut self) {
         if self.explorer.is_some() {
             self.close_explorer();
         } else {
             self.open_explorer();
         }
+        self.persist_explorer_open();
     }
 
     /// Open the explorer window as the left dock (#63 Phase A — outside

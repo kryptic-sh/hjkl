@@ -1681,6 +1681,97 @@ fn dock_resize_without_config_path_does_not_panic_or_write_anything() {
     assert_eq!(app.config.explorer.width, before + 2);
 }
 
+// ── Session-state persistence: explorer open/closed (#63 Phase C) ─────────
+
+#[test]
+fn toggle_explorer_persists_open_state_to_config_file() {
+    use crate::keymap_actions::AppAction;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_some());
+    let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
+    assert!(text.contains("[explorer]"));
+    assert!(
+        text.contains("open = true"),
+        "opening the explorer must persist open = true; got:\n{text}"
+    );
+
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_none());
+    let text = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(
+        text.contains("open = false"),
+        "closing the explorer must persist open = false; got:\n{text}"
+    );
+}
+
+#[test]
+fn toggle_explorer_without_config_path_does_not_panic_or_write_anything() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_some());
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_none());
+}
+
+#[test]
+fn restore_dock_state_reopens_explorer_when_config_says_open() {
+    let mut cfg = hjkl_app::config::Config::default();
+    cfg.explorer.open = true;
+    let mut app = App::new(None, false, None, None).unwrap().with_config(cfg);
+
+    assert!(
+        app.left_dock.is_none(),
+        "with_config alone must not open the dock"
+    );
+
+    app.restore_dock_state_from_config();
+
+    assert!(
+        app.left_dock.is_some(),
+        "restore must reopen the explorer through the normal toggle_explorer path"
+    );
+    assert!(app.explorer.is_some());
+}
+
+#[test]
+fn restore_dock_state_is_noop_when_config_says_closed() {
+    // Default config has explorer.open = false.
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    app.restore_dock_state_from_config();
+
+    assert!(app.left_dock.is_none());
+    assert!(app.explorer.is_none());
+}
+
+#[test]
+fn restore_dock_state_does_not_double_toggle_when_already_open() {
+    use crate::keymap_actions::AppAction;
+    let mut cfg = hjkl_app::config::Config::default();
+    cfg.explorer.open = true;
+    let mut app = App::new(None, false, None, None).unwrap().with_config(cfg);
+    // Simulate the explorer already being open (e.g. a caller invoking
+    // restore twice, or opening it interactively before restore runs).
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_some());
+
+    app.restore_dock_state_from_config();
+
+    assert!(
+        app.left_dock.is_some(),
+        "restore must not close an already-open explorer (it only opens \
+         when explorer.is_none())"
+    );
+}
+
 #[test]
 fn dock_resize_clamps_to_minimum_width() {
     use crate::keymap_actions::AppAction;

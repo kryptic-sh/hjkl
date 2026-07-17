@@ -362,6 +362,15 @@ fn main() -> Result<()> {
     if args.picker {
         app.open_picker();
     }
+    // Reopen the left explorer dock if the user left it open last session
+    // (#63 Phase C — `explorer.open` in config, written back by every
+    // `toggle_explorer`). Runs after `with_config`/`with_config_path` (needs
+    // the loaded config) and after the CLI files are open (so the dock's
+    // initial reveal-cursor lands on the file the user is actually editing,
+    // same as an interactive `<leader>e` would). The bottom quickfix/
+    // location-list dock is never restored — see
+    // `dock::restore_dock_state_from_config`'s doc comment for why.
+    app.restore_dock_state_from_config();
     // Recover any orphan scratch swaps from a previous crashed session.
     // This runs after all CLI files are open so recovered unnamed buffers
     // come last in the slot list; it does NOT run inside App::new so that

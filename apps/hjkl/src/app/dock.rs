@@ -434,4 +434,56 @@ impl super::App {
             self.bus.warn(format!("couldn't save panel height: {e}"));
         }
     }
+
+    // ── Session-state persistence (#63 Phase C) ─────────────────────────
+    //
+    // Unlike `persist_dock_width`/`persist_dock_height` (interactive resize
+    // only), open/closed state is written back on every toggle so the dock
+    // reopens automatically on the next launch. There is no separate
+    // "session file" mechanism anywhere in this codebase to hook into —
+    // `hjkl_config::write_key_at`'s surgical TOML patch (the same one Phase
+    // A/B already use for dock geometry) IS the closest existing precedent
+    // for "runtime state that survives a restart", so this reuses it rather
+    // than inventing a new persistence format.
+
+    /// Write the left dock's current open/closed state back to the user's
+    /// config file. Called from [`super::App::toggle_explorer`] after every
+    /// toggle (both open and close), so `explorer.open` always reflects
+    /// reality — including when [`Self::restore_dock_state_from_config`]
+    /// itself calls `toggle_explorer` at startup (a harmless rewrite of the
+    /// same value already on disk). No-op — silently, matching
+    /// [`Self::persist_dock_width`] — when no config path is known.
+    pub(crate) fn persist_explorer_open(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let open = self.explorer.is_some();
+        if let Err(e) = hjkl_config::write_key_at(&path, "explorer.open", open) {
+            self.bus.warn(format!("couldn't save explorer open state: {e}"));
+        }
+    }
+
+    /// Startup dock-state restore (#63 Phase C). Reopens the left dock iff
+    /// `explorer.open` is `true` in the loaded config — going through
+    /// [`super::App::toggle_explorer`], the SAME path an interactive
+    /// `<leader>e` takes, so every invariant that path maintains (slot
+    /// creation, dock installation, initial cursor/reveal, focus) holds for
+    /// the restored dock exactly as it would for a fresh open. Must run
+    /// after `App::new` + `with_config`/`with_config_path` (needs both the
+    /// initial window/slot machinery AND the loaded config); see
+    /// `main.rs`'s call site.
+    ///
+    /// The bottom dock's open/which-list state is deliberately NOT
+    /// restored: unlike dock geometry, the quickfix/location-list ENTRIES
+    /// are never persisted (`QfList` is plain in-memory state, rebuilt
+    /// fresh by `:grep`/`:make`/`:cexpr`/etc. every run) — reopening an
+    /// empty `:copen` window on startup would show a blank read-only
+    /// buffer with nothing to look at, so there is nothing worth restoring.
+    /// Only the left dock, whose content (the file tree) is cheap to
+    /// rebuild from disk on every open, gets this treatment.
+    pub(crate) fn restore_dock_state_from_config(&mut self) {
+        if self.config.explorer.open && self.explorer.is_none() {
+            self.toggle_explorer();
+        }
+    }
 }

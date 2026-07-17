@@ -52,11 +52,21 @@ pub struct ExplorerDockConfig {
     /// the current terminal width (see `dock::clamp_dock_width`); this is
     /// just the persisted preference.
     pub width: u16,
+    /// Whether the explorer dock is open. Written back on every
+    /// `toggle_explorer` (`<leader>e`, `<C-w>c` on the dock) and read on
+    /// startup to reopen the dock if it was left open (#63 Phase C).
+    /// `#[serde(default)]` so a hand-edited `[explorer]` section that
+    /// predates this field (only `width` set) still parses.
+    #[serde(default)]
+    pub open: bool,
 }
 
 impl Default for ExplorerDockConfig {
     fn default() -> Self {
-        Self { width: 36 }
+        Self {
+            width: 36,
+            open: false,
+        }
     }
 }
 
