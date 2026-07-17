@@ -115,9 +115,31 @@ struct Cli {
     #[arg(short = 'q', value_name = "ERRORFILE", num_args = 0..=1, default_missing_value = "errors.err")]
     quickfix: Option<String>,
 
+    /// Open each file in a horizontal split (nvim `-o`).
+    #[arg(short = 'o', conflicts_with_all = ["open_vsplit", "open_tabs"])]
+    open_hsplit: bool,
+
+    /// Open each file in a vertical split (nvim `-O`).
+    #[arg(short = 'O', conflicts_with_all = ["open_hsplit", "open_tabs"])]
+    open_vsplit: bool,
+
+    /// Open each file in a tab page (nvim `-p`).
+    #[arg(short = 'p', conflicts_with_all = ["open_hsplit", "open_vsplit"])]
+    open_tabs: bool,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
+}
+
+/// How CLI files beyond the first are laid out on startup.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FileLayout {
+    #[default]
+    Buffers, // default: extra files become buffers (bufferline)
+    HSplit, // -o: horizontal splits
+    VSplit, // -O: vertical splits
+    Tabs,   // -p: tab pages
 }
 
 /// Parsed arguments after pre-processing the `+N` / `+/pattern` tokens.
@@ -147,6 +169,10 @@ pub struct Args {
     /// `&errorformat`, populate the quickfix list, and jump to the first
     /// error at startup. Mirrors `nvim -q`. `None` when the flag is absent.
     pub quickfix: Option<String>,
+    /// `-o` / `-O` / `-p`: how files beyond the first are laid out on
+    /// startup. Mirrors nvim's layout flags (bare form only — no `-o2`
+    /// window-count variant).
+    pub file_layout: FileLayout,
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -238,6 +264,17 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
         quickfix: cli.quickfix,
+        // clap's `conflicts_with_all` on the three flags guarantees at most
+        // one of these bools is set.
+        file_layout: if cli.open_tabs {
+            FileLayout::Tabs
+        } else if cli.open_vsplit {
+            FileLayout::VSplit
+        } else if cli.open_hsplit {
+            FileLayout::HSplit
+        } else {
+            FileLayout::Buffers
+        },
     };
     // nvim compatibility: `-u NONE` disables plugins + config, `-u NORC` skips
     // just the init file. hjkl has no plugin system and a single TOML config,
@@ -410,12 +447,49 @@ fn main() -> Result<()> {
     } else {
         base_app
     };
-    // Load any additional files into extra slots (argv order). Errors are
-    // printed to stderr but do not abort — the editor opens with whatever
-    // could be loaded.
-    for path in args.files.into_iter().skip(1) {
-        if let Err(e) = app.open_extra(path) {
-            eprintln!("hjkl: {e}");
+    // Load any additional files (argv order beyond the first). By default
+    // they become extra buffers (bufferline); `-o`/`-O`/`-p` instead lay
+    // each one out in its own horizontal split / vertical split / tab page,
+    // mirroring nvim's layout flags. Errors are printed to stderr but do not
+    // abort — the editor opens with whatever could be loaded. This only
+    // affects the TUI path — headless/embed/nvim-api already returned above.
+    let extra_files: Vec<PathBuf> = args.files.into_iter().skip(1).collect();
+    match args.file_layout {
+        FileLayout::Buffers => {
+            for path in extra_files {
+                if let Err(e) = app.open_extra(path) {
+                    eprintln!("hjkl: {e}");
+                }
+            }
+        }
+        FileLayout::HSplit => {
+            for path in &extra_files {
+                app.dispatch_ex(&format!("split {}", path.display()));
+            }
+            if !extra_files.is_empty() {
+                // Return focus to the first file's window (id 0, allocated
+                // by `App::new` before any splits ran), matching nvim's
+                // "first file ends up top-left" behavior.
+                app.switch_focus(0);
+            }
+        }
+        FileLayout::VSplit => {
+            for path in &extra_files {
+                app.dispatch_ex(&format!("vsplit {}", path.display()));
+            }
+            if !extra_files.is_empty() {
+                app.switch_focus(0);
+            }
+        }
+        FileLayout::Tabs => {
+            for path in &extra_files {
+                app.dispatch_ex(&format!("tabnew {}", path.display()));
+            }
+            if !extra_files.is_empty() {
+                // Return focus to the first tab (index 0), matching nvim's
+                // "first file ends up in the first tab" behavior.
+                app.switch_tab(0);
+            }
         }
     }
     if args.picker {
@@ -824,6 +898,50 @@ mod cli_tests {
         assert_eq!(args.quickfix, None);
     }
 
+    /// `-o` / `-O` / `-p` parse into `args.file_layout`; absent defaults to
+    /// `Buffers` (today's bufferline behavior).
+    #[test]
+    fn parse_argv_file_layout_flags() {
+        let raw: Vec<String> = ["hjkl", "-o", "a.txt", "b.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.file_layout, FileLayout::HSplit);
+
+        let raw: Vec<String> = ["hjkl", "-O", "a.txt", "b.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.file_layout, FileLayout::VSplit);
+
+        let raw: Vec<String> = ["hjkl", "-p", "a.txt", "b.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.file_layout, FileLayout::Tabs);
+
+        let raw: Vec<String> = ["hjkl", "a.txt", "b.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.file_layout, FileLayout::Buffers);
+    }
+
+    /// `-o` / `-O` / `-p` are mutually exclusive — nvim treats these as
+    /// distinct layout choices, not composable flags. Use `Cli::try_parse_from`
+    /// directly (not `parse_argv`) since a parse error there calls
+    /// `std::process::exit`.
+    #[test]
+    fn cli_file_layout_flags_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from(["hjkl", "-o", "-O", "f.txt"]).is_err());
+        assert!(Cli::try_parse_from(["hjkl", "-o", "-p", "f.txt"]).is_err());
+        assert!(Cli::try_parse_from(["hjkl", "-O", "-p", "f.txt"]).is_err());
+    }
+
     fn blank_args() -> Args {
         Args {
             files: vec![],
@@ -838,6 +956,7 @@ mod cli_tests {
             nvim_api: false,
             commands: vec![],
             quickfix: None,
+            file_layout: FileLayout::Buffers,
         }
     }
 }

@@ -25,6 +25,7 @@ pub mod clean;
 pub mod comment;
 pub mod dot_repeat;
 pub mod explorer;
+pub mod file_layout;
 pub mod filter;
 pub mod global_marks;
 pub mod harness;
