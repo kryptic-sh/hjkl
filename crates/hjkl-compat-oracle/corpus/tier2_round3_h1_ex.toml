@@ -1,0 +1,11 @@
+# Round 3 — H1 (nvim-api arm): `:%d` fully empties the buffer via the ex
+# command path, driven through `hjkl --nvim-api` (key replay doesn't
+# dispatch `:`). Verified with `nvim --headless --clean -n -c "normal! :%d<CR>"
+# -c wq` — 0 bytes written.
+
+[[cases]]
+name = "r3_ex_percent_delete_empties_buffer"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = ":%d<CR>"
+expected_buffer = ""

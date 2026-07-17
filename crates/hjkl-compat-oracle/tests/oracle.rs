@@ -129,7 +129,9 @@ async fn run_corpus_via_nvim_api(rel_path: &str, label: &str) {
             }
             Ok(outcome) => {
                 let mut buf = outcome.buffer.clone();
-                if case.initial_buffer.ends_with('\n') && !buf.ends_with('\n') {
+                // Don't fabricate a trailing newline for a fully-emptied
+                // buffer — see the matching guard in hjkl_driver.rs (H1).
+                if case.initial_buffer.ends_with('\n') && !buf.is_empty() && !buf.ends_with('\n') {
                     buf.push('\n');
                 }
                 if buf != case.expected_buffer {
@@ -777,9 +779,11 @@ async fn nvim_api_tier_passes() {
                 failures.push(format!("{}: driver error: {e}", case.name));
             }
             Ok(outcome) => {
-                // Re-apply trailing newline convention.
+                // Re-apply trailing newline convention. Skip for a
+                // fully-emptied buffer — see the matching guard in
+                // hjkl_driver.rs (H1).
                 let mut buf = outcome.buffer.clone();
-                if case.initial_buffer.ends_with('\n') && !buf.ends_with('\n') {
+                if case.initial_buffer.ends_with('\n') && !buf.is_empty() && !buf.ends_with('\n') {
                     buf.push('\n');
                 }
                 if buf != case.expected_buffer {
@@ -877,7 +881,7 @@ async fn tier2_sneak_disabled_fallback_corpus_passes() {
             }
             Ok(outcome) => {
                 let mut buf = outcome.buffer.clone();
-                if case.initial_buffer.ends_with('\n') && !buf.ends_with('\n') {
+                if case.initial_buffer.ends_with('\n') && !buf.is_empty() && !buf.ends_with('\n') {
                     buf.push('\n');
                 }
                 if buf != case.expected_buffer {
@@ -930,6 +934,20 @@ async fn tier2_sentence_corpus_passes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_round2b_corpus_passes() {
     run_corpus("corpus/tier2_round2b.toml").await;
+}
+
+/// H1: oracle harness fix pins — cases that fully empty the buffer, only
+/// testable after the nvim_driver.rs / hjkl_driver.rs trailing-newline fix.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_h1_corpus_passes() {
+    run_corpus("corpus/tier2_round3_h1.toml").await;
+}
+
+/// H1 (nvim-api arm): `:%d` fully empties the buffer via the ex command
+/// path.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_h1_ex_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_round3_h1_ex.toml", "tier2_round3_h1_ex").await;
 }
 
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds

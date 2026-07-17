@@ -261,7 +261,9 @@ async fn run_case_via_nvim_api_inner(
     // 4. Read back buffer.
     let raw_lines = cur_buf.get_lines(0, -1, false).await?;
     let mut buf_str = raw_lines.join("\n");
-    if has_trailing_newline {
+    // See nvim_driver.rs's matching comment: don't fabricate a trailing `\n`
+    // for a fully-emptied buffer (`raw_lines == [""]` / `buf_str == ""`).
+    if has_trailing_newline && !buf_str.is_empty() {
         buf_str.push('\n');
     }
 

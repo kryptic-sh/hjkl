@@ -1,0 +1,21 @@
+# Round 3 — H1: oracle harness previously fabricated a trailing "\n" for
+# buffers emptied down to zero lines. `nvim_buf_get_lines` reads back a
+# genuinely-emptied buffer identically to a buffer with one real empty line
+# (both `[""]`), but real nvim writes 0 bytes for the former and 1 byte
+# ("\n") for the latter — verified with `nvim --headless --clean -n -c
+# "normal! dG" -c wq` (0 bytes) vs `-c "normal! x"` on a single-char line (1
+# byte). The fix in nvim_driver.rs disambiguates via `wordcount().bytes`.
+# These cases were untestable before that fix (the harness's own
+# "expected_buffer (corpus author error?)" sanity check against live nvim
+# would have failed).
+
+# `dG` from row 0 deletes every line; the buffer collapses to nothing (0
+# bytes on disk in real nvim, not a lone "\n").
+[[cases]]
+name = "r3_dG_from_row0_empties_buffer"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "dG"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"

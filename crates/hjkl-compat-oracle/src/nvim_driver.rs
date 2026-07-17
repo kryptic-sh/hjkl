@@ -160,8 +160,29 @@ async fn run_case_inner(
     // 6. Read back buffer.
     let raw_lines = cur_buf.get_lines(0, -1, false).await?;
     let mut buf_str = raw_lines.join("\n");
-    // Re-apply the trailing newline that the original buffer had.
-    if has_trailing_newline {
+    // Re-apply the trailing newline that the original buffer had — but only
+    // when nvim would actually write one. `nvim_buf_get_lines` collapses two
+    // distinct internal states to the same `[""]` / `""` read-back:
+    //   - a buffer with one genuinely empty line (e.g. `x` deleting the sole
+    //     char of a single-char line) — nvim writes a 1-byte `"\n"` file.
+    //   - a buffer emptied down to zero lines (`dG` from row 0, `:%d`) — an
+    //     internal "ML_EMPTY" state that writes a 0-byte file.
+    // `wordcount().bytes` (what `:w` would write) distinguishes them where
+    // the line-based read-back cannot, so use it as the ground truth instead
+    // of a blind `buf_str.is_empty()` check (verified against real nvim:
+    // `x` on `"a\n"` → 1-byte file; `dG` on a multi-line buffer from row 0 →
+    // 0-byte file, despite both reading back as `raw_lines == [""]`).
+    let wordcount = nvim.call_function("wordcount", vec![]).await?;
+    let nvim_byte_count = wordcount
+        .as_map()
+        .and_then(|m| {
+            m.iter()
+                .find(|(k, _)| k.as_str() == Some("bytes"))
+                .and_then(|(_, v)| v.as_i64())
+        })
+        .unwrap_or(-1);
+    let genuinely_empty = buf_str.is_empty() && nvim_byte_count == 0;
+    if has_trailing_newline && !genuinely_empty {
         buf_str.push('\n');
     }
 
