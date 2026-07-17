@@ -486,3 +486,21 @@ fn block_insert_skips_rows_shorter_than_the_block_column() {
         &["aaZaa".to_string(), "x".to_string(), "bbZbb".to_string()]
     );
 }
+
+/// B1: an insert-mode ctrl-key combo with no dedicated binding (e.g.
+/// `<C-b>`) must be a no-op, NOT insert the literal letter (the pre-fix
+/// bug — `<C-a>` used to insert "a"). This intentionally diverges from
+/// real nvim, which inserts the raw control byte for most unbound ctrl
+/// keys (verified: `<C-b>` in nvim inserts a literal ^B) — logged in
+/// DIVERGE.md since reproducing an unprintable control byte in the buffer
+/// has no user-facing benefit and no-op is the safer choice.
+#[test]
+fn insert_unhandled_ctrl_key_is_noop_not_literal_letter() {
+    let mut e = editor_with("hello\n");
+    dispatch_keys(&mut e, "i<C-b>x<Esc>");
+    assert_eq!(
+        lines_of(&e),
+        &["xhello".to_string(), String::new()],
+        "unhandled ctrl key must not insert its letter literally"
+    );
+}

@@ -111,3 +111,45 @@ initial_cursor = [0, 5]
 keys = "#x"
 expected_buffer = "a. a.b\n"
 expected_mode = "normal"
+
+# ─── B1 — insert-mode C-a/C-e/C-y ─────────────────────────────────────────────
+
+# `<C-a>` re-inserts the text typed during the previous insert session.
+[[cases]]
+name = "b1_ctrl_a_reinserts_last_insert"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = "ifoo<Esc>a<C-a><Esc>"
+expected_buffer = "foofoo\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+
+# `<C-e>` copies the char in the same column of the line BELOW.
+[[cases]]
+name = "b1_ctrl_e_copies_char_below"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "jli<C-e><Esc>"
+expected_buffer = "abc\ndhef\nghi\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+
+# `<C-y>` copies the char in the same column of the line ABOVE.
+[[cases]]
+name = "b1_ctrl_y_copies_char_above"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "jli<C-y><Esc>"
+expected_buffer = "abc\ndbef\nghi\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+
+# `<C-y>` at row 0 (no line above) is a no-op.
+[[cases]]
+name = "b1_ctrl_y_noop_at_first_row"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "li<C-y><Esc>"
+expected_buffer = "abc\ndef\nghi\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

@@ -69,6 +69,32 @@ pub fn step_insert<H: Host>(
                 ed.insert_ctrl_bracket();
                 return true;
             }
+            // B1: `<C-a>` re-inserts the text typed during the last insert
+            // session, `<C-e>`/`<C-y>` copy the char below/above the cursor.
+            Key::Char('a') => {
+                ed.insert_ctrl_a();
+                return true;
+            }
+            Key::Char('e') => {
+                ed.insert_ctrl_e();
+                return true;
+            }
+            Key::Char('y') => {
+                ed.insert_ctrl_y();
+                return true;
+            }
+            // B1: any other ctrl-key combo has no dedicated insert-mode
+            // binding. Real nvim inserts the raw control byte for most of
+            // these (verified: `<C-b>` types a literal ^B) — reproducing
+            // that here would put unprintable bytes in the buffer for no
+            // benefit, so we consume the key as a no-op instead (documented
+            // as an accepted divergence in DIVERGE.md). What this fixes is
+            // the PREVIOUS behaviour of falling through to `handle_insert_key`
+            // below, which typed the ctrl letter itself as a literal
+            // character (e.g. `<C-a>` inserted a literal "a").
+            Key::Char(_) => {
+                return true;
+            }
             _ => {}
         }
     }

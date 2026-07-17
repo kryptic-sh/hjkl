@@ -688,6 +688,13 @@ pub trait VimEditorExt {
     fn insert_ctrl_t(&mut self);
     /// `Ctrl-D` — dedent the current line one `shiftwidth`.
     fn insert_ctrl_d(&mut self);
+    /// `Ctrl-A` — insert the text typed during the most recent insert
+    /// session (vim's "." register).
+    fn insert_ctrl_a(&mut self);
+    /// `Ctrl-E` — insert the char in the same column of the line below.
+    fn insert_ctrl_e(&mut self);
+    /// `Ctrl-Y` — insert the char in the same column of the line above.
+    fn insert_ctrl_y(&mut self);
     /// Paste register `reg` at the cursor (the `Ctrl-R` follow-up).
     fn insert_paste_register(&mut self, reg: char);
     /// `Ctrl-[` — expand any pending abbreviation (Esc-equivalent trigger).
@@ -1887,6 +1894,24 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             self.mark_content_dirty();
             let (row, _) = self.cursor();
             crate::vim_state::vim_mut(self).widen_insert_row(row);
+        }
+    }
+
+    fn insert_ctrl_a(&mut self) {
+        if crate::vim::insert_ctrl_a_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_ctrl_e(&mut self) {
+        if crate::vim::insert_ctrl_e_bridge(self) {
+            after_insert_mutation(self);
+        }
+    }
+
+    fn insert_ctrl_y(&mut self) {
+        if crate::vim::insert_ctrl_y_bridge(self) {
+            after_insert_mutation(self);
         }
     }
 

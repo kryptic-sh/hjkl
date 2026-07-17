@@ -683,6 +683,68 @@ pub(crate) fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
     ed.push_buffer_cursor_to_textarea();
     true
 }
+/// B1: insert the text typed during the most recent insert session
+/// (`Ctrl-A`, `:h i_CTRL-A`). No-op when nothing has been inserted yet this
+/// buffer session. Returns `true` when text was inserted.
+pub(crate) fn insert_ctrl_a_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> bool {
+    use hjkl_buffer::Edit;
+    let Some(text) = vim(ed).last_insert_text.clone() else {
+        return false;
+    };
+    if text.is_empty() {
+        return false;
+    }
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(ed.buffer());
+    ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+/// B1: insert the character in the same column of the line BELOW the cursor
+/// (`Ctrl-E`, `:h i_CTRL-E`). No-op when there's no line below, or that line
+/// is too short to have a char at this column. Returns `true` when a
+/// character was inserted.
+pub(crate) fn insert_ctrl_e_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> bool {
+    insert_char_from_adjacent_line(ed, 1)
+}
+/// B1: insert the character in the same column of the line ABOVE the cursor
+/// (`Ctrl-Y`, `:h i_CTRL-Y`). No-op when there's no line above, or that line
+/// is too short to have a char at this column. Returns `true` when a
+/// character was inserted.
+pub(crate) fn insert_ctrl_y_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> bool {
+    insert_char_from_adjacent_line(ed, -1)
+}
+/// Shared body for `Ctrl-E`/`Ctrl-Y`: copy the char at the cursor's column
+/// from the row `delta` away (below for `+1`, above for `-1`) and insert it
+/// like a typed character. `delta = -1` at row 0 and `delta = +1` past the
+/// last row are both no-ops (no such line); a column beyond that line's
+/// length is also a no-op (no such char).
+fn insert_char_from_adjacent_line<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    delta: isize,
+) -> bool {
+    use hjkl_buffer::Edit;
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(ed.buffer());
+    let Some(other_row) = cursor.row.checked_add_signed(delta) else {
+        return false;
+    };
+    if other_row >= buf_row_count(ed.buffer()) {
+        return false;
+    }
+    let Some(ch) = buf_line(ed.buffer(), other_row).and_then(|l| l.chars().nth(cursor.col)) else {
+        return false;
+    };
+    ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
 /// Indent the current line by one `shiftwidth` and shift the cursor right by
 /// the same amount (`Ctrl-T`). Returns `true`.
 pub(crate) fn insert_ctrl_t_bridge<H: hjkl_engine::types::Host>(
