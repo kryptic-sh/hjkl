@@ -63,30 +63,32 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Operators
 
-| Feature                                             | Cases | File(s)                                                               |
-| --------------------------------------------------- | ----- | --------------------------------------------------------------------- |
-| d (dw, dd, d$, d0, d2j, d+, d-, d\_, d\|, d[[, d]]) | 10+   | tier1.toml                                                            |
-| D                                                   | 1     | tier1.toml                                                            |
-| c (cw, cc, C)                                       | 3     | tier1.toml                                                            |
-| y (yw, yy, Y)                                       | 3     | tier1.toml                                                            |
-| p / P                                               | 6     | tier1.toml                                                            |
-| counted P cursor position (B20)                     | 3     | tier2_round2b.toml                                                    |
-| x / X                                               | 2     | tier1.toml                                                            |
-| x at EOL clamps cursor (B11)                        | 3     | tier2_round2b.toml                                                    |
-| r                                                   | 1     | tier1.toml                                                            |
-| ~ (toggle case)                                     | 1     | tier1.toml                                                            |
-| counted ~ clamps cursor at EOL (B21)                | 1     | tier2_round2b.toml                                                    |
-| J                                                   | 2     | tier2_case_indent_join.toml, tier2_gaps.toml                          |
-| gJ                                                  | 1     | tier2_case_indent_join.toml                                           |
-| gU / gu / g~                                        | 3     | tier2_case_indent_join.toml                                           |
-| > / < (indent/outdent)                              | —     | excluded — shiftwidth diverges between hjkl defaults and nvim --clean |
-| = (auto-indent)                                     | —     | TODO                                                                  |
-| ! (filter)                                          | —     | TODO                                                                  |
-| gq (reflow)                                         | —     | TODO (gw is tested via nvim_api_tier)                                 |
-| gw (cursor-stable reflow)                           | 3     | nvim_api_tier.toml                                                    |
-| gc (comment)                                        | —     | TODO                                                                  |
-| 3dd (count)                                         | 1     | tier2_gaps.toml                                                       |
-| 2yyp (count yank+paste)                             | 1     | tier2_gaps.toml                                                       |
+| Feature                                                            | Cases | File(s)                                                               |
+| ------------------------------------------------------------------ | ----- | --------------------------------------------------------------------- |
+| d (dw, dd, d$, d0, d2j, d+, d-, d\_, d\|, d[[, d]])                | 10+   | tier1.toml                                                            |
+| linewise delete reaching buffer end clamps cursor (dG/dj/d2j) (H2) | 3     | tier2_round3_h2.toml                                                  |
+| linewise delete fully emptying buffer (dG from row 0, :%d) (H1)    | 2     | tier2_round3_h1.toml, tier2_round3_h1_ex.toml                         |
+| D                                                                  | 1     | tier1.toml                                                            |
+| c (cw, cc, C)                                                      | 3     | tier1.toml                                                            |
+| y (yw, yy, Y)                                                      | 3     | tier1.toml                                                            |
+| p / P                                                              | 6     | tier1.toml                                                            |
+| counted P cursor position (B20)                                    | 3     | tier2_round2b.toml                                                    |
+| x / X                                                              | 2     | tier1.toml                                                            |
+| x at EOL clamps cursor (B11)                                       | 3     | tier2_round2b.toml                                                    |
+| r                                                                  | 1     | tier1.toml                                                            |
+| ~ (toggle case)                                                    | 1     | tier1.toml                                                            |
+| counted ~ clamps cursor at EOL (B21)                               | 1     | tier2_round2b.toml                                                    |
+| J                                                                  | 2     | tier2_case_indent_join.toml, tier2_gaps.toml                          |
+| gJ                                                                 | 1     | tier2_case_indent_join.toml                                           |
+| gU / gu / g~                                                       | 3     | tier2_case_indent_join.toml                                           |
+| > / < (indent/outdent)                                             | —     | excluded — shiftwidth diverges between hjkl defaults and nvim --clean |
+| = (auto-indent)                                                    | —     | TODO                                                                  |
+| ! (filter)                                                         | —     | TODO                                                                  |
+| gq (reflow)                                                        | —     | TODO (gw is tested via nvim_api_tier)                                 |
+| gw (cursor-stable reflow)                                          | 3     | nvim_api_tier.toml                                                    |
+| gc (comment)                                                       | —     | TODO                                                                  |
+| 3dd (count)                                                        | 1     | tier2_gaps.toml                                                       |
+| 2yyp (count yank+paste)                                            | 1     | tier2_gaps.toml                                                       |
 
 ## Text Objects
 
@@ -108,16 +110,19 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Modes
 
-| Feature              | Cases               | File(s)                                   |
-| -------------------- | ------------------- | ----------------------------------------- |
-| normal               | all                 | various                                   |
-| insert (i/a/I/A/o/O) | 6                   | tier1.toml                                |
-| visual char (v)      | 4                   | tier2_visual.toml                         |
-| visual line (V)      | 4                   | tier2_visual.toml                         |
-| visual block (C-v)   | 7                   | tier2_visual_block.toml                   |
-| command-line (:)     | via nvim-api driver | nvim_api_tier.toml, tier2_substitute.toml |
-| terminal             | —                   | (not shipped)                             |
-| replace (R)          | 8                   | tier2_replace_mode.toml                   |
+| Feature                                       | Cases               | File(s)                                   |
+| --------------------------------------------- | ------------------- | ----------------------------------------- |
+| normal                                        | all                 | various                                   |
+| insert (i/a/I/A/o/O)                          | 6                   | tier1.toml                                |
+| visual char (v)                               | 4                   | tier2_visual.toml                         |
+| visual line (V)                               | 4                   | tier2_visual.toml                         |
+| [count]v / [count]V (B5)                      | 6                   | tier2_round3_b5_counted_visual.toml       |
+| visual r{char} (charwise/linewise) (B2)       | 3                   | tier2_round3_b2_visual_replace.toml       |
+| visual text-object growth (vipip, viwiw) (B6) | 3                   | tier2_round3_b6_visual_textobj_grow.toml  |
+| visual block (C-v)                            | 7                   | tier2_visual_block.toml                   |
+| command-line (:)                              | via nvim-api driver | nvim_api_tier.toml, tier2_substitute.toml |
+| terminal                                      | —                   | (not shipped)                             |
+| replace (R)                                   | 8                   | tier2_replace_mode.toml                   |
 
 ## Insert Primitives
 
@@ -202,30 +207,30 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Ex Commands
 
-| Feature                        | Cases | File(s)                                    |
-| ------------------------------ | ----- | ------------------------------------------ |
-| :syntax on/off                 | 4     | nvim_api_tier.toml                         |
-| :redraw / :redraw!             | 2     | nvim_api_tier.toml                         |
-| :set scrolloff / sidescrolloff | 2     | nvim_api_tier.toml                         |
-| :set list / nolist / listchars | 4     | nvim_api_tier.toml                         |
-| :retab / :retab!               | 3     | nvim_api_tier.toml                         |
-| :earlier / :later              | 3     | nvim_api_tier.toml                         |
-| :q / :q! / :qa / :wq           | —     | exit commands can't oracle (process exits) |
-| :w / :wall                     | —     | requires a file path, not oracled          |
-| :e / :edit                     | —     | requires a file, not oracled               |
-| :r                             | —     | TODO                                       |
-| :1,3d (range delete)           | 4     | tier2_ex_delete.toml (register/count args) |
-| :wa                            | —     | requires files, not oracled                |
-| :put / :put! (range addr, register arg, :0put) | 4 | tier2_round3_b3_put.toml           |
-| /pat/ , ?pat? range addresses  | 6     | tier2_round3_b4_search_range.toml          |
-| :join / :j / :j! (gJ)          | 7     | tier2_ex_join.toml                         |
-| :yank / :y [reg] [count]       | 4     | tier2_ex_yank.toml                         |
-| :sort                          | —     | TODO                                       |
-| :set noignorecase              | —     | TODO                                       |
-| :set colorizer                 | —     | (not shipped)                              |
-| :set indent_guides             | —     | (not shipped in oracle)                    |
-| :set format_on_save            | —     | (not shipped in oracle)                    |
-| :set trim_trailing_whitespace  | —     | (not shipped in oracle)                    |
+| Feature                                        | Cases | File(s)                                    |
+| ---------------------------------------------- | ----- | ------------------------------------------ |
+| :syntax on/off                                 | 4     | nvim_api_tier.toml                         |
+| :redraw / :redraw!                             | 2     | nvim_api_tier.toml                         |
+| :set scrolloff / sidescrolloff                 | 2     | nvim_api_tier.toml                         |
+| :set list / nolist / listchars                 | 4     | nvim_api_tier.toml                         |
+| :retab / :retab!                               | 3     | nvim_api_tier.toml                         |
+| :earlier / :later                              | 3     | nvim_api_tier.toml                         |
+| :q / :q! / :qa / :wq                           | —     | exit commands can't oracle (process exits) |
+| :w / :wall                                     | —     | requires a file path, not oracled          |
+| :e / :edit                                     | —     | requires a file, not oracled               |
+| :r                                             | —     | TODO                                       |
+| :1,3d (range delete)                           | 4     | tier2_ex_delete.toml (register/count args) |
+| :wa                                            | —     | requires files, not oracled                |
+| :put / :put! (range addr, register arg, :0put) | 4     | tier2_round3_b3_put.toml                   |
+| /pat/ , ?pat? range addresses                  | 6     | tier2_round3_b4_search_range.toml          |
+| :join / :j / :j! (gJ)                          | 7     | tier2_ex_join.toml                         |
+| :yank / :y [reg] [count]                       | 4     | tier2_ex_yank.toml                         |
+| :sort                                          | —     | TODO                                       |
+| :set noignorecase                              | —     | TODO                                       |
+| :set colorizer                                 | —     | (not shipped)                              |
+| :set indent_guides                             | —     | (not shipped in oracle)                    |
+| :set format_on_save                            | —     | (not shipped in oracle)                    |
+| :set trim_trailing_whitespace                  | —     | (not shipped in oracle)                    |
 
 ## Macros
 
@@ -247,20 +252,22 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Misc
 
-| Feature                      | Cases | File(s)                                                                                                                                                                                                                                                                                |
-| ---------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| . (dot repeat)               | 10    | tier2_dot_repeat.toml                                                                                                                                                                                                                                                                  |
-| . with count (3.)            | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
-| J. (join dot)                | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
-| u (undo)                     | 2     | tier1.toml                                                                                                                                                                                                                                                                             |
-| U (undo line)                | 5     | not oracled — `nvim_buf_set_lines` seeding is itself undo-tracked by real nvim, so `U`'s restore target ends up pointing at the pre-seed empty buffer; pinned as unit tests in `hjkl-vim/tests/undo_line.rs` instead, each verified against a real `nvim --headless <file>` invocation |
-| C-r (redo)                   | 1     | tier1.toml                                                                                                                                                                                                                                                                             |
-| ZZ / ZQ                      | —     | exit commands, not oracled                                                                                                                                                                                                                                                             |
-| C-a / C-x (incr/decr)        | 2     | tier2_advanced.toml                                                                                                                                                                                                                                                                    |
-| C-a / C-x leading-zero width | 5     | tier2_increment_count.toml                                                                                                                                                                                                                                                             |
-| gv (reselect)                | 1     | tier2_visual.toml                                                                                                                                                                                                                                                                      |
-| :earlier / :later            | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
-| modeline                     | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
+| Feature                        | Cases | File(s)                                                                                                                                                                                                                                                                                |
+| ------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| . (dot repeat)                 | 10    | tier2_dot_repeat.toml                                                                                                                                                                                                                                                                  |
+| . with count (3.)              | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
+| J. (join dot)                  | 1     | tier2_gaps.toml                                                                                                                                                                                                                                                                        |
+| . after visual op (v_.) (B1)   | 9     | tier2_round3_b1_visual_dot.toml — charwise/linewise d/c/~; visual-block punted, see DIVERGE.md                                                                                                                                                                                         |
+| u (undo)                       | 2     | tier1.toml                                                                                                                                                                                                                                                                             |
+| g- / g+ (undo time-travel, G1) | 4     | tier2_round3_g1_undo_travel.toml                                                                                                                                                                                                                                                       |
+| U (undo line)                  | 5     | not oracled — `nvim_buf_set_lines` seeding is itself undo-tracked by real nvim, so `U`'s restore target ends up pointing at the pre-seed empty buffer; pinned as unit tests in `hjkl-vim/tests/undo_line.rs` instead, each verified against a real `nvim --headless <file>` invocation |
+| C-r (redo)                     | 1     | tier1.toml                                                                                                                                                                                                                                                                             |
+| ZZ / ZQ                        | —     | exit commands, not oracled                                                                                                                                                                                                                                                             |
+| C-a / C-x (incr/decr)          | 2     | tier2_advanced.toml                                                                                                                                                                                                                                                                    |
+| C-a / C-x leading-zero width   | 5     | tier2_increment_count.toml                                                                                                                                                                                                                                                             |
+| gv (reselect)                  | 1     | tier2_visual.toml                                                                                                                                                                                                                                                                      |
+| :earlier / :later              | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
+| modeline                       | 3     | nvim_api_tier.toml                                                                                                                                                                                                                                                                     |
 
 ---
 
