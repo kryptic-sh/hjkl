@@ -978,6 +978,13 @@ async fn tier2_round3_b2_visual_replace_corpus_passes() {
     run_corpus("corpus/tier2_round3_b2_visual_replace.toml").await;
 }
 
+/// B3: `:[range]put[!] [{reg}]` pastes a register linewise at the
+/// addressed line (previously a silent no-op).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_b3_put_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_round3_b3_put.toml", "tier2_round3_b3_put").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

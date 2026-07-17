@@ -216,7 +216,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | :r                             | —     | TODO                                       |
 | :1,3d (range delete)           | 4     | tier2_ex_delete.toml (register/count args) |
 | :wa                            | —     | requires files, not oracled                |
-| :put / :put!                   | —     | TODO                                       |
+| :put / :put! (range addr, register arg, :0put) | 4 | tier2_round3_b3_put.toml           |
 | :join / :j / :j! (gJ)          | 7     | tier2_ex_join.toml                         |
 | :yank / :y [reg] [count]       | 4     | tier2_ex_yank.toml                         |
 | :sort                          | —     | TODO                                       |

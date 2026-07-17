@@ -490,27 +490,43 @@ fn pwd_handler<H: Host>(
 
 // ---- put -------------------------------------------------------------------
 
-/// `:put [{reg}]` / `:put!` — paste a register's contents as a new line.
+/// `:[range]put [{reg}]` / `:[range]pu` — paste a register's contents
+/// linewise below the addressed line (the range's last address, or the
+/// cursor line when no range was given).
 ///
-/// Without `!`: paste below the current line.
-/// With `!`: paste above the current line.
+/// Without `!`: paste below the addressed line.
+/// With `!`: paste above the addressed line.
 /// Default register when no arg: `"` (unnamed).
+///
+/// `:0put[!]` (the special "before line 1" address) does NOT reach this
+/// handler through the normal range-parsing path — `parse_range`'s
+/// `resolve_address` clamps a literal `0` to line 1 for every command
+/// except the insertion-point ones (`:h :0`), so `try_dispatch` special-
+/// cases `:0put`/`:0pu` before generic range parsing (see `lib.rs`).
 fn put_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
-    _range: Option<LineRange>,
+    range: Option<LineRange>,
 ) -> Option<ExEffect> {
     let reg = args.trim().chars().next().unwrap_or('"');
-    Some(ExEffect::PutRegister { reg, above: false })
+    Some(ExEffect::PutRegister {
+        reg,
+        above: false,
+        target_line: range.map(|r| r.end_one_based()),
+    })
 }
 
 fn put_above_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
-    _range: Option<LineRange>,
+    range: Option<LineRange>,
 ) -> Option<ExEffect> {
     let reg = args.trim().chars().next().unwrap_or('"');
-    Some(ExEffect::PutRegister { reg, above: true })
+    Some(ExEffect::PutRegister {
+        reg,
+        above: true,
+        target_line: range.map(|r| r.end_one_based()),
+    })
 }
 
 // ---- registers / marks / jumps / changes -----------------------------------
@@ -4490,7 +4506,8 @@ mod tests {
             result,
             Some(ExEffect::PutRegister {
                 reg: '"',
-                above: false
+                above: false,
+                target_line: None,
             })
         );
     }
@@ -4503,7 +4520,8 @@ mod tests {
             result,
             Some(ExEffect::PutRegister {
                 reg: 'a',
-                above: false
+                above: false,
+                target_line: None,
             })
         );
     }
@@ -4516,7 +4534,8 @@ mod tests {
             result,
             Some(ExEffect::PutRegister {
                 reg: '"',
-                above: true
+                above: true,
+                target_line: None,
             })
         );
     }
@@ -4529,7 +4548,36 @@ mod tests {
             result,
             Some(ExEffect::PutRegister {
                 reg: '%',
-                above: false
+                above: false,
+                target_line: None,
+            })
+        );
+    }
+
+    #[test]
+    fn put_handler_with_range_resolves_target_line() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "", Some(LineRange::single(2)));
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: false,
+                target_line: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn put_above_handler_with_range_resolves_target_line() {
+        let mut ed = make_editor();
+        let result = put_above_handler(&mut ed, "", Some(LineRange::single(3)));
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: true,
+                target_line: Some(3),
             })
         );
     }

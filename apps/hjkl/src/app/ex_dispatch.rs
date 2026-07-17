@@ -543,8 +543,12 @@ impl App {
                     self.buffer_delete(force);
                 }
             }
-            ExEffect::PutRegister { reg, above } => {
-                self.do_put_register(reg, above);
+            ExEffect::PutRegister {
+                reg,
+                above,
+                target_line,
+            } => {
+                self.do_put_register(reg, above, target_line);
             }
             ExEffect::SaveAndRename { path } => {
                 // `:saveas {path}`: write to path AND update the buffer's identity.
@@ -618,9 +622,14 @@ impl App {
         }
     }
 
-    /// `:put [{reg}]` — paste register contents as a new line below (or above)
-    /// the cursor. Reads the register text, then inserts it as a fresh line.
-    fn do_put_register(&mut self, reg: char, above: bool) {
+    /// `:[range]put[!] [{reg}]` — paste register contents linewise at the
+    /// addressed line (B3). `target_line` is the range's resolved 1-based
+    /// line address (`Some(0)` is vim's special "before line 1" address for
+    /// `:0put`; `None` means no range was given — use the cursor's line).
+    /// Without `!`: paste below the addressed line. With `!`: paste above.
+    /// Cursor lands on the first non-blank of the LAST pasted line
+    /// (verified against real nvim).
+    fn do_put_register(&mut self, reg: char, above: bool, target_line: Option<usize>) {
         use hjkl_buffer::{Edit, Position};
         let idx = self.focused_slot_idx();
         // Register bank is a session-shared Arc, same one the active editor
@@ -639,24 +648,53 @@ impl App {
         // Strip trailing newline that linewise yanks carry so we don't
         // introduce a blank line at the end.
         let text = slot_text.trim_end_matches('\n').to_string();
+        let pasted_lines = text.matches('\n').count() + 1;
         // `idx` is always the focused slot, so the focused window's own
         // editor is the right (and only meaningfully cursor-visible) target
         // for the paste (#151 Stage 2b — was the slot bridge editor).
         let editor = self.active_editor_mut();
-        let (row, _) = editor.cursor();
-        if above {
+        let (cursor_row, _) = editor.cursor();
+        // Resolve the 1-based target line: an explicit range wins, else the
+        // cursor's own line (1-based). `0` (`:0put`) always means "before
+        // line 1", regardless of `above` — there's no "line -1" to paste
+        // after, so the bang flag is moot for that address (verified
+        // against real nvim: `:0put` and `:0put!` produce identical output).
+        let target_line_1based = target_line.unwrap_or(cursor_row + 1);
+        // `first_pasted_row`: the 0-based row the pasted text's FIRST line
+        // lands on, used both to perform the edit and to place the cursor
+        // afterward.
+        let first_pasted_row = if target_line_1based == 0 {
             editor.mutate_edit(Edit::InsertStr {
-                at: Position::new(row, 0),
+                at: Position::new(0, 0),
                 text: format!("{text}\n"),
             });
+            0
         } else {
-            let paste_rope = editor.buffer().rope();
-            let line_len = hjkl_buffer::rope_line_str(&paste_rope, row).chars().count();
-            editor.mutate_edit(Edit::InsertStr {
-                at: Position::new(row, line_len),
-                text: format!("\n{text}"),
-            });
-        }
+            let row = target_line_1based - 1;
+            if above {
+                editor.mutate_edit(Edit::InsertStr {
+                    at: Position::new(row, 0),
+                    text: format!("{text}\n"),
+                });
+                row
+            } else {
+                let paste_rope = editor.buffer().rope();
+                let line_len = hjkl_buffer::rope_line_str(&paste_rope, row).chars().count();
+                editor.mutate_edit(Edit::InsertStr {
+                    at: Position::new(row, line_len),
+                    text: format!("\n{text}"),
+                });
+                row + 1
+            }
+        };
+        // Cursor → first non-blank of the LAST pasted line.
+        let last_pasted_row = first_pasted_row + pasted_lines - 1;
+        let last_line_col = {
+            let rope = editor.buffer().rope();
+            let line = hjkl_buffer::rope_line_str(&rope, last_pasted_row);
+            line.chars().position(|c| !c.is_whitespace()).unwrap_or(0)
+        };
+        editor.jump_cursor(last_pasted_row, last_line_col);
         // Sync dirty state and propagate to syntax engine.
         let slot = &mut self.slots[idx];
         if slot.take_dirty() {

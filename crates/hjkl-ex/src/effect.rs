@@ -50,9 +50,18 @@ pub enum ExEffect {
     /// `:bd[!]` / `:bw[!]` — close the current buffer.
     /// `wipe = true` for `:bwipeout`; `force = true` when `!` was given.
     BufferDelete { force: bool, wipe: bool },
-    /// `:put [{reg}]` / `:pu [{reg}]` — paste register contents as a new
-    /// line below (or above when `above = true`) the cursor.
-    PutRegister { reg: char, above: bool },
+    /// `:[range]put[!] [{reg}]` / `:[range]pu[!] [{reg}]` — paste register
+    /// contents linewise at the addressed line (or the cursor line when no
+    /// range was given). `above = true` for `:put!` (paste before the
+    /// addressed line instead of after). `target_line` is the range's
+    /// resolved 1-based line address — `Some(0)` is vim's special "before
+    /// line 1" address for `:0put`; `None` means "no range given, use the
+    /// cursor's line".
+    PutRegister {
+        reg: char,
+        above: bool,
+        target_line: Option<usize>,
+    },
     /// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename
     /// the buffer identity so future `:w` writes there.
     /// Distinct from `SaveAs` (`:w <path>`) which writes elsewhere but keeps

@@ -60,6 +60,27 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return Some(handle_search_address(editor, input));
     }
 
+    // `:0put[!]` / `:0pu[!]` — special-cased BEFORE the generic parse_range
+    // below, which clamps a literal `0` range address to line 1 via
+    // resolve_address. Every other command legitimately has no "line 0";
+    // insertion-point commands like `:put` do (`:h :0`) — `:0put` pastes
+    // before the first line. Only fires for a BARE `0` (not `01`, not
+    // `0,5`) immediately followed by `put`/`pu` (+ optional `!`), so it
+    // can't shadow any other command's range parsing.
+    if let Some(rest) = input.strip_prefix('0')
+        && !rest.starts_with(|c: char| c.is_ascii_digit() || c == ',')
+    {
+        let (name, args) = parse::split_name_args(rest.trim_start());
+        if matches!(name, "put" | "pu" | "put!" | "pu!") {
+            let reg = args.trim().chars().next().unwrap_or('"');
+            return Some(ExEffect::PutRegister {
+                reg,
+                above: name.ends_with('!'),
+                target_line: Some(0),
+            });
+        }
+    }
+
     // Parse a leading range (`5`, `5,10`, `.,$`, `%`, `'a,'b`).
     let (range, cmd_str) = match parse_range(input, editor) {
         Ok(pair) => pair,

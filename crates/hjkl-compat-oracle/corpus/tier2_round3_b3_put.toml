@@ -1,0 +1,46 @@
+# Round 3 — B3: `:[range]put[!] [{reg}]` pastes a register linewise at the
+# addressed line instead of being a silent no-op. Driven through the
+# `hjkl --nvim-api` binary (ex commands need the command line, not
+# in-process key replay). Cursor lands on the first non-blank of the last
+# pasted line — verified against real nvim before implementing.
+#
+# Every case uses `:y[a]<CR>` (ex-yank) instead of normal-mode `yy`/`"ayy`
+# to seed the register: the nvim-api driver's ex-vs-normal segment split
+# looks at the FIRST `<CR>`-delimited segment to decide whether to route
+# through `nvim_command` or `nvim_input`, so a leading normal-mode segment
+# with no `<CR>` of its own (like a bare `"ayy` prefix) gets misdetected as
+# non-ex and the whole string — including the trailing `:put` — is sent
+# through `nvim_input`, which does NOT dispatch `:` from key replay.
+# Starting every segment with `:` sidesteps that entirely.
+
+[[cases]]
+name = "b3_put_bare_pastes_after_addressed_line"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = ":y<CR>:2put<CR>"
+expected_buffer = "one\ntwo\none\nthree\n"
+expected_cursor = [2, 0]
+
+[[cases]]
+name = "b3_put_bang_pastes_before_addressed_line"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = ":y<CR>:2put!<CR>"
+expected_buffer = "one\none\ntwo\nthree\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "b3_put_register_arg_pastes_named_register"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = ":y a<CR>:2put a<CR>"
+expected_buffer = "one\ntwo\none\nthree\n"
+expected_cursor = [2, 0]
+
+[[cases]]
+name = "b3_put_zero_address_pastes_before_first_line"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = ":y<CR>:0put<CR>"
+expected_buffer = "one\none\ntwo\nthree\n"
+expected_cursor = [0, 0]
