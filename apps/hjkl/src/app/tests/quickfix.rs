@@ -1,4 +1,4 @@
-//! Quickfix list (#184) app-level tests: nav dispatch, popup toggle, and a
+//! Quickfix list (#184) app-level tests: nav dispatch, dock toggle, and a
 //! real jump-to-entry through a temp file.
 
 use super::*;
@@ -16,7 +16,7 @@ fn entry(path: &std::path::Path, row: usize) -> QfEntry {
 }
 
 #[test]
-fn quickfix_popup_nav_and_toggle() {
+fn quickfix_dock_nav_and_toggle() {
     // `:copen` opens the bottom dock (#63 Phase B — no more Clear+List
     // overlay); `:cclose` closes it. Dock-buffer navigation itself is
     // covered by the `bottom_dock_*` tests below.
@@ -54,7 +54,7 @@ fn quickfix_make_parses_output_into_list() {
     app.handle_quickfix_command(QfCommand::Make(String::new()));
 
     assert_eq!(app.quickfix.len(), 1, ":make should populate the list");
-    assert!(app.quickfix_open(), ":make with errors opens the popup");
+    assert!(app.quickfix_open(), ":make with errors opens the dock");
     let e = app.quickfix.current().unwrap();
     assert_eq!((e.row, e.col), (2, 4)); // 0-based
     assert_eq!(e.kind, QfKind::Error);
@@ -69,7 +69,7 @@ fn quickfix_open_empty_does_not_show() {
     app.handle_quickfix_command(QfCommand::Open);
     assert!(
         !app.quickfix_open(),
-        "empty quickfix list must not open the popup"
+        "empty quickfix list must not open the dock"
     );
 }
 
@@ -103,7 +103,7 @@ fn quickfix_next_jumps_to_entry() {
 
 #[test]
 fn loclist_independent_from_quickfix() {
-    // The location list is a separate list/popup from the quickfix list.
+    // The location list is a separate list/dock from the quickfix list.
     let mut app = App::new(None, false, None, None).unwrap();
     let p = std::path::PathBuf::from("x.rs");
     app.loclist.set(vec![entry(&p, 0), entry(&p, 1)]);
@@ -684,7 +684,7 @@ fn diagnostics_populates_quickfix_from_all_buffers() {
     assert_eq!(app.quickfix.len(), 3, "quickfix should have 3 entries");
     assert!(
         app.quickfix_open(),
-        "popup should be open when diags present"
+        "dock should be open when diags present"
     );
 
     let entries = app.quickfix.entries();
@@ -717,7 +717,7 @@ fn ldiagnostics_uses_current_buffer_only() {
 
     // 2 diags, sorted: row0/col5, row1/col0.
     assert_eq!(app.loclist.len(), 2, "loclist should have 2 entries");
-    assert!(app.loclist_open(), "loclist popup should be open");
+    assert!(app.loclist_open(), "loclist dock should be open");
 
     let entries = app.loclist.entries();
     assert_eq!(entries[0].row, 0);
@@ -730,21 +730,21 @@ fn ldiagnostics_uses_current_buffer_only() {
 
     // Quickfix must be untouched.
     assert!(app.quickfix.is_empty(), "quickfix must not be touched");
-    assert!(!app.quickfix_open(), "quickfix popup must not be open");
+    assert!(!app.quickfix_open(), "quickfix dock must not be open");
 }
 
 #[test]
-fn diagnostics_empty_no_popup() {
+fn diagnostics_empty_no_dock() {
     let mut app = App::new(None, false, None, None).unwrap();
 
     // No diags injected — lsp_diags is empty by default.
     app.handle_quickfix_command(QfCommand::Diagnostics);
 
     assert!(app.quickfix.is_empty(), "list must remain empty");
-    assert!(!app.quickfix_open(), "popup must stay closed when no diags");
+    assert!(!app.quickfix_open(), "dock must stay closed when no diags");
 }
 
-/// `:cwindow` — opens the popup only when the list has entries; closes it
+/// `:cwindow` — opens the dock only when the list has entries; closes it
 /// when the list is empty; empty-list invocation is silent (no toast).
 #[test]
 fn cwindow_opens_on_entries_closes_on_empty() {
@@ -772,12 +772,12 @@ fn cwindow_opens_on_entries_closes_on_empty() {
         ":cwindow must open when the list has entries"
     );
 
-    // List emptied while the popup is open: `:cwindow` closes it.
+    // List emptied while the dock is open: `:cwindow` closes it.
     app.quickfix.set(vec![]);
     app.handle_quickfix_command(QfCommand::Window);
     assert!(
         !app.quickfix_open(),
-        ":cwindow must close the popup when the list is empty"
+        ":cwindow must close the dock when the list is empty"
     );
 }
 
