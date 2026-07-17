@@ -10,6 +10,49 @@ fn mode_label_vim_normal_returns_normal() {
     assert_eq!(app.mode_label(), "NORMAL");
 }
 
+// ── `hjkl -` stdin-buffer tests ─────────────────────────────────────────
+//
+// No pty e2e for this: the pty test harness drives keystrokes through the
+// spawned pty's own stdin, and cannot simultaneously feed a *separate* piped
+// stdin the way a real `cat file | hjkl -` shell pipeline does. These
+// in-process tests instead exercise the exact seam `hjkl -` uses —
+// `App::load_stdin_buffer`, which main.rs calls with the string already read
+// off fd 0 — proving everything downstream of the actual `read_to_string`.
+
+#[test]
+fn load_stdin_buffer_populates_unnamed_active_buffer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.load_stdin_buffer("line one\nline two\n");
+    let content = app.active_editor().buffer().content_joined();
+    assert_eq!(content.lines().next(), Some("line one"));
+    assert_eq!(content.lines().nth(1), Some("line two"));
+    assert!(
+        app.active().filename.is_none(),
+        "stdin buffer must stay unnamed ([No Name]), matching vim -"
+    );
+}
+
+#[test]
+fn load_stdin_buffer_moves_cursor_to_top() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.load_stdin_buffer("line one\nline two\n");
+    assert_eq!(app.active_editor().cursor(), (0, 0));
+}
+
+#[test]
+fn load_stdin_buffer_dismisses_start_screen() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(
+        app.start_screen.is_some(),
+        "precondition: a fresh no-file App shows the start screen"
+    );
+    app.load_stdin_buffer("line one\n");
+    assert!(
+        app.start_screen.is_none(),
+        "stdin content must be visible immediately, not hidden behind the splash"
+    );
+}
+
 // ── App::new tests ──────────────────────────────────────────────────────
 
 #[test]

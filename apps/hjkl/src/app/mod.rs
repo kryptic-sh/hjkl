@@ -1261,6 +1261,22 @@ impl App {
         self.slots[idx].set_content_undoable_headless(text);
     }
 
+    /// `hjkl -` (vim/nvim `-`): load piped stdin `text` into the active
+    /// buffer, which stays unnamed (`[No Name]`, `filename == None`) exactly
+    /// like `vim -`. Cursor lands at the top of the buffer, matching vim.
+    ///
+    /// Clears `start_screen` — without this the splash (rendered by
+    /// `render.rs` whenever `start_screen.is_some()`, covering the whole
+    /// buffer area) would hide the just-loaded content until the user's
+    /// first keypress dismisses it (see `event_loop::handle_key`).
+    pub(crate) fn load_stdin_buffer(&mut self, text: &str) {
+        self.start_screen = None;
+        let idx = self.active_index();
+        self.set_content_undoable_for_slot(idx, text);
+        self.active_editor_mut().jump_cursor(0, 0);
+        self.sync_after_engine_mutation();
+    }
+
     /// The editor for window `win_id` (the View — single source of per-window
     /// cursor/viewport/is_blame, #151). `window_editors` no longer has a
     /// static per-slot fallback to reach for (#151 Stage 2b removed the slot

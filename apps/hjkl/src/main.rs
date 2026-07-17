@@ -175,6 +175,14 @@ pub struct Args {
     pub file_layout: FileLayout,
 }
 
+/// `true` when `p` is the literal `-` (vim/nvim convention: read the buffer
+/// from stdin instead of opening a file). `split_vim_tokens` never treats a
+/// bare `-` specially, so it survives into `args.files` as a normal
+/// positional `PathBuf("-")` — this just tests for that sentinel.
+fn is_stdin_arg(p: &std::path::Path) -> bool {
+    p.as_os_str() == "-"
+}
+
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
 /// Preserves the binary name in the clap stream so clap's prog detection
 /// stays correct.
@@ -427,15 +435,24 @@ fn main() -> Result<()> {
         );
     }
 
+    // `hjkl -` (vim/nvim `-`): read the buffer from stdin instead of opening
+    // a file. Only recognised here in the TUI path — `--headless -` falls
+    // through to headless's own file-loading, which treats `-` as a literal
+    // filename (out of scope for this feature).
+    let read_stdin = args.files.first().is_some_and(|p| is_stdin_arg(p));
+
     // Build app state (may read file from disk) before entering alternate screen
     // so we can print errors to the normal terminal if the file is unreadable.
-    let base_app = app::App::new(
-        args.files.first().cloned(),
-        args.readonly,
-        args.line,
-        args.pattern,
-    )?
-    .with_config(cfg.clone());
+    // When reading stdin, pass no initial file — `-` is not a real path, and
+    // the unnamed scratch buffer App::new builds is exactly what the stdin
+    // content gets loaded into below.
+    let initial_file = if read_stdin {
+        None
+    } else {
+        args.files.first().cloned()
+    };
+    let base_app = app::App::new(initial_file, args.readonly, args.line, args.pattern)?
+        .with_config(cfg.clone());
     let base_app = match cfg_path {
         Some(p) => base_app.with_config_path(p),
         None => base_app,
@@ -447,6 +464,20 @@ fn main() -> Result<()> {
     } else {
         base_app
     };
+    // `hjkl -`: read all of stdin into the unnamed active buffer built above.
+    // Safe to consume fd 0 here even though we're about to go interactive —
+    // crossterm's Unix event source reads keystrokes from `/dev/tty`, not
+    // fd 0, so draining stdin never steals input the TUI needs. When stdin
+    // is a real TTY (no pipe) this blocks until EOF (Ctrl-D), same as vim.
+    if read_stdin {
+        use std::io::Read;
+        let mut stdin_text = String::new();
+        if let Err(e) = std::io::stdin().lock().read_to_string(&mut stdin_text) {
+            eprintln!("hjkl: reading stdin: {e}");
+        } else {
+            app.load_stdin_buffer(&stdin_text);
+        }
+    }
     // Load any additional files (argv order beyond the first). By default
     // they become extra buffers (bufferline); `-o`/`-O`/`-p` instead lay
     // each one out in its own horizontal split / vertical split / tab page,
@@ -940,6 +971,16 @@ mod cli_tests {
         assert!(Cli::try_parse_from(["hjkl", "-o", "-O", "f.txt"]).is_err());
         assert!(Cli::try_parse_from(["hjkl", "-o", "-p", "f.txt"]).is_err());
         assert!(Cli::try_parse_from(["hjkl", "-O", "-p", "f.txt"]).is_err());
+    }
+
+    /// `hjkl -` (vim/nvim convention): a bare `-` FILE arg means "read the
+    /// buffer from stdin". `is_stdin_arg` recognises only that exact literal.
+    #[test]
+    fn is_stdin_arg_recognises_bare_dash_only() {
+        assert!(is_stdin_arg(std::path::Path::new("-")));
+        assert!(!is_stdin_arg(std::path::Path::new("foo")));
+        assert!(!is_stdin_arg(std::path::Path::new("-R")));
+        assert!(!is_stdin_arg(std::path::Path::new("")));
     }
 
     fn blank_args() -> Args {
