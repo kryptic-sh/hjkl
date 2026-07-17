@@ -64,6 +64,25 @@ fn write_timeout() -> Duration {
 /// at all while we waited. It deliberately does not guess which kind of failure
 /// it is — `last read` is not a computed answer, it is just whatever happened to
 /// be on disk when the clock ran out.
+/// The "changed while waiting" diagnostic line for a [`wait_for_contents`]
+/// timeout, distinguishing the two failure modes: the file changed but never
+/// to the expected value, versus it never changed at all (editor never ran).
+///
+/// Pure — extracted from [`wait_for_contents`] so the reporting can be
+/// unit-tested deterministically. The old self-test drove this branch with a
+/// real writer thread racing the wait budget, which flaked under parallel
+/// load whenever the write landed before `wait_for_contents` snapshotted its
+/// first read (making `first == last`). Testing the pure reporter removes the
+/// race entirely.
+fn timeout_churn(first: &str, last: &str) -> &'static str {
+    if last == first {
+        "no — the file never changed while we waited, so the editor most likely \
+         never processed the keys or never ran its write command"
+    } else {
+        "yes — the file was written at least once, but never with the expected content"
+    }
+}
+
 pub fn wait_for_contents(path: &Path, want: &str) -> String {
     let timeout = write_timeout();
     let deadline = std::time::Instant::now() + timeout;
@@ -79,12 +98,7 @@ pub fn wait_for_contents(path: &Path, want: &str) -> String {
         std::thread::sleep(Duration::from_millis(25));
         last = std::fs::read_to_string(path).unwrap_or_default();
     }
-    let churn = if last == first {
-        "no — the file never changed while we waited, so the editor most likely \
-         never processed the keys or never ran its write command"
-    } else {
-        "yes — the file was written at least once, but never with the expected content"
-    };
+    let churn = timeout_churn(&first, &last);
     panic!(
         "TIMED OUT after {timeout:?} waiting for the editor to write the expected content.\n\
          \n  path:      {}\
@@ -944,36 +958,27 @@ mod tests {
         );
     }
 
+    /// The churn diagnostic must distinguish "file changed but to the wrong
+    /// value" from "file never touched" — the two timeout failure modes that
+    /// were once indistinguishable. Tested against the pure `timeout_churn`
+    /// reporter, so there is NO writer-thread race: the previous version
+    /// spawned a 2ms writer against the wait budget and flaked under
+    /// full-suite parallel load whenever the write landed BEFORE
+    /// `wait_for_contents` snapshotted its first read (making `first == last`,
+    /// so churn wrongly reported "never changed"). That was an ordering race
+    /// no delay tuning could close; the pure reporter removes it.
     #[test]
-    fn wait_for_contents_reports_a_write_that_landed_wrong() {
-        short_write_budget();
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(b"seeded\n").unwrap();
-        f.flush().unwrap();
-        let path = f.path().to_owned();
-
-        // Something writes, but not what we asked for. That is a real mismatch,
-        // and the message must NOT blame timing for it. The write must land
-        // strictly AFTER wait_for_contents snapshots `first` (else the churn
-        // detector sees no change) and strictly BEFORE the budget expires —
-        // hence a short writer delay against a much larger budget. A 20ms
-        // sleep vs the old 80ms budget was only a 4x margin and flaked under
-        // full-suite parallel load (the thread's sleep stretched past the
-        // budget → churn flipped to "never changed"); 2ms vs 400ms is 200x.
-        std::thread::spawn({
-            let path = path.clone();
-            move || {
-                std::thread::sleep(Duration::from_millis(2));
-                std::fs::write(&path, b"wrong\n").unwrap();
-            }
-        });
-
-        let err = std::panic::catch_unwind(move || wait_for_contents(&path, "right\n"))
-            .expect_err("must panic");
-        let msg = err.downcast_ref::<String>().unwrap();
+    fn timeout_churn_distinguishes_changed_from_untouched() {
+        // Changed-but-wrong: first != last.
         assert!(
-            msg.contains("written at least once, but never with the expected content"),
-            "a file that changed must not be reported as never written; got: {msg}"
+            super::timeout_churn("seeded\n", "wrong\n")
+                .contains("written at least once, but never with the expected content"),
+            "a file that changed must be reported as written-but-wrong"
+        );
+        // Untouched: first == last.
+        assert!(
+            super::timeout_churn("seeded\n", "seeded\n").contains("never changed"),
+            "an untouched file must be reported as never written"
         );
     }
 
