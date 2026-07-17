@@ -1,0 +1,44 @@
+# B7 — `:[range]d[elete] [{register}] [count]` writes registers. Plain `:d`
+# writes the unnamed register (and shifts the "1-"9 ring); `:d a` writes "a
+# instead; a trailing [count] deletes `count` lines starting at the range's
+# LAST line. Verified via a paste-back (`p` / `"xp`) since the nvim-api
+# driver harness doesn't assert register contents directly. Driven via the
+# nvim-api subprocess. Every case verified against nvim v0.12.4.
+
+# `:2d` deletes line 2 into the unnamed register; `Gp` pastes it back.
+[[cases]]
+name = "delete_writes_unnamed_register"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":2d<CR>Gp"
+expected_buffer = "a\nc\nd\nb\n"
+expected_cursor = [3, 0]
+
+# `:2d x` deletes line 2 into register "x instead of the unnamed ring.
+[[cases]]
+name = "delete_writes_named_register"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ":2d x<CR>G\"xp"
+expected_buffer = "a\nc\nd\nb\n"
+expected_cursor = [3, 0]
+
+# `:2d x 2` — [count] with a named register: deletes `count` lines starting
+# at the addressed line (here, a bare address acts as a 1-line range whose
+# "end" IS that line), into "x.
+[[cases]]
+name = "delete_named_register_with_count"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = ":2d x 2<CR>G\"xp"
+expected_buffer = "a\nd\ne\nb\nc\n"
+expected_cursor = [3, 0]
+
+# `:2d 2` — bare [count] (no register): same span, unnamed register.
+[[cases]]
+name = "delete_bare_count_unnamed_register"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = ":2d 2<CR>Gp"
+expected_buffer = "a\nd\ne\nb\nc\n"
+expected_cursor = [3, 0]

@@ -201,6 +201,12 @@ async fn tier2_ex_yank_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_ex_yank.toml", "tier2_ex_yank").await;
 }
 
+/// B7: `:[range]d[elete] [{register}] [count]` writes registers.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_ex_delete_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_ex_delete.toml", "tier2_ex_delete").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_case_indent_join_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

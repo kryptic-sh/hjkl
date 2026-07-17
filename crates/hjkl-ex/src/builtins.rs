@@ -767,25 +767,40 @@ fn join_handler_inner<H: Host>(
 ///
 /// `LineRange` is 1-based inclusive. Legacy `Range` (in hjkl-editor) is 0-based;
 /// we convert here before mutating the buffer.
+///
+/// # B7: register + count args
+///
+/// `args` is `[{register}] [count]` (parsed by [`parse_reg_count`], same
+/// grammar as `:y`). Plain `:d` writes the unnamed register `"` (linewise,
+/// shifting the `"1`-`"9` ring — [`hjkl_engine::registers::Registers::record_delete`]
+/// already does this when no register is named). `:d a` writes `"a`
+/// instead. A trailing `[count]` OVERRIDES the range to delete `count`
+/// lines starting at the range's LAST line (same start-from-range-end rule
+/// as `:y [count]` / `:j [count]` — verified against nvim v0.12.4).
 fn delete_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
-    _args: &str,
+    args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
     use hjkl_buffer::{Edit, MotionKind, Position};
 
-    // No range → current line (1-based cursor row + 1).
-    let r = range.unwrap_or_else(|| LineRange::single(editor.cursor().0 + 1));
-    // Convert 1-based inclusive to 0-based inclusive row indices.
-    let start_row = r.start_one_based().saturating_sub(1);
-    let total = editor.buffer().row_count();
-    if total == 0 {
+    let (reg, count) = match parse_reg_count(args) {
+        Ok(rc) => rc,
+        Err(e) => return Some(ExEffect::Error(e)),
+    };
+    let Some((start_row, end_row)) = resolve_range_with_count(editor, range, count) else {
         return Some(ExEffect::Ok);
+    };
+
+    // Collect the removed text BEFORE mutating, for the register write.
+    let rope = editor.buffer().rope();
+    let mut removed = String::new();
+    for row in start_row..=end_row {
+        removed.push_str(&hjkl_buffer::rope_line_str(&rope, row));
+        removed.push('\n');
     }
-    let end_row = (r.end_one_based().saturating_sub(1)).min(total.saturating_sub(1));
-    if start_row > end_row {
-        return Some(ExEffect::Ok);
-    }
+    drop(rope);
+    editor.with_registers_mut(|r| r.record_delete(removed, true, reg));
 
     editor.push_undo();
     // Delete bottom-up so row indices stay valid as rows are removed.
@@ -1671,7 +1686,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "delete",
         aliases: &["d"],
-        arg_kind: ArgKind::None,
+        arg_kind: ArgKind::Raw,
         min_prefix: 1,
         run: delete_handler::<H>,
     });

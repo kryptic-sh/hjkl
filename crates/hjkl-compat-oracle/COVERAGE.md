@@ -203,7 +203,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | :w / :wall                     | —     | requires a file path, not oracled          |
 | :e / :edit                     | —     | requires a file, not oracled               |
 | :r                             | —     | TODO                                       |
-| :1,3d (range delete)           | —     | TODO                                       |
+| :1,3d (range delete)           | 4     | tier2_ex_delete.toml (register/count args) |
 | :wa                            | —     | requires files, not oracled                |
 | :put / :put!                   | —     | TODO                                       |
 | :join / :j / :j! (gJ)          | 7     | tier2_ex_join.toml                         |
