@@ -1,0 +1,29 @@
+# Round 3 — B6: visual text objects grow when re-applied to a selection
+# that already exactly equals their bounds (`:h v_ip`), instead of
+# no-op'ing. `ip`/`ap` alternate paragraph/blank-run units; `iw` alternates
+# word/whitespace units. Verified against real nvim before implementing.
+
+[[cases]]
+name = "b6_visual_ip_ip_grows_over_blank_run"
+initial_buffer = "foo\nbar\n\nbaz\n"
+initial_cursor = [0, 0]
+keys = "vipipd"
+expected_buffer = "baz\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "b6_visual_ip_ip_ip_grows_into_next_paragraph"
+initial_buffer = "foo\nbar\n\nbaz\nqux\n"
+initial_cursor = [0, 0]
+keys = "vipipipd"
+expected_buffer = ""
+expected_mode = "normal"
+
+[[cases]]
+name = "b6_visual_iw_iw_grows_over_whitespace"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "viwiwd"
+expected_buffer = "bar baz\n"
+expected_register = ['"', "foo "]
+expected_mode = "normal"

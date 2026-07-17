@@ -1787,6 +1787,66 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let Some((start, end, kind)) = crate::vim::text_object_range(self, obj, inner, 1) else {
             return;
         };
+        // B6: `:h v_ip` — when the selection ALREADY exactly equals this
+        // text object's natural bounds (the user is re-applying `ip`/`ap`/
+        // etc. to a selection it already produced, e.g. `vipip`), the
+        // object GROWS instead of re-selecting the identical (so
+        // no-op-looking) range. `ip`/`ap` alternate paragraph and
+        // blank-run units this way; growth is implemented generically here
+        // by probing the SAME text object one row past the current end and
+        // unioning the two ranges, rather than hand-rolling paragraph-
+        // specific alternation logic.
+        // Compare the SELECTION'S END (which the cursor always tracks, by
+        // this function's own construction below) against the freshly
+        // computed object's end — NOT the anchor. After a grow, the anchor
+        // stays pinned at the FIRST application's start while the end keeps
+        // moving, so an anchor-based check would only ever match once
+        // (verified against real nvim: `vipipipd`, three applications,
+        // grows a second time too — the anchor-based check breaks that).
+        let already_matches = match kind {
+            RangeKind::Linewise => {
+                crate::vim_state::vim(self).mode == FsmMode::VisualLine && self.cursor().0 == end.0
+            }
+            _ => {
+                crate::vim_state::vim(self).mode == FsmMode::Visual
+                    && self.cursor() == crate::vim::retreat_one(self, end)
+            }
+        };
+        // When growing, keep the EXISTING anchor (the first application's
+        // start) — `start` above is the freshly computed single-object's
+        // start (e.g. the blank run's own start on a second `ip`), which is
+        // NOT where the accumulated selection began.
+        //
+        // The probe position differs by kind: Linewise units are probed one
+        // ROW past the current end (`ip`/`ap` grow onto the next line);
+        // charwise units (`iw`, quotes, brackets, …) are probed at `end`
+        // directly — `end` for an Exclusive object already points ONE PAST
+        // the last selected char, i.e. exactly where the next same-line unit
+        // begins (verified against real nvim: `viwiw` on "foo bar baz"
+        // grows "foo" to "foo " — the following WHITESPACE run on the SAME
+        // row, not a jump to the next line).
+        let (start, end) = if already_matches {
+            let existing_start = match kind {
+                RangeKind::Linewise => (crate::vim_state::vim(self).visual_line_anchor, 0),
+                _ => crate::vim_state::vim(self).visual_anchor,
+            };
+            let probe = match kind {
+                RangeKind::Linewise => (end.0 + 1, 0),
+                _ => end,
+            };
+            let saved_cursor = self.cursor();
+            self.jump_cursor(probe.0, probe.1);
+            let grown = crate::vim::text_object_range(self, obj, inner, 1)
+                .filter(|&(_, _, grown_kind)| grown_kind == kind)
+                .map(|(_, grown_end, _)| grown_end);
+            self.jump_cursor(saved_cursor.0, saved_cursor.1);
+            match grown {
+                Some(grown_end) if grown_end > end => (existing_start, grown_end),
+                _ => (existing_start, end),
+            }
+        } else {
+            (start, end)
+        };
         match kind {
             RangeKind::Linewise => {
                 crate::vim_state::vim_mut(self).visual_line_anchor = start.0;
