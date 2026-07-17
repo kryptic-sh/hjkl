@@ -74,9 +74,7 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     // (`parse_expr_text`) expands `\n` into real newlines, so this is
     // equivalent to three `:caddexpr` calls but in one round-trip.
     session.keys(":set errorformat=\\%f:\\%l:\\%c:\\%m<Enter>");
-    session.keys(
-        ":cexpr \"aaa.txt:1:1:first\\nbbb.txt:2:1:second\\nccc.txt:3:1:third\"<Enter>",
-    );
+    session.keys(":cexpr \"aaa.txt:1:1:first\\nbbb.txt:2:1:second\\nccc.txt:3:1:third\"<Enter>");
     session.keys(":copen<Enter>");
 
     let shows_all = (0..24).any(|r| session.line(r).contains("|1 col 1| first"))

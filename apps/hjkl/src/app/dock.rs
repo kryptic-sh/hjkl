@@ -459,7 +459,8 @@ impl super::App {
         };
         let open = self.explorer.is_some();
         if let Err(e) = hjkl_config::write_key_at(&path, "explorer.open", open) {
-            self.bus.warn(format!("couldn't save explorer open state: {e}"));
+            self.bus
+                .warn(format!("couldn't save explorer open state: {e}"));
         }
     }
 

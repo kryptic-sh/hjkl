@@ -195,9 +195,8 @@ fn dock_resize_ctrl_w_gt_persists_width_to_real_config_file() {
     session.keys(" e");
     session.keys("<C-w>><C-w>>");
 
-    let ok = wait_until(|| {
-        std::fs::read_to_string(&cfg_path).is_ok_and(|t| t.contains("width = 38"))
-    });
+    let ok =
+        wait_until(|| std::fs::read_to_string(&cfg_path).is_ok_and(|t| t.contains("width = 38")));
     let text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
     assert!(
         ok,
