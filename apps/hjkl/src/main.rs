@@ -132,6 +132,12 @@ struct Cli {
     #[arg(short = 'n')]
     no_swap: bool,
 
+    /// Recovery mode. Bare `-r` lists swap files and exits; `-r <FILE>`
+    /// opens <FILE> and recovers it from its swap (via the on-open
+    /// recovery prompt). Mirrors `vim -r`.
+    #[arg(short = 'r', value_name = "FILE", num_args = 0..=1, default_missing_value = "")]
+    recover: Option<String>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -181,6 +187,13 @@ pub struct Args {
     /// `-n`: disable swap-file writes for the session (memory only).
     /// Mirrors `vim -n` / `nvim -n`.
     pub no_swap: bool,
+    /// `-r [FILE]`: `None` when absent. `Some("")` (bare `-r`) means "list
+    /// swap files and exit" — handled entirely in `main()` before any
+    /// `App` is built. `Some(path)` (non-empty) means "recover `path`";
+    /// `parse_argv` folds `path` into `files` so it becomes the file that
+    /// gets opened, and the existing on-open recovery prompt
+    /// (`App::check_recovery_on_open`) does the rest. Mirrors `vim -r`.
+    pub recover: Option<String>,
 }
 
 /// `true` when `p` is the literal `-` (vim/nvim convention: read the buffer
@@ -292,7 +305,20 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
             FileLayout::Buffers
         },
         no_swap: cli.no_swap,
+        recover: cli.recover,
     };
+    // `-r <FILE>` (non-empty value only — bare `-r` is list mode, handled in
+    // `main()` before this function's caller ever gets here): hjkl already
+    // shows a crash-recovery prompt on open whenever a newer swap exists
+    // (`App::check_recovery_on_open`, run from `App::new`), so `-r <FILE>`
+    // needs nothing new for the recovery itself — it just has to make
+    // `FILE` the file that gets opened. Prepend it so it lands in slot 0
+    // (the active buffer) even if the user also passed other FILEs.
+    if let Some(path) = args.recover.as_deref()
+        && !path.is_empty()
+    {
+        args.files.insert(0, PathBuf::from(path));
+    }
     // nvim compatibility: `-u NONE` disables plugins + config, `-u NORC` skips
     // just the init file. hjkl has no plugin system and a single TOML config,
     // so both sentinels collapse onto the same thing: bundled defaults only,
@@ -315,6 +341,66 @@ fn parse_args() -> Result<Args> {
         eprintln!("{w}");
     }
     Ok(args)
+}
+
+/// `-r` (bare): enumerate `hjkl_app::swap::swap_dir()` for `*.swp` files,
+/// read each header, and print a concise listing to stdout. Mirrors
+/// `vim -r` (bare form, which lists swap files instead of opening one).
+/// Unreadable / non-swap entries in the directory are silently skipped, same
+/// tolerance `scan_orphan_scratch_swaps_in` applies elsewhere.
+fn list_swap_files() -> io::Result<()> {
+    let dir = hjkl_app::swap::swap_dir()?;
+    let mut entries: Vec<(PathBuf, hjkl_app::swap::SwapHeader, bool)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("swp") {
+                continue;
+            }
+            if let Ok((header, _body)) = hjkl_app::swap::read_swap(&path) {
+                let alive = hjkl_app::swap::pid_is_alive(header.writer_pid);
+                entries.push((path, header, alive));
+            }
+        }
+    }
+    print!("{}", format_swap_listing(&entries));
+    Ok(())
+}
+
+/// Pure formatter for [`list_swap_files`]'s `-r` (bare) listing — factored
+/// out so it's unit-testable without touching real XDG directories. `alive`
+/// is whether `header.writer_pid` is still a live process (crash vs. an
+/// active concurrent session).
+fn format_swap_listing(entries: &[(PathBuf, hjkl_app::swap::SwapHeader, bool)]) -> String {
+    if entries.is_empty() {
+        return "No swap files found\n".to_string();
+    }
+    // Stable, greppable order regardless of readdir's OS-dependent ordering.
+    let mut sorted: Vec<&(PathBuf, hjkl_app::swap::SwapHeader, bool)> = entries.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out = String::new();
+    out.push_str("Swap files found:\n");
+    for (swap_path, header, alive) in sorted {
+        let file = if header.canonical_path.is_empty() {
+            "[No Name]"
+        } else {
+            header.canonical_path.as_str()
+        };
+        let status = if *alive {
+            "still running"
+        } else {
+            "process gone"
+        };
+        out.push_str(&format!("  {}\n", swap_path.display()));
+        out.push_str(&format!("    file:  {file}\n"));
+        out.push_str(&format!("    pid:   {} ({status})\n", header.writer_pid));
+        out.push_str(&format!(
+            "    saved: {} ms since epoch\n",
+            header.write_time_unix_ms
+        ));
+    }
+    out
 }
 
 /// Prepend the anvil `bin/` directory to `$PATH` so any tool installed via
@@ -354,6 +440,16 @@ fn main() -> Result<()> {
     init_tracing();
 
     let args = parse_args()?;
+
+    // `-r` (bare, no value): vim `-r` — list swap files and exit. A terminal
+    // action like `--version`/`--help`, not an editing mode, so it runs
+    // before any App/TUI/headless setup. `-r <FILE>` (non-empty) is NOT
+    // handled here — `parse_argv` already folded it into `args.files`, so it
+    // falls through to the normal TUI open below.
+    if args.recover.as_deref() == Some("") {
+        list_swap_files()?;
+        std::process::exit(0);
+    }
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since
     // it is the most specific. +cmd / -c CMD are silently ignored.
@@ -1016,6 +1112,7 @@ mod cli_tests {
             quickfix: None,
             file_layout: FileLayout::Buffers,
             no_swap: false,
+            recover: None,
         }
     }
 
@@ -1034,5 +1131,83 @@ mod cli_tests {
         let (args, _) = parse_argv(raw).expect("parse_argv");
         assert!(args.no_swap);
         assert_eq!(args.files, vec![PathBuf::from("f.txt")]);
+    }
+
+    /// `-r [FILE]` (vim `-r`): absent → `None`; bare `-r` (list-swaps mode)
+    /// → `Some("")`; `-r foo.txt` → `Some("foo.txt")`.
+    #[test]
+    fn parse_argv_dash_r_recover_flag() {
+        let raw: Vec<String> = ["hjkl", "f.txt"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.recover, None);
+
+        let raw: Vec<String> = ["hjkl", "-r"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.recover.as_deref(), Some(""));
+
+        let raw: Vec<String> = ["hjkl", "-r", "foo.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.recover.as_deref(), Some("foo.txt"));
+    }
+
+    /// `-r <FILE>` (non-empty value): `parse_argv` folds `FILE` into
+    /// `args.files` so it becomes the active buffer that `App::new` opens —
+    /// the existing on-open recovery prompt then does the actual recovery
+    /// (covered end-to-end by `tests/pty_harness/recovery.rs`). If the user
+    /// also passed other FILEs, the recover target is prepended so it's
+    /// slot 0, not appended after them.
+    #[test]
+    fn parse_argv_dash_r_recover_file_becomes_active_buffer() {
+        let raw: Vec<String> = ["hjkl", "-r", "crashed.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.files, vec![PathBuf::from("crashed.txt")]);
+
+        // Also passed other FILEs on the command line — the recover target
+        // must still end up first (the active buffer).
+        let raw: Vec<String> = ["hjkl", "-r", "crashed.txt", "other.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(
+            args.files,
+            vec![PathBuf::from("crashed.txt"), PathBuf::from("other.txt")]
+        );
+
+        // Bare `-r` (list mode, empty value) must NOT touch `args.files`.
+        let raw: Vec<String> = ["hjkl", "-r", "-R"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.recover.as_deref(), Some(""));
+        assert!(args.files.is_empty());
+    }
+
+    /// `format_swap_listing` — pure formatter unit test, independent of real
+    /// XDG I/O (the subprocess route in `tests/recover_list.rs` covers the
+    /// real `swap_dir()` + binary end-to-end).
+    #[test]
+    fn format_swap_listing_empty_and_populated() {
+        assert_eq!(format_swap_listing(&[]), "No swap files found\n");
+
+        let header = hjkl_app::swap::SwapHeader {
+            magic: hjkl_app::swap::SwapHeader::MAGIC,
+            version: hjkl_app::swap::SwapHeader::VERSION,
+            canonical_path: "/home/user/crashed.txt".to_string(),
+            file_mtime_unix_ms: 1_700_000_000_000,
+            write_time_unix_ms: 1_700_000_001_000,
+            cursor: (0, 0),
+            writer_pid: 999_999_999, // almost certainly dead
+        };
+        let out =
+            format_swap_listing(&[(PathBuf::from("/cache/hjkl/swap/abc123.swp"), header, false)]);
+        assert!(out.contains("/home/user/crashed.txt"), "got: {out}");
+        assert!(out.contains("/cache/hjkl/swap/abc123.swp"), "got: {out}");
+        assert!(out.contains("process gone"), "got: {out}");
+        assert!(out.contains("999999999"), "got: {out}");
     }
 }

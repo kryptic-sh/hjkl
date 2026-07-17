@@ -70,6 +70,8 @@ hjkl +vsp file1 file2 # open two files in a vertical split
 hjkl --clean file.txt # bundled defaults only, ignore the user config
 hjkl -u NONE file.txt # nvim-style alias: same as --clean
 hjkl -n file.txt      # no swap file — edits live only in memory
+hjkl -r               # list swap files found and exit
+hjkl -r file.txt      # open file.txt and recover it from its swap
 ```
 
 `--clean` starts from the bundled defaults, ignoring the user config file at its
@@ -82,6 +84,12 @@ created or updated, so edits live only in memory. Mirrors `vim -n` / `nvim -n`.
 `-u <PATH>` is an nvim-compatible alias for `--config <PATH>`; `-u NONE` and
 `-u NORC` behave like `--clean` (hjkl has no plugin system and a single config
 file, so nvim's two "skip init" sentinels collapse onto the same behavior).
+
+`-r` (bare) lists swap files found in hjkl's swap directory and exits — no
+TUI. `-r <FILE>` opens `<FILE>` normally; hjkl already shows a
+crash-recovery prompt on open whenever a newer swap exists, so `-r <FILE>`
+just makes sure `<FILE>` is the file that prompt fires for. Mirrors `vim -r`
+/ `vim -r <file>`.
 
 <!-- screenshot placeholder -->
 <!-- ![hjkl screenshot](https://hjkl.kryptic.sh/screenshot.png) -->
