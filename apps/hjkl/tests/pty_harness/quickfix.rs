@@ -30,8 +30,8 @@ fn copen_dock_supports_real_yank_then_closes() {
     session.keys(":copen<Enter>");
 
     // The dock is a real buffer: some row must render the formatted entry
-    // (`path|row col N| message`, #63 Phase B's `qf_format_list`).
-    let shows_entry = (0..24).any(|r| session.line(r).contains("|2 col 1| sample message"));
+    // (`path │ row:col │ message`, aligned — see `qf_format_list`).
+    let shows_entry = (0..24).any(|r| session.line(r).contains("│ 2:1 │ sample message"));
     assert!(
         shows_entry,
         "the :copen dock buffer must show the formatted quickfix entry"
@@ -45,7 +45,7 @@ fn copen_dock_supports_real_yank_then_closes() {
     session.keys(":cclose<Enter>");
     session.keys("Gp");
 
-    let pasted = (0..24).any(|r| session.line(r).contains("|2 col 1| sample message"));
+    let pasted = (0..24).any(|r| session.line(r).contains("│ 2:1 │ sample message"));
     assert!(
         pasted,
         "the dock-yanked line must paste into the regular buffer, proving \
@@ -77,9 +77,9 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     session.keys(":cexpr \"aaa.txt:1:1:first\\nbbb.txt:2:1:second\\nccc.txt:3:1:third\"<Enter>");
     session.keys(":copen<Enter>");
 
-    let shows_all = (0..24).any(|r| session.line(r).contains("|1 col 1| first"))
-        && (0..24).any(|r| session.line(r).contains("|2 col 1| second"))
-        && (0..24).any(|r| session.line(r).contains("|3 col 1| third"));
+    let shows_all = (0..24).any(|r| session.line(r).contains("│ 1:1 │ first"))
+        && (0..24).any(|r| session.line(r).contains("│ 2:1 │ second"))
+        && (0..24).any(|r| session.line(r).contains("│ 3:1 │ third"));
     assert!(shows_all, "dock must list all three quickfix entries");
 
     // `j`: real vim motion moves the dock's cursor off entry 0 (first).
@@ -118,7 +118,7 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     // The dock itself must still be open (vim's `<CR>` moves focus to the
     // target window but does not close the quickfix window) and must still
     // show all three entries — the jump must not have torn anything down.
-    let dock_still_open = (0..24).any(|r| session.line(r).contains("|2 col 1| second"));
+    let dock_still_open = (0..24).any(|r| session.line(r).contains("│ 2:1 │ second"));
     assert!(
         dock_still_open,
         "the quickfix dock must stay open after <CR> jumps out of it"

@@ -916,13 +916,22 @@ impl crate::app::App {
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 /// Render list `list`'s entries into the bottom dock's buffer text, one line
-/// per entry in vim's quickfix-window format: `path|row col N| message`
-/// (1-based row/col — `QfEntry::row`/`col` are stored 0-based, see the doc on
-/// [`hjkl_quickfix::QfEntry`]). Entries with an empty path (current-buffer
-/// entries, e.g. from `:cexpr` with no `%f`) render as `[No Name]` so every
-/// line stays non-ambiguous and non-empty.
+/// per entry: `path │ row:col │ message` with the path column padded and the
+/// `row:col` column right-aligned across the whole list, so the three columns
+/// line up vertically. Row/col are rendered 1-based (`QfEntry::row`/`col` are
+/// stored 0-based, see the doc on [`hjkl_quickfix::QfEntry`]).
+///
+/// DELIBERATE deviation from vim: real vim's quickfix window is the jagged,
+/// unaligned `path|lnum col N| text`. Alignment is a pure presentation
+/// upgrade — the row↔entry mapping (`qf_dock_jump_at_cursor`) is positional,
+/// so the text format carries no parsing responsibility.
+///
+/// Entries with an empty path (current-buffer entries, e.g. from `:cexpr`
+/// with no `%f`) render as `[No Name]` so every line stays non-ambiguous and
+/// non-empty.
 fn qf_format_list(list: &QfList) -> String {
-    list.entries()
+    let cols: Vec<(String, String)> = list
+        .entries()
         .iter()
         .map(|e| {
             let path = if e.path.as_os_str().is_empty() {
@@ -930,7 +939,29 @@ fn qf_format_list(list: &QfList) -> String {
             } else {
                 e.path.display().to_string()
             };
-            format!("{}|{} col {}| {}", path, e.row + 1, e.col + 1, e.message)
+            (path, format!("{}:{}", e.row + 1, e.col + 1))
+        })
+        .collect();
+    // Char counts, not byte lengths — paths can carry non-ASCII.
+    let path_w = cols
+        .iter()
+        .map(|(p, _)| p.chars().count())
+        .max()
+        .unwrap_or(0);
+    let loc_w = cols
+        .iter()
+        .map(|(_, l)| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    cols.iter()
+        .zip(list.entries())
+        .map(|((path, loc), e)| {
+            let path_pad = path_w.saturating_sub(path.chars().count());
+            let loc_pad = loc_w.saturating_sub(loc.chars().count());
+            format!(
+                "{path}{:path_pad$} │ {:loc_pad$}{loc} │ {}",
+                "", "", e.message
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
