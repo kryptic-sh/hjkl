@@ -147,6 +147,16 @@ pub struct TerminalSession {
     /// crash-recovery prompt, swallowing the test's keystrokes (#185).
     #[allow(dead_code)]
     cache_dir: tempfile::TempDir,
+    /// Per-session XDG config dir. Kept alive (and unique per spawn) for the
+    /// same reason as `cache_dir`: `hjkl` now writes runtime state back into
+    /// `config.toml` (dock resize, and — #63 Phase C — `explorer.open`) via
+    /// `hjkl_config::write_key_at`, not just reads it. A single shared
+    /// `XDG_CONFIG_HOME` across every e2e test (the old behaviour) would let
+    /// one test's explorer-toggle or dock-resize leak into every other pty
+    /// test that spawns afterward, since nextest runs this binary's tests as
+    /// parallel/sequential processes sharing whatever's on disk.
+    #[allow(dead_code)]
+    config_dir: tempfile::TempDir,
 }
 
 impl TerminalSession {
@@ -213,10 +223,12 @@ impl TerminalSession {
         // copy→paste round-trip.
         cmd.env("HJKL_CLIPBOARD", "osc52");
         cmd.env("TERM", "xterm-256color");
-        cmd.env(
-            "XDG_CONFIG_HOME",
-            std::env::temp_dir().join("hjkl-e2e-config"),
-        );
+        // Fresh per-session config dir (see the `config_dir` field doc) —
+        // `hjkl` writes runtime state (dock resize, explorer.open) back into
+        // config.toml, so a shared dir across tests would leak state between
+        // unrelated pty processes.
+        let config_dir = tempfile::tempdir().expect("e2e config tempdir");
+        cmd.env("XDG_CONFIG_HOME", config_dir.path());
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
 
@@ -256,6 +268,7 @@ impl TerminalSession {
             rows,
             cols,
             cache_dir,
+            config_dir,
         };
 
         session.wait_ms(spawn_ms());
@@ -322,11 +335,12 @@ impl TerminalSession {
         // copy→paste round-trip.
         cmd.env("HJKL_CLIPBOARD", "osc52");
         cmd.env("TERM", "xterm-256color");
-        // Deterministic config: use an empty tmp dir so no user config leaks in.
-        cmd.env(
-            "XDG_CONFIG_HOME",
-            std::env::temp_dir().join("hjkl-e2e-config"),
-        );
+        // Fresh per-session config dir — see the `config_dir` field doc.
+        // Deterministic AND isolated: no real user config leaks in, and no
+        // state this session's `hjkl` writes back (dock resize,
+        // explorer.open) leaks into any other test's session.
+        let config_dir = tempfile::tempdir().expect("e2e config tempdir");
+        cmd.env("XDG_CONFIG_HOME", config_dir.path());
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
 
         if let Some(d) = cwd {
@@ -367,6 +381,7 @@ impl TerminalSession {
             rows,
             cols,
             cache_dir,
+            config_dir,
         };
 
         // Wait for the first frame to appear.
@@ -438,6 +453,16 @@ impl TerminalSession {
             .expect("write raw bytes to pty");
         self.writer.flush().expect("flush pty");
         self.wait_ms(settle_ms());
+    }
+
+    /// Path to the config file this session's `hjkl` reads/writes —
+    /// `$XDG_CONFIG_HOME/hjkl/config.toml` under this session's isolated
+    /// `config_dir`. The file may not exist yet if nothing has written to
+    /// it (`hjkl` only creates it lazily, on the first `write_key_at` call —
+    /// see `hjkl_config::write::write_key_at`).
+    #[allow(dead_code)]
+    pub fn config_file_path(&self) -> std::path::PathBuf {
+        self.config_dir.path().join("hjkl").join("config.toml")
     }
 
     // ── Screen queries ────────────────────────────────────────────────────────

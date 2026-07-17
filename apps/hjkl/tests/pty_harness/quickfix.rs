@@ -52,3 +52,77 @@ fn copen_dock_supports_real_yank_then_closes() {
          `yy` actually worked against a real buffer"
     );
 }
+
+/// Populate three entries, `:copen`, navigate the dock with real vim motions
+/// (`j`) and a real incremental search (`/second<Enter>`), then `<CR>` jumps
+/// to the entry under the cursor. End-to-end twin of the in-process
+/// `qf_dock_jump_at_cursor` / `qf_after_nav` unit tests: proves the whole
+/// chain — dock is a real searchable/navigable buffer, `<CR>` reads the
+/// RIGHT row, and the jump lands in the main area (not back in the readonly
+/// dock) on the correct file and line (#63 Phase C).
+#[test]
+fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("aaa.txt"), "a1\na2\na3\n").unwrap();
+    std::fs::write(tmp.path().join("bbb.txt"), "b1\nb2\nb3\n").unwrap();
+    std::fs::write(tmp.path().join("ccc.txt"), "c1\nc2\nc3\n").unwrap();
+    let first = tmp.path().join("aaa.txt");
+
+    let mut session = TerminalSession::spawn_in_dir_with_file(tmp.path(), &first);
+
+    // Populate all three entries in one `:cexpr` — the quoted-string form
+    // (`parse_expr_text`) expands `\n` into real newlines, so this is
+    // equivalent to three `:caddexpr` calls but in one round-trip.
+    session.keys(":set errorformat=\\%f:\\%l:\\%c:\\%m<Enter>");
+    session.keys(
+        ":cexpr \"aaa.txt:1:1:first\\nbbb.txt:2:1:second\\nccc.txt:3:1:third\"<Enter>",
+    );
+    session.keys(":copen<Enter>");
+
+    let shows_all = (0..24).any(|r| session.line(r).contains("|1 col 1| first"))
+        && (0..24).any(|r| session.line(r).contains("|2 col 1| second"))
+        && (0..24).any(|r| session.line(r).contains("|3 col 1| third"));
+    assert!(shows_all, "dock must list all three quickfix entries");
+
+    // `j`: real vim motion moves the dock's cursor off entry 0 (first).
+    // `/second<Enter>`: real incremental search lands the cursor on the
+    // "second" entry's row — impossible against the old Clear+List overlay,
+    // which owned every keypress and had no buffer for `/` to search.
+    session.keys("j");
+    session.keys("/second<Enter>");
+
+    // `<CR>`: jump to the entry under the cursor (`qf_dock_jump_at_cursor`).
+    session.keys("<Enter>");
+
+    // Must land in a REGULAR window on bbb.txt at (0-based) row 1 — the
+    // screen row the cursor cell sits on must render "b2" (bbb.txt's 2nd
+    // line), not "b1"/"b3" or anywhere in the still-open dock below.
+    let (cursor_row, _) = session.cursor_cell_wait();
+    let cursor_line = session.line(cursor_row);
+    assert!(
+        cursor_line.contains("b2"),
+        "the jump must land the cursor on bbb.txt's line 2 (\"b2\"), the \
+         \"second\" entry's target line; cursor is on row {cursor_row} \
+         which renders {cursor_line:?}\nscreen:\n{}",
+        (0..24)
+            .map(|r| session.line(r))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    // Also confirm bbb.txt (not aaa.txt) is now the focused buffer, via the
+    // status line filename.
+    let status_shows_bbb = (0..24).any(|r| session.line(r).contains("bbb.txt"));
+    assert!(
+        status_shows_bbb,
+        "bbb.txt must be the file that was opened by the jump"
+    );
+
+    // The dock itself must still be open (vim's `<CR>` moves focus to the
+    // target window but does not close the quickfix window) and must still
+    // show all three entries — the jump must not have torn anything down.
+    let dock_still_open = (0..24).any(|r| session.line(r).contains("|2 col 1| second"));
+    assert!(
+        dock_still_open,
+        "the quickfix dock must stay open after <CR> jumps out of it"
+    );
+}
