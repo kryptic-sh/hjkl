@@ -1349,3 +1349,349 @@ fn ctrl_w_t_moves_window_to_new_tab() {
 
     assert_eq!(app.tabs.len(), 2, "Ctrl-w T must create a new tab");
 }
+
+// ── Docks (#63 Phase A: window-management refactor) ───────────────────────
+//
+// The left dock (currently only the file explorer) lives outside every
+// tab's `LayoutTree` — see `app/dock.rs`. These tests pin the guarantees
+// that fall out of that: tree ops can't reach it, `<C-w>` crosses the
+// frame boundary, closing it doesn't touch the tree, and its width persists.
+
+#[test]
+fn dock_excluded_from_equalize_and_swap() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp"); // 2 tree windows
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().expect("dock open").win_id;
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "opening the explorer focuses its dock window"
+    );
+
+    // Equalize touches the tree only; must not close/move the dock, and
+    // must not panic on a focused window that isn't a tree leaf at all.
+    app.dispatch_action(AppAction::EqualizeLayout, 1);
+    assert!(app.left_dock.is_some(), "equalize must not close the dock");
+    assert_eq!(
+        app.layout().leaves().len(),
+        2,
+        "equalize must not touch tree window count"
+    );
+
+    // Swap: the dock has no tree sibling — no-op, no panic, focus unmoved.
+    app.dispatch_action(AppAction::SwapWithSibling, 1);
+    assert!(app.left_dock.is_some());
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "swap must not move focus off the dock"
+    );
+}
+
+#[test]
+fn only_focused_window_on_dock_is_a_noop() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    app.dispatch_ex("sp");
+    let leaves_before = app.layout().leaves().len();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win);
+
+    app.dispatch_action(AppAction::OnlyFocusedWindow, 1);
+
+    assert!(app.left_dock.is_some(), "only must leave the dock open");
+    assert_eq!(
+        app.layout().leaves().len(),
+        leaves_before,
+        "`:only` while a dock is focused has no tree window to collapse \
+         around, so the tree must be untouched"
+    );
+}
+
+#[test]
+fn only_focused_window_from_tree_leaves_dock_open_and_collapses_tree() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    // Move focus back into the tree before `:only`.
+    app.focus_right();
+    let tree_win = app.focused_window();
+    assert!(app.layout().contains(tree_win));
+
+    app.dispatch_action(AppAction::OnlyFocusedWindow, 1);
+
+    assert!(
+        app.left_dock.is_some(),
+        "the dock must stay open across `:only`"
+    );
+    assert_eq!(
+        app.layout().leaves(),
+        vec![tree_win],
+        "`:only` must collapse the tree to the focused tree window"
+    );
+}
+
+#[test]
+fn ctrl_w_h_l_crosses_frame_boundary_with_dock_open() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let regular_win = app.focused_window();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win);
+
+    // C-w l: leave the dock, land back in the main area.
+    app.focus_right();
+    assert_eq!(
+        app.focused_window(),
+        regular_win,
+        "C-w l from the dock must land in the main area"
+    );
+
+    // C-w h: re-enter the dock from the tree's leftmost (only) window.
+    app.focus_left();
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "C-w h from the leftmost tree window must focus the dock"
+    );
+
+    // C-w h again: already at the dock, nothing further left — no-op.
+    app.focus_left();
+    assert_eq!(app.focused_window(), dock_win);
+}
+
+#[test]
+fn ctrl_w_w_cycle_includes_the_dock() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let regular_win = app.focused_window();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win);
+
+    app.focus_next();
+    assert_eq!(
+        app.focused_window(),
+        regular_win,
+        "C-w w from the dock must reach the regular window"
+    );
+    app.focus_next();
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "C-w w must wrap back around to the dock"
+    );
+}
+
+#[test]
+fn close_focused_window_on_dock_closes_the_dock_not_the_tree() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let tree_leaves_before = app.layout().leaves().len();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_some());
+
+    app.dispatch_action(AppAction::CloseFocusedWindow, 1);
+
+    assert!(
+        app.left_dock.is_none(),
+        "CloseFocusedWindow on the dock must close the dock"
+    );
+    assert!(app.explorer.is_none());
+    assert_eq!(
+        app.layout().leaves().len(),
+        tree_leaves_before,
+        "the tree must be completely untouched"
+    );
+}
+
+#[test]
+fn split_while_dock_focused_reroutes_instead_of_splitting_the_dock() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    let leaves_before = app.layout().leaves().len();
+
+    app.dispatch_ex("sp");
+
+    assert!(app.left_dock.is_some(), "the dock must be untouched");
+    assert_eq!(app.left_dock.as_ref().unwrap().win_id, dock_win);
+    assert!(
+        app.layout().leaves().len() > leaves_before,
+        "the split must have happened in the tree, not on the dock"
+    );
+    assert!(
+        app.layout().contains(app.focused_window()),
+        "focus after the split must be a real tree leaf, not the dock"
+    );
+}
+
+#[test]
+fn move_window_to_new_tab_on_dock_is_a_clean_error_not_a_panic() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let tabs_before = app.tabs.len();
+
+    app.dispatch_action(AppAction::MoveWindowToNewTab, 1);
+
+    assert_eq!(
+        app.tabs.len(),
+        tabs_before,
+        "docks can't be moved to a new tab"
+    );
+    assert!(app.left_dock.is_some(), "the dock must remain open");
+}
+
+#[test]
+fn explorer_still_opens_files_into_main_area_not_the_dock() {
+    use crate::keymap_actions::AppAction;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("target.txt"), "hi").unwrap();
+    let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win);
+
+    // Row 0 = root (the tmp dir), row 1 = target.txt (its only entry).
+    // Activating a file node (the explorer's own "open" action — pressing
+    // <CR>/`o` on a node — as opposed to typing `:e` while the dock
+    // happens to be focused, a separate, pre-existing, already-tested edge
+    // case) must reroute focus off the dock first.
+    app.set_explorer_window_cursor(1, 0, None);
+    app.dispatch_action(AppAction::ExplorerActivate, 1);
+
+    assert_ne!(
+        app.focused_window(),
+        dock_win,
+        "opening a file from the tree must move focus off the dock"
+    );
+    assert!(
+        app.left_dock.is_some(),
+        "the dock itself must remain open, untouched"
+    );
+    assert!(
+        app.layout().contains(app.focused_window()),
+        "the opened file's window must be a real tree leaf"
+    );
+}
+
+#[test]
+fn tab_switch_with_dock_focused_restores_it() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win);
+
+    // The dock is global — it must stay open across tab creation.
+    app.dispatch_ex("tabnew");
+    assert!(
+        app.left_dock.is_some(),
+        "dock must stay open across tab creation"
+    );
+    assert_ne!(
+        app.focused_window(),
+        dock_win,
+        "the new tab gets its own regular window focused, not the dock"
+    );
+
+    // Switching back to tab 0 (whose remembered focus was the dock, still
+    // open) must restore it.
+    app.switch_tab(0);
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "switching back to the tab that had the dock focused must restore it"
+    );
+}
+
+#[test]
+fn switch_tab_falls_back_when_remembered_focus_window_no_longer_exists() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let dock_win = app.left_dock.as_ref().unwrap().win_id;
+    app.dispatch_ex("tabnew");
+    // Close the dock while tab 1 is active — its window is now gone.
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_none());
+    assert!(app.windows[dock_win].is_none());
+
+    // Force tab 0's remembered focus onto the now-closed id. In practice
+    // `teardown_left_dock` sweeps every tab at close time so this exact
+    // staleness shouldn't occur for docks specifically — this pins
+    // `switch_tab`'s fallback as a general safety net for ANY dangling
+    // remembered-focus id, which is what #63 Phase A's design doc asks for.
+    app.tabs[0].focused_window = dock_win;
+
+    app.switch_tab(0);
+
+    let fw = app.focused_window();
+    assert!(
+        app.windows[fw].is_some(),
+        "must fall back to an open window instead of a closed one"
+    );
+    assert_ne!(fw, dock_win);
+}
+
+#[test]
+fn dock_resize_ctrl_w_gt_persists_width_to_config_file() {
+    use crate::keymap_actions::AppAction;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.left_dock.is_some());
+    let before = app.config.explorer.width;
+
+    app.dispatch_action(AppAction::ResizeWidth(2), 1);
+
+    assert_eq!(
+        app.config.explorer.width,
+        before + 2,
+        "in-memory width must update immediately"
+    );
+    let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
+    assert!(text.contains("[explorer]"));
+    assert!(text.contains(&format!("width = {}", app.config.explorer.width)));
+}
+
+#[test]
+fn dock_resize_without_config_path_does_not_panic_or_write_anything() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let before = app.config.explorer.width;
+
+    app.dispatch_action(AppAction::ResizeWidth(2), 1);
+
+    assert_eq!(app.config.explorer.width, before + 2);
+}
+
+#[test]
+fn dock_resize_clamps_to_minimum_width() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+    app.dispatch_action(AppAction::ResizeWidth(-1000), 1);
+
+    assert_eq!(
+        app.config.explorer.width,
+        crate::app::dock::DOCK_MIN_WIDTH,
+        "width must clamp at the minimum rather than going to 0 or negative"
+    );
+}
