@@ -53,6 +53,33 @@ fn load_stdin_buffer_dismisses_start_screen() {
     );
 }
 
+// ── `-s <scriptin>` replay tests ─────────────────────────────────────────
+//
+// `main()`'s `-s` replay loop feeds `crate::scriptin_char_to_key`-decoded
+// keys through `App::handle_keypress`, falling through to
+// `App::dispatch_fallthrough_key` exactly like `App::run`'s primary
+// key-read arm does. This proves that wiring actually drives an edit
+// through the real input path — `handle_keypress` alone consumes
+// `:`-command / overlay keys, but Insert-mode text returns `FallThrough`
+// and needs the same fallthrough dispatch `run()` performs, or scripted
+// inserts would silently never reach the buffer.
+#[test]
+fn scriptin_replay_ihello_esc_inserts_text_and_returns_to_normal() {
+    use crate::app::event_loop::KeyOutcome;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    for c in "ihello\u{1b}".chars() {
+        let key = crate::scriptin_char_to_key(c);
+        match app.handle_keypress(key) {
+            KeyOutcome::FallThrough => app.dispatch_fallthrough_key(key),
+            KeyOutcome::Continue | KeyOutcome::Break => {}
+        }
+    }
+    let content = app.active_editor().buffer().content_joined();
+    assert_eq!(content.lines().next(), Some("hello"));
+    assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
+}
+
 // ── App::new tests ──────────────────────────────────────────────────────
 
 #[test]

@@ -37,6 +37,7 @@ pub mod quickfix;
 pub mod recovery;
 pub mod register_count;
 pub mod render_sync;
+pub mod scriptin;
 pub mod search_bank;
 pub mod substitute;
 pub mod substitute_newline_cursor;

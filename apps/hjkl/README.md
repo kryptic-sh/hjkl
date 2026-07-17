@@ -72,6 +72,7 @@ hjkl -u NONE file.txt # nvim-style alias: same as --clean
 hjkl -n file.txt      # no swap file — edits live only in memory
 hjkl -r               # list swap files found and exit
 hjkl -r file.txt      # open file.txt and recover it from its swap
+hjkl -s script.txt file.txt # replay script.txt's keystrokes, then continue interactively
 ```
 
 `--clean` starts from the bundled defaults, ignoring the user config file at its
@@ -85,11 +86,16 @@ created or updated, so edits live only in memory. Mirrors `vim -n` / `nvim -n`.
 `-u NORC` behave like `--clean` (hjkl has no plugin system and a single config
 file, so nvim's two "skip init" sentinels collapse onto the same behavior).
 
-`-r` (bare) lists swap files found in hjkl's swap directory and exits — no
-TUI. `-r <FILE>` opens `<FILE>` normally; hjkl already shows a
-crash-recovery prompt on open whenever a newer swap exists, so `-r <FILE>`
-just makes sure `<FILE>` is the file that prompt fires for. Mirrors `vim -r`
-/ `vim -r <file>`.
+`-r` (bare) lists swap files found in hjkl's swap directory and exits — no TUI.
+`-r <FILE>` opens `<FILE>` normally; hjkl already shows a crash-recovery prompt
+on open whenever a newer swap exists, so `-r <FILE>` just makes sure `<FILE>` is
+the file that prompt fires for. Mirrors `vim -r` / `vim -r <file>`.
+
+`-s <SCRIPTIN>` replays `<SCRIPTIN>`'s characters as startup keystrokes —
+Normal-mode motions, Insert-mode text, and `:` ex commands (`:wq`, `:%s/…`,
+etc.) all run — then the editor continues interactively unless the script itself
+exits (e.g. ends in `:wq`). Runs after `-c`/`+cmd`. Mirrors `vim -s` /
+`nvim -s`.
 
 <!-- screenshot placeholder -->
 <!-- ![hjkl screenshot](https://hjkl.kryptic.sh/screenshot.png) -->

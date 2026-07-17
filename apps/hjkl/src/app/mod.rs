@@ -29,7 +29,7 @@ pub(crate) mod diff_mode;
 mod dispatch;
 pub(crate) mod dock;
 mod engine_actions;
-mod event_loop;
+pub(crate) mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
 pub(crate) mod explorer;

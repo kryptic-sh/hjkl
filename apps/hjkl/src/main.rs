@@ -33,7 +33,11 @@ pub(crate) mod test_cwd;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::{event, execute, terminal};
+use crossterm::{
+    event,
+    event::{KeyCode, KeyEvent, KeyModifiers},
+    execute, terminal,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::path::PathBuf;
@@ -138,6 +142,11 @@ struct Cli {
     #[arg(short = 'r', value_name = "FILE", num_args = 0..=1, default_missing_value = "")]
     recover: Option<String>,
 
+    /// Replay keystrokes from <SCRIPTIN> at startup, as if typed (Normal-mode
+    /// keys, inserts, and `:` ex commands all run). Mirrors `vim -s`.
+    #[arg(short = 's', value_name = "SCRIPTIN")]
+    script_in: Option<PathBuf>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -194,6 +203,11 @@ pub struct Args {
     /// gets opened, and the existing on-open recovery prompt
     /// (`App::check_recovery_on_open`) does the rest. Mirrors `vim -r`.
     pub recover: Option<String>,
+    /// `-s <SCRIPTIN>`: replay the file's characters as startup keystrokes
+    /// (Normal-mode keys, inserts, and `:` ex commands), then continue
+    /// interactively. Mirrors `vim -s` / `nvim -s`. TUI mode only; runs
+    /// after `-c`/`+cmd` and before raw mode is entered.
+    pub script_in: Option<PathBuf>,
 }
 
 /// `true` when `p` is the literal `-` (vim/nvim convention: read the buffer
@@ -202,6 +216,44 @@ pub struct Args {
 /// positional `PathBuf("-")` — this just tests for that sentinel.
 fn is_stdin_arg(p: &std::path::Path) -> bool {
     p.as_os_str() == "-"
+}
+
+/// Decode ONE character from a `-s <scriptin>` file into the crossterm
+/// [`KeyEvent`] a live terminal would have produced for that keystroke.
+/// Mirrors `vim -s` / `nvim -s`: the scriptin file is a raw byte stream of
+/// what the user would have typed, not a structured script format.
+///
+/// - `\x1b` (Esc) → `KeyCode::Esc`
+/// - `\r` / `\n` → `KeyCode::Enter`
+/// - `\t` → `KeyCode::Tab`
+/// - `\x08` (BS) / `\x7f` (DEL) → `KeyCode::Backspace`
+/// - other C0 control chars `\x01..=\x1a` → `Ctrl-<letter>` (e.g. `\x17` is
+///   Ctrl-w, matching the ASCII convention `ctrl+letter == letter - 0x60`)
+/// - everything else → the plain `KeyCode::Char`, no modifiers
+///
+/// KNOWN LIMITATION: this decodes one **character** at a time, not one
+/// terminal **key event**. A real terminal coalesces multi-byte escape
+/// sequences (arrow keys as `ESC [ A`, function keys, etc.) into a single
+/// composite `KeyEvent`; fed through this decoder byte-by-byte they instead
+/// become a lone `Esc` followed by unrelated printable-char keys, which does
+/// NOT reproduce the original keystroke. Scriptin files built from plain
+/// typing — motions, inserts, `:` ex commands — essentially never contain
+/// these sequences, so this is a non-issue in practice.
+pub(crate) fn scriptin_char_to_key(c: char) -> KeyEvent {
+    match c {
+        '\x1b' => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        '\r' | '\n' => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        '\t' => KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        '\x08' | '\x7f' => KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        // Other C0 control chars: \x01 = Ctrl-a … \x1a = Ctrl-z. The arms
+        // above already intercept \x08 (BS), \x09 (Tab), \x0d (CR) before
+        // this range is reached.
+        c2 @ '\x01'..='\x1a' => {
+            let letter = (b'a' + (c2 as u8 - 1)) as char;
+            KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL)
+        }
+        c2 => KeyEvent::new(KeyCode::Char(c2), KeyModifiers::NONE),
+    }
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -306,6 +358,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         },
         no_swap: cli.no_swap,
         recover: cli.recover,
+        script_in: cli.script_in,
     };
     // `-r <FILE>` (non-empty value only — bare `-r` is list mode, handled in
     // `main()` before this function's caller ever gets here): hjkl already
@@ -675,6 +728,52 @@ fn main() -> Result<()> {
             // still needs a clean shutdown here.
             app.shutdown();
             return Ok(());
+        }
+    }
+
+    // `-s <SCRIPTIN>`: replay the file's characters as startup keystrokes,
+    // as if the user had typed them interactively. Runs AFTER `-c`/`+cmd`
+    // (so those set up state first — e.g. `-c 'set ...'` before a script
+    // that depends on it) and BEFORE raw mode, so a script ending in `:wq`
+    // can exit cleanly without ever opening the alternate screen. Threaded
+    // through `App::handle_keypress` — the SAME app-level input path
+    // `App::run`'s event loop below drives every interactive keystroke
+    // through — rather than the lower-level `hjkl_engine`/`hjkl_vim`
+    // dispatch, because that engine-level path does not execute `:` ex
+    // commands, and scriptin files routinely end in one (`:wq`, `:x`, …).
+    // A missing/unreadable scriptin file is a warning, not a fatal error —
+    // matches vim's tolerant behavior for a bad `-s` path.
+    if let Some(path) = &args.script_in {
+        match std::fs::read_to_string(path) {
+            Ok(script) => {
+                for c in script.chars() {
+                    let key = scriptin_char_to_key(c);
+                    // Mirror `App::run`'s primary key-read arm: `handle_keypress`
+                    // consumes overlay/prefix/`:`-command keys inline, but
+                    // Insert-mode text and Normal/Visual-mode motions return
+                    // `FallThrough` and must be driven through
+                    // `dispatch_fallthrough_key` the same way `run()` does —
+                    // otherwise scripted inserts would never actually reach
+                    // the buffer.
+                    match app.handle_keypress(key) {
+                        app::event_loop::KeyOutcome::FallThrough => {
+                            app.dispatch_fallthrough_key(key);
+                        }
+                        app::event_loop::KeyOutcome::Continue
+                        | app::event_loop::KeyOutcome::Break => {}
+                    }
+                    if app.exit_requested {
+                        // A scripted `:wq` / `:q!` requested exit — honour it
+                        // before entering the alternate screen, same as the
+                        // `-c`/`+cmd` loop above.
+                        app.shutdown();
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("hjkl: -s {}: {e}", path.display());
+            }
         }
     }
 
@@ -1113,6 +1212,7 @@ mod cli_tests {
             file_layout: FileLayout::Buffers,
             no_swap: false,
             recover: None,
+            script_in: None,
         }
     }
 
@@ -1209,5 +1309,60 @@ mod cli_tests {
         assert!(out.contains("/cache/hjkl/swap/abc123.swp"), "got: {out}");
         assert!(out.contains("process gone"), "got: {out}");
         assert!(out.contains("999999999"), "got: {out}");
+    }
+
+    /// `-s <SCRIPTIN>` parses into `args.script_in`; absent → `None`.
+    #[test]
+    fn parse_argv_dash_s_scriptin_flag() {
+        let raw: Vec<String> = ["hjkl", "-s", "foo.txt", "file.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.script_in, Some(PathBuf::from("foo.txt")));
+        assert_eq!(args.files, vec![PathBuf::from("file.rs")]);
+
+        let raw: Vec<String> = ["hjkl", "file.rs"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.script_in, None);
+    }
+
+    /// `scriptin_char_to_key` — pure per-character decoder used by `-s`
+    /// replay. Covers every special-cased control character plus the
+    /// plain-printable-char fallback.
+    #[test]
+    fn scriptin_char_to_key_decodes_special_and_plain_chars() {
+        assert_eq!(
+            scriptin_char_to_key('a'),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\x1b'),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\r'),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\n'),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\t'),
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\x08'),
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\x7f'),
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            scriptin_char_to_key('\x17'),
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
+        );
     }
 }
