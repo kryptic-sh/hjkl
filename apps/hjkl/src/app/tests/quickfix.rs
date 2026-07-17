@@ -837,8 +837,9 @@ fn make_app_with_qf_files() -> (App, std::path::PathBuf, tempfile::TempDir) {
 }
 
 /// `:copen` creates a bottom-dock window whose buffer has one line per
-/// entry, formatted `path │ row:col │ message` (1-based row/col, columns
-/// aligned across the list), and focuses it.
+/// entry, formatted `path:line:col │ message` (1-based line/col, the merged
+/// location column padded so the message column aligns across the list),
+/// and focuses it.
 #[test]
 fn copen_creates_bottom_dock_with_matching_buffer_lines() {
     let (mut app, file_a, _dir) = make_app_with_qf_files();
@@ -857,14 +858,14 @@ fn copen_creates_bottom_dock_with_matching_buffer_lines() {
     assert_eq!(rope.len_lines(), 3, "one line per entry");
     let line0 = hjkl_buffer::rope_line_str(&rope, 0);
     let line1 = hjkl_buffer::rope_line_str(&rope, 1);
-    // Both entries share one path, so the path column needs no padding; the
-    // location column right-aligns 1:1 and 2:3 (equal width here).
+    // Both entries share one path, so `path:1:1` and `path:2:3` are the same
+    // width here — no padding needed.
     assert_eq!(
         line0,
-        format!("{} │ 1:1 │ first hit", file_a.display()),
-        "row/col must be rendered 1-based with aligned columns"
+        format!("{}:1:1 │ first hit", file_a.display()),
+        "line/col must be rendered 1-based, merged into the path column"
     );
-    assert_eq!(line1, format!("{} │ 2:3 │ second hit", file_a.display()));
+    assert_eq!(line1, format!("{}:2:3 │ second hit", file_a.display()));
     assert_eq!(
         app.window_cursor(dock.win_id).0,
         0,
@@ -916,7 +917,7 @@ fn dock_yy_yanks_the_entry_line() {
         .unwrap_or_default();
     assert_eq!(
         yanked.trim_end_matches('\n'),
-        format!("{} │ 1:1 │ first hit", file_a.display()),
+        format!("{}:1:1 │ first hit", file_a.display()),
         "yy must yank the exact rendered entry line, got {yanked:?}"
     );
 }
@@ -1034,5 +1035,43 @@ fn lopen_reuses_the_open_quickfix_dock() {
     let rope = app.active_editor().buffer().rope();
     assert_eq!(rope.len_lines(), 1, "buffer now shows the loclist's entry");
     let line0 = hjkl_buffer::rope_line_str(&rope, 0);
-    assert_eq!(line0, "loc.rs │ 5:1 │ hit at 4");
+    assert_eq!(line0, "loc.rs:5:1 │ hit at 4");
+}
+
+/// Perf/hang smoke test (quickfix-dock highlight upgrade): a list far larger
+/// than the highlight budget (`QF_HIGHLIGHT_BUDGET`, 1000) — and than any
+/// realistic project's grep hits — must still rebuild the dock buffer
+/// without hanging or panicking. No timing assertion; the suite's default
+/// per-test timeout is the actual hang guard here. This only pins
+/// correctness (every one of the 2000 entries renders, first to last) so a
+/// future change that makes the rebuild pathological fails loudly as a
+/// hang, not a silent slowdown.
+#[test]
+fn dock_rebuild_handles_a_2000_entry_list_without_hanging() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let n = 2000;
+    // Extension the language registry won't recognise, so this stays
+    // network/grammar-load free and the timing is dominated purely by the
+    // dock's own formatting + span-layout work, not tree-sitter I/O.
+    let entries: Vec<QfEntry> = (0..n)
+        .map(|i| QfEntry {
+            path: std::path::PathBuf::from(format!("src/file_{i}.perf-smoke-ext")),
+            row: i % 500,
+            col: i % 80,
+            kind: QfKind::Grep,
+            message: format!("perf smoke entry {i}"),
+        })
+        .collect();
+    app.quickfix.set(entries);
+    app.handle_quickfix_command(QfCommand::Open);
+
+    let dock = app.bottom_dock.as_ref().expect("bottom dock must be open");
+    assert_eq!(dock.kind, crate::app::dock::DockKind::Quickfix);
+    let rope = app.active_editor().buffer().rope();
+    assert_eq!(rope.len_lines(), n, "every entry must render a line");
+    let last = hjkl_buffer::rope_line_str(&rope, n - 1);
+    assert!(
+        last.contains(&format!("perf smoke entry {}", n - 1)),
+        "last entry must be fully rendered too, got {last:?}"
+    );
 }
