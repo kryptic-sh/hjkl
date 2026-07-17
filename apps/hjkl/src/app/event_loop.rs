@@ -1539,6 +1539,21 @@ impl App {
                     }
                     if let Some((doc_row, doc_col)) = hit {
                         let count = self.mouse_click_tracker.register(win_id, doc_row, doc_col);
+                        // ── #63 Phase C: quickfix/location-list dock double-click ──
+                        // Double-click jumps to the entry under the cursor, mirroring
+                        // vim's real quickfix window (`:h quickfix-window`:
+                        // "double-clicking on an entry has the same effect as typing
+                        // <CR>") and this app's own `<CR>` binding
+                        // (`qf_dock_jump_at_cursor`). This intentionally overrides the
+                        // double-click-selects-word convention used for ordinary text
+                        // windows below — the dock is a read-only entry list, not
+                        // prose, so word-select has no use there and vim's own
+                        // quickfix window makes the identical trade-off.
+                        if count == 2 && self.is_bottom_dock(win_id) {
+                            self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
+                            self.qf_dock_jump_at_cursor();
+                            return MouseOutcome::Continue;
+                        }
                         match count {
                             1 => {
                                 self.active_editor_mut().mouse_click_doc(doc_row, doc_col);
