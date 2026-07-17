@@ -1115,7 +1115,28 @@ pub(crate) fn paragraph_text_object<H: hjkl_engine::types::Host>(
     let count = count.max(1);
     let (row, _) = ed.cursor();
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
-    let n_lines = rope.len_lines();
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return None;
+    }
+    // Skip vim's single phantom trailing empty row — ropey's len_lines()
+    // always synthesizes one extra empty final "line" when the buffer text
+    // ends in `\n` (see hjkl_engine::motions::move_bottom / the
+    // content_row_count clamp it shares with every vertical motion, and
+    // this file's own `sentence_boundary`, which applies the identical
+    // clamp). Without this, a blank-line run reaching real EOF (e.g. `dip`
+    // on the trailing blank run of `"a\n\n\n\n"`) extends `bot` one row past
+    // the buffer's real last line into the phantom row, which makes
+    // `do_delete_range`'s "hi is the last row" branch eat the newline that
+    // terminates the preceding *real* content line too — dropping a `\n`
+    // that real vim keeps. A genuinely empty *real* last line (e.g.
+    // `"One.\n\n"`) is left alone; only a single trailing phantom row is
+    // ever skipped.
+    let n_lines = if raw_n_lines > 1 && rope_line_to_str(&rope, raw_n_lines - 1).is_empty() {
+        raw_n_lines - 1
+    } else {
+        raw_n_lines
+    };
     if n_lines == 0 {
         return None;
     }

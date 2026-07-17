@@ -292,17 +292,38 @@ keys = "dip"
 expected_buffer = "b\n"
 expected_mode = "normal"
 
-# `dap` on a blank run at the buffer start (consumes the run AND the
-# following paragraph, emptying the buffer entirely) and `dip` on a blank
-# run touching EOF are NOT oracle-tested: both fully empty (or reduce to a
-# single unterminated line) the buffer, which trips an unrelated pre-existing
-# gap in `hjkl_driver.rs`'s buffer reconstruction (`lines.join("\n")` doesn't
-# re-append the trailing newline the way `nvim_driver.rs` does — reproduces
-# even on a plain `dd` emptying a one-line buffer, nothing to do with ip/ap).
-# The real `Editor::content()` API (verified via a throwaway unit probe) DOES
-# return the correct nvim-matching string in both cases, so this is a driver
-# artifact, not a product bug — pinned instead as unit tests in
-# `crates/hjkl-vim/tests/paragraph_blank_run.rs`, each verified against nvim.
+# `dap` on a blank run at the buffer start consumes the run AND the
+# following paragraph, emptying the buffer entirely — verified against real
+# nvim (`wordcount().bytes == 0`, the same genuinely-emptied state `dG` from
+# row 0 produces, not a single leftover "\n"). Previously deferred to a unit
+# test on the (mistaken) assumption that `hjkl_driver.rs`'s buffer
+# reconstruction fabricated the wrong value here; empirical re-verification
+# against live nvim (#281) showed the driver already agreed with nvim on
+# this one.
+[[cases]]
+name = "b16_dap_from_blank_run_at_buffer_start_empties_buffer"
+initial_buffer = "\n\n\nb\n"
+initial_cursor = [0, 0]
+keys = "dap"
+expected_buffer = ""
+expected_mode = "normal"
+
+# `dip` on a blank run touching EOF (no trailing paragraph) deletes just the
+# run, leaving the preceding paragraph intact WITH its trailing newline —
+# verified against real nvim. This one *did* diverge (#281): `paragraph_text_object`
+# extended the blank run into ropey's phantom trailing empty row (the
+# synthetic line a rope ending in `\n` always reports past its real content),
+# so the linewise delete's "reached the last row" branch also ate the `\n`
+# terminating the preceding real line. Fixed by clamping the blank-run scan
+# to the buffer's real last content row, mirroring the same clamp this file's
+# `sentence_boundary` already applies (`hjkl-vim/src/vim/text_object.rs`).
+[[cases]]
+name = "b16_dip_from_blank_run_at_eof_leaves_preceding_paragraph"
+initial_buffer = "a\n\n\n\n"
+initial_cursor = [0, 0]
+keys = "jdip"
+expected_buffer = "a\n"
+expected_mode = "normal"
 
 # ─── B13 — {count}zt/zz/zb honor count (cursor part; scroll isn't oracle-able) ─
 
