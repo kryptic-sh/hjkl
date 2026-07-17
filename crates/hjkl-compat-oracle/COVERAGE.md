@@ -182,7 +182,7 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | :s/pat/rep/              | 4     | tier2_substitute.toml, nvim_api_tier.toml |
 | :s/g flag                | 2     | tier2_substitute.toml                     |
 | :s/i flag (case)         | 2     | tier2_substitute.toml, nvim_api_tier.toml |
-| :g/ global               | 1     | tier2_substitute.toml                     |
+| :g / :v (global) sub-commands: d, s, j, y; two-pass row tracking; register/cursor semantics; `:g!`/`:v` negation | 7 | tier2_ex_global.toml (+1 substitute.toml) |
 | & / :&                   | —     | TODO                                      |
 | bare :s (repeat last sub)| 4     | tier2_bare_s_repeat.toml                  |
 | g&                       | 2     | nvim_api_tier.toml                        |

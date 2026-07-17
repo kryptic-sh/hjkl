@@ -1,0 +1,76 @@
+# B4/B14 — `:g`/`:v` sub-command execution with vim's two-pass model plus
+# register/cursor semantics. Driven via the nvim-api subprocess (ex commands
+# aren't dispatched by in-process key replay). Every case verified against
+# nvim v0.12.4 via headless probes.
+
+# `:g/foo/d` — cursor lands past the last deletion, clamped to the new last
+# line (verified: deleting the buffer's own last matching line).
+[[cases]]
+name = "global_d_cursor_clamps_past_last_deletion"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":g/foo/d<CR>"
+expected_buffer = "bar\nbaz\n"
+expected_cursor = [1, 0]
+
+# `:g/foo/s//X/` — empty pattern reuses the `:g` pattern itself; cursor
+# lands on the LAST substituted line (not the buffer's last line).
+[[cases]]
+name = "global_s_empty_pattern_reuses_g_pattern"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":g/foo/s//X/<CR>"
+expected_buffer = "X1\nbar\nX2\nbaz\nX3\n"
+expected_cursor = [4, 0]
+
+# `:g/foo/s/foo/X/` — explicit pattern in the sub-command (independent of
+# the :g pattern) gives the same result.
+[[cases]]
+name = "global_s_explicit_pattern"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":g/foo/s/foo/X/<CR>"
+expected_buffer = "X1\nbar\nX2\nbaz\nX3\n"
+expected_cursor = [4, 0]
+
+# `:g/foo/j` — two-pass row tracking: each match's row shifts as EARLIER
+# joins shrink the buffer. Also exercises `:j`'s reuse inside `:g`.
+[[cases]]
+name = "global_j_tracks_row_shift_across_joins"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":g/foo/j<CR>"
+expected_buffer = "foo1 bar\nfoo2 baz\nfoo3\n"
+expected_cursor = [2, 0]
+
+# `:v/foo/d` (`:vglobal`) — deletes NON-matching lines.
+[[cases]]
+name = "vglobal_d_deletes_non_matching_lines"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":v/foo/d<CR>"
+expected_buffer = "foo1\nfoo2\nfoo3\n"
+expected_cursor = [2, 0]
+
+# `:g!/foo/d` — bang form of `:global`, same as `:v/foo/d`. Exercises the
+# dedicated `global!` / `g!` registry entry (bang glues onto the command
+# NAME during ex parsing, so this needs its own exact registration — see
+# `register_builtins`).
+[[cases]]
+name = "global_bang_negates_like_vglobal"
+initial_buffer = "foo\nbar\nfoo\nbaz\n"
+initial_cursor = [0, 0]
+keys = ":g!/foo/d<CR>"
+expected_buffer = "foo\nfoo\n"
+expected_cursor = [1, 0]
+
+# `:g/foo/y a` — yanks EVERY matching line into "a (each :y call overwrites;
+# only the LAST match's text survives — vim semantics for a non-appending
+# register target inside :g). Verified via paste-back.
+[[cases]]
+name = "global_y_named_register_holds_last_match"
+initial_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\n"
+initial_cursor = [0, 0]
+keys = ":g/foo/y a<CR>G\"ap"
+expected_buffer = "foo1\nbar\nfoo2\nbaz\nfoo3\nfoo3\n"
+expected_cursor = [5, 0]

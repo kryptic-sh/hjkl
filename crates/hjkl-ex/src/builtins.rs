@@ -633,7 +633,7 @@ fn resolve_range_with_count<H: Host>(
 
 /// `:[range]y[ank] [{register}] [count]` — yank lines into a register
 /// (linewise), without mutating the buffer or moving the cursor.
-fn yank_handler<H: Host>(
+pub(crate) fn yank_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -677,7 +677,7 @@ fn yank_handler<H: Host>(
 /// no count joins every line in the range; an explicit trailing `[count]`
 /// OVERRIDES the join to start at the range's LAST line and join `count`
 /// total lines from there.
-fn join_handler<H: Host>(
+pub(crate) fn join_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -686,7 +686,7 @@ fn join_handler<H: Host>(
 }
 
 /// `:[range]j[oin]! [count]` — see [`join_handler`]; `raw = true` (gJ).
-fn join_bang_handler<H: Host>(
+pub(crate) fn join_bang_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -777,7 +777,7 @@ fn join_handler_inner<H: Host>(
 /// instead. A trailing `[count]` OVERRIDES the range to delete `count`
 /// lines starting at the range's LAST line (same start-from-range-end rule
 /// as `:y [count]` / `:j [count]` — verified against nvim v0.12.4).
-fn delete_handler<H: Host>(
+pub(crate) fn delete_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -1056,7 +1056,7 @@ fn extract_leading_number(line: &str) -> i64 {
 /// only `last_search()`'s pattern). Flags are NOT reused — `:s` alone always
 /// runs with default (no) flags; `:s g` / `:s 3` parse `args` as a bare
 /// flags+count tail via `parse_flags` (verified against nvim v0.12.4).
-fn substitute_handler<H: Host>(
+pub(crate) fn substitute_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -1767,6 +1767,19 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 1,
         run: |editor, args, range| global_match_handler(editor, args, range),
+    });
+
+    // `:global!` / `:g!` — negated form (same as `:vglobal`/`:v`). Registered
+    // as its own exact name/alias because `split_name_args` glues a trailing
+    // `!` onto the command NAME (not into `args`), so `:g!/pat/d` never
+    // reaches the bare `global` entry above (its name would be `"g!"`, which
+    // doesn't prefix-match `"global"`).
+    reg.add(ExCommand {
+        name: "global!",
+        aliases: &["g!"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 7,
+        run: |editor, args, range| crate::global::global_handler(editor, args, range, true),
     });
 
     // `:vglobal` / `:v` (min_prefix=1; range-aware)

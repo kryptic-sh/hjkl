@@ -207,6 +207,13 @@ async fn tier2_ex_delete_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_ex_delete.toml", "tier2_ex_delete").await;
 }
 
+/// B4/B14: `:g`/`:v` sub-command execution with vim's two-pass model plus
+/// register/cursor semantics.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_ex_global_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_ex_global.toml", "tier2_ex_global").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_case_indent_join_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

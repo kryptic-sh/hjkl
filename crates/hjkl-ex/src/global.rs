@@ -1,54 +1,120 @@
-//! `:[range]global/pat/cmd` and `:[range]vglobal/pat/cmd` — Phase 8a.
+//! `:[range]global/pat/cmd` and `:[range]vglobal/pat/cmd` — Phase 8a, extended
+//! for B4/B14 (round-2a) to support the `d` / `s` / `j` / `y` sub-commands
+//! with vim's two-pass execution model and per-line register/cursor
+//! semantics.
 //!
-//! Currently supports only `:g/pat/d` (delete matching lines) and
-//! `:g!/pat/d` / `:v/pat/d` (delete non-matching lines).
-//! Ported verbatim from `hjkl_editor::ex::apply_global`.
+//! # Two-pass execution (vim semantics)
+//!
+//! Vim's `:g` first scans the WHOLE scope and marks every matching (or, for
+//! `:v`/`:g!`, non-matching) line, THEN executes the sub-command once per
+//! marked line, in ascending document order — critically, marking happens
+//! before any mutation, so a sub-command that changes the line count (`d`,
+//! `j`) doesn't corrupt which lines were originally selected.
+//!
+//! Real vim tracks marks with a buffer-local flag bit per line that survives
+//! edits. hjkl-buffer has no such mechanism, so this module reconstructs the
+//! same effect with plain row arithmetic: rows are marked by their ORIGINAL
+//! (pre-mutation) index, then replayed ascending while accumulating a signed
+//! `shift` — the cumulative row-count delta from every earlier sub-command
+//! invocation. `actual_row = orig_row as i64 + shift`. This works for any
+//! sub-command that changes the total row count uniformly (delete removes
+//! rows, join merges rows) as well as ones that don't (substitute, yank).
+//!
+//! # Sub-commands
+//!
+//! `d` [register], `s/pat/rep/[flags]` (including empty-pattern `s//rep/`,
+//! which reuses the `:g` pattern itself — vim sets the "last search pattern"
+//! to the `:g` pattern before running the sub-command loop), `j` [count],
+//! `y` [register] [count]. Each delegates to the SAME handler as the
+//! standalone `:d` / `:s` / `:j` / `:y` ex commands (`crate::builtins`), so
+//! register/cursor semantics fixed there (B5/B6/B7) apply for free here too.
+//!
+//! `:g/pat/normal ...` is explicitly OUT OF SCOPE (see `DIVERGE.md`) — hjkl
+//! has no general `:normal {cmd}` ex command yet. It errors cleanly rather
+//! than silently no-op'ing.
 
 use crate::{effect::ExEffect, range::LineRange};
 use hjkl_engine::Host;
 
-/// Split `s` by `sep`, treating `\<sep>` as a literal occurrence.
-fn split_unescaped(s: &str, sep: char) -> Vec<String> {
-    let mut out = Vec::new();
+/// Split `s` at the FIRST unescaped occurrence of `sep`, treating `\<sep>`
+/// as a literal occurrence. Returns `(before, after)` with the separator
+/// itself consumed, or `None` if `sep` never appears unescaped.
+///
+/// Unlike a general "split on every occurrence" helper, this stops after
+/// the first match: `:g/pattern/cmd` only uses the separator to delimit
+/// PATTERN from CMD — the cmd tail (e.g. `s/foo/bar/g`) commonly contains
+/// the SAME character again as its own delimiter, and re-splitting on every
+/// occurrence would shred it (this was a real bug caught while adding `:g`
+/// sub-command support — a naive `split('/').collect()` turned
+/// `:g/foo/s//X/` into five parts instead of pattern="foo", cmd="s//X/").
+fn split_first_unescaped(s: &str, sep: char) -> Option<(String, String)> {
     let mut cur = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         if c == '\\' {
-            if let Some(&next) = chars.peek() {
-                if next == sep {
+            match chars.peek() {
+                Some(&(_, next)) if next == sep => {
                     cur.push(sep);
                     chars.next();
-                } else {
-                    cur.push('\\');
-                    cur.push(next);
-                    chars.next();
                 }
-            } else {
-                cur.push('\\');
+                _ => cur.push('\\'),
             }
-        } else if c == sep {
-            out.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(c);
+            continue;
         }
+        if c == sep {
+            let rest_start = i + c.len_utf8();
+            return Some((cur, s[rest_start..].to_string()));
+        }
+        cur.push(c);
     }
-    out.push(cur);
-    out
+    None
 }
 
-/// Run `:[range]g/pat/d` (or its negated variants).
+/// Execute `cmd` (the sub-command tail after the `:g/pat/` delimiter, e.g.
+/// `"d"`, `"d a"`, `"s/foo/bar/g"`, `"j"`, `"y a 2"`) at `row` (0-based).
+/// Delegates to the standalone ex-command handlers with a single-line range
+/// `[row+1, row+1]` (1-based), so each runs exactly as `:{row+1}{cmd}` would.
+fn dispatch_sub_command<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    cmd: &str,
+    row: usize,
+) -> Option<ExEffect> {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return Some(ExEffect::Error("global: missing sub-command".into()));
+    }
+    let range = Some(LineRange::single(row + 1));
+    let (head, rest) = cmd.split_at(1);
+    match head {
+        "d" => crate::builtins::delete_handler(editor, rest.trim_start(), range),
+        "y" => crate::builtins::yank_handler(editor, rest.trim_start(), range),
+        "j" => crate::builtins::join_handler(editor, rest.trim_start(), range),
+        // `s` takes the REST verbatim (starting with the delimiter, e.g.
+        // "/foo/bar/g") or empty/flags-only for the bare-repeat form (B17) —
+        // exactly what `substitute_handler` expects as `args`.
+        "s" => crate::builtins::substitute_handler(editor, rest, range),
+        _ if cmd.starts_with("normal") => Some(ExEffect::Error(
+            ":g/pat/normal is not supported (see DIVERGE.md)".into(),
+        )),
+        _ => Some(ExEffect::Error(format!(
+            ":g supports d/s/j/y today, got `{cmd}`"
+        ))),
+    }
+}
+
+/// Run `:[range]g/pat/cmd` (or its negated variants).
 ///
-/// Walks the rows in `range` (whole buffer when None), collects matches,
-/// then drops them in reverse so row indices stay valid through the cascade
-/// of deletes. Ported verbatim from `hjkl_editor::ex::apply_global`.
+/// Two-pass: marks every matching row in `range` (whole buffer when `None`)
+/// against the ORIGINAL buffer, then executes `cmd` on each marked row in
+/// ascending order, tracking a signed row-count shift so later marks stay
+/// valid as earlier invocations add/remove rows. See the module doc for the
+/// full design rationale.
 pub(crate) fn global_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
     negate: bool,
 ) -> Option<ExEffect> {
-    use hjkl_buffer::{Edit, MotionKind, Position};
-
     let mut chars = args.chars();
     let sep = match chars.next() {
         Some(c) => c,
@@ -60,17 +126,11 @@ pub(crate) fn global_handler<H: Host>(
         ));
     }
     let rest: String = chars.collect();
-    let parts = split_unescaped(&rest, sep);
-    if parts.len() < 2 {
+    let Some((pattern, cmd)) = split_first_unescaped(&rest, sep) else {
         return Some(ExEffect::Error("global needs /pattern/cmd".into()));
-    }
-    let pattern = parts[0].clone();
-    let cmd = parts[1].trim();
-    if cmd != "d" {
-        return Some(ExEffect::Error(format!(
-            ":g supports only `d` today, got `{cmd}`"
-        )));
-    }
+    };
+    let cmd = cmd.trim().to_string();
+
     use hjkl_engine::search::{CaseMode, resolve_case_mode};
     let s = editor.settings();
     let base = CaseMode::from_options(s.ignore_case, s.smartcase);
@@ -87,7 +147,8 @@ pub(crate) fn global_handler<H: Host>(
 
     editor.push_undo();
 
-    // Identify rows to drop. Default to whole buffer when no range supplied.
+    // Pass 1: mark rows against the ORIGINAL (pre-mutation) buffer. Default
+    // scope is the whole buffer when no range was supplied.
     let (scope_start, scope_end) = match range {
         Some(r) => {
             let start = r.start_one_based().saturating_sub(1);
@@ -118,36 +179,61 @@ pub(crate) fn global_handler<H: Host>(
             lines_changed: 0,
         });
     }
-    let count = targets.len();
-    for row in targets.iter().rev() {
-        let row = *row;
-        if editor.buffer().row_count() == 1 {
-            let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), 0)
-                .chars()
-                .count();
-            if line_chars > 0 {
-                editor.mutate_edit(Edit::DeleteRange {
-                    start: Position::new(0, 0),
-                    end: Position::new(0, line_chars),
-                    kind: MotionKind::Char,
-                });
-            }
+    let total_targets = targets.len();
+
+    // Vim: `:g` sets the "last search pattern" to its own pattern argument
+    // BEFORE running the sub-command loop, so an empty-pattern `s//rep/`
+    // inside reuses it (apply_substitute already falls back to
+    // `editor.last_search()` for `pattern: None`).
+    editor.set_last_search(Some(pattern), true);
+
+    // Pass 2: execute `cmd` on each marked row, ascending, tracking a
+    // signed shift so later marks (recorded against the ORIGINAL buffer)
+    // stay valid as earlier invocations change the row count.
+    let mut shift: i64 = 0;
+    let mut last_row: Option<usize> = None;
+    for orig_row in targets {
+        let before_total = editor.buffer().row_count() as i64;
+        let actual_row = orig_row as i64 + shift;
+        if actual_row < 0 || actual_row as usize >= before_total as usize {
             continue;
         }
-        editor.mutate_edit(Edit::DeleteRange {
-            start: Position::new(row, 0),
-            end: Position::new(row, 0),
-            kind: MotionKind::Line,
-        });
+        let actual_row = actual_row as usize;
+
+        editor.jump_cursor(actual_row, 0);
+        let effect = dispatch_sub_command(editor, &cmd, actual_row);
+        if let Some(ExEffect::Error(e)) = effect {
+            editor.mark_content_dirty();
+            return Some(ExEffect::Error(e));
+        }
+
+        let after_total = editor.buffer().row_count() as i64;
+        shift += after_total - before_total;
+        last_row = Some(actual_row);
     }
+
     editor.mark_content_dirty();
+
+    // Cursor: the row of the LAST sub-command invocation, clamped to the
+    // (possibly shrunk) buffer, first non-blank — matches vim's behavior
+    // for `:g/pat/d` (lands past the last deletion, clamped) and
+    // `:g/pat/s//rep/` (lands on the last substituted line), verified
+    // against nvim v0.12.4.
+    if let Some(row) = last_row {
+        let total = editor.buffer().row_count();
+        let row = row.min(total.saturating_sub(1));
+        let line = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row);
+        let first_non_blank = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+        editor.jump_cursor(row, first_non_blank);
+    }
+
     Some(ExEffect::Substituted {
-        count,
-        lines_changed: count,
+        count: total_targets,
+        lines_changed: total_targets,
     })
 }
 
-/// `:global/pat/cmd` — delete matching lines (negate=false).
+/// `:global/pat/cmd` — matching lines (negate=false).
 pub(crate) fn global_match_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
@@ -162,7 +248,7 @@ pub(crate) fn global_match_handler<H: Host>(
     global_handler(editor, body, range, negate)
 }
 
-/// `:vglobal/pat/cmd` — delete non-matching lines (negate=true).
+/// `:vglobal/pat/cmd` — non-matching lines (negate=true).
 pub(crate) fn vglobal_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
@@ -244,6 +330,18 @@ mod tests {
     }
 
     #[test]
+    fn global_normal_subcommand_errors_cleanly() {
+        // :g/pat/normal is out of scope (DIVERGE.md) — must error, not panic
+        // or silently no-op.
+        let mut editor = make_editor_with_lines(&["foo", "bar"]);
+        let result = global_match_handler(&mut editor, "/foo/normal x", None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    #[test]
     fn global_range_limits_scope() {
         // Only delete 'foo' in lines 1-2; line 3 foo preserved.
         let mut editor = make_editor_with_lines(&["foo", "foo", "foo"]);
@@ -262,6 +360,26 @@ mod tests {
         assert!(matches!(result, Some(ExEffect::Substituted { .. })));
         let lines = buf_lines(&editor);
         assert!(lines.iter().all(|l| l == "foo"), "lines: {lines:?}");
+    }
+
+    #[test]
+    fn global_s_substitutes_on_matching_lines() {
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2"]);
+        let result = global_match_handler(&mut editor, "/foo/s//X/", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 2, .. })),
+            "got: {result:?}"
+        );
+        let lines = buf_lines(&editor);
+        assert_eq!(lines, vec!["X1", "bar", "X2"]);
+    }
+
+    #[test]
+    fn global_d_writes_unnamed_register_to_last_deleted_line() {
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2"]);
+        let _result = global_match_handler(&mut editor, "/foo/d", None);
+        let last_delete = editor.with_registers(|r| r.read('"').unwrap().text.clone());
+        assert_eq!(last_delete, "foo2\n");
     }
 
     fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
