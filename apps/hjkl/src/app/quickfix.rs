@@ -140,6 +140,13 @@ impl crate::app::App {
                 }
             }
             QfCommand::Close => self.qf_set_open(w, false),
+            QfCommand::Window => {
+                // `:cwindow` / `:lwindow` — open only when the list has
+                // entries; close when it's empty (vim `:h :cwindow`). Unlike
+                // `:copen`, an empty list is silent — vim shows no message.
+                let open = !self.qf_list(w).is_empty();
+                self.qf_set_open(w, open);
+            }
             QfCommand::Next => {
                 self.qf_list_mut(w).next();
                 self.qf_after_nav(w);

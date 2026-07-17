@@ -104,6 +104,9 @@ pub enum QfCommand {
     Open,
     /// `:cclose` — hide the quickfix popup.
     Close,
+    /// `:cwindow` / `:cw` — show the popup only when the list is non-empty;
+    /// when the list is empty, close the popup if it is open (vim `:h :cwindow`).
+    Window,
     /// `:cnext` — jump to the next entry.
     Next,
     /// `:cprev` — jump to the previous entry.

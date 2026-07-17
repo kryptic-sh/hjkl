@@ -741,3 +741,57 @@ fn diagnostics_empty_no_popup() {
     assert!(app.quickfix.is_empty(), "list must remain empty");
     assert!(!app.quickfix_open, "popup must stay closed when no diags");
 }
+
+/// `:cwindow` — opens the popup only when the list has entries; closes it
+/// when the list is empty; empty-list invocation is silent (no toast).
+#[test]
+fn cwindow_opens_on_entries_closes_on_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Empty list: stays closed, no message (unlike `:copen`'s "list is empty").
+    let toasts_before = app.bus.history().count();
+    app.handle_quickfix_command(QfCommand::Window);
+    assert!(
+        !app.quickfix_open,
+        ":cwindow on an empty list must not open"
+    );
+    assert_eq!(
+        app.bus.history().count(),
+        toasts_before,
+        ":cwindow on an empty list is silent in vim"
+    );
+
+    // Non-empty list: opens.
+    let p = std::path::PathBuf::from("x.rs");
+    app.quickfix.set(vec![entry(&p, 0)]);
+    app.handle_quickfix_command(QfCommand::Window);
+    assert!(
+        app.quickfix_open,
+        ":cwindow must open when the list has entries"
+    );
+
+    // List emptied while the popup is open: `:cwindow` closes it.
+    app.quickfix.set(vec![]);
+    app.handle_quickfix_command(QfCommand::Window);
+    assert!(
+        !app.quickfix_open,
+        ":cwindow must close the popup when the list is empty"
+    );
+}
+
+/// `:lwindow` — same contract against the location list.
+#[test]
+fn lwindow_opens_on_entries_closes_on_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.handle_loclist_command(QfCommand::Window);
+    assert!(!app.loclist_open);
+
+    let p = std::path::PathBuf::from("x.rs");
+    app.loclist.set(vec![entry(&p, 0)]);
+    app.handle_loclist_command(QfCommand::Window);
+    assert!(app.loclist_open);
+
+    app.loclist.set(vec![]);
+    app.handle_loclist_command(QfCommand::Window);
+    assert!(!app.loclist_open);
+}

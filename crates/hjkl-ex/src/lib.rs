@@ -1235,6 +1235,26 @@ mod tests {
 
     // ---- Phase 2c: registers -----------------------------------------------
 
+    /// `:cw`/`:cwindow` and `:lw`/`:lwindow` resolve and yield the
+    /// conditional-open Window command (vim `:h :cwindow`).
+    #[test]
+    fn dispatch_cw_and_lw_yield_window_commands() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        for cmd in ["cw", "cwindow"] {
+            match try_dispatch(&reg, &mut editor, cmd) {
+                Some(ExEffect::Quickfix(QfCommand::Window)) => {}
+                other => panic!("`:{cmd}` expected Quickfix(Window), got {other:?}"),
+            }
+        }
+        for cmd in ["lw", "lwindow"] {
+            match try_dispatch(&reg, &mut editor, cmd) {
+                Some(ExEffect::Location(QfCommand::Window)) => {}
+                other => panic!("`:{cmd}` expected Location(Window), got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn dispatch_reg_returns_info_titled_registers() {
         let reg = default_registry::<DefaultHost>();

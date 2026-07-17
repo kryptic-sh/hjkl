@@ -1895,6 +1895,13 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: cclose_handler::<H>,
     });
     reg.add(ExCommand {
+        name: "cwindow",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "cw" — no other :c* command starts with "cw"
+        run: cwindow_handler::<H>,
+    });
+    reg.add(ExCommand {
         name: "cnext",
         aliases: &[],
         arg_kind: ArgKind::None,
@@ -1981,6 +1988,13 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3, // "lcl"
         run: lclose_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "lwindow",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 2, // "lw" — no other :l* command starts with "lw"
+        run: lwindow_handler::<H>,
     });
     reg.add(ExCommand {
         name: "lnext",
@@ -2410,6 +2424,7 @@ macro_rules! qf_handler {
 
 qf_handler!(copen_handler, QfCommand::Open);
 qf_handler!(cclose_handler, QfCommand::Close);
+qf_handler!(cwindow_handler, QfCommand::Window);
 qf_handler!(cnext_handler, QfCommand::Next);
 qf_handler!(cprev_handler, QfCommand::Prev);
 qf_handler!(cfirst_handler, QfCommand::First);
@@ -2504,6 +2519,7 @@ macro_rules! loc_handler {
 }
 
 loc_handler!(lopen_handler, QfCommand::Open);
+loc_handler!(lwindow_handler, QfCommand::Window);
 loc_handler!(lclose_handler, QfCommand::Close);
 loc_handler!(lnext_handler, QfCommand::Next);
 loc_handler!(lprev_handler, QfCommand::Prev);
