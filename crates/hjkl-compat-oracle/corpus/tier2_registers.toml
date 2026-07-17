@@ -81,3 +81,49 @@ initial_cursor = [0, 0]
 keys = "ddx\"1p"
 expected_buffer = "2\nL1\nL3\n"
 expected_mode = "normal"
+
+# #280 — linewise Visual delete reaching the buffer's TRUE last row must not
+# capture ropey's phantom trailing row as an extra newline. The oracle compares
+# the default register against real nvim, so this pins `"` == "one\ntwo\nthree
+# \nfour\n" exactly (a phantom-row regression would capture "...four\n\n").
+# The repro was fixed as a side effect of the round-3 phantom-row clamps; this
+# case keeps it fixed.
+[[cases]]
+name = "register_linewise_delete_to_buffer_end"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "VGd"
+expected_buffer = ""
+expected_mode = "normal"
+
+# NEGATIVE for #280 — a linewise delete NOT reaching the last row keeps its
+# normal register shape: exactly "one\ntwo\n" (one trailing \n per line, no
+# more, no fewer). Guards against an over-eager clamp that trims a legitimate
+# trailing newline.
+[[cases]]
+name = "register_linewise_delete_not_reaching_end"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "Vjd"
+expected_buffer = "three\nfour\n"
+expected_mode = "normal"
+
+# `dG` from mid-buffer — same phantom-row family through the operator+motion
+# path (`run_operator_over_range`) instead of the Visual path.
+[[cases]]
+name = "register_dG_from_mid_buffer"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [1, 0]
+keys = "dG"
+expected_buffer = "one\n"
+expected_mode = "normal"
+
+# `yG` — the linewise yank capture (`read_vim_range`) must agree with nvim on
+# the same phantom-row boundary.
+[[cases]]
+name = "register_yG_to_buffer_end"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "yG"
+expected_buffer = "one\ntwo\nthree\nfour\n"
+expected_mode = "normal"
