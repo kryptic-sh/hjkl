@@ -137,12 +137,47 @@ pub fn step_normal<H: Host>(
         Key::Char('v') if !input.ctrl && ed.fsm_mode() == FsmMode::Normal => {
             ed.set_visual_anchor(ed.cursor());
             ed.set_mode(VimMode::Visual);
+            // B5: `[count]v` extends the initial selection to `count`
+            // chars from the anchor — verified against real nvim: the
+            // selection stays within the CURRENT LINE, clamped at
+            // one-past-the-last-char (absorbing the trailing newline into
+            // an operator's range, same as `v$`) once `count` reaches or
+            // exceeds the remaining line length; it never wraps onto the
+            // next line's real characters no matter how large `count` is
+            // (`3v` through `8v` on a 2-char line all select identically).
+            if had_explicit_count && count > 1 {
+                let (row, col) = ed.cursor();
+                let line_chars = hjkl_engine::buf_helpers::buf_line_chars(ed.buffer(), row);
+                let target_col = (col + count - 1).min(line_chars);
+                ed.jump_cursor(row, target_col);
+            }
             return true;
         }
         Key::Char('V') if !input.ctrl && ed.fsm_mode() == FsmMode::Normal => {
             let (row, _) = ed.cursor();
             ed.set_visual_line_anchor(row);
             ed.set_mode(VimMode::VisualLine);
+            // B5: `[count]V` extends the initial selection to `count`
+            // lines from the anchor, clamped to the buffer's LAST CONTENT
+            // row — `buf_row_count` counts ropey's phantom trailing row
+            // (the empty remainder after a buffer's own trailing `\n`), so
+            // clamping to `total - 1` directly would land the cursor one
+            // row past the real content (`:h phantom row`-style bug, same
+            // class as H2's linewise-delete clamp).
+            if had_explicit_count && count > 1 {
+                let total = hjkl_engine::buf_helpers::buf_row_count(ed.buffer());
+                let last_content_row = if total >= 2
+                    && hjkl_engine::buf_helpers::buf_line(ed.buffer(), total - 1)
+                        .map(|s| s.is_empty())
+                        .unwrap_or(false)
+                {
+                    total - 2
+                } else {
+                    total.saturating_sub(1)
+                };
+                let target_row = (row + count - 1).min(last_content_row);
+                ed.jump_cursor(target_row, 0);
+            }
             return true;
         }
         Key::Char('v') if !input.ctrl && ed.fsm_mode() == FsmMode::VisualLine => {

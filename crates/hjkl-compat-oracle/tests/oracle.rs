@@ -997,6 +997,13 @@ async fn tier2_round3_b4_search_range_corpus_passes() {
     .await;
 }
 
+/// B5: `[count]v` / `[count]V` extend the initial visual selection instead
+/// of ignoring the count.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_b5_counted_visual_corpus_passes() {
+    run_corpus("corpus/tier2_round3_b5_counted_visual.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

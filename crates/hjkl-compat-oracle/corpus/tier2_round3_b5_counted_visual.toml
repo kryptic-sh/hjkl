@@ -1,0 +1,65 @@
+# Round 3 — B5: `[count]v` / `[count]V` extend the initial visual selection
+# by `count` chars / lines instead of ignoring the count (normal.rs captured
+# `count` on entry but never used it). Verified against real nvim: `[count]v`
+# stays within the CURRENT LINE, clamped at one-past-the-last-char (absorbing
+# the trailing newline, same as `v$`) once `count` reaches or exceeds the
+# remaining line length — it does NOT wrap onto the next line's real
+# characters no matter how large `count` is.
+
+[[cases]]
+name = "b5_counted_v_selects_count_chars"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "3vd"
+expected_buffer = " bar baz\n"
+expected_register = ['"', "foo"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b5_counted_v_single_char_is_bare_v"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "1vd"
+expected_buffer = "oo bar baz\n"
+expected_register = ['"', "f"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b5_counted_v_within_line_count"
+initial_buffer = "abcdefghij\n"
+initial_cursor = [0, 0]
+keys = "4vd"
+expected_buffer = "efghij\n"
+expected_register = ['"', "abcd"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b5_counted_v_overflow_clamps_through_eol_not_into_next_line"
+initial_buffer = "ab\ncd\nef\n"
+initial_cursor = [0, 0]
+keys = "5vd"
+expected_buffer = "cd\nef\n"
+expected_register = ['"', "ab\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b5_counted_V_selects_count_lines"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "3Vd"
+expected_buffer = "four\n"
+expected_mode = "normal"
+
+# Not `10Vd` here: deleting through the buffer's TRUE last row hits a
+# pre-existing, unrelated register-capture bug in the linewise Delete path
+# (yanks an extra trailing "\n" — see DIVERGE.md B5 note) that isn't part of
+# this fix's scope. Checking the clamped cursor/mode alone (no delete) still
+# fully pins the count-clamping behavior this item is about.
+[[cases]]
+name = "b5_counted_V_overflow_clamps_to_last_line"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "10V"
+expected_buffer = "one\ntwo\nthree\nfour\n"
+expected_cursor = [3, 0]
+expected_mode = "visual_line"
