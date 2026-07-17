@@ -2112,9 +2112,12 @@ fn insert_ctrl_w_deletes_word_back() {
 
 #[test]
 fn insert_ctrl_w_at_col0_joins_with_prev_word() {
-    // Vim with default `backspace=indent,eol,start`: Ctrl-W at the
-    // start of a row joins to the previous line and deletes the
-    // word now before the cursor.
+    // B2 (round 2b): Ctrl-W at the start of a row joins to the previous
+    // line (deletes just the newline) and STOPS — it does not also eat
+    // the previous line's last word. Verified against real nvim v0.12.4
+    // (default `backspace=indent,eol,start`):
+    // `nvim --headless -u NONE hello_world.txt` + `feedkeys("ji\<C-w>\<Esc>", 'x')`
+    // → "helloworld", cursor (0, 5) before the Esc step-back.
     let mut e = editor_with("hello\nworld");
     e.jump_cursor(1, 0);
     run_keys(&mut e, "i");
@@ -2122,8 +2125,6 @@ fn insert_ctrl_w_at_col0_joins_with_prev_word() {
         &mut e,
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
-    // "hello" was the only word on row 0; it gets deleted, leaving
-    // "world" on a single line.
     assert_eq!(
         e.buffer()
             .rope()
@@ -2133,13 +2134,17 @@ fn insert_ctrl_w_at_col0_joins_with_prev_word() {
                 s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
             })
             .collect::<Vec<_>>(),
-        vec!["world".to_string()]
+        vec!["helloworld".to_string()]
     );
-    assert_eq!(e.cursor(), (0, 0));
+    assert_eq!(e.cursor(), (0, 5));
 }
 
 #[test]
 fn insert_ctrl_w_at_col0_keeps_prefix_words() {
+    // B2 (round 2b): same bare-join behaviour with a multi-word previous
+    // line — "bar" must survive. Verified against real nvim v0.12.4:
+    // `nvim --headless -u NONE foo_bar_baz.txt` + `feedkeys("ji\<C-w>\<Esc>", 'x')`
+    // → "foo barbaz", cursor (0, 7) before the Esc step-back.
     let mut e = editor_with("foo bar\nbaz");
     e.jump_cursor(1, 0);
     run_keys(&mut e, "i");
@@ -2147,7 +2152,6 @@ fn insert_ctrl_w_at_col0_keeps_prefix_words() {
         &mut e,
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
-    // Joins lines, then deletes the trailing "bar" of the prev line.
     assert_eq!(
         e.buffer()
             .rope()
@@ -2157,9 +2161,9 @@ fn insert_ctrl_w_at_col0_keeps_prefix_words() {
                 s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
             })
             .collect::<Vec<_>>(),
-        vec!["foo baz".to_string()]
+        vec!["foo barbaz".to_string()]
     );
-    assert_eq!(e.cursor(), (0, 4));
+    assert_eq!(e.cursor(), (0, 7));
 }
 
 #[test]
