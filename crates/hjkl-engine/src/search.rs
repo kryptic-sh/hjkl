@@ -420,7 +420,11 @@ impl SearchState {
             self.generations.resize(row + 1, u64::MAX);
         }
         if self.generations[row] != dirty_gen {
-            self.matches[row] = re.find_iter(line).map(|m| (m.start(), m.end())).collect();
+            // Shared scanner (`hjkl_buffer::search_match_ranges`) — the same
+            // byte-range computation the hlsearch painter and the quickfix
+            // dock's match overlay use, so navigation and highlighting can
+            // never disagree about where a match is.
+            self.matches[row] = hjkl_buffer::search_match_ranges(re, line);
             self.generations[row] = dirty_gen;
         }
         &self.matches[row]

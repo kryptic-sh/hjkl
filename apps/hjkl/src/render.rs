@@ -922,9 +922,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let search_pattern = search_pattern_owned.as_ref();
 
     let search_bg = if search_pattern.is_some() {
-        Style::default()
-            .bg(app.theme.ui.search_bg)
-            .fg(app.theme.ui.search_fg)
+        app.theme.ui.search_match_style()
     } else {
         Style::default()
     };
@@ -1618,9 +1616,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let char_start = line_no_nl[..m.byte_start as usize].chars().count();
             let char_end = line_no_nl[..m.byte_end as usize].chars().count();
             let text_x = area.x + sign_w + num_gw + fold_w;
-            let highlight_style = Style::default()
-                .bg(app.theme.ui.search_bg)
-                .fg(app.theme.ui.search_fg)
+            let highlight_style = app
+                .theme
+                .ui
+                .search_match_style()
                 .add_modifier(Modifier::REVERSED);
             let buf = frame.buffer_mut();
             for ch_idx in char_start..char_end {

@@ -181,6 +181,18 @@ impl UiTheme {
             hop_label_bg: parse_hex(&raw.hop.label_bg)?,
         })
     }
+
+    /// THE style painted over search-pattern matches — hlsearch in a normal
+    /// buffer (`render::buffer_pane`'s `search_bg`), the substitute-confirm
+    /// current-match flash, and the quickfix dock's match overlay all read
+    /// this one accessor so a "search match" always looks the same
+    /// everywhere. Both bg AND fg are set, which is what lets the style WIN
+    /// over syntax highlighting when patched/layered on top of it.
+    pub fn search_match_style(&self) -> ratatui::style::Style {
+        ratatui::style::Style::default()
+            .bg(self.search_bg)
+            .fg(self.search_fg)
+    }
 }
 
 #[derive(Deserialize)]

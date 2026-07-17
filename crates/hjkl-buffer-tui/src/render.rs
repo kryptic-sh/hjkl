@@ -1035,14 +1035,20 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// Run the active search regex against `line` and return the
     /// charwise `(start_col, end_col_exclusive)` ranges that need
     /// the search bg painted. Empty when no pattern is set.
+    ///
+    /// Match scanning is the shared [`hjkl_buffer::search_match_ranges`]
+    /// (byte ranges — the same helper the engine's `SearchState` cache and
+    /// the app's quickfix-dock overlay use); only the byte→char-column
+    /// conversion for cell painting is local.
     fn row_search_ranges(&self, line: &str) -> Vec<(usize, usize)> {
         let Some(re) = self.search_pattern else {
             return Vec::new();
         };
-        re.find_iter(line)
-            .map(|m| {
-                let start = line[..m.start()].chars().count();
-                let end = line[..m.end()].chars().count();
+        hjkl_buffer::search_match_ranges(re, line)
+            .into_iter()
+            .map(|(s, e)| {
+                let start = line[..s].chars().count();
+                let end = line[..e].chars().count();
                 (start, end)
             })
             .collect()
