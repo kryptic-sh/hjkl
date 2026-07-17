@@ -2249,6 +2249,84 @@ fn scroll_left_then_right_roundtrip() {
     assert_eq!(e.host().viewport().top_col, 7);
 }
 
+// ── B12: zh/zl/zH/zL horizontal scroll (`z<x>` chord) ──────────────────────
+//
+// Scroll state (`top_col`) isn't oracle-comparable (the compat-oracle harness
+// forces a fixed viewport height/width for the nvim side), so these are
+// pinned as unit tests instead, each amount verified against a real nvim
+// probe: `nvim --headless -u NONE -S <script>` driving `normal! zl` / `5zl`
+// / `zh` / `5zh` / `zL` / `zH` over a 200-char line with `columns=40` (so
+// `winwidth(0) == 40`) and reading `winsaveview()["leftcol"]` back — see the
+// round-2b PR description for the exact probe script. `winwidth=40` means
+// `zH`/`zL` (half a screenwidth, `:h zH`) move by 20.
+
+#[test]
+fn zl_scrolls_right_by_count_columns() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.after_z('l', 1);
+    assert_eq!(e.host().viewport().top_col, 1);
+    e.after_z('l', 5);
+    assert_eq!(e.host().viewport().top_col, 6);
+}
+
+#[test]
+fn zh_scrolls_left_by_count_columns() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.scroll_right(10);
+    e.after_z('h', 1);
+    assert_eq!(e.host().viewport().top_col, 9);
+    e.after_z('h', 5);
+    assert_eq!(e.host().viewport().top_col, 4);
+}
+
+#[test]
+fn zh_does_not_underflow_past_zero() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.after_z('h', 1);
+    assert_eq!(e.host().viewport().top_col, 0);
+    e.after_z('h', 3);
+    assert_eq!(e.host().viewport().top_col, 0);
+}
+
+#[test]
+fn z_capital_h_scrolls_left_by_half_screenwidth() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.scroll_right(30);
+    e.after_z('H', 1);
+    assert_eq!(e.host().viewport().top_col, 10); // 30 - 40/2
+}
+
+#[test]
+fn z_capital_l_scrolls_right_by_half_screenwidth() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.after_z('L', 1);
+    assert_eq!(e.host().viewport().top_col, 20); // 0 + 40/2
+}
+
+#[test]
+fn zl_is_noop_when_wrap_is_on() {
+    let mut e = fresh_editor(&"x".repeat(200));
+    e.set_viewport_height(10);
+    e.host_mut().viewport_mut().width = 40;
+    e.host_mut().viewport_mut().wrap = hjkl_buffer::Wrap::Char;
+    e.after_z('l', 5);
+    assert_eq!(
+        e.host().viewport().top_col,
+        0,
+        "zl must not scroll when 'wrap' is on — vim only scrolls horizontally with nowrap"
+    );
+}
+
 // ── Search ───────────────────────────────────────────────────────────────
 
 #[test]

@@ -518,6 +518,23 @@ pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
             ed.set_viewport_pinned(true);
             ed.set_scroll_anim_hint(true);
         }
+        // B12: `zh`/`zl` scroll the viewport horizontally by `count`
+        // columns; `zH`/`zL` by half a screenwidth (`:h zH`/`zL`). Vim
+        // only scrolls horizontally when 'wrap' is off — with wrap on
+        // there's nothing to scroll, so these are a no-op (verified
+        // against nvim: `zl` with `wrap` set leaves `leftcol` untouched).
+        'h' | 'l' | 'H' | 'L' if ed.host().viewport().wrap == hjkl_buffer::Wrap::None => {
+            let width = ed.host().viewport().width as i16;
+            let cols = match ch {
+                'h' | 'l' => count.max(1) as i16,
+                _ => width / 2,
+            };
+            match ch {
+                'h' | 'H' => ed.scroll_left(cols),
+                _ => ed.scroll_right(cols),
+            }
+        }
+        'h' | 'l' | 'H' | 'L' => {}
         // Folds — operate on the fold under the cursor (or the
         // whole buffer for `R` / `M`). Routed through
         // [`Editor::apply_fold_op`] (0.0.38 Patch C-δ.4) so the host
