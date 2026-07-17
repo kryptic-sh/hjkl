@@ -411,7 +411,11 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
-    // `z` prefix (zz / zt / zb — cursor-relative viewport scrolls).
+    // `z` prefix (zz / zt / zb / zh / zl / zH / zL — cursor-relative
+    // viewport scrolls). B13: re-arm the count the digit-accumulation
+    // above already consumed via `take_count()` (line ~126) so
+    // `handle_after_z`'s own `take_count()` sees `[count]` instead of the
+    // default 1 — mirrors the sibling `g` prefix handler just above.
     if !input.ctrl
         && input.key == Key::Char('z')
         && matches!(
@@ -419,6 +423,7 @@ pub fn step_normal<H: Host>(
             FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
         )
     {
+        ed.set_count(count);
         ed.set_pending(Pending::Z);
         return true;
     }

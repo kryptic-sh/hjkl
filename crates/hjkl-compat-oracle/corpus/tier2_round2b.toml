@@ -304,6 +304,41 @@ expected_mode = "normal"
 # artifact, not a product bug — pinned instead as unit tests in
 # `crates/hjkl-vim/tests/paragraph_blank_run.rs`, each verified against nvim.
 
+# ─── B13 — {count}zt/zz/zb honor count (cursor part; scroll isn't oracle-able) ─
+
+# `5zt` moves the cursor to line 5, PRESERVING the current column
+# (clamped, not resetting to first non-blank) — verified against nvim.
+[[cases]]
+name = "b13_counted_zt_moves_cursor_preserves_column"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+initial_cursor = [0, 3]
+keys = "5zt"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+expected_cursor = [4, 3]
+expected_mode = "normal"
+
+# `5zt` clamps the preserved column to the target line's length when it's
+# shorter than the current column.
+[[cases]]
+name = "b13_counted_zt_clamps_column_to_line_length"
+initial_buffer = "aaaaaaaaaa\nbb\nccc\ndddd\ne\nffffff\n"
+initial_cursor = [0, 7]
+keys = "5zt"
+expected_buffer = "aaaaaaaaaa\nbb\nccc\ndddd\ne\nffffff\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+
+# Bare `zt` (no count) does NOT move the cursor at all — only `[count]zt`
+# does.
+[[cases]]
+name = "b13_bare_zt_does_not_move_cursor"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+initial_cursor = [2, 2]
+keys = "zt"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+expected_cursor = [2, 2]
+expected_mode = "normal"
+
 # `dap` on a blank run touching EOF (no paragraph AFTER it to consume) is a
 # no-op — verified against nvim: the buffer is left completely unchanged.
 [[cases]]

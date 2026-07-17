@@ -12,7 +12,9 @@ use hjkl_engine::input::{Input, Key};
 use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_row_count, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{
+    buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
+};
 
 /// Public(crate) entry: apply operator over the motion identified by a raw
 /// char key. Called by `Editor::apply_op_motion` (the public controller API)
@@ -503,18 +505,37 @@ pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
     use hjkl_engine::CursorScrollTarget;
     let row = ed.cursor().0;
     match ch {
-        'z' => {
-            ed.scroll_cursor_to(CursorScrollTarget::Center);
-            ed.set_viewport_pinned(true);
-            ed.set_scroll_anim_hint(true);
-        }
-        't' => {
-            ed.scroll_cursor_to(CursorScrollTarget::Top);
-            ed.set_viewport_pinned(true);
-            ed.set_scroll_anim_hint(true);
-        }
-        'b' => {
-            ed.scroll_cursor_to(CursorScrollTarget::Bottom);
+        'z' | 't' | 'b' => {
+            // B13: `[count]zt`/`zz`/`zb` move the cursor to line `[count]`
+            // FIRST — keeping the current column, clamped to the target
+            // line's length, NOT resetting to the first non-blank — THEN
+            // scroll (`:h zt`: "cursor line [count] used instead of the
+            // cursor line"). `count > 1` is this codebase's established
+            // convention for "an explicit count was given" (mirrors
+            // `Motion::FileBottom`'s handling of `G` vs `NG`); bare
+            // `z<x>` (count <= 1) leaves the cursor alone. Verified
+            // against nvim: `8zt` at column 5 lands on line 8 at column 5
+            // (clamped), while bare `zt` doesn't move the cursor at all.
+            if count > 1 {
+                let total = buf_row_count(ed.buffer());
+                let target_row = (count - 1).min(total.saturating_sub(1));
+                ed.buffer_mut().reveal_row(target_row);
+                let cur_col = ed.cursor().1;
+                let line_chars = buf_line_chars(ed.buffer(), target_row);
+                let new_col = if line_chars == 0 {
+                    0
+                } else {
+                    cur_col.min(line_chars - 1)
+                };
+                buf_set_cursor_rc(ed.buffer_mut(), target_row, new_col);
+                ed.push_buffer_cursor_to_textarea();
+            }
+            let target = match ch {
+                'z' => CursorScrollTarget::Center,
+                't' => CursorScrollTarget::Top,
+                _ => CursorScrollTarget::Bottom,
+            };
+            ed.scroll_cursor_to(target);
             ed.set_viewport_pinned(true);
             ed.set_scroll_anim_hint(true);
         }
