@@ -1,0 +1,34 @@
+# Round 2b hardening pass — pinning cases for verified vim-compat bugs.
+#
+# Live nvim compare (each case's expected_buffer/expected_cursor is also
+# sanity-checked against a live nvim by the oracle harness itself).
+
+# ─── B11 — `x` at EOL leaves cursor past end ──────────────────────────────────
+
+# `$x` on "foobar": deletes the last char, cursor clamps to the new last
+# column (not one past it).
+[[cases]]
+name = "b11_x_at_eol_clamps_cursor"
+initial_buffer = "foobar\n"
+initial_cursor = [0, 0]
+keys = "$x"
+expected_buffer = "fooba\n"
+expected_cursor = [0, 4]
+
+# `x` on a single-char line deletes it and clamps to col 0.
+[[cases]]
+name = "b11_x_single_char_line_clamps_to_zero"
+initial_buffer = "a\n"
+initial_cursor = [0, 0]
+keys = "x"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+
+# Counted `3x` hitting EOL deletes through the end and clamps.
+[[cases]]
+name = "b11_counted_x_hits_eol_clamps"
+initial_buffer = "abcde\n"
+initial_cursor = [0, 3]
+keys = "3x"
+expected_buffer = "abc\n"
+expected_cursor = [0, 2]

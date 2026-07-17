@@ -925,6 +925,13 @@ async fn tier2_sentence_corpus_passes() {
     run_corpus("corpus/tier2_sentence.toml").await;
 }
 
+/// Round 2b hardening pass — B11/B12/B13/B16/B19/B20/B21 + insert C-a/C-e/C-y
+/// (B1), insert C-w/C-u (B2/B3), and linewise case-op blank-line (B10).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round2b_corpus_passes() {
+    run_corpus("corpus/tier2_round2b.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

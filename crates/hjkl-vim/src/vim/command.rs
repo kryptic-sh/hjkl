@@ -204,6 +204,13 @@ pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
         let target = vim_mut(ed).pending_register.take();
         ed.record_delete(deleted, false, target);
     }
+    // B11: `x` deleting the last char(s) of a line can leave the cursor one
+    // past the new end — vim clamps to the new last column in Normal mode.
+    let cursor = buf_cursor_pos(ed.buffer());
+    let line_chars = buf_line_chars(ed.buffer(), cursor.row);
+    if line_chars > 0 && cursor.col >= line_chars {
+        buf_set_cursor_pos(ed.buffer_mut(), Position::new(cursor.row, line_chars - 1));
+    }
     ed.push_buffer_cursor_to_textarea();
 }
 /// Vim `Ctrl-a` / `Ctrl-x` — find the next number at or after the cursor on the
