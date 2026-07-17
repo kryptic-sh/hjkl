@@ -16,8 +16,10 @@
 //! falls straight through to the engine.
 
 use hjkl_buffer::rope_line_str;
+use hjkl_engine_tui::{EditorRatatuiExt, style_to_ratatui};
 use hjkl_ex::QfCommand;
 use hjkl_quickfix::{QfEntry, QfKind, QfList};
+use ratatui::style::Style as RStyle;
 
 use crate::app::types::DiagSeverity;
 
@@ -265,15 +267,105 @@ impl crate::app::App {
         else {
             return;
         };
-        let text = qf_format_list(self.qf_list(w));
+
+        let layouts = qf_row_layouts(self.qf_list(w));
+        let text = layouts
+            .iter()
+            .map(|r| r.line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Computed BEFORE the content mutation below: highlighting reads
+        // `self.directory` / `self.preview_highlighters` / `self.theme`
+        // (immutable), not the slot being rebuilt.
+        let spans = self.qf_dock_spans(self.qf_list(w).entries(), &layouts);
+
         self.slots[slot_idx].set_content(&text);
         let _ = self.slots[slot_idx].take_content_edits();
         let _ = self.slots[slot_idx].take_content_reset();
+
+        // Direct install into the dock's one window — no worker pipeline
+        // can race this: `recompute_and_install` only ever touches the
+        // FOCUSED slot, and every qf/loclist dock slot is created with
+        // `features.syntax = false` (see `new_qf_dock_slot`), so even a
+        // focused dock short-circuits there before it would install
+        // anything. See the module doc for the full argument.
+        if let Some(editor) = self.window_editors.get_mut(&win_id) {
+            editor.install_ratatui_syntax_spans(spans);
+        }
 
         let cursor_row = self.qf_list(w).cursor();
         if let Some(editor) = self.window_editors.get_mut(&win_id) {
             editor.jump_cursor(cursor_row, 0);
         }
+    }
+
+    /// Build the dock's per-row ratatui-styled spans (#63 quickfix-dock
+    /// highlight upgrade): the location column's `path` part in one theme
+    /// color, its `:line:col` suffix (plus alignment padding) in a dimmer
+    /// one, the `│` separator in the border color, and — budget permitting
+    /// — the target file's OWN syntax highlighting laid over the
+    /// message/code column, shifted by that column's byte offset.
+    ///
+    /// Reuses [`Self::preview_spans_for`] — the exact function the picker
+    /// preview pane already calls per visible line — so the language
+    /// grammar is resolved from each entry's path the same way file
+    /// previews do, and the underlying per-language `Highlighter` cache
+    /// (`self.preview_highlighters`, keyed by grammar name) is shared
+    /// across every entry in this rebuild AND across every other preview
+    /// call this session: entries in the same language reuse one already-
+    /// warm parser instead of constructing one per line.
+    ///
+    /// Only the first [`QF_HIGHLIGHT_BUDGET`] entries get code-column
+    /// syntax spans — see its doc for why. Location-column spans (path /
+    /// suffix / separator) are O(1) string-slicing per row, not a parse,
+    /// so they're applied to every row regardless of the budget: entries
+    /// past the cap still render the fully formatted, aligned line, just
+    /// without highlighting on the message text.
+    fn qf_dock_spans(
+        &self,
+        entries: &[QfEntry],
+        layouts: &[QfRowLayout],
+    ) -> Vec<Vec<(usize, usize, RStyle)>> {
+        let path_style = RStyle::default().fg(self.theme.ui.text);
+        let loc_style = RStyle::default().fg(self.theme.ui.non_text);
+        let sep_style = RStyle::default().fg(self.theme.ui.border);
+
+        entries
+            .iter()
+            .zip(layouts.iter())
+            .enumerate()
+            .map(|(i, (entry, layout))| {
+                let mut spans: Vec<(usize, usize, RStyle)> = Vec::with_capacity(4);
+                if layout.path_end > 0 {
+                    spans.push((0, layout.path_end, path_style));
+                }
+                if layout.loc_col_end > layout.path_end {
+                    spans.push((layout.path_end, layout.loc_col_end, loc_style));
+                }
+                let sep_end = layout.loc_col_end + QF_COL_SEP.len();
+                spans.push((layout.loc_col_end, sep_end, sep_style));
+
+                if i < QF_HIGHLIGHT_BUDGET && !entry.message.is_empty() {
+                    let preview = self.preview_spans_for(&entry.path, entry.message.as_bytes());
+                    if let Some(row0) = preview.by_row.first() {
+                        for span in row0 {
+                            let style = preview
+                                .styles
+                                .get(span.style as usize)
+                                .copied()
+                                .map(style_to_ratatui)
+                                .unwrap_or_default();
+                            spans.push((
+                                layout.code_col_start + span.start_byte,
+                                layout.code_col_start + span.end_byte,
+                                style,
+                            ));
+                        }
+                    }
+                }
+                spans
+            })
+            .collect()
     }
 
     /// If the bottom dock is currently showing list `w`, rebuild its buffer
@@ -915,11 +1007,54 @@ impl crate::app::App {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-/// Render list `list`'s entries into the bottom dock's buffer text, one line
-/// per entry: `path │ row:col │ message` with the path column padded and the
-/// `row:col` column right-aligned across the whole list, so the three columns
-/// line up vertically. Row/col are rendered 1-based (`QfEntry::row`/`col` are
-/// stored 0-based, see the doc on [`hjkl_quickfix::QfEntry`]).
+/// Separator glyph between the merged `path:line:col` location column and
+/// the message/code column. A single space pads each side (` │ `); both are
+/// plain ASCII, so its BYTE length equals its char length — no char/byte
+/// conversion needed at any span-offset call site below.
+const QF_COL_SEP: &str = " │ ";
+
+/// Highlight at most this many entries' message text per dock rebuild
+/// (`qf_dock_spans`'s code-column syntax pass).
+///
+/// Each entry's syntax parse is cheap in isolation (a single short message
+/// line through an already-warm, per-language `Highlighter` — see
+/// [`App::qf_dock_spans`]'s doc), but list length is unbounded: a
+/// project-wide `:grep`/`:make` can produce tens of thousands of hits. This
+/// cap bounds worst-case rebuild cost to a fixed number of short parses
+/// regardless of list size, so `:copen`/`:cnext`/`:colder`/... on a huge
+/// list can never turn into a multi-second stall. Entries past the cap
+/// still render the fully formatted, aligned `path:line:col │ message`
+/// line — just without syntax color on the message text; the location
+/// column's own coloring (path / suffix / separator) is O(1) per row and is
+/// NOT capped (see `qf_dock_spans`).
+const QF_HIGHLIGHT_BUDGET: usize = 1000;
+
+/// One dock buffer row's rendered text plus the byte offsets
+/// [`App::qf_dock_spans`] needs to lay styled spans over it. Computed once
+/// per rebuild by [`qf_row_layouts`] and shared by both the plain-text
+/// formatter and the span builder so the two can never drift out of
+/// alignment with each other.
+struct QfRowLayout {
+    /// The full rendered line: `{loc_padded}{QF_COL_SEP}{message}`.
+    line: String,
+    /// Byte offset where the `path` part of the location column ends
+    /// (`[0, path_end)` is the path).
+    path_end: usize,
+    /// Byte offset where the location column (path + `:line:col` +
+    /// alignment padding) ends — `[path_end, loc_col_end)` is the
+    /// `:line:col` suffix plus any trailing pad spaces.
+    loc_col_end: usize,
+    /// Byte offset where the message/code column starts, i.e. right after
+    /// `QF_COL_SEP`.
+    code_col_start: usize,
+}
+
+/// Compute one [`QfRowLayout`] per entry in `list`: merge each entry's
+/// location into a single `path:line:col` column (colon-joined, the
+/// grep/compiler convention), padded so the message/code column aligns
+/// vertically across the whole list. Row/col are rendered 1-based
+/// (`QfEntry::row`/`col` are stored 0-based, see the doc on
+/// [`hjkl_quickfix::QfEntry`]).
 ///
 /// DELIBERATE deviation from vim: real vim's quickfix window is the jagged,
 /// unaligned `path|lnum col N| text`. Alignment is a pure presentation
@@ -927,10 +1062,10 @@ impl crate::app::App {
 /// so the text format carries no parsing responsibility.
 ///
 /// Entries with an empty path (current-buffer entries, e.g. from `:cexpr`
-/// with no `%f`) render as `[No Name]` so every line stays non-ambiguous and
-/// non-empty.
-fn qf_format_list(list: &QfList) -> String {
-    let cols: Vec<(String, String)> = list
+/// with no `%f`) render as `[No Name]:line:col` so every line stays
+/// non-ambiguous and non-empty.
+fn qf_row_layouts(list: &QfList) -> Vec<QfRowLayout> {
+    let locs: Vec<(String, String)> = list
         .entries()
         .iter()
         .map(|e| {
@@ -939,30 +1074,47 @@ fn qf_format_list(list: &QfList) -> String {
             } else {
                 e.path.display().to_string()
             };
-            (path, format!("{}:{}", e.row + 1, e.col + 1))
+            let loc = format!("{path}:{}:{}", e.row + 1, e.col + 1);
+            (path, loc)
         })
         .collect();
-    // Char counts, not byte lengths — paths can carry non-ASCII.
-    let path_w = cols
-        .iter()
-        .map(|(p, _)| p.chars().count())
-        .max()
-        .unwrap_or(0);
-    let loc_w = cols
+    // Char counts, not byte lengths, for the padding WIDTH — paths can
+    // carry non-ASCII and the column must align visually. The padding
+    // itself is always plain ASCII spaces, so once its char count is
+    // decided its byte length is identical (see `QF_COL_SEP`'s doc).
+    let loc_w = locs
         .iter()
         .map(|(_, l)| l.chars().count())
         .max()
         .unwrap_or(0);
-    cols.iter()
+    locs.iter()
         .zip(list.entries())
         .map(|((path, loc), e)| {
-            let path_pad = path_w.saturating_sub(path.chars().count());
-            let loc_pad = loc_w.saturating_sub(loc.chars().count());
-            format!(
-                "{path}{:path_pad$} │ {:loc_pad$}{loc} │ {}",
-                "", "", e.message
-            )
+            let pad = loc_w.saturating_sub(loc.chars().count());
+            let loc_padded = format!("{loc}{:pad$}", "");
+            let path_end = path.len();
+            let loc_col_end = loc_padded.len();
+            let code_col_start = loc_col_end + QF_COL_SEP.len();
+            let line = format!("{loc_padded}{QF_COL_SEP}{}", e.message);
+            QfRowLayout {
+                line,
+                path_end,
+                loc_col_end,
+                code_col_start,
+            }
         })
+        .collect()
+}
+
+/// Render list `list`'s entries into the bottom dock's buffer text, one line
+/// per entry — see [`qf_row_layouts`] for the format. Plain-text-only
+/// convenience wrapper around it (used directly by unit tests that only
+/// care about the rendered text, not the span layout).
+#[cfg(test)]
+fn qf_format_list(list: &QfList) -> String {
+    qf_row_layouts(list)
+        .into_iter()
+        .map(|r| r.line)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1017,7 +1169,10 @@ fn parse_expr_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_make_argv;
+    use super::{QF_HIGHLIGHT_BUDGET, resolve_make_argv};
+    use crate::app::App;
+    use hjkl_quickfix::{QfEntry, QfKind, QfList};
+    use std::path::PathBuf;
 
     #[test]
     fn make_argv_appends_extra_after_makeprg() {
@@ -1039,5 +1194,123 @@ mod tests {
         // With an empty makeprg, extra must NOT be promoted to the program.
         assert!(resolve_make_argv("", "/tmp/evil").is_none());
         assert!(resolve_make_argv("   ", "evilprog arg").is_none());
+    }
+
+    fn entry(path: &str, row: usize, col: usize, message: &str) -> QfEntry {
+        QfEntry {
+            path: PathBuf::from(path),
+            row,
+            col,
+            kind: QfKind::Grep,
+            message: message.to_string(),
+        }
+    }
+
+    // ── format alignment ────────────────────────────────────────────────
+
+    /// Two entries with different-width `path:line:col` columns must still
+    /// have their `│` separator land at the SAME char index on both lines —
+    /// the whole point of merging + padding the location column.
+    #[test]
+    fn qf_format_list_aligns_code_column_with_mixed_path_widths() {
+        let mut list = QfList::new();
+        list.set(vec![
+            entry("a.rs", 0, 0, "short"),
+            entry("a_much_longer_path/name.rs", 11, 33, "longer one"),
+        ]);
+        let text = super::qf_format_list(&list);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "a.rs:1:1                         │ short");
+        assert_eq!(lines[1], "a_much_longer_path/name.rs:12:34 │ longer one");
+        let sep0 = lines[0].find('│').expect("line 0 has a separator");
+        let sep1 = lines[1].find('│').expect("line 1 has a separator");
+        assert_eq!(
+            sep0, sep1,
+            "the │ must sit at the same byte/char index on both lines \
+             (content here is pure ASCII so byte index == char index)"
+        );
+    }
+
+    // ── span layout ─────────────────────────────────────────────────────
+
+    /// The path part of the location column must be styled differently from
+    /// its `:line:col` suffix, and the boundary between the two spans must
+    /// land EXACTLY at the path/colon transition (not one byte off, which
+    /// would bleed the wrong color onto `:` or the last path char).
+    ///
+    /// Uses an unrecognised extension (`.qf-test-unknown-ext`) so grammar
+    /// resolution deterministically returns `GrammarRequest::Unknown`
+    /// (a synchronous, network-free registry lookup) — this test is about
+    /// the location-column span geometry, not code highlighting, so it must
+    /// not depend on any grammar being installed/loadable in the test
+    /// environment.
+    #[test]
+    fn qf_dock_spans_styles_path_and_loc_suffix_separately() {
+        let app = App::new(None, false, None, None).unwrap();
+        let entries = vec![entry(
+            "src/main.qf-test-unknown-ext",
+            4,
+            7,
+            "unused variable",
+        )];
+        let layouts = super::qf_row_layouts(&{
+            let mut l = QfList::new();
+            l.set(entries.clone());
+            l
+        });
+        let spans = app.qf_dock_spans(&entries, &layouts);
+        assert_eq!(spans.len(), 1);
+        let row = &spans[0];
+        // path span + loc-suffix span + separator span; no code span (the
+        // extension is unrecognised, so highlighting yields nothing).
+        assert_eq!(row.len(), 3, "expected exactly 3 format spans, got {row:?}");
+
+        let path_len = "src/main.qf-test-unknown-ext".len();
+        let (p_start, p_end, p_style) = row[0];
+        assert_eq!((p_start, p_end), (0, path_len), "path span boundaries");
+        assert_eq!(p_style.fg, Some(app.theme.ui.text));
+
+        let (l_start, l_end, l_style) = row[1];
+        assert_eq!(
+            l_start, path_len,
+            "loc-suffix span must start EXACTLY where the path span ends"
+        );
+        assert!(l_end > l_start);
+        assert_eq!(l_style.fg, Some(app.theme.ui.non_text));
+
+        let (s_start, s_end, s_style) = row[2];
+        assert_eq!(s_start, l_end, "separator span must start where loc ends");
+        assert_eq!(s_end - s_start, super::QF_COL_SEP.len());
+        assert_eq!(s_style.fg, Some(app.theme.ui.border));
+    }
+
+    // ── budget cap ──────────────────────────────────────────────────────
+
+    /// A list longer than [`QF_HIGHLIGHT_BUDGET`] must not panic, must
+    /// format every entry, and entries past the cap must carry ONLY the
+    /// format spans (path/loc/separator) — no attempt at code-column
+    /// highlighting beyond the budget.
+    #[test]
+    fn qf_dock_spans_caps_highlighting_beyond_budget() {
+        let app = App::new(None, false, None, None).unwrap();
+        let n = QF_HIGHLIGHT_BUDGET + 5;
+        let entries: Vec<QfEntry> = (0..n)
+            .map(|i| entry("f.qf-test-unknown-ext", i, 0, "some message"))
+            .collect();
+        let mut list = QfList::new();
+        list.set(entries.clone());
+        let layouts = super::qf_row_layouts(&list);
+
+        let spans = app.qf_dock_spans(&entries, &layouts);
+        assert_eq!(spans.len(), n, "every entry must still get a row, no panic");
+
+        for (i, row) in spans.iter().enumerate().skip(QF_HIGHLIGHT_BUDGET) {
+            assert_eq!(
+                row.len(),
+                3,
+                "entry {i} is past the budget — must be format-only spans"
+            );
+        }
     }
 }
