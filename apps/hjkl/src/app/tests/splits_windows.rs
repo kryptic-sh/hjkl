@@ -1695,3 +1695,188 @@ fn dock_resize_clamps_to_minimum_width() {
         "width must clamp at the minimum rather than going to 0 or negative"
     );
 }
+
+// ── Bottom dock (#63 Phase B: quickfix/location-list as a real dock) ──────
+//
+// The bottom dock reuses the exact same global-dock mechanism as the left
+// explorer dock (see `app/dock.rs`), so these tests mirror the `dock_*`
+// tests above one-for-one, just against `app.bottom_dock` / `:copen`.
+
+/// Open the bottom dock with one quickfix entry, no real files needed since
+/// these tests never jump.
+fn open_bottom_dock(app: &mut App) -> window::WindowId {
+    app.quickfix.set(vec![hjkl_quickfix::QfEntry {
+        path: std::path::PathBuf::from("x.rs"),
+        row: 0,
+        col: 0,
+        kind: hjkl_quickfix::QfKind::Grep,
+        message: "hit".into(),
+    }]);
+    app.handle_quickfix_command(hjkl_ex::QfCommand::Open);
+    app.bottom_dock
+        .as_ref()
+        .expect("bottom dock must be open")
+        .win_id
+}
+
+#[test]
+fn bottom_dock_excluded_from_equalize_and_swap() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp"); // 2 tree windows
+    let dock_win = open_bottom_dock(&mut app);
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        ":copen focuses the new dock window"
+    );
+
+    app.dispatch_action(AppAction::EqualizeLayout, 1);
+    assert!(
+        app.bottom_dock.is_some(),
+        "equalize must not close the dock"
+    );
+    assert_eq!(app.layout().leaves().len(), 2);
+
+    app.dispatch_action(AppAction::SwapWithSibling, 1);
+    assert!(app.bottom_dock.is_some());
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "swap must not move focus off the dock"
+    );
+}
+
+#[test]
+fn only_focused_window_on_bottom_dock_is_a_noop() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    app.dispatch_ex("sp");
+    let leaves_before = app.layout().leaves().len();
+    open_bottom_dock(&mut app);
+
+    app.dispatch_action(AppAction::OnlyFocusedWindow, 1);
+
+    assert!(app.bottom_dock.is_some(), "only must leave the dock open");
+    assert_eq!(app.layout().leaves().len(), leaves_before);
+}
+
+#[test]
+fn close_focused_window_on_bottom_dock_closes_the_dock_not_the_tree() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let tree_leaves_before = app.layout().leaves().len();
+    open_bottom_dock(&mut app);
+
+    app.dispatch_action(AppAction::CloseFocusedWindow, 1);
+
+    assert!(
+        app.bottom_dock.is_none(),
+        "CloseFocusedWindow on the bottom dock must close the dock"
+    );
+    assert_eq!(app.layout().leaves().len(), tree_leaves_before);
+}
+
+#[test]
+fn ctrl_w_j_k_crosses_frame_boundary_with_bottom_dock_open() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let regular_win = app.focused_window();
+    let dock_win = open_bottom_dock(&mut app);
+    assert_eq!(app.focused_window(), dock_win);
+
+    // C-w k: leave the dock, land back in the main area.
+    app.focus_above();
+    assert_eq!(
+        app.focused_window(),
+        regular_win,
+        "C-w k from the bottom dock must land in the main area"
+    );
+
+    // C-w j: re-enter the dock (no tree neighbour below the only window).
+    app.focus_below();
+    assert_eq!(
+        app.focused_window(),
+        dock_win,
+        "C-w j from the bottommost tree window must focus the bottom dock"
+    );
+
+    // C-w j again: already at the dock, nothing further below — no-op.
+    app.focus_below();
+    assert_eq!(app.focused_window(), dock_win);
+}
+
+/// Per the approved frame diagram: the bottom dock spans only the MAIN
+/// AREA's width, below the tree — NOT below the left dock too. So `<C-w>j`
+/// from the explorer must NOT reach it; `<C-w>l` from the explorer re-enters
+/// the main area as usual (#63 Phase A behaviour, unaffected by Phase B).
+#[test]
+fn ctrl_w_j_from_explorer_does_not_reach_bottom_dock() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let regular_win = app.focused_window();
+    open_bottom_dock(&mut app);
+    // Re-focus the regular window, then open the explorer too.
+    app.set_focused_window(regular_win);
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let explorer_win = app.left_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), explorer_win);
+
+    app.focus_below();
+    assert_eq!(
+        app.focused_window(),
+        explorer_win,
+        "C-w j from the explorer must NOT reach the bottom dock"
+    );
+
+    app.focus_right();
+    assert_eq!(
+        app.focused_window(),
+        regular_win,
+        "C-w l from the explorer must enter the main area"
+    );
+}
+
+#[test]
+fn bottom_dock_resize_ctrl_w_plus_persists_height_to_config_file() {
+    use crate::keymap_actions::AppAction;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+    // Simulate a rendered frame (as the real binary always has by the time a
+    // user can press a key) — otherwise `resize_dock_height_by`'s terminal-
+    // height fallback (24) clamps at half (12), which coincidentally equals
+    // the bundled default `panel.height`, leaving zero headroom to grow.
+    app.last_frame_rect = Some(ratatui::layout::Rect::new(0, 0, 80, 40));
+    open_bottom_dock(&mut app);
+    let before = app.config.panel.height;
+
+    app.dispatch_action(AppAction::ResizeHeight(2), 1);
+
+    assert_eq!(
+        app.config.panel.height,
+        before + 2,
+        "in-memory height must update immediately"
+    );
+    let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
+    assert!(text.contains("[panel]"));
+    assert!(text.contains(&format!("height = {}", app.config.panel.height)));
+}
+
+#[test]
+fn bottom_dock_resize_clamps_to_minimum_height() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    open_bottom_dock(&mut app);
+
+    app.dispatch_action(AppAction::ResizeHeight(-1000), 1);
+
+    assert_eq!(
+        app.config.panel.height,
+        crate::app::dock::DOCK_MIN_HEIGHT,
+        "height must clamp at the minimum rather than going to 0 or negative"
+    );
+}

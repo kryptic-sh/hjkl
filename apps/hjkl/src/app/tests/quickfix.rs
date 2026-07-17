@@ -17,24 +17,21 @@ fn entry(path: &std::path::Path, row: usize) -> QfEntry {
 
 #[test]
 fn quickfix_popup_nav_and_toggle() {
+    // `:copen` opens the bottom dock (#63 Phase B — no more Clear+List
+    // overlay); `:cclose` closes it. Dock-buffer navigation itself is
+    // covered by the `bottom_dock_*` tests below.
     let mut app = App::new(None, false, None, None).unwrap();
     let p = std::path::PathBuf::from("x.rs");
     app.quickfix
         .set(vec![entry(&p, 0), entry(&p, 1), entry(&p, 2)]);
 
-    // `:copen` shows the popup; popup j/k move the highlight without jumping.
     app.handle_quickfix_command(QfCommand::Open);
-    assert!(app.quickfix_open);
-    app.quickfix_popup_down();
-    assert_eq!(app.quickfix.cursor(), 1);
-    app.quickfix_popup_down();
-    assert_eq!(app.quickfix.cursor(), 2);
-    app.quickfix_popup_up();
-    assert_eq!(app.quickfix.cursor(), 1);
+    assert!(app.quickfix_open());
+    assert!(app.bottom_dock.is_some());
 
-    // `:cclose` hides it.
     app.handle_quickfix_command(QfCommand::Close);
-    assert!(!app.quickfix_open);
+    assert!(!app.quickfix_open());
+    assert!(app.bottom_dock.is_none());
 }
 
 #[cfg(unix)]
@@ -57,7 +54,7 @@ fn quickfix_make_parses_output_into_list() {
     app.handle_quickfix_command(QfCommand::Make(String::new()));
 
     assert_eq!(app.quickfix.len(), 1, ":make should populate the list");
-    assert!(app.quickfix_open, ":make with errors opens the popup");
+    assert!(app.quickfix_open(), ":make with errors opens the popup");
     let e = app.quickfix.current().unwrap();
     assert_eq!((e.row, e.col), (2, 4)); // 0-based
     assert_eq!(e.kind, QfKind::Error);
@@ -71,7 +68,7 @@ fn quickfix_open_empty_does_not_show() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.handle_quickfix_command(QfCommand::Open);
     assert!(
-        !app.quickfix_open,
+        !app.quickfix_open(),
         "empty quickfix list must not open the popup"
     );
 }
@@ -111,17 +108,19 @@ fn loclist_independent_from_quickfix() {
     let p = std::path::PathBuf::from("x.rs");
     app.loclist.set(vec![entry(&p, 0), entry(&p, 1)]);
 
-    // `:lopen` opens the loclist popup, NOT the quickfix popup.
+    // `:lopen` opens the loclist dock, NOT the quickfix dock.
     app.handle_loclist_command(QfCommand::Open);
-    assert!(app.loclist_open);
-    assert!(!app.quickfix_open);
+    assert!(app.loclist_open());
+    assert!(!app.quickfix_open());
 
-    app.loclist_popup_down();
+    // Move the loclist cursor directly (not via `:lnext`, which would also
+    // jump the editor — out of scope for this independence check).
+    app.loclist.next();
     assert_eq!(app.loclist.cursor(), 1);
     assert_eq!(app.quickfix.cursor(), 0, "quickfix list untouched");
 
     app.handle_loclist_command(QfCommand::Close);
-    assert!(!app.loclist_open);
+    assert!(!app.loclist_open());
 }
 
 #[test]
@@ -683,7 +682,10 @@ fn diagnostics_populates_quickfix_from_all_buffers() {
 
     // 3 diags, sorted by (path, row, col): row2/col0, row2/col10, row5/col3.
     assert_eq!(app.quickfix.len(), 3, "quickfix should have 3 entries");
-    assert!(app.quickfix_open, "popup should be open when diags present");
+    assert!(
+        app.quickfix_open(),
+        "popup should be open when diags present"
+    );
 
     let entries = app.quickfix.entries();
     assert_eq!(entries[0].row, 2);
@@ -715,7 +717,7 @@ fn ldiagnostics_uses_current_buffer_only() {
 
     // 2 diags, sorted: row0/col5, row1/col0.
     assert_eq!(app.loclist.len(), 2, "loclist should have 2 entries");
-    assert!(app.loclist_open, "loclist popup should be open");
+    assert!(app.loclist_open(), "loclist popup should be open");
 
     let entries = app.loclist.entries();
     assert_eq!(entries[0].row, 0);
@@ -728,7 +730,7 @@ fn ldiagnostics_uses_current_buffer_only() {
 
     // Quickfix must be untouched.
     assert!(app.quickfix.is_empty(), "quickfix must not be touched");
-    assert!(!app.quickfix_open, "quickfix popup must not be open");
+    assert!(!app.quickfix_open(), "quickfix popup must not be open");
 }
 
 #[test]
@@ -739,7 +741,7 @@ fn diagnostics_empty_no_popup() {
     app.handle_quickfix_command(QfCommand::Diagnostics);
 
     assert!(app.quickfix.is_empty(), "list must remain empty");
-    assert!(!app.quickfix_open, "popup must stay closed when no diags");
+    assert!(!app.quickfix_open(), "popup must stay closed when no diags");
 }
 
 /// `:cwindow` — opens the popup only when the list has entries; closes it
@@ -752,7 +754,7 @@ fn cwindow_opens_on_entries_closes_on_empty() {
     let toasts_before = app.bus.history().count();
     app.handle_quickfix_command(QfCommand::Window);
     assert!(
-        !app.quickfix_open,
+        !app.quickfix_open(),
         ":cwindow on an empty list must not open"
     );
     assert_eq!(
@@ -766,7 +768,7 @@ fn cwindow_opens_on_entries_closes_on_empty() {
     app.quickfix.set(vec![entry(&p, 0)]);
     app.handle_quickfix_command(QfCommand::Window);
     assert!(
-        app.quickfix_open,
+        app.quickfix_open(),
         ":cwindow must open when the list has entries"
     );
 
@@ -774,7 +776,7 @@ fn cwindow_opens_on_entries_closes_on_empty() {
     app.quickfix.set(vec![]);
     app.handle_quickfix_command(QfCommand::Window);
     assert!(
-        !app.quickfix_open,
+        !app.quickfix_open(),
         ":cwindow must close the popup when the list is empty"
     );
 }
@@ -784,14 +786,251 @@ fn cwindow_opens_on_entries_closes_on_empty() {
 fn lwindow_opens_on_entries_closes_on_empty() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.handle_loclist_command(QfCommand::Window);
-    assert!(!app.loclist_open);
+    assert!(!app.loclist_open());
 
     let p = std::path::PathBuf::from("x.rs");
     app.loclist.set(vec![entry(&p, 0)]);
     app.handle_loclist_command(QfCommand::Window);
-    assert!(app.loclist_open);
+    assert!(app.loclist_open());
 
     app.loclist.set(vec![]);
     app.handle_loclist_command(QfCommand::Window);
-    assert!(!app.loclist_open);
+    assert!(!app.loclist_open());
+}
+
+// ── Bottom dock (#63 Phase B): real window/buffer, not a popup ─────────────
+
+/// Build two real temp files and a quickfix list with an entry in each, so
+/// dock tests can exercise real jumps.
+fn make_app_with_qf_files() -> (App, std::path::PathBuf, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let file_a = dir.path().join("a.txt");
+    let file_b = dir.path().join("b.txt");
+    std::fs::write(&file_a, "a-line0\na-line1\na-line2\n").unwrap();
+    std::fs::write(&file_b, "b-line0\nb-line1\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.quickfix.set(vec![
+        QfEntry {
+            path: file_a.clone(),
+            row: 0,
+            col: 0,
+            kind: QfKind::Grep,
+            message: "first hit".into(),
+        },
+        QfEntry {
+            path: file_a.clone(),
+            row: 1,
+            col: 2,
+            kind: QfKind::Grep,
+            message: "second hit".into(),
+        },
+        QfEntry {
+            path: file_b.clone(),
+            row: 0,
+            col: 0,
+            kind: QfKind::Grep,
+            message: "third hit".into(),
+        },
+    ]);
+    (app, file_a, dir)
+}
+
+/// `:copen` creates a bottom-dock window whose buffer has one line per
+/// entry, formatted `path|row col N| message` (1-based row/col), and
+/// focuses it.
+#[test]
+fn copen_creates_bottom_dock_with_matching_buffer_lines() {
+    let (mut app, file_a, _dir) = make_app_with_qf_files();
+
+    app.handle_quickfix_command(QfCommand::Open);
+
+    let dock = app.bottom_dock.as_ref().expect("bottom dock must be open");
+    assert_eq!(dock.kind, crate::app::dock::DockKind::Quickfix);
+    assert_eq!(
+        app.focused_window(),
+        dock.win_id,
+        ":copen must focus the dock"
+    );
+
+    let rope = app.active_editor().buffer().rope();
+    assert_eq!(rope.len_lines(), 3, "one line per entry");
+    let line0 = hjkl_buffer::rope_line_str(&rope, 0);
+    let line1 = hjkl_buffer::rope_line_str(&rope, 1);
+    assert_eq!(
+        line0,
+        format!("{}|1 col 1| first hit", file_a.display()),
+        "row/col must be rendered 1-based"
+    );
+    assert_eq!(line1, format!("{}|2 col 3| second hit", file_a.display()));
+    assert_eq!(
+        app.window_cursor(dock.win_id).0,
+        0,
+        "cursor starts at entry 0"
+    );
+}
+
+/// THE regression test for the user's original complaint: the quickfix dock
+/// is a real buffer, so vim motions (j/k) and operators (yy) work on it —
+/// unlike the old `Clear`+`List` overlay, which only understood j/k/Enter/Esc/q.
+#[test]
+fn dock_j_k_move_a_real_cursor_without_touching_the_list_cursor() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+
+    super::macro_key_seq(&mut app, &[super::ck('j')]);
+    assert_eq!(
+        app.window_cursor(dock_win).0,
+        1,
+        "j must move the dock cursor"
+    );
+    super::macro_key_seq(&mut app, &[super::ck('j')]);
+    assert_eq!(app.window_cursor(dock_win).0, 2);
+    super::macro_key_seq(&mut app, &[super::ck('k')]);
+    assert_eq!(app.window_cursor(dock_win).0, 1);
+
+    // j/k alone must NOT commit to the list's "current entry" pointer —
+    // only `<CR>` (vim's `:cc`-equivalent) does that.
+    assert_eq!(
+        app.quickfix.cursor(),
+        0,
+        "list cursor must stay put until <CR>"
+    );
+}
+
+/// `yy` in the dock yanks the entry line into the unnamed register — the
+/// concrete regression test for "no yank" in the old popup.
+#[test]
+fn dock_yy_yanks_the_entry_line() {
+    let (mut app, file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+
+    super::macro_key_seq(&mut app, &[super::ck('y'), super::ck('y')]);
+
+    let yanked = app
+        .active_editor()
+        .with_registers(|r| r.read('"').map(|s| s.text.clone()))
+        .unwrap_or_default();
+    assert_eq!(
+        yanked.trim_end_matches('\n'),
+        format!("{}|1 col 1| first hit", file_a.display()),
+        "yy must yank the exact rendered entry line, got {yanked:?}"
+    );
+}
+
+/// `<CR>` jumps to the entry under the dock's cursor: commits the dock
+/// cursor row to the list's current-entry pointer, opens the target file,
+/// and moves focus to a REGULAR window — never back into the dock itself.
+#[test]
+fn dock_enter_jumps_to_entry_and_focus_lands_on_a_regular_window() {
+    let (mut app, file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+
+    // Move to entry 1 (a.txt row 1 col 2) and jump.
+    super::macro_key_seq(&mut app, &[super::ck('j')]);
+    super::macro_key_seq(&mut app, &[super::key(crossterm::event::KeyCode::Enter)]);
+
+    assert_eq!(
+        app.quickfix.cursor(),
+        1,
+        "<CR> must commit to the list cursor"
+    );
+    assert_ne!(
+        app.focused_window(),
+        dock_win,
+        "<CR> must move focus OFF the dock"
+    );
+    assert!(
+        app.window_is_regular(app.focused_window()),
+        "the jump target must be a regular window"
+    );
+    assert_eq!(app.active().filename.as_deref(), Some(file_a.as_path()));
+    assert_eq!(app.active_editor().cursor(), (1, 2));
+    assert!(
+        app.bottom_dock.is_some(),
+        "the dock itself must remain open after the jump (vim parity)"
+    );
+}
+
+/// The dock buffer is readonly: `x`, `dd`, and `i...<Esc>` must all be
+/// rejected without changing a single character.
+#[test]
+fn dock_buffer_is_readonly_and_rejects_edits() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let before = app.active_editor().buffer().rope().to_string();
+
+    super::macro_key_seq(&mut app, &[super::ck('x')]);
+    assert_eq!(
+        app.active_editor().buffer().rope().to_string(),
+        before,
+        "x must not delete a character in the readonly dock"
+    );
+
+    super::macro_key_seq(&mut app, &[super::ck('d'), super::ck('d')]);
+    assert_eq!(
+        app.active_editor().buffer().rope().to_string(),
+        before,
+        "dd must not delete a line in the readonly dock"
+    );
+
+    super::macro_key_seq(
+        &mut app,
+        &[
+            super::ck('i'),
+            super::ck('X'),
+            super::key(crossterm::event::KeyCode::Esc),
+        ],
+    );
+    assert_eq!(
+        app.active_editor().buffer().rope().to_string(),
+        before,
+        "insert must not add a character in the readonly dock"
+    );
+}
+
+/// `:cnext` while the dock is open moves the dock's highlighted row to match
+/// the newly-current entry.
+#[test]
+fn cnext_syncs_the_dock_cursor_row() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.window_cursor(dock_win).0, 0);
+
+    app.handle_quickfix_command(QfCommand::Next);
+
+    assert_eq!(app.quickfix.cursor(), 1);
+    assert_eq!(
+        app.window_cursor(dock_win).0,
+        1,
+        ":cnext must move the dock's cursor to the new current entry"
+    );
+}
+
+/// `:lopen` while `:copen`'s dock is showing REUSES the same window/slot and
+/// just retargets which list it displays — vim shows one such window at a
+/// time in practice.
+#[test]
+fn lopen_reuses_the_open_quickfix_dock() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let qf_dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+
+    let p = std::path::PathBuf::from("loc.rs");
+    app.loclist.set(vec![entry(&p, 4)]);
+    app.handle_loclist_command(QfCommand::Open);
+
+    let dock = app.bottom_dock.as_ref().expect("dock must still be open");
+    assert_eq!(dock.win_id, qf_dock_win, "the SAME window/slot is reused");
+    assert_eq!(dock.kind, crate::app::dock::DockKind::Loclist);
+    assert!(!app.quickfix_open());
+    assert!(app.loclist_open());
+
+    let rope = app.active_editor().buffer().rope();
+    assert_eq!(rope.len_lines(), 1, "buffer now shows the loclist's entry");
+    let line0 = hjkl_buffer::rope_line_str(&rope, 0);
+    assert_eq!(line0, "loc.rs|5 col 1| hit at 4");
 }
