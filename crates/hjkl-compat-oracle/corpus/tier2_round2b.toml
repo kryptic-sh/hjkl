@@ -76,3 +76,38 @@ initial_cursor = [0, 0]
 keys = "yw3P"
 expected_buffer = "abc abc abc abc def\n"
 expected_cursor = [0, 11]
+
+# ─── B19 — `*` / `#` from punctuation ─────────────────────────────────────────
+
+# Cursor on the first `.` in "a.b a.b": `*` advances to the next keyword
+# char ("b" at index 2) first, then searches forward for that word —
+# landing on the SECOND "b" (index 6), not deleting the "a" before the dot.
+[[cases]]
+name = "b19_star_from_punctuation"
+initial_buffer = "a.b a.b\n"
+initial_cursor = [0, 1]
+keys = "*x"
+expected_buffer = "a.b a.\n"
+expected_mode = "normal"
+
+# Cursor on a space between words: `*` still advances forward to the next
+# keyword char rather than expanding the (non-existent) word at the cursor.
+[[cases]]
+name = "b19_star_from_whitespace"
+initial_buffer = "a b a b\n"
+initial_cursor = [0, 1]
+keys = "*x"
+expected_buffer = "a b a \n"
+expected_mode = "normal"
+
+# `#` mirrors `*`: it ALSO advances forward to find the word (per `:h
+# star`), then searches BACKWARD for the previous occurrence. Cursor on the
+# second `.` in "a.b a.b": forward-scan finds "b" at index 6, backward
+# search from there lands on the FIRST "b" (index 2).
+[[cases]]
+name = "b19_hash_from_punctuation"
+initial_buffer = "a.b a.b\n"
+initial_cursor = [0, 5]
+keys = "#x"
+expected_buffer = "a. a.b\n"
+expected_mode = "normal"

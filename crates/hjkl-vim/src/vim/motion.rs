@@ -835,8 +835,26 @@ pub(crate) fn word_at_cursor_search<H: hjkl_engine::types::Host>(
     let spec = ed.settings().iskeyword.clone();
     let is_word = |c: char| is_keyword_char(c, &spec);
     let mut start = col.min(chars.len().saturating_sub(1));
-    while start > 0 && is_word(chars[start - 1]) {
-        start -= 1;
+    if is_word(chars[start]) {
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+    } else {
+        // B19: the cursor isn't on a keyword char. `:h star` — both `*`
+        // and `#` advance FORWARD to the next keyword char on this line
+        // before extracting the word; only the SEARCH that follows differs
+        // by direction. Anchor the actual cursor at the found word's start
+        // so the subsequent search-advance call's skip-current logic
+        // treats it as the current match and steps to the true next (or,
+        // for `#`, previous) occurrence — matching nvim, which lands on
+        // the *second* occurrence from punctuation, not the nearest one.
+        while start < chars.len() && !is_word(chars[start]) {
+            start += 1;
+        }
+        if start >= chars.len() {
+            return;
+        }
+        buf_set_cursor_rc(ed.buffer_mut(), row, start);
     }
     let mut end = start;
     while end < chars.len() && is_word(chars[end]) {
