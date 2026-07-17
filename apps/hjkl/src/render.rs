@@ -1904,9 +1904,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // the one place that unconditionally sees the full frame every draw.
     app.last_frame_rect = Some(area);
 
-    // Explorer slots don't count as additional user buffers for the top-bar
-    // visibility decision — otherwise opening the explorer alone would show the bar.
-    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    // Special-pane slots (explorer, bottom qf/loclist dock) don't count as
+    // additional user buffers for the top-bar visibility decision —
+    // otherwise opening the explorer or `:copen` alone would show the bar.
+    let real_slots = (0..app.slots().len())
+        .filter(|&idx| !app.slot_is_special(idx))
+        .count();
     let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
     let (buf_area, status_area, top_bar_area) = {
         // Build constraint list dynamically based on what rows are visible.
@@ -2018,6 +2021,68 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         buf_area
     };
 
+    // Bottom dock (#63 Phase B: quickfix/location-list, real window/buffer —
+    // replaces the old `quickfix_popup_overlay`). Carved from the REMAINDER
+    // after the left dock, so it spans only the main area's width — per the
+    // approved design, `<C-w>j` from the explorer must not reach it (the
+    // bottom dock sits below the tree, to the right of the left dock, not
+    // below the left dock too). Same `render_window` / separator approach as
+    // the left dock, just along the row axis instead of the column axis.
+    let bottom_dock_win = app.bottom_dock.as_ref().map(|d| d.win_id);
+    let main_area = if let Some(dock_win) = bottom_dock_win {
+        let total_h = main_area.height;
+        let dock_h =
+            crate::app::dock::clamp_dock_height(app.config.panel.height, total_h).min(total_h);
+        let (dock_rect, sep_rect, rest) = if dock_h >= 2 && main_area.height > dock_h {
+            let sep = Rect {
+                x: main_area.x,
+                y: main_area.y + main_area.height - dock_h,
+                width: main_area.width,
+                height: 1,
+            };
+            let content = Rect {
+                x: main_area.x,
+                y: sep.y + 1,
+                width: main_area.width,
+                height: dock_h - 1,
+            };
+            let rest = Rect {
+                x: main_area.x,
+                y: main_area.y,
+                width: main_area.width,
+                height: main_area.height - dock_h,
+            };
+            (content, Some(sep), rest)
+        } else {
+            let h = dock_h.min(main_area.height);
+            let content = Rect {
+                x: main_area.x,
+                y: main_area.y + main_area.height - h,
+                width: main_area.width,
+                height: h,
+            };
+            let rest = Rect {
+                x: main_area.x,
+                y: main_area.y,
+                width: main_area.width,
+                height: main_area.height - h,
+            };
+            (content, None, rest)
+        };
+        render_window(frame, app, dock_rect, dock_win);
+        if let Some(sep) = sep_rect {
+            draw_separator(
+                frame,
+                sep,
+                window::SplitDir::Horizontal,
+                app.theme.ui.border,
+            );
+        }
+        rest
+    } else {
+        main_area
+    };
+
     // Walk the window tree and render each pane. Use take_layout /
     // restore_layout so we can pass `&mut LayoutTree` to render_layout
     // (which writes last_rect on Split nodes) while also holding
@@ -2049,10 +2114,9 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         which_key_popup(frame, app, buf_area);
     }
 
-    // Quickfix / location-list popup (`:copen` / `:lopen`, #184) — bottom pane.
-    if app.quickfix_open || app.loclist_open {
-        quickfix_popup_overlay(frame, app, buf_area);
-    }
+    // Quickfix / location-list is now a real bottom-dock window/buffer
+    // (#63 Phase B), carved and rendered via `render_window` above alongside
+    // the left dock — no overlay draw needed here anymore.
 
     // Info popup (`:reg`, `:marks`, `:jumps`, `:changes`) renders on top of
     // the picker overlay so it always shows.
@@ -2111,8 +2175,10 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     let sep_style = Style::default().fg(ui.border);
 
     let show_tabs = app.tabs.len() > 1;
-    // Count only real (non-explorer) slots for the buffer-line visibility check.
-    let real_slot_count = app.slots().iter().filter(|s| !s.is_explorer).count();
+    // Count only real (non-special-pane) slots for the buffer-line visibility check.
+    let real_slot_count = (0..app.slots().len())
+        .filter(|&idx| !app.slot_is_special(idx))
+        .count();
     let show_buffers = real_slot_count > 1;
     let total_width = area.width as usize;
 
@@ -2204,9 +2270,10 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     if show_buffers && buf_budget > 0 {
         let mut first = true;
         for (i, slot) in app.slots().iter().enumerate() {
-            // Skip the explorer scratch buffer — it's a real window but not a
-            // user-visible named buffer, so it must not appear in the buffer line.
-            if slot.is_explorer {
+            // Skip special-pane scratch buffers (explorer, bottom qf/loclist
+            // dock) — real windows, but not user-visible named buffers, so
+            // they must not appear in the buffer line.
+            if app.slot_is_special(i) {
                 continue;
             }
             let base_name = slot
@@ -2835,64 +2902,8 @@ fn render_picker_input_and_list(
 }
 
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
-/// output and the K-key LSP hover info path.
-///
-/// `:copen` / `:lopen` popup (#184) — a read-only bottom pane listing
-/// `path:row:col: message`, with the current entry highlighted. Not the fuzzy
-/// picker; navigation is `j`/`k`/`<CR>` (see `event_loop`). The `ListState`
-/// auto-scrolls to keep the selected entry visible. The quickfix list takes
-/// precedence over the location list when both are open.
-fn quickfix_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
-    let (list_data, title) = if app.quickfix_open {
-        (&app.quickfix, " quickfix ")
-    } else {
-        (&app.loclist, " location list ")
-    };
-    let ui = &app.theme.ui;
-    let entries = list_data.entries();
-    let body_rows = entries.len().clamp(1, 10) as u16;
-    let h = body_rows + 2; // +2 for the border.
-    if buf_area.height <= h {
-        return;
-    }
-    let area = Rect {
-        x: buf_area.x,
-        y: buf_area.y + buf_area.height - h,
-        width: buf_area.width,
-        height: h,
-    };
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ui.border));
-    if entries.is_empty() {
-        frame.render_widget(Paragraph::new("list is empty").block(block), area);
-        return;
-    }
-    let items: Vec<ListItem> = entries
-        .iter()
-        .map(|e| {
-            ListItem::new(format!(
-                "{}:{}:{}: {}",
-                e.path.display(),
-                e.row + 1,
-                e.col + 1,
-                e.message
-            ))
-        })
-        .collect();
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(ui.picker_selection_bg)
-            .add_modifier(Modifier::BOLD),
-    );
-    let mut state = ListState::default();
-    state.select(Some(list_data.cursor()));
-    frame.render_stateful_widget(list, area, &mut state);
-}
-
-/// Delegates to `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
+/// output and the K-key LSP hover info path. Delegates to
+/// `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
 fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
     let popup = match app.info_popup.as_ref() {
         Some(p) => p,

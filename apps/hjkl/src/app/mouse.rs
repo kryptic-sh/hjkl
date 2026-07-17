@@ -75,7 +75,7 @@ pub fn hit_test_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
     if let Some(hit) = hit_test_border_tree(layout, col, row) {
         return Some(hit);
     }
-    hit_test_dock_border(app, col, row)
+    hit_test_dock_border(app, col, row).or_else(|| hit_test_bottom_dock_border(app, col, row))
 }
 
 /// Left-dock right-border hit test (#63 Phase A). The dock's `last_rect` is
@@ -92,6 +92,29 @@ fn hit_test_dock_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
     if col == border_col && row >= rect.y && row < rect.y + rect.h {
         Some(BorderHit {
             orientation: SplitOrientation::Vertical,
+            border_cell: (col, row),
+            split_origin: 0,
+            split_total: 0,
+            dock: true,
+        })
+    } else {
+        None
+    }
+}
+
+/// Bottom-dock top-border hit test (#63 Phase B — twin of
+/// [`hit_test_dock_border`], along the row axis instead of the column axis).
+/// The dock's content rect is shrunk by 1 row for the separator when one was
+/// drawn (see `render::frame`'s bottom-dock carve), so the border sits
+/// exactly one row above `rect.y`.
+fn hit_test_bottom_dock_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
+    let dock = app.bottom_dock.as_ref()?;
+    let win = app.windows.get(dock.win_id)?.as_ref()?;
+    let rect = win.last_rect?;
+    let border_row = rect.y.checked_sub(1)?;
+    if row == border_row && col >= rect.x && col < rect.x + rect.w {
+        Some(BorderHit {
+            orientation: SplitOrientation::Horizontal,
             border_cell: (col, row),
             split_origin: 0,
             split_total: 0,
@@ -908,9 +931,10 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
     let mut used = 0usize;
     let mut first = true;
 
-    for slot in app.slots().iter() {
-        // Explorer buffers are not shown in the buffer line.
-        if slot.is_explorer {
+    for (idx, slot) in app.slots().iter().enumerate() {
+        // Special-pane buffers (explorer, bottom qf/loclist dock) are not
+        // shown in the buffer line.
+        if app.slot_is_special(idx) {
             continue;
         }
         let base_name = slot
@@ -951,7 +975,9 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
 pub fn picker_overlay_rect(app: &App) -> Option<Rect> {
     app.picker.as_ref()?;
     let vp = app.active_editor().host().viewport();
-    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let real_slots = (0..app.slots().len())
+        .filter(|&idx| !app.slot_is_special(idx))
+        .count();
     let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
     let top_bar_h = if show_top_bar {
         crate::app::TOP_BAR_HEIGHT
@@ -1061,7 +1087,9 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     }
 
     let show_tab_bar = app.tabs.len() > 1;
-    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let real_slots = (0..app.slots().len())
+        .filter(|&idx| !app.slot_is_special(idx))
+        .count();
     let show_buffer_line = real_slots > 1;
     let show_top_bar = show_tab_bar || show_buffer_line;
 
@@ -1098,15 +1126,11 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         // Check buffer region (left-aligned).
         if show_buffer_line {
             let buf_ranges = buffer_line_x_ranges(app, bar_width);
-            // The buffer line skips explorer slots, so the i-th displayed entry
-            // is NOT necessarily slot `i`. Map the display position to the
-            // actual slot index of the i-th non-explorer slot.
-            let real_indices: Vec<usize> = app
-                .slots()
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| !s.is_explorer)
-                .map(|(idx, _)| idx)
+            // The buffer line skips special-pane slots, so the i-th displayed
+            // entry is NOT necessarily slot `i`. Map the display position to
+            // the actual slot index of the i-th non-special slot.
+            let real_indices: Vec<usize> = (0..app.slots().len())
+                .filter(|&idx| !app.slot_is_special(idx))
                 .collect();
             for (i, (start, end)) in buf_ranges.iter().enumerate() {
                 if col >= *start && col < *end {

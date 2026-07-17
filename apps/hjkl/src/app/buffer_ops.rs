@@ -54,9 +54,10 @@ impl App {
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).
     pub(crate) fn switch_to(&mut self, idx: usize) {
-        // The explorer scratch buffer is never a switch target — it's managed
-        // as its own pane, not a normal buffer.
-        if self.slots.get(idx).is_some_and(|s| s.is_explorer) {
+        // Special-pane scratch buffers (explorer, bottom qf/loclist dock) are
+        // never a switch target — they're managed as their own panes, not
+        // normal buffers.
+        if self.slot_is_special(idx) {
             return;
         }
         // Never load a normal buffer into a special pane (explorer/cmdline).
@@ -93,18 +94,19 @@ impl App {
         self.explorer_reveal_active();
     }
 
-    /// `:bnext` — cycle active forward, skipping `is_explorer` slots.
-    /// No-op when only one non-explorer slot.
+    /// `:bnext` — cycle active forward, skipping special-pane slots
+    /// (explorer, bottom qf/loclist dock). No-op when only one regular slot.
     pub(crate) fn buffer_next(&mut self) {
         if !self.require_multi_buffer() {
             return;
         }
         let n = self.slots.len();
         let current = self.focused_slot_idx();
-        // Walk forward, skipping explorer slots. Guard against all-explorer edge.
+        // Walk forward, skipping special-pane slots. Guard against the
+        // all-special edge case.
         let next = (1..=n).find_map(|i| {
             let idx = (current + i) % n;
-            if !self.slots[idx].is_explorer {
+            if !self.slot_is_special(idx) {
                 Some(idx)
             } else {
                 None
@@ -115,8 +117,8 @@ impl App {
         }
     }
 
-    /// `:bprev` — cycle active backward, skipping `is_explorer` slots.
-    /// No-op when only one non-explorer slot.
+    /// `:bprev` — cycle active backward, skipping special-pane slots
+    /// (explorer, bottom qf/loclist dock). No-op when only one regular slot.
     pub(crate) fn buffer_prev(&mut self) {
         if !self.require_multi_buffer() {
             return;
@@ -125,7 +127,7 @@ impl App {
         let current = self.focused_slot_idx();
         let prev = (1..=n).find_map(|i| {
             let idx = (current + n - i) % n;
-            if !self.slots[idx].is_explorer {
+            if !self.slot_is_special(idx) {
                 Some(idx)
             } else {
                 None
@@ -306,10 +308,13 @@ impl App {
         self.bus.info(format!("buffer wiped: \"{name}\""));
     }
 
-    /// Returns `true` when multiple non-explorer slots are open; otherwise
-    /// sets the "only one buffer open" status message and returns `false`.
+    /// Returns `true` when multiple regular (non-special-pane) slots are
+    /// open; otherwise sets the "only one buffer open" status message and
+    /// returns `false`.
     pub(crate) fn require_multi_buffer(&mut self) -> bool {
-        let real_count = self.slots.iter().filter(|s| !s.is_explorer).count();
+        let real_count = (0..self.slots.len())
+            .filter(|&idx| !self.slot_is_special(idx))
+            .count();
         if real_count <= 1 {
             self.bus.warn("only one buffer open");
             return false;
@@ -317,13 +322,14 @@ impl App {
         true
     }
 
-    /// `:ls` / `:buffers` — render the buffer list to a single status
-    /// line. Marks: `%` active, `+` modified. Explorer slots are excluded.
+    /// `:ls` / `:buffers` — render the buffer list to a single status line.
+    /// Marks: `%` active, `+` modified. Special-pane slots (explorer, bottom
+    /// qf/loclist dock) are excluded.
     pub(crate) fn list_buffers(&self) -> String {
         let active_slot = self.focused_slot_idx();
         let mut parts = Vec::with_capacity(self.slots.len());
         for (i, slot) in self.slots.iter().enumerate() {
-            if slot.is_explorer {
+            if self.slot_is_special(i) {
                 continue;
             }
             let active = if i == active_slot { '%' } else { ' ' };
@@ -340,12 +346,12 @@ impl App {
 
     // ── nvim-api helpers ──────────────────────────────────────────────────────
 
-    /// View ids of all non-explorer slots, as `u64` (nvim wire format).
+    /// View ids of all regular (non-special-pane) slots, as `u64` (nvim wire
+    /// format).
     pub(crate) fn nvim_buffer_ids(&self) -> Vec<u64> {
-        self.slots
-            .iter()
-            .filter(|s| !s.is_explorer)
-            .map(|s| s.buffer_id)
+        (0..self.slots.len())
+            .filter(|&idx| !self.slot_is_special(idx))
+            .map(|idx| self.slots[idx].buffer_id)
             .collect()
     }
 

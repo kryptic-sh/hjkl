@@ -29,11 +29,9 @@ use super::window::{self, WindowId};
 pub(crate) enum DockKind {
     /// Left dock: the file-explorer tree.
     Explorer,
-    /// Bottom dock (Phase B, unused): `:copen` quickfix list.
-    #[allow(dead_code)]
+    /// Bottom dock: `:copen` quickfix list (#63 Phase B).
     Quickfix,
-    /// Bottom dock (Phase B, unused): `:lopen` location list.
-    #[allow(dead_code)]
+    /// Bottom dock: `:lopen` location list (#63 Phase B).
     Loclist,
 }
 
@@ -64,6 +62,18 @@ pub(crate) const DOCK_MIN_WIDTH: u16 = 12;
 pub(crate) fn clamp_dock_width(width: u16, terminal_width: u16) -> u16 {
     let max = (terminal_width / 2).max(DOCK_MIN_WIDTH);
     width.clamp(DOCK_MIN_WIDTH, max)
+}
+
+/// Minimum sane height for the bottom dock — mirrors `panel.height`'s static
+/// validation bound (3..=200, see `hjkl_app::config::Config::validate`).
+pub(crate) const DOCK_MIN_HEIGHT: u16 = 3;
+
+/// Clamp a candidate bottom-dock height against both the static sane bounds
+/// and the live terminal height, mirroring [`clamp_dock_width`]'s
+/// "12..=terminal_width/2" shape ("3..=terminal_height/2" here).
+pub(crate) fn clamp_dock_height(height: u16, terminal_height: u16) -> u16 {
+    let max = (terminal_height / 2).max(DOCK_MIN_HEIGHT);
+    height.clamp(DOCK_MIN_HEIGHT, max)
 }
 
 impl super::App {
@@ -112,15 +122,7 @@ impl super::App {
 
         if slot_idx < self.slots.len() {
             self.slots.remove(slot_idx);
-            let slot_count = self.slots.len();
-            for win in self.windows.iter_mut().flatten() {
-                if win.slot == slot_idx {
-                    win.slot = 0;
-                } else if win.slot > slot_idx {
-                    win.slot -= 1;
-                }
-                win.slot = win.slot.min(slot_count.saturating_sub(1));
-            }
+            self.reindex_after_slot_removal(slot_idx);
         }
 
         for i in 0..self.tabs.len() {
@@ -133,21 +135,130 @@ impl super::App {
         Some(dock)
     }
 
+    /// Allocate a fresh window over `slot_idx` and install it as the bottom
+    /// dock (#63 Phase B — twin of [`Self::install_left_dock`]). `kind` is
+    /// always [`DockKind::Quickfix`] or [`DockKind::Loclist`]; callers
+    /// (`quickfix::open_bottom_dock_for`) handle sequencing (focus,
+    /// window-editor reconcile, buffer content) themselves.
+    pub(crate) fn install_bottom_dock(&mut self, slot_idx: usize, kind: DockKind) -> WindowId {
+        let win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(window::Window::new(slot_idx)));
+        self.bottom_dock = Some(Dock {
+            win_id,
+            slot_idx,
+            kind,
+        });
+        win_id
+    }
+
+    /// Tear down the bottom dock: drop its window entry + folds/editor, remove
+    /// its slot (reindexing every other window's slot reference, same as
+    /// [`Self::teardown_left_dock`]), and fix up any tab whose remembered
+    /// `focused_window` pointed at it. Returns the removed [`Dock`].
+    pub(crate) fn teardown_bottom_dock(&mut self) -> Option<Dock> {
+        let dock = self.bottom_dock.take()?;
+        let slot_idx = self
+            .windows
+            .get(dock.win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.slot)
+            .unwrap_or(dock.slot_idx);
+
+        self.windows[dock.win_id] = None;
+        self.window_folds.remove(&dock.win_id);
+        self.window_editors.remove(&dock.win_id);
+
+        if slot_idx < self.slots.len() {
+            self.slots.remove(slot_idx);
+            self.reindex_after_slot_removal(slot_idx);
+        }
+
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].focused_window == dock.win_id {
+                let fallback = self.tabs[i].layout.leaves().into_iter().next().unwrap_or(0);
+                self.tabs[i].focused_window = fallback;
+            }
+        }
+
+        Some(dock)
+    }
+
+    /// `<C-w>c` / `:cclose` / `:lclose` on the bottom dock — twin of
+    /// [`Self::close_left_dock`]. Unlike the left dock, the bottom dock has no
+    /// separate `Option<ExplorerPane>`-style state to dispatch on: quickfix
+    /// and location lists both live directly on `App` (`quickfix` /
+    /// `loclist`) and close identically regardless of which one currently
+    /// owns the dock, so there's no per-`DockKind` branch to write here.
+    /// No-op if the dock is already closed. Fixes focus onto a regular window
+    /// only when the dock itself was focused at close time (mirrors
+    /// `explorer::close_explorer`).
+    pub(crate) fn close_bottom_dock(&mut self) {
+        let was_focused = self
+            .bottom_dock
+            .as_ref()
+            .is_some_and(|d| d.win_id == self.focused_window());
+        if self.teardown_bottom_dock().is_none() {
+            return;
+        }
+        if was_focused {
+            let target = self
+                .editor_target_window()
+                .or_else(|| self.layout().leaves().into_iter().next())
+                .unwrap_or_else(|| self.focused_window());
+            self.set_focused_window(target);
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Fix up window `slot` pointers AND [`super::App::prev_active`] after
+    /// `self.slots[removed_idx]` has been removed. Shared by
+    /// [`Self::teardown_left_dock`] and [`Self::teardown_bottom_dock`].
+    ///
+    /// `prev_active` is a raw slot index (`<C-^>` / `:b#`'s alternate-buffer
+    /// pointer) that Phase A's `teardown_left_dock` never fixed up — the
+    /// explorer opens/closes rarely enough per session that a stale
+    /// `prev_active` was unlikely to bite. The bottom dock opens/closes far
+    /// more often (every `:copen`/`:cclose`, every `:grep`/`:make`), which
+    /// makes it much more likely for `prev_active` to point at a slot that
+    /// used to sit one-past a removed dock slot — silently landing `<C-^>` on
+    /// the WRONG buffer post-removal instead of erroring or panicking
+    /// (`buffer_alt`'s `i < self.slots.len()` bounds check tolerates a
+    /// stale-but-in-range index without ever detecting the drift). Fixed here
+    /// for both dock kinds rather than left as a Phase-B-only patch.
+    fn reindex_after_slot_removal(&mut self, removed_idx: usize) {
+        let slot_count = self.slots.len();
+        for win in self.windows.iter_mut().flatten() {
+            if win.slot == removed_idx {
+                win.slot = 0;
+            } else if win.slot > removed_idx {
+                win.slot -= 1;
+            }
+            win.slot = win.slot.min(slot_count.saturating_sub(1));
+        }
+        self.prev_active = match self.prev_active {
+            Some(p) if p == removed_idx => None,
+            Some(p) if p > removed_idx => Some(p - 1),
+            other => other,
+        };
+    }
+
     /// `<C-w>c` / `:close` / `:q` on the left dock — closes the dock itself
     /// rather than touching the tree (#63 Phase A). Dispatches on
-    /// [`DockKind`] so a future bottom-dock kind gets its own toggle-off
-    /// path without touching this call site again. No-op if the dock is
-    /// already closed.
+    /// [`DockKind`] so a future left-dock kind gets its own toggle-off path
+    /// without touching this call site again. No-op if the dock is already
+    /// closed.
     pub(crate) fn close_left_dock(&mut self) {
         let Some(kind) = self.left_dock.as_ref().map(|d| d.kind) else {
             return;
         };
         match kind {
             DockKind::Explorer => self.toggle_explorer(),
-            // Reserved for Phase B — no bottom-dock kind is ever installed
-            // as the LEFT dock today, so this arm is unreachable in
-            // practice; kept exhaustive so a future left-dock kind can't
-            // silently fall through without a close path.
+            // No bottom-dock kind (Quickfix/Loclist) is ever installed as
+            // the LEFT dock — `install_left_dock`'s only caller passes
+            // `DockKind::Explorer` — so this arm is unreachable in practice;
+            // kept exhaustive so a future left-dock kind can't silently fall
+            // through without a close path.
             DockKind::Quickfix | DockKind::Loclist => {}
         }
     }
@@ -159,8 +270,7 @@ impl super::App {
         self.left_dock.as_ref().is_some_and(|d| d.win_id == id)
     }
 
-    /// `true` when `id` is the bottom dock's window (reserved; always
-    /// `false` in Phase A since `bottom_dock` is never populated).
+    /// `true` when `id` is the bottom dock's window.
     pub(crate) fn is_bottom_dock(&self, id: WindowId) -> bool {
         self.bottom_dock.as_ref().is_some_and(|d| d.win_id == id)
     }
@@ -168,6 +278,29 @@ impl super::App {
     /// `true` when `id` is any dock's window.
     pub(crate) fn is_dock_window(&self, id: WindowId) -> bool {
         self.is_left_dock(id) || self.is_bottom_dock(id)
+    }
+
+    /// Slot index of the bottom dock's scratch buffer, or `None` when no
+    /// bottom dock is open. Twin of `explorer::explorer_slot_idx`, but
+    /// derived from `bottom_dock.win_id` rather than an `is_explorer`-style
+    /// flag on the slot itself — the dock is the ONLY thing that can point a
+    /// window at this slot, so its window's `slot` field is already the
+    /// single source of truth (#63 Phase B).
+    pub(crate) fn qf_dock_slot_idx(&self) -> Option<usize> {
+        let win_id = self.bottom_dock.as_ref()?.win_id;
+        self.windows.get(win_id)?.as_ref().map(|w| w.slot)
+    }
+
+    /// `true` when slot `idx` is a "special" pane slot that must never appear
+    /// as a normal user buffer: the explorer OR the bottom quickfix/
+    /// location-list dock. Used everywhere `is_explorer` used to be the sole
+    /// exclusion check for buffer cycling (`:bn`/`:bp`), `:ls`, the buffer
+    /// line, the nvim buffer list, and the top-bar multi-buffer visibility
+    /// count — the qf dock slot needs the exact same treatment the explorer
+    /// slot already gets, or it would show up as a fake "real" buffer the
+    /// moment `:copen` creates it.
+    pub(crate) fn slot_is_special(&self, idx: usize) -> bool {
+        self.slots.get(idx).is_some_and(|s| s.is_explorer) || self.qf_dock_slot_idx() == Some(idx)
     }
 
     // ── Frame-level focus navigation ────────────────────────────────────
@@ -197,6 +330,36 @@ impl super::App {
     /// in the ACTIVE tab's tree), else the tree's first (top-left-most) leaf.
     pub(crate) fn dock_neighbor_right(&self, fw: WindowId) -> Option<WindowId> {
         if !self.is_left_dock(fw) {
+            return None;
+        }
+        if let Some(last) = self.last_regular_window
+            && self.layout().contains(last)
+        {
+            return Some(last);
+        }
+        self.layout().leaves().into_iter().next()
+    }
+
+    /// Bottom-dock target when tree navigation found no neighbour BELOW `fw`
+    /// (#63 Phase B — twin of [`Self::dock_neighbor_left`]). `None` when
+    /// there's no bottom dock, `fw` already IS the bottom dock, or `fw` isn't
+    /// even in the active tab's tree — which is exactly the left dock's case:
+    /// the bottom dock spans only the MAIN AREA's width (below the tree, to
+    /// the right of the left dock), so `<C-w>j` from the explorer must NOT
+    /// reach it (`layout().contains(explorer_win)` is always `false`, same
+    /// guard `dock_neighbor_left` relies on).
+    pub(crate) fn dock_neighbor_down(&self, fw: WindowId) -> Option<WindowId> {
+        let dock = self.bottom_dock.as_ref()?;
+        if fw == dock.win_id || !self.layout().contains(fw) {
+            return None;
+        }
+        Some(dock.win_id)
+    }
+
+    /// Main-area re-entry target when leaving the bottom dock upward (`<C-w>k`
+    /// from the dock) — twin of [`Self::dock_neighbor_right`].
+    pub(crate) fn dock_neighbor_up(&self, fw: WindowId) -> Option<WindowId> {
+        if !self.is_bottom_dock(fw) {
             return None;
         }
         if let Some(last) = self.last_regular_window
@@ -248,6 +411,27 @@ impl super::App {
         let width = self.config.explorer.width;
         if let Err(e) = hjkl_config::write_key_at(&path, "explorer.width", width as i64) {
             self.bus.warn(format!("couldn't save explorer width: {e}"));
+        }
+    }
+
+    /// Adjust the bottom dock's configured height by `delta` rows in memory
+    /// only (clamped) — twin of [`Self::resize_dock_width_by`].
+    pub(crate) fn resize_dock_height_by(&mut self, delta: i32) {
+        let terminal_h = self.last_frame_rect.map(|r| r.height).unwrap_or(24);
+        let current = self.config.panel.height as i32;
+        let candidate = (current + delta).clamp(0, u16::MAX as i32) as u16;
+        self.config.panel.height = clamp_dock_height(candidate, terminal_h);
+    }
+
+    /// Write the bottom dock's current configured height back to the user's
+    /// config file — twin of [`Self::persist_dock_width`].
+    pub(crate) fn persist_dock_height(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let height = self.config.panel.height;
+        if let Err(e) = hjkl_config::write_key_at(&path, "panel.height", height as i64) {
+            self.bus.warn(format!("couldn't save panel height: {e}"));
         }
     }
 }

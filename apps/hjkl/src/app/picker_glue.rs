@@ -42,12 +42,16 @@ impl App {
         self.picker = Some(crate::picker::Picker::new(source));
     }
 
-    /// Open the buffer picker over the currently open slots (explorer excluded).
+    /// Open the buffer picker over the currently open slots (special-pane
+    /// slots excluded).
     pub(crate) fn open_buffer_picker(&mut self) {
-        // Collect only non-explorer slots for the picker so the explorer buffer
-        // never appears in `:buffers` / buffer picker results.
-        let real_slots: Vec<&crate::app::BufferSlot> =
-            self.slots.iter().filter(|s| !s.is_explorer).collect();
+        // Collect only regular slots for the picker so the explorer buffer /
+        // bottom qf-dock buffer never appear in `:buffers` / buffer picker
+        // results.
+        let real_slots: Vec<&crate::app::BufferSlot> = (0..self.slots.len())
+            .filter(|&idx| !self.slot_is_special(idx))
+            .map(|idx| &self.slots[idx])
+            .collect();
         let source = Box::new(crate::picker::BufferSource::new(
             &real_slots,
             |s| {

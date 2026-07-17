@@ -1,8 +1,19 @@
 //! Quickfix-list / location-list host integration (#184): `:grep` / `:make`
-//! population, the `:copen`/`:lopen` popup navigation, and jump-to-entry. The
-//! agnostic list + cursor live in the `hjkl-quickfix` crate; ex commands arrive
-//! as `ExEffect::Quickfix(QfCommand)` (global list) or `ExEffect::Location(...)`
-//! (window-local list). Both lists share this machinery via [`QfWhich`].
+//! population, the `:copen`/`:lopen` bottom-dock lifecycle (#63 Phase B), and
+//! jump-to-entry. The agnostic list + cursor live in the `hjkl-quickfix`
+//! crate; ex commands arrive as `ExEffect::Quickfix(QfCommand)` (global list)
+//! or `ExEffect::Location(...)` (window-local list). Both lists share this
+//! machinery via [`QfWhich`].
+//!
+//! `:copen`/`:lopen` used to show a `Clear`+`List` overlay with hardcoded key
+//! interception (`j`/`k`/`<CR>`/`Esc`/`q`) that owned every keypress while up.
+//! Phase B replaces that with a REAL window/buffer in `App::bottom_dock` (see
+//! `crate::app::dock`): a real `Editor` backs it, so every vim motion,
+//! search, and yank works on the list for free. The only key this module
+//! still intercepts is `<CR>` (jump to the entry under the dock's cursor,
+//! [`App::qf_dock_jump_at_cursor`]) — everything else (including `j`/`k`
+//! navigation and `q`, which vim's real quickfix window does NOT close on)
+//! falls straight through to the engine.
 
 use hjkl_buffer::rope_line_str;
 use hjkl_ex::QfCommand;
@@ -19,11 +30,20 @@ pub(crate) enum QfWhich {
 }
 
 impl QfWhich {
-    /// Human label used in toasts and the popup title.
+    /// Human label used in toasts and the dock title.
     fn label(self) -> &'static str {
         match self {
             QfWhich::Quickfix => "quickfix",
             QfWhich::Location => "location",
+        }
+    }
+
+    /// The bottom-dock [`DockKind`](crate::app::dock::DockKind) this list
+    /// shows when open (#63 Phase B).
+    fn dock_kind(self) -> crate::app::dock::DockKind {
+        match self {
+            QfWhich::Quickfix => crate::app::dock::DockKind::Quickfix,
+            QfWhich::Location => crate::app::dock::DockKind::Loclist,
         }
     }
 }
@@ -63,11 +83,255 @@ impl crate::app::App {
         }
     }
 
+    /// `true` while the bottom dock is showing the quickfix list (#63 Phase
+    /// B). Derived from `bottom_dock`'s kind rather than a separately-tracked
+    /// bool — the dock's presence/kind now IS the "list is shown" state, so
+    /// there's nothing left to go stale against it.
+    pub(crate) fn quickfix_open(&self) -> bool {
+        self.bottom_dock
+            .as_ref()
+            .is_some_and(|d| d.kind == crate::app::dock::DockKind::Quickfix)
+    }
+
+    /// `true` while the bottom dock is showing the location list. Twin of
+    /// [`Self::quickfix_open`].
+    pub(crate) fn loclist_open(&self) -> bool {
+        self.bottom_dock
+            .as_ref()
+            .is_some_and(|d| d.kind == crate::app::dock::DockKind::Loclist)
+    }
+
+    /// Open (or close) the bottom dock showing list `w` (#63 Phase B).
+    ///
+    /// `open = true`: install the dock if it doesn't exist yet, or — if it's
+    /// currently showing the OTHER list — reuse the same window/slot and just
+    /// retarget which list it displays (vim shows one quickfix-style window
+    /// at a time in practice; this mirrors that instead of stacking two
+    /// docks). Either way the buffer is rebuilt from the current list content
+    /// and the dock receives focus, matching vim's `:copen`/`:lopen`.
+    ///
+    /// `open = false`: closes the dock, but ONLY if list `w` currently owns
+    /// it — closing quickfix must not accidentally close a loclist dock a
+    /// moment after `:lopen` reused it, and vice versa.
     fn qf_set_open(&mut self, w: QfWhich, open: bool) {
-        match w {
-            QfWhich::Quickfix => self.quickfix_open = open,
-            QfWhich::Location => self.loclist_open = open,
+        if open {
+            self.open_bottom_dock_for(w);
+        } else if self.qf_dock_shows(w) {
+            self.close_bottom_dock();
         }
+    }
+
+    /// `true` when the bottom dock is currently showing list `w`.
+    fn qf_dock_shows(&self, w: QfWhich) -> bool {
+        match w {
+            QfWhich::Quickfix => self.quickfix_open(),
+            QfWhich::Location => self.loclist_open(),
+        }
+    }
+
+    /// Install-or-reuse the bottom dock for list `w`, rebuild its buffer, and
+    /// focus it. See [`Self::qf_set_open`] for the reuse contract.
+    fn open_bottom_dock_for(&mut self, w: QfWhich) {
+        let kind = w.dock_kind();
+        self.sync_viewport_from_editor();
+        let win_id = match self.bottom_dock.as_ref().map(|d| d.kind) {
+            Some(k) if k == kind => self.bottom_dock.as_ref().unwrap().win_id,
+            Some(_) => {
+                let win_id = self.bottom_dock.as_ref().unwrap().win_id;
+                if let Some(d) = self.bottom_dock.as_mut() {
+                    d.kind = kind;
+                }
+                win_id
+            }
+            None => self.new_qf_dock_slot(kind),
+        };
+        self.set_focused_window(win_id);
+        self.reconcile_window_editors();
+        self.sync_viewport_to_editor();
+        self.qf_rebuild_dock_buffer(w);
+    }
+
+    /// Build a fresh scratch/readonly [`BufferSlot`](super::BufferSlot) and
+    /// install it as the bottom dock (#63 Phase B — mirrors
+    /// `explorer::open_explorer`'s slot construction). Does NOT touch focus —
+    /// [`Self::open_bottom_dock_for`] sequences that uniformly across the
+    /// "already open" / "retarget" / "create" cases.
+    fn new_qf_dock_slot(
+        &mut self,
+        kind: crate::app::dock::DockKind,
+    ) -> crate::app::window::WindowId {
+        use hjkl_buffer::View;
+        use hjkl_engine::Settings;
+        use std::time::Instant;
+
+        let buffer_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+
+        // Read-only, no filename, no line numbers/signs — matches vim's
+        // quickfix-window presentation. `filetype = "qf"` mirrors vim's
+        // `&filetype` for the quickfix buffer (ftplugins / statusline
+        // detection can key off it later).
+        //
+        // BOTH `readonly` AND `modifiable = false` are set, matching vim's
+        // real quickfix window exactly (`&readonly` + `&nomodifiable`):
+        // `readonly` alone only gates `:w` (E45) in this engine —
+        // `Editor::mutate_edit` explicitly does NOT check it (see its doc
+        // comment) — so `modifiable = false` is what actually makes x/dd/i
+        // no-ops here (`nomodifiable` silently refuses insert/replace entry
+        // and swallows every edit funnel, per `vim::comment` /
+        // `Editor::mutate_edit`). Unlike the explorer slot (intentionally
+        // modifiable for oil.nvim-style renaming), the qf dock must reject
+        // ALL edits — there's no fs-transaction path backing it.
+        let settings = Settings {
+            filetype: "qf".to_string(),
+            number: false,
+            relativenumber: false,
+            signcolumn: hjkl_engine::types::SignColumnMode::No,
+            cursorline: true,
+            foldcolumn: 0,
+            readonly: true,
+            modifiable: false,
+            ..Settings::default()
+        };
+
+        let slot = super::BufferSlot {
+            buffer_id,
+            is_explorer: false,
+            features: super::BufferFeatures {
+                syntax: false,
+                lsp: false,
+                hover: false,
+                end_of_buffer: false,
+            },
+            view: View::new(),
+            settings,
+            filename: None,
+            dirty: false,
+            is_new_file: false,
+            is_untracked: false,
+            diag_signs: Vec::new(),
+            diag_signs_lsp: Vec::new(),
+            lsp_diags: Vec::new(),
+            last_lsp_dirty_gen: None,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            blame: Vec::new(),
+            last_blame_dirty_gen: None,
+            last_blame_refresh_at: Instant::now(),
+            saved_hash: 0,
+            saved_len: 0,
+            signature_cache: None,
+            disk_mtime: None,
+            disk_len: None,
+            disk_state: super::DiskState::Synced,
+            swap_path: None,
+            last_swap_dirty_gen: None,
+            last_fold_dirty_gen: None,
+            git_repo_present: None,
+            commit_ctx: None,
+        };
+        self.slots.push(slot);
+        let slot_idx = self.slots.len() - 1;
+        self.install_bottom_dock(slot_idx, kind)
+    }
+
+    /// Rebuild the bottom dock's buffer text from list `w`'s current entries,
+    /// one line per entry in vim's quickfix-window format:
+    /// `path|row col N| message` (1-based row/col, matching what the user
+    /// sees in the editor — `QfEntry::row`/`col` are stored 0-based). No-op
+    /// when the dock isn't currently showing `w` (a stale rebuild call after
+    /// the dock switched lists or closed).
+    ///
+    /// Called on every dock open/reuse AND on every list mutation while the
+    /// dock is open (`:grep`/`:make`/`:cexpr`/.../`:colder`/`:cnewer` all
+    /// route through here via `qf_set_open`/`qf_refresh_dock_if_open`) so the
+    /// buffer never shows stale content. Bypasses the readonly guard directly
+    /// (same pattern as `explorer::explorer_rebuild_buffer`) since this is a
+    /// structural content reset, not a user edit.
+    fn qf_rebuild_dock_buffer(&mut self, w: QfWhich) {
+        let Some(dock) = self.bottom_dock.as_ref() else {
+            return;
+        };
+        if dock.kind != w.dock_kind() {
+            return;
+        }
+        let win_id = dock.win_id;
+        let Some(slot_idx) = self
+            .windows
+            .get(win_id)
+            .and_then(|win| win.as_ref())
+            .map(|win| win.slot)
+        else {
+            return;
+        };
+        let text = qf_format_list(self.qf_list(w));
+        self.slots[slot_idx].set_content(&text);
+        let _ = self.slots[slot_idx].take_content_edits();
+        let _ = self.slots[slot_idx].take_content_reset();
+
+        let cursor_row = self.qf_list(w).cursor();
+        if let Some(editor) = self.window_editors.get_mut(&win_id) {
+            editor.jump_cursor(cursor_row, 0);
+        }
+    }
+
+    /// If the bottom dock is currently showing list `w`, rebuild its buffer
+    /// from the (just-mutated) list content. No-op — cheaply — otherwise.
+    /// Used by list-population commands that don't go through
+    /// `qf_set_open` (`:colder`/`:cnewer`, which never change open/closed
+    /// state on their own).
+    fn qf_refresh_dock_if_open(&mut self, w: QfWhich) {
+        if self.qf_dock_shows(w) {
+            self.qf_rebuild_dock_buffer(w);
+        }
+    }
+
+    /// Move the bottom dock's cursor to list `w`'s current entry row, when
+    /// the dock is open and showing `w`. Called after `:cnext`/`:cprev`/etc.
+    /// move the list cursor so the dock's highlighted row (the cursor line)
+    /// stays in sync with which entry the editor jumped to.
+    fn qf_sync_dock_cursor(&mut self, w: QfWhich) {
+        let Some(dock) = self.bottom_dock.as_ref() else {
+            return;
+        };
+        if dock.kind != w.dock_kind() {
+            return;
+        }
+        let win_id = dock.win_id;
+        let row = self.qf_list(w).cursor();
+        if let Some(editor) = self.window_editors.get_mut(&win_id) {
+            editor.jump_cursor(row, 0);
+        }
+    }
+
+    /// `<CR>` in the bottom dock (#63 Phase B): jump to the entry under the
+    /// dock's cursor. The dock buffer is 1:1 with the list's entries (row `i`
+    /// ↔ `entries()[i]`, built that way by `qf_rebuild_dock_buffer`), so the
+    /// dock's own cursor row IS the target entry index — no separate
+    /// row→entry mapping needed.
+    ///
+    /// Routes the file open through [`Self::focus_editor_window_for_open`]
+    /// FIRST so the jump lands in a REGULAR window, never back into the
+    /// (readonly) dock itself — matching vim: the quickfix window is never
+    /// the target of the file it opens.
+    pub(crate) fn qf_dock_jump_at_cursor(&mut self) {
+        let Some(dock) = self.bottom_dock.as_ref() else {
+            return;
+        };
+        let w = match dock.kind {
+            crate::app::dock::DockKind::Quickfix => QfWhich::Quickfix,
+            crate::app::dock::DockKind::Loclist => QfWhich::Location,
+            // The bottom dock never hosts the explorer.
+            crate::app::dock::DockKind::Explorer => return,
+        };
+        let win_id = dock.win_id;
+        let row = self.window_cursor(win_id).0;
+        if row < self.qf_list(w).len() {
+            self.qf_list_mut(w).set_cursor(row);
+        }
+        self.focus_editor_window_for_open();
+        self.qf_jump_to_current(w);
     }
 
     /// Mutable reference to the `older` stack for `w`.
@@ -206,6 +470,10 @@ impl crate::app::App {
         let current_idx = older_len + 1;
         self.bus
             .info(format!("{} list {} of {}", w.label(), current_idx, total));
+        // `:colder` doesn't open/close the dock on its own (vim just makes
+        // the list active), but if it's ALREADY open on this list the
+        // buffer must reflect the newly-activated list's entries.
+        self.qf_refresh_dock_if_open(w);
     }
 
     /// `:cnewer [N]` / `:lnewer [N]` — activate a newer error list.
@@ -232,6 +500,7 @@ impl crate::app::App {
         let current_idx = older_len + 1;
         self.bus
             .info(format!("{} list {} of {}", w.label(), current_idx, total));
+        self.qf_refresh_dock_if_open(w);
     }
 
     /// `:cdo {cmd}` / `:cfdo {cmd}` (and `l*` variants) — run an ex command at
@@ -275,6 +544,11 @@ impl crate::app::App {
             (0..entries.len()).collect()
         };
 
+        // Route off any special pane (e.g. the bottom dock itself) BEFORE
+        // running per-entry edits — `cmd` must never execute against the
+        // dock's readonly buffer just because it happened to be focused when
+        // `:cdo`/`:cfdo` was invoked.
+        self.focus_editor_window_for_open();
         let cmd_owned = cmd.to_string();
         for i in indices {
             self.qf_list_mut(w).set_cursor(i);
@@ -284,13 +558,19 @@ impl crate::app::App {
     }
 
     /// `]q`/`[q` (and `]l`/`[l`) and the `:cnext`/`:lnext` families route here
-    /// after moving the list cursor: keep the popup in sync and jump the editor.
+    /// after moving the list cursor: jump the editor and, if the bottom dock
+    /// is open on this list, keep its highlighted row in sync.
     fn qf_after_nav(&mut self, w: QfWhich) {
         if self.qf_list(w).is_empty() {
             self.bus.info(format!("{} list is empty", w.label()));
             return;
         }
+        // Land the jump in a REGULAR window even when `:cnext`/`[q`/etc. was
+        // invoked while the (readonly) dock itself was focused — matches
+        // vim: the quickfix window is never the target of the file it opens.
+        self.focus_editor_window_for_open();
         self.qf_jump_to_current(w);
+        self.qf_sync_dock_cursor(w);
     }
 
     /// Open the current entry's file and place the cursor on it. No-op when the
@@ -559,7 +839,9 @@ impl crate::app::App {
     pub(crate) fn set_loclist(&mut self, entries: Vec<QfEntry>) {
         self.qf_push_history(QfWhich::Location);
         self.loclist.set(entries);
-        self.loclist_open = false; // populate silently; user opens via :lopen
+        // Populate silently; user opens via :lopen. Closes the dock only if
+        // it currently owns it — a quickfix dock left open is untouched.
+        self.qf_set_open(QfWhich::Location, false);
     }
 
     /// `:diagnostics` / `:ldiagnostics` — populate the quickfix / location list
@@ -629,43 +911,30 @@ impl crate::app::App {
             self.bus.info("no diagnostics");
         }
     }
-
-    // ── popup navigation (event loop) ───────────────────────────────────────
-
-    /// `:copen` popup: move the highlight down (`j` / `<Down>`). Does NOT jump —
-    /// vim's quickfix window only jumps on `<CR>`. The render `ListState`
-    /// auto-scrolls to keep the selected entry visible.
-    pub(crate) fn quickfix_popup_down(&mut self) {
-        self.quickfix.next();
-    }
-
-    /// `:copen` popup: move the highlight up (`k` / `<Up>`).
-    pub(crate) fn quickfix_popup_up(&mut self) {
-        self.quickfix.prev();
-    }
-
-    /// `:copen` popup: jump to the highlighted entry (`<CR>`).
-    pub(crate) fn quickfix_jump_to_current(&mut self) {
-        self.qf_jump_to_current(QfWhich::Quickfix);
-    }
-
-    /// `:lopen` popup: move the highlight down.
-    pub(crate) fn loclist_popup_down(&mut self) {
-        self.loclist.next();
-    }
-
-    /// `:lopen` popup: move the highlight up.
-    pub(crate) fn loclist_popup_up(&mut self) {
-        self.loclist.prev();
-    }
-
-    /// `:lopen` popup: jump to the highlighted entry.
-    pub(crate) fn loclist_jump_to_current(&mut self) {
-        self.qf_jump_to_current(QfWhich::Location);
-    }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+/// Render list `list`'s entries into the bottom dock's buffer text, one line
+/// per entry in vim's quickfix-window format: `path|row col N| message`
+/// (1-based row/col — `QfEntry::row`/`col` are stored 0-based, see the doc on
+/// [`hjkl_quickfix::QfEntry`]). Entries with an empty path (current-buffer
+/// entries, e.g. from `:cexpr` with no `%f`) render as `[No Name]` so every
+/// line stays non-ambiguous and non-empty.
+fn qf_format_list(list: &QfList) -> String {
+    list.entries()
+        .iter()
+        .map(|e| {
+            let path = if e.path.as_os_str().is_empty() {
+                "[No Name]".to_string()
+            } else {
+                e.path.display().to_string()
+            };
+            format!("{}|{} col {}| {}", path, e.row + 1, e.col + 1, e.message)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Map LSP [`DiagSeverity`] to quickfix [`QfKind`].
 fn diag_severity_to_qf_kind(sev: DiagSeverity) -> QfKind {

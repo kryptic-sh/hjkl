@@ -491,36 +491,22 @@ impl App {
             return KeyOutcome::Continue;
         }
 
-        // ── Quickfix popup (#184) ─────────────────────────────────
-        // While `:copen` is up, the popup owns navigation keys. `<CR>` jumps to
-        // the highlighted entry (popup stays open, vim-style); Esc/q close.
-        if self.quickfix_open {
-            match key.code {
-                KeyCode::Esc => self.quickfix_open = false,
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
-                    self.quickfix_open = false
-                }
-                KeyCode::Char('j') | KeyCode::Down => self.quickfix_popup_down(),
-                KeyCode::Char('k') | KeyCode::Up => self.quickfix_popup_up(),
-                KeyCode::Enter => self.quickfix_jump_to_current(),
-                _ => {}
-            }
-            return KeyOutcome::Continue;
-        }
-
-        // ── Location-list popup (#184 phase 3) ────────────────────
-        // Same key handling as the quickfix popup, against the location list.
-        if self.loclist_open {
-            match key.code {
-                KeyCode::Esc => self.loclist_open = false,
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
-                    self.loclist_open = false
-                }
-                KeyCode::Char('j') | KeyCode::Down => self.loclist_popup_down(),
-                KeyCode::Char('k') | KeyCode::Up => self.loclist_popup_up(),
-                KeyCode::Enter => self.loclist_jump_to_current(),
-                _ => {}
-            }
+        // ── Quickfix / location-list dock (#63 Phase B) ────────────
+        // The dock is a real window/buffer now (replaces the old `:copen`/
+        // `:lopen` Clear+List overlay that owned every key while up) — j/k,
+        // /, ?, yy, 5G, etc. all reach the engine normally. The ONLY key
+        // still intercepted here is `<CR>`: jump to the entry under the
+        // dock's cursor. `q` intentionally does NOT close it (vim's real
+        // quickfix window doesn't close on `q` either) — `:cclose`/`:lclose`/
+        // `<C-w>c` do, via `dispatch_window_action`/`handle_qf_command`.
+        if self.is_bottom_dock(self.focused_window())
+            && self.active_editor().vim_mode() == VimMode::Normal
+            && self.pending_state.is_none()
+            && key.code == KeyCode::Enter
+            && key.modifiers == KeyModifiers::NONE
+        {
+            self.qf_dock_jump_at_cursor();
+            self.sync_after_engine_mutation();
             return KeyOutcome::Continue;
         }
 
@@ -1597,13 +1583,23 @@ impl App {
                         mouse::SplitOrientation::Horizontal => me.row,
                     };
                     if drag.dock {
-                        // Dock resize (#63 Phase A) is delta-based against
-                        // the live config width, not a ratio recompute —
-                        // there's no split origin/total to work from.
-                        // Persistence happens once on release, not per
+                        // Dock resize (#63 Phase A/B) is delta-based against
+                        // the live config width/height, not a ratio
+                        // recompute — there's no split origin/total to work
+                        // from. Persistence happens once on release, not per
                         // drag frame (see the `Up` arm below).
                         let delta = new_pos as i32 - drag.last_pos as i32;
-                        self.resize_dock_width_by(delta);
+                        match drag.orientation {
+                            mouse::SplitOrientation::Vertical => self.resize_dock_width_by(delta),
+                            // The bottom dock sits BELOW its top border, so
+                            // dragging the border down (positive row delta)
+                            // shrinks it — the inverse sign of the width
+                            // case, where dragging right (positive col
+                            // delta) grows the (left-anchored) dock.
+                            mouse::SplitOrientation::Horizontal => {
+                                self.resize_dock_height_by(-delta)
+                            }
+                        }
                     } else {
                         let split_pos = new_pos.saturating_sub(drag.split_origin);
                         self.resize_split_to(
@@ -1636,11 +1632,18 @@ impl App {
             // Up: clear any active border drag; vim stays in
             // Visual after a text drag-release — no-op otherwise.
             MouseEventKind::Up(MouseButton::Left) if self.border_drag.is_some() => {
-                // Dock-width drags persist once here on release, rather than
-                // per drag-frame (`<C-w><`/`<C-w>>` persist per press
-                // instead — see `App::persist_dock_width`'s doc comment).
-                if self.border_drag.is_some_and(|d| d.dock) {
-                    self.persist_dock_width();
+                use crate::app::mouse;
+                // Dock drags persist once here on release, rather than per
+                // drag-frame (`<C-w><`/`<C-w>>`/`<C-w>+`/`<C-w>-` persist per
+                // press instead — see `App::persist_dock_width`'s doc
+                // comment).
+                if let Some(drag) = self.border_drag
+                    && drag.dock
+                {
+                    match drag.orientation {
+                        mouse::SplitOrientation::Vertical => self.persist_dock_width(),
+                        mouse::SplitOrientation::Horizontal => self.persist_dock_height(),
+                    }
                 }
                 self.border_drag = None;
             }

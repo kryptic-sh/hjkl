@@ -84,7 +84,18 @@ impl App {
                 }
             },
             AppAction::NewSplit => self.dispatch_ex("new"),
-            AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
+            AppAction::ResizeHeight(delta) => {
+                // `<C-w>+` / `<C-w>-` while the bottom dock is focused resize
+                // the dock (config-driven, persisted) instead of a tree
+                // split — twin of the `ResizeWidth` / left-dock case below
+                // (#63 Phase B).
+                if self.is_bottom_dock(self.focused_window()) {
+                    self.resize_dock_height_by(delta * count as i32);
+                    self.persist_dock_height();
+                } else {
+                    self.resize_height(delta * count as i32);
+                }
+            }
             AppAction::ResizeWidth(delta) => {
                 // `<C-w><` / `<C-w>>` while the left dock is focused resize
                 // the dock (config-driven, persisted) instead of a tree
@@ -121,8 +132,14 @@ impl App {
                 .layout()
                 .neighbor_left(focused)
                 .or_else(|| self.dock_neighbor_left(focused)),
-            NavDir::Down => self.layout().neighbor_below(focused),
-            NavDir::Up => self.layout().neighbor_above(focused),
+            NavDir::Down => self
+                .layout()
+                .neighbor_below(focused)
+                .or_else(|| self.dock_neighbor_down(focused)),
+            NavDir::Up => self
+                .layout()
+                .neighbor_above(focused)
+                .or_else(|| self.dock_neighbor_up(focused)),
             NavDir::Right => self
                 .layout()
                 .neighbor_right(focused)
@@ -150,18 +167,26 @@ impl App {
 
     // ── Window focus navigation ───────────────────────────────────────────
 
-    /// Move focus to the window below the current one (`Ctrl-w j`).
+    /// Move focus to the window below the current one (`Ctrl-w j`). Tree
+    /// navigation first; when it finds no neighbour below, the bottom dock
+    /// (if open) is the frame-level neighbour below (#63 Phase B) — see
+    /// `dock::dock_neighbor_down`.
     pub fn focus_below(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_below(fw) {
             self.switch_focus(target);
+        } else if let Some(target) = self.dock_neighbor_down(fw) {
+            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the window above the current one (`Ctrl-w k`).
+    /// Move focus to the window above the current one (`Ctrl-w k`). When
+    /// leaving the bottom dock, re-enters the main area (#63 Phase B).
     pub fn focus_above(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_above(fw) {
+            self.switch_focus(target);
+        } else if let Some(target) = self.dock_neighbor_up(fw) {
             self.switch_focus(target);
         }
     }
@@ -305,6 +330,10 @@ impl App {
         let focused = self.focused_window();
         if self.is_left_dock(focused) {
             self.close_left_dock();
+            return;
+        }
+        if self.is_bottom_dock(focused) {
+            self.close_bottom_dock();
             return;
         }
 

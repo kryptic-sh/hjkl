@@ -578,16 +578,15 @@ pub struct App {
     /// the editor engine.
     pub(crate) hop: Option<hop::HopState>,
     /// Quickfix list (#184): file+line locations from `:grep` (and later `:make`
-    /// / LSP). Navigated via `:cnext`/`:cprev`/`]q`/`[q`; shown by `:copen`.
+    /// / LSP). Navigated via `:cnext`/`:cprev`/`]q`/`[q`; shown by `:copen` as
+    /// a real bottom-dock window/buffer (#63 Phase B — see `App::bottom_dock`
+    /// / `App::quickfix_open()`, which derives open/closed from the dock's
+    /// kind rather than tracking a separate bool).
     pub(crate) quickfix: hjkl_quickfix::QfList,
-    /// `:copen` popup visibility.
-    pub(crate) quickfix_open: bool,
     /// Location list (#184 phase 3): the `:l*` analogue of the quickfix list.
     /// Populated by `:lgrep` / `:lmake` and LSP references; navigated via
-    /// `:lnext`/`:lprev`/`]l`/`[l`; shown by `:lopen`.
+    /// `:lnext`/`:lprev`/`]l`/`[l`; shown by `:lopen` (see `App::loclist_open()`).
     pub(crate) loclist: hjkl_quickfix::QfList,
-    /// `:lopen` popup visibility.
-    pub(crate) loclist_open: bool,
     /// Older quickfix lists for `:colder` (#261 Phase 5b). Index 0 is the oldest
     /// kept, last element is the most-recently-pushed (popped first by `:colder`).
     /// Capped at 9 entries (together with the current list → vim's 10-list max).
@@ -986,6 +985,11 @@ impl App {
     /// interacting with the overlay (notably the LSP hover popup, which
     /// would otherwise show through the menu for whatever doc text the
     /// mouse cell happens to sit over).
+    ///
+    /// The quickfix/location-list dock is intentionally NOT included here
+    /// (#63 Phase B): it's a real window now, not a blocking overlay drawn on
+    /// top of everything — same as the left explorer dock, which was never
+    /// part of this check either.
     pub(crate) fn overlay_active(&self) -> bool {
         self.context_menu.is_some()
             || self.picker.is_some()
@@ -994,8 +998,6 @@ impl App {
             || self.search_field.is_some()
             || self.info_popup.is_some()
             || self.hop.is_some()
-            || self.quickfix_open
-            || self.loclist_open
     }
 
     /// Full-screen rect for clamping popups / context menus to the
@@ -2312,9 +2314,7 @@ impl App {
             scroll_anim: None,
             hop: None,
             quickfix: hjkl_quickfix::QfList::new(),
-            quickfix_open: false,
             loclist: hjkl_quickfix::QfList::new(),
-            loclist_open: false,
             quickfix_older: Vec::new(),
             quickfix_newer: Vec::new(),
             loclist_older: Vec::new(),
