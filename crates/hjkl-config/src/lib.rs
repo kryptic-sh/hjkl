@@ -25,6 +25,7 @@
 mod error;
 mod loader;
 mod validate;
+mod write;
 
 pub use error::ConfigError;
 pub use loader::{
@@ -34,3 +35,4 @@ pub use loader::{
 pub use validate::{
     Validate, ValidationError, ensure_non_empty_str, ensure_non_zero, ensure_one_of, ensure_range,
 };
+pub use write::write_key_at;

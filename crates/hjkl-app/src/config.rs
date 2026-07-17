@@ -30,6 +30,49 @@ pub struct Config {
     pub lsp: hjkl_lsp::LspConfig,
     #[serde(default)]
     pub which_key: WhichKeyConfig,
+    /// Left file-explorer dock sizing (window-management refactor Phase A).
+    #[serde(default)]
+    pub explorer: ExplorerDockConfig,
+    /// Bottom panel dock sizing. Unused until the quickfix/location-list
+    /// dock lands (Phase B); plumbed now so the config schema is stable.
+    #[serde(default)]
+    pub panel: PanelConfig,
+}
+
+/// Sizing for the left file-explorer dock (Phase A of the window-management
+/// refactor). The dock lives outside the per-tab `LayoutTree` — see
+/// `apps/hjkl/src/app/dock.rs` — so its size is config-driven rather than a
+/// split ratio. Interactive resize (`<C-w><`/`<C-w>>`, border-drag) writes
+/// this value back to the user's config file via `hjkl_config::write_key_at`
+/// so it survives across sessions.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerDockConfig {
+    /// Width in terminal columns. Runtime-clamped to a sane range against
+    /// the current terminal width (see `dock::clamp_dock_width`); this is
+    /// just the persisted preference.
+    pub width: u16,
+}
+
+impl Default for ExplorerDockConfig {
+    fn default() -> Self {
+        Self { width: 36 }
+    }
+}
+
+/// Sizing for the bottom panel dock (Phase B: quickfix / location-list).
+/// Reserved and plumbed in Phase A; nothing renders into it yet.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelConfig {
+    /// Height in terminal rows.
+    pub height: u16,
+}
+
+impl Default for PanelConfig {
+    fn default() -> Self {
+        Self { height: 12 }
+    }
 }
 
 /// Configuration for the which-key popup.
@@ -132,6 +175,10 @@ impl Validate for Config {
             ));
         }
         ensure_range(self.editor.tab_width, 1, 16, "editor.tab_width")?;
+        // Static sanity bounds; the runtime clamp against the live terminal
+        // width (`dock::clamp_dock_width`) is a separate, dynamic check.
+        ensure_range(self.explorer.width, 12, 400, "explorer.width")?;
+        ensure_range(self.panel.height, 3, 200, "panel.height")?;
         // Empty theme.name is meaningless. Unknown *non-empty* names still
         // fall back to "dark" with a runtime warning (permissive rollout
         // for future themes), but `name = ""` indicates a config bug, not
@@ -315,5 +362,42 @@ mod tests {
             cfg.editor.chord_timeout_ms, 1000,
             "chord_timeout_ms must keep default when not overridden"
         );
+    }
+
+    // ── dock config (explorer.width / panel.height) ─────────────────────────
+
+    /// Bundled default must set explorer.width = 36 (matches the previous
+    /// `EXPLORER_WINDOW_WIDTH` constant) and panel.height = 12.
+    #[test]
+    fn defaults_dock_sizes() {
+        let cfg: Config = toml::from_str(DEFAULTS_TOML).expect("bundled config.toml must parse");
+        assert_eq!(cfg.explorer.width, 36);
+        assert_eq!(cfg.panel.height, 12);
+    }
+
+    #[test]
+    fn user_override_explorer_width() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "[explorer]\nwidth = 50").unwrap();
+        let cfg = load_from(f.path()).unwrap();
+        assert_eq!(cfg.explorer.width, 50);
+        assert_eq!(cfg.panel.height, 12, "panel.height must keep default");
+    }
+
+    #[test]
+    fn validate_rejects_too_narrow_explorer_width() {
+        let mut cfg = Config::default();
+        cfg.explorer.width = 1;
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.field, "explorer.width");
+    }
+
+    #[test]
+    fn validate_rejects_zero_panel_height() {
+        let mut cfg = Config::default();
+        cfg.panel.height = 0;
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.field, "panel.height");
     }
 }

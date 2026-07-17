@@ -41,6 +41,18 @@ icons = "auto"
 # Theme name. Currently only "dark" is bundled.
 name = "dark"
 
+[explorer]
+# Width (columns) of the left file-explorer dock. Interactively resizable
+# with `<C-w> <` / `<C-w> >` (or by dragging its right border with the
+# mouse) while the explorer is focused — resizing writes this value back to
+# your config file so it persists across sessions.
+width = 36
+
+[panel]
+# Height (rows) of the bottom panel dock. Reserved for the quickfix /
+# location-list dock (unused today; plumbed ahead of that landing).
+height = 12
+
 [which_key]
 # Show a popup listing available bindings when a prefix key is held
 # without follow-up for delay_ms milliseconds.
