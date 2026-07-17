@@ -637,6 +637,11 @@ pub trait VimEditorExt {
     /// `ch`.
     fn replace_block_char(&mut self, ch: char);
 
+    /// Charwise (`v`) / linewise (`V`) Visual-mode `r<ch>` — replace every
+    /// character in the selection with `ch` (B2). Newlines are preserved;
+    /// registers are untouched.
+    fn visual_replace_char(&mut self, ch: char);
+
     /// Visual-mode `i<ch>` / `a<ch>` — extend the selection to cover the text
     /// object identified by `ch`.
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool);
@@ -1759,6 +1764,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
 
     fn replace_block_char(&mut self, ch: char) {
         crate::vim::block_replace(self, ch);
+    }
+
+    fn visual_replace_char(&mut self, ch: char) {
+        crate::vim::visual_replace_char(self, ch);
     }
 
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool) {

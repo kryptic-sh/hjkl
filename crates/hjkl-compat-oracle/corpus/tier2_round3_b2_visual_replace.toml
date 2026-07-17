@@ -1,0 +1,39 @@
+# Round 3 — B2: visual `r{char}` replaces every character in the selection
+# instead of deleting it. Pre-fix, `r` in charwise/linewise Visual mode was
+# swallowed as an unknown-key no-op (Visual mode stayed active), so the
+# NEXT key got redispatched as a fresh visual command — e.g. `vllrx`
+# silently ate the `r`, then `x` deleted the still-active selection into the
+# unnamed register: real data loss, not a replace.
+#
+# Verified against real nvim before implementing (see round-3 report):
+# cursor lands at the START of the selection; registers are untouched.
+
+[[cases]]
+name = "b2_visual_char_single_line_replace"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "yyvllrx"
+expected_buffer = "xxx bar\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "foo bar\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b2_visual_char_multiline_replace"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\n"
+initial_cursor = [0, 0]
+keys = "\"ayyllvjrX"
+expected_buffer = "aaXX\nXXXb\ncccc\ndddd\n"
+expected_cursor = [0, 2]
+expected_register = ['a', "aaaa\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "b2_visual_line_replace"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "\"ayyVjrZ"
+expected_buffer = "ZZZ\nZZZ\nbaz\n"
+expected_cursor = [0, 0]
+expected_register = ['a', "foo\n"]
+expected_mode = "normal"

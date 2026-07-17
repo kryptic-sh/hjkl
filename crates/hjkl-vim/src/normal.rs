@@ -221,6 +221,22 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
+    // B2: charwise (`v`) / linewise (`V`) Visual mode `r<ch>` — replace
+    // every character in the selection with `ch`. `visual_operator()`
+    // deliberately has no `r` arm (it isn't an operator: it takes its own
+    // pending char, like normal-mode `r`), so without this arm bare `r`
+    // fell through every branch to the unknown-key no-op — leaving Visual
+    // mode active — and the NEXT key got redispatched as a fresh visual
+    // command (e.g. `vllrx` silently swallowed `r`, then `x` deleted the
+    // still-active selection: real data loss, not a replace).
+    if matches!(ed.fsm_mode(), FsmMode::Visual | FsmMode::VisualLine)
+        && !input.ctrl
+        && input.key == Key::Char('r')
+    {
+        ed.set_pending(Pending::Replace);
+        return true;
+    }
+
     // VisualBlock: extra commands beyond the standard y/d/c/x — `r`
     // replaces the block with a single char, `I` / `A` enter insert
     // mode at the block's left / right edge and repeat on every row.
@@ -1029,6 +1045,13 @@ fn handle_replace<H: Host>(
     if let Key::Char(ch) = input.key {
         if ed.fsm_mode() == FsmMode::VisualBlock {
             ed.replace_block_char(ch);
+            return true;
+        }
+        // B2: charwise / linewise Visual `r<ch>` — replace the whole
+        // selection, not a single char at the cursor (that's the
+        // normal-mode-only `replace_char_at` path below).
+        if matches!(ed.fsm_mode(), FsmMode::Visual | FsmMode::VisualLine) {
+            ed.visual_replace_char(ch);
             return true;
         }
         ed.replace_char_at(ch, count.max(1));

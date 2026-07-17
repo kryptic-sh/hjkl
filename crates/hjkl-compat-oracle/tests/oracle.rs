@@ -969,6 +969,15 @@ async fn tier2_round3_b1_visual_dot_corpus_passes() {
     run_corpus("corpus/tier2_round3_b1_visual_dot.toml").await;
 }
 
+/// B2: visual `r{char}` replaces every character in the selection instead
+/// of the pre-fix behavior (silent no-op that let the replacement char
+/// fall through and re-dispatch as a fresh visual command, e.g. deleting
+/// the selection).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_b2_visual_replace_corpus_passes() {
+    run_corpus("corpus/tier2_round3_b2_visual_replace.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

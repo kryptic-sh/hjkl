@@ -578,6 +578,54 @@ pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top, left);
 }
+/// B2: `r{ch}` in charwise (`v`) or linewise (`V`) Visual mode — replace
+/// every character in the selection with `ch`; newlines are NOT replaced
+/// (a linewise selection keeps its original line count). Registers are
+/// left untouched (`r` doesn't yank/delete). Cursor lands at the start of
+/// the selection — verified against real nvim: charwise `llvjrX` on
+/// `"aaaa\nbbbb\n..."` lands on `(0, 2)` (the selection's top), linewise
+/// `VjrZ` lands on `(top, 0)`.
+pub(crate) fn visual_replace_char<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    ch: char,
+) {
+    let linewise = matches!(vim(ed).mode, Mode::VisualLine);
+    let (top, bot) = if linewise {
+        let cursor_row = buf_cursor_pos(ed.buffer()).row;
+        let anchor_row = vim(ed).visual_line_anchor;
+        (
+            (cursor_row.min(anchor_row), 0),
+            (cursor_row.max(anchor_row), 0),
+        )
+    } else {
+        let anchor = vim(ed).visual_anchor;
+        let cursor = ed.cursor();
+        order(anchor, cursor)
+    };
+    ed.push_undo();
+    ed.sync_buffer_content_from_textarea();
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
+    let last_row = bot.0.min(lines.len().saturating_sub(1));
+    for (row, line) in lines.iter_mut().enumerate().take(last_row + 1).skip(top.0) {
+        let chars: Vec<char> = line.chars().collect();
+        let lo = if !linewise && row == top.0 { top.1 } else { 0 };
+        let hi = if !linewise && row == bot.0 {
+            (bot.1 + 1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if lo >= hi {
+            continue;
+        }
+        let before: String = chars[..lo].iter().collect();
+        let middle: String = std::iter::repeat_n(ch, hi - lo).collect();
+        let after: String = chars[hi..].iter().collect();
+        *line = format!("{before}{middle}{after}");
+    }
+    reset_textarea_lines(ed, lines);
+    vim_mut(ed).mode = Mode::Normal;
+    ed.jump_cursor(top.0, if linewise { 0 } else { top.1 });
+}
 /// Replace buffer content with `lines` while preserving the cursor.
 /// Used by indent / outdent / block_replace to wholesale rewrite
 /// rows without going through the per-edit funnel.
