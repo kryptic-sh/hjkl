@@ -1,0 +1,37 @@
+# Round 3 — G1: wire g- / g+ undo time-travel keys (:h g-). The primitives
+# (earlier_by_steps / later_by_steps) already existed for :earlier/:later;
+# g-/g+ just weren't wired to any key. expected_buffer values are authored
+# from live-nvim comparison (this file uses run_corpus, which self-checks
+# expected_buffer against real nvim and fails loudly on a mismatch).
+
+[[cases]]
+name = "g1_g_minus_walks_back_one_edit_chain"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>AY<Esc>g-"
+expected_buffer = "fooX\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "g1_g_minus_twice_is_capped_at_available_undo"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>AY<Esc>g-g-"
+expected_buffer = "foo\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "g1_g_plus_walks_forward_after_g_minus"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>AY<Esc>g-g-g+"
+expected_buffer = "fooX\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "g1_counted_g_minus"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>AY<Esc>2g-"
+expected_buffer = "foo\n"
+expected_mode = "normal"

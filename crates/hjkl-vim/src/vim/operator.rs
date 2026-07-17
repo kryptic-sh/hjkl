@@ -457,6 +457,16 @@ pub(crate) fn apply_after_g<H: hjkl_engine::types::Host>(
             },
             count,
         ),
+        // G1: `g-` / `g+` — undo time-travel by `[count]` steps (`:h g-`).
+        // Same primitives `:earlier`/`:later` already use; `g-`/`g+` are
+        // just the normal-mode keystroke form with a leading count instead
+        // of an ex-command argument.
+        '-' => {
+            ed.earlier_by_steps(count.max(1));
+        }
+        '+' => {
+            ed.later_by_steps(count.max(1));
+        }
         // `g&` — repeat last `:s` over the whole buffer (1,$), keeping all
         // original flags. Equivalent to `:%s//~/&` in vim.
         '&' => {

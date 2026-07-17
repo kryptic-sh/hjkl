@@ -80,7 +80,7 @@ pub fn children_for(mode: Mode, prefix: &[KeyEvent]) -> Vec<VimDescriptor> {
 /// Expected count of root Normal-mode descriptors.
 pub const COUNT_NORMAL_ROOT: usize = 84;
 /// Expected count of g-prefix descriptors.
-pub const COUNT_G_PREFIX: usize = 21;
+pub const COUNT_G_PREFIX: usize = 23;
 /// Expected count of z-prefix descriptors.
 pub const COUNT_Z_PREFIX: usize = 11;
 /// Expected count of operator-pending root descriptors (d/c/y prefix children).
@@ -314,6 +314,8 @@ fn g_prefix() -> Vec<VimDescriptor> {
         VimDescriptor::char('*', "search word (partial) forward"),
         VimDescriptor::char('#', "search word (partial) backward"),
         VimDescriptor::char('c', "toggle comment operator"),
+        VimDescriptor::char('-', "undo time-travel (earlier)"),
+        VimDescriptor::char('+', "undo time-travel (later)"),
     ]
 }
 
