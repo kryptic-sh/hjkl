@@ -622,6 +622,23 @@ pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
     if cursor.row == 0 && cursor.col == 0 {
         return true;
     }
+    // B2: at col 0 of any row but the first, `Ctrl-W` joins with the
+    // previous line (deletes just the newline) and stops — it must NOT
+    // continue past the line boundary and eat the previous line's last
+    // word. Verified against nvim: `A<CR><C-w><Esc>` on "abc" restores
+    // "abc" (a bare join, not `J`'s space-inserting join).
+    if cursor.col == 0 {
+        let prev_row = cursor.row - 1;
+        let prev_chars = buf_line_chars(ed.buffer(), prev_row);
+        ed.mutate_edit(Edit::JoinLines {
+            row: prev_row,
+            count: 1,
+            with_space: false,
+        });
+        buf_set_cursor_rc(ed.buffer_mut(), prev_row, prev_chars);
+        ed.push_buffer_cursor_to_textarea();
+        return true;
+    }
     let iskeyword = ed.settings().iskeyword.clone();
     hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, 1, &iskeyword);
     let word_start = buf_cursor_pos(ed.buffer());

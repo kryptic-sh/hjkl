@@ -153,3 +153,38 @@ keys = "li<C-y><Esc>"
 expected_buffer = "abc\ndef\nghi\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# ─── B2 — insert C-w at BOL joins lines instead of eating the previous word ───
+
+# `A<CR><C-w><Esc>` on "abc": opens a new line, then immediately joins it
+# back — must restore "abc" exactly, not eat the word before the cursor.
+[[cases]]
+name = "b2_ctrl_w_at_bol_joins_not_eats_word"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "A<CR><C-w><Esc>"
+expected_buffer = "abc\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# BOL `Ctrl-W` with real text AFTER the cursor on the current line — the
+# join must preserve that trailing text (a bare join with no space, unlike
+# `J`), verified against nvim.
+[[cases]]
+name = "b2_ctrl_w_at_bol_preserves_trailing_text"
+initial_buffer = "\n"
+initial_cursor = [0, 0]
+keys = "iab cd<CR>ef<Home><C-w><Esc>"
+expected_buffer = "ab cdef\n"
+expected_mode = "normal"
+
+# BOL `Ctrl-W` on a pre-existing multi-line buffer (not a freshly opened
+# line) — same bare-join behaviour.
+[[cases]]
+name = "b2_ctrl_w_at_bol_existing_buffer"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "jI<C-w><Esc>"
+expected_buffer = "foobar\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
