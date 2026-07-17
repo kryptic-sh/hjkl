@@ -255,3 +255,61 @@ initial_cursor = [0, 0]
 keys = "A<CR>newtext<C-u>x<Esc>"
 expected_buffer = "abc\nx\n"
 expected_mode = "normal"
+
+# ─── B16 — ip/ap text objects on blank-line runs ──────────────────────────────
+
+# `dip` from a blank line in the middle of a 3-line blank run deletes the
+# WHOLE run, not a no-op.
+[[cases]]
+name = "b16_dip_from_middle_of_blank_run"
+initial_buffer = "a\n\n\n\nb\n"
+initial_cursor = [0, 0]
+keys = "jdip"
+expected_buffer = "a\nb\n"
+expected_mode = "normal"
+
+# `dap` from a blank run additionally consumes the following non-blank
+# paragraph (but not further — "c" sits behind its own blank separator).
+# Deliberately leaves trailing content after the deleted range so this case
+# doesn't also exercise the unrelated pre-existing "linewise delete through
+# the buffer's true end mislands the cursor on the phantom row" gap (see
+# the note near the bottom of this file).
+[[cases]]
+name = "b16_dap_from_blank_run_consumes_next_paragraph"
+initial_buffer = "a\n\n\n\nb\n\nc\n"
+initial_cursor = [0, 0]
+keys = "jdap"
+expected_buffer = "a\n\nc\n"
+expected_mode = "normal"
+
+# `dip` on a blank run at the very START of the buffer (no leading
+# paragraph) still deletes the whole run.
+[[cases]]
+name = "b16_dip_from_blank_run_at_buffer_start"
+initial_buffer = "\n\n\nb\n"
+initial_cursor = [0, 0]
+keys = "dip"
+expected_buffer = "b\n"
+expected_mode = "normal"
+
+# `dap` on a blank run at the buffer start (consumes the run AND the
+# following paragraph, emptying the buffer entirely) and `dip` on a blank
+# run touching EOF are NOT oracle-tested: both fully empty (or reduce to a
+# single unterminated line) the buffer, which trips an unrelated pre-existing
+# gap in `hjkl_driver.rs`'s buffer reconstruction (`lines.join("\n")` doesn't
+# re-append the trailing newline the way `nvim_driver.rs` does — reproduces
+# even on a plain `dd` emptying a one-line buffer, nothing to do with ip/ap).
+# The real `Editor::content()` API (verified via a throwaway unit probe) DOES
+# return the correct nvim-matching string in both cases, so this is a driver
+# artifact, not a product bug — pinned instead as unit tests in
+# `crates/hjkl-vim/tests/paragraph_blank_run.rs`, each verified against nvim.
+
+# `dap` on a blank run touching EOF (no paragraph AFTER it to consume) is a
+# no-op — verified against nvim: the buffer is left completely unchanged.
+[[cases]]
+name = "b16_dap_from_blank_run_at_eof_is_noop"
+initial_buffer = "a\n\n\n\n"
+initial_cursor = [0, 0]
+keys = "jdap"
+expected_buffer = "a\n\n\n\n"
+expected_mode = "normal"

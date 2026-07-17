@@ -1126,20 +1126,42 @@ pub(crate) fn paragraph_text_object<H: hjkl_engine::types::Host>(
         }
         rope_line_to_str(&rope, r).trim().is_empty()
     };
-    if is_blank(row) {
-        return None;
-    }
     let mut top = row;
-    while top > 0 && !is_blank(top - 1) {
-        top -= 1;
-    }
     let mut bot = row;
-    while bot + 1 < n_lines && !is_blank(bot + 1) {
-        bot += 1;
-    }
-    // For `ap`, include one trailing blank line if present.
-    if !inner && bot + 1 < n_lines && is_blank(bot + 1) {
-        bot += 1;
+    if is_blank(row) {
+        // B16: `:h ip`/`:h ap` on a blank line select the blank-line RUN
+        // (not a no-op). `ip` stops at the run's edges. `ap` additionally
+        // consumes the following non-blank paragraph, if one exists — but
+        // if the run touches EOF with no paragraph after it, `ap` is a
+        // no-op (verified against nvim: `dap` on a trailing blank run at
+        // EOF leaves the buffer untouched).
+        while top > 0 && is_blank(top - 1) {
+            top -= 1;
+        }
+        while bot + 1 < n_lines && is_blank(bot + 1) {
+            bot += 1;
+        }
+        if !inner {
+            if bot + 1 < n_lines {
+                bot += 1;
+                while bot + 1 < n_lines && !is_blank(bot + 1) {
+                    bot += 1;
+                }
+            } else {
+                return None;
+            }
+        }
+    } else {
+        while top > 0 && !is_blank(top - 1) {
+            top -= 1;
+        }
+        while bot + 1 < n_lines && !is_blank(bot + 1) {
+            bot += 1;
+        }
+        // For `ap`, include one trailing blank line if present.
+        if !inner && bot + 1 < n_lines && is_blank(bot + 1) {
+            bot += 1;
+        }
     }
     // `Nip` / `Nap` extend across `count - 1` further units. For `ip` a unit is
     // a single block — a maximal run of same-blankness lines — so counting
