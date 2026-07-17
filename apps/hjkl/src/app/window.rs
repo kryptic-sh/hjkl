@@ -85,7 +85,18 @@ impl App {
             },
             AppAction::NewSplit => self.dispatch_ex("new"),
             AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
-            AppAction::ResizeWidth(delta) => self.resize_width(delta * count as i32),
+            AppAction::ResizeWidth(delta) => {
+                // `<C-w><` / `<C-w>>` while the left dock is focused resize
+                // the dock (config-driven, persisted) instead of a tree
+                // split — there's no enclosing Vertical split to find (#63
+                // Phase A).
+                if self.is_left_dock(self.focused_window()) {
+                    self.resize_dock_width_by(delta * count as i32);
+                    self.persist_dock_width();
+                } else {
+                    self.resize_width(delta * count as i32);
+                }
+            }
             AppAction::EqualizeLayout => self.equalize_layout(),
             AppAction::MaximizeHeight => self.maximize_height(),
             AppAction::MaximizeWidth => self.maximize_width(),
@@ -101,11 +112,21 @@ impl App {
     pub(crate) fn dispatch_tmux_navigate(&mut self, dir: super::NavDir) {
         use super::NavDir;
         let focused = self.focused_window();
+        // Dock adjacency (#63 Phase A) counts as a real neighbour here too —
+        // otherwise `<C-h>` at the leftmost tree window with the explorer
+        // dock open would wrongly fall through to tmux instead of focusing
+        // the dock.
         let neighbour = match dir {
-            NavDir::Left => self.layout().neighbor_left(focused),
+            NavDir::Left => self
+                .layout()
+                .neighbor_left(focused)
+                .or_else(|| self.dock_neighbor_left(focused)),
             NavDir::Down => self.layout().neighbor_below(focused),
             NavDir::Up => self.layout().neighbor_above(focused),
-            NavDir::Right => self.layout().neighbor_right(focused),
+            NavDir::Right => self
+                .layout()
+                .neighbor_right(focused)
+                .or_else(|| self.dock_neighbor_right(focused)),
         };
         if neighbour.is_some() {
             match dir {
@@ -145,42 +166,64 @@ impl App {
         }
     }
 
-    /// Move focus to the window left of the current one (`Ctrl-w h`).
+    /// Move focus to the window left of the current one (`Ctrl-w h`). Tree
+    /// navigation first; when it finds no left neighbour, the left dock (if
+    /// open) is the frame-level left neighbour (#63 Phase A) — see
+    /// `dock::dock_neighbor_left` for why that's always correct without
+    /// hjkl-layout knowing docks exist.
     pub fn focus_left(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_left(fw) {
             self.switch_focus(target);
+        } else if let Some(target) = self.dock_neighbor_left(fw) {
+            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the window right of the current one (`Ctrl-w l`).
+    /// Move focus to the window right of the current one (`Ctrl-w l`). When
+    /// leaving the left dock, re-enters the main area (#63 Phase A).
     pub fn focus_right(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_right(fw) {
             self.switch_focus(target);
+        } else if let Some(target) = self.dock_neighbor_right(fw) {
+            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the next window in pre-order traversal, wrapping around (`Ctrl-w w`).
+    /// Move focus to the next window, wrapping around (`Ctrl-w w`). Cycle
+    /// order includes open docks (#63 Phase A) — vim includes special
+    /// windows in the `<C-w>w` cycle.
     pub fn focus_next(&mut self) {
         let fw = self.focused_window();
-        if let Some(target) = self.layout().next_leaf(fw) {
-            self.switch_focus(target);
+        let order = self.focus_cycle_order();
+        if let Some(pos) = order.iter().position(|&id| id == fw) {
+            self.switch_focus(order[(pos + 1) % order.len()]);
         }
     }
 
-    /// Move focus to the previous window in pre-order traversal, wrapping around (`Ctrl-w W`).
+    /// Move focus to the previous window, wrapping around (`Ctrl-w W`).
     pub fn focus_previous(&mut self) {
         let fw = self.focused_window();
-        if let Some(target) = self.layout().prev_leaf(fw) {
-            self.switch_focus(target);
+        let order = self.focus_cycle_order();
+        if let Some(pos) = order.iter().position(|&id| id == fw) {
+            let len = order.len();
+            self.switch_focus(order[(pos + len - 1) % len]);
         }
     }
 
     /// Close all windows except the focused one. Replaces the layout with a
-    /// single leaf and drops the `Option<Window>` entries for all other windows.
+    /// single leaf and drops the `Option<Window>` entries for all other
+    /// windows. Docks are left open untouched either way — they're never
+    /// tree leaves, so the collapse can't reach them (#63 Phase A). When the
+    /// focused window IS a dock, there's nothing in the tree to collapse
+    /// around it, so this is a no-op (matches vim: `:only` from a special
+    /// window doesn't touch the regular splits behind it).
     pub fn only_focused_window(&mut self) {
         let focused = self.focused_window();
+        if !self.layout().contains(focused) {
+            return;
+        }
         let all_leaves = self.layout().leaves();
         for id in all_leaves {
             if id != focused {
@@ -209,6 +252,13 @@ impl App {
     /// containing only the moved window.
     pub fn move_window_to_new_tab(&mut self) -> Result<(), &'static str> {
         let focused = self.focused_window();
+        // Docks are global (#63 Phase A) — moving one "to a new tab" is
+        // meaningless (it would still be visible on every tab, including
+        // the one it supposedly moved to). Clean no-op with its own message
+        // rather than the tree-only "E1" check below, which doesn't apply.
+        if !self.layout().contains(focused) {
+            return Err("dock windows can't move to a new tab");
+        }
         if self.layout().leaves().len() <= 1 {
             return Err("E1: only one window in this tab");
         }
@@ -245,7 +295,18 @@ impl App {
             self.close_cmdline_window();
             return;
         }
+        // Dock: closing it is the explorer's own toggle-off path, not a
+        // tree op — docks are never `LayoutTree` leaves, so
+        // `layout_mut().remove_leaf` would either wrongly report "E444:
+        // cannot close last window" (dock id not found anywhere in the
+        // tree) or, worse, silently do nothing to the tree while this
+        // function went on to null out a window the tree still doesn't
+        // reference at all (#63 Phase A).
         let focused = self.focused_window();
+        if self.is_left_dock(focused) {
+            self.close_left_dock();
+            return;
+        }
 
         // Capture commit context BEFORE the window is torn down so we can
         // run `git commit` after the close succeeds. `:wq`/`:x` already ran

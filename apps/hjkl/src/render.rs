@@ -573,53 +573,6 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
     }
 }
 
-/// Re-pin the explorer window to a fixed column width by overriding the ratio of
-/// its enclosing vertical split. Called each frame before `render_layout`, so the
-/// sidebar holds a constant width as the terminal or sibling windows resize
-/// (instead of scaling like a normal ratio split) and naturally resists
-/// `<C-w>=` equalize. `width` is the column width currently available to `node`,
-/// threaded down from the live frame area (NOT the stale `last_rect`, which would
-/// lag one frame on resize and visibly jiggle).
-fn pin_explorer_width(
-    node: &mut window::LayoutTree,
-    explorer_win: window::WindowId,
-    width: u16,
-    fixed: u16,
-) {
-    use window::{Axis, LayoutTree};
-    let LayoutTree::Split {
-        dir, ratio, a, b, ..
-    } = node
-    else {
-        return;
-    };
-    let w = width.max(1);
-    if dir.axis() == Axis::Col {
-        let frac = (fixed as f32 / w as f32).clamp(0.05, 0.9);
-        if matches!(a.as_ref(), LayoutTree::Leaf(id) if *id == explorer_win) {
-            *ratio = frac;
-            return;
-        }
-        if matches!(b.as_ref(), LayoutTree::Leaf(id) if *id == explorer_win) {
-            *ratio = 1.0 - frac;
-            return;
-        }
-    }
-    // Recurse with each child's CURRENT width (mirrors `split_rect`): a vertical
-    // split divides the width by ratio; a horizontal split gives both children
-    // the full width.
-    let (aw, bw) = match dir.axis() {
-        Axis::Col => {
-            let aw = ((w as f32) * *ratio).round() as u16;
-            let aw = aw.clamp(1, w.saturating_sub(1).max(1));
-            (aw, w.saturating_sub(aw))
-        }
-        Axis::Row => (w, w),
-    };
-    pin_explorer_width(a, explorer_win, aw, fixed);
-    pin_explorer_width(b, explorer_win, bw, fixed);
-}
-
 /// Draw a 1-cell-wide separator between sibling panes.
 ///
 /// For `SplitDir::Vertical` (side-by-side panes) the separator is a column
@@ -2004,21 +1957,73 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         top_bar(frame, app, tb);
     }
 
+    // Left dock (#63 Phase A): carved off the frame BEFORE the tree gets the
+    // remainder, exactly once per frame, so it holds a config-driven width
+    // across resizes without needing a split ratio at all (the old
+    // `pin_explorer_width` re-pinned a ratio every frame; the dock doesn't
+    // have one to re-pin — its rect is computed directly here). Uses
+    // `render_window` directly, same as any tree leaf — the dock's `WindowId`
+    // has a normal `windows[..]` / `window_editors[..]` entry, it's just
+    // never referenced by a `LayoutTree` leaf.
+    let dock_win = app.left_dock.as_ref().map(|d| d.win_id);
+    let main_area = if let Some(dock_win) = dock_win {
+        let total_w = buf_area.width;
+        let dock_w =
+            crate::app::dock::clamp_dock_width(app.config.explorer.width, total_w).min(total_w);
+        // Mirrors the Col-axis separator carving in `render_layout` /
+        // `headless_split_rect` exactly, so `mouse::hit_test_border`'s dock
+        // border cell lines up with what's actually drawn.
+        let (dock_rect, sep_rect, rest) = if dock_w >= 2 && buf_area.width > dock_w {
+            let content = Rect {
+                x: buf_area.x,
+                y: buf_area.y,
+                width: dock_w - 1,
+                height: buf_area.height,
+            };
+            let sep = Rect {
+                x: buf_area.x + dock_w - 1,
+                y: buf_area.y,
+                width: 1,
+                height: buf_area.height,
+            };
+            let rest = Rect {
+                x: buf_area.x + dock_w,
+                y: buf_area.y,
+                width: buf_area.width - dock_w,
+                height: buf_area.height,
+            };
+            (content, Some(sep), rest)
+        } else {
+            let w = dock_w.min(buf_area.width);
+            let content = Rect {
+                x: buf_area.x,
+                y: buf_area.y,
+                width: w,
+                height: buf_area.height,
+            };
+            let rest = Rect {
+                x: buf_area.x + w,
+                y: buf_area.y,
+                width: buf_area.width - w,
+                height: buf_area.height,
+            };
+            (content, None, rest)
+        };
+        render_window(frame, app, dock_rect, dock_win);
+        if let Some(sep) = sep_rect {
+            draw_separator(frame, sep, window::SplitDir::Vertical, app.theme.ui.border);
+        }
+        rest
+    } else {
+        buf_area
+    };
+
     // Walk the window tree and render each pane. Use take_layout /
     // restore_layout so we can pass `&mut LayoutTree` to render_layout
     // (which writes last_rect on Split nodes) while also holding
     // `&mut App` for render_window.
     let mut layout = app.take_layout();
-    // Keep the explorer sidebar a fixed column width across resizes.
-    if let Some(explorer_win) = app.explorer.as_ref().map(|e| e.win_id) {
-        pin_explorer_width(
-            &mut layout,
-            explorer_win,
-            buf_area.width,
-            crate::app::explorer::EXPLORER_WINDOW_WIDTH,
-        );
-    }
-    render_layout(frame, app, buf_area, &mut layout);
+    render_layout(frame, app, main_area, &mut layout);
     app.restore_layout(layout);
 
     status_line(frame, app, status_area);

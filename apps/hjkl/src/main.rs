@@ -293,11 +293,23 @@ fn main() -> Result<()> {
             .map(|c| (c, hjkl_config::ConfigSource::File(path.to_path_buf()))),
         None => hjkl_app::config::load(),
     };
-    let cfg = match cfg {
-        Ok((c, _src)) => c,
+    let (cfg, cfg_source) = match cfg {
+        Ok(pair) => pair,
         Err(e) => {
             eprintln!("hjkl: config error: {e}");
             std::process::exit(2);
+        }
+    };
+    // Resolved config file path, for dock-resize write-back
+    // (`App::persist_dock_width`). `ConfigSource::Defaults` means no file
+    // exists yet at the default XDG path — resolve that path anyway (rather
+    // than leaving `config_path` unset) so the FIRST interactive resize can
+    // still create a minimal file there, matching `write_key_at`'s
+    // create-if-missing behavior.
+    let cfg_path = match cfg_source {
+        hjkl_config::ConfigSource::File(p) => Some(p),
+        hjkl_config::ConfigSource::Defaults => {
+            hjkl_config::config_path::<hjkl_app::config::Config>().ok()
         }
     };
     // Bounds-check the parsed config (tab_width range, etc.). Schema-level
@@ -328,6 +340,10 @@ fn main() -> Result<()> {
         args.pattern,
     )?
     .with_config(cfg.clone());
+    let base_app = match cfg_path {
+        Some(p) => base_app.with_config_path(p),
+        None => base_app,
+    };
 
     let mut app = if cfg.lsp.enabled {
         let mgr = hjkl_lsp::LspManager::spawn(cfg.lsp.clone());

@@ -697,9 +697,9 @@ impl super::App {
         }
     }
 
-    /// Open the explorer window (left vertical split of the current tab).
+    /// Open the explorer window as the left dock (#63 Phase A — outside
+    /// every tab's `LayoutTree`, visible on every tab).
     fn open_explorer(&mut self) {
-        use super::window::{LayoutTree, SplitDir, Window};
         use hjkl_buffer::View;
         use hjkl_engine::{BufferEdit, Settings};
         use std::time::Instant;
@@ -788,31 +788,14 @@ impl super::App {
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;
 
-        let new_win_id = self.next_window_id;
-        self.next_window_id += 1;
-        self.windows.push(Some(Window::new(slot_idx)));
-
-        // Splice a left vertical split: new explorer window on the left,
-        // existing layout on the right.
-        let total_w = crossterm::terminal::size()
-            .map(|(w, _)| w as usize)
-            .unwrap_or(80);
-        let ratio_a = (EXPLORER_WINDOW_WIDTH as f32 / total_w as f32).clamp(0.05, 0.45);
-        let ratio_b = 1.0 - ratio_a;
-        let _ = ratio_b; // ratio_a is the left side
-
-        // Save the outgoing window's cursor/scroll before changing the layout.
+        // Save the outgoing window's cursor/scroll before changing focus.
         self.sync_viewport_from_editor();
 
-        let old_layout = self.take_layout();
-        let new_layout = LayoutTree::Split {
-            dir: SplitDir::Vertical,
-            ratio: ratio_a,
-            a: Box::new(LayoutTree::Leaf(new_win_id)),
-            b: Box::new(old_layout),
-            last_rect: None,
-        };
-        self.restore_layout(new_layout);
+        // Install as the left dock (#63 Phase A) — a real window with its
+        // own slot, but never woven into any tab's `LayoutTree`. Its width
+        // comes from config (`render::frame` carves its rect off the frame
+        // each draw), not a split ratio.
+        let new_win_id = self.install_left_dock(slot_idx, super::dock::DockKind::Explorer);
 
         // Focus the new explorer window.
         self.set_focused_window(new_win_id);
@@ -866,29 +849,20 @@ impl super::App {
         self.slots.iter().position(|s| s.is_explorer)
     }
 
-    /// Close the explorer window and remove its slot.
+    /// Close the explorer dock and remove its slot (#63 Phase A). Since the
+    /// dock was never a `LayoutTree` leaf, there is no tree collapse — just
+    /// tear the dock down and move focus onto a regular window if the
+    /// explorer (or nothing at all, in a degenerate test setup) was focused.
     fn close_explorer(&mut self) {
-        let Some(ep) = self.explorer.take() else {
+        if self.explorer.take().is_none() {
             return;
-        };
-        let new_focus = match self.layout_mut().remove_leaf(ep.win_id) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        self.windows[ep.win_id] = None;
-        if let Some(slot_idx) = self.explorer_slot_idx() {
-            self.slots.remove(slot_idx);
-            let slot_count = self.slots.len();
-            for win in self.windows.iter_mut().flatten() {
-                if win.slot == slot_idx {
-                    win.slot = 0;
-                } else if win.slot > slot_idx {
-                    win.slot -= 1;
-                }
-                win.slot = win.slot.min(slot_count.saturating_sub(1));
-            }
         }
-        self.set_focused_window(new_focus);
+        self.teardown_left_dock();
+        let target = self
+            .editor_target_window()
+            .or_else(|| self.layout().leaves().into_iter().next())
+            .unwrap_or_else(|| self.focused_window());
+        self.set_focused_window(target);
         self.sync_viewport_to_editor();
     }
 
@@ -2060,9 +2034,6 @@ impl super::App {
         Some(format!("Discard changes to {name}? (y/n)"))
     }
 }
-
-/// Width of the explorer window in columns.
-pub(crate) const EXPLORER_WINDOW_WIDTH: u16 = 36;
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 

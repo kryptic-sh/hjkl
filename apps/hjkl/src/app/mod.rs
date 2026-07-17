@@ -27,6 +27,7 @@ pub(crate) mod count_prefix;
 mod diff;
 pub(crate) mod diff_mode;
 mod dispatch;
+pub(crate) mod dock;
 mod engine_actions;
 mod event_loop;
 mod ex_dispatch;
@@ -237,6 +238,23 @@ pub struct App {
     pub picker: Option<crate::picker::Picker>,
     /// Left file-explorer window (#55). `None` when closed; closed on launch.
     pub(crate) explorer: Option<explorer::ExplorerPane>,
+    /// Left dock (#63 Phase A) — the window-management-tree-external home
+    /// for the explorer window when open. `Some` exactly when `explorer` is
+    /// `Some` (kept in lockstep by `explorer::open_explorer` /
+    /// `close_explorer`); a second field rather than deriving dock-ness from
+    /// `explorer` alone so future dock kinds (Phase B) share one mechanism.
+    pub(crate) left_dock: Option<dock::Dock>,
+    /// Bottom dock (#63 Phase A, unused). Reserved for quickfix/location-list
+    /// (Phase B) — wired through render/focus/dispatch now so that phase is
+    /// additive rather than another refactor.
+    pub(crate) bottom_dock: Option<dock::Dock>,
+    /// Resolved path of the user's config file, as loaded by `main` (either
+    /// the XDG default or an explicit `--config <PATH>`). `None` when no
+    /// config file exists yet (bundled-defaults-only) or in tests that never
+    /// call `with_config_path`. Used to write back interactive dock resizes
+    /// via `hjkl_config::write_key_at` — set once via `with_config_path`,
+    /// same lifecycle as `with_config`.
+    pub(crate) config_path: Option<PathBuf>,
     /// Pending explorer git-discard confirmation. `None` when not confirming.
     /// Carries the absolute path of the node whose worktree changes will be
     /// discarded when the user presses `y`.
@@ -710,6 +728,11 @@ pub(crate) struct BorderDrag {
     pub split_total: u16,
     /// Most recent mouse position (column for VSplit, row for HSplit).
     pub last_pos: u16,
+    /// `true` when dragging the left dock's border rather than a tree split
+    /// (#63 Phase A). Dock drags adjust `config.explorer.width` by the
+    /// per-frame delta and persist once on release; tree drags call
+    /// `resize_split_to` every frame (no persistence — ratios aren't config).
+    pub dock: bool,
 }
 
 pub(crate) use prompt::prompt_cursor_shape;
@@ -1045,28 +1068,28 @@ impl App {
     }
 
     /// `true` when `id` is a REGULAR editor window — one that may hold an
-    /// ordinary file buffer. Special panes are not regular: the explorer
-    /// window and the cmdline window (`q:`/`q/`). The quickfix/location
-    /// lists render as panels today (no `WindowId`); if they ever become
-    /// real windows they must be excluded here too.
+    /// ordinary file buffer. Special panes are not regular: dock windows
+    /// (#63 Phase A — the explorer today, quickfix/location-list docks in
+    /// Phase B) and the cmdline window (`q:`/`q/`).
+    ///
+    /// Docks live outside every tab's `LayoutTree` by construction (see
+    /// `dock.rs`), so the old "belt and braces: a window pointing at an
+    /// explorer-backed slot is not regular even if the tracked win_id is out
+    /// of sync" fallback is gone — there is now exactly one source of truth
+    /// for dock membership (`is_dock_window`), not a window/slot pair that
+    /// could drift apart.
     pub(crate) fn window_is_regular(&self, id: window::WindowId) -> bool {
         let exists = self.windows.get(id).is_some_and(Option::is_some);
         if !exists {
             return false;
         }
-        if self.explorer.as_ref().is_some_and(|ep| ep.win_id == id) {
+        if self.is_dock_window(id) {
             return false;
         }
         if self.cmdline_win.as_ref().is_some_and(|cw| cw.win_id == id) {
             return false;
         }
-        // Belt and braces: a window pointing at an explorer-backed slot is
-        // not regular even if `self.explorer`'s win_id is out of sync.
-        let slot_is_explorer = self.windows[id]
-            .as_ref()
-            .and_then(|w| self.slots.get(w.slot))
-            .is_some_and(|s| s.is_explorer);
-        !slot_is_explorer
+        true
     }
 
     /// The window that should RECEIVE a file buffer being opened right now:
@@ -2181,6 +2204,9 @@ impl App {
             search_field: None,
             picker: None,
             explorer: None,
+            left_dock: None,
+            bottom_dock: None,
+            config_path: None,
             explorer_git_discard_confirm: None,
             icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
@@ -2449,6 +2475,21 @@ impl App {
                 }
             }
         }
+        self
+    }
+
+    /// Record where the active config file lives (or would live), so
+    /// interactive dock resizes (`<C-w><`/`<C-w>>`, border-drag) know where
+    /// to persist via `hjkl_config::write_key_at`.
+    ///
+    /// `main` calls this with the same path `hjkl_app::config::load`/
+    /// `load_from` resolved (the XDG default or an explicit `--config`
+    /// override) right alongside `with_config`. Tests that exercise
+    /// persistence call it with a tempfile path; tests that don't care about
+    /// persistence can skip it — [`App::persist_dock_width`] silently no-ops
+    /// without a path.
+    pub fn with_config_path(mut self, path: PathBuf) -> Self {
+        self.config_path = Some(path);
         self
     }
 

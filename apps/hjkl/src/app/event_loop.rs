@@ -1388,8 +1388,10 @@ impl App {
                         .wrapping_sub(hit.border_cell.0 as usize)
                         .wrapping_sub((hit.border_cell.1 as usize) << 16);
                     let count = self.mouse_click_tracker.register(synthetic_id, 0, 0);
-                    if count == 2 {
-                        // Double-click → equalize all splits.
+                    if count == 2 && !hit.dock {
+                        // Double-click → equalize all splits. Not meaningful
+                        // for the dock border (no ratio to reset); a dock
+                        // double-click is just a no-op single click below.
                         self.equalize_split();
                     } else {
                         // Single click → begin drag.
@@ -1402,6 +1404,7 @@ impl App {
                             split_origin: hit.split_origin,
                             split_total: hit.split_total,
                             last_pos,
+                            dock: hit.dock,
                         });
                     }
                     return MouseOutcome::Continue;
@@ -1593,13 +1596,23 @@ impl App {
                         mouse::SplitOrientation::Vertical => me.column,
                         mouse::SplitOrientation::Horizontal => me.row,
                     };
-                    let split_pos = new_pos.saturating_sub(drag.split_origin);
-                    self.resize_split_to(
-                        drag.orientation,
-                        drag.split_origin,
-                        drag.split_total,
-                        split_pos,
-                    );
+                    if drag.dock {
+                        // Dock resize (#63 Phase A) is delta-based against
+                        // the live config width, not a ratio recompute —
+                        // there's no split origin/total to work from.
+                        // Persistence happens once on release, not per
+                        // drag frame (see the `Up` arm below).
+                        let delta = new_pos as i32 - drag.last_pos as i32;
+                        self.resize_dock_width_by(delta);
+                    } else {
+                        let split_pos = new_pos.saturating_sub(drag.split_origin);
+                        self.resize_split_to(
+                            drag.orientation,
+                            drag.split_origin,
+                            drag.split_total,
+                            split_pos,
+                        );
+                    }
                     if let Some(d) = self.border_drag.as_mut() {
                         d.last_pos = new_pos;
                     }
@@ -1623,6 +1636,12 @@ impl App {
             // Up: clear any active border drag; vim stays in
             // Visual after a text drag-release — no-op otherwise.
             MouseEventKind::Up(MouseButton::Left) if self.border_drag.is_some() => {
+                // Dock-width drags persist once here on release, rather than
+                // per drag-frame (`<C-w><`/`<C-w>>` persist per press
+                // instead — see `App::persist_dock_width`'s doc comment).
+                if self.border_drag.is_some_and(|d| d.dock) {
+                    self.persist_dock_width();
+                }
                 self.border_drag = None;
             }
 

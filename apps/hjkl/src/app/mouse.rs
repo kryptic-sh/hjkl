@@ -54,6 +54,11 @@ pub struct BorderHit {
     /// Total size (width for VSplit, height for HSplit) of the split's
     /// `last_rect`. Needed in `resize_split_to` for ratio math.
     pub split_total: u16,
+    /// `true` when this border belongs to the left dock rather than a tree
+    /// split (#63 Phase A). Dock resize is delta-based (see
+    /// `App::resize_dock_width_by`), not ratio-based, so `split_origin` /
+    /// `split_total` are unused (zeroed) for a dock hit.
+    pub dock: bool,
 }
 
 /// Walk the layout tree and find a border within `tolerance` cells of
@@ -67,7 +72,34 @@ pub struct BorderHit {
 /// Returns `None` before the first render or when not on any border.
 pub fn hit_test_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
     let layout = app.layout();
-    hit_test_border_tree(layout, col, row)
+    if let Some(hit) = hit_test_border_tree(layout, col, row) {
+        return Some(hit);
+    }
+    hit_test_dock_border(app, col, row)
+}
+
+/// Left-dock right-border hit test (#63 Phase A). The dock's `last_rect` is
+/// written by the same `render_window` call a tree leaf goes through
+/// (`render::frame`, before `render_layout`), already shrunk by 1 column for
+/// the separator when one was drawn — so the border sits exactly one column
+/// past `rect.x + rect.w`, mirroring the Col-axis carving in
+/// `render::frame` / `headless_split_rect`.
+fn hit_test_dock_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
+    let dock = app.left_dock.as_ref()?;
+    let win = app.windows.get(dock.win_id)?.as_ref()?;
+    let rect = win.last_rect?;
+    let border_col = rect.x + rect.w;
+    if col == border_col && row >= rect.y && row < rect.y + rect.h {
+        Some(BorderHit {
+            orientation: SplitOrientation::Vertical,
+            border_cell: (col, row),
+            split_origin: 0,
+            split_total: 0,
+            dock: true,
+        })
+    } else {
+        None
+    }
 }
 
 fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Option<BorderHit> {
@@ -98,6 +130,7 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                             border_cell: (col, row),
                             split_origin: area.x,
                             split_total: area.w,
+                            dock: false,
                         })
                     } else {
                         None
@@ -115,6 +148,7 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                             border_cell: (col, row),
                             split_origin: area.y,
                             split_total: area.h,
+                            dock: false,
                         })
                     } else {
                         None
@@ -149,6 +183,21 @@ pub fn hit_test_window(app: &App, col: u16, row: u16) -> Option<window::WindowId
             && rect_contains(rect, col, row)
         {
             return Some(win_id);
+        }
+    }
+    // Docks (#63 Phase A) are never tree leaves, so they need their own
+    // check — same `last_rect`-based hit test, `render::frame` writes it via
+    // the same `render_window` call a tree leaf goes through.
+    for dock_win in [app.left_dock.as_ref(), app.bottom_dock.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|d| d.win_id)
+    {
+        if let Some(Some(win)) = app.windows.get(dock_win)
+            && let Some(rect) = win.last_rect
+            && rect_contains(rect, col, row)
+        {
+            return Some(dock_win);
         }
     }
     None

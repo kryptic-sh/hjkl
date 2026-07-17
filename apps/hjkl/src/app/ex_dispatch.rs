@@ -708,6 +708,11 @@ impl App {
     /// scroll).  With a filename: opens a new slot in the upper half.
     pub(super) fn do_split(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
+        // Docks are never `LayoutTree` leaves (#63 Phase A) — splitting one
+        // would leave the new window unreachable by any tree op (never
+        // spliced in, never focusable via `<C-w>` cycling). Reroute to a
+        // regular window first, same as buffer-open paths already do.
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         let cur_slot = self.windows[focused]
             .as_ref()
@@ -763,6 +768,8 @@ impl App {
     /// New window goes on the left (vim convention).
     pub(super) fn do_vsplit(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
+        // See `do_split`: reroute off a dock before splitting (#63 Phase A).
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         let cur_slot = self.windows[focused]
             .as_ref()
@@ -814,6 +821,8 @@ impl App {
     /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
     pub(super) fn do_vnew(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
+        // See `do_split`: reroute off a dock before splitting (#63 Phase A).
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         // Inherit the source window's scroll from its own editor (#151 Phase D).
         let (top_row, top_col) = self.window_scroll(focused);
@@ -888,6 +897,8 @@ impl App {
     /// New window appears on top (a), existing window stays below (b).
     pub(super) fn do_new(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
+        // See `do_split`: reroute off a dock before splitting (#63 Phase A).
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         // Inherit the source window's scroll from its own editor (#151 Phase D).
         let (top_row, top_col) = self.window_scroll(focused);
