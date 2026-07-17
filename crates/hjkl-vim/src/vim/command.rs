@@ -621,7 +621,12 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     if yank.is_empty() {
         return;
     }
-    for _ in 0..count {
+    // Charwise pastes insert the register text repeated `count` times as a
+    // single block (see the `i == 0` branch below), so they only need one
+    // pass through the loop; linewise pastes still iterate `count` times
+    // (each pass opens its own fresh row(s)).
+    let iterations = if linewise { count } else { count.min(1) };
+    for _ in 0..iterations {
         ed.sync_buffer_content_from_textarea();
         let yank = yank.clone();
         if linewise {
@@ -666,6 +671,17 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
             // Charwise paste. `P` inserts at cursor (shifting cell
             // right); `p` inserts after cursor (advance one cell
             // first, clamped to the end of the line).
+            //
+            // B20: `[count]p`/`[count]P` insert the register text
+            // repeated `count` times as a SINGLE block (vim semantics),
+            // not `count` separate paste operations — a per-iteration
+            // loop is only correct for `p` (each pass's cursor lands
+            // right after the previous insert, so it happens to
+            // append); for `P` every pass re-anchors on the *original*
+            // cursor, re-inserting at the same point and leaving the
+            // cursor on the wrong char once the loop ends. Building the
+            // repeated text once and inserting it in one shot gives the
+            // right buffer AND the right final cursor for both.
             let cursor = buf_cursor_pos(ed.buffer());
             let at = if before {
                 cursor
@@ -673,10 +689,8 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
                 let line_chars = buf_line_chars(ed.buffer(), cursor.row);
                 Position::new(cursor.row, (cursor.col + 1).min(line_chars))
             };
-            ed.mutate_edit(Edit::InsertStr {
-                at,
-                text: yank.clone(),
-            });
+            let repeated = yank.repeat(count);
+            ed.mutate_edit(Edit::InsertStr { at, text: repeated });
             // Vim parks the cursor on the last char of the pasted text
             // (do_insert_str leaves it one past the end). `gp` instead
             // leaves the cursor just AFTER the pasted text, so skip the

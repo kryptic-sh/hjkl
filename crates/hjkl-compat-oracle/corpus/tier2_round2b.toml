@@ -44,3 +44,35 @@ initial_cursor = [0, 1]
 keys = "5~"
 expected_buffer = "aBC\n"
 expected_cursor = [0, 2]
+
+# ─── B20 — counted `P` cursor position ────────────────────────────────────────
+
+# `yl3P` on "abc": yanks 'a' (1 char), pastes it 3 times before the cursor as
+# one block ("aaa" + "abc"). Cursor lands on the LAST char of the pasted
+# block, not on the first char pasted by the final loop iteration.
+[[cases]]
+name = "b20_counted_capital_p_charwise_cursor"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "yl3P"
+expected_buffer = "aaaabc\n"
+expected_cursor = [0, 2]
+
+# `yl1P` (no count) still lands on the single pasted char.
+[[cases]]
+name = "b20_uncounted_capital_p_charwise_cursor"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "yl1P"
+expected_buffer = "aabc\n"
+expected_cursor = [0, 0]
+
+# Multi-char register + count: `yw3P` yanks "abc " (word + trailing space)
+# and pastes it 3 times before the cursor.
+[[cases]]
+name = "b20_counted_capital_p_multichar_register"
+initial_buffer = "abc def\n"
+initial_cursor = [0, 0]
+keys = "yw3P"
+expected_buffer = "abc abc abc abc def\n"
+expected_cursor = [0, 11]
