@@ -83,15 +83,23 @@ pub fn step_insert<H: Host>(
                 ed.insert_ctrl_y();
                 return true;
             }
-            // B1: any other ctrl-key combo has no dedicated insert-mode
-            // binding. Real nvim inserts the raw control byte for most of
-            // these (verified: `<C-b>` types a literal ^B) — reproducing
-            // that here would put unprintable bytes in the buffer for no
-            // benefit, so we consume the key as a no-op instead (documented
-            // as an accepted divergence in DIVERGE.md). What this fixes is
-            // the PREVIOUS behaviour of falling through to `handle_insert_key`
-            // below, which typed the ctrl letter itself as a literal
-            // character (e.g. `<C-a>` inserted a literal "a").
+            // DELIBERATE vim divergence — any other ctrl-key combo has no
+            // dedicated insert-mode binding, and we consume it as a NO-OP.
+            //
+            // Real nvim instead inserts the raw control byte for unbound
+            // ctrl keys (verified against nvim 0.12: `i<C-b>x<Esc>` on
+            // "hello" produces "\x02xhello" — a literal ^B in the buffer).
+            // Reproducing that would put unprintable, un-typeable bytes in
+            // the document for keys that have no editing purpose in a TUI,
+            // so the no-op is intentional. Do NOT "fix" this to match nvim
+            // without deciding that trade-off deliberately; the choice is
+            // pinned by dispatch_input.rs::
+            // insert_unhandled_ctrl_key_is_noop_not_literal_letter.
+            //
+            // What this arm must never regress to: falling through to
+            // `handle_insert_key` below, which would type the ctrl LETTER
+            // itself as a literal character (the pre-fix bug: `<C-a>`
+            // inserted a plain "a").
             Key::Char(_) => {
                 return true;
             }
