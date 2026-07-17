@@ -273,6 +273,14 @@ pub(crate) fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
             break;
         }
     }
+    // B21: a counted `~` that runs past EOL can leave the cursor one past
+    // the new end — vim clamps to the last column in Normal mode.
+    let cursor = buf_cursor_pos(ed.buffer());
+    let line_chars = buf_line_chars(ed.buffer(), cursor.row);
+    if line_chars > 0 && cursor.col >= line_chars {
+        buf_set_cursor_rc(ed.buffer_mut(), cursor.row, line_chars - 1);
+        ed.push_buffer_cursor_to_textarea();
+    }
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::ToggleCase {
             count: count.max(1),

@@ -32,3 +32,15 @@ initial_cursor = [0, 3]
 keys = "3x"
 expected_buffer = "abc\n"
 expected_cursor = [0, 2]
+
+# ─── B21 — counted `~` runs past EOL ──────────────────────────────────────────
+
+# `5~` at col 1 of "abc" only has 2 chars left to toggle; cursor clamps to
+# the last column instead of running past it.
+[[cases]]
+name = "b21_counted_tilde_clamps_cursor"
+initial_buffer = "abc\n"
+initial_cursor = [0, 1]
+keys = "5~"
+expected_buffer = "aBC\n"
+expected_cursor = [0, 2]
