@@ -68,11 +68,16 @@ hjkl +/foo file.txt   # search for "foo" on open
 hjkl +picker          # open fuzzy file picker immediately
 hjkl +vsp file1 file2 # open two files in a vertical split
 hjkl --clean file.txt # bundled defaults only, ignore the user config
+hjkl -u NONE file.txt # nvim-style alias: same as --clean
 ```
 
 `--clean` starts from the bundled defaults, ignoring the user config file at its
 default location (and any `--config` path), and does not persist runtime changes
 (dock resizes, `explorer.open`) back to disk. Mirrors `nvim --clean`.
+
+`-u <PATH>` is an nvim-compatible alias for `--config <PATH>`; `-u NONE` and
+`-u NORC` behave like `--clean` (hjkl has no plugin system and a single config
+file, so nvim's two "skip init" sentinels collapse onto the same behavior).
 
 <!-- screenshot placeholder -->
 <!-- ![hjkl screenshot](https://hjkl.kryptic.sh/screenshot.png) -->

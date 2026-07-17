@@ -69,7 +69,9 @@ struct Cli {
 
     /// Override the user config path (default: $XDG_CONFIG_HOME/hjkl/config.toml).
     /// Bundled defaults are still applied; the file is layered on top.
-    #[arg(long, value_name = "PATH")]
+    /// `-u <PATH>` is an nvim-compatible alias for this flag; `-u NONE` and
+    /// `-u NORC` (case-sensitive, matching nvim) behave like `--clean`.
+    #[arg(short = 'u', long, value_name = "PATH")]
     config: Option<PathBuf>,
 
     /// Start from the bundled defaults only: ignore the user config file at
@@ -226,6 +228,17 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
     };
+    // nvim compatibility: `-u NONE` disables plugins + config, `-u NORC` skips
+    // just the init file. hjkl has no plugin system and a single TOML config,
+    // so both sentinels collapse onto the same thing: bundled defaults only,
+    // no user file, no write-back — i.e. `--clean`. Case-sensitive, matching
+    // nvim's own sentinel handling.
+    if let Some(path) = args.config.as_deref().and_then(|p| p.to_str())
+        && (path == "NONE" || path == "NORC")
+    {
+        args.clean = true;
+        args.config = None;
+    }
     let warnings = apply_vim_tokens(&mut args, &vim_tokens);
     Ok((args, warnings))
 }
@@ -732,6 +745,37 @@ mod cli_tests {
             .collect();
         let (args, _) = parse_argv(raw).expect("parse_argv");
         assert!(!args.clean, "clean defaults to false without the flag");
+    }
+
+    /// `-u <PATH>` is a clap alias for `--config <PATH>`; `-u NONE` / `-u NORC`
+    /// (nvim's "skip init" sentinels) collapse onto `--clean` instead, since
+    /// hjkl has no plugin system and a single config file. Case-sensitive,
+    /// matching nvim.
+    #[test]
+    fn parse_argv_dash_u_config_alias_and_sentinels() {
+        let raw: Vec<String> = ["hjkl", "-u", "/some/path.toml", "f.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.config, Some(PathBuf::from("/some/path.toml")));
+        assert!(!args.clean);
+
+        let raw: Vec<String> = ["hjkl", "-u", "NONE", "f.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(args.clean);
+        assert_eq!(args.config, None);
+
+        let raw: Vec<String> = ["hjkl", "-u", "NORC"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(args.clean);
+        assert_eq!(args.config, None);
     }
 
     fn blank_args() -> Args {
