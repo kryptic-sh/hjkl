@@ -485,6 +485,13 @@ impl super::App {
     pub(crate) fn restore_dock_state_from_config(&mut self) {
         if self.config.explorer.open && self.explorer.is_none() {
             self.toggle_explorer();
+            // An interactive open focuses the explorer; a startup RESTORE
+            // must not — the user launched `hjkl <file>` to edit the file,
+            // so focus belongs in the main area with the tree merely
+            // visible (IDE/vim-session convention).
+            if let Some(target) = self.editor_target_window() {
+                self.switch_focus(target);
+            }
         }
     }
 }
