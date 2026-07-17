@@ -40,6 +40,14 @@ pub struct QfEntry {
 pub struct QfList {
     entries: Vec<QfEntry>,
     cursor: usize,
+    /// Raw search pattern that produced this list (`:grep {pat}`), if any.
+    /// `None` for pattern-less sources (`:make`, `:cexpr`, diagnostics, …).
+    /// Lives ON the list — not beside it — so history stacks
+    /// (`:colder`/`:cnewer` clone whole `QfList`s) carry each list's own
+    /// provenance and a restored `:make` list can never inherit the pattern
+    /// of the `:grep` list that replaced it. Hosts use it to overlay
+    /// match highlighting on the rendered entries.
+    pattern: Option<String>,
 }
 
 impl QfList {
@@ -48,15 +56,35 @@ impl QfList {
     }
 
     /// Replace all entries and reset the cursor to the first entry.
+    ///
+    /// Also clears the stored search pattern — a replacement is a new
+    /// provenance, and most populators (`:make`, `:cexpr`, diagnostics)
+    /// have no pattern. Pattern-ful populators (`:grep`) call
+    /// [`Self::set_search_pattern`] immediately after.
     pub fn set(&mut self, entries: Vec<QfEntry>) {
         self.entries = entries;
         self.cursor = 0;
+        self.pattern = None;
     }
 
-    /// Drop all entries and reset the cursor.
+    /// Drop all entries and reset the cursor (and the stored pattern —
+    /// same provenance rule as [`Self::set`]).
     pub fn clear(&mut self) {
         self.entries.clear();
         self.cursor = 0;
+        self.pattern = None;
+    }
+
+    /// The raw search pattern that produced this list, if any. See the
+    /// field doc for lifecycle.
+    pub fn search_pattern(&self) -> Option<&str> {
+        self.pattern.as_deref()
+    }
+
+    /// Record (or clear) the search pattern that produced this list.
+    /// Call after [`Self::set`] — `set` deliberately resets it.
+    pub fn set_search_pattern(&mut self, pattern: Option<String>) {
+        self.pattern = pattern;
     }
 
     /// Append entries to the list without changing the cursor.
@@ -216,5 +244,35 @@ mod tests {
         assert_eq!(l.cursor(), 1);
         l.set_cursor(99);
         assert_eq!(l.cursor(), 1, "out-of-range set_cursor is a no-op");
+    }
+
+    /// `set` (and `clear`) reset the stored search pattern: a replacement
+    /// is a new provenance, so a pattern-less repopulation (`:make`,
+    /// `:cexpr`, diagnostics) can never inherit the previous `:grep`
+    /// pattern. Pattern-ful populators re-record it after `set`.
+    #[test]
+    fn set_and_clear_reset_the_search_pattern() {
+        let mut l = list3();
+        l.set_search_pattern(Some("needle".into()));
+        assert_eq!(l.search_pattern(), Some("needle"));
+
+        l.set(vec![]);
+        assert_eq!(l.search_pattern(), None, "set must clear the pattern");
+
+        l.set_search_pattern(Some("other".into()));
+        l.clear();
+        assert_eq!(l.search_pattern(), None, "clear must clear the pattern");
+    }
+
+    /// History stacks clone whole `QfList`s — the pattern must travel with
+    /// its list through a clone (the `:colder`/`:cnewer` mechanism).
+    #[test]
+    fn clone_carries_the_search_pattern() {
+        let mut l = list3();
+        l.set_search_pattern(Some("needle".into()));
+        let snapshot = l.clone();
+        l.set(vec![]);
+        assert_eq!(l.search_pattern(), None);
+        assert_eq!(snapshot.search_pattern(), Some("needle"));
     }
 }

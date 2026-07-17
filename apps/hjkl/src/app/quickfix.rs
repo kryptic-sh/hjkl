@@ -277,7 +277,11 @@ impl crate::app::App {
         // Computed BEFORE the content mutation below: highlighting reads
         // `self.directory` / `self.preview_highlighters` / `self.theme`
         // (immutable), not the slot being rebuilt.
-        let spans = self.qf_dock_spans(self.qf_list(w).entries(), &layouts);
+        let spans = self.qf_dock_spans(
+            self.qf_list(w).entries(),
+            &layouts,
+            self.qf_list(w).search_pattern(),
+        );
 
         self.slots[slot_idx].set_content(&text);
         let _ = self.slots[slot_idx].take_content_edits();
@@ -321,14 +325,29 @@ impl crate::app::App {
     /// so they're applied to every row regardless of the budget: entries
     /// past the cap still render the fully formatted, aligned line, just
     /// without highlighting on the message text.
+    ///
+    /// When `pattern` is set (the list came from `:grep` — see
+    /// `QfList::search_pattern`), each in-budget entry's message is also
+    /// scanned with the SAME shared scanner hlsearch uses
+    /// ([`hjkl_buffer::search_match_ranges`]) and the match ranges are
+    /// overlaid in the code column with the SAME
+    /// [`search_match_style`](crate::theme::UiTheme::search_match_style)
+    /// the in-buffer `/` highlight paints — so a `:grep` hit looks in the
+    /// dock exactly like a `/` hit looks in the buffer. The overlay WINS
+    /// over the syntax spans on overlap (see [`overlay_search_ranges`]),
+    /// mirroring the in-buffer layering where `paint_row` patches the
+    /// search style AFTER the span style.
     fn qf_dock_spans(
         &self,
         entries: &[QfEntry],
         layouts: &[QfRowLayout],
+        pattern: Option<&str>,
     ) -> Vec<Vec<(usize, usize, RStyle)>> {
         let path_style = RStyle::default().fg(self.theme.ui.text);
         let loc_style = RStyle::default().fg(self.theme.ui.non_text);
         let sep_style = RStyle::default().fg(self.theme.ui.border);
+        let search_re = pattern.and_then(compile_qf_search_regex);
+        let search_style = self.theme.ui.search_match_style();
 
         entries
             .iter()
@@ -361,6 +380,16 @@ impl crate::app::App {
                                 style,
                             ));
                         }
+                    }
+                    if let Some(re) = &search_re {
+                        let matches: Vec<(usize, usize)> =
+                            hjkl_buffer::search_match_ranges(re, &entry.message)
+                                .into_iter()
+                                .map(|(s, e)| {
+                                    (layout.code_col_start + s, layout.code_col_start + e)
+                                })
+                                .collect();
+                        spans = overlay_search_ranges(spans, &matches, search_style);
                     }
                 }
                 spans
@@ -762,6 +791,13 @@ impl crate::app::App {
         let n = entries.len();
         self.qf_push_history(w);
         self.qf_list_mut(w).set(entries);
+        // Record the originating pattern (AFTER `set`, which clears it) so
+        // the dock rebuild can overlay search-match highlighting on each
+        // entry's message. `:grep` is the only pattern-ful populator —
+        // `:make`/`:cexpr`/diagnostics have no pattern, and `set`'s
+        // auto-clear keeps them that way.
+        self.qf_list_mut(w)
+            .set_search_pattern(Some(pat.to_string()));
         if n == 0 {
             self.qf_set_open(w, false);
             self.bus.info(format!("no matches for \"{pat}\""));
@@ -1106,6 +1142,81 @@ fn qf_row_layouts(list: &QfList) -> Vec<QfRowLayout> {
         .collect()
 }
 
+/// Compile a stored quickfix search pattern (`QfList::search_pattern`) for
+/// the dock's match overlay.
+///
+/// The pattern is used VERBATIM as Rust `regex` syntax: ripgrep's default
+/// engine IS the Rust regex crate, so for the primary `:grep` backend
+/// (`rg`) this compiles exactly what matched. Smart-case mirrors the
+/// `--smart-case` flag `qf_run_grep` passes to rg — case-insensitive unless
+/// the pattern contains an uppercase letter. Patterns the Rust engine
+/// rejects (e.g. BRE-only syntax fed to the plain-`grep` fallback backend)
+/// return `None` and simply disable the overlay — formatting and syntax
+/// highlighting are unaffected.
+fn compile_qf_search_regex(pat: &str) -> Option<regex::Regex> {
+    regex::RegexBuilder::new(pat)
+        .case_insensitive(!pat.chars().any(|c| c.is_uppercase()))
+        .build()
+        .ok()
+}
+
+/// Merge search-match `overlay` ranges into a row's span list with the
+/// overlay style WINNING wherever they overlap an existing span.
+///
+/// This is the span-level equivalent of the in-buffer hlsearch layering:
+/// `BufferView::paint_row` resolves the syntax span style first and then
+/// patches the search style over it, and since
+/// [`search_match_style`](crate::theme::UiTheme::search_match_style) sets
+/// both fg AND bg, the search style fully replaces the syntax colors within
+/// a match. Here the dock's overlay travels through the same styled-spans
+/// channel as the syntax spans, so precedence must be made structural
+/// instead: every existing span is SPLIT around the overlay ranges (the
+/// overlapped slices are dropped) and one span per overlay range is
+/// appended, yielding a list where the overlay style is the only style
+/// present inside a match. `overlay` must be sorted and non-overlapping —
+/// which [`hjkl_buffer::search_match_ranges`]'s output (regex `find_iter`
+/// order) always is.
+fn overlay_search_ranges(
+    spans: Vec<(usize, usize, RStyle)>,
+    overlay: &[(usize, usize)],
+    style: RStyle,
+) -> Vec<(usize, usize, RStyle)> {
+    if overlay.is_empty() {
+        return spans;
+    }
+    let mut out: Vec<(usize, usize, RStyle)> = Vec::with_capacity(spans.len() + overlay.len());
+    for (start, end, st) in spans {
+        // Subtract every overlay range from [start, end), keeping the
+        // uncovered slices.
+        let mut cur = start;
+        for &(os, oe) in overlay {
+            if oe <= cur {
+                continue;
+            }
+            if os >= end {
+                break;
+            }
+            if os > cur {
+                out.push((cur, os, st));
+            }
+            cur = cur.max(oe);
+            if cur >= end {
+                break;
+            }
+        }
+        if cur < end {
+            out.push((cur, end, st));
+        }
+    }
+    for &(os, oe) in overlay {
+        if oe > os {
+            out.push((os, oe, style));
+        }
+    }
+    out.sort_by_key(|&(s, _, _)| s);
+    out
+}
+
 /// Render list `list`'s entries into the bottom dock's buffer text, one line
 /// per entry — see [`qf_row_layouts`] for the format. Plain-text-only
 /// convenience wrapper around it (used directly by unit tests that only
@@ -1259,7 +1370,7 @@ mod tests {
             l.set(entries.clone());
             l
         });
-        let spans = app.qf_dock_spans(&entries, &layouts);
+        let spans = app.qf_dock_spans(&entries, &layouts, None);
         assert_eq!(spans.len(), 1);
         let row = &spans[0];
         // path span + loc-suffix span + separator span; no code span (the
@@ -1302,7 +1413,7 @@ mod tests {
         list.set(entries.clone());
         let layouts = super::qf_row_layouts(&list);
 
-        let spans = app.qf_dock_spans(&entries, &layouts);
+        let spans = app.qf_dock_spans(&entries, &layouts, None);
         assert_eq!(spans.len(), n, "every entry must still get a row, no panic");
 
         for (i, row) in spans.iter().enumerate().skip(QF_HIGHLIGHT_BUDGET) {
@@ -1312,5 +1423,140 @@ mod tests {
                 "entry {i} is past the budget — must be format-only spans"
             );
         }
+    }
+
+    // ── search-match overlay ────────────────────────────────────────────
+
+    /// A grep-provenance list (pattern stored, the exact state
+    /// `qf_run_grep` leaves behind: `set` + `set_search_pattern`) must
+    /// yield search-style spans EXACTLY over each pattern occurrence in
+    /// the message, shifted into the code column.
+    #[test]
+    fn qf_dock_spans_overlays_search_matches_in_code_column() {
+        let app = App::new(None, false, None, None).unwrap();
+        // "alpha match beta match": occurrences at bytes 6..11 and 17..22.
+        let entries = vec![entry(
+            "src/x.qf-test-unknown-ext",
+            0,
+            0,
+            "alpha match beta match",
+        )];
+        let mut list = QfList::new();
+        list.set(entries.clone());
+        list.set_search_pattern(Some("match".to_string()));
+        let layouts = super::qf_row_layouts(&list);
+        let code_start = "src/x.qf-test-unknown-ext:1:1".len() + super::QF_COL_SEP.len();
+
+        let spans = app.qf_dock_spans(&entries, &layouts, list.search_pattern());
+        let row = &spans[0];
+        let search_style = app.theme.ui.search_match_style();
+        let match_spans: Vec<_> = row
+            .iter()
+            .filter(|(_, _, st)| *st == search_style)
+            .collect();
+        assert_eq!(
+            match_spans.len(),
+            2,
+            "one search span per occurrence, got {row:?}"
+        );
+        assert_eq!(
+            (match_spans[0].0, match_spans[0].1),
+            (code_start + 6, code_start + 11),
+            "first occurrence must sit exactly over 'match' in the code column"
+        );
+        assert_eq!(
+            (match_spans[1].0, match_spans[1].1),
+            (code_start + 17, code_start + 22)
+        );
+        // Nothing else may overlap the match ranges — the overlay must be
+        // the ONLY style inside a match (it wins over syntax).
+        for &(s, e, st) in row {
+            if st == search_style {
+                continue;
+            }
+            for &&(ms, me, _) in &match_spans {
+                assert!(
+                    e <= ms || s >= me,
+                    "non-search span ({s},{e}) overlaps match ({ms},{me})"
+                );
+            }
+        }
+    }
+
+    /// A pattern-less list (the state `:make`/`:cexpr`/diagnostics leave
+    /// behind: `set` with no `set_search_pattern`) must yield NO
+    /// search-style spans even when the message contains text that a stale
+    /// pattern would have matched.
+    #[test]
+    fn qf_dock_spans_no_overlay_without_a_pattern() {
+        let app = App::new(None, false, None, None).unwrap();
+        let entries = vec![entry("src/x.qf-test-unknown-ext", 0, 0, "alpha match beta")];
+        let mut list = QfList::new();
+        list.set(entries.clone()); // `set` also clears any prior pattern
+        let layouts = super::qf_row_layouts(&list);
+
+        let spans = app.qf_dock_spans(&entries, &layouts, list.search_pattern());
+        let search_style = app.theme.ui.search_match_style();
+        assert!(
+            spans[0].iter().all(|(_, _, st)| *st != search_style),
+            "no search-style spans without a stored pattern, got {:?}",
+            spans[0]
+        );
+    }
+
+    /// The overlay WINS over an underlying (syntax) span on overlap: the
+    /// base span is split around the match and the match range carries
+    /// only the overlay style. Expressed directly against
+    /// `overlay_search_ranges` so no real grammar is needed.
+    #[test]
+    fn overlay_search_ranges_wins_over_underlying_spans() {
+        use super::RStyle;
+        use ratatui::style::Color;
+        let syntax = RStyle::default().fg(Color::Rgb(1, 2, 3));
+        let search = RStyle::default().fg(Color::Rgb(9, 9, 9)).bg(Color::Black);
+
+        // One broad syntax span [0, 10); match at [3, 6).
+        let merged = super::overlay_search_ranges(vec![(0, 10, syntax)], &[(3, 6)], search);
+        assert_eq!(
+            merged,
+            vec![(0, 3, syntax), (3, 6, search), (6, 10, syntax)],
+            "base span must split around the match; match carries ONLY the overlay style"
+        );
+
+        // A match straddling two adjacent syntax spans truncates both.
+        let merged =
+            super::overlay_search_ranges(vec![(0, 5, syntax), (5, 10, syntax)], &[(4, 7)], search);
+        assert_eq!(
+            merged,
+            vec![(0, 4, syntax), (4, 7, search), (7, 10, syntax)]
+        );
+
+        // Empty overlay is a no-op.
+        let merged = super::overlay_search_ranges(vec![(0, 5, syntax)], &[], search);
+        assert_eq!(merged, vec![(0, 5, syntax)]);
+    }
+
+    /// `compile_qf_search_regex` mirrors rg's `--smart-case`: insensitive
+    /// for all-lowercase patterns, sensitive once the pattern has an
+    /// uppercase letter; invalid patterns disable the overlay (None).
+    #[test]
+    fn compile_qf_search_regex_smart_case_and_invalid() {
+        let re = super::compile_qf_search_regex("match").expect("valid pattern");
+        assert!(
+            re.is_match("has MATCH here"),
+            "lowercase pattern → insensitive"
+        );
+
+        let re = super::compile_qf_search_regex("Match").expect("valid pattern");
+        assert!(
+            !re.is_match("has match here"),
+            "uppercase pattern → sensitive"
+        );
+        assert!(re.is_match("has Match here"));
+
+        assert!(
+            super::compile_qf_search_regex("(unclosed").is_none(),
+            "invalid regex must disable the overlay, not panic"
+        );
     }
 }
