@@ -334,7 +334,16 @@ impl View {
 
                     let n2 = c.text.len_lines();
                     let target_row = lo.min(n2.saturating_sub(1));
-                    let removed_joined = {
+                    let removed_joined = if remove_start == remove_end {
+                        // True no-op: zero chars removed (linewise delete on
+                        // an already-empty buffer — the only shape where the
+                        // range collapses). Joining the lone empty row and
+                        // appending the '\n' terminator would fabricate "\n"
+                        // out of nothing; callers then record that phantom
+                        // text into the unnamed register, where vim leaves
+                        // registers untouched (#280 follow-up).
+                        String::new()
+                    } else {
                         let mut s = removed_lines.join("\n");
                         // Add trailing '\n' so the inverse InsertStr re-inserts
                         // correctly (pushes surviving rows down).
@@ -829,6 +838,29 @@ mod tests {
             end: Position::new(0, 0),
             kind: MotionKind::Line,
         });
+        assert_eq!(b.row_count(), 1);
+        assert_eq!(rope_line_str(&b.rope(), 0), "");
+    }
+
+    /// Regression (#280 follow-up): a linewise delete on an ALREADY-EMPTY
+    /// buffer removes zero chars, so the inverse must carry empty text.
+    /// The old code fabricated "\n" (joined the lone empty row and appended
+    /// a terminator), which callers then recorded into the unnamed register
+    /// — vim leaves registers untouched on a true no-op delete.
+    #[test]
+    fn noop_linewise_delete_on_empty_buffer_has_empty_inverse() {
+        let mut b = View::from_str("");
+        let inv = b.apply_edit(Edit::DeleteRange {
+            start: Position::new(0, 0),
+            end: Position::new(0, 0),
+            kind: MotionKind::Line,
+        });
+        match inv {
+            Edit::InsertStr { text, .. } => {
+                assert_eq!(text, "", "no-op delete must not fabricate \"\\n\"");
+            }
+            other => panic!("expected InsertStr inverse, got {other:?}"),
+        }
         assert_eq!(b.row_count(), 1);
         assert_eq!(rope_line_str(&b.rope(), 0), "");
     }

@@ -127,3 +127,44 @@ initial_cursor = [0, 0]
 keys = "yG"
 expected_buffer = "one\ntwo\nthree\nfour\n"
 expected_mode = "normal"
+
+# A TRUE no-op linewise delete (zero chars removed) must leave every register
+# untouched, matching nvim. The first `VGd` empties the buffer and seeds `"`
+# with the full text; the second `VGd` on the lone empty line removes nothing,
+# so `"` must still hold "one\ntwo\nthree\nfour\n". (The bug fabricated a
+# bogus "\n" from the phantom row and clobbered the register.)
+[[cases]]
+name = "register_survives_noop_visual_line_delete"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "VGdVGd"
+expected_buffer = ""
+expected_mode = "normal"
+
+# Same no-op family through the `dd` path.
+[[cases]]
+name = "register_survives_noop_dd"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "VGddd"
+expected_buffer = ""
+expected_mode = "normal"
+
+# Same no-op family through the operator+motion path (`dG`).
+[[cases]]
+name = "register_survives_noop_dG"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "VGddG"
+expected_buffer = ""
+expected_mode = "normal"
+
+# NEGATIVE — deleting a REAL blank line is NOT a no-op: one '\n' is removed
+# and the register gets "\n". Guards the no-op check against over-reach.
+[[cases]]
+name = "register_dd_on_real_blank_line"
+initial_buffer = "a\n\nb\n"
+initial_cursor = [1, 0]
+keys = "dd"
+expected_buffer = "a\nb\n"
+expected_mode = "normal"
