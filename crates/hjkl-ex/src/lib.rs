@@ -53,10 +53,19 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return None;
     }
 
-    // Phase 8a: search-as-address `:/pat` / `:?pat`.
-    // Must be checked before parse_range because `/` and `?` are not valid
-    // range chars and parse_range would return None range + the original input.
-    if input.starts_with('/') || input.starts_with('?') {
+    // Phase 8a: search-as-address `:/pat` / `:?pat`, BARE form only (nothing
+    // after the pattern / optional closing delimiter). This must be
+    // distinguished from B4's `/pat/[,/pat2/]cmd` range-address form — e.g.
+    // `:/two/,/four/d` is a range feeding the `d` command, not a jump — by
+    // peeking at `range::parse_base_address`'s remainder: empty means "just
+    // jump" (the pre-existing, well-tested `handle_search_address` path);
+    // anything else (an offset, a comma, a command name) falls through to
+    // the generic `parse_range` below, which now understands `/pat/` /
+    // `?pat?` as address kinds (`Address::Search`) in its own right.
+    if (input.starts_with('/') || input.starts_with('?'))
+        && let Some((_, rest)) = range::parse_base_address(input)
+        && rest.is_empty()
+    {
         return Some(handle_search_address(editor, input));
     }
 

@@ -28,12 +28,19 @@ impl LineRange {
 
 // ---- address parsing -------------------------------------------------------
 
-#[derive(Debug, Clone, Copy)]
-enum Address {
+#[derive(Debug, Clone)]
+pub(crate) enum Address {
     Number(usize), // 1-based, as the user typed
     Current,
     Last,
     Mark(char),
+    /// `/pat/` (`forward = true`) or `?pat?` (`forward = false`) — B4: a
+    /// search-pattern address. Resolved lazily in `resolve_address` since
+    /// it needs to actually run the search, not just read editor state.
+    Search {
+        pattern: String,
+        forward: bool,
+    },
 }
 
 /// Strip a leading base address from `s`, return `(address, remainder)` or
@@ -41,7 +48,7 @@ enum Address {
 /// [`parse_offset_chain`]'s job. A leading `+`/`-` (no explicit base) is
 /// treated as an implicit `.` (current line) base and left unconsumed so the
 /// offset parser picks it up.
-fn parse_base_address(s: &str) -> Option<(Address, &str)> {
+pub(crate) fn parse_base_address(s: &str) -> Option<(Address, &str)> {
     let mut chars = s.char_indices();
     let (_, first) = chars.next()?;
     match first {
@@ -66,6 +73,42 @@ fn parse_base_address(s: &str) -> Option<(Address, &str)> {
             }
             let n: usize = s[..end].parse().ok()?;
             Some((Address::Number(n), &s[end..]))
+        }
+        // B4: `/pat/` (forward) / `?pat?` (backward) search-pattern address
+        // (`:h search-offset` base form — offsets are picked up afterward by
+        // the normal `parse_offset_chain` call in `parse_address`, same as
+        // every other address kind). The pattern runs up to the first
+        // UNESCAPED closing delimiter, or to the end of `s` if none is
+        // found (`:h :range`: a missing closing delimiter is allowed — the
+        // pattern just runs to the end of the command). Byte-level escape
+        // scanning is UTF-8-safe here: `/`, `?`, and `\` are all single-byte
+        // ASCII, which can never appear as a continuation byte of a
+        // multi-byte character, so slicing at their positions never lands
+        // mid-char.
+        '/' | '?' => {
+            let delim = first as u8;
+            let body = &s[1..];
+            let bytes = body.as_bytes();
+            let mut close = None;
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == delim && (i == 0 || bytes[i - 1] != b'\\') {
+                    close = Some(i);
+                    break;
+                }
+                i += 1;
+            }
+            let (pattern, rest) = match close {
+                Some(idx) => (&body[..idx], &body[idx + 1..]),
+                None => (body, ""),
+            };
+            Some((
+                Address::Search {
+                    pattern: pattern.to_string(),
+                    forward: first == '/',
+                },
+                rest,
+            ))
         }
         _ => None,
     }
@@ -134,8 +177,74 @@ fn resolve_address<H: hjkl_engine::Host>(
             .mark(c)
             .map(|(r, _)| r as i64 + 1) // 0-based → 1-based
             .ok_or_else(|| format!("mark `{c}` not set"))?,
+        Address::Search { pattern, forward } => resolve_search_address(&pattern, forward, editor)?,
     };
     Ok((base + offset).clamp(1, last as i64) as usize)
+}
+
+/// B4: resolve `/pat/` (`forward = true`) / `?pat?` (`forward = false`) to a
+/// 1-based line number. `/pat/` = first match STRICTLY BELOW the cursor;
+/// `?pat?` = first match STRICTLY ABOVE it — verified against real nvim:
+/// `/foo/d` with the cursor already ON a line containing "foo" deletes the
+/// NEXT "foo" line, not the current one. Wraps past the buffer end/start
+/// when `'wrapscan'` is on (the default), matching `/`/`?`/`n`/`N`.
+fn resolve_search_address<H: hjkl_engine::Host>(
+    pattern: &str,
+    forward: bool,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+) -> Result<i64, String> {
+    use hjkl_engine::search::{CaseMode, resolve_case_mode};
+    use hjkl_engine::{Cursor, Query, Search};
+    if pattern.is_empty() {
+        // vim reuses the last search pattern for a bare `//`/`??` address;
+        // not implemented here (no pin requires it) — error cleanly rather
+        // than silently matching everything.
+        return Err("E35: no previous regular expression".into());
+    }
+    let settings = editor.settings();
+    let case_base = CaseMode::from_options(settings.ignore_case, settings.smartcase);
+    let (stripped, mode) = resolve_case_mode(pattern, case_base);
+    let src = if mode == CaseMode::Insensitive {
+        format!("(?i){stripped}")
+    } else {
+        stripped
+    };
+    let re = regex::Regex::new(&src).map_err(|e| format!("bad pattern: {e}"))?;
+
+    let buf = editor.buffer();
+    let cursor = Cursor::cursor(buf);
+    let wrap = settings.wrapscan;
+    // "Strictly after/before the cursor": advance the search anchor one
+    // byte past (forward) / before (backward) the cursor first, mirroring
+    // `hjkl_engine::search::search_forward`/`search_backward`'s
+    // `skip_current` behavior — those functions mutate the live cursor as
+    // a side effect (used by `/`/`n`), which range resolution must NOT do,
+    // so the byte-offset math is inlined here against the read-only
+    // `Search`/`Cursor` trait methods instead of calling them directly.
+    let found = if forward {
+        let from_byte = buf.byte_offset(cursor);
+        let from = buf.pos_at_byte(from_byte.saturating_add(1));
+        buf.find_next(from, &re).or_else(|| {
+            wrap.then(|| buf.find_next(hjkl_engine::Pos::new(0, 0), &re))
+                .flatten()
+        })
+    } else {
+        let from_byte = buf.byte_offset(cursor);
+        let before = (from_byte > 0).then(|| buf.pos_at_byte(from_byte - 1));
+        before
+            .and_then(|from| buf.find_prev(from, &re))
+            .or_else(|| {
+                wrap.then(|| {
+                    let end = buf.pos_at_byte(buf.len_bytes());
+                    buf.find_prev(end, &re)
+                })
+                .flatten()
+            })
+    };
+    match found {
+        Some(range) => Ok(range.start.line as i64 + 1), // 0-based → 1-based
+        None => Err(format!("E486: Pattern not found: {pattern}")),
+    }
 }
 
 // ---- public API ------------------------------------------------------------
@@ -207,8 +316,9 @@ pub fn parse_dest_address<H: hjkl_engine::Host>(
         return Err(format!("trailing characters after address: `{rest}`"));
     }
     // `0` is a legal destination (place before line 1); resolve_address would
-    // clamp it to 1, so special-case it here.
-    if let (Address::Number(0), 0) = (addr, offset) {
+    // clamp it to 1, so special-case it here. Matches on `&addr` (not `addr`)
+    // since `Address` isn't `Copy` (the `Search` variant owns a `String`).
+    if matches!(addr, Address::Number(0)) && offset == 0 {
         return Ok(0);
     }
     resolve_address(addr, offset, editor)

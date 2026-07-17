@@ -985,6 +985,18 @@ async fn tier2_round3_b3_put_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_round3_b3_put.toml", "tier2_round3_b3_put").await;
 }
 
+/// B4: `/pat/` and `?pat?` search-pattern addresses in ex command ranges
+/// (previously unsupported — the address parser didn't recognize `/`/`?` at
+/// all as a base-address character).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_b4_search_range_corpus_passes() {
+    run_corpus_via_nvim_api(
+        "corpus/tier2_round3_b4_search_range.toml",
+        "tier2_round3_b4_search_range",
+    )
+    .await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

@@ -1,0 +1,60 @@
+# Round 3 — B4: `/pat/` and `?pat?` search-pattern addresses in ex command
+# ranges (previously unsupported — a silent no-op since the address parser
+# didn't recognize `/`/`?` as a valid base address character at all).
+# Driven through the `hjkl --nvim-api` binary (ex commands need the command
+# line). Verified against real nvim before implementing: `/pat/` matches the
+# first line STRICTLY BELOW the cursor (not the cursor's own line, even if
+# it matches too), `?pat?` the first line strictly above; both wrap past the
+# buffer end/start by default (`'wrapscan'`).
+
+[[cases]]
+name = "b4_search_range_forward_forward_deletes_between"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = ":/two/,/four/d<CR>"
+expected_buffer = "one\n"
+expected_cursor = [0, 0]
+
+[[cases]]
+name = "b4_search_range_backward_deletes_above"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [3, 0]
+keys = ":?two?d<CR>"
+expected_buffer = "one\nthree\nfour\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "b4_search_range_bare_single_address_deletes_matched_line"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = ":/two/d<CR>"
+expected_buffer = "one\nthree\nfour\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "b4_search_range_cursor_on_matching_line_skips_to_next"
+initial_buffer = "foo\nfoo\nbar\n"
+initial_cursor = [0, 0]
+keys = ":/foo/d<CR>"
+expected_buffer = "foo\nbar\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "b4_search_range_wraps_past_buffer_end"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [2, 0]
+keys = ":/foo/d<CR>"
+expected_buffer = "bar\nbaz\n"
+expected_cursor = [0, 0]
+
+# Bare `:/pat` jump (no command after) must still work — regression check
+# for the try_dispatch gating change that now only special-cases a TRULY
+# bare search address (nothing after the pattern), falling through to the
+# generic range parser otherwise.
+[[cases]]
+name = "b4_bare_search_jump_still_works"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "/three<CR>"
+expected_buffer = "one\ntwo\nthree\nfour\n"
+expected_cursor = [2, 0]
