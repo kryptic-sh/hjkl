@@ -837,9 +837,9 @@ fn make_app_with_qf_files() -> (App, std::path::PathBuf, tempfile::TempDir) {
 }
 
 /// `:copen` creates a bottom-dock window whose buffer has one line per
-/// entry, formatted `path:line:col │ message` (1-based line/col, the merged
-/// location column padded so the message column aligns across the list),
-/// and focuses it.
+/// entry, formatted `path:line:col message` (1-based line/col, a single
+/// space between the location column and the message — no alignment or
+/// separator), and focuses it.
 #[test]
 fn copen_creates_bottom_dock_with_matching_buffer_lines() {
     let (mut app, file_a, _dir) = make_app_with_qf_files();
@@ -862,10 +862,10 @@ fn copen_creates_bottom_dock_with_matching_buffer_lines() {
     // width here — no padding needed.
     assert_eq!(
         line0,
-        format!("{}:1:1 │ first hit", file_a.display()),
+        format!("{}:1:1 first hit", file_a.display()),
         "line/col must be rendered 1-based, merged into the path column"
     );
-    assert_eq!(line1, format!("{}:2:3 │ second hit", file_a.display()));
+    assert_eq!(line1, format!("{}:2:3 second hit", file_a.display()));
     assert_eq!(
         app.window_cursor(dock.win_id).0,
         0,
@@ -917,7 +917,7 @@ fn dock_yy_yanks_the_entry_line() {
         .unwrap_or_default();
     assert_eq!(
         yanked.trim_end_matches('\n'),
-        format!("{}:1:1 │ first hit", file_a.display()),
+        format!("{}:1:1 first hit", file_a.display()),
         "yy must yank the exact rendered entry line, got {yanked:?}"
     );
 }
@@ -1035,7 +1035,7 @@ fn lopen_reuses_the_open_quickfix_dock() {
     let rope = app.active_editor().buffer().rope();
     assert_eq!(rope.len_lines(), 1, "buffer now shows the loclist's entry");
     let line0 = hjkl_buffer::rope_line_str(&rope, 0);
-    assert_eq!(line0, "loc.rs:5:1 │ hit at 4");
+    assert_eq!(line0, "loc.rs:5:1 hit at 4");
 }
 
 /// Perf/hang smoke test (quickfix-dock highlight upgrade): a list far larger
