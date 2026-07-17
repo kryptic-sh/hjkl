@@ -950,6 +950,15 @@ async fn tier2_round3_h1_ex_corpus_passes() {
     run_corpus_via_nvim_api("corpus/tier2_round3_h1_ex.toml", "tier2_round3_h1_ex").await;
 }
 
+/// H2: linewise operator deletes must clamp the cursor when the deleted
+/// range reaches the buffer end (`run_operator_over_range`'s Delete arm,
+/// reached by motion-driven deletes like dG/dj, was missing the phantom-row
+/// clamp that the dedicated dd path already had).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_h2_corpus_passes() {
+    run_corpus("corpus/tier2_round3_h2.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

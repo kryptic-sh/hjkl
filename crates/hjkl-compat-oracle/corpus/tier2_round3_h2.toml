@@ -1,0 +1,39 @@
+# Round 3 — H2: linewise operator deletes that reach the buffer end must
+# clamp the cursor instead of landing on the now-nonexistent row past the
+# last real line. `execute_line_op` (the `dd`/`Ndd` path) already had this
+# clamp; `run_operator_over_range`'s Delete arm (reached by motion-driven
+# linewise deletes like `dG`/`dj`/`d2j`) did not.
+
+# `dG` mid-buffer: cursor starts on row 1 (not row 0, so this does NOT empty
+# the buffer — combines with H1 in a separate case below), deletes through
+# the end, must land on the new last line.
+[[cases]]
+name = "r3_dG_mid_buffer_clamps_cursor"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [1, 0]
+keys = "dG"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `dj` on the last two lines of a 3-line buffer deletes through the end;
+# cursor must clamp to the new last (and only remaining) line.
+[[cases]]
+name = "r3_dj_last_two_lines_clamps_cursor"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [1, 0]
+keys = "dj"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `d2j` from a mid-buffer row that reaches the last line, on a 4-line buffer,
+# so the clamp lands on the row *above* the (now nonexistent) deleted rows.
+[[cases]]
+name = "r3_d2j_reaches_end_clamps_cursor"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [1, 0]
+keys = "d2j"
+expected_buffer = "one\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

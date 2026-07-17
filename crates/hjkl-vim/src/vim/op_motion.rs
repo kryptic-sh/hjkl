@@ -7,7 +7,7 @@ use hjkl_vim_types::{InsertReason, Mode, Motion, Operator, RangeKind, TextObject
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
 pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -261,6 +261,21 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
         }
         Operator::Delete => {
             ed.push_undo();
+            // Linewise deletes must not land the cursor on `top.0` when that
+            // row no longer exists after the cut (or is now the trailing
+            // phantom row) — mirrors the clamp in linewise.rs's `dd` path
+            // (H2), which `run_operator_over_range` (reached by
+            // motion-driven deletes like `dG`/`dj`) was missing. Capture
+            // `total`/`deleted_through_last` before the cut since the row
+            // count changes underneath it. `total` includes ropey's phantom
+            // trailing row, so `deleted_through_last` only fires when the
+            // buffer has no trailing newline (no phantom row to absorb the
+            // boundary) — the far more common "reaches the last content
+            // line" case is instead caught by the phantom-row pullback
+            // below, which must run unconditionally, not just when this
+            // flag is set.
+            let total = buf_row_count(ed.buffer());
+            let deleted_through_last = matches!(kind, RangeKind::Linewise) && bot.0 + 1 >= total;
             cut_vim_range(ed, top, bot, kind);
             // After a charwise / inclusive delete the buffer cursor is
             // placed at `start` by the edit path. In Normal mode the
@@ -268,6 +283,28 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
             // `d$` doesn't leave the cursor one past the new line end.
             if !matches!(kind, RangeKind::Linewise) {
                 clamp_cursor_to_normal_mode(ed);
+            } else {
+                let total_after = buf_row_count(ed.buffer());
+                let raw_target = if deleted_through_last {
+                    top.0.saturating_sub(1).min(total_after.saturating_sub(1))
+                } else {
+                    top.0.min(total_after.saturating_sub(1))
+                };
+                // Clamp off the trailing phantom empty row that arises from
+                // a buffer with a trailing newline (stored as ["...", ""]) —
+                // same rule as linewise.rs's `dd` path.
+                let target_row = if raw_target > 0
+                    && raw_target + 1 == total_after
+                    && buf_line(ed.buffer(), raw_target)
+                        .map(|s| s.is_empty())
+                        .unwrap_or(false)
+                {
+                    raw_target - 1
+                } else {
+                    raw_target
+                };
+                buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+                ed.push_buffer_cursor_to_textarea();
             }
             vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: after a delete both marks park at
