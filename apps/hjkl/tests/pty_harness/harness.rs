@@ -830,7 +830,11 @@ mod tests {
     /// Give the file a short write budget so the timeout path runs fast.
     /// Nextest runs each test in its own process, so this cannot leak.
     fn short_write_budget() {
-        unsafe { std::env::set_var("E2E_WRITE_MS", "80") };
+        // 400ms: short enough that the timeout-path self-tests stay fast,
+        // long enough that a 2ms writer thread landing inside the budget is
+        // certain even under full-suite parallel load (the previous 80ms
+        // budget flaked — see wait_for_contents_reports_a_write_that_landed_wrong).
+        unsafe { std::env::set_var("E2E_WRITE_MS", "400") };
     }
 
     #[test]
@@ -869,11 +873,17 @@ mod tests {
         let path = f.path().to_owned();
 
         // Something writes, but not what we asked for. That is a real mismatch,
-        // and the message must NOT blame timing for it.
+        // and the message must NOT blame timing for it. The write must land
+        // strictly AFTER wait_for_contents snapshots `first` (else the churn
+        // detector sees no change) and strictly BEFORE the budget expires —
+        // hence a short writer delay against a much larger budget. A 20ms
+        // sleep vs the old 80ms budget was only a 4x margin and flaked under
+        // full-suite parallel load (the thread's sleep stretched past the
+        // budget → churn flipped to "never changed"); 2ms vs 400ms is 200x.
         std::thread::spawn({
             let path = path.clone();
             move || {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(2));
                 std::fs::write(&path, b"wrong\n").unwrap();
             }
         });
