@@ -21,6 +21,7 @@ pub mod at_colon;
 pub mod autoreload;
 pub mod backward_range;
 pub mod change_list;
+pub mod clean;
 pub mod comment;
 pub mod dot_repeat;
 pub mod explorer;

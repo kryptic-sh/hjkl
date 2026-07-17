@@ -289,7 +289,30 @@ impl TerminalSession {
     /// alive for the session's lifetime, same as the auto-generated case.
     #[allow(dead_code)]
     pub fn spawn_with_file_and_cache_dir(path: &Path, cache_dir: tempfile::TempDir) -> Self {
-        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir)
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[])
+    }
+
+    /// Spawn `hjkl` with `dir` as the cwd, opening `file`, after pre-seeding
+    /// a user `config.toml` (at the session's isolated XDG path) with
+    /// `config_toml`, and passing `extra_args` (e.g. `["--clean"]`) before
+    /// the file. Lets a test assert whether the seeded config took effect.
+    #[allow(dead_code)]
+    pub fn spawn_in_dir_with_file_config_args(
+        dir: &Path,
+        file: &Path,
+        config_toml: &str,
+        extra_args: &[&str],
+    ) -> Self {
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        Self::spawn_inner_cwd_cache(
+            Some(file),
+            24,
+            80,
+            Some(dir),
+            cache_dir,
+            Some(config_toml),
+            extra_args,
+        )
     }
 
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
@@ -304,7 +327,7 @@ impl TerminalSession {
         // cache dir would also leave fixture swaps behind across runs and
         // surface the recovery prompt. Unique per spawn → fresh + clean.
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
-        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir)
+        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir, None, &[])
     }
 
     fn spawn_inner_cwd_cache(
@@ -313,6 +336,8 @@ impl TerminalSession {
         cols: u16,
         cwd: Option<&Path>,
         cache_dir: tempfile::TempDir,
+        config_toml: Option<&str>,
+        extra_args: &[&str],
     ) -> Self {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -343,8 +368,24 @@ impl TerminalSession {
         cmd.env("XDG_CONFIG_HOME", config_dir.path());
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
 
+        // Pre-seed a user config at the XDG path so a `--clean` test can
+        // prove the flag actually IGNORES it (and a non-clean control can
+        // prove the same file IS read). Written before spawn so it exists
+        // when `hjkl` resolves its config at startup.
+        if let Some(toml) = config_toml {
+            let hjkl_cfg_dir = config_dir.path().join("hjkl");
+            std::fs::create_dir_all(&hjkl_cfg_dir).expect("mk config dir");
+            std::fs::write(hjkl_cfg_dir.join("config.toml"), toml).expect("seed config.toml");
+        }
+
         if let Some(d) = cwd {
             cmd.cwd(d);
+        }
+
+        // Extra CLI flags (e.g. `--clean`) precede the positional file arg,
+        // matching how a user would invoke `hjkl --clean file`.
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         if let Some(p) = file {

@@ -67,7 +67,12 @@ hjkl +42 file.txt     # jump to line 42
 hjkl +/foo file.txt   # search for "foo" on open
 hjkl +picker          # open fuzzy file picker immediately
 hjkl +vsp file1 file2 # open two files in a vertical split
+hjkl --clean file.txt # bundled defaults only, ignore the user config
 ```
+
+`--clean` starts from the bundled defaults, ignoring the user config file at its
+default location (and any `--config` path), and does not persist runtime changes
+(dock resizes, `explorer.open`) back to disk. Mirrors `nvim --clean`.
 
 <!-- screenshot placeholder -->
 <!-- ![hjkl screenshot](https://hjkl.kryptic.sh/screenshot.png) -->

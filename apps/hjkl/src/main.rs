@@ -72,6 +72,13 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
+    /// Start from the bundled defaults only: ignore the user config file at
+    /// the default location (and any `--config` path), and do not persist
+    /// runtime changes (e.g. dock resizes) back to disk. Mirrors
+    /// `nvim --clean`.
+    #[arg(long)]
+    clean: bool,
+
     /// Run without a terminal: load FILEs, dispatch any +cmd / -c CMD ex
     /// commands in order, write back to disk if a command asks (e.g. +':wq'),
     /// then exit. No ratatui, no crossterm. Useful for scripted edits in CI.
@@ -113,6 +120,10 @@ pub struct Args {
     pub readonly: bool,
     pub picker: bool,
     pub config: Option<PathBuf>,
+    /// Ignore the user config file (default location and `--config`) and start
+    /// from the bundled defaults, without persisting runtime changes to disk.
+    /// Mirrors `nvim --clean`.
+    pub clean: bool,
     /// Run without a terminal (no ratatui/crossterm). Phase 1 of issue #26.
     pub headless: bool,
     /// Run as JSON-RPC 2.0 server over stdin/stdout. Phase 2 of issue #26.
@@ -208,6 +219,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         readonly: cli.readonly,
         picker: false,
         config: cli.config,
+        clean: cli.clean,
         headless: cli.headless || cli.embed || cli.nvim_api,
         embed: cli.embed,
         nvim_api: cli.nvim_api,
@@ -285,13 +297,28 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    // Load user config. `--config <PATH>` reads an explicit file; otherwise
-    // we use the XDG path. In both cases the bundled `src/config.toml`
+    // `--clean` and `--config` are mutually exclusive intents: clean starts
+    // from the bundled defaults only, so an explicit `--config` path would be
+    // silently ignored. Warn rather than fail so `--clean` stays a drop-in.
+    if args.clean && args.config.is_some() {
+        eprintln!("hjkl: warning: --clean ignores --config");
+    }
+
+    // Load user config. `--clean` uses the bundled defaults and reads NO file.
+    // Otherwise `--config <PATH>` reads an explicit file, and the bare form
+    // uses the XDG path — in both of those the bundled `src/config.toml`
     // defaults are applied first and the user file is deep-merged on top.
-    let cfg = match args.config.as_deref() {
-        Some(path) => hjkl_app::config::load_from(path)
-            .map(|c| (c, hjkl_config::ConfigSource::File(path.to_path_buf()))),
-        None => hjkl_app::config::load(),
+    let cfg = if args.clean {
+        Ok((
+            hjkl_app::config::Config::default(),
+            hjkl_config::ConfigSource::Defaults,
+        ))
+    } else {
+        match args.config.as_deref() {
+            Some(path) => hjkl_app::config::load_from(path)
+                .map(|c| (c, hjkl_config::ConfigSource::File(path.to_path_buf()))),
+            None => hjkl_app::config::load(),
+        }
     };
     let (cfg, cfg_source) = match cfg {
         Ok(pair) => pair,
@@ -306,10 +333,18 @@ fn main() -> Result<()> {
     // than leaving `config_path` unset) so the FIRST interactive resize can
     // still create a minimal file there, matching `write_key_at`'s
     // create-if-missing behavior.
-    let cfg_path = match cfg_source {
-        hjkl_config::ConfigSource::File(p) => Some(p),
-        hjkl_config::ConfigSource::Defaults => {
-            hjkl_config::config_path::<hjkl_app::config::Config>().ok()
+    //
+    // Under `--clean` we deliberately leave the path UNSET: a clean session
+    // must never touch the user's config on disk, so runtime changes (dock
+    // resizes, `explorer.open` write-back) stay in-memory only.
+    let cfg_path = if args.clean {
+        None
+    } else {
+        match cfg_source {
+            hjkl_config::ConfigSource::File(p) => Some(p),
+            hjkl_config::ConfigSource::Defaults => {
+                hjkl_config::config_path::<hjkl_app::config::Config>().ok()
+            }
         }
     };
     // Bounds-check the parsed config (tab_width range, etc.). Schema-level
@@ -678,6 +713,27 @@ mod cli_tests {
         assert_eq!(args.commands, vec!["vsp".to_string()]);
     }
 
+    /// `--clean` parses into `args.clean` and defaults to `false` when
+    /// absent. The main config path keys off this flag to skip the user
+    /// file and disable disk write-back.
+    #[test]
+    fn parse_argv_clean_flag() {
+        let raw: Vec<String> = ["hjkl", "--clean", "src/main.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(args.clean, "--clean must set args.clean");
+        assert_eq!(args.files, vec![PathBuf::from("src/main.rs")]);
+
+        let raw: Vec<String> = ["hjkl", "src/main.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(!args.clean, "clean defaults to false without the flag");
+    }
+
     fn blank_args() -> Args {
         Args {
             files: vec![],
@@ -686,6 +742,7 @@ mod cli_tests {
             readonly: false,
             picker: false,
             config: None,
+            clean: false,
             headless: false,
             embed: false,
             nvim_api: false,
