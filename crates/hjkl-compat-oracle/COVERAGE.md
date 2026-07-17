@@ -17,46 +17,49 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Motions
 
-| Feature                       | Cases | File(s)                                                   |
-| ----------------------------- | ----- | --------------------------------------------------------- |
-| h                             | 1     | tier1.toml                                                |
-| j                             | 1     | tier1.toml                                                |
-| j / k phantom trailing row    | 8     | tier2_vertical_phantom_row.toml                           |
-| k                             | 1     | tier1.toml                                                |
-| l                             | 2     | sample.toml, tier1.toml                                   |
-| w                             | 1     | tier1.toml                                                |
-| W                             | 1     | tier1.toml                                                |
-| b                             | 1     | tier1.toml                                                |
-| B                             | 1     | tier1.toml                                                |
-| e                             | 1     | tier1.toml                                                |
-| E                             | 1     | tier1.toml                                                |
-| ge                            | 1     | tier2_paragraph_word.toml                                 |
-| gE                            | 1     | tier2_gaps.toml                                           |
-| g\_ (last non-blank)          | 1     | tier2_gaps.toml                                           |
-| 0                             | 1     | tier1.toml                                                |
-| ^                             | 1     | tier1.toml                                                |
-| $                             | 1     | tier1.toml                                                |
-| gg                            | 1     | tier1.toml                                                |
-| G                             | 1     | tier1.toml                                                |
-| f / F                         | 2     | tier1.toml, tier2_search.toml                             |
-| t / T                         | 2     | tier1.toml, tier2_search.toml                             |
-| ; / ,                         | 2     | tier1.toml                                                |
-| % (match bracket)             | 1     | tier1.toml                                                |
-| n / N                         | 2     | tier2_search.toml                                         |
-| \* / #                        | 2     | tier2_search.toml                                         |
-| + / - / \_                    | 6     | tier1.toml                                                |
-| [[/]] / [] / ][               | 4     | tier1.toml                                                |
-| \| (goto column)              | 2     | tier1.toml                                                |
-| { / } (paragraph)             | 2     | tier2_paragraph_word.toml                                 |
-| ( / ) (sentence)              | 11    | tier2_sentence.toml                                       |
-| H (viewport top)              | 1     | tier2_gaps.toml                                           |
-| M (viewport middle)           | 2     | tier2_viewport_bounds.toml                                |
-| L (viewport bottom)           | 3     | tier2_viewport_bounds.toml                                |
-| zz / zt / zb                  | —     | TODO: not yet implemented (#63)                           |
-| sneak s/S (ON)                | —     | intentional divergence — see corpus/tier2_sneak.toml note |
-| sneak s/S (disabled fallback) | 2     | tier2_sneak.toml                                          |
-| Nw (5w)                       | 1     | tier2_gaps.toml                                           |
-| Nb (3b)                       | 1     | tier2_gaps.toml                                           |
+| Feature                                                      | Cases | File(s)                                                                                           |
+| ------------------------------------------------------------ | ----- | ------------------------------------------------------------------------------------------------- |
+| h                                                            | 1     | tier1.toml                                                                                        |
+| j                                                            | 1     | tier1.toml                                                                                        |
+| j / k phantom trailing row                                   | 8     | tier2_vertical_phantom_row.toml                                                                   |
+| k                                                            | 1     | tier1.toml                                                                                        |
+| l                                                            | 2     | sample.toml, tier1.toml                                                                           |
+| w                                                            | 1     | tier1.toml                                                                                        |
+| W                                                            | 1     | tier1.toml                                                                                        |
+| b                                                            | 1     | tier1.toml                                                                                        |
+| B                                                            | 1     | tier1.toml                                                                                        |
+| e                                                            | 1     | tier1.toml                                                                                        |
+| E                                                            | 1     | tier1.toml                                                                                        |
+| ge                                                           | 1     | tier2_paragraph_word.toml                                                                         |
+| gE                                                           | 1     | tier2_gaps.toml                                                                                   |
+| g\_ (last non-blank)                                         | 1     | tier2_gaps.toml                                                                                   |
+| 0                                                            | 1     | tier1.toml                                                                                        |
+| ^                                                            | 1     | tier1.toml                                                                                        |
+| $                                                            | 1     | tier1.toml                                                                                        |
+| gg                                                           | 1     | tier1.toml                                                                                        |
+| G                                                            | 1     | tier1.toml                                                                                        |
+| f / F                                                        | 2     | tier1.toml, tier2_search.toml                                                                     |
+| t / T                                                        | 2     | tier1.toml, tier2_search.toml                                                                     |
+| ; / ,                                                        | 2     | tier1.toml                                                                                        |
+| % (match bracket)                                            | 1     | tier1.toml                                                                                        |
+| n / N                                                        | 2     | tier2_search.toml                                                                                 |
+| \* / #                                                       | 2     | tier2_search.toml                                                                                 |
+| \* / # from punctuation (advance to next keyword char) (B19) | 3     | tier2_round2b.toml                                                                                |
+| + / - / \_                                                   | 6     | tier1.toml                                                                                        |
+| [[/]] / [] / ][                                              | 4     | tier1.toml                                                                                        |
+| \| (goto column)                                             | 2     | tier1.toml                                                                                        |
+| { / } (paragraph)                                            | 2     | tier2_paragraph_word.toml                                                                         |
+| ( / ) (sentence)                                             | 11    | tier2_sentence.toml                                                                               |
+| H (viewport top)                                             | 1     | tier2_gaps.toml                                                                                   |
+| M (viewport middle)                                          | 2     | tier2_viewport_bounds.toml                                                                        |
+| L (viewport bottom)                                          | 3     | tier2_viewport_bounds.toml                                                                        |
+| zz / zt / zb (bare)                                          | —     | scroll-only, not oracle-comparable (harness fixes viewport height)                                |
+| {count}zt/zz/zb (cursor part)                                | 3     | tier2_round2b.toml (B13)                                                                          |
+| zh / zl / zH / zL                                            | —     | scroll-only, not oracle-comparable; unit-tested in hjkl-engine-tui/tests/editor_behavior.rs (B12) |
+| sneak s/S (ON)                                               | —     | intentional divergence — see corpus/tier2_sneak.toml note                                         |
+| sneak s/S (disabled fallback)                                | 2     | tier2_sneak.toml                                                                                  |
+| Nw (5w)                                                      | 1     | tier2_gaps.toml                                                                                   |
+| Nb (3b)                                                      | 1     | tier2_gaps.toml                                                                                   |
 
 ## Operators
 
@@ -67,9 +70,12 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 | c (cw, cc, C)                                       | 3     | tier1.toml                                                            |
 | y (yw, yy, Y)                                       | 3     | tier1.toml                                                            |
 | p / P                                               | 6     | tier1.toml                                                            |
+| counted P cursor position (B20)                     | 3     | tier2_round2b.toml                                                    |
 | x / X                                               | 2     | tier1.toml                                                            |
+| x at EOL clamps cursor (B11)                        | 3     | tier2_round2b.toml                                                    |
 | r                                                   | 1     | tier1.toml                                                            |
 | ~ (toggle case)                                     | 1     | tier1.toml                                                            |
+| counted ~ clamps cursor at EOL (B21)                | 1     | tier2_round2b.toml                                                    |
 | J                                                   | 2     | tier2_case_indent_join.toml, tier2_gaps.toml                          |
 | gJ                                                  | 1     | tier2_case_indent_join.toml                                           |
 | gU / gu / g~                                        | 3     | tier2_case_indent_join.toml                                           |
@@ -84,20 +90,21 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Text Objects
 
-| Feature            | Cases | File(s)                        |
-| ------------------ | ----- | ------------------------------ |
-| aw / iw            | 2     | tier1.toml                     |
-| aW / iW            | —     | TODO                           |
-| ap / ip            | 2     | tier2_text_objects.toml        |
-| as / is            | 2     | tier2_text_objects.toml        |
-| a" / i"            | 2     | tier1.toml                     |
-| a' / i'            | 2     | tier2_text_objects.toml        |
-| a( / i(            | 2     | tier1.toml                     |
-| a[ / i[            | 2     | tier2_text_objects.toml        |
-| a{ / i{            | 2     | tier1.toml                     |
-| a< / i<            | 2     | tier2_gaps.toml                |
-| a` / i`            | —     | TODO (backtick string objects) |
-| at / it (HTML tag) | 2     | tier2_gaps.toml                |
+| Feature                          | Cases       | File(s)                                                                                                          |
+| -------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| aw / iw                          | 2           | tier1.toml                                                                                                       |
+| aW / iW                          | —           | TODO                                                                                                             |
+| ap / ip                          | 2           | tier2_text_objects.toml                                                                                          |
+| ip / ap on blank-line runs (B16) | 4 (+2 unit) | tier2_round2b.toml; 2 buffer-collapsing boundary cases in hjkl-vim/tests/paragraph_blank_run.rs (see note there) |
+| as / is                          | 2           | tier2_text_objects.toml                                                                                          |
+| a" / i"                          | 2           | tier1.toml                                                                                                       |
+| a' / i'                          | 2           | tier2_text_objects.toml                                                                                          |
+| a( / i(                          | 2           | tier1.toml                                                                                                       |
+| a[ / i[                          | 2           | tier2_text_objects.toml                                                                                          |
+| a{ / i{                          | 2           | tier1.toml                                                                                                       |
+| a< / i<                          | 2           | tier2_gaps.toml                                                                                                  |
+| a` / i`                          | —           | TODO (backtick string objects)                                                                                   |
+| at / it (HTML tag)               | 2           | tier2_gaps.toml                                                                                                  |
 
 ## Modes
 
@@ -114,15 +121,19 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Insert Primitives
 
-| Feature                          | Cases | File(s)             |
-| -------------------------------- | ----- | ------------------- |
-| i / a / I / A / o / O            | 6     | tier1.toml          |
-| c / C / s / S                    | 3     | tier1.toml          |
-| x / X                            | 2     | tier1.toml          |
-| C-w (delete word back)           | 1     | tier2_advanced.toml |
-| C-u (delete to line start)       | 1     | tier2_advanced.toml |
-| C-r (paste register in insert)   | —     | TODO                |
-| gi (resume last insert position) | 1     | tier2_advanced.toml |
+| Feature                                        | Cases | File(s)             |
+| ---------------------------------------------- | ----- | ------------------- |
+| i / a / I / A / o / O                          | 6     | tier1.toml          |
+| c / C / s / S                                  | 3     | tier1.toml          |
+| x / X                                          | 2     | tier1.toml          |
+| C-w (delete word back)                         | 1     | tier2_advanced.toml |
+| C-w at BOL (joins, doesn't eat prev word) (B2) | 3     | tier2_round2b.toml  |
+| C-u (delete to line start)                     | 1     | tier2_advanced.toml |
+| C-u session-scoped delete (B3)                 | 6     | tier2_round2b.toml  |
+| C-a (repeat last insert) (B1)                  | 1     | tier2_round2b.toml  |
+| C-e / C-y (copy char below/above) (B1)         | 3     | tier2_round2b.toml  |
+| C-r (paste register in insert)                 | —     | TODO                |
+| gi (resume last insert position)               | 1     | tier2_advanced.toml |
 
 ## Counts
 
@@ -169,25 +180,25 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Search / Substitute
 
-| Feature                  | Cases | File(s)                                   |
-| ------------------------ | ----- | ----------------------------------------- |
-| / (forward search)       | 2     | tier2_search.toml                         |
-| ? (backward search)      | 1     | tier2_search.toml                         |
-| n / N                    | 2     | tier2_search.toml                         |
-| \* / #                   | 2     | tier2_search.toml                         |
-| word boundary \b         | 1     | tier2_search.toml                         |
-| vim default-magic regex (\( \) \+ \? \| \{n,m}, literal ( ) + ? \| {}) | 5 | tier2_regex_magic.toml |
-| \v / \V magic-mode switches | 3  | tier2_regex_magic.toml                    |
-| :s replacement \u / \l (+ \U/\L interaction) | 2 | tier2_regex_magic.toml   |
-| :s/pat/rep/              | 4     | tier2_substitute.toml, nvim_api_tier.toml |
-| :s/g flag                | 2     | tier2_substitute.toml                     |
-| :s/i flag (case)         | 2     | tier2_substitute.toml, nvim_api_tier.toml |
-| :g / :v (global) sub-commands: d, s, j, y; two-pass row tracking; register/cursor semantics; `:g!`/`:v` negation | 7 | tier2_ex_global.toml (+1 substitute.toml) |
-| & / :&                   | —     | TODO                                      |
-| bare :s (repeat last sub)| 4     | tier2_bare_s_repeat.toml                  |
-| g&                       | 2     | nvim_api_tier.toml                        |
-| smartcase + \c/\C        | 4     | nvim_api_tier.toml                        |
-| :s/c interactive confirm | —     | oracle skipped (#171)                     |
+| Feature                                                                                                          | Cases | File(s)                                   |
+| ---------------------------------------------------------------------------------------------------------------- | ----- | ----------------------------------------- |
+| / (forward search)                                                                                               | 2     | tier2_search.toml                         |
+| ? (backward search)                                                                                              | 1     | tier2_search.toml                         |
+| n / N                                                                                                            | 2     | tier2_search.toml                         |
+| \* / #                                                                                                           | 2     | tier2_search.toml                         |
+| word boundary \b                                                                                                 | 1     | tier2_search.toml                         |
+| vim default-magic regex (\( \) \+ \? \| \{n,m}, literal ( ) + ? \| {})                                           | 5     | tier2_regex_magic.toml                    |
+| \v / \V magic-mode switches                                                                                      | 3     | tier2_regex_magic.toml                    |
+| :s replacement \u / \l (+ \U/\L interaction)                                                                     | 2     | tier2_regex_magic.toml                    |
+| :s/pat/rep/                                                                                                      | 4     | tier2_substitute.toml, nvim_api_tier.toml |
+| :s/g flag                                                                                                        | 2     | tier2_substitute.toml                     |
+| :s/i flag (case)                                                                                                 | 2     | tier2_substitute.toml, nvim_api_tier.toml |
+| :g / :v (global) sub-commands: d, s, j, y; two-pass row tracking; register/cursor semantics; `:g!`/`:v` negation | 7     | tier2_ex_global.toml (+1 substitute.toml) |
+| & / :&                                                                                                           | —     | TODO                                      |
+| bare :s (repeat last sub)                                                                                        | 4     | tier2_bare_s_repeat.toml                  |
+| g&                                                                                                               | 2     | nvim_api_tier.toml                        |
+| smartcase + \c/\C                                                                                                | 4     | nvim_api_tier.toml                        |
+| :s/c interactive confirm                                                                                         | —     | oracle skipped (#171)                     |
 
 ## Ex Commands
 
@@ -217,13 +228,14 @@ Intentional divergences are documented in `corpus/known_divergences.toml`.
 
 ## Macros
 
-| Feature                | Cases | File(s)           |
-| ---------------------- | ----- | ----------------- |
-| q{a} record            | 3     | tier2_macros.toml |
-| @{a} play              | 3     | tier2_macros.toml |
-| @: (repeat last ex)    | —     | TODO              |
-| @@ (repeat last macro) | 1     | tier2_macros.toml |
-| N@{a} counted play     | 1     | tier2_macros.toml |
+| Feature                                                  | Cases | File(s)                                                                                                                                                                       |
+| -------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| q{a} record                                              | 3     | tier2_macros.toml                                                                                                                                                             |
+| @{a} play                                                | 3     | tier2_macros.toml                                                                                                                                                             |
+| @: (repeat last ex)                                      | —     | TODO                                                                                                                                                                          |
+| @@ (repeat last macro)                                   | 1     | tier2_macros.toml                                                                                                                                                             |
+| N@{a} counted play                                       | 1     | tier2_macros.toml                                                                                                                                                             |
+| decode_macro unknown `<...>` tag replays literally (B15) | 2     | not oracle-able (macro-text decode is an hjkl-engine internal, not a live-nvim-comparable keystroke sequence) — unit-tested in hjkl-engine/src/input.rs `#[cfg(test)]` module |
 
 ## Windows / Tabs
 
