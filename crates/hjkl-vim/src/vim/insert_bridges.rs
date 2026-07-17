@@ -654,17 +654,49 @@ pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
     ed.push_buffer_cursor_to_textarea();
     true
 }
-/// Delete from the cursor back to the start of the current line (`Ctrl-U`).
-/// No-op when already at column 0. Returns `true` when something was deleted.
+/// Delete backward on the current line (`Ctrl-U`, `:h i_CTRL-U`). No-op when
+/// already at column 0. Returns `true` when something was deleted.
+///
+/// B3: vim deletes only the text THIS insert session typed on the current
+/// line, not the whole line back to column 0. When there's nothing
+/// session-typed left to delete (either the session didn't start on this
+/// row, or the cursor is already at/before its start column), it falls back
+/// to deleting to the first non-blank column — and if the cursor is already
+/// at or before THAT indent boundary, all the way to column 0 (vim's
+/// documented two-consecutive-presses behaviour). All three tiers verified
+/// against nvim probes.
 pub(crate) fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
-    if cursor.col > 0 {
+    if cursor.col == 0 {
+        return true;
+    }
+    let session_start_col = vim(ed)
+        .insert_session
+        .as_ref()
+        .filter(|s| s.start_row == cursor.row)
+        .map(|s| s.start_col);
+    let target = match session_start_col {
+        Some(start_col) if cursor.col > start_col => start_col,
+        _ => {
+            let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
+            let first_non_blank = line
+                .chars()
+                .position(|c| c != ' ' && c != '\t')
+                .unwrap_or(0);
+            if cursor.col > first_non_blank {
+                first_non_blank
+            } else {
+                0
+            }
+        }
+    };
+    if target < cursor.col {
         ed.mutate_edit(Edit::DeleteRange {
-            start: Position::new(cursor.row, 0),
+            start: Position::new(cursor.row, target),
             end: cursor,
             kind: MotionKind::Char,
         });

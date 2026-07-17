@@ -188,3 +188,70 @@ keys = "jI<C-w><Esc>"
 expected_buffer = "foobar\n"
 expected_cursor = [0, 2]
 expected_mode = "normal"
+
+# ─── B3 — insert C-u deletes only the session's typed text ───────────────────
+
+# `Aworld<C-u><Esc>` on "hello ": deletes only "world" (this session's
+# typed text), not the whole line.
+[[cases]]
+name = "b3_ctrl_u_deletes_only_session_text"
+initial_buffer = "hello \n"
+initial_cursor = [0, 0]
+keys = "Aworld<C-u><Esc>"
+expected_buffer = "hello \n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+
+# Nothing typed yet this session, no indent: falls back to deleting to
+# column 0.
+[[cases]]
+name = "b3_ctrl_u_no_session_text_no_indent"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "lli<C-u>x<Esc>"
+expected_buffer = "xllo\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Nothing typed yet this session, WITH indent: first C-u falls back to the
+# first non-blank column (keeps the indent).
+[[cases]]
+name = "b3_ctrl_u_no_session_text_with_indent"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = "A<C-u>x<Esc>"
+expected_buffer = "    x\n"
+expected_mode = "normal"
+
+# Two consecutive C-u presses with nothing session-typed: the first
+# deletes to the indent boundary, the second (cursor now AT that boundary)
+# deletes the indent too, reaching column 0.
+[[cases]]
+name = "b3_ctrl_u_twice_reaches_col_zero"
+initial_buffer = "    hello\n"
+initial_cursor = [0, 0]
+keys = "A<C-u><C-u>x<Esc>"
+expected_buffer = "x\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Typed text, C-u, then MORE typed text, then C-u again: the session start
+# column is the ORIGINAL insert-entry column, not reset by the first C-u.
+[[cases]]
+name = "b3_ctrl_u_session_start_survives_first_press"
+initial_buffer = "hi\n"
+initial_cursor = [0, 0]
+keys = "Afoo<C-u>bar<C-u>x<Esc>"
+expected_buffer = "hix\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# Insert session spans a newline (`o`/`<CR>` mid-session): C-u on the NEW
+# row is scoped to that row, not the original entry row.
+[[cases]]
+name = "b3_ctrl_u_session_spans_newline"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "A<CR>newtext<C-u>x<Esc>"
+expected_buffer = "abc\nx\n"
+expected_mode = "normal"
