@@ -125,3 +125,59 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
         "the quickfix dock must stay open after <CR> jumps out of it"
     );
 }
+
+/// `-q [ERRORFILE]` (nvim "quickfix mode" alias, mirrored via `-q`
+/// dispatching `:cfile <errfile>` at startup — see `main`): reads the
+/// errorfile through the DEFAULT `&errorformat`
+/// (`"%f:%l:%c:%m,%f:%l:%m,%l:%c:%m"` — see `Settings::default`), so no
+/// `:set errorformat=` is needed here (unlike the `:cexpr` tests above,
+/// which set it explicitly to dodge `%` filename-expansion on ex-command
+/// args — `-q` never goes through that path since it reads the file
+/// directly). Populates the quickfix list AND jumps to the first entry,
+/// opening a DIFFERENT file than the one given on argv — proving both
+/// halves of nvim's `-q` contract.
+#[test]
+fn dash_q_flag_populates_quickfix_and_jumps_to_first_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let opened = tmp.path().join("main.txt");
+    std::fs::write(&opened, "m1\nm2\nm3\n").unwrap();
+    std::fs::write(tmp.path().join("second.txt"), "s1\ns2\ns3\n").unwrap();
+    // "second.txt:2:1:oops" matches `%f:%l:%c:%m` → path=second.txt,
+    // line=2, col=1, message="oops".
+    std::fs::write(tmp.path().join("errors.err"), "second.txt:2:1:oops\n").unwrap();
+
+    let mut session = TerminalSession::spawn_in_dir_with_file_config_args(
+        tmp.path(),
+        &opened,
+        "",
+        &["-q", "errors.err"],
+    );
+
+    // Cursor must land on second.txt's (0-based) line 1 — "s2" — not
+    // anywhere in main.txt, proving the jump actually switched buffers.
+    let (cursor_row, _) = session.cursor_cell_wait();
+    let cursor_line = session.line(cursor_row);
+    assert!(
+        cursor_line.contains("s2"),
+        "-q must jump to second.txt's line 2 (\"s2\"); cursor is on row \
+         {cursor_row} which renders {cursor_line:?}\nscreen:\n{}",
+        (0..24)
+            .map(|r| session.line(r))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let status_shows_second = (0..24).any(|r| session.line(r).contains("second.txt"));
+    assert!(
+        status_shows_second,
+        "second.txt must be the focused buffer after -q's jump"
+    );
+
+    // The quickfix list itself must be populated too (not just the jump) —
+    // `:copen` shows the dock with the parsed entry.
+    session.keys(":copen<Enter>");
+    let shows_entry = (0..24).any(|r| session.line(r).contains("second.txt:2:1 oops"));
+    assert!(
+        shows_entry,
+        "the quickfix list populated by -q must contain the parsed entry"
+    );
+}

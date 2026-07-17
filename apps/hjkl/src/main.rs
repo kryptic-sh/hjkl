@@ -109,6 +109,12 @@ struct Cli {
     #[arg(short = 'c', long = "command", value_name = "CMD", action = clap::ArgAction::Append)]
     commands: Vec<String>,
 
+    /// Quickfix mode: read <ERRORFILE> (default: errors.err) through
+    /// 'errorformat', populate the quickfix list, and jump to the first
+    /// error. Mirrors `nvim -q`.
+    #[arg(short = 'q', value_name = "ERRORFILE", num_args = 0..=1, default_missing_value = "errors.err")]
+    quickfix: Option<String>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -137,6 +143,10 @@ pub struct Args {
     /// Ex commands to dispatch in headless mode. `-c` commands precede `+cmd`
     /// tokens; argv interleaving within each group is preserved.
     pub commands: Vec<String>,
+    /// `-q [ERRORFILE]`: read `ERRORFILE` (default `errors.err`) through
+    /// `&errorformat`, populate the quickfix list, and jump to the first
+    /// error at startup. Mirrors `nvim -q`. `None` when the flag is absent.
+    pub quickfix: Option<String>,
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -227,6 +237,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         nvim_api: cli.nvim_api,
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
+        quickfix: cli.quickfix,
     };
     // nvim compatibility: `-u NONE` disables plugins + config, `-u NORC` skips
     // just the init file. hjkl has no plugin system and a single TOML config,
@@ -424,6 +435,16 @@ fn main() -> Result<()> {
     // come last in the slot list; it does NOT run inside App::new so that
     // tests and headless/embed modes are free of real-XDG scanning.
     app.recover_orphan_scratch_buffers();
+    // `-q [ERRORFILE]` (nvim "quickfix mode"): read the errorfile through
+    // `&errorformat`, populate the quickfix list, and jump to the first
+    // error. Runs BEFORE `-c`/`+cmd` — nvim populates the quickfix list
+    // during startup, then runs `-c`/`+cmd` afterward, so a `-c cnext` or
+    // similar can act on the list `-q` just built. `:cfile` already
+    // implements exactly this read-parse-populate-jump sequence (see
+    // `App::qf_run_from_file`), so `-q` just dispatches it as an ex command.
+    if let Some(errfile) = &args.quickfix {
+        app.dispatch_ex(&format!("cfile {errfile}"));
+    }
     // Run any +cmd / -c CMD tokens before entering raw mode. Errors surface
     // as toasts on the notification bus and become visible on the first frame.
     // Matches vim/nvim: `nvim +vsp file.txt` opens the file then runs `:vsp`.
@@ -778,6 +799,31 @@ mod cli_tests {
         assert_eq!(args.config, None);
     }
 
+    /// `-q [ERRORFILE]` (nvim "quickfix mode" alias): absent → `None`; bare
+    /// `-q` (nothing else follows to be consumed as its value) defaults to
+    /// `"errors.err"` (clap's `default_missing_value`); `-q errs.txt`
+    /// captures the explicit path — and does NOT swallow a subsequent FILE
+    /// positional.
+    #[test]
+    fn parse_argv_dash_q_quickfix_flag() {
+        let raw: Vec<String> = ["hjkl", "-q", "errs.txt", "f.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.quickfix.as_deref(), Some("errs.txt"));
+        assert_eq!(args.files, vec![PathBuf::from("f.txt")]);
+
+        // Bare `-q` with nothing after it to consume as a value.
+        let raw: Vec<String> = ["hjkl", "-q"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.quickfix.as_deref(), Some("errors.err"));
+
+        let raw: Vec<String> = ["hjkl", "f.txt"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert_eq!(args.quickfix, None);
+    }
+
     fn blank_args() -> Args {
         Args {
             files: vec![],
@@ -791,6 +837,7 @@ mod cli_tests {
             embed: false,
             nvim_api: false,
             commands: vec![],
+            quickfix: None,
         }
     }
 }
