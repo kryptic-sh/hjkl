@@ -1609,11 +1609,9 @@ impl super::App {
             }
             self.explorer_rebuild_buffer();
         } else {
-            // File: open in the nearest non-explorer window.
-            let target_win = self.nearest_non_explorer_window();
-            if let Some(win_id) = target_win {
-                self.switch_focus(win_id);
-            }
+            // File: open in a regular editor window (prefers the last one
+            // the user focused — see `editor_target_window`).
+            self.focus_editor_window_for_open();
             let s = Self::explorer_open_arg(&node.path);
             // Suppress the `"file" NL` open toast — opening from the tree is an
             // explicit action and the buffer visibly changes.
@@ -1761,20 +1759,10 @@ impl super::App {
         true
     }
 
-    /// Find the nearest non-explorer window in the active tab's layout.
-    pub(crate) fn nearest_non_explorer_window(&self) -> Option<super::window::WindowId> {
-        let leaves = self.layout().leaves();
-        let explorer_win = self.explorer.as_ref().map(|ep| ep.win_id);
-        // Prefer the currently focused non-explorer window.
-        let fw = self.focused_window();
-        if Some(fw) != explorer_win {
-            return Some(fw);
-        }
-        // Fall back to the first non-explorer leaf.
-        leaves
-            .into_iter()
-            .find(|&win_id| Some(win_id) != explorer_win)
-    }
+    // NOTE: window targeting for opens lives on `App` now —
+    // `editor_target_window` / `focus_editor_window_for_open` (mod.rs)
+    // replaced the old `nearest_non_explorer_window`, adding last-focused
+    // preference and cmdline-window exclusion.
 
     // ── Cursor-node helpers ───────────────────────────────────────────────────
 
@@ -1841,9 +1829,7 @@ impl super::App {
             Some(n) if !n.is_dir => n,
             _ => return,
         };
-        if let Some(win_id) = self.nearest_non_explorer_window() {
-            self.switch_focus(win_id);
-        }
+        self.focus_editor_window_for_open();
         let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("split {s}"));
     }
@@ -1854,9 +1840,7 @@ impl super::App {
             Some(n) if !n.is_dir => n,
             _ => return,
         };
-        if let Some(win_id) = self.nearest_non_explorer_window() {
-            self.switch_focus(win_id);
-        }
+        self.focus_editor_window_for_open();
         let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("vsplit {s}"));
     }
@@ -2036,10 +2020,8 @@ impl super::App {
             return;
         }
 
-        // Focus a non-explorer window first (same as explorer_open_split).
-        if let Some(win_id) = self.nearest_non_explorer_window() {
-            self.switch_focus(win_id);
-        }
+        // Focus a regular editor window first (same as explorer_open_split).
+        self.focus_editor_window_for_open();
 
         // Open the COMMIT_EDITMSG in a horizontal split.
         let s = Self::explorer_open_arg(&msg_file);

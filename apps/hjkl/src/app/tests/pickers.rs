@@ -450,3 +450,88 @@ fn picker_action_custom_downcasts_to_app_action() {
         panic!("expected Custom");
     }
 }
+
+// ── Regular-window routing (picker must never hijack special panes) ────
+
+/// Picking a file while the EXPLORER window is focused must open the file
+/// in a regular editor window — not retarget the explorer pane's slot.
+#[test]
+fn picker_open_path_while_explorer_focused_routes_to_regular_window() {
+    use crate::picker_action::AppAction;
+    use hjkl_picker::PickerAction;
+    let path = std::env::temp_dir().join("hjkl_expl_picker_open.txt");
+    std::fs::write(&path, "picked\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
+    let explorer_win = app.explorer.as_ref().expect("explorer open").win_id;
+    assert_eq!(
+        app.focused_window(),
+        explorer_win,
+        "opening the explorer focuses its window"
+    );
+
+    app.dispatch_picker_action(PickerAction::Custom(Box::new(AppAction::OpenPath(
+        path.clone(),
+    ))));
+
+    assert_ne!(
+        app.focused_window(),
+        explorer_win,
+        "picker open must move focus off the explorer window"
+    );
+    let expl_slot = app.windows[explorer_win].as_ref().unwrap().slot;
+    assert!(
+        app.slots[expl_slot].is_explorer,
+        "explorer window must still show the explorer slot"
+    );
+    assert_eq!(
+        app.active().filename.as_deref(),
+        Some(path.as_path()),
+        "picked file must be open in the focused regular window"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Buffer-picker selection (SwitchSlot) while the explorer is focused must
+/// retarget a regular window, not the explorer pane.
+#[test]
+fn picker_switch_slot_while_explorer_focused_routes_to_regular_window() {
+    use crate::picker_action::AppAction;
+    use hjkl_picker::PickerAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
+    let explorer_win = app.explorer.as_ref().expect("explorer open").win_id;
+    assert_eq!(app.focused_window(), explorer_win);
+
+    app.dispatch_picker_action(PickerAction::Custom(Box::new(AppAction::SwitchSlot(0))));
+
+    assert_ne!(app.focused_window(), explorer_win);
+    let expl_slot = app.windows[explorer_win].as_ref().unwrap().slot;
+    assert!(app.slots[expl_slot].is_explorer);
+    assert!(!app.active().is_explorer, "active slot must be regular");
+}
+
+/// `editor_target_window` prefers the LAST regular window the user focused,
+/// not just the first leaf in the layout.
+#[test]
+fn editor_target_prefers_last_focused_regular_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("vsplit");
+    let after_split = app.focused_window();
+    app.focus_next();
+    let second = app.focused_window();
+    assert_ne!(after_split, second, "vsplit must yield two windows");
+
+    // Open the explorer — focus moves to its (non-regular) window.
+    app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
+    let explorer_win = app.explorer.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), explorer_win);
+    assert!(!app.window_is_regular(explorer_win));
+
+    assert_eq!(
+        app.editor_target_window(),
+        Some(second),
+        "target must be the last regular window focused before the explorer"
+    );
+}

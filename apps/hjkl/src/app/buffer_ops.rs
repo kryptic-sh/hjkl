@@ -59,14 +59,10 @@ impl App {
         if self.slots.get(idx).is_some_and(|s| s.is_explorer) {
             return;
         }
-        // Never load a normal buffer into the explorer pane. If the explorer is
-        // focused (e.g. clicking a buffer-line entry while it's focused),
-        // redirect to the nearest non-explorer window first.
-        if self.explorer_buf_focused()
-            && let Some(win_id) = self.nearest_non_explorer_window()
-        {
-            self.switch_focus(win_id);
-        }
+        // Never load a normal buffer into a special pane (explorer/cmdline).
+        // If one is focused (e.g. clicking a buffer-line entry while the
+        // explorer is focused), redirect to a regular editor window first.
+        self.focus_editor_window_for_open();
         let current_slot = self.focused_slot_idx();
         if idx != current_slot {
             self.prev_active = Some(current_slot);

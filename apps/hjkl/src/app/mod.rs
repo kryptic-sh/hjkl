@@ -195,6 +195,13 @@ pub struct App {
     /// The slot that was active just before the most recent `switch_to`
     /// call. Used by `<C-^>` / `:b#` to jump to the alternate buffer.
     pub prev_active: Option<usize>,
+    /// The most recently focused REGULAR editor window (see
+    /// [`Self::window_is_regular`]). Buffer-open paths triggered from a
+    /// special pane (picker while the explorer is focused, explorer tree
+    /// open) route the file here so special windows never get hijacked by
+    /// file buffers. May be stale (closed window / other tab) —
+    /// [`Self::editor_target_window`] validates before use.
+    pub(crate) last_regular_window: Option<window::WindowId>,
     /// Set to `true` when the FSM or Ctrl-C wants to quit.
     pub exit_requested: bool,
     /// Notification bus — collects all info/warn/error toasts pushed during
@@ -1025,8 +1032,79 @@ impl App {
     }
 
     /// Set the focused window in the active tab.
+    ///
+    /// Also records `last_regular_window` when `id` is a regular editor
+    /// window — the memory that lets buffer-open paths (picker, explorer)
+    /// route files back to the window the user last edited in instead of
+    /// hijacking a special pane (see [`Self::editor_target_window`]).
     pub fn set_focused_window(&mut self, id: window::WindowId) {
         self.tabs[self.active_tab].focused_window = id;
+        if self.window_is_regular(id) {
+            self.last_regular_window = Some(id);
+        }
+    }
+
+    /// `true` when `id` is a REGULAR editor window — one that may hold an
+    /// ordinary file buffer. Special panes are not regular: the explorer
+    /// window and the cmdline window (`q:`/`q/`). The quickfix/location
+    /// lists render as panels today (no `WindowId`); if they ever become
+    /// real windows they must be excluded here too.
+    pub(crate) fn window_is_regular(&self, id: window::WindowId) -> bool {
+        let exists = self.windows.get(id).is_some_and(Option::is_some);
+        if !exists {
+            return false;
+        }
+        if self.explorer.as_ref().is_some_and(|ep| ep.win_id == id) {
+            return false;
+        }
+        if self.cmdline_win.as_ref().is_some_and(|cw| cw.win_id == id) {
+            return false;
+        }
+        // Belt and braces: a window pointing at an explorer-backed slot is
+        // not regular even if `self.explorer`'s win_id is out of sync.
+        let slot_is_explorer = self.windows[id]
+            .as_ref()
+            .and_then(|w| self.slots.get(w.slot))
+            .is_some_and(|s| s.is_explorer);
+        !slot_is_explorer
+    }
+
+    /// The window that should RECEIVE a file buffer being opened right now:
+    /// the focused window when it is regular, else the last regular window
+    /// the user focused (if it still exists in the ACTIVE tab's layout),
+    /// else the first regular leaf in the active tab. `None` when the tab
+    /// has no regular window at all (e.g. explorer is the only window) —
+    /// callers then open in place, matching the explorer tree's own
+    /// fallback.
+    pub(crate) fn editor_target_window(&self) -> Option<window::WindowId> {
+        let fw = self.focused_window();
+        if self.window_is_regular(fw) {
+            return Some(fw);
+        }
+        let leaves = self.layout().leaves();
+        if let Some(last) = self.last_regular_window
+            && leaves.contains(&last)
+            && self.window_is_regular(last)
+        {
+            return Some(last);
+        }
+        leaves
+            .into_iter()
+            .find(|&win_id| self.window_is_regular(win_id))
+    }
+
+    /// Move focus to [`Self::editor_target_window`] before opening a file
+    /// buffer. No-op when the focused window is already regular or when no
+    /// regular window exists. Every path that opens/retargets a buffer as a
+    /// side effect of a UI surface (picker select, explorer tree open) must
+    /// call this first so special panes never get hijacked by file buffers.
+    pub(crate) fn focus_editor_window_for_open(&mut self) {
+        if self.window_is_regular(self.focused_window()) {
+            return;
+        }
+        if let Some(target) = self.editor_target_window() {
+            self.switch_focus(target);
+        }
     }
 
     /// Temporarily take the active tab's layout, replacing it with a
@@ -2089,6 +2167,10 @@ impl App {
             next_window_id: 1,
             next_buffer_id: 1,
             prev_active: None,
+            // Window 0 exists and is regular at startup; recorded here so
+            // opening the explorer before any focus change still has a
+            // last-regular target.
+            last_regular_window: Some(0),
             exit_requested: false,
             bus: HollerBus::new(),
             info_popup: None,

@@ -200,6 +200,8 @@ impl App {
             }
         };
         self.picker = None;
+        // Split a regular window, not a special pane (explorer/cmdline).
+        self.focus_editor_window_for_open();
         // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
         let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("split {s}"));
@@ -219,6 +221,8 @@ impl App {
             }
         };
         self.picker = None;
+        // Split a regular window, not a special pane (explorer/cmdline).
+        self.focus_editor_window_for_open();
         // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
         let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("vsplit {s}"));
@@ -238,6 +242,10 @@ impl App {
             }
         };
         self.picker = None;
+        // `tabnew` creates its own fresh window, but leave the CURRENT
+        // tab's focus on a regular window too so returning to this tab
+        // doesn't strand focus on a hijack-prone special pane.
+        self.focus_editor_window_for_open();
         // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
         let s = super::ex_dispatch::escape_ex_path(&path.to_string_lossy());
         self.dispatch_ex(&format!("tabnew {s}"));
@@ -294,15 +302,20 @@ impl App {
         };
         match app_action {
             AppAction::OpenPath(path) => {
+                // Route the file to a regular editor window — picking from
+                // a special pane (explorer focused) must not hijack it.
+                self.focus_editor_window_for_open();
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
             }
             AppAction::SwitchSlot(idx) => {
                 if idx < self.slots.len() {
+                    self.focus_editor_window_for_open();
                     self.switch_to(idx);
                 }
             }
             AppAction::OpenPathAtLine(path, line) => {
+                self.focus_editor_window_for_open();
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
                 // goto_line is 1-based and clamps to buffer length.
@@ -715,6 +728,9 @@ impl App {
                 self.next_buffer_id += 1;
                 self.slots.push(slot);
                 let new_idx = self.slots.len() - 1;
+                // The commit view is an ordinary buffer — route it to a
+                // regular window, never the explorer/cmdline pane.
+                self.focus_editor_window_for_open();
                 self.switch_to(new_idx);
                 self.bus.info(format!("showing commit {short_sha}"));
             }
