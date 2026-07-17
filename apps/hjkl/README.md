@@ -69,11 +69,15 @@ hjkl +picker          # open fuzzy file picker immediately
 hjkl +vsp file1 file2 # open two files in a vertical split
 hjkl --clean file.txt # bundled defaults only, ignore the user config
 hjkl -u NONE file.txt # nvim-style alias: same as --clean
+hjkl -n file.txt      # no swap file — edits live only in memory
 ```
 
 `--clean` starts from the bundled defaults, ignoring the user config file at its
 default location (and any `--config` path), and does not persist runtime changes
 (dock resizes, `explorer.open`) back to disk. Mirrors `nvim --clean`.
+
+`-n` disables swap-file writing for the session: no crash-recovery file is
+created or updated, so edits live only in memory. Mirrors `vim -n` / `nvim -n`.
 
 `-u <PATH>` is an nvim-compatible alias for `--config <PATH>`; `-u NONE` and
 `-u NORC` behave like `--clean` (hjkl has no plugin system and a single config

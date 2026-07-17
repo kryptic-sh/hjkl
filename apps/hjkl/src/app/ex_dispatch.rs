@@ -1238,6 +1238,11 @@ impl App {
     pub(crate) fn write_swap_for_slot(&mut self, idx: usize) {
         use hjkl_app::swap::{self, SwapHeader};
 
+        // `-n`: swap disabled for the session — no-op (issue: `-n`/no-swap).
+        if !self.swapfile_enabled {
+            return;
+        }
+
         // The explorer is a programmatic scratch buffer — never persist it to a
         // swap file (otherwise a crash would offer to "recover" the tree text).
         if self.slots[idx].is_explorer {
@@ -1331,6 +1336,10 @@ impl App {
     /// so it always writes — even for an unmodified buffer. That is intentional:
     /// the PID lock must exist immediately so a concurrent second open sees it.
     pub(crate) fn arm_swap_on_open(&mut self, slot_idx: usize) {
+        // `-n`: swap disabled for the session — no-op (issue: `-n`/no-swap).
+        if !self.swapfile_enabled {
+            return;
+        }
         if self.pending_recovery.is_some() {
             return;
         }
@@ -1341,6 +1350,24 @@ impl App {
             return;
         }
         self.write_swap_for_slot(slot_idx);
+    }
+
+    /// `-n`: disable swap files for the rest of the session (issue: `-n`/
+    /// no-swap, mirrors `vim -n` / `nvim -n`). Sets [`Self::swapfile_enabled`]
+    /// to `false`, which makes [`Self::write_swap_for_slot`] and
+    /// [`Self::arm_swap_on_open`] no-op for the rest of the session, and
+    /// removes any swap file already armed on currently-open slots — at
+    /// startup that is just slot 0's PID-lock swap, written by
+    /// `App::new`'s own `arm_swap_on_open(0)` call before `main` gets a
+    /// chance to call this. Mirrors the cleanup loop in
+    /// [`Self::cleanup_swaps_on_exit`].
+    pub(crate) fn disable_swapfiles(&mut self) {
+        self.swapfile_enabled = false;
+        for slot in &mut self.slots {
+            if let Some(p) = slot.swap_path.take() {
+                let _ = hjkl_app::swap::remove_swap(&p);
+            }
+        }
     }
 
     /// Remove all slots' swap files. Called on graceful shutdown so a clean

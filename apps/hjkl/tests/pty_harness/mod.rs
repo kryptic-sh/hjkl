@@ -31,6 +31,7 @@ pub mod global_marks;
 pub mod harness;
 pub mod indent;
 pub mod macro_replay;
+pub mod noswap;
 pub mod paste;
 pub mod quickfix;
 pub mod recovery;

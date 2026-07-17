@@ -292,6 +292,20 @@ impl TerminalSession {
         Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[])
     }
 
+    /// Spawn `hjkl` opening `file` with a caller-supplied `cache_dir` as
+    /// `XDG_CACHE_HOME` (so the caller can inspect `<cache_dir>/hjkl/swap/…`
+    /// after the session runs, exactly like [`Self::spawn_with_file_and_cache_dir`]),
+    /// plus `extra_args` (e.g. `["-n"]`) before the file — neither existing
+    /// constructor combines an inspectable cache dir with extra args.
+    #[allow(dead_code)]
+    pub fn spawn_with_file_cache_dir_and_args(
+        path: &Path,
+        cache_dir: tempfile::TempDir,
+        extra_args: &[&str],
+    ) -> Self {
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, extra_args)
+    }
+
     /// Spawn `hjkl` with `dir` as the cwd, opening `file`, after pre-seeding
     /// a user `config.toml` (at the session's isolated XDG path) with
     /// `config_toml`, and passing `extra_args` (e.g. `["--clean"]`) before

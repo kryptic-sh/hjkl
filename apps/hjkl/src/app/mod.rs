@@ -616,6 +616,13 @@ pub struct App {
     /// returned the focused pane's size instead of the real screen. This
     /// is the actual terminal geometry, recorded where it's known for free.
     pub(crate) last_frame_rect: Option<ratatui::layout::Rect>,
+    /// `false` disables swap-file writing for the whole session (`-n`, vim /
+    /// nvim `-n` parity). Default `true` — every `App::new` starts with
+    /// swap enabled (so the constructor's own `arm_swap_on_open(0)` behaves
+    /// normally); `main` flips this off post-construction via
+    /// [`Self::disable_swapfiles`] when `-n` is passed. Gates
+    /// `write_swap_for_slot` and `arm_swap_on_open` (issue #185).
+    pub(crate) swapfile_enabled: bool,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -2339,6 +2346,7 @@ impl App {
             nvim_bvars: std::collections::HashMap::new(),
             nvim_wvars: std::collections::HashMap::new(),
             last_frame_rect: None,
+            swapfile_enabled: true,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

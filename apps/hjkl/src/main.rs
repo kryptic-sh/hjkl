@@ -127,6 +127,11 @@ struct Cli {
     #[arg(short = 'p', conflicts_with_all = ["open_hsplit", "open_vsplit"])]
     open_tabs: bool,
 
+    /// No swap file: edits live only in memory for this session, with no
+    /// crash-recovery file written or updated. Mirrors `vim -n` / `nvim -n`.
+    #[arg(short = 'n')]
+    no_swap: bool,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -173,6 +178,9 @@ pub struct Args {
     /// startup. Mirrors nvim's layout flags (bare form only — no `-o2`
     /// window-count variant).
     pub file_layout: FileLayout,
+    /// `-n`: disable swap-file writes for the session (memory only).
+    /// Mirrors `vim -n` / `nvim -n`.
+    pub no_swap: bool,
 }
 
 /// `true` when `p` is the literal `-` (vim/nvim convention: read the buffer
@@ -283,6 +291,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         } else {
             FileLayout::Buffers
         },
+        no_swap: cli.no_swap,
     };
     // nvim compatibility: `-u NONE` disables plugins + config, `-u NORC` skips
     // just the init file. hjkl has no plugin system and a single TOML config,
@@ -464,6 +473,14 @@ fn main() -> Result<()> {
     } else {
         base_app
     };
+    // `-n`: disable swap files for the rest of the session. Must run before
+    // stdin loading and the extra-files loop below so nothing opened this
+    // session ever arms or writes a swap. This also removes the swap `new()`
+    // already armed on slot 0 (a fresh session always arms it before this
+    // flag can take effect).
+    if args.no_swap {
+        app.disable_swapfiles();
+    }
     // `hjkl -`: read all of stdin into the unnamed active buffer built above.
     // Safe to consume fd 0 here even though we're about to go interactive —
     // crossterm's Unix event source reads keystrokes from `/dev/tty`, not
@@ -998,6 +1015,24 @@ mod cli_tests {
             commands: vec![],
             quickfix: None,
             file_layout: FileLayout::Buffers,
+            no_swap: false,
         }
+    }
+
+    /// `-n` (no swap file): absent → `false`; present → `true`. Mirrors
+    /// `vim -n` / `nvim -n`.
+    #[test]
+    fn parse_argv_dash_n_no_swap_flag() {
+        let raw: Vec<String> = ["hjkl", "f.txt"].iter().map(|s| s.to_string()).collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(!args.no_swap);
+
+        let raw: Vec<String> = ["hjkl", "-n", "f.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, _) = parse_argv(raw).expect("parse_argv");
+        assert!(args.no_swap);
+        assert_eq!(args.files, vec![PathBuf::from("f.txt")]);
     }
 }
