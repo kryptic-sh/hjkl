@@ -30,6 +30,7 @@ pub mod harness;
 pub mod indent;
 pub mod macro_replay;
 pub mod paste;
+pub mod quickfix;
 pub mod recovery;
 pub mod register_count;
 pub mod render_sync;
