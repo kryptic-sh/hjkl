@@ -1,0 +1,104 @@
+# Round 3 — B1: dot-repeat for visual-mode operators (`:h v_.`).
+#
+# vim replays a visual-mode operator over a same-SIZE region anchored at the
+# CURRENT cursor, not the original absolute range:
+#   - charwise (v): same number of lines; on the last line, same char width
+#     (a single-line selection just repeats the same char count).
+#   - linewise (V): same number of lines, exactly like `[N]dd`/`[N]U`/etc.
+# Verified against `nvim --headless --clean -n` probes (see round-3 report)
+# before implementing — nvim_win_get_cursor's row is 1-based, which the
+# initial probing pass misread as 0-based and had to redo.
+
+# ── charwise, single line ──────────────────────────────────────────────────
+
+[[cases]]
+name = "b1_visual_char_single_line_delete_dot"
+initial_buffer = "one two three four\n"
+initial_cursor = [0, 0]
+keys = "vlld."
+expected_buffer = "o three four\n"
+
+# ── charwise, multi-line ───────────────────────────────────────────────────
+
+[[cases]]
+name = "b1_visual_char_multiline_delete_dot"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\n"
+initial_cursor = [0, 0]
+keys = "vjd."
+expected_buffer = "ccc\ndddd\n"
+
+# ── linewise ────────────────────────────────────────────────────────────────
+
+[[cases]]
+name = "b1_visual_line_delete_dot"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff\n"
+initial_cursor = [0, 0]
+keys = "Vjd."
+expected_buffer = "eeee\nffff\n"
+
+# ── charwise toggle-case: cursor moves between the op and `.` so the
+#    replayed 3-char width lands on a DIFFERENT span, producing a novel
+#    (non-reverting) result — a stronger check than a no-op would be, since
+#    toggle-case is its own inverse and could mask a wrong extent.
+
+[[cases]]
+name = "b1_visual_char_togglecase_dot_after_move"
+initial_buffer = "AbCdEfGhIj\n"
+initial_cursor = [0, 0]
+keys = "vll~ll."
+expected_buffer = "aBCDefGhIj\n"
+
+[[cases]]
+name = "b1_visual_char_togglecase_dot_bare_is_noop_reselect"
+initial_buffer = "abcdefghij\n"
+initial_cursor = [0, 0]
+keys = "vll~."
+expected_buffer = "abcdefghij\n"
+
+# ── linewise indent, shiftwidth pinned so both drivers agree ───────────────
+
+[[cases]]
+name = "b1_visual_line_indent_dot"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\n"
+initial_cursor = [0, 0]
+keys = "Vj>."
+shiftwidth = 4
+expandtab = true
+expected_buffer = "        aaaa\n        bbbb\ncccc\ndddd\n"
+
+# ── linewise uppercase — dot after moving down repeats at the new cursor ───
+
+[[cases]]
+name = "b1_visual_line_uppercase_dot_after_move"
+initial_buffer = "row0\nrow1\nrow2\nrow3\nrow4\n"
+initial_cursor = [0, 0]
+keys = "VjUj."
+expected_buffer = "ROW0\nROW1\nROW2\nrow3\nrow4\n"
+
+# ── charwise change + retype, dot-repeat retypes at the new region ─────────
+
+[[cases]]
+name = "b1_visual_char_change_dot_retypes"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\n"
+initial_cursor = [0, 0]
+keys = "vjcXY<Esc>j."
+expected_buffer = "XYbbb\ncXYddd\n"
+
+# ── linewise change + retype ────────────────────────────────────────────────
+
+[[cases]]
+name = "b1_visual_line_change_dot_retypes"
+initial_buffer = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff\n"
+initial_cursor = [0, 0]
+keys = "VjcZZ<Esc>j."
+expected_buffer = "ZZ\nZZ\neeee\nffff\n"
+
+# ── yank must NOT participate in dot-repeat (`:h .` — yank is not a change;
+#    verified `yyj.` in real nvim leaves the buffer untouched) ─────────────
+
+[[cases]]
+name = "b1_visual_line_yank_dot_is_noop"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "Vyj."
+expected_buffer = "foo\nbar\nbaz\n"

@@ -2,7 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{InsertEntry, LastChange, Mode};
+use hjkl_vim_types::{InsertEntry, LastChange, Mode, VisualExtent};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -129,6 +129,46 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
             inserted,
         } => {
             gn_operate(ed, Some(op), forward, 1);
+            if let Some(text) = inserted {
+                replay_insert_and_finish(ed, &text);
+            }
+        }
+        LastChange::VisualOp {
+            op,
+            extent,
+            inserted,
+        } => {
+            // B1: replay a visual-mode operator over a same-SIZE region
+            // anchored at the CURRENT cursor (`:h v_.`), not the original
+            // absolute range. `Line` extents are exactly `[count]dd`-style
+            // (execute_line_op already implements that count semantics for
+            // every operator it supports). `Char` extents synthesize an
+            // inclusive charwise range: single-line selections keep their
+            // raw width from the cursor; multi-line selections run the
+            // first line cursor-to-EOL, middle lines whole, and the last
+            // line's first `width` chars — the same shape
+            // `run_operator_over_range` already cuts for a live multi-line
+            // charwise visual selection.
+            match extent {
+                VisualExtent::Line { lines } => {
+                    execute_line_op(ed, op, lines);
+                }
+                VisualExtent::Char { lines, width } => {
+                    let (r, c) = ed.cursor();
+                    let end = if lines <= 1 {
+                        (r, c + width.saturating_sub(1))
+                    } else {
+                        (r + lines - 1, width.saturating_sub(1))
+                    };
+                    run_operator_over_range(
+                        ed,
+                        op,
+                        (r, c),
+                        end,
+                        hjkl_vim_types::RangeKind::Inclusive,
+                    );
+                }
+            }
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
             }

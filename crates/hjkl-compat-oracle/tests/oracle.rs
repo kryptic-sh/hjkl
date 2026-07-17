@@ -959,6 +959,16 @@ async fn tier2_round3_h2_corpus_passes() {
     run_corpus("corpus/tier2_round3_h2.toml").await;
 }
 
+/// B1: dot-repeat for visual-mode operators (`v_.`) — charwise/linewise
+/// delete, toggle-case, indent, and change-with-retype, all replaying over
+/// a same-size region anchored at the current cursor. Also pins that visual
+/// yank does NOT participate in dot-repeat (matches real vim: `.` only
+/// repeats changes).
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_round3_b1_visual_dot_corpus_passes() {
+    run_corpus("corpus/tier2_round3_b1_visual_dot.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

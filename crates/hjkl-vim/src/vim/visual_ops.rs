@@ -2,7 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{InsertReason, Mode, Motion, Operator, RangeKind};
+use hjkl_vim_types::{InsertReason, LastChange, Mode, Motion, Operator, RangeKind, VisualExtent};
 
 use hjkl_engine::rope_util::{rope_line_to_str, rope_to_lines_vec};
 
@@ -40,11 +40,27 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
+                    record_visual_last_change(
+                        ed,
+                        op,
+                        VisualExtent::Line {
+                            lines: bot - top + 1,
+                        },
+                    );
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     // Vim `Vc` / `Vjc`: same linewise-change semantics as
                     // `cc` — preserve first line's indent, enter insert.
+                    // Record BEFORE entering insert: `AfterChange` patches
+                    // `inserted` into this entry when the user hits Esc.
+                    record_visual_last_change(
+                        ed,
+                        op,
+                        VisualExtent::Line {
+                            lines: bot - top + 1,
+                        },
+                    );
                     change_linewise_rows(ed, top, bot);
                 }
                 Operator::Uppercase
@@ -56,6 +72,13 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         .max(vim(ed).visual_line_anchor);
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
                     move_first_non_whitespace(ed);
+                    record_visual_last_change(
+                        ed,
+                        op,
+                        VisualExtent::Line {
+                            lines: bot - top + 1,
+                        },
+                    );
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
@@ -66,6 +89,13 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     } else {
                         outdent_rows(ed, top, bot, levels);
                     }
+                    record_visual_last_change(
+                        ed,
+                        op,
+                        VisualExtent::Line {
+                            lines: bot - top + 1,
+                        },
+                    );
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Reflow => {
@@ -123,10 +153,14 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+                    record_visual_last_change(ed, op, charwise_extent(top, bot));
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     ed.push_undo();
+                    // Record BEFORE entering insert: `AfterChange` patches
+                    // `inserted` into this entry when the user hits Esc.
+                    record_visual_last_change(ed, op, charwise_extent(top, bot));
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
                     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
                 }
@@ -139,6 +173,7 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     apply_case_op_to_selection(ed, op, top, bot, RangeKind::Inclusive);
+                    record_visual_last_change(ed, op, charwise_extent(top, bot));
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
@@ -150,6 +185,16 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     } else {
                         outdent_rows(ed, top.0, bot.0, levels);
                     }
+                    // Indent/outdent always act linewise regardless of the
+                    // originating charwise selection (`:h v_>` — columns are
+                    // ignored), so the dot-repeat extent is Line, not Char.
+                    record_visual_last_change(
+                        ed,
+                        op,
+                        VisualExtent::Line {
+                            lines: bot.0 - top.0 + 1,
+                        },
+                    );
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Reflow => {
@@ -190,6 +235,40 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
         }
         Mode::VisualBlock => apply_block_operator(ed, op, levels),
         _ => {}
+    }
+}
+/// B1: record `LastChange::VisualOp` for dot-repeat, unless this call is
+/// itself a replay (`.` must not overwrite the entry it's replaying).
+fn record_visual_last_change<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    extent: VisualExtent,
+) {
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::VisualOp {
+            op,
+            extent,
+            inserted: None,
+        });
+    }
+}
+/// B1: derive the charwise dot-repeat extent from an ordered `(top, bot)`
+/// INCLUSIVE range (`:h v_.`). Single-line selections store the raw
+/// selected char count as `width` (replay selects that many chars starting
+/// at the cursor); multi-line selections store the last line's char count
+/// measured from column 0 (replay's last line always starts at column 0 —
+/// only the first line tracks the cursor's column).
+fn charwise_extent(top: (usize, usize), bot: (usize, usize)) -> VisualExtent {
+    if top.0 == bot.0 {
+        VisualExtent::Char {
+            lines: 1,
+            width: bot.1 - top.1 + 1,
+        }
+    } else {
+        VisualExtent::Char {
+            lines: bot.0 - top.0 + 1,
+            width: bot.1 + 1,
+        }
     }
 }
 /// Compute `(top_row, bot_row, left_col, right_col)` for the current

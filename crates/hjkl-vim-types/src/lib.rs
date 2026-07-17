@@ -357,6 +357,38 @@ pub enum LastChange {
     },
     /// `R{text}<Esc>` — replace (overstrike) mode. `.` re-overtypes `text`.
     ReplaceMode { text: String },
+    /// A visual-mode operator (`v`/`V` + `d`/`c`/`</>`/`~`/`u`/`U`/`?`).
+    /// vim (`:h v_.`) replays over a same-SIZE region anchored at the
+    /// current cursor rather than the original absolute range — `extent`
+    /// captures that size. `inserted` is filled on Esc for the `c` form so
+    /// `.` retypes it (same `AfterChange` patch site as `OpMotion` /
+    /// `OpTextObj` / `LineOp`).
+    ///
+    /// Visual-BLOCK operators are NOT covered here — see the round-3 B1
+    /// DIVERGE.md note.
+    VisualOp {
+        op: Operator,
+        extent: VisualExtent,
+        inserted: Option<String>,
+    },
+}
+
+/// Size of a visual-mode selection, captured for `LastChange::VisualOp`
+/// dot-repeat (`:h v_.`). Vim's rule: characterwise replays over the same
+/// number of lines, with the same character width on the last line;
+/// linewise replays over the same number of lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualExtent {
+    /// Charwise (`v`). `lines == 1`: `width` is the raw selected char count,
+    /// and replay selects exactly `width` chars starting at the cursor.
+    /// `lines > 1`: the first replay line runs from the cursor's column to
+    /// ITS OWN end of line, middle lines are taken whole, and the last line
+    /// takes its first `width` chars (measured from column 0, matching the
+    /// original selection's last-line char count).
+    Char { lines: usize, width: usize },
+    /// Linewise (`V`). Replay is exactly `[count]dd`-equivalent: `lines`
+    /// rows starting at the cursor's row.
+    Line { lines: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

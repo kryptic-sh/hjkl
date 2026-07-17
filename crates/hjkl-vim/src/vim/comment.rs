@@ -322,7 +322,8 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
                 LastChange::OpMotion { inserted: ins, .. }
                 | LastChange::OpTextObj { inserted: ins, .. }
                 | LastChange::LineOp { inserted: ins, .. }
-                | LastChange::GnOp { inserted: ins, .. },
+                | LastChange::GnOp { inserted: ins, .. }
+                | LastChange::VisualOp { inserted: ins, .. },
             ) = vim_mut(ed).last_change.as_mut()
             {
                 *ins = Some(inserted);

@@ -2,7 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{Mode, RangeKind};
+use hjkl_vim_types::{LastChange, Mode, RangeKind};
 
 use hjkl_engine::rope_util::{rope_line_to_str, rope_row_range_str};
 
@@ -483,6 +483,14 @@ pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
         if !joined {
             break;
         }
+    }
+    // B1: visual `J`/`gJ` is exactly `[joins + 1]J`/`gJ` from the top row —
+    // reuse the existing `JoinLine` dot-repeat entry (`:h v_J`) rather than
+    // adding a bespoke visual variant; replay already starts at whatever
+    // row the cursor is on, same as this function does via the
+    // `buf_set_cursor_rc` above.
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
     }
     vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
