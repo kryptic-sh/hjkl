@@ -192,7 +192,26 @@ pub fn decode_macro(s: &str) -> Vec<Input> {
                     ..Input::default()
                 }
             }
-            _ => continue,
+            _ => {
+                // Unrecognized `<tag>` — emit the literal characters (`<`,
+                // tag body, `>`) so the caller doesn't silently lose user
+                // text (mirrors the unterminated-`<foo` branch above).
+                out.push(Input {
+                    key: Key::Char('<'),
+                    ..Input::default()
+                });
+                for ch in tag.chars() {
+                    out.push(Input {
+                        key: Key::Char(ch),
+                        ..Input::default()
+                    });
+                }
+                out.push(Input {
+                    key: Key::Char('>'),
+                    ..Input::default()
+                });
+                continue;
+            }
         };
         out.push(input);
     }
@@ -319,6 +338,48 @@ mod tests {
         }];
         let text = encode_macro(&keys);
         assert_eq!(text, "<lt>");
+        assert_eq!(decode_macro(&text), keys);
+    }
+
+    /// B15: an unrecognized `<...>` tag must replay as its literal characters
+    /// (`<`, tag body, `>`) rather than vanishing — mirrors the existing
+    /// unterminated-`<foo` handling just above it.
+    #[test]
+    fn unknown_tag_replays_literally() {
+        fn ch(c: char) -> Input {
+            Input {
+                key: Key::Char(c),
+                ..Input::default()
+            }
+        }
+        let decoded = decode_macro("<xyz>ok");
+        let expected = vec![
+            ch('<'),
+            ch('x'),
+            ch('y'),
+            ch('z'),
+            ch('>'),
+            ch('o'),
+            ch('k'),
+        ];
+        assert_eq!(decoded, expected);
+    }
+
+    /// Round-trip sanity: encode/decode must still agree after the fix.
+    #[test]
+    fn roundtrip_still_holds_after_unknown_tag_fix() {
+        let keys = vec![
+            Input {
+                key: Key::Char('d'),
+                ctrl: true,
+                ..Input::default()
+            },
+            Input {
+                key: Key::Esc,
+                ..Input::default()
+            },
+        ];
+        let text = encode_macro(&keys);
         assert_eq!(decode_macro(&text), keys);
     }
 }
