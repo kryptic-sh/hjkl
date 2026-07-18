@@ -2798,8 +2798,12 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
             non_text: Style::default().fg(ui.non_text),
             cursor_line: cursor_line_bg(ui),
         };
-        let picker = app.picker.as_ref().expect("picker still set");
-        hjkl_picker_tui::preview_pane(frame, picker, app, &theme, right);
+        // Re-borrow the picker immutably (the earlier `as_mut` borrow ended
+        // above). Use `if let` rather than `expect` so a cleared picker skips
+        // the preview instead of panicking the render path.
+        if let Some(picker) = app.picker.as_ref() {
+            hjkl_picker_tui::preview_pane(frame, picker, app, &theme, right);
+        }
     }
 }
 
