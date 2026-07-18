@@ -34,6 +34,12 @@ pub(crate) fn save_file_durable(
         Ok(())
     }
 
+    // In a confined RPC filesystem policy, refuse writes that escape the
+    // working directory. Check the caller-supplied `path` *before* canonicalize
+    // (which would resolve `..` away). No-op when the policy is off (TUI).
+    hjkl_engine::policy::check_fs_path(path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+
     // Resolve symlinks so we replace the real file, not the link itself.
     // `canonicalize` fails when the file doesn't exist yet (new file) —
     // write at the given path in that case.

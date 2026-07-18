@@ -528,6 +528,13 @@ fn main() -> Result<()> {
         if !args.allow_shell {
             hjkl_engine::policy::disable_shell();
         }
+        // The RPC server modes take file paths from that same untrusted caller,
+        // so confine `:w`/`:e`/`:r` to the working-directory subtree. Headless
+        // (`-c` scripts) is local/user-driven, so it keeps full filesystem
+        // access.
+        if args.embed || args.nvim_api {
+            hjkl_engine::policy::restrict_fs();
+        }
     }
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since

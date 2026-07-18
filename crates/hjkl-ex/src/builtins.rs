@@ -135,6 +135,9 @@ fn read_handler<H: Host>(
             Err(e) => return Some(ExEffect::Error(format!("cannot run `{cmd}`: {e}"))),
         }
     } else {
+        if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(path)) {
+            return Some(ExEffect::Error(e));
+        }
         match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => return Some(ExEffect::Error(format!("cannot read `{path}`: {e}"))),

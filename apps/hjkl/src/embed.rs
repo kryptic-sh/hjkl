@@ -174,6 +174,10 @@ fn dispatch(
                 }
                 ExEffect::EditFile { path, .. } => {
                     // Single-buffer embed mode: treat :e as a reload/open.
+                    if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(&path))
+                    {
+                        return error_resp(id, ERR_EX_COMMAND, &format!("{path}: {e}"));
+                    }
                     match std::fs::read_to_string(&path) {
                         Ok(content) => {
                             let content = content.strip_suffix('\n').unwrap_or(&content);
