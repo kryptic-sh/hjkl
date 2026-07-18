@@ -41,12 +41,15 @@ pub(crate) fn save_file_durable(
 
     // `:w` on a file we lack write permission for must still fail, exactly
     // like the old `File::create` did — the rename trick would otherwise
-    // bypass the file's own permission bits. Probe with a non-truncating
-    // write-open (contents and mtime untouched).
-    if target.exists()
-        && let Err(e) = std::fs::OpenOptions::new().write(true).open(&target)
-    {
-        return Err(e);
+    // bypass the file's own permission bits. Probe with a single non-truncating
+    // write-open (contents and mtime untouched). A single open (rather than a
+    // separate `exists()` check followed by an open) closes the TOCTOU gap where
+    // the target could be swapped between the two syscalls. `NotFound` means a
+    // brand-new file, which is allowed.
+    match std::fs::OpenOptions::new().write(true).open(&target) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
 
     // Track whether the temp file was opened so we can gate the fallback:
