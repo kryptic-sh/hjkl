@@ -15,9 +15,119 @@
 //! `write_default` is a full-overwrite tool for scaffolding, this is a
 //! targeted patch tool for runtime persistence.
 
-use std::path::Path;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::ConfigError;
+
+// ---------------------------------------------------------------------------
+// Atomic write helpers
+// ---------------------------------------------------------------------------
+
+/// Filesystem lock bound to the lifetime of a single read-modify-write
+/// operation on `config_path`.  Creating the guard acquires the lock (retrying
+/// if another writer holds it); dropping the guard removes the lock file.
+struct LockGuard(PathBuf);
+
+impl LockGuard {
+    /// Try to create `<config_path>.lock`.  Up to 3 attempts, 10 ms apart,
+    /// before bailing out with [`ConfigError::Write`].
+    fn acquire(config_path: &Path) -> Result<Self, ConfigError> {
+        let lock_path = PathBuf::from(format!("{}.lock", config_path.display()));
+        // The lock file's parent dir may not exist yet for new configs
+        // (e.g. nested dirs created by `create_dir_all` later in the
+        // function). Ensure it exists before trying to create the lock.
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Write {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+        let mut attempts = 0u32;
+        loop {
+            match File::create_new(&lock_path) {
+                Ok(_) => return Ok(Self(lock_path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    attempts += 1;
+                    if attempts >= 3 {
+                        return Err(ConfigError::Write {
+                            path: lock_path,
+                            source: e,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(ConfigError::Write {
+                        path: lock_path,
+                        source: e,
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Build the temp-file path: `.<filename>.hjkl-tmp.<pid>` in the same
+/// directory as `config_path`.
+fn temp_path_for(config_path: &Path) -> PathBuf {
+    let dir = config_path.parent().unwrap_or(Path::new("."));
+    let file_name = config_path
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("config.toml"));
+    let temp_name = format!(
+        ".{}.hjkl-tmp.{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    );
+    dir.join(temp_name)
+}
+
+/// Write `contents` to `path` atomically: write to a same-directory temp file,
+/// fsync it, then rename over the real path.  The temp file is cleaned up on
+/// every error path.
+fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
+    let temp_path = temp_path_for(path);
+
+    let mut file = File::create_new(&temp_path).map_err(|e| ConfigError::Write {
+        path: temp_path.clone(),
+        source: e,
+    })?;
+    file.write_all(contents.as_bytes()).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        ConfigError::Write {
+            path: temp_path.clone(),
+            source: e,
+        }
+    })?;
+    file.sync_all().map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        ConfigError::Write {
+            path: temp_path.clone(),
+            source: e,
+        }
+    })?;
+
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        ConfigError::Write {
+            path: path.to_path_buf(),
+            source: e,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 /// Set `dotted_path` (e.g. `"explorer.width"`) to `value` in the TOML file at
 /// `path`, preserving every other byte of the file.
@@ -30,6 +140,12 @@ use crate::error::ConfigError;
 /// - If a path segment exists but is not a table (e.g. `explorer` is a
 ///   string), returns [`ConfigError::Invalid`] rather than clobbering it.
 ///
+/// The read-modify-write sequence is guarded by a lock file
+/// (`<path>.lock`) so concurrent hjkl processes don't silently lose each
+/// other's updates.  The write itself is atomic (temp-file + `fsync` +
+/// `rename`), so a crash or I/O error mid-write never leaves a
+/// partial/truncated config behind.
+///
 /// # Errors
 ///
 /// [`ConfigError::Io`] on read failure (other than "file does not exist"),
@@ -41,6 +157,10 @@ pub fn write_key_at(
     dotted_path: &str,
     value: impl Into<toml_edit::Value>,
 ) -> Result<(), ConfigError> {
+    // Acquire file lock *before* reading — without it two processes can
+    // race: both read the same state, both write, last writer wins.
+    let _lock = LockGuard::acquire(path)?;
+
     let existing = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -81,10 +201,7 @@ pub fn write_key_at(
             source: e,
         })?;
     }
-    std::fs::write(path, doc.to_string()).map_err(|e| ConfigError::Write {
-        path: path.to_path_buf(),
-        source: e,
-    })
+    atomic_write(path, &doc.to_string())
 }
 
 #[cfg(test)]

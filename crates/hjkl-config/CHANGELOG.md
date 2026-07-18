@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `write_key_at` now writes atomically (temp-file + `fsync` + `rename`) so a
+  crash or I/O error mid-write never leaves a partial or truncated config file.
+  The read-modify-write sequence is also guarded by a lock file
+  (`<config>.lock`) with retry, preventing concurrent hjkl processes from
+  silently losing each other's updates.
+
 [Unreleased]: https://github.com/kryptic-sh/hjkl-config/compare/v0.2.0...HEAD
 
 ## [0.2.0] - 2026-05-03
