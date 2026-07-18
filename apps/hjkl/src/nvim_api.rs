@@ -2538,13 +2538,15 @@ mod tests {
         }
 
         let mut inner = RecordingReader { reads: Vec::new() };
-        let mut reader = LimitedReader::new(&mut inner, 3);
-        let mut buf = [0; 16];
-        assert_eq!(reader.read(&mut buf).unwrap(), 3);
-        assert!(reader.read(&mut buf).is_err());
-        assert!(reader.exceeded);
-        drop(reader);
-        assert_eq!(inner.reads, vec![3]);
+        let reads = {
+            let mut reader = LimitedReader::new(&mut inner, 3);
+            let mut buf = [0; 16];
+            assert_eq!(reader.read(&mut buf).unwrap(), 3);
+            assert!(reader.read(&mut buf).is_err());
+            assert!(reader.exceeded);
+            reader.inner.reads.clone()
+        };
+        assert_eq!(reads, vec![3]);
     }
 
     /// Encode a buffer handle `Value::Ext(BUFFER_EXT, encode_id(id))` suitable
