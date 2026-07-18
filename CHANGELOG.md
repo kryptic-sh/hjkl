@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **msgpack-RPC message size limit:** The nvim-api msgpack reader now enforces a
+  64 MiB per-message byte budget. Oversized messages log an error and close the
+  RPC session instead of allocating attacker-declared sizes, matching the
+  JSON-RPC line cap.
+
 ## [0.34.2] - 2026-07-17
 
 Two full-codebase audit rounds (~60 fixes, every one regression-tested with

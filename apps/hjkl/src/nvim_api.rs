@@ -20,7 +20,7 @@
 //!
 //! See the table in `docs/embed-rpc.md` — the "nvim-api mode" section.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -36,6 +36,10 @@ use crate::host::TuiHost;
 const BUFFER_EXT: i8 = 0;
 const WINDOW_EXT: i8 = 1;
 const TABPAGE_EXT: i8 = 2;
+
+/// Maximum bytes the msgpack-RPC reader will accept in a single message.
+/// Matching the JSON-RPC line cap, oversized messages close the RPC session.
+const MAX_MSG_SIZE: u64 = 64 * 1024 * 1024; // 64 MiB
 
 /// Encode a u64 id as the minimal msgpack bytes for the ext payload.
 /// nvim uses a fixint 1 (0x01) as the buffer/window id in practice.
@@ -2365,6 +2369,43 @@ fn run_with_io<R: std::io::Read>(
     result
 }
 
+/// A `Read` wrapper that counts bytes consumed and returns an error when a
+/// per-message budget is exceeded.
+struct LimitedReader<'a, R: Read> {
+    inner: &'a mut R,
+    bytes_read: u64,
+    max: u64,
+    /// Set to true when the budget is exceeded — the caller can check this to
+    /// distinguish a size-limit error from a genuine I/O error.
+    exceeded: bool,
+}
+
+impl<'a, R: Read> LimitedReader<'a, R> {
+    fn new(inner: &'a mut R, max: u64) -> Self {
+        LimitedReader {
+            inner,
+            bytes_read: 0,
+            max,
+            exceeded: false,
+        }
+    }
+}
+
+impl<R: Read> Read for LimitedReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes_read += n as u64;
+        if self.bytes_read > self.max {
+            self.exceeded = true;
+            return Err(std::io::Error::other(format!(
+                "msgpack message size {} exceeds limit {}",
+                self.bytes_read, self.max,
+            )));
+        }
+        Ok(n)
+    }
+}
+
 /// The msgpack-rpc read/dispatch loop, broken out of [`run_with_io`] so
 /// teardown (`cleanup_swaps_on_exit` + `shutdown`) runs on every exit path —
 /// including an `Err` propagated via `?` from `dispatch`, which previously
@@ -2377,10 +2418,17 @@ fn run_loop<R: std::io::Read>(
 ) -> Result<()> {
     let mut should_quit = false;
     loop {
-        // Read one msgpack value. Returns Err on EOF or protocol error.
-        let msg = match rmpv::decode::read_value(reader) {
+        // Read one msgpack value with a byte budget. When the budget is
+        // exceeded the stream is at an unknown position — log and close
+        // the session.
+        let mut limited = LimitedReader::new(reader, MAX_MSG_SIZE);
+        let msg = match rmpv::decode::read_value(&mut limited) {
             Ok(v) => v,
             Err(e) => {
+                if limited.exceeded {
+                    eprintln!("hjkl --nvim-api: msgpack message exceeds {MAX_MSG_SIZE} byte limit");
+                    break;
+                }
                 use rmpv::decode::Error;
                 match e {
                     // ANY failure to read bytes off stdin — EOF, broken pipe,
