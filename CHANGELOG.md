@@ -24,6 +24,11 @@ patch bumps.
   `fsync` + `rename`) so a crash or I/O error mid-write never leaves a partial
   config. A lock file (`<config>.lock`) with retry prevents concurrent hjkl
   processes from silently losing each other's updates.
+- **Crash-safe file writes for headless and embed/RPC modes:** `:w` in headless
+  mode and the embed/RPC `save` command now use `save_file_durable` (atomic
+  temp-file write + fsync + rename) instead of `std::fs::write`, which truncated
+  the target in place. A crash or ENOSPC mid-write can no longer destroy the
+  file in those modes.
 
 ## [0.34.2] - 2026-07-17
 
