@@ -397,12 +397,9 @@ fn write_buffer(
         None => Err("E32: No file name".to_string()),
         Some(p) => {
             let joined = editor.buffer().content_joined();
-            let mut content = String::with_capacity(joined.len() + 1);
-            content.push_str(&joined);
-            if !joined.is_empty() {
-                content.push('\n');
-            }
-            std::fs::write(p, &content).map_err(|e| format!("hjkl: {}: {e}", p.display()))
+            let trailing_nl = !joined.is_empty();
+            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl)
+                .map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
     }
 }

@@ -20,6 +20,11 @@ patch bumps.
   This prevents concurrent writers from interleaving writes to the same temp
   file and closes a window where a pre-existing temp file with loose permissions
   could be opened without tightening them.
+- **Crash-safe file writes for headless and embed/RPC modes:** `:w` in headless
+  mode and the embed/RPC `save` command now use `save_file_durable` (atomic
+  temp-file write + fsync + rename) instead of `std::fs::write`, which truncated
+  the target in place. A crash or ENOSPC mid-write can no longer destroy the
+  file in those modes.
 
 ## [0.34.2] - 2026-07-17
 
