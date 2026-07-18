@@ -35,8 +35,10 @@ pub fn trash_dir() -> std::io::Result<PathBuf> {
 ///
 /// The returned path has the form `<trash>/<stem>.<ext>.<n>` where `<n>` is
 /// the lowest non-negative integer for which `create_new` succeeds.  The
-/// placeholder file is left in place so the caller's `rename` can atomically
-/// replace it, eliminating the TOCTOU window between reservation and use.
+/// placeholder is created and immediately removed — `create_new` is used only
+/// as an atomic-existence check, so the caller's `rename` (for either files or
+/// directories) atomically replaces any concurrent creation in the brief window
+/// between removal and the caller's operation.
 ///
 /// **Does NOT move anything** — the caller is responsible for the actual
 /// filesystem operation.
@@ -60,7 +62,11 @@ pub fn trash_path(original: &Path) -> std::io::Result<PathBuf> {
             .create_new(true)
             .open(&candidate)
         {
-            Ok(_f) => return Ok(candidate),
+            Ok(f) => {
+                drop(f); // close before remove (required on Windows)
+                std::fs::remove_file(&candidate)?;
+                return Ok(candidate);
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 counter += 1;
                 if counter > MAX_RETRIES {
