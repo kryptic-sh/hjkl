@@ -178,14 +178,47 @@ pub fn scan_orphan_scratch_swaps() -> Vec<OrphanScratch> {
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
-/// Atomically write a swap file: stream header + rope body to `<path>.tmp`,
-/// fsync, then rename to `path`.
+/// Generate a 16-char hex suffix from a platform-secure random source for
+/// temp-file uniqueness.  Falls back to a time / pid / counter mix on
+/// platforms without `/dev/urandom` (the fallback is not crypto-grade but is
+/// unique enough in-practice for a temp filename).
+fn random_suffix() -> String {
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 8];
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom")
+            && f.read_exact(&mut buf).is_ok()
+        {
+            return format!("{:016x}", u64::from_le_bytes(buf));
+        }
+    }
+    // Fallback (non-Unix, or /dev/urandom unavailable).
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let pid = std::process::id() as u64;
+    // Mix with Knuth's multiplicative hash constants.
+    let combined = now
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(pid.wrapping_mul(1_442_695_040_888_963_407))
+        .wrapping_add(count);
+    format!("{:016x}", combined)
+}
+
+/// Atomically write a swap file: stream header + rope body to a unique
+/// temporary file (`<path>.<random>.tmp`), fsync, then rename to `path`.
 ///
 /// `path` is the final `.swp` path (as returned by [`swap_path_for`]).
 /// `rope` body is streamed via `rope.chunks()` — no full-document allocation.
+///
+/// Uses `create_new` (O_CREAT | O_EXCL) on a random temp path so concurrent
+/// writers never share the same temporary file.  Retries up to 5 times on
+/// collision.
 pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Result<()> {
-    let tmp = path.with_extension("swp.tmp");
-
     // Serialize header with postcard.
     let header_bytes = postcard::to_stdvec(header).map_err(|e| {
         std::io::Error::new(
@@ -194,30 +227,74 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
         )
     })?;
 
-    // Write: 4-byte magic + u32-LE header length + header bytes + body chunks.
-    // Create owner-only (0600) on Unix so the unsaved contents are not exposed
-    // to other local users.
-    let mut f = {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        opts.open(&tmp)?
-    };
-    f.write_all(&SwapHeader::MAGIC)?;
-    let hlen = header_bytes.len() as u32;
-    f.write_all(&hlen.to_le_bytes())?;
-    f.write_all(&header_bytes)?;
-    for chunk in rope.chunks() {
-        f.write_all(chunk.as_bytes())?;
-    }
-    f.sync_all()?;
-    drop(f);
+    const MAX_RETRIES: u32 = 5;
+    let mut last_err: Option<std::io::Error> = None;
 
-    std::fs::rename(&tmp, path)
+    for _ in 0..MAX_RETRIES {
+        let suffix = random_suffix();
+        let tmp_name = format!(
+            "{}.{}.tmp",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            suffix
+        );
+        let tmp = path.with_file_name(&tmp_name);
+
+        // Open with create_new (O_EXCL) so we never open a pre-existing file.
+        // On Unix set mode 0o600 so unsaved contents are owner-only even on
+        // first creation (create_new guarantees this is first creation).
+        let mut f = {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            match opts.open(&tmp) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        };
+
+        // Write: 4-byte magic + u32-LE header length + header bytes + body chunks.
+        let write_result = (|| -> std::io::Result<()> {
+            f.write_all(&SwapHeader::MAGIC)?;
+            let hlen = header_bytes.len() as u32;
+            f.write_all(&hlen.to_le_bytes())?;
+            f.write_all(&header_bytes)?;
+            for chunk in rope.chunks() {
+                f.write_all(chunk.as_bytes())?;
+            }
+            f.sync_all()?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+
+        drop(f);
+
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "failed to create unique swap temp file after retries",
+        )
+    }))
 }
 
 // ── Read ──────────────────────────────────────────────────────────────────────
@@ -419,14 +496,19 @@ mod tests {
     fn write_swap_is_atomic_no_tmp_left() {
         let td2 = tempfile::tempdir().unwrap();
         let swp = td2.path().join("atomic.swp");
-        let tmp = swp.with_extension("swp.tmp");
 
         let header = sample_header("/tmp/atomic.rs");
         let rope = Rope::from_str("data");
         write_swap(&swp, &header, &rope).unwrap();
 
         assert!(swp.exists(), ".swp must exist after write");
-        assert!(!tmp.exists(), ".swp.tmp must not exist after rename");
+        // No .tmp files should be left behind (temp uses a unique random name
+        // that is always renamed or cleaned up).
+        let has_tmp = std::fs::read_dir(td2.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().map_or(false, |ext| ext == "tmp"));
+        assert!(!has_tmp, "no .tmp files should remain after write");
     }
 
     #[test]

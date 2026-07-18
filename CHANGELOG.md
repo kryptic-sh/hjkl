@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Swap temp file uniqueness:** `write_swap` now creates a unique per-call
+  temporary file (`<name>.swp.<random>.tmp`) with `O_EXCL` (`create_new`) and
+  Unix mode `0o600`, instead of reusing a predictable `<name>.swp.tmp` path.
+  This prevents concurrent writers from interleaving writes to the same temp
+  file and closes a window where a pre-existing temp file with loose permissions
+  could be opened without tightening them.
+
 ## [0.34.2] - 2026-07-17
 
 Two full-codebase audit rounds (~60 fixes, every one regression-tested with
