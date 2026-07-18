@@ -20,6 +20,10 @@ patch bumps.
   This prevents concurrent writers from interleaving writes to the same temp
   file and closes a window where a pre-existing temp file with loose permissions
   could be opened without tightening them.
+- **Atomic config writes:** `write_key_at` now writes atomically (temp-file +
+  `fsync` + `rename`) so a crash or I/O error mid-write never leaves a partial
+  config. A lock file (`<config>.lock`) with retry prevents concurrent hjkl
+  processes from silently losing each other's updates.
 
 ## [0.34.2] - 2026-07-17
 
