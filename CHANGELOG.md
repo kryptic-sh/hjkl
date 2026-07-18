@@ -29,6 +29,13 @@ patch bumps.
   temp-file write + fsync + rename) instead of `std::fs::write`, which truncated
   the target in place. A crash or ENOSPC mid-write can no longer destroy the
   file in those modes.
+- **Trash destination TOCTOU:** `trash_path` now atomically reserves the
+  destination slot with `create_new` (`O_EXCL`) instead of a `Path::exists()`
+  check. Two concurrent hjkl processes deleting files with the same basename can
+  no longer select the same slot and overwrite each other's trashed data.
+- **Trash directory permissions:** `trash_dir` now sets Unix mode `0o700` after
+  creation, matching the swap directory. Previously the effective mode depended
+  on umask, potentially exposing trashed file contents to other local users.
 
 ## [0.34.2] - 2026-07-17
 

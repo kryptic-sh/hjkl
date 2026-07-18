@@ -507,7 +507,7 @@ mod tests {
         let has_tmp = std::fs::read_dir(td2.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .any(|e| e.path().extension().map_or(false, |ext| ext == "tmp"));
+            .any(|e| e.path().extension().is_some_and(|ext| ext == "tmp"));
         assert!(!has_tmp, "no .tmp files should remain after write");
     }
 

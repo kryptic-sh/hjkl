@@ -2,9 +2,9 @@
 //!
 //! Deleted filesystem entries are moved to `<XDG_CACHE_HOME>/hjkl/trash/`
 //! rather than permanently removed, matching the swap-dir pattern from
-//! [`crate::swap`].  Only *path resolution* lives here — no file I/O beyond
-//! creating the directory and probing for existing entries.
+//! [`crate::swap`].
 
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 // ── Directory helper ──────────────────────────────────────────────────────────
@@ -20,18 +20,23 @@ pub fn trash_dir() -> std::io::Result<PathBuf> {
         .map_err(|e| std::io::Error::other(format!("xdg cache_dir: {e}")))?;
     let dir = base.join("trash");
     std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     Ok(dir)
 }
 
 // ── Unique destination path ───────────────────────────────────────────────────
 
-/// Return a unique, non-existing path inside [`trash_dir`] for `original`.
+/// Return a unique path inside [`trash_dir`] for `original`, atomically
+/// reserved so that two concurrent callers never select the same destination.
 ///
 /// The returned path has the form `<trash>/<stem>.<ext>.<n>` where `<n>` is
-/// the lowest non-negative integer that does not collide with an existing
-/// entry in the trash directory.  The counter is determined by scanning
-/// existing directory entries — no randomness or time-based values are used
-/// so the result is deterministic for a given trash-directory state.
+/// the lowest non-negative integer for which `create_new` succeeds.  The
+/// placeholder file is left in place so the caller's `rename` can atomically
+/// replace it, eliminating the TOCTOU window between reservation and use.
 ///
 /// **Does NOT move anything** — the caller is responsible for the actual
 /// filesystem operation.
@@ -44,15 +49,28 @@ pub fn trash_path(original: &Path) -> std::io::Result<PathBuf> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unnamed".to_string());
 
-    // Probe with counter 0, 1, 2, … until we find a name that does not exist.
+    // Atomically reserve the first free counter slot.
+    const MAX_RETRIES: u64 = 1000;
     let mut counter: u64 = 0;
     loop {
         let candidate_name = format!("{base_name}.{counter}");
         let candidate = dir.join(&candidate_name);
-        if !candidate.exists() {
-            return Ok(candidate);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_f) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                counter += 1;
+                if counter > MAX_RETRIES {
+                    return Err(std::io::Error::other(format!(
+                        "trash_path: exhausted {MAX_RETRIES} retries for {candidate:?}"
+                    )));
+                }
+            }
+            Err(e) => return Err(e),
         }
-        counter += 1;
     }
 }
 
