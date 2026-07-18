@@ -660,6 +660,16 @@ impl TerminalSession {
         s.trim_end().to_string()
     }
 
+    /// Full screen as a newline-joined, row-numbered string — for failure
+    /// diagnostics in assertions.
+    #[allow(dead_code)]
+    pub fn dump_screen(&self) -> String {
+        (0..self.rows)
+            .map(|r| format!("{r:>2}|{}", self.line(r)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     // ── Internals ─────────────────────────────────────────────────────────────
 
     fn wait_ms(&self, ms: u64) {

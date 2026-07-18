@@ -36,7 +36,8 @@ fn copen_dock_supports_real_yank_then_closes() {
     let shows_entry = session.wait_for_screen_contains("target.txt:2:1 sample message", 2000);
     assert!(
         shows_entry,
-        "the :copen dock buffer must show the formatted quickfix entry"
+        "the :copen dock buffer must show the formatted quickfix entry\nscreen:\n{}",
+        session.dump_screen()
     );
 
     // `yy` — a REAL vim yank, impossible against the old Clear+List overlay
@@ -82,7 +83,11 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     let shows_all = session.wait_for_screen_contains("aaa.txt:1:1 first", 2000)
         && session.wait_for_screen_contains("bbb.txt:2:1 second", 2000)
         && session.wait_for_screen_contains("ccc.txt:3:1 third", 2000);
-    assert!(shows_all, "dock must list all three quickfix entries");
+    assert!(
+        shows_all,
+        "dock must list all three quickfix entries\nscreen:\n{}",
+        session.dump_screen()
+    );
 
     // `j`: real vim motion moves the dock's cursor off entry 0 (first).
     // `/second<Enter>`: real incremental search lands the cursor on the
@@ -179,6 +184,7 @@ fn dash_q_flag_populates_quickfix_and_jumps_to_first_error() {
     let shows_entry = session.wait_for_screen_contains("second.txt:2:1 oops", 2000);
     assert!(
         shows_entry,
-        "the quickfix list populated by -q must contain the parsed entry"
+        "the quickfix list populated by -q must contain the parsed entry\nscreen:\n{}",
+        session.dump_screen()
     );
 }
