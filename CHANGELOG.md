@@ -29,10 +29,31 @@ patch bumps.
   temp-file write + fsync + rename) instead of `std::fs::write`, which truncated
   the target in place. A crash or ENOSPC mid-write can no longer destroy the
   file in those modes.
-- **Trash destination TOCTOU:** `trash_path` now atomically reserves the
-  destination slot with `create_new` (`O_EXCL`) instead of a `Path::exists()`
-  check. Two concurrent hjkl processes deleting files with the same basename can
-  no longer select the same slot and overwrite each other's trashed data.
+- **Trash destination TOCTOU (reopened window closed):** `trash_path` now
+  reserves per entry-type — a `create_new` file placeholder for files, an atomic
+  `create_dir` for directories — kept in place so the caller's `rename` replaces
+  it atomically. The previous `remove_file`-after-`create_new` revert had
+  reopened the TOCTOU window for concurrent trash operations.
+- **Save fallback no longer truncates on post-open failure:**
+  `save_file_durable` now gates the in-place fallback to pre-write errors only
+  (unwritable parent, cross-device rename). If the temp file is successfully
+  opened, a subsequent write or sync error propagates instead of falling through
+  to `File::create(path)`, which would truncate the original file on a disk-full
+  condition.
+- **Stale config lock file recovery:** `LockGuard::acquire` now records the
+  owner PID and a timestamp in the lock file and checks both on contention. A
+  lock whose owner PID is dead or whose mtime exceeds 60 seconds is reclaimed
+  rather than failing permanently, preventing a crashed hjkl process from
+  silently bricking runtime config persistence.
+- **Parent-directory fsync after atomic rename:** All three atomic writers
+  (`save_file_durable`, `write_swap`, `atomic_write` in hjkl-config) now fsync
+  the parent directory after the final `rename`, so the rename itself survives a
+  crash.
+- **Cross-device directory restore test coverage:** Added
+  `restore_dir_cross_device_fallback_preserves_contents` test that directly
+  exercises the `copy_dir_recursive` + `remove_dir_all` fallback body of
+  `move_dir` for a directory restore. The existing apply→undo→redo test only
+  covered the same-device `rename` path.
 - **Trash directory permissions:** `trash_dir` now sets Unix mode `0o700` after
   creation, matching the swap directory. Previously the effective mode depended
   on umask, potentially exposing trashed file contents to other local users.

@@ -49,6 +49,12 @@ pub(crate) fn save_file_durable(
         return Err(e);
     }
 
+    // Track whether the temp file was opened so we can gate the fallback:
+    // once the temp exists a write/sync error must propagate, never fall
+    // back to in-place truncation (which would compound the I/O error with
+    // data loss).  Only pre-write failures (unwritable parent, EXDEV) may
+    // fall through to the non-atomic path.
+    let mut temp_opened = false;
     let atomic = (|| -> std::io::Result<()> {
         let parent = match target.parent() {
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -66,6 +72,8 @@ pub(crate) fn save_file_durable(
             .write(true)
             .create_new(true) // never clobber an existing file
             .open(&tmp_path)?;
+        temp_opened = true;
+
         let res = (|| -> std::io::Result<()> {
             // Preserve the existing file's permission mode.
             if let Ok(meta) = std::fs::metadata(&target) {
@@ -73,7 +81,14 @@ pub(crate) fn save_file_durable(
             }
             write_body(&mut f, body, trailing_nl)?;
             f.sync_all()?; // durable BEFORE the rename makes it visible
-            std::fs::rename(&tmp_path, &target)
+            std::fs::rename(&tmp_path, &target)?;
+            // fsync the parent directory so the rename itself is durable.
+            if let Some(parent) = target.parent()
+                && let Ok(pdir) = std::fs::File::open(parent)
+            {
+                let _ = pdir.sync_all();
+            }
+            Ok(())
         })();
         if res.is_err() {
             let _ = std::fs::remove_file(&tmp_path);
@@ -83,12 +98,16 @@ pub(crate) fn save_file_durable(
 
     match atomic {
         Ok(()) => Ok(()),
-        Err(_) => {
+        Err(e) if !temp_opened || e.kind() == std::io::ErrorKind::CrossesDevices => {
             // Fallback: the previous in-place truncate-and-write. Non-atomic,
-            // but works where temp+rename can't.
+            // but works where temp+rename can't (e.g. cross-device rename, or
+            // unwritable parent dir that prevented temp-file creation).
+            // Only entered when the temp file was *never* opened; a write or
+            // sync failure after creation would propagate above.
             let mut f = std::fs::File::create(path)?;
             write_body(&mut f, body, trailing_nl)
         }
+        Err(e) => Err(e),
     }
 }
 

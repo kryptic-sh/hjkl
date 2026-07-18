@@ -528,14 +528,15 @@ pub(crate) fn apply_ops(
             }
 
             FsOp::Trash(path) => {
-                let dest = match hjkl_app::trash::trash_path(path) {
+                let is_dir = path.is_dir();
+                let dest = match hjkl_app::trash::trash_path(path, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("trash_path({path:?}): {e}"));
                         continue;
                     }
                 };
-                let result = if path.is_dir() {
+                let result = if is_dir {
                     move_dir(path, &dest)
                 } else {
                     move_file(path, &dest)
@@ -727,14 +728,15 @@ pub(crate) fn revert_ops(
         match op {
             // A file/dir was created → trash it to undo.
             AppliedOp::Created(path) => {
-                let dest = match hjkl_app::trash::trash_path(path) {
+                let is_dir = path.is_dir();
+                let dest = match hjkl_app::trash::trash_path(path, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("revert created: trash_path({path:?}): {e}"));
                         continue;
                     }
                 };
-                let result = if path.is_dir() {
+                let result = if is_dir {
                     move_dir(path, &dest)
                 } else {
                     move_file(path, &dest)
@@ -821,14 +823,15 @@ pub(crate) fn revert_ops(
 
             // A trashed entry was restored to `to` → trash `to` again.
             AppliedOp::Restored { from_trash: _, to } => {
-                let new_dest = match hjkl_app::trash::trash_path(to) {
+                let is_dir = to.is_dir();
+                let new_dest = match hjkl_app::trash::trash_path(to, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("revert restored: trash_path({to:?}): {e}"));
                         continue;
                     }
                 };
-                let result = if to.is_dir() {
+                let result = if is_dir {
                     move_dir(to, &new_dest)
                 } else {
                     move_file(to, &new_dest)
@@ -901,14 +904,15 @@ pub(crate) fn apply_applied(
             AppliedOp::Trashed { original, dest: _ } => {
                 // Re-trash: original should be back on disk (from the undo).
                 // Compute a fresh trash dest.
-                let new_dest = match hjkl_app::trash::trash_path(original) {
+                let is_dir = original.is_dir();
+                let new_dest = match hjkl_app::trash::trash_path(original, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("redo trashed: trash_path({original:?}): {e}"));
                         continue;
                     }
                 };
-                let result = if original.is_dir() {
+                let result = if is_dir {
                     move_dir(original, &new_dest)
                 } else {
                     move_file(original, &new_dest)
@@ -2198,6 +2202,49 @@ mod tests {
         assert!(errs.is_empty(), "redo dir: {errs:?}");
         assert!(dir.is_dir(), "dir must be restored again after redo");
         assert!(dir.join("inner.txt").exists(), "contents must survive redo");
+    }
+
+    /// The cross-device fallback of [`move_dir`] (`copy_dir_recursive` +
+    /// `remove_dir_all`) for a directory restore must preserve the full
+    /// subtree including nested files.  The existing redo test above only
+    /// exercises the same-device `rename` path; this test directly exercises
+    /// the copy+remove fallback body on a directory with content.
+    #[test]
+    fn restore_dir_cross_device_fallback_preserves_contents() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+
+        // Create a directory tree (simulating a trashed dir).
+        let src = td.path().join("trashed_dir");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/deep.txt"), b"nested").unwrap();
+        std::fs::write(src.join("top.txt"), b"top-level").unwrap();
+
+        // Restore target (simulating the original path being re-created).
+        let restored = td.path().join("restored_dir");
+
+        // Exercise the cross-device fallback body directly:
+        // `move_dir` does `rename` first, then on CrossesDevices falls back to
+        // `copy_dir_recursive` + `remove_dir_all`.  We can't force a
+        // CrossesDevices error inside one tempdir, but we can exercise the
+        // fallback body itself — which is the path that was previously
+        // untested for directory restores.
+        copy_dir_recursive(&src, &restored).unwrap();
+        std::fs::remove_dir_all(&src).unwrap();
+
+        // Verify the restored directory has the full subtree.
+        assert!(restored.is_dir(), "restored dir must exist");
+        assert!(restored.join("sub").is_dir(), "subdir must be restored");
+        assert_eq!(
+            std::fs::read_to_string(restored.join("sub/deep.txt")).unwrap(),
+            "nested"
+        );
+        assert_eq!(
+            std::fs::read_to_string(restored.join("top.txt")).unwrap(),
+            "top-level"
+        );
+        // Original is gone (removed by remove_dir_all).
+        assert!(!src.exists(), "source must be removed after cross-device move");
     }
 
     // ── cross-device copy fallback: symlink safety ────────────────────────────

@@ -16,11 +16,44 @@
 //! targeted patch tool for runtime persistence.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::ConfigError;
+
+// ---------------------------------------------------------------------------
+// PID liveness check
+// ---------------------------------------------------------------------------
+
+/// Return `true` if a process with the given `pid` is still running.
+///
+/// On Linux this checks `/proc/<pid>/`.  Everywhere else it always returns
+/// `false`, so the mtime check ([`LOCK_STALE_SECS`]) is the sole staleness
+/// signal.  (Adding a `kill(0)` FFI would require a `libc` dependency that
+/// `hjkl-config` does not carry.)
+fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::metadata(format!("/proc/{pid}")).is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Maximum age of a lock file before it is considered stale regardless of
+/// PID liveness (guards against PID reuse and unreadable lock files).
+///
+/// **Known residual**: when two processes simultaneously reclaim the same
+/// stale lock, B's `remove_file` can delete A's freshly-created replacement
+/// before B's own `create_new`, letting both proceed.  The window is narrow
+/// (post-crash recovery + concurrent `write_key_at`), config writes are
+/// idempotent per-key, and the worst case is a lost dock-resize persistence
+/// event — not worth the complexity of a rename-to-unique-name reclaim.
+const LOCK_STALE_SECS: u64 = 60;
 
 // ---------------------------------------------------------------------------
 // Atomic write helpers
@@ -29,11 +62,20 @@ use crate::error::ConfigError;
 /// Filesystem lock bound to the lifetime of a single read-modify-write
 /// operation on `config_path`.  Creating the guard acquires the lock (retrying
 /// if another writer holds it); dropping the guard removes the lock file.
+///
+/// The lock file records the owner PID and a write timestamp.  On acquisition,
+/// if the lock already exists, the recorded PID is checked for liveness and
+/// the mtime is checked against [`LOCK_STALE_SECS`]; a stale lock is reclaimed
+/// rather than failing outright.  This prevents a crashed process (SIGKILL,
+/// panic-abort, power loss) from permanently bricking runtime config
+/// persistence.
 struct LockGuard(PathBuf);
 
 impl LockGuard {
-    /// Try to create `<config_path>.lock`.  Up to 3 attempts, 10 ms apart,
-    /// before bailing out with [`ConfigError::Write`].
+    /// Try to create `<config_path>.lock`.  Up to 10 attempts, 10 ms apart,
+    /// before bailing out with [`ConfigError::Write`].  Between attempts any
+    /// existing lock is checked for staleness and reclaimed if the owner is
+    /// dead or the lock has exceeded [`LOCK_STALE_SECS`].
     fn acquire(config_path: &Path) -> Result<Self, ConfigError> {
         let lock_path = PathBuf::from(format!("{}.lock", config_path.display()));
         // The lock file's parent dir may not exist yet for new configs
@@ -45,13 +87,31 @@ impl LockGuard {
                 source: e,
             })?;
         }
+        const MAX_ATTEMPTS: u32 = 10;
         let mut attempts = 0u32;
         loop {
             match File::create_new(&lock_path) {
-                Ok(_) => return Ok(Self(lock_path)),
+                Ok(mut f) => {
+                    // Record owner PID + timestamp so a future acquire can
+                    // detect staleness.
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let _ = write!(f, "{} {}", std::process::id(), now);
+                    let _ = f.sync_all();
+                    return Ok(Self(lock_path));
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_is_stale(&lock_path) {
+                        // Reclaim the stale lock and retry immediately
+                        // (don't count as an attempt — the lock wasn't
+                        // genuinely contended).
+                        let _ = std::fs::remove_file(&lock_path);
+                        continue;
+                    }
                     attempts += 1;
-                    if attempts >= 3 {
+                    if attempts >= MAX_ATTEMPTS {
                         return Err(ConfigError::Write {
                             path: lock_path,
                             source: e,
@@ -68,6 +128,40 @@ impl LockGuard {
             }
         }
     }
+}
+
+/// Check whether the lock file at `lock_path` is stale — the owner PID is
+/// dead, the file is unreadable/corrupt, or its mtime exceeds
+/// [`LOCK_STALE_SECS`].
+fn lock_is_stale(lock_path: &Path) -> bool {
+    // mtime check first: cheap and catches most cases.
+    if let Ok(meta) = std::fs::metadata(lock_path)
+        && let Ok(mod_time) = meta.modified()
+        && let Ok(elapsed) = mod_time.elapsed()
+        && elapsed.as_secs() > LOCK_STALE_SECS
+    {
+        return true;
+    }
+
+    // PID liveness check: read the recorded PID from the lock file body.
+    let mut contents = String::new();
+    if File::open(lock_path)
+        .and_then(|mut f| f.read_to_string(&mut contents))
+        .is_ok()
+    {
+        // Format: "<pid> <timestamp_secs>"
+        if let Some(pid_str) = contents.split_whitespace().next()
+            && let Ok(pid) = pid_str.parse::<u32>()
+            && !pid_is_alive(pid)
+        {
+            return true;
+        }
+        // Corrupt / unparseable body → stale (can't verify owner).
+        return true;
+    }
+
+    // Can't read the lock file at all → stale.
+    true
 }
 
 impl Drop for LockGuard {
@@ -122,7 +216,14 @@ fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
             path: path.to_path_buf(),
             source: e,
         }
-    })
+    })?;
+    // fsync the parent directory so the rename is durable.
+    if let Some(parent) = path.parent()
+        && let Ok(pdir) = File::open(parent)
+    {
+        let _ = pdir.sync_all();
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

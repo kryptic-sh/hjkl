@@ -281,7 +281,15 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
         drop(f);
 
         match std::fs::rename(&tmp, path) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                // fsync the parent directory so the rename is durable.
+                if let Some(parent) = path.parent()
+                    && let Ok(pdir) = std::fs::File::open(parent)
+                {
+                    let _ = pdir.sync_all();
+                }
+                return Ok(());
+            }
             Err(e) => {
                 let _ = std::fs::remove_file(&tmp);
                 return Err(e);

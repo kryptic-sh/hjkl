@@ -34,15 +34,19 @@ pub fn trash_dir() -> std::io::Result<PathBuf> {
 /// reserved so that two concurrent callers never select the same destination.
 ///
 /// The returned path has the form `<trash>/<stem>.<ext>.<n>` where `<n>` is
-/// the lowest non-negative integer for which `create_new` succeeds.  The
-/// placeholder is created and immediately removed — `create_new` is used only
-/// as an atomic-existence check, so the caller's `rename` (for either files or
-/// directories) atomically replaces any concurrent creation in the brief window
-/// between removal and the caller's operation.
+/// the lowest non-negative integer for which the reservation succeeds.
+///
+/// For **files** (`is_dir == false`), a 0-byte placeholder file is created
+/// with `create_new` (O_EXCL) and left in place.  The caller's `rename`
+/// atomically replaces it — no TOCTOU window.
+///
+/// For **directories** (`is_dir == true`), an empty directory is created with
+/// `create_dir` (atomic mkdir).  The caller's `rename` of a source directory
+/// onto an empty target directory succeeds on Linux and leaves no window.
 ///
 /// **Does NOT move anything** — the caller is responsible for the actual
 /// filesystem operation.
-pub fn trash_path(original: &Path) -> std::io::Result<PathBuf> {
+pub fn trash_path(original: &Path, is_dir: bool) -> std::io::Result<PathBuf> {
     let dir = trash_dir()?;
 
     // Build a base name from the original file name (fall back to "unnamed").
@@ -57,16 +61,19 @@ pub fn trash_path(original: &Path) -> std::io::Result<PathBuf> {
     loop {
         let candidate_name = format!("{base_name}.{counter}");
         let candidate = dir.join(&candidate_name);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(f) => {
-                drop(f); // close before remove (required on Windows)
-                std::fs::remove_file(&candidate)?;
-                return Ok(candidate);
-            }
+
+        let result = if is_dir {
+            std::fs::create_dir(&candidate).map(|_| ())
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+                .map(|_| ())
+        };
+
+        match result {
+            Ok(()) => return Ok(candidate),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 counter += 1;
                 if counter > MAX_RETRIES {
@@ -132,7 +139,7 @@ mod tests {
         let fake_original = Path::new("/some/project/foo.rs");
 
         // First call — nothing in trash yet, should get counter 0.
-        let first = trash_path(fake_original).expect("first trash_path must succeed");
+        let first = trash_path(fake_original, false).expect("first trash_path must succeed");
         assert!(
             first.to_string_lossy().ends_with(".0"),
             "first trash_path must end with .0, got {first:?}"
@@ -142,7 +149,7 @@ mod tests {
         std::fs::write(&first, b"dummy content").expect("creating dummy trash entry must succeed");
 
         // Second call — counter 0 is taken, must get counter 1.
-        let second = trash_path(fake_original).expect("second trash_path must succeed");
+        let second = trash_path(fake_original, false).expect("second trash_path must succeed");
         assert!(
             second.to_string_lossy().ends_with(".1"),
             "second trash_path must end with .1, got {second:?}"
@@ -162,7 +169,7 @@ mod tests {
 
         // First free slot is 1 (lexicographic probe, not a sorted scan —
         // the implementation probes 0, 1, 2 in order; 0 is taken, 1 is free).
-        let got = trash_path(fake_original).unwrap();
+        let got = trash_path(fake_original, false).unwrap();
         assert!(
             got.to_string_lossy().ends_with(".1"),
             "expected counter 1 (first gap), got {got:?}"
