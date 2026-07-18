@@ -2244,7 +2244,10 @@ mod tests {
             "top-level"
         );
         // Original is gone (removed by remove_dir_all).
-        assert!(!src.exists(), "source must be removed after cross-device move");
+        assert!(
+            !src.exists(),
+            "source must be removed after cross-device move"
+        );
     }
 
     // ── cross-device copy fallback: symlink safety ────────────────────────────
