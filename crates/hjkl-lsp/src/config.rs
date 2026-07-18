@@ -35,3 +35,21 @@ pub struct ServerConfig {
     #[serde(default)]
     pub initialization_options: Option<serde_json::Value>,
 }
+
+impl ServerConfig {
+    /// Validate the config before it is used to spawn a process.
+    ///
+    /// `command` is trusted user configuration (absolute paths to language
+    /// servers are legitimate), so this only rejects an empty/whitespace
+    /// command — spawning that would either fail opaquely or, with a shell
+    /// wrapper, run nothing useful. It is the single choke point to extend if
+    /// project-local (untrusted) config is ever added.
+    pub fn validate(&self, language_id: &str) -> Result<(), String> {
+        if self.command.trim().is_empty() {
+            return Err(format!(
+                "lsp: server for {language_id:?} has an empty `command`"
+            ));
+        }
+        Ok(())
+    }
+}

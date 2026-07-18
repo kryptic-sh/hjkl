@@ -59,6 +59,7 @@ impl Server {
         cmd: &ServerConfig,
         evt_tx: Sender<LspEvent>,
     ) -> anyhow::Result<Self> {
+        cmd.validate(&key.language).map_err(anyhow::Error::msg)?;
         let mut child = tokio::process::Command::new(&cmd.command)
             .args(&cmd.args)
             .stdin(std::process::Stdio::piped())
