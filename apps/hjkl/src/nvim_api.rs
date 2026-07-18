@@ -2393,15 +2393,17 @@ impl<'a, R: Read> LimitedReader<'a, R> {
 
 impl<R: Read> Read for LimitedReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.bytes_read += n as u64;
-        if self.bytes_read > self.max {
+        let remaining = self.max.saturating_sub(self.bytes_read);
+        if remaining == 0 {
             self.exceeded = true;
             return Err(std::io::Error::other(format!(
-                "msgpack message size {} exceeds limit {}",
-                self.bytes_read, self.max,
+                "msgpack message size exceeds limit {}",
+                self.max,
             )));
         }
+        let len = buf.len().min(remaining as usize);
+        let n = self.inner.read(&mut buf[..len])?;
+        self.bytes_read += n as u64;
         Ok(n)
     }
 }
@@ -2520,6 +2522,30 @@ mod tests {
     use super::*;
     use hjkl_vim::VimEditorExt;
     use rmpv::Value;
+
+    #[test]
+    fn limited_reader_never_requests_more_than_remaining_budget() {
+        struct RecordingReader {
+            reads: Vec<usize>,
+        }
+
+        impl Read for RecordingReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.reads.push(buf.len());
+                buf.fill(b'x');
+                Ok(buf.len())
+            }
+        }
+
+        let mut inner = RecordingReader { reads: Vec::new() };
+        let mut reader = LimitedReader::new(&mut inner, 3);
+        let mut buf = [0; 16];
+        assert_eq!(reader.read(&mut buf).unwrap(), 3);
+        assert!(reader.read(&mut buf).is_err());
+        assert!(reader.exceeded);
+        drop(reader);
+        assert_eq!(inner.reads, vec![3]);
+    }
 
     /// Encode a buffer handle `Value::Ext(BUFFER_EXT, encode_id(id))` suitable
     /// for passing as a param to dispatch.

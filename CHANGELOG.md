@@ -10,10 +10,12 @@ patch bumps.
 
 ### Fixed
 
-- **msgpack-RPC message size limit:** The nvim-api msgpack reader now enforces a
-  64 MiB per-message byte budget. Oversized messages log an error and close the
-  RPC session instead of allocating attacker-declared sizes, matching the
-  JSON-RPC line cap.
+- **Audit hardening:** Config persistence retains live locks; grammar manifests
+  reject escaping source paths and use full pinned revisions for cache identity;
+  failed async grammar dispatches resolve callers; LSP exits clear runtime
+  attachments; swap recovery caps bodies; watcher backend failures trigger a
+  rescan; and non-TUI modes validate default configuration while rejecting
+  unsupported `--config` and `--clean` flags.
 - **Swap temp file uniqueness:** `write_swap` now creates a unique per-call
   temporary file (`<name>.swp.<random>.tmp`) with `O_EXCL` (`create_new`) and
   Unix mode `0o600`, instead of reusing a predictable `<name>.swp.tmp` path.

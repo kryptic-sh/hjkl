@@ -382,7 +382,10 @@ fn worker(
             recv(raw_rx) -> msg => {
                 match msg {
                     Err(_) => break, // Watcher dropped, channel closed.
-                    Ok(Err(_)) => continue, // notify error, ignore.
+                    Ok(Err(error)) => {
+                        eprintln!("hjkl-fs-watch: backend error: {error}");
+                        overflow.store(true, Ordering::SeqCst);
+                    }
                     Ok(Ok(event)) => {
                         if paused.load(Ordering::SeqCst) {
                             continue;

@@ -356,9 +356,24 @@ pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
         )
     })?;
 
-    // Body: rest of file.
-    let mut body = String::new();
-    f.read_to_string(&mut body)?;
+    // Body: cap the remaining file length before allocating. Swaps are cache
+    // entries, so oversized or corrupt bodies are discarded during recovery.
+    const MAX_BODY_LEN: u64 = 64 * 1024 * 1024;
+    let body_len = f.metadata()?.len().saturating_sub(8 + hlen as u64);
+    if body_len > MAX_BODY_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("swap: body length {body_len} exceeds {MAX_BODY_LEN}"),
+        ));
+    }
+    let mut body = String::with_capacity(body_len as usize);
+    f.take(MAX_BODY_LEN + 1).read_to_string(&mut body)?;
+    if body.len() as u64 > MAX_BODY_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("swap: body length exceeds {MAX_BODY_LEN}"),
+        ));
+    }
 
     Ok((header, body))
 }
@@ -538,6 +553,25 @@ mod tests {
         bytes.extend_from_slice(&SwapHeader::MAGIC);
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         std::fs::write(&swp, &bytes).unwrap();
+        let err = read_swap(&swp).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_swap_rejects_oversized_body() {
+        let td2 = tempfile::tempdir().unwrap();
+        let swp = td2.path().join("oversized.swp");
+        let header = sample_header("/tmp/large.rs");
+        let header_bytes = postcard::to_allocvec(&header).unwrap();
+        let file = std::fs::File::create(&swp).unwrap();
+        file.set_len(8 + header_bytes.len() as u64 + 64 * 1024 * 1024 + 1)
+            .unwrap();
+        drop(file);
+        let mut file = std::fs::OpenOptions::new().write(true).open(&swp).unwrap();
+        file.write_all(&SwapHeader::MAGIC).unwrap();
+        file.write_all(&(header_bytes.len() as u32).to_le_bytes())
+            .unwrap();
+        file.write_all(&header_bytes).unwrap();
         let err = read_swap(&swp).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }

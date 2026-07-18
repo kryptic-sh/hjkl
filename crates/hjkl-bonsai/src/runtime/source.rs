@@ -90,8 +90,7 @@ impl SourceCache {
     /// Path where the source tree for `(name, spec)` would live (whether or
     /// not it has been cloned yet).
     pub fn source_dir(&self, name: &str, spec: &LangSpec) -> PathBuf {
-        self.base
-            .join(format!("{name}-{}", short_rev(&spec.git_rev)))
+        self.base.join(format!("{name}-{}", spec.git_rev))
     }
 
     /// Resolve `injections.scm` from the grammar source's own `queries/`
@@ -130,12 +129,17 @@ impl SourceCache {
         if !is_safe_component(name) {
             bail!("unsafe grammar name {name:?}: must be a single path component");
         }
+        if let Some(subpath) = spec.subpath.as_deref()
+            && !is_safe_relative_path(subpath)
+        {
+            bail!("unsafe grammar subpath {subpath:?}");
+        }
         let dest = self.source_dir(name, spec);
         if dest.exists() {
             return Ok(grammar_root(&dest, spec));
         }
 
-        let key = format!("{name}-{}", short_rev(&spec.git_rev));
+        let key = format!("{name}-{}", spec.git_rev);
         let lock = key_lock(&self.locks, &key);
         let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
 
@@ -148,9 +152,7 @@ impl SourceCache {
         std::fs::create_dir_all(&self.base)
             .with_context(|| format!("create cache base {}", self.base.display()))?;
 
-        let staging = self
-            .base
-            .join(format!("{name}-{}.tmp", short_rev(&spec.git_rev)));
+        let staging = self.base.join(format!("{name}-{}.tmp", spec.git_rev));
         let _ = std::fs::remove_dir_all(&staging);
 
         match clone_into(&staging, &spec.git_url, &spec.git_rev) {
@@ -185,6 +187,19 @@ pub(crate) fn is_safe_component(s: &str) -> bool {
     matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
 }
 
+pub(crate) fn is_safe_relative_path(s: &str) -> bool {
+    !s.is_empty()
+        && !Path::new(s).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn short_rev(rev: &str) -> &str {
     let mut take = rev.len().min(12);
     // Revs are normally ASCII hex, but the manifest is parsed input — back
@@ -251,12 +266,12 @@ impl QuerySourceCache {
             QuerySource::Helix => "helix",
             QuerySource::NvimTreesitter => "nvim-treesitter",
         };
-        let dest = self.base.join(format!("{label}-{}", short_rev(rev)));
+        let dest = self.base.join(format!("{label}-{rev}"));
         if dest.exists() {
             return Ok(dest);
         }
 
-        let key = format!("{label}-{}", short_rev(rev));
+        let key = format!("{label}-{rev}");
         let lock = key_lock(&self.locks, &key);
         let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
 
@@ -269,7 +284,7 @@ impl QuerySourceCache {
         std::fs::create_dir_all(&self.base)
             .with_context(|| format!("create query-source base {}", self.base.display()))?;
 
-        let staging = self.base.join(format!("{label}-{}.tmp", short_rev(rev)));
+        let staging = self.base.join(format!("{label}-{rev}.tmp"));
         let _ = std::fs::remove_dir_all(&staging);
 
         let sparse_prefix = source.query_prefix();
@@ -320,10 +335,10 @@ impl QuerySourceCache {
                 QuerySource::Helix => "helix",
                 QuerySource::NvimTreesitter => "nvim-treesitter",
             },
-            short_rev(match source {
+            match source {
                 QuerySource::Helix => meta.helix_rev.as_str(),
                 QuerySource::NvimTreesitter => meta.nvim_treesitter_rev.as_str(),
-            }),
+            },
         ));
         // Already resolved — reuse (idempotent).
         if resolved_path.exists() {
@@ -593,12 +608,12 @@ mod tests {
     }
 
     #[test]
-    fn source_dir_format_includes_short_rev() {
+    fn source_dir_format_includes_full_rev() {
         let cache = SourceCache::new(PathBuf::from("/tmp/cache"));
         let spec = dummy_spec("0123456789abcdef00112233", None);
         assert_eq!(
             cache.source_dir("rust", &spec),
-            PathBuf::from("/tmp/cache/rust-0123456789ab")
+            PathBuf::from("/tmp/cache/rust-0123456789abcdef00112233")
         );
     }
 
@@ -787,7 +802,7 @@ mod tests {
         // Build a minimal fake helix sparse-clone layout.
         let cache_base = tmp.path().join("query-sources");
         let meta = dummy_meta();
-        let label = format!("helix-{}", short_rev(&meta.helix_rev));
+        let label = format!("helix-{}", meta.helix_rev);
         let repo = cache_base.join(&label);
         let qs_dir = repo.join("runtime/queries/rust");
         std::fs::create_dir_all(&qs_dir).unwrap();
@@ -807,7 +822,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache_base = tmp.path().join("query-sources");
         let meta = dummy_meta();
-        let label = format!("nvim-treesitter-{}", short_rev(&meta.nvim_treesitter_rev));
+        let label = format!("nvim-treesitter-{}", meta.nvim_treesitter_rev);
         let repo = cache_base.join(&label);
         let qs_dir = repo.join("queries/go");
         std::fs::create_dir_all(&qs_dir).unwrap();

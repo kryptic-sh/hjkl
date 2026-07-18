@@ -1,6 +1,7 @@
 //! `bonsai.toml` schema + parser.
 
 use std::collections::BTreeMap;
+use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -82,6 +83,13 @@ impl Manifest {
     /// Parse a TOML manifest string.
     pub fn from_toml_str(s: &str) -> Result<Self> {
         let raw: ManifestRaw = toml::from_str(s).context("parse bonsai.toml")?;
+        for (name, spec) in &raw.language {
+            validate_relative_path(name, "subpath", spec.subpath.as_deref())?;
+            validate_relative_path(name, "query_subdir", spec.query_subdir.as_deref())?;
+            for c_file in &spec.c_files {
+                validate_relative_path(name, "c_files", Some(c_file))?;
+            }
+        }
         Ok(Self {
             meta: raw.meta,
             languages: raw.language,
@@ -107,6 +115,23 @@ impl Manifest {
     pub fn is_empty(&self) -> bool {
         self.languages.is_empty()
     }
+}
+
+fn validate_relative_path(language: &str, field: &str, value: Option<&str>) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.is_empty()
+        || Path::new(value).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        anyhow::bail!("unsafe {field} path {value:?} in language {language:?}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -163,6 +188,24 @@ mod tests {
         let m = Manifest::from_toml_str(SAMPLE).unwrap();
         let names: Vec<_> = m.iter().map(|(n, _)| n).collect();
         assert_eq!(names, vec!["rust", "typescript"]);
+    }
+
+    #[test]
+    fn rejects_unsafe_path_fields() {
+        for (field, value) in [
+            ("subpath", "../escape"),
+            ("c_files", "/etc/passwd"),
+            ("query_subdir", "../queries"),
+        ] {
+            let manifest = SAMPLE.replace(
+                "query_source = \"helix\"",
+                &format!("query_source = \"helix\"\n{field} = \"{value}\""),
+            );
+            assert!(
+                Manifest::from_toml_str(&manifest).is_err(),
+                "{field} accepted {value}"
+            );
+        }
     }
 
     #[test]

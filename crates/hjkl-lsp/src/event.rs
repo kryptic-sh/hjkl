@@ -71,6 +71,9 @@ pub enum LspCommand {
         method: String,
         params: serde_json::Value,
     },
+    /// A server process exited; remove runtime state so a future attachment
+    /// starts a replacement.
+    ServerExited { key: ServerKey },
     /// Gracefully shut down all servers and exit the runtime loop.
     ShutdownAll,
 }

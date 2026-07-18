@@ -75,6 +75,9 @@ pub enum LoadError {
     /// The underlying `GrammarLoader::load` returned an error.
     #[error("grammar load failed: {0}")]
     Failed(String),
+    /// The worker pool was unavailable before the job could be dispatched.
+    #[error("grammar load dispatch failed: worker pool is unavailable")]
+    DispatchFailed,
     /// The `LoadHandle` channel was dropped before the worker completed.
     /// This variant is produced internally if the send itself fails; callers
     /// generally won't see it (drop = no receiver = no one to observe it).
@@ -161,9 +164,25 @@ impl AsyncGrammarLoader {
             // First caller — insert and enqueue.
             map.insert(name.clone(), vec![tx]);
             drop(map); // Release lock before sending to avoid potential deadlock.
-            // If the channel is closed (all workers died) this returns an Err;
-            // the handle will simply never resolve — acceptable in shutdown.
-            let _ = self.job_tx.send(Job { name, spec, meta });
+            if self
+                .job_tx
+                .send(Job {
+                    name: name.clone(),
+                    spec,
+                    meta,
+                })
+                .is_err()
+            {
+                let senders = self
+                    .in_flight
+                    .lock()
+                    .expect("in_flight mutex poisoned")
+                    .remove(&name)
+                    .unwrap_or_default();
+                for sender in senders {
+                    let _ = sender.send(Err(LoadError::DispatchFailed));
+                }
+            }
             return LoadHandle { rx };
         }
         // Drop map lock before returning (borrow ends here for the else branch above,

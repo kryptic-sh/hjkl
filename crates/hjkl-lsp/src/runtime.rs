@@ -87,6 +87,11 @@ pub(crate) async fn dispatch(
                     &buffers,
                 );
             }
+            LspCommand::ServerExited { key } => {
+                servers.remove(&key);
+                buffers.retain(|_, buffer| buffer.server_key != key);
+                tracing::info!(?key, "removed exited LSP server and its buffer attachments");
+            }
             LspCommand::ShutdownAll => {
                 tracing::info!("shutting down all LSP servers");
                 for (_key, server) in servers.drain() {

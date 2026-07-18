@@ -349,6 +349,9 @@ impl App {
                 hjkl_lsp::LspEvent::ServerExited { key, status } => {
                     tracing::warn!(?key, ?status, "lsp server exited");
                     self.lsp_state.remove(&key);
+                    if let Some(mgr) = &self.lsp {
+                        mgr.server_exited(key);
+                    }
                 }
                 hjkl_lsp::LspEvent::Notification {
                     key,

@@ -149,12 +149,12 @@ fn lock_is_stale(lock_path: &Path) -> bool {
         .and_then(|mut f| f.read_to_string(&mut contents))
         .is_ok()
     {
-        // Format: "<pid> <timestamp_secs>"
+        // Format: "<pid> <timestamp_secs>". A readable, parseable lock
+        // owned by a live process remains contended.
         if let Some(pid_str) = contents.split_whitespace().next()
             && let Ok(pid) = pid_str.parse::<u32>()
-            && !pid_is_alive(pid)
         {
-            return true;
+            return !pid_is_alive(pid);
         }
         // Corrupt / unparseable body → stale (can't verify owner).
         return true;
@@ -308,6 +308,14 @@ pub fn write_key_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_is_not_stale_for_live_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml.lock");
+        std::fs::write(&path, format!("{} 0", std::process::id())).unwrap();
+        assert!(!lock_is_stale(&path));
+    }
 
     #[test]
     fn creates_file_when_missing() {

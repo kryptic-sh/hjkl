@@ -105,7 +105,20 @@ fn compile_into(spec: &LangSpec, source_root: &Path, out_file: &Path) -> Result<
     let mut any_cpp = false;
     let mut sources: Vec<PathBuf> = Vec::with_capacity(spec.c_files.len());
     for f in &spec.c_files {
-        let p = source_root.join(f);
+        let path = Path::new(f);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            bail!("unsafe grammar source path: {f:?}");
+        }
+        let p = source_root.join(path);
         if !p.is_file() {
             bail!("missing source file: {}", p.display());
         }

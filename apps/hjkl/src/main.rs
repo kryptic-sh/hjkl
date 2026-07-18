@@ -32,7 +32,7 @@ mod which_key;
 #[cfg(test)]
 pub(crate) mod test_cwd;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
     event,
@@ -503,6 +503,15 @@ fn main() -> Result<()> {
     if args.recover.as_deref() == Some("") {
         list_swap_files()?;
         std::process::exit(0);
+    }
+
+    if args.nvim_api || args.embed || args.headless {
+        if args.clean || args.config.is_some() {
+            anyhow::bail!("--config and --clean are unsupported outside TUI mode");
+        }
+        let (cfg, _) = hjkl_app::config::load().context("config error")?;
+        use hjkl_config::Validate;
+        cfg.validate().context("config validation")?;
     }
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since

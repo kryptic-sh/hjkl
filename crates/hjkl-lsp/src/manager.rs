@@ -78,6 +78,11 @@ impl LspManager {
         }
     }
 
+    /// Tell the runtime an LSP process exited so dead server state is removed.
+    pub fn server_exited(&self, key: crate::event::ServerKey) {
+        self.send_cmd("ServerExited", LspCommand::ServerExited { key });
+    }
+
     /// Attach a buffer to the appropriate language server.
     pub fn attach_buffer(&self, id: BufferId, path: &Path, language_id: &str, text: &str) {
         self.send_cmd(

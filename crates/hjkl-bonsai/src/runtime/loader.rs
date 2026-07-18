@@ -26,7 +26,7 @@
 //! Layout written by the install step (and expected by [`Grammar::load`]):
 //! - `<user_dir>/<name><ext>` — parser
 //! - `<user_dir>/<name>.scm`  — highlights query
-//! - `<user_dir>/<name>.rev`  — sidecar `<git_rev>:<query_short_rev>:abi<N>` for
+//! - `<user_dir>/<name>.rev`  — sidecar `<git_rev>:<query_rev>:abi<N>` for
 //!   staleness detection. Updating either the grammar rev or the query-source rev
 //!   triggers a re-install (overwriting in place). Old two-field sidecars parse
 //!   as stale → rebuild (correct behavior across the schema bump).
@@ -44,7 +44,7 @@ use crate::query_sanitize::sanitize_highlights;
 
 use super::compile::{GrammarCompiler, shared_lib_ext};
 use super::manifest::{LangSpec, ManifestMeta};
-use super::source::{QuerySourceCache, SourceCache, is_safe_component, short_rev};
+use super::source::{QuerySourceCache, SourceCache, is_safe_component};
 use super::xdg;
 
 /// Configurable grammar resolver. Construct once, reuse across lookups.
@@ -234,7 +234,7 @@ fn is_user_install_fresh(
     let Ok(content) = std::fs::read_to_string(&rev_path) else {
         return false;
     };
-    let Some((grammar_rev, query_short, abi)) = parse_rev_sidecar(content.trim()) else {
+    let Some((grammar_rev, query_rev, abi)) = parse_rev_sidecar(content.trim()) else {
         return false;
     };
     let expected_query_rev = match spec.query_source {
@@ -242,20 +242,20 @@ fn is_user_install_fresh(
         crate::runtime::manifest::QuerySource::NvimTreesitter => meta.nvim_treesitter_rev.as_str(),
     };
     grammar_rev == spec.git_rev
-        && query_short == short_rev(expected_query_rev)
+        && query_rev == expected_query_rev
         && abi == tree_sitter::LANGUAGE_VERSION
 }
 
-/// Parse the three-field `<git_rev>:<query_short_rev>:abi<N>` payload.
+/// Parse the three-field `<git_rev>:<query_rev>:abi<N>` payload.
 /// `None` when malformed (including old two-field format → stale → rebuild).
 fn parse_rev_sidecar(s: &str) -> Option<(&str, &str, usize)> {
     let mut parts = s.splitn(3, ':');
     let grammar_rev = parts.next()?;
-    let query_short = parts.next()?;
+    let query_rev = parts.next()?;
     let abi_part = parts.next()?;
     let abi_str = abi_part.strip_prefix("abi")?;
     let abi = abi_str.parse().ok()?;
-    Some((grammar_rev, query_short, abi))
+    Some((grammar_rev, query_rev, abi))
 }
 
 /// Copy `built_so` to `<user_dir>/<name><ext>`, `highlights_src` to
@@ -313,7 +313,7 @@ fn install_into_user_dir(
     let rev_payload = format!(
         "{}:{}:abi{}",
         spec.git_rev,
-        short_rev(query_rev),
+        query_rev,
         tree_sitter::LANGUAGE_VERSION
     );
     write_atomic(&rev_dest, rev_payload.as_bytes())?;
@@ -418,13 +418,13 @@ mod tests {
         user_dir: &Path,
         name: &str,
         grammar_rev: &str,
-        query_short: &str,
+        query_rev: &str,
         abi: usize,
     ) {
         std::fs::create_dir_all(user_dir).unwrap();
         std::fs::write(
             user_dir.join(format!("{name}.rev")),
-            format!("{grammar_rev}:{query_short}:abi{abi}"),
+            format!("{grammar_rev}:{query_rev}:abi{abi}"),
         )
         .unwrap();
     }
@@ -510,7 +510,7 @@ mod tests {
             &user,
             name,
             rev,
-            short_rev(&meta.helix_rev),
+            &meta.helix_rev,
             tree_sitter::LANGUAGE_VERSION,
         );
 
@@ -557,7 +557,7 @@ mod tests {
             &user,
             "rust",
             "old-rev-bbbb",
-            short_rev(&meta.helix_rev),
+            &meta.helix_rev,
             tree_sitter::LANGUAGE_VERSION,
         );
 
@@ -581,7 +581,7 @@ mod tests {
         let pre = user.join(format!("rust{}", shared_lib_ext()));
         touch(&pre);
         let stale_abi = tree_sitter::LANGUAGE_VERSION + 1;
-        write_rev_sidecar(&user, "rust", rev, short_rev(&meta.helix_rev), stale_abi);
+        write_rev_sidecar(&user, "rust", rev, &meta.helix_rev, stale_abi);
 
         assert!(loader.lookup_fresh("rust", &spec, &meta).is_none());
     }
@@ -661,11 +661,7 @@ mod tests {
         let rev_payload = std::fs::read_to_string(user.join("rust.rev")).unwrap();
         assert_eq!(
             rev_payload,
-            format!(
-                "{rev}:{}:abi{}",
-                short_rev(query_rev),
-                tree_sitter::LANGUAGE_VERSION
-            )
+            format!("{rev}:{query_rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
         );
     }
 
@@ -734,11 +730,7 @@ mod tests {
         let rev_payload = std::fs::read_to_string(user.join("xml.rev")).unwrap();
         assert_eq!(
             rev_payload,
-            format!(
-                "{rev}:{}:abi{}",
-                short_rev(query_rev),
-                tree_sitter::LANGUAGE_VERSION
-            )
+            format!("{rev}:{query_rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
         );
     }
 
