@@ -36,6 +36,10 @@ patch bumps.
 - **Trash directory permissions:** `trash_dir` now sets Unix mode `0o700` after
   creation, matching the swap directory. Previously the effective mode depended
   on umask, potentially exposing trashed file contents to other local users.
+- **Explorer redo treats restored directories as files:** The redo path in
+  `apply_applied` for `AppliedOp::Restored` now checks `is_dir()` on the trashed
+  entry and calls `move_dir` for directories (instead of always calling
+  `move_file`, whose cross-device fallback cannot move directories).
 
 ## [0.34.2] - 2026-07-17
 
