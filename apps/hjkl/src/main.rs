@@ -148,6 +148,13 @@ struct Cli {
     #[arg(short = 's', value_name = "SCRIPTIN")]
     script_in: Option<PathBuf>,
 
+    /// Allow shell-out commands (`:!cmd`, `:r !cmd`, `:[range]!cmd`, range
+    /// filters) in `--embed` / `--nvim-api` / `--headless` modes. Those modes
+    /// disable shell-out by default because the driving client may not be the
+    /// local user. No effect in interactive TUI, where shell-out is always on.
+    #[arg(long = "allow-shell")]
+    allow_shell: bool,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -209,6 +216,9 @@ pub struct Args {
     /// interactively. Mirrors `vim -s` / `nvim -s`. TUI mode only; runs
     /// after `-c`/`+cmd` and before raw mode is entered.
     pub script_in: Option<PathBuf>,
+    /// `--allow-shell`: permit shell-out in `--embed`/`--nvim-api`/`--headless`
+    /// modes (off by default in those modes; always on in the TUI).
+    pub allow_shell: bool,
 }
 
 /// `true` when `p` is the literal `-` (vim/nvim convention: read the buffer
@@ -360,6 +370,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         no_swap: cli.no_swap,
         recover: cli.recover,
         script_in: cli.script_in,
+        allow_shell: cli.allow_shell,
     };
     // `-r <FILE>` (non-empty value only — bare `-r` is list mode, handled in
     // `main()` before this function's caller ever gets here): hjkl already
@@ -512,6 +523,11 @@ fn main() -> Result<()> {
         let (cfg, _) = hjkl_app::config::load().context("config error")?;
         use hjkl_config::Validate;
         cfg.validate().context("config validation")?;
+        // Non-TUI modes may be driven by a remote/automated client, not the
+        // local user. Disable shell-out unless explicitly opted in.
+        if !args.allow_shell {
+            hjkl_engine::policy::disable_shell();
+        }
     }
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since
@@ -1223,6 +1239,7 @@ mod cli_tests {
             no_swap: false,
             recover: None,
             script_in: None,
+            allow_shell: false,
         }
     }
 

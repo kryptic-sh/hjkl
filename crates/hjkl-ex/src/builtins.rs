@@ -106,6 +106,11 @@ fn read_handler<H: Host>(
         if cmd.is_empty() {
             return Some(ExEffect::Error(":r ! needs a shell command".into()));
         }
+        if hjkl_engine::policy::shell_disabled() {
+            return Some(ExEffect::Error(
+                "shell commands are disabled in this mode (pass --allow-shell to enable)".into(),
+            ));
+        }
         match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
             Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
                 Ok(s) => s,

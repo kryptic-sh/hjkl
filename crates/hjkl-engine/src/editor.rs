@@ -4699,6 +4699,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         use std::thread;
         use std::time::Instant;
 
+        if crate::policy::shell_disabled() {
+            return Err(
+                "shell commands are disabled in this mode (pass --allow-shell to enable)".into(),
+            );
+        }
+
         let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(10));
         let rope = crate::types::Query::rope(self.buffer());
         let line_count = rope.len_lines();

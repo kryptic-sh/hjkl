@@ -19,6 +19,11 @@ pub(crate) fn shell_filter_handler<H: Host>(
     if cmd.is_empty() {
         return ExEffect::Error(":! needs a shell command".into());
     }
+    if hjkl_engine::policy::shell_disabled() {
+        return ExEffect::Error(
+            "shell commands are disabled in this mode (pass --allow-shell to enable)".into(),
+        );
+    }
     use std::io::Write as IoWrite;
     use std::process::{Command, Stdio};
 
