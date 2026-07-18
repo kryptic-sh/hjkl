@@ -17,7 +17,7 @@ fn copen_dock_supports_real_yank_then_closes() {
     let target = tmp.path().join("target.txt");
     std::fs::write(&target, "alpha\nbeta\ngamma\n").unwrap();
 
-    let mut session = TerminalSession::spawn_in_dir_with_file(tmp.path(), &target);
+    let mut session = TerminalSession::spawn_in_dir_with_file_wide(tmp.path(), &target);
 
     // `%f:%l:%c:%m` matches "target.txt:2:1:sample message" → one entry at
     // (1-based) line 2, col 1, message "sample message". Every bare `%` is
@@ -71,7 +71,7 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     std::fs::write(tmp.path().join("ccc.txt"), "c1\nc2\nc3\n").unwrap();
     let first = tmp.path().join("aaa.txt");
 
-    let mut session = TerminalSession::spawn_in_dir_with_file(tmp.path(), &first);
+    let mut session = TerminalSession::spawn_in_dir_with_file_wide(tmp.path(), &first);
 
     // Populate all three entries in one `:cexpr` — the quoted-string form
     // (`parse_expr_text`) expands `\n` into real newlines, so this is
@@ -152,7 +152,7 @@ fn dash_q_flag_populates_quickfix_and_jumps_to_first_error() {
     // line=2, col=1, message="oops".
     std::fs::write(tmp.path().join("errors.err"), "second.txt:2:1:oops\n").unwrap();
 
-    let mut session = TerminalSession::spawn_in_dir_with_file_config_args(
+    let mut session = TerminalSession::spawn_in_dir_with_file_config_args_wide(
         tmp.path(),
         &opened,
         "",

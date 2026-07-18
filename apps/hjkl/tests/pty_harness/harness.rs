@@ -342,6 +342,39 @@ impl TerminalSession {
         )
     }
 
+    /// Wide-terminal (24×200) variant of [`Self::spawn_in_dir_with_file`].
+    ///
+    /// The quickfix dock renders each entry as `<absolute-path>:line:col msg`.
+    /// On the macOS CI runner the temp cwd (`/private/var/folders/…`) is long
+    /// enough to push the entry past the default 80 columns, truncating the
+    /// `:line:col msg` tail so substring assertions fail there but pass on
+    /// Linux's short `/tmp/…`. A wide terminal keeps the whole entry on screen
+    /// so the assertion no longer depends on cwd length.
+    pub fn spawn_in_dir_with_file_wide(dir: &Path, file: &Path) -> Self {
+        Self::spawn_inner_cwd(Some(file), 24, 200, Some(dir))
+    }
+
+    /// Wide-terminal (24×200) variant of
+    /// [`Self::spawn_in_dir_with_file_config_args`]. See
+    /// [`Self::spawn_in_dir_with_file_wide`] for why the width matters.
+    pub fn spawn_in_dir_with_file_config_args_wide(
+        dir: &Path,
+        file: &Path,
+        config_toml: &str,
+        extra_args: &[&str],
+    ) -> Self {
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        Self::spawn_inner_cwd_cache(
+            Some(file),
+            24,
+            200,
+            Some(dir),
+            cache_dir,
+            Some(config_toml),
+            extra_args,
+        )
+    }
+
     fn spawn_inner(file: Option<&Path>, rows: u16, cols: u16) -> Self {
         Self::spawn_inner_cwd(file, rows, cols, None)
     }
