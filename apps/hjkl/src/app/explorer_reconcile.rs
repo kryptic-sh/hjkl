@@ -963,7 +963,15 @@ pub(crate) fn apply_applied(
                     errors.push(format!("redo restored: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                match move_file(from_trash, to) {
+                let is_dir = std::fs::symlink_metadata(from_trash)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+                let result = if is_dir {
+                    move_dir(from_trash, to)
+                } else {
+                    move_file(from_trash, to)
+                };
+                match result {
                     Ok(()) => {
                         // Remove from the trashed registry.
                         if let Some(pos) = trashed.iter().position(|(_, d)| d == from_trash) {
@@ -2150,6 +2158,46 @@ mod tests {
         let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(dest.exists(), "dest must be restored again after redo");
+    }
+
+    #[test]
+    fn revert_restore_dir_retrashes_redo_restores() {
+        let td = tempfile::tempdir().unwrap();
+        let _trash = isolated_trash(&td);
+        let dir = td.path().join("mydir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("inner.txt"), b"deep").unwrap();
+
+        // Step 1: trash the dir.
+        let mut trashed: Vec<(String, PathBuf)> = Vec::new();
+        let (_, _trash_applied, e) = apply_ops(&[FsOp::Trash(dir.clone())], &mut trashed);
+        assert!(e.is_empty(), "trash dir: {e:?}");
+        assert!(!dir.exists());
+        assert_eq!(trashed.len(), 1);
+        let trash_path = trashed[0].1.clone();
+
+        // Build a Restored op the same way apply_ops would.
+        let restored = AppliedOp::Restored {
+            from_trash: trash_path,
+            to: dir.clone(),
+        };
+
+        // Step 2: apply_applied (redo) — restore dir from trash.
+        let (_, redo_applied, errs) = apply_applied(&[restored], &mut trashed);
+        assert!(errs.is_empty(), "apply_applied dir: {errs:?}");
+        assert!(dir.is_dir(), "dir must be restored after apply_applied");
+        assert!(dir.join("inner.txt").exists(), "contents must survive");
+
+        // Step 3: revert_ops (undo) — trash dir again.
+        let (redo_journal, errs) = revert_ops(&redo_applied, &mut trashed);
+        assert!(errs.is_empty(), "revert dir: {errs:?}");
+        assert!(!dir.exists(), "dir must be trashed again after revert");
+
+        // Step 4: apply_applied (redo again) — restore from the new trash path.
+        let (_, _, errs) = apply_applied(&redo_journal, &mut trashed);
+        assert!(errs.is_empty(), "redo dir: {errs:?}");
+        assert!(dir.is_dir(), "dir must be restored again after redo");
+        assert!(dir.join("inner.txt").exists(), "contents must survive redo");
     }
 
     // ── cross-device copy fallback: symlink safety ────────────────────────────

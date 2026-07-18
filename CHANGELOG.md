@@ -29,6 +29,10 @@ patch bumps.
   temp-file write + fsync + rename) instead of `std::fs::write`, which truncated
   the target in place. A crash or ENOSPC mid-write can no longer destroy the
   file in those modes.
+- **Explorer redo treats restored directories as files:** The redo path in
+  `apply_applied` for `AppliedOp::Restored` now checks `is_dir()` on the trashed
+  entry and calls `move_dir` for directories (instead of always calling
+  `move_file`, whose cross-device fallback cannot move directories).
 
 ## [0.34.2] - 2026-07-17
 
