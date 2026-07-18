@@ -26,21 +26,27 @@ use crate::error::ConfigError;
 // PID liveness check
 // ---------------------------------------------------------------------------
 
-/// Return `true` if a process with the given `pid` is still running.
+/// Report whether a process with the given `pid` is still running.
 ///
-/// On Linux this checks `/proc/<pid>/`.  Everywhere else it always returns
-/// `false`, so the mtime check ([`LOCK_STALE_SECS`]) is the sole staleness
-/// signal.  (Adding a `kill(0)` FFI would require a `libc` dependency that
-/// `hjkl-config` does not carry.)
-fn pid_is_alive(pid: u32) -> bool {
+/// - `Some(true)`  — the owner is alive.
+/// - `Some(false)` — the owner is provably gone.
+/// - `None`        — liveness could not be determined on this platform.
+///
+/// On Linux this probes `/proc/<pid>/`. Elsewhere there is no cheap probe
+/// without a `libc` dependency `hjkl-config` does not carry, so it returns
+/// `None` and the mtime check ([`LOCK_STALE_SECS`]) becomes the sole staleness
+/// signal. Returning `None` (rather than `false`) is important: "cannot probe"
+/// must not be mistaken for "dead", or every live lock would look stale and
+/// mutual exclusion would break on non-Linux hosts.
+fn pid_liveness(pid: u32) -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
-        std::fs::metadata(format!("/proc/{pid}")).is_ok()
+        Some(std::fs::metadata(format!("/proc/{pid}")).is_ok())
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = pid;
-        false
+        None
     }
 }
 
@@ -149,12 +155,14 @@ fn lock_is_stale(lock_path: &Path) -> bool {
         .and_then(|mut f| f.read_to_string(&mut contents))
         .is_ok()
     {
-        // Format: "<pid> <timestamp_secs>". A readable, parseable lock
-        // owned by a live process remains contended.
+        // Format: "<pid> <timestamp_secs>". Within the freshness window, only
+        // reclaim a lock whose owner is *provably* gone. When liveness cannot
+        // be probed (non-Linux), keep the lock and let mtime govern — treating
+        // "unknown" as "dead" would make every live lock look stale.
         if let Some(pid_str) = contents.split_whitespace().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            return !pid_is_alive(pid);
+            return matches!(pid_liveness(pid), Some(false));
         }
         // Corrupt / unparseable body → stale (can't verify owner).
         return true;
@@ -314,7 +322,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml.lock");
         std::fs::write(&path, format!("{} 0", std::process::id())).unwrap();
+        // Live on Linux (probed) and "unknown" elsewhere both mean "keep the
+        // lock" while its mtime is fresh — so this must hold on every platform.
         assert!(!lock_is_stale(&path));
+    }
+
+    #[test]
+    fn lock_is_stale_for_corrupt_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml.lock");
+        std::fs::write(&path, "not-a-pid").unwrap();
+        // An unparseable owner can't be verified → reclaim it (all platforms).
+        assert!(lock_is_stale(&path));
     }
 
     #[test]
