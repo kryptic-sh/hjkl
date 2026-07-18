@@ -150,7 +150,6 @@ pub struct TerminalSession {
     /// Shared vt100 parser state updated by the reader thread.
     parser: Arc<Mutex<vt100::Parser>>,
     /// Terminal height in rows (used for screen iteration bounds).
-    #[allow(dead_code)]
     rows: u16,
     /// Terminal width in columns.
     cols: u16,
@@ -589,6 +588,25 @@ impl TerminalSession {
             std::thread::sleep(Duration::from_millis(20));
         }
         self.line(row).contains(expected)
+    }
+
+    /// Poll up to `timeout_ms` for `needle` to appear on ANY screen row,
+    /// returning `true` once it does (or `false` on timeout).
+    ///
+    /// Use this instead of a bare `(0..rows).any(|r| line(r).contains(..))`
+    /// right after a `keys()` that triggers a redraw: `keys()` only waits a
+    /// fixed `settle_ms`, which the slower/variable macOS pty redraw can
+    /// outlast, so the immediate scan races the paint. Polling removes the
+    /// race without slowing the common (already-painted) case.
+    pub fn wait_for_screen_contains(&self, needle: &str, timeout_ms: u64) -> bool {
+        let steps = (timeout_ms / 20).max(1);
+        for _ in 0..steps {
+            if (0..self.rows).any(|r| self.line(r).contains(needle)) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        (0..self.rows).any(|r| self.line(r).contains(needle))
     }
 
     /// Foreground color of the first cell on `row` whose rendered content equals

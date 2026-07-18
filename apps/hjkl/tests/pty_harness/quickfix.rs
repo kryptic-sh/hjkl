@@ -31,8 +31,9 @@ fn copen_dock_supports_real_yank_then_closes() {
 
     // The dock is a real buffer: some row must render the formatted entry
     // (`path:line:col message` — single space, no alignment or separator;
-    // see `qf_row_layouts`).
-    let shows_entry = (0..24).any(|r| session.line(r).contains("target.txt:2:1 sample message"));
+    // see `qf_row_layouts`). Poll for the redraw rather than scanning once —
+    // `keys()` only waits a fixed settle, which the macOS pty can outlast.
+    let shows_entry = session.wait_for_screen_contains("target.txt:2:1 sample message", 2000);
     assert!(
         shows_entry,
         "the :copen dock buffer must show the formatted quickfix entry"
@@ -46,7 +47,7 @@ fn copen_dock_supports_real_yank_then_closes() {
     session.keys(":cclose<Enter>");
     session.keys("Gp");
 
-    let pasted = (0..24).any(|r| session.line(r).contains("target.txt:2:1 sample message"));
+    let pasted = session.wait_for_screen_contains("target.txt:2:1 sample message", 2000);
     assert!(
         pasted,
         "the dock-yanked line must paste into the regular buffer, proving \
@@ -78,9 +79,9 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     session.keys(":cexpr \"aaa.txt:1:1:first\\nbbb.txt:2:1:second\\nccc.txt:3:1:third\"<Enter>");
     session.keys(":copen<Enter>");
 
-    let shows_all = (0..24).any(|r| session.line(r).contains("aaa.txt:1:1 first"))
-        && (0..24).any(|r| session.line(r).contains("bbb.txt:2:1 second"))
-        && (0..24).any(|r| session.line(r).contains("ccc.txt:3:1 third"));
+    let shows_all = session.wait_for_screen_contains("aaa.txt:1:1 first", 2000)
+        && session.wait_for_screen_contains("bbb.txt:2:1 second", 2000)
+        && session.wait_for_screen_contains("ccc.txt:3:1 third", 2000);
     assert!(shows_all, "dock must list all three quickfix entries");
 
     // `j`: real vim motion moves the dock's cursor off entry 0 (first).
@@ -110,7 +111,7 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     );
     // Also confirm bbb.txt (not aaa.txt) is now the focused buffer, via the
     // status line filename.
-    let status_shows_bbb = (0..24).any(|r| session.line(r).contains("bbb.txt"));
+    let status_shows_bbb = session.wait_for_screen_contains("bbb.txt", 2000);
     assert!(
         status_shows_bbb,
         "bbb.txt must be the file that was opened by the jump"
@@ -119,7 +120,7 @@ fn copen_dock_vim_navigate_then_enter_jumps_to_correct_entry() {
     // The dock itself must still be open (vim's `<CR>` moves focus to the
     // target window but does not close the quickfix window) and must still
     // show all three entries — the jump must not have torn anything down.
-    let dock_still_open = (0..24).any(|r| session.line(r).contains("bbb.txt:2:1 second"));
+    let dock_still_open = session.wait_for_screen_contains("bbb.txt:2:1 second", 2000);
     assert!(
         dock_still_open,
         "the quickfix dock must stay open after <CR> jumps out of it"
@@ -166,7 +167,7 @@ fn dash_q_flag_populates_quickfix_and_jumps_to_first_error() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    let status_shows_second = (0..24).any(|r| session.line(r).contains("second.txt"));
+    let status_shows_second = session.wait_for_screen_contains("second.txt", 2000);
     assert!(
         status_shows_second,
         "second.txt must be the focused buffer after -q's jump"
@@ -175,7 +176,7 @@ fn dash_q_flag_populates_quickfix_and_jumps_to_first_error() {
     // The quickfix list itself must be populated too (not just the jump) —
     // `:copen` shows the dock with the parsed entry.
     session.keys(":copen<Enter>");
-    let shows_entry = (0..24).any(|r| session.line(r).contains("second.txt:2:1 oops"));
+    let shows_entry = session.wait_for_screen_contains("second.txt:2:1 oops", 2000);
     assert!(
         shows_entry,
         "the quickfix list populated by -q must contain the parsed entry"
