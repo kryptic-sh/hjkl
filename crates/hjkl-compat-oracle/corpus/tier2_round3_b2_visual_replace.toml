@@ -37,3 +37,67 @@ expected_buffer = "ZZZ\nZZZ\nbaz\n"
 expected_cursor = [0, 0]
 expected_register = ['a', "foo\n"]
 expected_mode = "normal"
+
+# Dot-repeat (`.`) after charwise/linewise Visual `r` (`:h v_.`). Pre-fix,
+# visual `r` never recorded `last_change`, so `.` was a no-op. nvim re-replaces
+# a same-SIZE region anchored at the cursor; `r` never touches registers, so
+# the seeded unnamed register survives. Expected values verified against real
+# nvim v0.12.4.
+
+# Charwise single-line: `vllrx` replaces 3 chars at (0,0); `jl.` re-replaces a
+# 3-char run starting at (1,1). Seeded unnamed register ("hello\n" via `yy`)
+# is left untouched.
+[[cases]]
+name = "dot_repeat_visual_char_single"
+initial_buffer = "hello\nworld\nfoo\n"
+initial_cursor = [0, 0]
+keys = "yyvllrxjl."
+expected_buffer = "xxxlo\nwxxxd\nfoo\n"
+expected_cursor = [1, 1]
+expected_register = ['"', "hello\n"]
+expected_mode = "normal"
+
+# Charwise multi-line: `llvjrx` replaces the (0,2)-(1,2) span; `jl.` re-replaces
+# a same-shape span (first line cursor-to-EOL, last line first 3 chars) at
+# (1,3).
+[[cases]]
+name = "dot_repeat_visual_char_multiline"
+initial_buffer = "hello\nworld\nfoo\nbar\n"
+initial_cursor = [0, 0]
+keys = "llvjrxjl."
+expected_buffer = "hexxx\nxxxxx\nxxx\nbar\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+
+# Linewise: `Vjrx` replaces 2 whole lines; `jj.` re-replaces 2 whole lines
+# starting at row 2. Cursor lands at column 0 of the repeat's top row.
+[[cases]]
+name = "dot_repeat_visual_line"
+initial_buffer = "foo\nbar\nbaz\nqux\n"
+initial_cursor = [0, 0]
+keys = "Vjrxjj."
+expected_buffer = "xxx\nxxx\nxxx\nxxx\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Regression: block `r` dot-repeat still re-replaces a same-size rectangle
+# (rides `VisualBlockReplace`, not the new charwise/linewise variant).
+[[cases]]
+name = "dot_repeat_visual_replace_block_unaffected"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlrX2j."
+expected_buffer = "XXcd\nXXgh\nXXkl\nXXop\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Regression: normal-mode `r` dot-repeat is unaffected — `.` repeats the
+# single-char replace, not a visual one.
+[[cases]]
+name = "dot_repeat_normal_replace_unaffected"
+initial_buffer = "abc\ndef\n"
+initial_cursor = [0, 0]
+keys = "rXl."
+expected_buffer = "XXc\ndef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"

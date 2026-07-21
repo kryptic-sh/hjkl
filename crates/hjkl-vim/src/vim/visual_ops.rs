@@ -882,6 +882,34 @@ pub(crate) fn visual_replace_char<H: hjkl_engine::types::Host>(
         let cursor = ed.cursor();
         order(anchor, cursor)
     };
+    // `r` isn't an `Operator`, so record via its own dot-repeat variant
+    // (mirrors block `r` / `VisualBlockReplace`). Charwise stores the same
+    // `charwise_extent` the visual OPERATORS use; linewise stores the row
+    // count — `.` then re-replaces a same-size region at the cursor.
+    if !vim(ed).replaying {
+        let extent = if linewise {
+            VisualExtent::Line {
+                lines: bot.0 - top.0 + 1,
+            }
+        } else {
+            charwise_extent(top, bot)
+        };
+        vim_mut(ed).last_change = Some(LastChange::VisualReplace { ch, extent });
+    }
+    replace_range_with_char(ed, linewise, top, bot, ch);
+}
+/// Core of charwise/linewise Visual `r`: replace every character in
+/// `(top..=bot)` with `ch`, preserving newlines. Split out so dot-repeat can
+/// drive it with a region reconstructed at the cursor (`replay_visual_replace`)
+/// rather than the live selection. Cursor lands at the selection start
+/// (`top.1` charwise, column 0 linewise).
+fn replace_range_with_char<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    linewise: bool,
+    top: (usize, usize),
+    bot: (usize, usize),
+    ch: char,
+) {
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
@@ -905,6 +933,39 @@ pub(crate) fn visual_replace_char<H: hjkl_engine::types::Host>(
     reset_textarea_lines(ed, lines);
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top.0, if linewise { 0 } else { top.1 });
+}
+/// Dot-repeat replay of charwise/linewise Visual `r{ch}` — reconstruct a
+/// same-size region anchored at the cursor from the stored `extent` (mirrors
+/// the `VisualExtent::Char`/`Line` shape the visual operators replay, `:h
+/// v_.`), then re-replace. `VisualExtent::Block` never reaches here (block `r`
+/// rides `VisualBlockReplace`).
+pub(crate) fn replay_visual_replace<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    ch: char,
+    extent: VisualExtent,
+) {
+    let (r, c) = ed.cursor();
+    match extent {
+        VisualExtent::Line { lines } => {
+            let top = (r, 0);
+            let bot = (r + lines.saturating_sub(1), 0);
+            replace_range_with_char(ed, true, top, bot, ch);
+        }
+        VisualExtent::Char { lines, width } => {
+            let top = (r, c);
+            // Same reconstruction the charwise operator replay uses: single
+            // line keeps its raw `width` from the cursor; multi-line runs the
+            // first line cursor-to-EOL, middle lines whole, last line's first
+            // `width` chars (`bot.1` measured from column 0).
+            let bot = if lines <= 1 {
+                (r, c + width.saturating_sub(1))
+            } else {
+                (r + lines - 1, width.saturating_sub(1))
+            };
+            replace_range_with_char(ed, false, top, bot, ch);
+        }
+        VisualExtent::Block { .. } => {}
+    }
 }
 /// Replace buffer content with `lines` while preserving the cursor.
 /// Used by indent / outdent / block_replace to wholesale rewrite

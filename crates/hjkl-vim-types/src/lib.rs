@@ -373,6 +373,13 @@ pub enum LastChange {
         extent: VisualExtent,
         inserted: Option<String>,
     },
+    /// Charwise (`v`) / linewise (`V`) `r{ch}` — dot-repeat re-replaces a
+    /// same-SIZE region anchored at the cursor (`:h v_.`), mirroring
+    /// `VisualBlockReplace` for the block case. `r` has no `Operator`, so it
+    /// rides its own variant instead of `VisualOp`. `extent` is a
+    /// `VisualExtent::Char` or `VisualExtent::Line` captured from the live
+    /// selection.
+    VisualReplace { ch: char, extent: VisualExtent },
     /// Visual-BLOCK `r{ch}` — dot-repeat re-replaces a same-size rectangle
     /// anchored TOP-LEFT at the cursor. `r` has no `Operator`, so it rides
     /// its own variant instead of `VisualOp`. `to_eol` preserves a `$`-ragged

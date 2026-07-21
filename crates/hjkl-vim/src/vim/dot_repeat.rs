@@ -183,6 +183,9 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
                 }
             }
         }
+        LastChange::VisualReplace { ch, extent } => {
+            replay_visual_replace(ed, ch, extent);
+        }
         LastChange::VisualBlockReplace {
             ch,
             rows,
