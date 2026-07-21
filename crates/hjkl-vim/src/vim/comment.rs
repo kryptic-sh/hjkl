@@ -216,47 +216,6 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
             }
         }
     }
-    // Helper: replicate `inserted` text across block rows top+1..=bot at
-    // `col`. `pad` distinguishes vim's two block-edge behaviours (`:h
-    // v_b_I` vs `:h v_b_A`): when `pad` is true, rows shorter than `col`
-    // are padded with spaces first so the text still lands at `col` (`A`);
-    // when `pad` is false, rows shorter than `col` are skipped entirely —
-    // no padding, no insert on that row (`I`). `to_eol` (`:h v_b_$`, `A`
-    // only) overrides `col` per row with that row's own current EOL —
-    // always exactly reachable, so it never pads or skips. Returns
-    // without touching the cursor — callers position it afterward.
-    fn replicate_block_text<H: hjkl_engine::types::Host>(
-        ed: &mut Editor<hjkl_buffer::View, H>,
-        inserted: &str,
-        top: usize,
-        bot: usize,
-        col: usize,
-        pad: bool,
-        to_eol: bool,
-    ) {
-        use hjkl_buffer::{Edit, Position};
-        for r in (top + 1)..=bot {
-            let line_len = buf_line_chars(ed.buffer(), r);
-            let row_col = if to_eol { line_len } else { col };
-            if row_col > line_len {
-                if !pad {
-                    // vim `v_b_I`: row doesn't reach the block's left
-                    // column — skip it, no padding, no insert.
-                    continue;
-                }
-                let pad_str: String = std::iter::repeat_n(' ', row_col - line_len).collect();
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(r, line_len),
-                    text: pad_str,
-                });
-            }
-            ed.mutate_edit(Edit::InsertStr {
-                at: Position::new(r, row_col),
-                text: inserted.to_string(),
-            });
-        }
-    }
-
     if let InsertReason::BlockEdge {
         top,
         bot,
@@ -278,15 +237,34 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         // this returns — that step-back is what actually lands on the
         // left edge.
         let to_eol = pad && vim(ed).block_to_eol;
-        if !inserted.is_empty() && top < bot && !vim(ed).replaying {
+        if !inserted.is_empty() && !vim(ed).replaying {
             // `[count]I` / `[count]A` repeat the typed text `count` times on
             // EVERY row. The generic count-repeat branch above already
             // stacked the extra copies onto the TOP row (so `inserted` here
             // is one copy); replicate the fully-repeated run onto the rest.
             let repeated = inserted.repeat(session.count.max(1));
-            replicate_block_text(ed, &repeated, top, bot, col, pad, to_eol);
-            buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
-            ed.push_buffer_cursor_to_textarea();
+            if top < bot {
+                replicate_block_text(ed, &repeated, top, bot, col, pad, to_eol);
+                buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
+                ed.push_buffer_cursor_to_textarea();
+            }
+            // Record for dot-repeat (`:h v_.`, block `I`/`A`). `cols` is the
+            // block width `A` appends past: `cursor_col == left + 1` and
+            // (non-ragged) `col == right + 1`, so `cols == col + 1 -
+            // cursor_col`. `I` doesn't need a width (it re-inserts at the
+            // cursor column), so its `cols` is a placeholder.
+            let cols = if pad {
+                (col + 1).saturating_sub(cursor_col)
+            } else {
+                1
+            };
+            vim_mut(ed).last_change = Some(LastChange::VisualBlockInsert {
+                text: repeated,
+                rows: bot - top + 1,
+                cols,
+                to_eol,
+                append: pad,
+            });
         }
         return;
     }
@@ -298,13 +276,24 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         // the block's left column rather than padding them, and the
         // replicated text always lands at the LEFT column regardless of
         // a ragged right edge — verified against `nvim --headless`.
-        if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col, false, false);
-            let ins_chars = inserted.chars().count();
-            let line_len = buf_line_chars(ed.buffer(), top);
-            let target_col = (col + ins_chars).min(line_len);
-            buf_set_cursor_rc(ed.buffer_mut(), top, target_col);
-            ed.push_buffer_cursor_to_textarea();
+        if !inserted.is_empty() && !vim(ed).replaying {
+            if top < bot {
+                replicate_block_text(ed, &inserted, top, bot, col, false, false);
+                let ins_chars = inserted.chars().count();
+                let line_len = buf_line_chars(ed.buffer(), top);
+                let target_col = (col + ins_chars).min(line_len);
+                buf_set_cursor_rc(ed.buffer_mut(), top, target_col);
+                ed.push_buffer_cursor_to_textarea();
+            }
+            // Patch the retyped text into the `VisualOp{Change, Block}` entry
+            // recorded at the block-`c` start (mirrors the charwise/linewise
+            // `AfterChange` patch, which `BlockChange` bypasses via its early
+            // return).
+            if let Some(LastChange::VisualOp { inserted: ins, .. }) =
+                vim_mut(ed).last_change.as_mut()
+            {
+                *ins = Some(inserted);
+            }
         }
         return;
     }

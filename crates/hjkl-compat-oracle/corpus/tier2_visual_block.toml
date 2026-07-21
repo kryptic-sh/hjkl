@@ -594,3 +594,115 @@ expected_buffer = "abcd\nafgh\najkl\n"
 expected_cursor = [0, 0]
 expected_register = ['"', "a"]
 expected_mode = "normal"
+
+# ─── Blockwise dot-repeat (`.`) ──────────────────────────────────────────────
+#
+# `.` after a visual-BLOCK operator reconstructs a same-SIZE rectangle with
+# its TOP-LEFT corner at the cursor (`:h v_.` for blocks), then re-runs the
+# op — verified against nvim v0.12.4. Each case does the block op, moves the
+# cursor elsewhere, then `.`.
+
+# Block `d`: `<C-v>jld` cuts a 2×2 rect at (0,0); `2j.` cuts another at (2,0).
+[[cases]]
+name = "dot_repeat_block_d"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jld2j."
+expected_buffer = "cd\ngh\nkl\nop\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Block `r{ch}`: replaces every cell; `.` re-replaces a same-size rect.
+[[cases]]
+name = "dot_repeat_block_r"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlrX2j."
+expected_buffer = "XXcd\nXXgh\nXXkl\nXXop\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Block `~` (toggle case): `.` toggles a same-size rect at the new cursor.
+[[cases]]
+name = "dot_repeat_block_toggle_case"
+initial_buffer = "ABcd\nEFgh\nIJkl\nMNop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jl~2j."
+expected_buffer = "abcd\nefgh\nijkl\nmnop\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Block `U` (uppercase): `.` uppercases a same-size rect at the new cursor.
+[[cases]]
+name = "dot_repeat_block_uppercase"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlU2j."
+expected_buffer = "ABcd\nEFgh\nIJkl\nMNop\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+# Block `c` with typed text: `.` re-runs the change (re-typing "XY") over a
+# same-size rect; cursor lands on the last re-typed char.
+[[cases]]
+name = "dot_repeat_block_change"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlcXY<Esc>2j0."
+expected_buffer = "XYcd\nXYgh\nXYkl\nXYop\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+
+# Block `I` (insert at left edge): `.` re-inserts "Z" at the cursor column
+# over the original block height (3 rows).
+[[cases]]
+name = "dot_repeat_block_I"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjIZ<Esc>l."
+expected_buffer = "ZZabcd\nZZefgh\nZZijkl\nmnop\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# Block `A` (append past right edge): `.` re-appends "Z" one column past the
+# reconstructed block's right edge over the original height.
+[[cases]]
+name = "dot_repeat_block_A"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjAZ<Esc>2l."
+expected_buffer = "aZbZcd\neZfZgh\niZjZkl\nmnop\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# Block `$A` (ragged append): `.` re-appends "X" at each row's OWN EOL over
+# the original height, preserving the `$`-ragged flag.
+[[cases]]
+name = "dot_repeat_block_A_ragged"
+initial_buffer = "abcd\nef\nijklmn\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj$AX<Esc>gg0."
+expected_buffer = "abcdXX\nefXX\nijklmnXX\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Regression: charwise `.` (Visual `U`) still replays over a same-size
+# charwise region — unchanged by the blockwise work above.
+[[cases]]
+name = "dot_repeat_regression_charwise_U"
+initial_buffer = "aaaa\nbbbb\ncccc\n"
+initial_cursor = [0, 0]
+keys = "vjlUgg."
+expected_buffer = "AAAA\nBBbb\ncccc\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Regression: linewise `.` (Visual `d`) still replays as `[count]dd`.
+[[cases]]
+name = "dot_repeat_regression_linewise_d"
+initial_buffer = "aaa\nbbb\nccc\nddd\n"
+initial_cursor = [0, 0]
+keys = "Vjd."
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"

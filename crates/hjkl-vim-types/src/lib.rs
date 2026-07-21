@@ -364,12 +364,36 @@ pub enum LastChange {
     /// `.` retypes it (same `AfterChange` patch site as `OpMotion` /
     /// `OpTextObj` / `LineOp`).
     ///
-    /// Visual-BLOCK operators are NOT covered here — see the round-3 B1
-    /// DIVERGE.md note.
+    /// `d` / `c` / `~`/`u`/`U`/`g?` from Visual — charwise, linewise, AND
+    /// blockwise (`VisualExtent::Block`). Block `c` fills `inserted` at its
+    /// own `BlockChange` finish site (`comment.rs`), mirroring the charwise
+    /// `AfterChange` patch.
     VisualOp {
         op: Operator,
         extent: VisualExtent,
         inserted: Option<String>,
+    },
+    /// Visual-BLOCK `r{ch}` — dot-repeat re-replaces a same-size rectangle
+    /// anchored TOP-LEFT at the cursor. `r` has no `Operator`, so it rides
+    /// its own variant instead of `VisualOp`. `to_eol` preserves a `$`-ragged
+    /// right edge (`:h v_b_$`).
+    VisualBlockReplace {
+        ch: char,
+        rows: usize,
+        cols: usize,
+        to_eol: bool,
+    },
+    /// Visual-BLOCK `I` / `A` — dot-repeat re-inserts `text` at the block's
+    /// left (`append == false`) or right (`append == true`) edge over a
+    /// same-size rectangle anchored TOP-LEFT at the cursor. `cols` is the
+    /// block width (`A` appends `cols` columns past the cursor); `to_eol`
+    /// preserves a `$`-ragged right edge (`A` only, `:h v_b_$`).
+    VisualBlockInsert {
+        text: String,
+        rows: usize,
+        cols: usize,
+        to_eol: bool,
+        append: bool,
     },
 }
 
@@ -389,6 +413,16 @@ pub enum VisualExtent {
     /// Linewise (`V`). Replay is exactly `[count]dd`-equivalent: `lines`
     /// rows starting at the cursor's row.
     Line { lines: usize },
+    /// Blockwise (`<C-v>`). Replay reconstructs a `rows` × `cols` rectangle
+    /// with its TOP-LEFT corner at the cursor (`:h v_.` for blocks), then
+    /// re-runs the operator. `to_eol` preserves a `$`-ragged right edge
+    /// (`:h v_b_$`) — every row then resolves its own EOL instead of the
+    /// fixed `cols` width.
+    Block {
+        rows: usize,
+        cols: usize,
+        to_eol: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

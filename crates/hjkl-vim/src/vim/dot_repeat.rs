@@ -152,6 +152,9 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
             match extent {
                 VisualExtent::Line { lines } => {
                     execute_line_op(ed, op, lines);
+                    if let Some(text) = inserted {
+                        replay_insert_and_finish(ed, &text);
+                    }
                 }
                 VisualExtent::Char { lines, width } => {
                     let (r, c) = ed.cursor();
@@ -167,11 +170,35 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
                         end,
                         hjkl_vim_types::RangeKind::Inclusive,
                     );
+                    if let Some(text) = inserted {
+                        replay_insert_and_finish(ed, &text);
+                    }
+                }
+                // B-block (`:h v_.` for blocks): reconstruct a same-SIZE
+                // rectangle top-left at the cursor and re-run the op. Block
+                // `c` re-inserts `inserted` itself (it never went through
+                // insert mode here), so DON'T also `replay_insert_and_finish`.
+                VisualExtent::Block { rows, cols, to_eol } => {
+                    replay_block_visual_op(ed, op, rows, cols, to_eol, inserted);
                 }
             }
-            if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
-            }
+        }
+        LastChange::VisualBlockReplace {
+            ch,
+            rows,
+            cols,
+            to_eol,
+        } => {
+            replay_block_replace(ed, ch, rows, cols, to_eol);
+        }
+        LastChange::VisualBlockInsert {
+            text,
+            rows,
+            cols,
+            to_eol,
+            append,
+        } => {
+            replay_block_insert(ed, &text, rows, cols, to_eol, append);
         }
         LastChange::ReplaceMode { text } => {
             use hjkl_buffer::{Edit, MotionKind, Position};
