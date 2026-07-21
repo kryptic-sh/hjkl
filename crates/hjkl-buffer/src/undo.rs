@@ -58,19 +58,109 @@ pub struct MarkSnapshot {
     pub global_marks: BTreeMap<char, (usize, usize)>,
 }
 
-// ─── Undo arena tree (Phase 2b, docs/undo-architecture.md §3/§5) ──────────────
+// ─── Reversible edge delta (Phase 3a, docs/undo-architecture.md §3/§6) ─────────
 //
-// The undo history is a real arena TREE of state snapshots (Phase 2a introduced
-// the arena but kept linear behaviour; Phase 2b makes it branch). An edit after
-// an undo now FORKS a new child instead of truncating the forward branch, so
-// old branches stay reachable — matching nvim's undo tree. `seq` is now
+// Phase 2b stored a FULL rope snapshot on every node. Phase 3a stores only a
+// reversible **delta** on each parent→child edge (the root keeps a full base
+// rope) plus a materialization cache, so the in-RAM hot path stays snapshot-fast
+// while a future undofile shrinks from hundreds of MB to KB. This slice changes
+// ONLY internal storage — every public signature, and every observable
+// behaviour, is byte-identical to Phase 2b.
+
+/// A reversible edit between two adjacent buffer states, expressed as a single
+/// spanning replacement in **char-offset space** on the rope.
+///
+/// The index space is ropey `char` offsets throughout — never bytes — so
+/// multi-byte UTF-8 round-trips (a byte offset could split a codepoint). In the
+/// PARENT state `chars[start .. start + old.chars().count()] == old`; replacing
+/// that region with `new` yields the CHILD state, and swapping the two inverts
+/// it. A whole undo group collapses to the one region spanning its edits
+/// (common-prefix / common-suffix diff); a `Vec<Delta>` for disjoint regions is
+/// an acceptable future generalization, but one spanning region is all Phase 3a
+/// needs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Delta {
+    /// Char offset of the first differing char (the common-prefix length).
+    pub start: usize,
+    /// Chars present in the PARENT but not the CHILD (removed going forward).
+    pub old: String,
+    /// Chars present in the CHILD but not the PARENT (inserted going forward).
+    pub new: String,
+}
+
+/// Common-prefix / common-suffix diff of two ropes → the minimal single spanning
+/// [`Delta`]. Guarantees `apply_forward(a, diff(a, b)) == b` and
+/// `apply_inverse(b, diff(a, b)) == a` for ALL `a`, `b` (see the property
+/// tests). Boundaries are found on bytes (fast) then snapped to char boundaries
+/// so `old`/`new` are always valid UTF-8 and `start` is a true char offset.
+fn diff(parent: &ropey::Rope, child: &ropey::Rope) -> Delta {
+    let a = parent.to_string();
+    let b = child.to_string();
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+
+    // Longest common byte prefix, snapped DOWN to a char boundary.
+    let max_pre = ab.len().min(bb.len());
+    let mut pre = 0;
+    while pre < max_pre && ab[pre] == bb[pre] {
+        pre += 1;
+    }
+    while pre > 0 && !a.is_char_boundary(pre) {
+        pre -= 1;
+    }
+
+    // Longest common byte suffix not overlapping the prefix. The cut points
+    // `a_end`/`b_end` sit at identical trailing bytes, so snapping `a_end` UP to
+    // a char boundary snaps `b_end` by the same byte delta simultaneously.
+    let max_suf = max_pre - pre;
+    let mut suf = 0;
+    while suf < max_suf && ab[ab.len() - 1 - suf] == bb[bb.len() - 1 - suf] {
+        suf += 1;
+    }
+    let mut a_end = ab.len() - suf;
+    while a_end < ab.len() && !a.is_char_boundary(a_end) {
+        a_end += 1;
+    }
+    let b_end = bb.len() - (ab.len() - a_end);
+
+    Delta {
+        start: a[..pre].chars().count(),
+        old: a[pre..a_end].to_string(),
+        new: b[pre..b_end].to_string(),
+    }
+}
+
+/// Apply a forward delta (PARENT → CHILD) to `parent`, returning the child rope.
+fn apply_forward(parent: &ropey::Rope, d: &Delta) -> ropey::Rope {
+    let mut r = parent.clone();
+    let old_chars = d.old.chars().count();
+    r.remove(d.start..d.start + old_chars);
+    r.insert(d.start, &d.new);
+    r
+}
+
+/// Apply an inverse delta (CHILD → PARENT) to `child`, returning the parent rope.
+fn apply_inverse(child: &ropey::Rope, d: &Delta) -> ropey::Rope {
+    let mut r = child.clone();
+    let new_chars = d.new.chars().count();
+    r.remove(d.start..d.start + new_chars);
+    r.insert(d.start, &d.old);
+    r
+}
+
+// ─── Undo arena tree (Phase 2b + Phase 3a delta storage) ──────────────────────
+//
+// The undo history is a real arena TREE of buffer states (Phase 2a introduced
+// the arena; Phase 2b makes it branch; Phase 3a stores edges as deltas). An edit
+// after an undo FORKS a new child instead of truncating the forward branch, so
+// old branches stay reachable — matching nvim's undo tree. `seq` is
 // load-bearing: `g-`/`g+` and the `:earlier`/`:later` count forms walk ALL
 // states by global `seq` (see `seq_earlier_step`/`seq_later_step`), while
 // `u`/`<C-r>` stay branch-local (parent / `last_child`).
 //
-// The linear-history subset is unchanged from Phase 2a: with no forks the tree
-// is a single root→current→leaf path and every operation degrades to the old
-// two-stack behaviour.
+// The linear-history subset is unchanged: with no forks the tree is a single
+// root→current→leaf path and every operation degrades to the old two-stack
+// behaviour.
 //
 // - `current` points at the node representing the LIVE buffer state.
 // - The ancestors of `current` (parent, … up to `root`) are the reachable undo
@@ -78,23 +168,50 @@ pub struct MarkSnapshot {
 // - `current.last_child` is the `<C-r>` target. Landing on any node (undo,
 //   redo, or a `g-`/`g+` jump) rewrites `last_child` down the root→node path so
 //   a later `<C-r>` retraces the branch just taken.
-// - `current`'s OWN snapshot is scratch (the live state): it is written on the
-//   way past a node and never read as a restore target until it has been
-//   written, so a placeholder there is safe (see the module tests).
+//
+// Storage (Phase 3a): each non-root node holds the reversible `delta` on its
+// edge from `parent`; the root holds a full `base` rope. A node's content is
+// reconstructed on demand (`materialize`) from the nearest cached ancestor (or
+// the root base) by replaying forward deltas, or — for the `u`/`<C-r>` hot path
+// — from the adjacent warm node by one delta apply. Recently materialized ropes
+// are kept in a bounded LRU (`warm`); `current` is always kept warm. A node's
+// `delta`/content is FINALIZED lazily on the way past it (whenever the live rope
+// is written into it), never read as a restore target until then — so the fresh
+// leaf `current` holds a placeholder edge that is corrected before it matters.
 
 /// Index into [`UndoTree::nodes`]. Slots are reused via a free list, so an id is
 /// only valid while the node it names is live — the tree never hands ids out.
 pub(crate) type NodeId = usize;
 
+/// How many recently-materialized node ropes to keep warm (besides the root
+/// base and `current`, which are always available). A cold jump beyond this
+/// window replays deltas from the nearest warm ancestor — rare and bounded.
+const WARM_CAP: usize = 16;
+
 /// One node of the undo arena tree: a buffer state the user could land on, plus
-/// its links. A node with `> 1` child is a branch point (Phase 2b); `last_child`
-/// records which child `<C-r>` follows.
+/// its links and the reversible edge to its parent. A node with `> 1` child is a
+/// branch point (Phase 2b); `last_child` records which child `<C-r>` follows.
 #[derive(Debug, Clone)]
 pub(crate) struct UndoNode {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub last_child: Option<NodeId>,
-    pub snapshot: UndoEntry,
+    /// Reversible edit from the parent's content to this node's content. `None`
+    /// only for the root (and any node promoted to root by pruning), which holds
+    /// `base` instead.
+    pub delta: Option<Delta>,
+    /// Full base rope. `Some` ONLY for the root — the anchor the delta chain
+    /// replays from. Non-root nodes leave this `None` and carry a `delta`.
+    pub base: Option<ropey::Rope>,
+    /// Materialized content, LRU-managed. Warm for `current` and recently
+    /// visited nodes; `None` (cold) otherwise, reconstructable from deltas.
+    pub rope_cache: Option<ropey::Rope>,
+    /// Post-state cursor for this node (restored alongside the text).
+    pub cursor: (usize, usize),
+    /// Wall-clock time this state was created — drives `:earlier`/`:later`.
+    pub timestamp: SystemTime,
+    /// Marks / jumplist / changelist snapshot restored with the text.
+    pub marks: MarkSnapshot,
     /// Global monotonic order across the whole tree — the change number that
     /// `g-`/`g+`, `:earlier`/`:later`, and `:undolist` traverse and display.
     pub seq: u64,
@@ -102,39 +219,44 @@ pub(crate) struct UndoNode {
 
 /// Arena tree of [`UndoNode`]s. Replaces the old `undo_stack`/`redo_stack`
 /// `Vec<UndoEntry>` pair on [`crate::Buffer`]; see the module comment for how
-/// `u`/`<C-r>` (branch-local) and `g-`/`g+` (seq-ordered) map onto it.
+/// `u`/`<C-r>` (branch-local) and `g-`/`g+` (seq-ordered) map onto it, and how
+/// Phase 3a stores edges as deltas behind a materialization cache.
 #[derive(Debug)]
 pub(crate) struct UndoTree {
     /// Slab; `None` slots are free and recorded in `free`.
     nodes: Vec<Option<UndoNode>>,
     /// Reusable slot indices (frees push here, allocs pop here first).
     free: Vec<NodeId>,
+    /// LRU of node ids with a warm `rope_cache` (root excluded — it uses
+    /// `base`), most-recently-touched last. Bounded by [`WARM_CAP`]; `current`
+    /// is never evicted.
+    warm: Vec<NodeId>,
     root: NodeId,
     current: NodeId,
     next_seq: u64,
 }
 
 impl UndoTree {
-    /// New tree with a single root == current node holding `rope` as its
-    /// placeholder state. The root snapshot is never read as a restore target
-    /// until the first `push` overwrites it (you cannot undo past the root), so
-    /// the placeholder content is immaterial.
+    /// New tree with a single root == current node holding `rope` as its base
+    /// state (the buffer as opened / last saved). The root is always
+    /// materializable from this base.
     pub(crate) fn new(rope: ropey::Rope) -> Self {
         let root = UndoNode {
             parent: None,
             children: Vec::new(),
             last_child: None,
-            snapshot: UndoEntry {
-                rope,
-                cursor: (0, 0),
-                timestamp: SystemTime::now(),
-                marks: MarkSnapshot::default(),
-            },
+            delta: None,
+            base: Some(rope),
+            rope_cache: None,
+            cursor: (0, 0),
+            timestamp: SystemTime::now(),
+            marks: MarkSnapshot::default(),
             seq: 0,
         };
         Self {
             nodes: vec![Some(root)],
             free: Vec::new(),
+            warm: Vec::new(),
             root: 0,
             current: 0,
             next_seq: 1,
@@ -162,10 +284,133 @@ impl UndoTree {
     }
 
     /// Free a single slot (does NOT recurse into children — callers detach
-    /// links first). Reclaims the node's `UndoEntry` (its rope Arc-clone).
+    /// links first). Drops the node's delta + materialized cache and purges it
+    /// from the warm LRU.
     fn free(&mut self, id: NodeId) {
         self.nodes[id] = None;
         self.free.push(id);
+        self.warm.retain(|&n| n != id);
+    }
+
+    // ── materialization (Phase 3a) ────────────────────────────────────────────
+
+    /// Record `id` as freshly materialized, evicting the coldest cache beyond
+    /// [`WARM_CAP`] (never the root — it has no cache — nor `current`).
+    fn touch_warm(&mut self, id: NodeId) {
+        if id == self.root {
+            return;
+        }
+        self.warm.retain(|&n| n != id);
+        self.warm.push(id);
+        while self.warm.len() > WARM_CAP {
+            let Some(pos) = self.warm.iter().position(|&n| n != self.current) else {
+                break;
+            };
+            let victim = self.warm.remove(pos);
+            if let Some(node) = self.nodes[victim].as_mut() {
+                node.rope_cache = None;
+            }
+        }
+    }
+
+    /// Materialize node `id`'s content, warming its cache. Uses the warm cache
+    /// if present, else the root `base`, else replays forward deltas from the
+    /// nearest materialized ancestor (or the root). Always terminates: the root
+    /// carries a base.
+    fn materialize(&mut self, id: NodeId) -> ropey::Rope {
+        if let Some(r) = &self.get(id).rope_cache {
+            return r.clone();
+        }
+        if let Some(base) = &self.get(id).base {
+            return base.clone();
+        }
+        // Walk up to the nearest ancestor that is warm or is the root, recording
+        // the path of nodes to replay forward.
+        let mut path = Vec::new();
+        let base_rope;
+        let mut anchor = id;
+        loop {
+            path.push(anchor);
+            let par = self
+                .get(anchor)
+                .parent
+                .expect("a non-root, non-based node always has a parent");
+            if let Some(r) = &self.get(par).rope_cache {
+                base_rope = r.clone();
+                break;
+            }
+            if let Some(b) = &self.get(par).base {
+                base_rope = b.clone();
+                break;
+            }
+            anchor = par;
+        }
+        let mut rope = base_rope;
+        for &node in path.iter().rev() {
+            let d = self
+                .get(node)
+                .delta
+                .clone()
+                .expect("a non-root node always carries its edge delta");
+            rope = apply_forward(&rope, &d);
+        }
+        self.get_mut(id).rope_cache = Some(rope.clone());
+        self.touch_warm(id);
+        rope
+    }
+
+    /// Reconstruct node `id`'s restorable [`UndoEntry`] — the byte-for-byte
+    /// equivalent of Phase 2b's `node.snapshot.clone()`.
+    fn entry_of(&mut self, id: NodeId) -> UndoEntry {
+        let rope = self.materialize(id);
+        let n = self.get(id);
+        UndoEntry {
+            rope,
+            cursor: n.cursor,
+            timestamp: n.timestamp,
+            marks: n.marks.clone(),
+        }
+    }
+
+    /// Finalize node `id` to hold `rope` as its content, recomputing its edge
+    /// delta (or the root base) and updating cursor/timestamp/marks. A no-op
+    /// diff is skipped when the content is unchanged (the common case on a
+    /// history walk, where only the fields move) — which also avoids
+    /// materializing the parent, keeping the walk cheap.
+    fn set_node_state(
+        &mut self,
+        id: NodeId,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        timestamp: SystemTime,
+        marks: MarkSnapshot,
+    ) {
+        let is_root = self.get(id).parent.is_none();
+        let unchanged = self.get(id).rope_cache.as_ref() == Some(&rope)
+            || (is_root && self.get(id).base.as_ref() == Some(&rope));
+        {
+            let node = self.get_mut(id);
+            node.cursor = cursor;
+            node.timestamp = timestamp;
+            node.marks = marks;
+        }
+        if unchanged {
+            return;
+        }
+        if is_root {
+            self.get_mut(id).base = Some(rope);
+            // The root is materialized from `base`; keep no stale cache.
+            self.get_mut(id).rope_cache = None;
+            self.warm.retain(|&n| n != id);
+        } else {
+            let par = self.get(id).parent.expect("non-root has a parent");
+            let par_rope = self.materialize(par);
+            let d = diff(&par_rope, &rope);
+            let node = self.get_mut(id);
+            node.delta = Some(d);
+            node.rope_cache = Some(rope);
+            self.touch_warm(id);
+        }
     }
 
     /// Free `id` and its whole subtree (iteratively, so a long redo chain can't
@@ -202,18 +447,16 @@ impl UndoTree {
         d
     }
 
-    /// `undo_stack.last().timestamp` == `current.parent`'s snapshot timestamp.
+    /// `undo_stack.last().timestamp` == `current.parent`'s timestamp.
     pub(crate) fn parent_timestamp(&self) -> Option<SystemTime> {
-        self.get(self.current)
-            .parent
-            .map(|p| self.get(p).snapshot.timestamp)
+        self.get(self.current).parent.map(|p| self.get(p).timestamp)
     }
 
     /// `redo_stack.last().timestamp` == `current.last_child`'s timestamp.
     pub(crate) fn child_timestamp(&self) -> Option<SystemTime> {
         self.get(self.current)
             .last_child
-            .map(|c| self.get(c).snapshot.timestamp)
+            .map(|c| self.get(c).timestamp)
     }
 
     // ── mutations ────────────────────────────────────────────────────────────
@@ -231,14 +474,31 @@ impl UndoTree {
     /// just created.
     pub(crate) fn push(&mut self, entry: UndoEntry) {
         let cur = self.current;
-        self.get_mut(cur).snapshot = entry.clone();
+        // Finalize the node being left with the pre-edit live state, recomputing
+        // its edge delta from its parent (or the root base).
+        self.set_node_state(
+            cur,
+            entry.rope.clone(),
+            entry.cursor,
+            entry.timestamp,
+            entry.marks.clone(),
+        );
         let seq = self.next_seq;
         self.next_seq += 1;
+        // Fresh child: identical to `cur` for now (empty edge delta + warm cache
+        // holding the pre-edit rope). Its true post-edit content is finalized on
+        // the way past it (next move) or by the next `push`, at which point the
+        // edge delta is recomputed against `cur`.
         let child = self.alloc(UndoNode {
             parent: Some(cur),
             children: Vec::new(),
             last_child: None,
-            snapshot: entry,
+            delta: Some(Delta::default()),
+            base: None,
+            rope_cache: Some(entry.rope),
+            cursor: entry.cursor,
+            timestamp: entry.timestamp,
+            marks: entry.marks,
             seq,
         });
         let cur_node = self.get_mut(cur);
@@ -246,6 +506,7 @@ impl UndoTree {
         cur_node.children.push(child);
         cur_node.last_child = Some(child);
         self.current = child;
+        self.touch_warm(child);
     }
 
     /// One undo step. `live` is the current buffer state (the node being left);
@@ -261,17 +522,24 @@ impl UndoTree {
     ) -> Option<UndoEntry> {
         let cur = self.current;
         let par = self.get(cur).parent?;
-        let dest_ts = self.get(par).snapshot.timestamp;
-        self.get_mut(cur).snapshot = UndoEntry {
-            rope,
-            cursor,
-            timestamp: dest_ts,
-            marks,
-        };
+        let dest_ts = self.get(par).timestamp;
+        self.set_node_state(cur, rope, cursor, dest_ts, marks);
         // Redo from the parent must return to the node we just left.
         self.get_mut(par).last_child = Some(cur);
         self.current = par;
-        Some(self.get(par).snapshot.clone())
+        // Hot-path materialization: derive the (possibly cold) parent from the
+        // just-finalized child by one inverse delta apply, so `u` never walks the
+        // ancestor chain even far outside the warm window.
+        if self.get(par).rope_cache.is_none() && self.get(par).base.is_none() {
+            let child_rope = self.get(cur).rope_cache.clone();
+            let child_delta = self.get(cur).delta.clone();
+            if let (Some(cr), Some(d)) = (child_rope, child_delta) {
+                let par_rope = apply_inverse(&cr, &d);
+                self.get_mut(par).rope_cache = Some(par_rope);
+                self.touch_warm(par);
+            }
+        }
+        Some(self.entry_of(par))
     }
 
     /// One redo step. Symmetric to [`Self::undo_step`]: `live` is written into
@@ -286,15 +554,11 @@ impl UndoTree {
     ) -> Option<UndoEntry> {
         let cur = self.current;
         let child = self.get(cur).last_child?;
-        let dest_ts = self.get(child).snapshot.timestamp;
-        self.get_mut(cur).snapshot = UndoEntry {
-            rope,
-            cursor,
-            timestamp: dest_ts,
-            marks,
-        };
+        let dest_ts = self.get(child).timestamp;
+        self.set_node_state(cur, rope, cursor, dest_ts, marks);
         self.current = child;
-        Some(self.get(child).snapshot.clone())
+        // `cur` is now warm, so materializing the child is one forward apply.
+        Some(self.entry_of(child))
     }
 
     // ── seq-ordered tree walk (`g-` / `g+`, `:earlier`/`:later` — Phase 2b) ───
@@ -360,13 +624,8 @@ impl UndoTree {
         marks: MarkSnapshot,
     ) {
         let cur = self.current;
-        let ts = self.get(cur).snapshot.timestamp;
-        self.get_mut(cur).snapshot = UndoEntry {
-            rope,
-            cursor,
-            timestamp: ts,
-            marks,
-        };
+        let ts = self.get(cur).timestamp;
+        self.set_node_state(cur, rope, cursor, ts, marks);
         self.retarget_current(target);
     }
 
@@ -380,7 +639,7 @@ impl UndoTree {
     ) -> Option<UndoEntry> {
         let target = self.node_below(self.current_seq())?;
         self.stash_and_move(target, rope, cursor, marks);
-        Some(self.get(target).snapshot.clone())
+        Some(self.entry_of(target))
     }
 
     /// One `g+` / `:later` step: move to the next-higher-`seq` node tree-wide.
@@ -393,20 +652,20 @@ impl UndoTree {
     ) -> Option<UndoEntry> {
         let target = self.node_above(self.current_seq())?;
         self.stash_and_move(target, rope, cursor, marks);
-        Some(self.get(target).snapshot.clone())
+        Some(self.entry_of(target))
     }
 
     /// Timestamp of the next-lower-`seq` node (the `:earlier Ns` predicate walks
     /// the seq order tree-wide, stopping once this dips to/below the cutoff).
     pub(crate) fn seq_earlier_timestamp(&self) -> Option<SystemTime> {
         self.node_below(self.current_seq())
-            .map(|id| self.get(id).snapshot.timestamp)
+            .map(|id| self.get(id).timestamp)
     }
 
     /// Timestamp of the next-higher-`seq` node (the `:later Ns` predicate).
     pub(crate) fn seq_later_timestamp(&self) -> Option<SystemTime> {
         self.node_above(self.current_seq())
-            .map(|id| self.get(id).snapshot.timestamp)
+            .map(|id| self.get(id).timestamp)
     }
 
     /// Leaves of the tree (nodes with no children), each as
@@ -428,7 +687,7 @@ impl UndoTree {
                 depth += 1;
                 p = self.get(pid).parent;
             }
-            out.push((n.seq, depth, n.snapshot.timestamp, id == self.current));
+            out.push((n.seq, depth, n.timestamp, id == self.current));
         }
         out.sort_by_key(|&(seq, ..)| seq);
         out
@@ -560,7 +819,18 @@ impl UndoTree {
         for c in others {
             self.free_subtree(c);
         }
-        self.get_mut(child).parent = None;
+        // The promoted child becomes the new root: materialize it (while the old
+        // root still anchors the chain) into a full base rope, then drop its
+        // now-meaningless parent edge. This keeps every delta below it valid.
+        let base = self.materialize(child);
+        {
+            let node = self.get_mut(child);
+            node.parent = None;
+            node.base = Some(base);
+            node.delta = None;
+            node.rope_cache = None;
+        }
+        self.warm.retain(|&n| n != child);
         self.root = child;
         self.free(root);
         true
@@ -580,17 +850,48 @@ impl UndoTree {
     /// current node, preserving the live state. Frees every other node.
     pub(crate) fn clear_all(&mut self) {
         let cur = self.current;
+        // The survivor becomes a self-contained root: give it a full base rope
+        // (materialized while the chain is still intact) so it needs no parent.
+        let base = self.materialize(cur);
         for id in 0..self.nodes.len() {
             if id != cur && self.nodes[id].is_some() {
                 self.nodes[id] = None;
                 self.free.push(id);
             }
         }
+        self.warm.clear();
         let node = self.get_mut(cur);
         node.parent = None;
         node.children.clear();
         node.last_child = None;
+        node.delta = None;
+        node.base = Some(base);
+        node.rope_cache = None;
         self.root = cur;
+    }
+}
+
+#[cfg(test)]
+impl UndoTree {
+    /// Ids of every live node, for warm-vs-cold materialization checks.
+    fn live_ids(&self) -> Vec<NodeId> {
+        (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].is_some())
+            .collect()
+    }
+
+    /// Materialize `id` for a test (public wrapper over the private method).
+    fn materialize_for_test(&mut self, id: NodeId) -> ropey::Rope {
+        self.materialize(id)
+    }
+
+    /// Evict every warm cache (root keeps its `base`), forcing the next
+    /// materialization of any node to reconstruct purely from deltas.
+    fn drop_all_caches(&mut self) {
+        for n in self.nodes.iter_mut().flatten() {
+            n.rope_cache = None;
+        }
+        self.warm.clear();
     }
 }
 
@@ -883,5 +1184,451 @@ mod tree_tests {
         assert!(!t.has_redo());
         assert_eq!(t.depth(), 0);
         assert_eq!(t.root, t.current);
+    }
+}
+
+// ─── Phase 3a delta-storage tests (docs/undo-architecture.md §3/§6) ───────────
+//
+// Correctness of the reversible delta and the warm/cold materialization is
+// where text gets silently corrupted, so these lean hard on it: exact diff
+// round-trips over random (incl. multi-byte) content, every node reconstructing
+// identically warm and cold, and a random op stream cross-checked against a
+// full-snapshot reference model kept alongside. All randomness is a deterministic
+// xorshift seeded from a fixed constant — never `SystemTime`/entropy — so a
+// failure reproduces exactly.
+#[cfg(test)]
+mod delta_tests {
+    use super::*;
+
+    /// Deterministic xorshift64* PRNG, fixed-seeded so runs are reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            // xorshift needs a non-zero state.
+            Rng(if seed == 0 {
+                0x9E37_79B9_7F4A_7C15
+            } else {
+                seed
+            })
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+
+    /// A random char-granular mutation of `s`: insert, delete, or replace a
+    /// span, drawing from an alphabet that mixes ASCII, accented, CJK, and
+    /// emoji so multi-byte boundaries are exercised.
+    fn mutate(s: &str, rng: &mut Rng) -> String {
+        const ALPHABET: [char; 10] = ['a', 'b', '\n', 'é', '日', '本', '🎉', '語', 'x', 'z'];
+        let chars: Vec<char> = s.chars().collect();
+        let pick = |rng: &mut Rng| ALPHABET[rng.below(ALPHABET.len())];
+        match rng.below(3) {
+            0 => {
+                let pos = rng.below(chars.len() + 1);
+                let mut v = chars.clone();
+                v.insert(pos, pick(rng));
+                v.into_iter().collect()
+            }
+            1 if !chars.is_empty() => {
+                let pos = rng.below(chars.len());
+                let mut v = chars.clone();
+                v.remove(pos);
+                v.into_iter().collect()
+            }
+            _ => {
+                if chars.is_empty() {
+                    return pick(rng).to_string();
+                }
+                let a = rng.below(chars.len());
+                let b = (a + rng.below(chars.len() - a + 1)).min(chars.len());
+                let mut v = chars[..a].to_vec();
+                v.push(pick(rng));
+                v.extend_from_slice(&chars[b..]);
+                v.into_iter().collect()
+            }
+        }
+    }
+
+    fn entry_str(s: &str) -> UndoEntry {
+        UndoEntry {
+            rope: ropey::Rope::from_str(s),
+            cursor: (0, 0),
+            timestamp: SystemTime::now(),
+            marks: MarkSnapshot::default(),
+        }
+    }
+
+    // ── (i) delta round-trip: apply(diff(a,b))==b and apply_inverse==a ────────
+
+    #[test]
+    fn diff_round_trips_over_random_evolving_content() {
+        let mut rng = Rng::new(0x1234_5678_9ABC_DEF0);
+        let mut s = String::from("seed café 日本語\n🎉");
+        for _ in 0..4000 {
+            let t = mutate(&s, &mut rng);
+            let a = ropey::Rope::from_str(&s);
+            let b = ropey::Rope::from_str(&t);
+            let d = diff(&a, &b);
+            assert_eq!(
+                apply_forward(&a, &d).to_string(),
+                t,
+                "forward a->b failed (start={}, old={:?}, new={:?})",
+                d.start,
+                d.old,
+                d.new
+            );
+            assert_eq!(
+                apply_inverse(&b, &d).to_string(),
+                s,
+                "inverse b->a failed (start={}, old={:?}, new={:?})",
+                d.start,
+                d.old,
+                d.new
+            );
+            s = t;
+        }
+    }
+
+    #[test]
+    fn diff_round_trips_over_unrelated_pairs() {
+        // Disjoint corpus pairs (not just single-edit neighbours) so the diff's
+        // prefix/suffix logic is stressed on wholly different multi-byte text.
+        let corpus = [
+            "",
+            "a",
+            "café\n日本語\n",
+            "🎉🎉🎉",
+            "abcdef",
+            "日本",
+            "x\ny\nz\n",
+            "aXb",
+            "café",
+            "語日本",
+            "\n\n\n",
+            "🎉x🎉y🎉",
+        ];
+        let mut rng = Rng::new(0xDEAD_BEEF_CAFE_1234);
+        for _ in 0..3000 {
+            let sa = corpus[rng.below(corpus.len())];
+            let sb = corpus[rng.below(corpus.len())];
+            let a = ropey::Rope::from_str(sa);
+            let b = ropey::Rope::from_str(sb);
+            let d = diff(&a, &b);
+            assert_eq!(apply_forward(&a, &d).to_string(), sb);
+            assert_eq!(apply_inverse(&b, &d).to_string(), sa);
+        }
+    }
+
+    // ── non-ASCII edit → undo → redo round-trip (multi-byte across a leave) ───
+
+    #[test]
+    fn non_ascii_edit_undo_redo_round_trip() {
+        // Edits land INSIDE multi-byte lines; undo/redo must round-trip the exact
+        // bytes, proving the char-offset delta never splits a codepoint.
+        let mut d = Driver::new("café\n日本語\n");
+        d.edit("cafés\n日本語\n");
+        d.edit("cafés\n日本語です\n");
+        d.edit("cafés\n日本語です🎉\n");
+        assert_eq!(d.undo().as_deref(), Some("cafés\n日本語です\n"));
+        assert_eq!(d.undo().as_deref(), Some("cafés\n日本語\n"));
+        assert_eq!(d.undo().as_deref(), Some("café\n日本語\n"));
+        assert_eq!(d.redo().as_deref(), Some("cafés\n日本語\n"));
+        assert_eq!(d.redo().as_deref(), Some("cafés\n日本語です\n"));
+        assert_eq!(d.redo().as_deref(), Some("cafés\n日本語です🎉\n"));
+        // Cold reconstruction of every node still matches (drop all caches).
+        assert_warm_equals_cold(&mut d.t);
+    }
+
+    // ── (ii) + (iii) random op stream vs a full-snapshot reference model ──────
+
+    #[test]
+    fn tree_matches_full_snapshot_reference_over_random_ops() {
+        let mut rng = Rng::new(0x9E37_79B9_7F4A_7C15);
+        let start = "α\nβγ\n日本🎉\n";
+        let mut real = UndoTree::new(ropey::Rope::from_str(start));
+        let mut refr = RefTree::new(start);
+        let mut live = start.to_string();
+
+        for step in 0..6000 {
+            // Structural predicates stay in lockstep with the reference.
+            assert_eq!(real.is_at_root(), refr.is_at_root(), "is_at_root @ {step}");
+            assert_eq!(real.has_redo(), refr.has_redo(), "has_redo @ {step}");
+            assert_eq!(real.depth(), refr.depth(), "depth @ {step}");
+
+            match rng.below(6) {
+                0 | 1 => {
+                    // Edit: push the PRE-edit state (engine discipline), then
+                    // mutate the live buffer.
+                    let pre = live.clone();
+                    real.push(entry_str(&pre));
+                    refr.push(&pre);
+                    live = mutate(&live, &mut rng);
+                }
+                2 => {
+                    let got = real
+                        .undo_step(
+                            ropey::Rope::from_str(&live),
+                            (0, 0),
+                            MarkSnapshot::default(),
+                        )
+                        .map(|e| e.rope.to_string());
+                    let want = refr.undo_step(&live);
+                    assert_eq!(got, want, "undo @ {step}");
+                    if let Some(c) = got {
+                        live = c;
+                    }
+                }
+                3 => {
+                    let got = real
+                        .redo_step(
+                            ropey::Rope::from_str(&live),
+                            (0, 0),
+                            MarkSnapshot::default(),
+                        )
+                        .map(|e| e.rope.to_string());
+                    let want = refr.redo_step(&live);
+                    assert_eq!(got, want, "redo @ {step}");
+                    if let Some(c) = got {
+                        live = c;
+                    }
+                }
+                4 => {
+                    let got = real
+                        .seq_earlier_step(
+                            ropey::Rope::from_str(&live),
+                            (0, 0),
+                            MarkSnapshot::default(),
+                        )
+                        .map(|e| e.rope.to_string());
+                    let want = refr.seq_earlier_step(&live);
+                    assert_eq!(got, want, "g- @ {step}");
+                    if let Some(c) = got {
+                        live = c;
+                    }
+                }
+                _ => {
+                    let got = real
+                        .seq_later_step(
+                            ropey::Rope::from_str(&live),
+                            (0, 0),
+                            MarkSnapshot::default(),
+                        )
+                        .map(|e| e.rope.to_string());
+                    let want = refr.seq_later_step(&live);
+                    assert_eq!(got, want, "g+ @ {step}");
+                    if let Some(c) = got {
+                        live = c;
+                    }
+                }
+            }
+
+            // (ii) Every so often, assert warm and cold materialization agree
+            // for every node — a cold-reconstructed node must equal the rope the
+            // full-snapshot model would have held.
+            if step % 200 == 0 {
+                assert_warm_equals_cold(&mut real);
+            }
+        }
+        assert_warm_equals_cold(&mut real);
+    }
+
+    /// For every live node: materialize warm, drop all caches, materialize cold,
+    /// assert identical. Restores nothing else (test-local).
+    fn assert_warm_equals_cold(t: &mut UndoTree) {
+        let ids = t.live_ids();
+        let warm: Vec<String> = ids
+            .iter()
+            .map(|&id| t.materialize_for_test(id).to_string())
+            .collect();
+        t.drop_all_caches();
+        for (i, &id) in ids.iter().enumerate() {
+            let cold = t.materialize_for_test(id).to_string();
+            assert_eq!(cold, warm[i], "warm != cold for node {id}");
+        }
+    }
+
+    /// Engine-faithful driver over the real (delta) [`UndoTree`]: mirrors how
+    /// `editor.rs` pushes the PRE-edit state and restores returned content.
+    struct Driver {
+        t: UndoTree,
+        live: String,
+    }
+    impl Driver {
+        fn new(s: &str) -> Self {
+            Driver {
+                t: UndoTree::new(ropey::Rope::from_str(s)),
+                live: s.to_string(),
+            }
+        }
+        fn edit(&mut self, new: &str) {
+            self.t.push(entry_str(&self.live));
+            self.live = new.to_string();
+        }
+        fn undo(&mut self) -> Option<String> {
+            let e = self.t.undo_step(
+                ropey::Rope::from_str(&self.live),
+                (0, 0),
+                MarkSnapshot::default(),
+            )?;
+            self.live = e.rope.to_string();
+            Some(self.live.clone())
+        }
+        fn redo(&mut self) -> Option<String> {
+            let e = self.t.redo_step(
+                ropey::Rope::from_str(&self.live),
+                (0, 0),
+                MarkSnapshot::default(),
+            )?;
+            self.live = e.rope.to_string();
+            Some(self.live.clone())
+        }
+    }
+
+    /// Full-snapshot reference tree — Phase 2b's model (a whole rope per node),
+    /// the oracle the delta tree is cross-checked against. Content only (cursor /
+    /// marks / timestamps are covered by the existing tree tests).
+    struct RefNode {
+        parent: Option<usize>,
+        children: Vec<usize>,
+        last_child: Option<usize>,
+        content: String,
+        seq: u64,
+    }
+    struct RefTree {
+        nodes: Vec<Option<RefNode>>,
+        current: usize,
+        next_seq: u64,
+    }
+    impl RefTree {
+        fn new(s: &str) -> Self {
+            let root = RefNode {
+                parent: None,
+                children: Vec::new(),
+                last_child: None,
+                content: s.to_string(),
+                seq: 0,
+            };
+            RefTree {
+                nodes: vec![Some(root)],
+                current: 0,
+                next_seq: 1,
+            }
+        }
+        fn get(&self, id: usize) -> &RefNode {
+            self.nodes[id].as_ref().unwrap()
+        }
+        fn get_mut(&mut self, id: usize) -> &mut RefNode {
+            self.nodes[id].as_mut().unwrap()
+        }
+        fn alloc(&mut self, n: RefNode) -> usize {
+            self.nodes.push(Some(n));
+            self.nodes.len() - 1
+        }
+        fn is_at_root(&self) -> bool {
+            self.get(self.current).parent.is_none()
+        }
+        fn has_redo(&self) -> bool {
+            self.get(self.current).last_child.is_some()
+        }
+        fn depth(&self) -> usize {
+            let mut d = 0;
+            let mut n = self.get(self.current).parent;
+            while let Some(p) = n {
+                d += 1;
+                n = self.get(p).parent;
+            }
+            d
+        }
+        fn push(&mut self, pre: &str) {
+            let cur = self.current;
+            self.get_mut(cur).content = pre.to_string();
+            let seq = self.next_seq;
+            self.next_seq += 1;
+            let child = self.alloc(RefNode {
+                parent: Some(cur),
+                children: Vec::new(),
+                last_child: None,
+                content: pre.to_string(),
+                seq,
+            });
+            let c = self.get_mut(cur);
+            c.children.push(child);
+            c.last_child = Some(child);
+            self.current = child;
+        }
+        fn undo_step(&mut self, live: &str) -> Option<String> {
+            let cur = self.current;
+            let par = self.get(cur).parent?;
+            self.get_mut(cur).content = live.to_string();
+            self.get_mut(par).last_child = Some(cur);
+            self.current = par;
+            Some(self.get(par).content.clone())
+        }
+        fn redo_step(&mut self, live: &str) -> Option<String> {
+            let cur = self.current;
+            let child = self.get(cur).last_child?;
+            self.get_mut(cur).content = live.to_string();
+            self.current = child;
+            Some(self.get(child).content.clone())
+        }
+        fn current_seq(&self) -> u64 {
+            self.get(self.current).seq
+        }
+        fn node_below(&self, s: u64) -> Option<usize> {
+            let mut best: Option<(u64, usize)> = None;
+            for (id, slot) in self.nodes.iter().enumerate() {
+                if let Some(n) = slot
+                    && n.seq < s
+                    && best.is_none_or(|(bs, _)| n.seq > bs)
+                {
+                    best = Some((n.seq, id));
+                }
+            }
+            best.map(|(_, id)| id)
+        }
+        fn node_above(&self, s: u64) -> Option<usize> {
+            let mut best: Option<(u64, usize)> = None;
+            for (id, slot) in self.nodes.iter().enumerate() {
+                if let Some(n) = slot
+                    && n.seq > s
+                    && best.is_none_or(|(bs, _)| n.seq < bs)
+                {
+                    best = Some((n.seq, id));
+                }
+            }
+            best.map(|(_, id)| id)
+        }
+        fn retarget(&mut self, target: usize) {
+            self.current = target;
+            let mut node = target;
+            while let Some(p) = self.get(node).parent {
+                self.get_mut(p).last_child = Some(node);
+                node = p;
+            }
+        }
+        fn stash_and_move(&mut self, target: usize, live: &str) {
+            let cur = self.current;
+            self.get_mut(cur).content = live.to_string();
+            self.retarget(target);
+        }
+        fn seq_earlier_step(&mut self, live: &str) -> Option<String> {
+            let target = self.node_below(self.current_seq())?;
+            self.stash_and_move(target, live);
+            Some(self.get(target).content.clone())
+        }
+        fn seq_later_step(&mut self, live: &str) -> Option<String> {
+            let target = self.node_above(self.current_seq())?;
+            self.stash_and_move(target, live);
+            Some(self.get(target).content.clone())
+        }
     }
 }
