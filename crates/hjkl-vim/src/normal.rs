@@ -283,7 +283,10 @@ pub fn step_normal<H: Host>(
             }
             Key::Char('I') => {
                 let (top, bot, left, _right) = ed.visual_block_bounds();
-                ed.visual_block_insert_at_left(top, bot, left);
+                // `[count]I` repeats the typed text `count` times on every
+                // row (`:h v_b_I` + count) — verified against nvim v0.12.4:
+                // `<C-v>jj2Ix` → "xx" on each row.
+                ed.visual_block_insert_at_left(top, bot, left, count.max(1));
                 return true;
             }
             Key::Char('A') => {
@@ -305,7 +308,47 @@ pub fn step_normal<H: Host>(
                 } else {
                     right + 1
                 };
-                ed.visual_block_append_at_right(top, bot, col, left);
+                // `[count]A` repeats the typed text `count` times on every
+                // row (`:h v_b_A` + count) — verified against nvim v0.12.4:
+                // `<C-v>jj2A!` → "!!" on each row.
+                ed.visual_block_append_at_right(top, bot, col, left, count.max(1));
+                return true;
+            }
+            // Uppercase block operators beyond the standard set (verified
+            // against nvim v0.12.4):
+            //   `D` — delete from the block's left column to EOL on every row.
+            //   `C` — change from the block's left column to EOL on every row.
+            //   `X` — delete the rectangle (identical to block `d`).
+            //   `Y` — yank the rectangle (identical to block `y`).
+            // `D`/`C` force the ragged (`$`-style) right edge so the operation
+            // always extends to each row's own end of line.
+            Key::Char('D') => {
+                ed.set_block_to_eol(true);
+                ed.apply_visual_operator(Operator::Delete, 1);
+                return true;
+            }
+            Key::Char('C') => {
+                ed.set_block_to_eol(true);
+                ed.apply_visual_operator(Operator::Change, 1);
+                return true;
+            }
+            Key::Char('X') => {
+                ed.apply_visual_operator(Operator::Delete, 1);
+                return true;
+            }
+            Key::Char('Y') => {
+                ed.apply_visual_operator(Operator::Yank, 1);
+                return true;
+            }
+            // `S` / `R` change the block's WHOLE rows linewise (like `Vc`) —
+            // verified against nvim v0.12.4: `<C-v>jSxx<Esc>` replaces both
+            // selected lines with "xx". Reuse the VisualLine change path.
+            Key::Char('S') | Key::Char('R') => {
+                let (top, bot, _left, _right) = ed.visual_block_bounds();
+                ed.set_visual_line_anchor(top);
+                ed.jump_cursor(bot, 0);
+                ed.set_mode(VimMode::VisualLine);
+                ed.apply_visual_operator(Operator::Change, 1);
                 return true;
             }
             _ => {}

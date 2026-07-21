@@ -186,3 +186,411 @@ keys = "yyp"
 expected_buffer = "one\none\ntwo\n"
 expected_cursor = [1, 0]
 expected_register = ['"', "one\n"]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Visual-block audit round: full <C-v> operator surface pinned against nvim
+# v0.12.4. Cursor = 0-based (row, col); register text is the joined-`\n`
+# blockwise payload. Every value below was probed from real nvim headless.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── Insert `I` with count / boundary rows ───────────────────────────────────
+
+# `[count]I` repeats the typed text `count` times at the block's left column on
+# EVERY row (not just the top row).
+[[cases]]
+name = "visual_block_I_count_repeats_all_rows"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj2Ix<Esc>"
+expected_buffer = "xxabcd\nxxefgh\nxxijkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `I` at a left column that lands EXACTLY on a short row's EOL (`left == len`)
+# still inserts there — only rows strictly SHORTER than the left column are
+# skipped (`:h v_b_I`). Row 1 ("ab", len 2) reaches col 2 exactly.
+[[cases]]
+name = "visual_block_I_boundary_short_row"
+initial_buffer = "abcdef\nab\nabcdef\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jjIZ<Esc>"
+expected_buffer = "abZcdef\nabZ\nabZcdef\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+# ─── Append `A` with count / ragged `$` ──────────────────────────────────────
+
+# `[count]A` repeats the typed text `count` times past the block's right edge
+# on every row.
+[[cases]]
+name = "visual_block_A_count_repeats_all_rows"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj2A!<Esc>"
+expected_buffer = "a!!bcd\ne!!fgh\ni!!jkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `<C-v>$A` (the critical ragged-append idiom): append at EACH row's OWN end of
+# line, regardless of differing widths (`:h v_b_$`).
+[[cases]]
+name = "visual_block_A_dollar_ragged_append"
+initial_buffer = "abc\ndefgh\nij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj$Ax<Esc>"
+expected_buffer = "abcx\ndefghx\nijx\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ─── Change `c` / `C` / `s` ──────────────────────────────────────────────────
+
+# `C` in visual block changes from the block's LEFT column to EOL on every row
+# (block change-to-EOL), replicating the typed text at the left column. Cursor
+# lands on the last typed char of the top row.
+[[cases]]
+name = "visual_block_C_change_to_eol"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjCXY<Esc>"
+expected_buffer = "aXY\neXY\niXY\n"
+expected_cursor = [0, 2]
+expected_register = ['"', "bcd\nfgh\njkl"]
+expected_mode = "normal"
+
+# `C` on a single-row block (still deletes left→EOL of that row).
+[[cases]]
+name = "visual_block_C_single_row"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 1]
+keys = "<C-v>lC_<Esc>"
+expected_buffer = "a_\nefgh\nijkl\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "bcd"]
+expected_mode = "normal"
+
+# Block change where a row is fully inside the block ("ab" reaches the left
+# column): its whole content is replaced, not skipped.
+[[cases]]
+name = "visual_block_c_ragged_short_row"
+initial_buffer = "abcdef\nab\nabcdef\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlcQ<Esc>"
+expected_buffer = "Qcdef\nQ\nQcdef\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab\nab\nab"]
+expected_mode = "normal"
+
+# `s` in visual block is an alias for `c` (block change at left column).
+[[cases]]
+name = "visual_block_s_equals_c"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlsQ<Esc>"
+expected_buffer = "Qcd\nQgh\nQkl\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab\nef\nij"]
+expected_mode = "normal"
+
+# `S` / `R` in visual block change the block's WHOLE rows linewise (like `Vc`).
+[[cases]]
+name = "visual_block_S_linewise_change"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jSxx<Esc>"
+expected_buffer = "xx\nklmno\npqrst\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "abcde\nfghij\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_block_R_linewise_change"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jRxx<Esc>"
+expected_buffer = "xx\nklmno\npqrst\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "abcde\nfghij\n"]
+expected_mode = "normal"
+
+# ─── Delete `x` / `D` ────────────────────────────────────────────────────────
+
+# `x` in visual block deletes the rectangle (same as `d`); register blockwise.
+[[cases]]
+name = "visual_block_x_deletes_block"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlx"
+expected_buffer = "cd\ngh\nkl\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab\nef\nij"]
+expected_mode = "normal"
+
+# `X` in visual block also deletes the rectangle (identical to `d` — NOT
+# extended to EOL).
+[[cases]]
+name = "visual_block_X_deletes_block"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjX"
+expected_buffer = "acd\negh\nikl\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "b\nf\nj"]
+expected_mode = "normal"
+
+# `D` deletes from the block's left column to EOL on every row. Cursor clamps
+# to the row's new last column (the top row shrinks to "a", so col 1 → col 0).
+[[cases]]
+name = "visual_block_D_delete_to_eol"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjD"
+expected_buffer = "a\ne\ni\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "bcd\nfgh\njkl"]
+expected_mode = "normal"
+
+# `D` on a single-row block.
+[[cases]]
+name = "visual_block_D_single_row"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "jl<C-v>D"
+expected_buffer = "abcd\ne\nijkl\n"
+expected_cursor = [1, 0]
+expected_register = ['"', "fgh"]
+expected_mode = "normal"
+
+# ─── Yank `y` / `Y` with `$` ─────────────────────────────────────────────────
+
+# `Y` in visual block yanks the rectangle (same as `y`), buffer unchanged.
+[[cases]]
+name = "visual_block_Y_yanks_block"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjY"
+expected_buffer = "abcd\nefgh\nijkl\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "b\nf\nj"]
+expected_mode = "normal"
+
+# Ragged `$` yank captures each row to its own EOL.
+[[cases]]
+name = "visual_block_y_dollar_ragged"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jj$y"
+expected_buffer = "abcde\nfghij\nklmno\npqrst\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "bcde\nghij\nlmno"]
+expected_mode = "normal"
+
+# ─── Replace `r` (basic + ragged `$`) ────────────────────────────────────────
+
+# `r{ch}` fills every cell in the block with `ch`; registers untouched.
+[[cases]]
+name = "visual_block_r_fills_block"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlrX"
+expected_buffer = "XXcd\nXXgh\nXXkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Ragged `$` replace fills each row to its OWN EOL.
+[[cases]]
+name = "visual_block_r_dollar_ragged"
+initial_buffer = "abc\ndefgh\nij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj$rX"
+expected_buffer = "XXX\nXXXXX\nXX\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ─── Case ops: `u` / `U` / `g~` / `gu` / `gU` ────────────────────────────────
+
+[[cases]]
+name = "visual_block_u_lowercase"
+initial_buffer = "ABCD\nEFGH\nIJKL\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlu"
+expected_buffer = "abCD\nefGH\nijKL\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_block_U_uppercase"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlU"
+expected_buffer = "ABcd\nEFgh\nIJkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_block_gtilde_togglecase"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlg~"
+expected_buffer = "ABcd\nEFgh\nIJkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_block_gu_lowercase"
+initial_buffer = "ABCD\nEFGH\nIJKL\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlgu"
+expected_buffer = "abCD\nefGH\nijKL\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_block_gU_uppercase"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlgU"
+expected_buffer = "ABcd\nEFgh\nIJkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ─── Corner motions `o` / `O` ────────────────────────────────────────────────
+
+# `o` swaps the cursor to the opposite (diagonal) corner; extending then
+# operating proves the anchor moved. Here: block (1,1)→(2,2), `o` puts the
+# cursor back at (1,1), `k` extends up to (0,1), `I` inserts at the left col.
+[[cases]]
+name = "visual_block_o_swap_then_extend_I"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [1, 1]
+keys = "<C-v>jlokIZ<Esc>"
+expected_buffer = "aZbcde\nfZghij\nkZlmno\npqrst\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# `o` then extend up, then `r` replaces the whole (now 3-row) block column.
+[[cases]]
+name = "visual_block_o_swap_then_extend_r"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [1, 1]
+keys = "<C-v>ljokrx"
+expected_buffer = "axxde\nfxxij\nkxxno\npqrst\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# `O` swaps only the HORIZONTAL corner (row unchanged). Block (0,1)→(2,2);
+# after `O` the cursor tracks the left column, so `I` still lands at col 1.
+[[cases]]
+name = "visual_block_O_swap_horizontal_I"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjlOIZ<Esc>"
+expected_buffer = "aZbcde\nfZghij\nkZlmno\npqrst\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# `O` then `A` appends past the block's (unchanged) right edge.
+[[cases]]
+name = "visual_block_O_swap_horizontal_A"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjlOAZ<Esc>"
+expected_buffer = "abcZde\nfghZij\nklmZno\npqrst\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# ─── Counts on block motions ─────────────────────────────────────────────────
+
+# `2j` inside the block extends the selection two rows.
+[[cases]]
+name = "visual_block_count_2j_delete"
+initial_buffer = "abcde\nfghij\nklmno\npqrst\n"
+initial_cursor = [0, 0]
+keys = "<C-v>2jld"
+expected_buffer = "cde\nhij\nmno\npqrst\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab\nfg\nkl"]
+expected_mode = "normal"
+
+# ─── Visual-mode block PASTE (`p` / `P` replacing the selected block) ─────────
+# `p` over a <C-v> selection deletes the rectangle (swapped into the unnamed
+# register, blockwise) then puts the source register per its kind.
+
+# Blockwise register → re-inserted as columns at the block's top-left.
+[[cases]]
+name = "visual_block_paste_blockwise_into_block"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jyj0<C-v>jp"
+expected_buffer = "abcd\nafgh\nejkl\n"
+expected_cursor = [1, 0]
+expected_register = ['"', "e\ni"]
+expected_mode = "normal"
+
+# Blockwise 2×2 register → 2×2 block (columns land at top-left).
+[[cases]]
+name = "visual_block_paste_2x2_into_2x2"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jly0jj<C-v>jlp"
+expected_buffer = "abcd\nefgh\nabkl\nefop\n"
+expected_cursor = [2, 0]
+expected_register = ['"', "ij\nmn"]
+expected_mode = "normal"
+
+# Single-line charwise register → replicated at the left column on EVERY row.
+[[cases]]
+name = "visual_block_paste_charwise_replicates"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "yl<C-v>jjp"
+expected_buffer = "abcd\nafgh\najkl\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "a\ne\ni"]
+expected_mode = "normal"
+
+# Single-line charwise register over a block whose middle row is too short:
+# that short row is SKIPPED (no padding). Buffer is net-unchanged here.
+[[cases]]
+name = "visual_block_paste_charwise_skips_short_row"
+initial_buffer = "abcdef\nab\nabcdef\n"
+initial_cursor = [0, 3]
+keys = "yl<C-v>jjp"
+expected_buffer = "abcdef\nab\nabcdef\n"
+expected_cursor = [0, 3]
+expected_register = ['"', "d\n \nd"]
+expected_mode = "normal"
+
+# Multi-line charwise register → a plain inline charwise paste at top-left
+# (cursor parks at the paste start).
+[[cases]]
+name = "visual_block_paste_charwise_multiline"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "vjy<C-v>jjlp"
+expected_buffer = "abcd\necd\ngh\nkl\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab\nef\nij"]
+expected_mode = "normal"
+
+# Linewise register → opened as a fresh line BELOW the block's bottom row.
+[[cases]]
+name = "visual_block_paste_linewise_below"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "yy<C-v>jjp"
+expected_buffer = "bcd\nfgh\njkl\nabcd\n"
+expected_cursor = [3, 0]
+expected_register = ['"', "a\ne\ni"]
+expected_mode = "normal"
+
+# `P` over a block: same placement as `p`, but the SOURCE register is
+# preserved (not overwritten by the deleted block).
+[[cases]]
+name = "visual_block_paste_P_preserves_register"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "yl<C-v>jjP"
+expected_buffer = "abcd\nafgh\najkl\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "a"]
+expected_mode = "normal"

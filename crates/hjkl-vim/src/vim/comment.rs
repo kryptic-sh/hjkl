@@ -279,7 +279,12 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         // left edge.
         let to_eol = pad && vim(ed).block_to_eol;
         if !inserted.is_empty() && top < bot && !vim(ed).replaying {
-            replicate_block_text(ed, &inserted, top, bot, col, pad, to_eol);
+            // `[count]I` / `[count]A` repeat the typed text `count` times on
+            // EVERY row. The generic count-repeat branch above already
+            // stacked the extra copies onto the TOP row (so `inserted` here
+            // is one copy); replicate the fully-repeated run onto the rest.
+            let repeated = inserted.repeat(session.count.max(1));
+            replicate_block_text(ed, &repeated, top, bot, col, pad, to_eol);
             buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
             ed.push_buffer_cursor_to_textarea();
         }

@@ -867,10 +867,20 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
     // `"+p`/`"*p` in visual mode: same live-clipboard refresh as normal-mode
     // paste (audit-r2 fix 4).
     sync_clipboard_register_for(ed, selector);
-    let (reg_text, reg_linewise) =
+    let (reg_text, reg_linewise, reg_blockwise, reg_block_width) =
         ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
-            Some(slot) => (slot.text.clone(), slot.linewise),
-            None => (regs.unnamed.text.clone(), regs.unnamed.linewise),
+            Some(slot) => (
+                slot.text.clone(),
+                slot.linewise,
+                slot.blockwise,
+                slot.block_width,
+            ),
+            None => (
+                regs.unnamed.text.clone(),
+                regs.unnamed.linewise,
+                regs.unnamed.blockwise,
+                regs.unnamed.block_width,
+            ),
         });
     // For `P`, snapshot the unnamed register so we can restore it afterwards.
     let saved_unnamed = before.then(|| ed.with_registers(|regs| regs.unnamed.clone()));
@@ -908,12 +918,8 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
-        Mode::Visual | Mode::VisualBlock => {
-            let anchor = if mode == Mode::VisualBlock {
-                vim(ed).block_anchor
-            } else {
-                vim(ed).visual_anchor
-            };
+        Mode::Visual => {
+            let anchor = vim(ed).visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
             // Delete the selection into the unnamed register.
@@ -940,6 +946,82 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
                 buf_set_cursor_rc(ed.buffer_mut(), top.0, last_col);
             }
             ed.push_buffer_cursor_to_textarea();
+        }
+        Mode::VisualBlock => {
+            // `p`/`P` over a VISUAL-BLOCK selection: delete the rectangle,
+            // then put the source register according to its kind. Verified
+            // against nvim v0.12.4 — each register type places differently:
+            //   - blockwise reg → re-inserted as columns at the block's
+            //     top-left, exactly like a normal-mode block paste.
+            //   - linewise reg  → opened as fresh line(s) BELOW the block's
+            //     bottom row (not inline).
+            //   - single-line charwise reg → replicated at the block's LEFT
+            //     column on EVERY row of the (now-deleted) block.
+            //   - multi-line charwise reg → a plain inline charwise paste at
+            //     the block's top-left (cursor parks at the paste start).
+            let (top, bot, left, right) = block_bounds(ed);
+            let to_eol = vim(ed).block_to_eol;
+            // Snapshot the rectangle for the `p` swap register.
+            let deleted = block_yank(ed, top, bot, left, right, to_eol);
+            let del_width = if to_eol {
+                deleted
+                    .split('\n')
+                    .map(|s| s.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            } else {
+                right + 1 - left
+            };
+            delete_block_contents(ed, top, bot, left, right, to_eol);
+            // `p` swaps the deleted block into the unnamed register (blockwise);
+            // `P` preserves the source register (restored below via
+            // `saved_unnamed`).
+            if !before && !deleted.is_empty() {
+                ed.record_yank_to_host(deleted.clone());
+                ed.record_delete_block(deleted, del_width, None);
+            }
+            if reg_blockwise {
+                ed.jump_cursor(top, left);
+                // `before = true` makes `do_block_paste` insert AT `left`
+                // (the block's now-vacated left column) rather than after it.
+                do_block_paste(ed, true, 1, reg_block_width, &reg_text);
+            } else if reg_linewise {
+                let text = reg_text.trim_matches('\n').to_string();
+                let lc = buf_line_chars(ed.buffer(), bot);
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(bot, lc),
+                    text: format!("\n{text}"),
+                });
+                buf_set_cursor_rc(ed.buffer_mut(), bot + 1, 0);
+                hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
+                ed.push_buffer_cursor_to_textarea();
+            } else if reg_text.contains('\n') {
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(top, left),
+                    text: reg_text.clone(),
+                });
+                buf_set_cursor_rc(ed.buffer_mut(), top, left);
+                ed.push_buffer_cursor_to_textarea();
+            } else {
+                // Single-line charwise: replicate at the left column on every
+                // block row. Rows shorter than `left` are SKIPPED (no
+                // padding) — verified against nvim v0.12.4: pasting "d" over
+                // a col-3 block whose middle row is only 2 chars leaves that
+                // short row untouched.
+                for r in top..=bot {
+                    let line_len = buf_line_chars(ed.buffer(), r);
+                    if left > line_len {
+                        continue;
+                    }
+                    ed.mutate_edit(Edit::InsertStr {
+                        at: Position::new(r, left),
+                        text: reg_text.clone(),
+                    });
+                }
+                let last_col = left + reg_text.chars().count().saturating_sub(1);
+                buf_set_cursor_rc(ed.buffer_mut(), top, last_col);
+                ed.push_buffer_cursor_to_textarea();
+            }
         }
         _ => {}
     }

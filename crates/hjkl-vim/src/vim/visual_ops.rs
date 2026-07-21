@@ -416,7 +416,12 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
                 ed.record_delete_block(yank, block_width, target);
             }
             vim_mut(ed).mode = Mode::Normal;
-            ed.jump_cursor(top, left);
+            // Cursor lands on the block's left column, clamped to the row's
+            // new last valid column — a ragged (`D` / `$`) delete can leave
+            // the top row shorter than `left`, and nvim parks on its EOL
+            // rather than past it (`<C-v>jjD` on "abcd…" → (0,0), not (0,1)).
+            let line_len = buf_line_chars(ed.buffer(), top);
+            ed.jump_cursor(top, left.min(line_len.saturating_sub(1)));
         }
         Operator::Change => {
             ed.push_undo();
@@ -552,7 +557,14 @@ pub(crate) fn block_yank<H: hjkl_engine::types::Host>(
         let chars: Vec<char> = line.chars().collect();
         let row_right = if to_eol { chars.len() } else { right };
         let end = (row_right + 1).min(chars.len());
-        if left >= chars.len() {
+        if !to_eol && left > chars.len() {
+            // Fixed-width block whose left column is STRICTLY past this
+            // row's EOL: nvim fills the whole cell span with `width` spaces
+            // rather than an empty segment. A row reaching EXACTLY to `left`
+            // (`left == len`) still yields an empty segment. Verified against
+            // nvim v0.12.4 (`<C-v>jjy` at col 3 over a 2-char row → " ").
+            rows.push(" ".repeat(right + 1 - left));
+        } else if left >= chars.len() {
             rows.push(String::new());
         } else {
             rows.push(chars[left..end].iter().collect());

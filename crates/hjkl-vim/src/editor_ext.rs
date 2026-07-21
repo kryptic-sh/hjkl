@@ -611,14 +611,23 @@ pub trait VimEditorExt {
     fn apply_op_search_range(&mut self, op: Operator, origin: (usize, usize));
 
     /// VisualBlock `I` — enter Insert at the left edge of the block.
-    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize);
+    /// `count` repeats the typed text on every row (`[count]I`).
+    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize, count: usize);
 
     /// VisualBlock `A` — enter Insert at the right edge of the block.
     /// `col` is the append/typed column (one past the block's right edge,
     /// or the ragged `$` column); `left` is the block's own left edge,
     /// where the cursor lands on Esc (verified against real nvim — `A`'s
     /// post-Esc cursor is NOT `col` on a block wider than one column).
-    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize, left: usize);
+    /// `count` repeats the typed text on every row (`[count]A`).
+    fn visual_block_append_at_right(
+        &mut self,
+        top: usize,
+        bot: usize,
+        col: usize,
+        left: usize,
+        count: usize,
+    );
 
     /// Execute a motion, pushing to the jumplist for big jumps and updating the
     /// sticky column.
@@ -1686,12 +1695,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         crate::vim::apply_op_search_range(self, op, origin);
     }
 
-    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize) {
+    fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize, count: usize) {
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
         crate::vim::begin_insert(
             self,
-            1,
+            count,
             InsertReason::BlockEdge {
                 top,
                 bot,
@@ -1710,7 +1719,14 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         );
     }
 
-    fn visual_block_append_at_right(&mut self, top: usize, bot: usize, col: usize, left: usize) {
+    fn visual_block_append_at_right(
+        &mut self,
+        top: usize,
+        bot: usize,
+        col: usize,
+        left: usize,
+        count: usize,
+    ) {
         // vim `v_b_A`: pad the top row to `col` with spaces before the
         // cursor lands there, same as `replicate_block_text` does for
         // every other row on Esc. Without this, `jump_cursor` clamps
@@ -1736,7 +1752,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
         crate::vim::begin_insert_noundo(
             self,
-            1,
+            count,
             InsertReason::BlockEdge {
                 top,
                 bot,
