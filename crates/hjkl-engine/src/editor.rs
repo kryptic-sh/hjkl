@@ -3422,6 +3422,20 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.last_substitute.lock().unwrap().clone()
     }
 
+    /// The previous `:s` replacement text, or `""` when no substitute has run
+    /// yet. Feeds the magic `~` expansion on the PATTERN side of `:s` and
+    /// `/`/`?` searches — pass it to
+    /// [`crate::search::resolve_case_mode`]. (The replacement-side `~`/`&`
+    /// features read the same [`Editor::last_substitute`] bank.)
+    pub fn last_substitute_replacement(&self) -> String {
+        self.last_substitute
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.replacement.clone())
+            .unwrap_or_default()
+    }
+
     /// Store the last successful substitute so `:&` / `:&&` can repeat it.
     pub fn set_last_substitute(&mut self, cmd: crate::substitute::SubstituteCmd) {
         *self.last_substitute.lock().unwrap() = Some(cmd);
@@ -3603,7 +3617,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             use crate::search::{CaseMode, resolve_case_mode};
             let base =
                 CaseMode::from_options(self.settings().ignore_case, self.settings().smartcase);
-            let (stripped, mode) = resolve_case_mode(&prompt.text, base);
+            let last_sub = self.last_substitute_replacement();
+            let (stripped, mode) = resolve_case_mode(&prompt.text, base, &last_sub);
             let src = if mode == CaseMode::Insensitive {
                 format!("(?i){stripped}")
             } else {
@@ -5027,7 +5042,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             use crate::search::{CaseMode, resolve_case_mode};
             let base =
                 CaseMode::from_options(self.settings().ignore_case, self.settings().smartcase);
-            let (stripped, mode) = resolve_case_mode(pattern, base);
+            let last_sub = self.last_substitute_replacement();
+            let (stripped, mode) = resolve_case_mode(pattern, base, &last_sub);
             let src = if mode == CaseMode::Insensitive {
                 format!("(?i){stripped}")
             } else {

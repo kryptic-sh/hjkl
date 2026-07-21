@@ -152,7 +152,7 @@ fn handle_search_address<H: hjkl_engine::Host>(
     let s = editor.settings();
     use hjkl_engine::search::{CaseMode, resolve_case_mode};
     let base = CaseMode::from_options(s.ignore_case, s.smartcase);
-    let (stripped, mode) = resolve_case_mode(&pat_str, base);
+    let (stripped, mode) = resolve_case_mode(&pat_str, base, &editor.last_substitute_replacement());
     let compile_src = if mode == CaseMode::Insensitive {
         format!("(?i){stripped}")
     } else {

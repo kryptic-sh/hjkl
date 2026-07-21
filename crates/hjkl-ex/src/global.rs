@@ -134,7 +134,7 @@ pub(crate) fn global_handler<H: Host>(
     use hjkl_engine::search::{CaseMode, resolve_case_mode};
     let s = editor.settings();
     let base = CaseMode::from_options(s.ignore_case, s.smartcase);
-    let (stripped, mode) = resolve_case_mode(&pattern, base);
+    let (stripped, mode) = resolve_case_mode(&pattern, base, &editor.last_substitute_replacement());
     let compile_src = if mode == CaseMode::Insensitive {
         format!("(?i){stripped}")
     } else {

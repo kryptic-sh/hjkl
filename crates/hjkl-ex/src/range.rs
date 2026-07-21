@@ -203,7 +203,8 @@ fn resolve_search_address<H: hjkl_engine::Host>(
     }
     let settings = editor.settings();
     let case_base = CaseMode::from_options(settings.ignore_case, settings.smartcase);
-    let (stripped, mode) = resolve_case_mode(pattern, case_base);
+    let (stripped, mode) =
+        resolve_case_mode(pattern, case_base, &editor.last_substitute_replacement());
     let src = if mode == CaseMode::Insensitive {
         format!("(?i){stripped}")
     } else {

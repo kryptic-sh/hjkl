@@ -261,6 +261,11 @@ pub fn apply_substitute<H: crate::types::Host>(
             .ok_or_else(|| "no previous regular expression".to_string())?,
     };
 
+    // Previous `:s` replacement text (this command is stored only after it
+    // succeeds, so this is the *prior* one). Serves double duty: pattern-side
+    // magic `~` expands to it, and replacement-side `~` re-expands it per match.
+    let prev_replacement = ed.last_substitute_replacement();
+
     // Case-sensitivity.
     // Per-substitute `/I` (case-sensitive) and `/i` (case-insensitive) flags
     // short-circuit all other resolution — they win over `\c`/`\C` in the
@@ -269,18 +274,18 @@ pub fn apply_substitute<H: crate::types::Host>(
         // /I flag: force case-sensitive — run vim_to_rust_regex to strip \c/\C
         // but do NOT add (?i).
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
         stripped
     } else if cmd.flags.ignore_case {
         // /i flag: force case-insensitive — strip \c/\C and prepend (?i).
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
         format!("(?i){stripped}")
     } else {
         // No explicit flag: honour ignorecase + smartcase + inline \c/\C.
         use crate::search::{CaseMode, resolve_case_mode};
         let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
-        let (stripped, mode) = resolve_case_mode(&pattern_str, base);
+        let (stripped, mode) = resolve_case_mode(&pattern_str, base, &prev_replacement);
         if mode == CaseMode::Insensitive {
             format!("(?i){stripped}")
         } else {
@@ -289,14 +294,6 @@ pub fn apply_substitute<H: crate::types::Host>(
     };
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
-
-    // `~` in the replacement expands to the previous substitute's replacement,
-    // which is the currently-stored `last_substitute` (this command is stored
-    // only after it succeeds).
-    let prev_replacement = ed
-        .last_substitute()
-        .map(|c| c.replacement.clone())
-        .unwrap_or_default();
 
     ed.push_undo();
 
@@ -438,18 +435,22 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
             .ok_or_else(|| "no previous regular expression".to_string())?,
     };
 
+    // Previous `:s` replacement — pattern-side magic `~` expands to it, and
+    // replacement-side `~` re-expands it per match (same as apply_substitute).
+    let prev_replacement = ed.last_substitute_replacement();
+
     let effective_pattern = if cmd.flags.case_sensitive {
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
         stripped
     } else if cmd.flags.ignore_case {
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
         format!("(?i){stripped}")
     } else {
         use crate::search::{CaseMode, resolve_case_mode};
         let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
-        let (stripped, mode) = resolve_case_mode(&pattern_str, base);
+        let (stripped, mode) = resolve_case_mode(&pattern_str, base, &prev_replacement);
         if mode == CaseMode::Insensitive {
             format!("(?i){stripped}")
         } else {
@@ -458,11 +459,6 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
     };
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
-
-    let prev_replacement = ed
-        .last_substitute()
-        .map(|c| c.replacement.clone())
-        .unwrap_or_default();
 
     let start = *line_range.start() as usize;
     let end = *line_range.end() as usize;
@@ -1384,5 +1380,72 @@ mod tests {
         let applied = apply_collected_matches(&mut e, &matches, &accepted);
         assert_eq!(applied, 2);
         assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
+    }
+
+    // ── V5: magic `~` on the PATTERN side of `:s` and `/`/`?` ─────────────────
+    // `apply_substitute` does NOT store `last_substitute` itself (the ex layer
+    // does), so these tests set it explicitly to simulate a prior `:s`.
+
+    /// nvim-verified: `:s/foo/BAR/` then `:s/~/baz/` — the second command's
+    /// pattern `~` expands to `BAR`, matches the just-inserted `BAR`, → `baz`.
+    #[test]
+    fn pattern_tilde_expands_to_last_substitute() {
+        let mut e = editor_with("foo");
+        let first = parse_substitute("/foo/BAR/").unwrap();
+        apply_substitute(&mut e, &first, 0..=0).unwrap();
+        assert_eq!(buf_line(&e, 0), "BAR");
+        e.set_last_substitute(first); // ex layer normally does this
+
+        let second = parse_substitute("/~/baz/").unwrap();
+        let out = apply_substitute(&mut e, &second, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1, "pattern `~` must match `BAR`");
+        assert_eq!(buf_line(&e, 0), "baz");
+    }
+
+    /// nvim-verified: `\~` in the pattern is a literal tilde — it matches a real
+    /// `~` character and does NOT expand to the last-substitute text.
+    #[test]
+    fn pattern_escaped_tilde_stays_literal() {
+        let mut e = editor_with("a~b");
+        // Prior `:s` set the last replacement to BAR; `\~` must ignore it.
+        e.set_last_substitute(parse_substitute("/x/BAR/").unwrap());
+        let cmd = parse_substitute("/\\~/X/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1, "`\\~` must match the literal tilde");
+        assert_eq!(buf_line(&e, 0), "aXb");
+    }
+
+    /// No previous substitute → pattern `~` expands to empty (documented
+    /// divergence from nvim's `E33`; the empty choice never corrupts text).
+    /// Here `:s/a~b/X/` on `"ab"` becomes pattern `ab`, which matches → `X`.
+    #[test]
+    fn pattern_tilde_no_previous_substitute_expands_empty() {
+        let mut e = editor_with("ab");
+        assert!(e.last_substitute().is_none());
+        let cmd = parse_substitute("/a~b/X/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1, "`~`→empty so pattern is `ab`");
+        assert_eq!(buf_line(&e, 0), "X");
+    }
+
+    /// A `/` search routes through the SAME `resolve_case_mode` path as the
+    /// `:s` LHS (`Editor::push_search_pattern`), so one test covers the shared
+    /// path: after a prior `:s/foo/BAR/`, searching `/~` compiles a regex that
+    /// matches `BAR`. nvim-verified: `/~` finds the last-substitute text.
+    #[test]
+    fn search_pattern_tilde_shares_expansion_path() {
+        let mut e = editor_with("BAR");
+        e.set_last_substitute(parse_substitute("/foo/BAR/").unwrap());
+        e.push_search_pattern("~");
+        let re = e
+            .search_state()
+            .pattern
+            .as_ref()
+            .expect("`/~` must compile to a pattern");
+        assert!(re.is_match("BAR"), "search `~` must expand to `BAR`");
+        assert!(
+            !re.is_match("~"),
+            "search `~` must not match a literal tilde"
+        );
     }
 }

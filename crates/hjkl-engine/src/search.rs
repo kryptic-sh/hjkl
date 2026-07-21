@@ -139,7 +139,15 @@ fn is_special_unescaped(ch: char, level: MagicLevel) -> bool {
 /// Emit `ch`'s regex-special meaning into `out`. `chars` is consumed further
 /// only for `{` (counted-repeat body) and `[` (character class) is handled by
 /// the caller since it needs to flip a "bracket mode" flag.
-fn emit_special(out: &mut String, ch: char, chars: &mut std::iter::Peekable<std::str::Chars>) {
+///
+/// `last_sub` is the previous `:s` replacement string, used to expand the
+/// magic `~` (`:h /~`, `:h s/~`).
+fn emit_special(
+    out: &mut String,
+    ch: char,
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    last_sub: &str,
+) {
     match ch {
         '(' => out.push('('),
         ')' => out.push(')'),
@@ -156,9 +164,15 @@ fn emit_special(out: &mut String, ch: char, chars: &mut std::iter::Peekable<std:
         '.' => out.push('.'),
         '*' => out.push('*'),
         ']' => out.push_str(r"\]"), // stray close — harmless as a literal.
-        // Magic `~` ("last substitute string" in a pattern) is not
-        // implemented — treated as a literal tilde (see DIVERGE.md).
-        '~' => out.push('~'),
+        // Magic `~` — expands to the previous `:s` replacement text
+        // (`:h /~`, `:h s/~`). Inserted verbatim into the translated
+        // (rust-regex) output: like vim, the text is dropped in "as pattern"
+        // without re-escaping. Ordinary word replacements (`BAR`) round-trip
+        // exactly; a replacement carrying regex metacharacters or vim
+        // replacement escapes (`\1`, `&`, `\u`…) is a documented
+        // sub-limitation and may not compile. Empty `last_sub` (no prior
+        // `:s`) → empty expansion (see `translate_pattern`).
+        '~' => out.push_str(last_sub),
         '^' => out.push('^'),
         '$' => out.push('$'),
         _ => out.push(ch),
@@ -219,8 +233,21 @@ fn emit_literal(out: &mut String, ch: char) {
 ///
 /// A simple bracket-depth flag skips translation inside `[...]` character
 /// classes, mirroring how vim (and rust-regex) treat class contents mostly
-/// literally.
-fn translate_pattern(pat: &str) -> (String, Option<bool>) {
+/// literally. A `~` inside `[...]` is therefore a literal class member (as in
+/// vim), never a last-substitute expansion.
+///
+/// ### Magic `~` (last-substitute expansion)
+///
+/// `last_sub` is the previous `:s` replacement string. Under default magic a
+/// bare `~` expands to it (`\~` stays a literal tilde); under `\M`/`\V` the
+/// roles swap (`\~` expands, bare `~` is literal) — both fall out of the
+/// existing symmetric magic-level logic since `~` is a "magic"-inherent char.
+/// The expansion is inserted verbatim into the rust-regex output (see
+/// [`emit_special`]). When `last_sub` is empty (no `:s` has run yet) the
+/// expansion is empty rather than an error — nvim raises `E33` here, but the
+/// empty-string choice is safe (never corrupts the buffer) and matches this
+/// repo's "silent no-op over hard error" search convention.
+fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
     let mut out = String::with_capacity(pat.len());
     let mut level = MagicLevel::Magic;
     let mut override_mode: Option<bool> = None;
@@ -259,7 +286,7 @@ fn translate_pattern(pat: &str) -> (String, Option<bool>) {
                         out.push('[');
                         in_bracket = true;
                     } else {
-                        emit_special(&mut out, c2, &mut chars);
+                        emit_special(&mut out, c2, &mut chars, last_sub);
                     }
                 }
                 Some(other) => {
@@ -279,7 +306,7 @@ fn translate_pattern(pat: &str) -> (String, Option<bool>) {
                 out.push('[');
                 in_bracket = true;
             } else {
-                emit_special(&mut out, ch, &mut chars);
+                emit_special(&mut out, ch, &mut chars, last_sub);
             }
         } else {
             emit_literal(&mut out, ch);
@@ -318,8 +345,15 @@ fn translate_pattern(pat: &str) -> (String, Option<bool>) {
 /// The `:s/…/…/i` and `:s/…/…/I` flags are handled in
 /// `apply_substitute` **before** calling this function (they
 /// short-circuit entirely). This function is not involved.
-pub fn resolve_case_mode(pat: &str, base: CaseMode) -> (String, CaseMode) {
-    let (out, override_mode) = translate_pattern(pat);
+///
+/// ### Magic `~` expansion
+///
+/// `last_sub` is the previous `:s` replacement string (pass `""` when there is
+/// no substitute context, e.g. `*`/`#` word search). Callers get it from
+/// [`crate::editor::Editor::last_substitute_replacement`]. See
+/// [`translate_pattern`] for the expansion + escaping rules.
+pub fn resolve_case_mode(pat: &str, base: CaseMode, last_sub: &str) -> (String, CaseMode) {
+    let (out, override_mode) = translate_pattern(pat, last_sub);
 
     let resolved = match override_mode {
         Some(true) => CaseMode::Insensitive,
@@ -363,8 +397,12 @@ pub fn resolve_case_mode(pat: &str, base: CaseMode) -> (String, CaseMode) {
 ///
 /// Prefer [`resolve_case_mode`] when you also need to apply case semantics;
 /// that function performs the same boundary rewrite internally.
+///
+/// This thin wrapper passes an empty last-substitute string, so a magic `~`
+/// expands to the empty string. Use [`resolve_case_mode`] directly with the
+/// editor's last-substitute replacement when `~` expansion matters.
 pub fn vim_to_rust_regex(pat: &str) -> String {
-    resolve_case_mode(pat, CaseMode::Sensitive).0
+    resolve_case_mode(pat, CaseMode::Sensitive, "").0
 }
 
 /// Per-row match cache keyed against the buffer's `dirty_gen`. Live
@@ -712,10 +750,54 @@ mod tests {
     }
 
     #[test]
-    fn magic_tilde_is_literal_not_special() {
-        // Magic `~` ("last substitute text") is unimplemented — treated as a
-        // literal tilde (see DIVERGE.md).
-        assert_eq!(vim_to_rust_regex("a~b"), "a~b");
+    fn magic_tilde_expands_to_last_sub_empty_via_wrapper() {
+        // `vim_to_rust_regex` passes an empty last-substitute string, so a bare
+        // magic `~` expands to "" (nvim would `E33` with no prior `:s`; we pick
+        // the safe empty expansion). `\~` stays a literal tilde.
+        assert_eq!(vim_to_rust_regex("a~b"), "ab");
+        assert_eq!(vim_to_rust_regex(r"a\~b"), "a~b");
+    }
+
+    // ── Magic `~` PATTERN-side expansion (V5) ────────────────────────────────
+
+    /// `~` expands to the supplied last-substitute string; `\~` stays literal.
+    /// nvim-verified: after `:s/foo/BAR/`, `/~` matches the text `BAR`.
+    #[test]
+    fn magic_tilde_expands_to_last_sub() {
+        let (out, _) = resolve_case_mode("~", CaseMode::Sensitive, "BAR");
+        assert_eq!(out, "BAR");
+        // Surrounded by other pattern text.
+        let (out, _) = resolve_case_mode("x~y", CaseMode::Sensitive, "BAR");
+        assert_eq!(out, "xBARy");
+    }
+
+    /// `\~` is a literal tilde and must NOT expand, even with a last-sub set.
+    /// nvim-verified: `\~` in a pattern matches a real `~` character.
+    #[test]
+    fn escaped_tilde_stays_literal_and_does_not_expand() {
+        let (out, _) = resolve_case_mode(r"\~", CaseMode::Sensitive, "BAR");
+        assert_eq!(out, "~");
+        // Compiled: matches a real tilde, not "BAR".
+        let re = Regex::new(&out).unwrap();
+        assert!(re.is_match("a~b"));
+        assert!(!re.is_match("BAR"));
+    }
+
+    /// `~` inside a `[...]` class is a literal class member, never an
+    /// expansion. nvim-verified: `[~]` matches the tilde character.
+    #[test]
+    fn tilde_in_bracket_class_is_literal() {
+        let (out, _) = resolve_case_mode("[~]", CaseMode::Sensitive, "BAR");
+        assert_eq!(out, "[~]");
+    }
+
+    /// No previous substitute (empty last-sub) → `~` expands to empty.
+    /// Documented divergence from nvim's `E33`; the empty choice never
+    /// corrupts the buffer.
+    #[test]
+    fn magic_tilde_no_previous_sub_expands_empty() {
+        let (out, _) = resolve_case_mode("a~b", CaseMode::Sensitive, "");
+        assert_eq!(out, "ab");
     }
 
     #[test]
@@ -893,14 +975,14 @@ mod tests {
 
     #[test]
     fn resolve_case_mode_no_override_smart_lowercase() {
-        let (stripped, mode) = resolve_case_mode("foo", CaseMode::Smart);
+        let (stripped, mode) = resolve_case_mode("foo", CaseMode::Smart, "");
         assert_eq!(stripped, "foo");
         assert_eq!(mode, CaseMode::Insensitive);
     }
 
     #[test]
     fn resolve_case_mode_no_override_smart_uppercase() {
-        let (stripped, mode) = resolve_case_mode("Foo", CaseMode::Smart);
+        let (stripped, mode) = resolve_case_mode("Foo", CaseMode::Smart, "");
         assert_eq!(stripped, "Foo");
         assert_eq!(mode, CaseMode::Sensitive);
     }
@@ -908,7 +990,7 @@ mod tests {
     #[test]
     fn resolve_case_mode_lower_c_override() {
         // \c overrides Sensitive → Insensitive; stripped pattern is "Foo"
-        let (stripped, mode) = resolve_case_mode(r"\cFoo", CaseMode::Sensitive);
+        let (stripped, mode) = resolve_case_mode(r"\cFoo", CaseMode::Sensitive, "");
         assert_eq!(stripped, "Foo");
         assert_eq!(mode, CaseMode::Insensitive);
     }
@@ -916,7 +998,7 @@ mod tests {
     #[test]
     fn resolve_case_mode_upper_c_override() {
         // \C overrides Smart → Sensitive; stripped pattern is "foo"
-        let (stripped, mode) = resolve_case_mode(r"foo\C", CaseMode::Smart);
+        let (stripped, mode) = resolve_case_mode(r"foo\C", CaseMode::Smart, "");
         assert_eq!(stripped, "foo");
         assert_eq!(mode, CaseMode::Sensitive);
     }
@@ -924,7 +1006,7 @@ mod tests {
     #[test]
     fn resolve_case_mode_last_wins() {
         // \c then \C → last-wins → Sensitive; stripped "foo"
-        let (stripped, mode) = resolve_case_mode(r"\cfoo\C", CaseMode::Smart);
+        let (stripped, mode) = resolve_case_mode(r"\cfoo\C", CaseMode::Smart, "");
         assert_eq!(stripped, "foo");
         assert_eq!(mode, CaseMode::Sensitive);
     }
@@ -933,7 +1015,7 @@ mod tests {
 
     fn build_regex_from(pat: &str, ic: bool, smart: bool) -> Regex {
         let base = CaseMode::from_options(ic, smart);
-        let (stripped, mode) = resolve_case_mode(pat, base);
+        let (stripped, mode) = resolve_case_mode(pat, base, "");
         let src = if mode == CaseMode::Insensitive {
             format!("(?i){stripped}")
         } else {
