@@ -58,23 +58,26 @@ pub struct MarkSnapshot {
     pub global_marks: BTreeMap<char, (usize, usize)>,
 }
 
-// ─── Undo arena tree (Phase 2a, docs/undo-architecture.md §3/§5) ──────────────
+// ─── Undo arena tree (Phase 2b, docs/undo-architecture.md §3/§5) ──────────────
 //
-// The undo history is stored as an arena tree of state snapshots instead of the
-// two linear `Vec<UndoEntry>` stacks it replaces. This slice is STRUCTURAL ONLY:
-// it keeps behaviour byte-identical to the old two-stack model by never letting
-// a node keep more than one child — every `push` drops the forward ("redo")
-// branch, exactly as the old `clear_redo` did. Branch retention + `g-`/`g+`
-// tree-walk semantics are a later slice (Phase 2b).
+// The undo history is a real arena TREE of state snapshots (Phase 2a introduced
+// the arena but kept linear behaviour; Phase 2b makes it branch). An edit after
+// an undo now FORKS a new child instead of truncating the forward branch, so
+// old branches stay reachable — matching nvim's undo tree. `seq` is now
+// load-bearing: `g-`/`g+` and the `:earlier`/`:later` count forms walk ALL
+// states by global `seq` (see `seq_earlier_step`/`seq_later_step`), while
+// `u`/`<C-r>` stay branch-local (parent / `last_child`).
 //
-// Mapping from the old two Vecs onto the tree's single root→current→leaf path:
+// The linear-history subset is unchanged from Phase 2a: with no forks the tree
+// is a single root→current→leaf path and every operation degrades to the old
+// two-stack behaviour.
 //
 // - `current` points at the node representing the LIVE buffer state.
-// - The ancestors of `current` (parent, grandparent, … up to `root`) are the
-//   old `undo_stack`, oldest at `root`. `undo_stack.last()` == `current.parent`.
-// - The descendant chain below `current` (`current.last_child`, its child, …)
-//   is the old `redo_stack`, nearest-future first. `redo_stack.last()` ==
-//   `current.last_child`.
+// - The ancestors of `current` (parent, … up to `root`) are the reachable undo
+//   line; `current.parent` is the `u` target.
+// - `current.last_child` is the `<C-r>` target. Landing on any node (undo,
+//   redo, or a `g-`/`g+` jump) rewrites `last_child` down the root→node path so
+//   a later `<C-r>` retraces the branch just taken.
 // - `current`'s OWN snapshot is scratch (the live state): it is written on the
 //   way past a node and never read as a restore target until it has been
 //   written, so a placeholder there is safe (see the module tests).
@@ -84,22 +87,22 @@ pub struct MarkSnapshot {
 pub(crate) type NodeId = usize;
 
 /// One node of the undo arena tree: a buffer state the user could land on, plus
-/// its links. In this slice every node has at most one child (`children` holds
-/// 0 or 1 id) because `push` drops the forward branch; the `Vec`/`last_child`
-/// shape is kept so Phase 2b can allow real branches without a data change.
+/// its links. A node with `> 1` child is a branch point (Phase 2b); `last_child`
+/// records which child `<C-r>` follows.
 #[derive(Debug, Clone)]
 pub(crate) struct UndoNode {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub last_child: Option<NodeId>,
     pub snapshot: UndoEntry,
-    #[allow(dead_code)] // load-bearing only for Phase 2b `g-`/`g+`; kept now.
+    /// Global monotonic order across the whole tree — the change number that
+    /// `g-`/`g+`, `:earlier`/`:later`, and `:undolist` traverse and display.
     pub seq: u64,
 }
 
 /// Arena tree of [`UndoNode`]s. Replaces the old `undo_stack`/`redo_stack`
-/// `Vec<UndoEntry>` pair on [`crate::Buffer`]; see the module comment for the
-/// stack⇔tree mapping that keeps behaviour byte-identical.
+/// `Vec<UndoEntry>` pair on [`crate::Buffer`]; see the module comment for how
+/// `u`/`<C-r>` (branch-local) and `g-`/`g+` (seq-ordered) map onto it.
 #[derive(Debug)]
 pub(crate) struct UndoTree {
     /// Slab; `None` slots are free and recorded in `free`.
@@ -215,21 +218,20 @@ impl UndoTree {
 
     // ── mutations ────────────────────────────────────────────────────────────
 
-    /// `undo_stack.push(entry)` + `redo_stack.clear()`.
+    /// Commit a new boundary from `current`, growing the tree (Phase 2b).
     ///
-    /// `entry` is the pre-edit LIVE state. It is committed as `current`'s
-    /// snapshot (making `current` the new `undo_stack.last()`), `current`'s
-    /// forward branch is dropped (the redo clear), and a fresh child becomes the
-    /// new `current` for the edit that is about to happen.
+    /// `entry` is the pre-edit LIVE state. It is written into `current`'s
+    /// snapshot (making `current` a real, restorable state), then a fresh child
+    /// is APPENDED and becomes the new `current` for the edit about to happen.
+    ///
+    /// Unlike Phase 2a this does NOT drop `current`'s existing children: an edit
+    /// after an undo now forks a new branch and the old forward branch(es) stay
+    /// reachable via `g-`/`g+` and `:undolist`, matching nvim's undo tree. The
+    /// new child is made `last_child` so a subsequent `<C-r>` follows the branch
+    /// just created.
     pub(crate) fn push(&mut self, entry: UndoEntry) {
         let cur = self.current;
         self.get_mut(cur).snapshot = entry.clone();
-        // Drop the old redo branch (byte-identical to the old clear_redo).
-        let old_children = std::mem::take(&mut self.get_mut(cur).children);
-        self.get_mut(cur).last_child = None;
-        for c in old_children {
-            self.free_subtree(c);
-        }
         let seq = self.next_seq;
         self.next_seq += 1;
         let child = self.alloc(UndoNode {
@@ -240,6 +242,7 @@ impl UndoTree {
             seq,
         });
         let cur_node = self.get_mut(cur);
+        // Append (retain old branches); the freshest child is the redo target.
         cur_node.children.push(child);
         cur_node.last_child = Some(child);
         self.current = child;
@@ -294,56 +297,273 @@ impl UndoTree {
         Some(self.get(child).snapshot.clone())
     }
 
-    /// `undo_stack.pop()` — discard the most-recent undo boundary WITHOUT moving
-    /// the live state: splice `current`'s parent out of the ancestor chain,
-    /// reconnecting `current` to its grandparent. Used by `:s` with zero
-    /// replacements and by a no-op undo group. Returns `false` at the root.
+    // ── seq-ordered tree walk (`g-` / `g+`, `:earlier`/`:later` — Phase 2b) ───
+    //
+    // `u`/`<C-r>` are branch-local (parent / `last_child`); `g-`/`g+` traverse
+    // ALL states by global `seq`, crossing branch boundaries. `g-` restores the
+    // node with the greatest `seq` strictly below `current`'s; `g+` the least
+    // `seq` strictly above. Confirmed against nvim v0.12.4 (`iA<Esc>uiB<Esc>`
+    // then `g-`/`g-g-`/`g-g+` walks empty↔A↔B by change number).
+
+    /// `seq` of the node the buffer currently shows.
+    fn current_seq(&self) -> u64 {
+        self.get(self.current).seq
+    }
+
+    /// Live node with the greatest `seq` strictly below `s` (the `g-` target).
+    fn node_below(&self, s: u64) -> Option<NodeId> {
+        let mut best: Option<(u64, NodeId)> = None;
+        for (id, slot) in self.nodes.iter().enumerate() {
+            if let Some(n) = slot
+                && n.seq < s
+                && best.is_none_or(|(bs, _)| n.seq > bs)
+            {
+                best = Some((n.seq, id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// Live node with the least `seq` strictly above `s` (the `g+` target).
+    fn node_above(&self, s: u64) -> Option<NodeId> {
+        let mut best: Option<(u64, NodeId)> = None;
+        for (id, slot) in self.nodes.iter().enumerate() {
+            if let Some(n) = slot
+                && n.seq > s
+                && best.is_none_or(|(bs, _)| n.seq < bs)
+            {
+                best = Some((n.seq, id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// Point `current` at `target` and rewrite `last_child` down the whole
+    /// root→target path, so a later `<C-r>` retraces the branch just landed on
+    /// (nvim parity: landing on a node updates its ancestors' redo direction).
+    fn retarget_current(&mut self, target: NodeId) {
+        self.current = target;
+        let mut node = target;
+        while let Some(p) = self.get(node).parent {
+            self.get_mut(p).last_child = Some(node);
+            node = p;
+        }
+    }
+
+    /// Stash the live buffer state into the node being left (it may be a fresh,
+    /// still-stale leaf), preserving that node's own timestamp, then move.
+    fn stash_and_move(
+        &mut self,
+        target: NodeId,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: MarkSnapshot,
+    ) {
+        let cur = self.current;
+        let ts = self.get(cur).snapshot.timestamp;
+        self.get_mut(cur).snapshot = UndoEntry {
+            rope,
+            cursor,
+            timestamp: ts,
+            marks,
+        };
+        self.retarget_current(target);
+    }
+
+    /// One `g-` / `:earlier` step: move to the next-lower-`seq` node tree-wide.
+    /// Returns its snapshot to restore, or `None` at the lowest state.
+    pub(crate) fn seq_earlier_step(
+        &mut self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: MarkSnapshot,
+    ) -> Option<UndoEntry> {
+        let target = self.node_below(self.current_seq())?;
+        self.stash_and_move(target, rope, cursor, marks);
+        Some(self.get(target).snapshot.clone())
+    }
+
+    /// One `g+` / `:later` step: move to the next-higher-`seq` node tree-wide.
+    /// Returns its snapshot to restore, or `None` at the highest state.
+    pub(crate) fn seq_later_step(
+        &mut self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: MarkSnapshot,
+    ) -> Option<UndoEntry> {
+        let target = self.node_above(self.current_seq())?;
+        self.stash_and_move(target, rope, cursor, marks);
+        Some(self.get(target).snapshot.clone())
+    }
+
+    /// Timestamp of the next-lower-`seq` node (the `:earlier Ns` predicate walks
+    /// the seq order tree-wide, stopping once this dips to/below the cutoff).
+    pub(crate) fn seq_earlier_timestamp(&self) -> Option<SystemTime> {
+        self.node_below(self.current_seq())
+            .map(|id| self.get(id).snapshot.timestamp)
+    }
+
+    /// Timestamp of the next-higher-`seq` node (the `:later Ns` predicate).
+    pub(crate) fn seq_later_timestamp(&self) -> Option<SystemTime> {
+        self.node_above(self.current_seq())
+            .map(|id| self.get(id).snapshot.timestamp)
+    }
+
+    /// Leaves of the tree (nodes with no children), each as
+    /// `(seq, depth-from-root, timestamp, is_current)`, sorted by `seq`.
+    /// Drives `:undolist`, which — like nvim — lists only branch leaves.
+    pub(crate) fn leaves(&self) -> Vec<(u64, usize, SystemTime, bool)> {
+        let mut out: Vec<(u64, usize, SystemTime, bool)> = Vec::new();
+        for (id, slot) in self.nodes.iter().enumerate() {
+            let Some(n) = slot else { continue };
+            // The root is the base state (change number 0), never a listed
+            // "change" — like nvim, an untouched buffer lists nothing.
+            if id == self.root || !n.children.is_empty() {
+                continue;
+            }
+            // Depth = number of ancestors (root leaf ⇒ 0).
+            let mut depth = 0;
+            let mut p = n.parent;
+            while let Some(pid) = p {
+                depth += 1;
+                p = self.get(pid).parent;
+            }
+            out.push((n.seq, depth, n.snapshot.timestamp, id == self.current));
+        }
+        out.sort_by_key(|&(seq, ..)| seq);
+        out
+    }
+
+    /// Number of live nodes (used by [`Self::cap`] as the state budget).
+    fn live_count(&self) -> usize {
+        self.nodes.iter().filter(|n| n.is_some()).count()
+    }
+
+    /// `undo_stack.pop()` — discard the most-recent boundary WITHOUT moving the
+    /// live state. Used by `:s` with zero replacements and by a no-op undo
+    /// group; in both, `current` is the childless leaf the last [`Self::push`]
+    /// created, so reverse that push: drop the leaf, step `current` back to its
+    /// parent (its snapshot equals the unchanged buffer), and restore the
+    /// parent's `last_child`. Retains any sibling branches the push appended to.
+    /// Returns `false` at the root, or if `current` is not a childless leaf
+    /// (nothing safe to pop).
     pub(crate) fn pop_committed(&mut self) -> bool {
         let cur = self.current;
+        if !self.get(cur).children.is_empty() {
+            return false;
+        }
         let Some(par) = self.get(cur).parent else {
             return false;
         };
-        let grand = self.get(par).parent;
-        self.get_mut(cur).parent = grand;
-        match grand {
-            Some(g) => {
-                let g_node = self.get_mut(g);
-                if let Some(slot) = g_node.children.iter_mut().find(|c| **c == par) {
-                    *slot = cur;
-                }
-                if g_node.last_child == Some(par) {
-                    g_node.last_child = Some(cur);
-                }
-            }
-            None => self.root = cur,
+        let par_node = self.get_mut(par);
+        par_node.children.retain(|&c| c != cur);
+        // The freshest surviving sibling (if any) becomes the redo target again.
+        par_node.last_child = par_node.children.last().copied();
+        self.current = par;
+        // The popped leaf always holds the highest seq (push assigns it last),
+        // so reclaim the seq to keep numbering gapless.
+        if self.get(cur).seq + 1 == self.next_seq {
+            self.next_seq -= 1;
         }
-        // `par` has only `cur` as a child (linear invariant) and `cur` is kept —
-        // free just the spliced-out slot.
-        self.free(par);
+        self.free(cur);
         true
     }
 
-    /// `if len > cap { undo_stack.drain(..len-cap) }` — a node budget. Prunes
-    /// the oldest ancestors (root side); never touches `current` or the redo
-    /// branch. `cap == 0` means unlimited (matches the old guard).
+    /// Node budget (`undolevels`). While the number of undo states (live nodes
+    /// minus the root) exceeds `cap`, prune — branch-aware (Phase 2b):
+    ///
+    /// 1. First drop the lowest-`seq` LEAF that is NOT on the root→`current`
+    ///    path — an abandoned branch tip. This never touches `current` or its
+    ///    ancestors, so the state you're on and its full undo line survive.
+    /// 2. When only the main line remains (no off-path leaves left), fall back
+    ///    to promoting the root's on-path child to root and dropping the old
+    ///    root — the Phase 2a root-side prune, which matches nvim's linear
+    ///    `undolevels` trimming (oldest states drop first).
+    ///
+    /// `cap == 0` means unlimited (matches the old guard).
     pub(crate) fn cap(&mut self, cap: usize) {
         if cap == 0 {
             return;
         }
-        let mut depth = self.depth();
-        while depth > cap {
-            let root = self.root;
-            // Linear tree: the root has exactly one child, on the path to
-            // `current`. Promote it to the new root and drop the old root.
-            let child = self
-                .get(root)
-                .last_child
-                .expect("depth > 0 implies the root has a child");
-            self.get_mut(child).parent = None;
-            self.root = child;
-            self.free(root);
-            depth -= 1;
+        // Guard against a pathological loop: at most one prune per live node.
+        let mut budget_iters = self.live_count() + 1;
+        while self.live_count().saturating_sub(1) > cap && budget_iters > 0 {
+            budget_iters -= 1;
+            if let Some(leaf) = self.lowest_offpath_leaf() {
+                self.detach_leaf(leaf);
+            } else if !self.prune_root_side() {
+                break;
+            }
         }
+    }
+
+    /// Ids on the root→`current` path (inclusive), which pruning must never
+    /// touch. Small (one per undo level), so a `Vec` membership check is fine.
+    fn current_path(&self) -> Vec<NodeId> {
+        let mut path = Vec::new();
+        let mut n = Some(self.current);
+        while let Some(id) = n {
+            path.push(id);
+            n = self.get(id).parent;
+        }
+        path
+    }
+
+    /// Lowest-`seq` leaf that is not on the root→`current` path, if any.
+    fn lowest_offpath_leaf(&self) -> Option<NodeId> {
+        let path = self.current_path();
+        let mut best: Option<(u64, NodeId)> = None;
+        for (id, slot) in self.nodes.iter().enumerate() {
+            if let Some(n) = slot
+                && n.children.is_empty()
+                && !path.contains(&id)
+                && best.is_none_or(|(bs, _)| n.seq < bs)
+            {
+                best = Some((n.seq, id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// Unlink `leaf` from its parent and free it (leaf ⇒ no subtree to recurse).
+    fn detach_leaf(&mut self, leaf: NodeId) {
+        if let Some(par) = self.get(leaf).parent {
+            let par_node = self.get_mut(par);
+            par_node.children.retain(|&c| c != leaf);
+            if par_node.last_child == Some(leaf) {
+                par_node.last_child = par_node.children.last().copied();
+            }
+        }
+        self.free(leaf);
+    }
+
+    /// Promote the root's on-path child to the new root and free the old root.
+    /// Returns `false` when the root is `current` (nothing left to trim).
+    fn prune_root_side(&mut self) -> bool {
+        let root = self.root;
+        if root == self.current {
+            return false;
+        }
+        // The child on the path to `current` (the root always has one here).
+        let path = self.current_path();
+        let Some(&child) = self.get(root).children.iter().find(|c| path.contains(c)) else {
+            return false;
+        };
+        // Any OTHER root children are off-path branches; drop them with the root.
+        let others: Vec<NodeId> = self
+            .get(root)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| c != child)
+            .collect();
+        for c in others {
+            self.free_subtree(c);
+        }
+        self.get_mut(child).parent = None;
+        self.root = child;
+        self.free(root);
+        true
     }
 
     /// `redo_stack.clear()` — drop `current`'s forward branch.
@@ -446,20 +666,112 @@ mod tree_tests {
     }
 
     #[test]
-    fn push_drops_forward_branch() {
+    fn push_retains_forward_branch() {
+        // Phase 2b: an edit after an undo forks a new branch; the old forward
+        // branch is NOT dropped and remains reachable by seq.
         let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
-        t.push(entry("s0")); // -> live s1
-        let (r, c, m) = live("s1");
-        t.undo_step(r, c, m); // back to s0, redo available
+        t.push(entry("A")); // root -> nA (seq1, "A")
+        let root = t.root;
+        let na = t.current;
+        let (r, c, m) = live("A");
+        t.undo_step(r, c, m); // back to root, nA is the redo child
         assert!(t.has_redo());
-        // A new edit from here drops the redo branch (linear behaviour).
-        t.push(entry("s0"));
-        assert!(!t.has_redo());
-        assert_eq!(t.depth(), 1);
-        // The old redo node's slot was reclaimed (then reused by the new
-        // child): only root + current remain live, no leak.
+        // A new edit from the root forks a SECOND child (nB, seq2).
+        t.push(entry("B"));
+        let nb = t.current;
+        assert_ne!(nb, na);
+        // Both branches live: root now has two children.
+        assert_eq!(t.get(root).children.len(), 2);
+        assert!(t.get(root).children.contains(&na));
+        assert!(t.get(root).children.contains(&nb));
+        // `<C-r>` follows the freshest branch (nB).
+        assert_eq!(t.get(root).last_child, Some(nb));
+        // Four live nodes: root + nA + nB + (nB is current/leaf). No leak of nA.
         let live = t.nodes.iter().filter(|n| n.is_some()).count();
-        assert_eq!(live, 2);
+        assert_eq!(live, 3);
+    }
+
+    #[test]
+    fn seq_walk_crosses_branches() {
+        // Mirror nvim `iA<Esc>uiB<Esc>` then g-/g+ (buffer starts empty "").
+        // `push(entry)` writes `entry` into the node being LEFT (its true
+        // pre-edit content); the fresh leaf holds the live post-edit state only
+        // once it is stashed on the way past — exactly the engine's discipline.
+        let mut t = UndoTree::new(ropey::Rope::from_str(""));
+        t.push(entry("")); // leave root("") -> nA(seq1), live "A"
+        let (r, c, m) = live("A");
+        t.undo_step(r, c, m); // stash "A" into nA, back to root("")
+        t.push(entry("")); // leave root("") -> nB(seq2), branch, live "B"
+        let nb = t.current;
+        // At B (seq2). g- -> greatest seq below 2 = seq1 = "A".
+        let (r, c, m) = live("B");
+        let a = t.seq_earlier_step(r, c, m).unwrap();
+        assert_eq!(a.rope.to_string(), "A");
+        // g- again -> root "".
+        let (r, c, m) = live("A");
+        let root_snap = t.seq_earlier_step(r, c, m).unwrap();
+        assert_eq!(root_snap.rope.to_string(), "");
+        // g+ -> back up to seq1 "A".
+        let (r, c, m) = live("");
+        let a2 = t.seq_later_step(r, c, m).unwrap();
+        assert_eq!(a2.rope.to_string(), "A");
+        // g+ -> seq2 "B" (crosses to the other branch).
+        let (r, c, m) = live("A");
+        let b = t.seq_later_step(r, c, m).unwrap();
+        assert_eq!(b.rope.to_string(), "B");
+        assert_eq!(t.current, nb);
+        // At the tip: no higher seq.
+        let (r, c, m) = live("B");
+        assert!(t.seq_later_step(r, c, m).is_none());
+    }
+
+    #[test]
+    fn seq_walk_updates_retrace_path() {
+        // Land on a deep leaf via g-, then u/u and <C-r>/<C-r> must retrace it
+        // (nvim `iX<Esc>iY<Esc>uiZ<Esc>g-uu<C-r><C-r>`). State labels: root "R".
+        let mut t = UndoTree::new(ropey::Rope::from_str("R"));
+        t.push(entry("R")); // leave root("R") -> nX(seq1), live "X"
+        t.push(entry("X")); // leave nX("X") -> nY(seq2), live "Y"
+        let (r, c, m) = live("Y");
+        t.undo_step(r, c, m); // stash "Y" into nY, back to nX("X")
+        t.push(entry("X")); // leave nX("X") -> nZ(seq3), branch, live "Z"
+        // g- from Z(seq3) -> nY(seq2) "Y".
+        let (r, c, m) = live("Z");
+        let y = t.seq_earlier_step(r, c, m).unwrap();
+        assert_eq!(y.rope.to_string(), "Y");
+        // u,u back to root.
+        let (r, c, m) = live("Y");
+        t.undo_step(r, c, m);
+        let (r, c, m) = live("X");
+        t.undo_step(r, c, m);
+        assert!(t.is_at_root());
+        // <C-r>,<C-r> retraces the branch we landed on: root->X->Y.
+        let (r, c, m) = live("R");
+        let x = t.redo_step(r, c, m).unwrap();
+        assert_eq!(x.rope.to_string(), "X");
+        let (r, c, m) = live("X");
+        let y2 = t.redo_step(r, c, m).unwrap();
+        assert_eq!(y2.rope.to_string(), "Y");
+    }
+
+    #[test]
+    fn leaves_lists_branch_tips_by_seq() {
+        // root -> nX -> nY -> nW (leaf, seq3, depth3) and nX -> nZ (leaf, seq4,
+        // depth2). Mirrors nvim `iX iY iW uu iZ`.
+        let mut t = UndoTree::new(ropey::Rope::from_str(""));
+        t.push(entry("X"));
+        t.push(entry("Y"));
+        t.push(entry("W"));
+        let (r, c, m) = live("W");
+        t.undo_step(r, c, m);
+        let (r, c, m) = live("Y");
+        t.undo_step(r, c, m); // back to nX
+        t.push(entry("Z")); // nX -> nZ(seq4)
+        let leaves = t.leaves();
+        // Two leaves: W(seq3, depth3) and Z(seq4, depth2). Z is current.
+        let dims: Vec<(u64, usize, bool)> =
+            leaves.iter().map(|&(s, d, _, cur)| (s, d, cur)).collect();
+        assert_eq!(dims, vec![(3, 3, false), (4, 2, true)]);
     }
 
     #[test]
@@ -478,15 +790,67 @@ mod tree_tests {
     }
 
     #[test]
-    fn pop_committed_splices_parent_keeping_live() {
+    fn cap_drops_offpath_leaf_before_main_line() {
+        // Fork two abandoned branches off the root, then extend the main line,
+        // and cap: the lowest-seq OFF-PATH leaf must go first, and `current`
+        // plus its ancestors must survive.
+        let mut t = UndoTree::new(ropey::Rope::from_str(""));
+        t.push(entry("A")); // root -> nA(seq1) [abandoned branch tip]
+        let na = t.current;
+        let (r, c, m) = live("A");
+        t.undo_step(r, c, m);
+        t.push(entry("B")); // root -> nB(seq2) [abandoned branch tip]
+        let nb = t.current;
+        let (r, c, m) = live("B");
+        t.undo_step(r, c, m);
+        t.push(entry("C")); // root -> nC(seq3), the live main line
+        let nc = t.current;
+        // 4 live nodes (root, nA, nB, nC) => 3 states. Cap to 2.
+        assert_eq!(t.leaves().len(), 3);
+        t.cap(2);
+        // The lowest-seq off-path leaf (nA, seq1) was dropped; current (nC) and
+        // its ancestor (root) survive, and the newer off-path leaf nB survives.
+        assert!(t.nodes[na].is_none());
+        assert!(t.nodes[nb].is_some());
+        assert_eq!(t.current, nc);
+        assert!(!t.is_at_root());
+        assert!(t.get(t.root).children.contains(&nb));
+        assert!(t.get(t.root).children.contains(&nc));
+    }
+
+    #[test]
+    fn pop_committed_reverses_last_push() {
         let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
         t.push(entry("s0")); // depth 1, current = fresh leaf
         assert_eq!(t.depth(), 1);
         assert!(t.pop_committed());
-        // The just-pushed boundary is gone; live node preserved as new root.
+        // The just-pushed leaf is gone; current stepped back to the root.
         assert_eq!(t.depth(), 0);
         assert!(t.is_at_root());
         assert_eq!(t.free.len(), 1);
+        // Seq reclaimed so the next push is gapless.
+        assert_eq!(t.next_seq, 1);
+    }
+
+    #[test]
+    fn pop_committed_retains_sibling_branches() {
+        // Fork a branch, then a no-op push at the fork must pop cleanly without
+        // orphaning the sibling branch.
+        let mut t = UndoTree::new(ropey::Rope::from_str(""));
+        t.push(entry("A")); // root -> nA(seq1)
+        let na = t.current;
+        let (r, c, m) = live("A");
+        t.undo_step(r, c, m); // back to root
+        t.push(entry("B")); // root -> nB(seq2); root children [nA, nB]
+        let root = t.root;
+        // A spurious no-op push at nB, then pop it.
+        assert!(t.pop_committed());
+        // nB is gone, current back at root; nA branch still intact & reachable.
+        assert!(t.get(root).children.contains(&na));
+        assert_eq!(t.get(root).children.len(), 1);
+        assert_eq!(t.current, root);
+        let live = t.nodes.iter().filter(|n| n.is_some()).count();
+        assert_eq!(live, 2); // root + nA
     }
 
     #[test]

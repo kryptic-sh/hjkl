@@ -1019,6 +1019,14 @@ async fn tier2_round3_g1_undo_travel_corpus_passes() {
     run_corpus("corpus/tier2_round3_g1_undo_travel.toml").await;
 }
 
+/// Phase 2b (#297): nvim-style undo TREE — `u`/`<C-r>` branch-local,
+/// `g-`/`g+` walk all states by seq across branches. Every expected value
+/// probed against real nvim v0.12.4.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_undo_tree_corpus_passes() {
+    run_corpus("corpus/tier2_undo_tree.toml").await;
+}
+
 // B5 (`U` / undo-line) is NOT oracle-tested: the nvim comparison side seeds
 // each case's buffer via `nvim_buf_set_lines`, which real nvim's undo
 // system treats as a genuine change — `U`'s restore-target line

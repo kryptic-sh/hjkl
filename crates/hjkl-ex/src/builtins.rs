@@ -583,6 +583,17 @@ fn changes_handler<H: Host>(
     })
 }
 
+fn undolist_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::InfoTitled {
+        title: "undolist",
+        content: crate::listings::format_undolist(editor),
+    })
+}
+
 // ---- register/count arg parsing (shared by :y and :d) ----------------------
 
 /// Parse a `[{register}] [count]` ex-command argument tail (e.g. `:y a 3` /
@@ -1590,6 +1601,15 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: redo_handler::<H>,
+    });
+
+    // `:undolist` / `:undol` (min_prefix=5; shorter prefixes resolve to `:undo`)
+    reg.add(ExCommand {
+        name: "undolist",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: undolist_handler::<H>,
     });
 
     // `:earlier` (min_prefix=2; vim compat: `:ea`)
@@ -4164,6 +4184,90 @@ mod tests {
         assert!(reg.resolve("lat").is_some(), ":lat must resolve to :later");
         assert_eq!(reg.resolve("lat").unwrap().name, "later");
         assert!(reg.resolve("later").is_some(), ":later must resolve");
+    }
+
+    // ── :earlier / :later over a branched undo TREE (Phase 2b, #297) ──────────
+    //
+    // `:earlier`/`:later` are `:` commands the compat-oracle can't drive, so
+    // these are hand-authored. The branch is built with real keystrokes; every
+    // expected value was probed against nvim v0.12.4 (`iA<Esc>uiB<Esc>` builds
+    // root -> {A(seq1), B(seq2)}, current = B; `:earlier`/`:later` walk by seq).
+
+    fn press(ed: &mut Editor<hjkl_buffer::View, DefaultHost>, keys: &str) {
+        for input in hjkl_engine::decode_macro(keys) {
+            hjkl_vim::dispatch_input(ed, input);
+        }
+    }
+
+    #[test]
+    fn earlier_count_walks_tree_by_seq_across_branches() {
+        let mut ed = make_editor();
+        press(&mut ed, "iA<Esc>uiB<Esc>");
+        assert_eq!(buf_line(&ed, 0), "B");
+        // :earlier 1 -> greatest seq below B(2) = the SIBLING A(1), not the
+        // branch-local parent (root). Confirms the tree-wide seq walk.
+        earlier_handler(&mut ed, "1", None);
+        assert_eq!(buf_line(&ed, 0), "A");
+        // :earlier 1 again -> root ("").
+        earlier_handler(&mut ed, "1", None);
+        assert_eq!(buf_line(&ed, 0), "");
+        // :later 2 -> forward by seq back to B.
+        later_handler(&mut ed, "2", None);
+        assert_eq!(buf_line(&ed, 0), "B");
+    }
+
+    #[test]
+    fn later_count_clamps_at_newest_state() {
+        let mut ed = make_editor();
+        press(&mut ed, "iA<Esc>uiB<Esc>");
+        earlier_handler(&mut ed, "2", None); // -> root ("")
+        assert_eq!(buf_line(&ed, 0), "");
+        later_handler(&mut ed, "99", None); // clamp at the newest state (B)
+        assert_eq!(buf_line(&ed, 0), "B");
+    }
+
+    // ── :undolist ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn undolist_lists_leaves_by_seq_with_current_marker() {
+        let mut ed = make_editor();
+        press(&mut ed, "iA<Esc>uiB<Esc>");
+        match undolist_handler(&mut ed, "", None) {
+            Some(ExEffect::InfoTitled { title, content }) => {
+                assert_eq!(title, "undolist");
+                let lines: Vec<&str> = content.lines().collect();
+                // nvim lists only leaves: header + A(seq1) + B(seq2).
+                assert!(lines[0].starts_with("number changes"), "header: {content}");
+                assert_eq!(lines.len(), 3, "header + 2 leaves; got: {content}");
+                assert!(lines[1].trim_start().starts_with("1 "), "row1: {content}");
+                assert!(lines[2].trim_start().starts_with("2 "), "row2: {content}");
+                // current is B (seq2) -> marked; A is not.
+                assert!(lines[2].contains('>'), "current marker on B: {content}");
+                assert!(!lines[1].contains('>'), "A not current: {content}");
+            }
+            other => panic!("expected InfoTitled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn undolist_empty_history_reports_nothing() {
+        let mut ed = make_editor();
+        match undolist_handler(&mut ed, "", None) {
+            Some(ExEffect::InfoTitled { content, .. }) => {
+                assert!(content.contains("Nothing to undo"), "got: {content}");
+            }
+            other => panic!("expected InfoTitled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn undolist_dispatch_resolves_min_prefix_5() {
+        let reg = crate::default_registry::<hjkl_engine::DefaultHost>();
+        assert_eq!(reg.resolve("undol").unwrap().name, "undolist");
+        assert_eq!(reg.resolve("undolist").unwrap().name, "undolist");
+        // Shorter prefixes still resolve to :undo.
+        assert_eq!(reg.resolve("u").unwrap().name, "undo");
+        assert_eq!(reg.resolve("undo").unwrap().name, "undo");
     }
 
     // ── registers / marks / jumps / changes ──────────────────────────────────

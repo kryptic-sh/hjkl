@@ -4437,6 +4437,36 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.redo_core();
     }
 
+    /// `[count]u` — undo `n` times, BRANCH-LOCAL (each step walks to the parent
+    /// on the current branch, not the seq order). This is what `u` binds to;
+    /// `g-`/`:earlier` use the tree-wide [`earlier_by_steps`](Self::earlier_by_steps)
+    /// seq walk instead. Stops at the branch root.
+    pub fn undo_by_steps(&mut self, n: usize) -> usize {
+        let mut count = 0;
+        for _ in 0..n {
+            if self.buffer.undo_stack_is_empty() {
+                break;
+            }
+            self.undo_core();
+            count += 1;
+        }
+        count
+    }
+
+    /// `[count]<C-r>` — redo `n` times, BRANCH-LOCAL (each step follows
+    /// `last_child`). Counterpart to [`undo_by_steps`](Self::undo_by_steps).
+    pub fn redo_by_steps(&mut self, n: usize) -> usize {
+        let mut count = 0;
+        for _ in 0..n {
+            if self.buffer.redo_stack_is_empty() {
+                break;
+            }
+            self.redo_core();
+            count += 1;
+        }
+        count
+    }
+
     /// `U` (`:h U`): restore the line where the latest change was made to
     /// its state before that run of changes began — NOT necessarily the
     /// line the cursor is currently on (moving the cursor away without
@@ -4478,43 +4508,90 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.push_buffer_cursor_to_textarea();
     }
 
-    /// Undo `n` steps. Returns the number of steps actually applied
-    /// (bounded by undo stack size).
+    /// One `g-` step: restore the next-lower-`seq` state anywhere in the undo
+    /// tree (`docs/undo-architecture.md` §5). Branch-crossing counterpart of
+    /// [`undo_core`](Self::undo_core); restores the destination snapshot exactly
+    /// like an undo. Returns `false` when already at the lowest state.
+    fn seq_earlier_core(&mut self) -> bool {
+        let (cur_rope, cur_cursor) = self.snapshot();
+        let cur_marks = self.snapshot_marks();
+        if let Some(entry) = self
+            .buffer
+            .seq_earlier_step(cur_rope, cur_cursor, cur_marks)
+        {
+            self.restore_rope(entry.rope, entry.cursor);
+            self.restore_marks(&entry.marks);
+            self.settle_after_history_jump();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// One `g+` step: restore the next-higher-`seq` state anywhere in the undo
+    /// tree. Branch-crossing counterpart of [`redo_core`](Self::redo_core),
+    /// including its vim-parity cursor-park at the start of the reapplied
+    /// change. Returns `false` when already at the highest state.
+    fn seq_later_core(&mut self) -> bool {
+        let (cur_rope, cur_cursor) = self.snapshot();
+        let cur_marks = self.snapshot_marks();
+        let before = cur_rope.clone();
+        if let Some(entry) = self.buffer.seq_later_step(cur_rope, cur_cursor, cur_marks) {
+            self.cap_undo();
+            self.restore_rope(entry.rope, entry.cursor);
+            self.restore_marks(&entry.marks);
+            let after = crate::types::Query::rope(&self.buffer);
+            if let Some((row, col)) = first_diff_pos(&before, &after) {
+                buf_set_cursor_rc(&mut self.buffer, row, col);
+                self.push_buffer_cursor_to_textarea();
+            }
+            self.settle_after_history_jump();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `g-` / `:earlier N` — travel `n` states back through the undo TREE by
+    /// `seq` (crossing branches), not the branch-local `u` path. Returns the
+    /// number of steps actually applied (clamped at the oldest state).
     pub fn earlier_by_steps(&mut self, n: usize) -> usize {
         let mut count = 0;
         for _ in 0..n {
-            if self.buffer.undo_stack_is_empty() {
+            if self.seq_earlier_core() {
+                count += 1;
+            } else {
                 break;
             }
-            self.undo_core();
-            count += 1;
         }
         count
     }
 
-    /// Redo `n` steps. Returns the number of steps actually applied
-    /// (bounded by redo stack size).
+    /// `g+` / `:later N` — travel `n` states forward through the undo TREE by
+    /// `seq`. Returns the number of steps actually applied (clamped at the
+    /// newest state).
     pub fn later_by_steps(&mut self, n: usize) -> usize {
         let mut count = 0;
         for _ in 0..n {
-            if self.buffer.redo_stack_is_empty() {
+            if self.seq_later_core() {
+                count += 1;
+            } else {
                 break;
             }
-            self.redo_core();
-            count += 1;
         }
         count
     }
 
-    /// Undo back until the next-to-pop entry's timestamp is at or before
-    /// `target`. Entries whose timestamp is strictly greater than `target`
-    /// are popped (undone). Returns the number of steps applied.
+    /// Travel back through the tree (by `seq`) while the next-older state's
+    /// timestamp is strictly greater than `target`; stop once it is at/below.
+    /// Returns the number of steps applied.
     ///
     /// Vim `:earlier Ns` semantics: `target = SystemTime::now() - N seconds`.
+    /// The walk is tree-wide (same seq order as `g-`), so it crosses branches.
     pub fn earlier_by_time(&mut self, target: SystemTime) -> usize {
         let mut count = 0;
         loop {
-            match self.buffer.peek_undo_timestamp() {
+            match self.buffer.seq_earlier_timestamp() {
                 None => break,
                 Some(ts) => {
                     if ts <= target {
@@ -4522,20 +4599,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                     }
                 }
             }
-            self.undo_core();
-            count += 1;
+            if self.seq_earlier_core() {
+                count += 1;
+            } else {
+                break;
+            }
         }
         count
     }
 
-    /// Redo forward while the next-to-pop redo entry's timestamp is at
-    /// or before `target`. Returns the number of steps applied.
+    /// Travel forward through the tree (by `seq`) while the next-newer state's
+    /// timestamp is at/below `target`. Returns the number of steps applied.
     ///
     /// Vim `:later Ns` semantics: `target = current_state_time + N seconds`.
     pub fn later_by_time(&mut self, target: SystemTime) -> usize {
         let mut count = 0;
         loop {
-            match self.buffer.peek_redo_timestamp() {
+            match self.buffer.seq_later_timestamp() {
                 None => break,
                 Some(ts) => {
                     if ts > target {
@@ -4543,10 +4623,20 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                     }
                 }
             }
-            self.redo_core();
-            count += 1;
+            if self.seq_later_core() {
+                count += 1;
+            } else {
+                break;
+            }
         }
         count
+    }
+
+    /// Undo-tree leaves for `:undolist`: `(seq, changes/depth, timestamp,
+    /// is_current)` sorted by `seq`. Like nvim, `:undolist` shows only branch
+    /// leaves, not every intermediate node.
+    pub fn undo_leaves(&self) -> Vec<(u64, usize, SystemTime, bool)> {
+        self.buffer.undo_leaves()
     }
 
     /// Snapshot current buffer state onto the undo stack and clear

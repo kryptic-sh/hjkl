@@ -398,7 +398,8 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             'r' => {
-                ed.later_by_steps(count.max(1));
+                // `<C-r>` is branch-local (follows last_child), unlike `g+`.
+                ed.redo_by_steps(count.max(1));
                 return true;
             }
             'a' if ed.fsm_mode() == FsmMode::Normal => {
@@ -717,7 +718,9 @@ fn handle_normal_only<H: Host>(
             true
         }
         Key::Char('u') => {
-            ed.earlier_by_steps(count.max(1));
+            // `u` is branch-local (walks to the parent state), unlike `g-`
+            // which walks the whole tree by change number.
+            ed.undo_by_steps(count.max(1));
             true
         }
         Key::Char('U') => {

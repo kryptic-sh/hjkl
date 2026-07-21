@@ -1,0 +1,173 @@
+# Phase 2b — nvim-style undo TREE: `u`/`<C-r>` are branch-local, `g-`/`g+`
+# walk ALL states by change number (seq) across branches (issue #297).
+#
+# Every expected_* value was probed against real nvim v0.12.4 by feeding the
+# keys through `nvim_input` (a socket + `--remote-send`, which — unlike
+# `exe "norm!"` — syncs undo between edits exactly as the oracle does). These
+# cases use `run_corpus`, which additionally self-checks each expected_buffer
+# against live nvim and fails loudly on a mismatch.
+#
+# The canonical branch scenario builds two branches off the empty root:
+#   iA<Esc>  -> "A" (seq1)      u      -> ""      iB<Esc> -> "B" (seq2)
+# so the root ("") has children A(seq1) and B(seq2); current = B.
+
+# ── branch scenario: g-/g+ walk by seq, u/uu stay branch-local ────────────────
+
+[[cases]]
+name = "tree_branch_g_minus_to_A"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>g-"
+expected_buffer = "A"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_branch_g_minus_twice_to_root"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>g-g-"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_branch_g_minus_then_g_plus_back_to_B"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>g-g+"
+expected_buffer = "B"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_branch_walk_root_and_forward_to_B"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>g-g-g+g+"
+expected_buffer = "B"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_branch_u_is_branch_local_to_root"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>u"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_branch_uu_clamps_at_root"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>uu"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `<C-r>` is branch-local (follows last_child), NOT the seq axis: from the B
+# leaf it has nowhere to redo, so it is a no-op.
+[[cases]]
+name = "tree_branch_ctrl_r_at_leaf_is_noop"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc><C-r>"
+expected_buffer = "B"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Landing on the A branch via g- rewrites the retrace pointers, so u (to root)
+# then <C-r> retraces DOWN to A — not the stale B branch.
+[[cases]]
+name = "tree_branch_g_minus_retrace_lands_on_A"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>g-u<C-r>"
+expected_buffer = "A"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ── three branches off the root: g-/g+ cross multiple branch points ───────────
+# iA u iB u iC builds root -> {A(seq1), B(seq2), C(seq3)}; current = C.
+
+[[cases]]
+name = "tree_three_branch_g_minus_to_B"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>uiC<Esc>g-"
+expected_buffer = "B"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_three_branch_g_minus_twice_to_A"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>uiC<Esc>g-g-"
+expected_buffer = "A"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_three_branch_walk_back_to_root_then_forward_to_C"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iA<Esc>uiB<Esc>uiC<Esc>g-g-g-g+g+g+"
+expected_buffer = "C"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ── deeper tree with an interior branch point (root -> X -> {Y, Z}) ───────────
+# iX iY builds root->X(seq1)->Y(seq2); u backs to X; iZ forks X->Z(seq3).
+# State after Y is "YX", after Z is "ZX" (each insert goes in at column 0).
+
+[[cases]]
+name = "tree_deep_g_minus_crosses_interior_branch"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iX<Esc>iY<Esc>uiZ<Esc>g-"
+expected_buffer = "YX"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_deep_g_minus_then_g_plus_back_to_Z"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iX<Esc>iY<Esc>uiZ<Esc>g-g+"
+expected_buffer = "ZX"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Multi-level retrace: land on the Y leaf via g-, undo to root, then <C-r><C-r>
+# retraces the whole root->X->Y branch.
+[[cases]]
+name = "tree_deep_multi_level_retrace"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iX<Esc>iY<Esc>uiZ<Esc>g-uu<C-r><C-r>"
+expected_buffer = "YX"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "tree_deep_redo_retraces_last_taken_branch"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "iX<Esc>iY<Esc>uiZ<Esc>uu<C-r><C-r>"
+expected_buffer = "ZX"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ── regression: linear history u/<C-r> unchanged from Phase 2a ────────────────
+
+[[cases]]
+name = "tree_linear_u_ctrl_r_roundtrip"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "AX<Esc>AY<Esc>uu<C-r><C-r>"
+expected_buffer = "fooXY\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"

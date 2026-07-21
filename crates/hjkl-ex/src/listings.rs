@@ -148,6 +148,46 @@ pub(crate) fn format_changes<H: Host>(
     lines.join("\n")
 }
 
+// ---- undolist --------------------------------------------------------------
+
+/// Render a `SystemTime` as nvim's relative `:undolist` "when" text
+/// (`"N seconds ago"`, `"N minutes ago"`, `"N hours ago"`, `"N days ago"`).
+/// Future/unknown timestamps clamp to `"0 seconds ago"`.
+fn format_relative_time(ts: std::time::SystemTime) -> String {
+    let secs = ts.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    let (n, unit) = if secs < 60 {
+        (secs, "second")
+    } else if secs < 3600 {
+        (secs / 60, "minute")
+    } else if secs < 86_400 {
+        (secs / 3600, "hour")
+    } else {
+        (secs / 86_400, "day")
+    };
+    let plural = if n == 1 { "" } else { "s" };
+    format!("{n} {unit}{plural} ago")
+}
+
+/// `:undolist` (`:undol`) — list the LEAVES of the undo tree, mirroring nvim:
+/// `number` (change/`seq`), `changes` (depth from the original state), and
+/// `when` (relative time). A trailing `>` marks the leaf the buffer is on. Like
+/// nvim, intermediate (non-leaf) branch nodes are not listed.
+pub(crate) fn format_undolist<H: Host>(
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+) -> String {
+    let leaves = editor.undo_leaves();
+    if leaves.is_empty() {
+        return "Nothing to undo".to_string();
+    }
+    let mut lines = vec!["number changes  when               saved".to_string()];
+    for (seq, changes, ts, is_current) in leaves {
+        let when = format_relative_time(ts);
+        let marker = if is_current { "  >" } else { "" };
+        lines.push(format!("{seq:>6} {changes:>7}  {when:<17}{marker}"));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

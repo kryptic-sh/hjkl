@@ -483,6 +483,54 @@ impl View {
         self.content.lock().unwrap().undo.pop_committed()
     }
 
+    /// One `g-` / `:earlier` step: move to the next-lower-`seq` state tree-wide,
+    /// returning its snapshot to restore, or `None` at the lowest state. `live`
+    /// is the current buffer state, stashed into the node being left. See
+    /// [`crate::UndoTree::seq_earlier_step`].
+    pub fn seq_earlier_step(
+        &self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: crate::MarkSnapshot,
+    ) -> Option<crate::UndoEntry> {
+        self.content
+            .lock()
+            .unwrap()
+            .undo
+            .seq_earlier_step(rope, cursor, marks)
+    }
+
+    /// One `g+` / `:later` step: move to the next-higher-`seq` state tree-wide.
+    /// Symmetric to [`Self::seq_earlier_step`].
+    pub fn seq_later_step(
+        &self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: crate::MarkSnapshot,
+    ) -> Option<crate::UndoEntry> {
+        self.content
+            .lock()
+            .unwrap()
+            .undo
+            .seq_later_step(rope, cursor, marks)
+    }
+
+    /// Timestamp of the next-lower-`seq` state (`:earlier Ns` predicate).
+    pub fn seq_earlier_timestamp(&self) -> Option<std::time::SystemTime> {
+        self.content.lock().unwrap().undo.seq_earlier_timestamp()
+    }
+
+    /// Timestamp of the next-higher-`seq` state (`:later Ns` predicate).
+    pub fn seq_later_timestamp(&self) -> Option<std::time::SystemTime> {
+        self.content.lock().unwrap().undo.seq_later_timestamp()
+    }
+
+    /// Undo-tree leaves for `:undolist`, each `(seq, changes/depth, timestamp,
+    /// is_current)`, sorted by `seq`. See [`crate::UndoTree::leaves`].
+    pub fn undo_leaves(&self) -> Vec<(u64, usize, std::time::SystemTime, bool)> {
+        self.content.lock().unwrap().undo.leaves()
+    }
+
     pub fn peek_undo_timestamp(&self) -> Option<std::time::SystemTime> {
         self.content.lock().unwrap().undo.parent_timestamp()
     }
