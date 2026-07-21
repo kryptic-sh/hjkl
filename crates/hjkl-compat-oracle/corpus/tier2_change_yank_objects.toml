@@ -361,3 +361,62 @@ initial_cursor = [0, 0]
 keys = "d2as"
 expected_buffer = "Three.\n"
 expected_cursor = [0, 0]
+
+# `dap` on the LAST paragraph (no trailing blank line, runs to EOF): vim's
+# `ap` falls back to consuming the LEADING blank line(s) instead of trailing
+# ones. So `dap` on "bar" here deletes the blank line + "bar", leaving just
+# "foo\n" with the cursor pulled back off the phantom trailing row. (V1 —
+# phantom trailing row on linewise deletes reaching EOF.)
+[[cases]]
+name = "textobj_dap_last_paragraph_takes_leading_blank"
+initial_buffer = "foo\n\nbar\n"
+initial_cursor = [2, 0]
+keys = "dap"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "\nbar\n"]
+
+# `dap` on the last paragraph with MULTIPLE leading blank lines: `ap` absorbs
+# the whole leading blank run when it falls back to leading whitespace.
+[[cases]]
+name = "textobj_dap_last_paragraph_takes_all_leading_blanks"
+initial_buffer = "foo\n\n\nbar\n"
+initial_cursor = [3, 0]
+keys = "dap"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "\n\nbar\n"]
+
+# `dap` on the ONLY paragraph (no blanks anywhere) empties the buffer to ""
+# (not "\n") with the cursor at the origin.
+[[cases]]
+name = "textobj_dap_single_paragraph_empties_buffer"
+initial_buffer = "bar\n"
+initial_cursor = [0, 0]
+keys = "dap"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_register = ['"', "bar\n"]
+
+# `dip` on the last paragraph at EOF stays INNER — it takes only the
+# paragraph, never the surrounding blank lines (contrast with `dap` above).
+# Pins that the leading-blank fallback is `ap`-only.
+[[cases]]
+name = "textobj_dip_last_paragraph_inner_only"
+initial_buffer = "foo\n\nbar\n"
+initial_cursor = [2, 0]
+keys = "dip"
+expected_buffer = "foo\n\n"
+expected_cursor = [1, 0]
+expected_register = ['"', "bar\n"]
+
+# `dap` on a MIDDLE paragraph (trailing blank present) still takes the
+# trailing blank, NOT the leading one — the EOF fallback must not fire here.
+[[cases]]
+name = "textobj_dap_middle_paragraph_takes_trailing_blank"
+initial_buffer = "foo\n\nbar\n\nbaz\n"
+initial_cursor = [2, 0]
+keys = "dap"
+expected_buffer = "foo\n\nbaz\n"
+expected_cursor = [2, 0]
+expected_register = ['"', "bar\n\n"]

@@ -1207,6 +1207,20 @@ pub(crate) fn paragraph_text_object<H: hjkl_engine::types::Host>(
         }
         rem -= 1;
     }
+    // vim `:h ap`: a paragraph object takes the trailing blank lines, or —
+    // when the paragraph runs to the end of the buffer with no blank line
+    // after it — the leading blank lines instead. `bot` sitting on a
+    // non-blank line at real EOF (`bot + 1 >= n_lines`, the phantom row
+    // already excluded above) means no trailing blank was available, so fall
+    // back to absorbing the whole leading blank run. When a trailing blank
+    // *was* taken `bot` is blank, so this is skipped and a middle-paragraph
+    // `dap` keeps its leading run intact. Checked after the `Nap` count loop
+    // so it reflects the final span.
+    if !inner && bot + 1 >= n_lines && !is_blank(bot) {
+        while top > 0 && is_blank(top - 1) {
+            top -= 1;
+        }
+    }
     let end_col = rope_line_to_str(&rope, bot).chars().count();
     Some(((top, 0), (bot, end_col)))
 }

@@ -97,3 +97,56 @@ keys = "k"
 expected_buffer = "foo\nbar\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# ── Linewise deletes reaching EOF must not park the cursor on the phantom row
+# (V1). These pin the phantom-row clamp for the Visual-line delete path, which
+# — unlike `dd` and the motion-driven operator path — previously lacked it.
+
+# `VGd` deletes every line: the buffer empties to "" (not "\n"), the register
+# captures exactly the four lines with a single trailing newline (no phantom
+# extra `\n`), and the cursor sits at the origin.
+[[cases]]
+name = "phantom_row_VGd_empties_buffer"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "VGd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_register = ['"', "one\ntwo\nthree\nfour\n"]
+expected_mode = "normal"
+
+# `jVjjd` — Visual-line delete of rows 1..3 (through the last real line) must
+# land the cursor on the surviving "one" row (0), NOT the phantom trailing row.
+[[cases]]
+name = "phantom_row_visual_line_delete_through_eof"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "jVjjd"
+expected_buffer = "one\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "two\nthree\nfour\n"]
+expected_mode = "normal"
+
+# `Vd` on the last real line only: cursor pulls back to the new last content
+# row ("three"), not the phantom trailing row.
+[[cases]]
+name = "phantom_row_visual_line_delete_last_line"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [3, 0]
+keys = "Vd"
+expected_buffer = "one\ntwo\nthree\n"
+expected_cursor = [2, 0]
+expected_register = ['"', "four\n"]
+expected_mode = "normal"
+
+# Non-EOF Visual-line delete is unchanged: deleting rows 1..2 lands on the
+# join row ("four" at row 1), same as before the phantom clamp was added.
+[[cases]]
+name = "visual_line_delete_non_eof_unchanged"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "jVjd"
+expected_buffer = "one\nfour\n"
+expected_cursor = [1, 0]
+expected_register = ['"', "two\nthree\n"]
+expected_mode = "normal"
