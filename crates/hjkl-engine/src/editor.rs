@@ -1722,7 +1722,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     ///
     /// Returns `true` if an entry was discarded.
     pub fn pop_last_undo(&mut self) -> bool {
-        self.buffer.pop_undo_entry().is_some()
+        self.buffer.pop_committed()
     }
 
     /// Read all named marks set this session — both lowercase
@@ -4340,44 +4340,42 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     // clamp, so the engine never names vim.
 
     /// Rope-level undo, then return the discipline to idle.
+    ///
+    /// Drives the undo arena tree: [`View::undo_step`](hjkl_buffer::View) writes
+    /// the live state into the node we leave (that node becomes the redo target)
+    /// and returns the parent snapshot to restore. Behaviourally identical to
+    /// the old pop-undo / push-redo dance — the moved-across node inherits the
+    /// destination's timestamp, exactly as the old redo entry did.
     fn undo_core(&mut self) {
-        if let Some(entry) = self.buffer.pop_undo_entry() {
+        if !self.buffer.undo_stack_is_empty() {
             let (cur_rope, cur_cursor) = self.snapshot();
             let cur_marks = self.snapshot_marks();
-            self.buffer.push_redo_entry(hjkl_buffer::UndoEntry {
-                rope: cur_rope,
-                cursor: cur_cursor,
-                timestamp: entry.timestamp,
-                marks: cur_marks,
-            });
-            self.restore_rope(entry.rope, entry.cursor);
-            self.restore_marks(&entry.marks);
+            if let Some(entry) = self.buffer.undo_step(cur_rope, cur_cursor, cur_marks) {
+                self.restore_rope(entry.rope, entry.cursor);
+                self.restore_marks(&entry.marks);
+            }
         }
         self.settle_after_history_jump();
     }
 
     /// Rope-level redo, then return the discipline to idle.
     fn redo_core(&mut self) {
-        if let Some(entry) = self.buffer.pop_redo_entry() {
+        if !self.buffer.redo_stack_is_empty() {
             let (cur_rope, cur_cursor) = self.snapshot();
             let cur_marks = self.snapshot_marks();
             let before = cur_rope.clone();
-            self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
-                rope: cur_rope,
-                cursor: cur_cursor,
-                timestamp: entry.timestamp,
-                marks: cur_marks,
-            });
-            self.cap_undo();
-            self.restore_rope(entry.rope, entry.cursor);
-            self.restore_marks(&entry.marks);
-            // Park the cursor at the START of the reapplied change rather than
-            // the end-of-insert position stored in the redo snapshot (vim
-            // parity). Recompute from the first differing character.
-            let after = crate::types::Query::rope(&self.buffer);
-            if let Some((row, col)) = first_diff_pos(&before, &after) {
-                buf_set_cursor_rc(&mut self.buffer, row, col);
-                self.push_buffer_cursor_to_textarea();
+            if let Some(entry) = self.buffer.redo_step(cur_rope, cur_cursor, cur_marks) {
+                self.cap_undo();
+                self.restore_rope(entry.rope, entry.cursor);
+                self.restore_marks(&entry.marks);
+                // Park the cursor at the START of the reapplied change rather
+                // than the end-of-insert position stored in the redo snapshot
+                // (vim parity). Recompute from the first differing character.
+                let after = crate::types::Query::rope(&self.buffer);
+                if let Some((row, col)) = first_diff_pos(&before, &after) {
+                    buf_set_cursor_rc(&mut self.buffer, row, col);
+                    self.push_buffer_cursor_to_textarea();
+                }
             }
         }
         self.settle_after_history_jump();

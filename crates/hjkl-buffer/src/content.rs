@@ -66,10 +66,12 @@ pub struct Buffer {
     pub(crate) cached_byte_len: Option<(u64, usize)>,
 
     // ── Per-buffer engine state (relocated from hjkl-engine::Editor) ──────
-    /// Undo history: O(1)-clone rope snapshots before each edit group.
-    pub(crate) undo_stack: Vec<crate::UndoEntry>,
-    /// Redo history: entries pushed when the user undoes.
-    pub(crate) redo_stack: Vec<crate::UndoEntry>,
+    /// Undo history: an arena tree of O(1)-clone rope snapshots (Phase 2a,
+    /// docs/undo-architecture.md §3/§5). Replaces the old `undo_stack` /
+    /// `redo_stack` `Vec<UndoEntry>` pair; the tree stays linear (each node
+    /// has ≤ 1 child) so its behaviour is byte-identical to the two stacks —
+    /// see [`crate::UndoTree`]'s module comment for the mapping.
+    pub(crate) undo: crate::UndoTree,
     /// Undo-group nesting depth. `> 0` while an [`crate::UndoGroup`] guard is
     /// live (see hjkl-engine). At depth `0` `push_undo` behaves exactly as it
     /// always has (one entry per call); at depth `> 0` every mutation inside
@@ -126,14 +128,15 @@ impl Default for Buffer {
 impl Buffer {
     /// New empty content with one empty row.
     pub fn new() -> Self {
+        let text = ropey::Rope::new();
+        let undo = crate::UndoTree::new(text.clone());
         Self {
-            text: ropey::Rope::new(),
+            text,
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,
             cached_byte_len: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo,
             undo_group_depth: 0,
             undo_group_armed: false,
             undo_group_open_gen: 0,
@@ -153,14 +156,15 @@ impl Buffer {
     /// `\n` produces a trailing empty line (matches ropey's own convention).
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(text: &str) -> Self {
+        let text = ropey::Rope::from_str(text);
+        let undo = crate::UndoTree::new(text.clone());
         Self {
-            text: ropey::Rope::from_str(text),
+            text,
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,
             cached_byte_len: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo,
             undo_group_depth: 0,
             undo_group_armed: false,
             undo_group_open_gen: 0,
@@ -205,7 +209,9 @@ impl Buffer {
         self.undo_group_depth -= 1;
         if self.undo_group_depth == 0 {
             if self.undo_group_armed && self.dirty_gen == self.undo_group_open_gen {
-                self.undo_stack.pop();
+                // Drop the armed snapshot: splice out the just-committed
+                // boundary node, restoring the tree to its pre-group shape.
+                self.undo.pop_committed();
             }
             self.undo_group_armed = false;
         }

@@ -419,60 +419,84 @@ impl View {
 
     // ── Per-buffer engine state accessors ─────────────────────────────────
 
+    // ── Undo arena tree accessors (Phase 2a) ─────────────────────────────
+    //
+    // These delegate to the per-document [`crate::UndoTree`]. Their names and
+    // semantics mirror the two-stack API they replace (`undo_stack` /
+    // `redo_stack`), so the engine's undo/redo drivers are untouched apart
+    // from the two `*_step` moves below.
+
     pub fn undo_stack_is_empty(&self) -> bool {
-        self.content.lock().unwrap().undo_stack.is_empty()
+        self.content.lock().unwrap().undo.is_at_root()
     }
 
     pub fn redo_stack_is_empty(&self) -> bool {
-        self.content.lock().unwrap().redo_stack.is_empty()
+        !self.content.lock().unwrap().undo.has_redo()
     }
 
     pub fn undo_stack_len(&self) -> usize {
-        self.content.lock().unwrap().undo_stack.len()
+        self.content.lock().unwrap().undo.depth()
     }
 
+    /// Commit the pre-edit LIVE state `entry` as an undo boundary: the current
+    /// node takes `entry` and a fresh child becomes current, with the forward
+    /// (redo) branch dropped — the tree form of `undo_stack.push` + `clear_redo`.
     pub fn push_undo_entry(&self, entry: crate::UndoEntry) {
-        self.content.lock().unwrap().undo_stack.push(entry);
+        self.content.lock().unwrap().undo.push(entry);
     }
 
-    pub fn push_redo_entry(&self, entry: crate::UndoEntry) {
-        self.content.lock().unwrap().redo_stack.push(entry);
+    /// One undo move. `live` is the current buffer state (rope/cursor/marks) of
+    /// the node being left; returns the parent snapshot to restore, or `None`
+    /// at the root. See [`crate::UndoTree::undo_step`].
+    pub fn undo_step(
+        &self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: crate::MarkSnapshot,
+    ) -> Option<crate::UndoEntry> {
+        self.content
+            .lock()
+            .unwrap()
+            .undo
+            .undo_step(rope, cursor, marks)
     }
 
-    pub fn pop_undo_entry(&self) -> Option<crate::UndoEntry> {
-        self.content.lock().unwrap().undo_stack.pop()
+    /// One redo move. Symmetric to [`Self::undo_step`]; returns the child
+    /// snapshot to restore, or `None` when there is no forward branch.
+    pub fn redo_step(
+        &self,
+        rope: ropey::Rope,
+        cursor: (usize, usize),
+        marks: crate::MarkSnapshot,
+    ) -> Option<crate::UndoEntry> {
+        self.content
+            .lock()
+            .unwrap()
+            .undo
+            .redo_step(rope, cursor, marks)
     }
 
-    pub fn pop_redo_entry(&self) -> Option<crate::UndoEntry> {
-        self.content.lock().unwrap().redo_stack.pop()
+    /// Discard the most-recent undo boundary without moving the live state
+    /// (`undo_stack.pop()`); `false` at the root. See
+    /// [`crate::UndoTree::pop_committed`].
+    pub fn pop_committed(&self) -> bool {
+        self.content.lock().unwrap().undo.pop_committed()
     }
 
     pub fn peek_undo_timestamp(&self) -> Option<std::time::SystemTime> {
-        self.content
-            .lock()
-            .unwrap()
-            .undo_stack
-            .last()
-            .map(|e| e.timestamp)
+        self.content.lock().unwrap().undo.parent_timestamp()
     }
 
     pub fn peek_redo_timestamp(&self) -> Option<std::time::SystemTime> {
-        self.content
-            .lock()
-            .unwrap()
-            .redo_stack
-            .last()
-            .map(|e| e.timestamp)
+        self.content.lock().unwrap().undo.child_timestamp()
     }
 
     pub fn clear_undo_redo(&self) {
-        let mut c = self.content.lock().unwrap();
-        c.undo_stack.clear();
-        c.redo_stack.clear();
+        self.content.lock().unwrap().undo.clear_all();
     }
 
     pub fn clear_redo(&self) {
-        self.content.lock().unwrap().redo_stack.clear();
+        self.content.lock().unwrap().undo.clear_redo();
     }
 
     /// Whether an undo group is currently open on this content (depth `> 0`).
@@ -487,13 +511,7 @@ impl View {
     }
 
     pub fn cap_undo(&self, cap: usize) {
-        if cap > 0 {
-            let mut c = self.content.lock().unwrap();
-            let len = c.undo_stack.len();
-            if len > cap {
-                c.undo_stack.drain(..len - cap);
-            }
-        }
+        self.content.lock().unwrap().undo.cap(cap);
     }
 
     pub fn content_dirty(&self) -> bool {
@@ -869,7 +887,10 @@ mod tests {
         assert!(!view_b.undo_stack_is_empty());
     }
 
-    /// Redo entries pushed via one view are visible via another.
+    /// A redo branch created via one view is visible via another — the undo
+    /// tree lives on the shared `Buffer`, not the per-window `View`. (Phase 2a:
+    /// re-expressed against the arena-tree API — a redo entry is now a forward
+    /// child left behind by an undo move, not a `push_redo_entry` onto a Vec.)
     #[test]
     fn redo_stack_shared_across_views() {
         use crate::UndoEntry;
@@ -882,19 +903,28 @@ mod tests {
 
         assert!(view_a.redo_stack_is_empty());
 
-        view_b.push_redo_entry(UndoEntry {
+        // Commit an undo boundary via view_b, then undo it — that leaves the
+        // node we left (cursor (0, 2)) as a forward/redo branch on the shared
+        // Content.
+        view_b.push_undo_entry(UndoEntry {
             rope: view_b.rope(),
-            cursor: (0, 2),
+            cursor: (0, 0),
             timestamp: SystemTime::UNIX_EPOCH,
             marks: Default::default(),
         });
+        view_b.undo_step(view_b.rope(), (0, 2), Default::default());
 
-        let entry = view_a.pop_redo_entry();
+        // The redo branch is visible + walkable via view_a.
+        assert!(!view_a.redo_stack_is_empty());
+        let entry = view_a.redo_step(view_a.rope(), (0, 0), Default::default());
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().cursor, (0, 2));
     }
 
-    /// `clear_undo_redo` clears both stacks and the effect is shared.
+    /// `clear_undo_redo` collapses the shared undo tree to a single node, wiping
+    /// both directions, and the effect is visible from every view. (Phase 2a:
+    /// the redo side is now seeded by an undo move rather than a raw
+    /// `push_redo_entry`.)
     #[test]
     fn clear_undo_redo_shared_across_views() {
         use crate::UndoEntry;
@@ -905,18 +935,18 @@ mod tests {
         let view_a = View::new_view(Arc::clone(&arc));
         let view_b = View::new_view(Arc::clone(&arc));
 
-        view_a.push_undo_entry(UndoEntry {
-            rope: view_a.rope(),
-            cursor: (0, 0),
-            timestamp: SystemTime::UNIX_EPOCH,
-            marks: Default::default(),
-        });
-        view_a.push_redo_entry(UndoEntry {
-            rope: view_a.rope(),
-            cursor: (0, 1),
-            timestamp: SystemTime::UNIX_EPOCH,
-            marks: Default::default(),
-        });
+        // Two boundaries then one undo → undo side AND redo side both populated.
+        for _ in 0..2 {
+            view_a.push_undo_entry(UndoEntry {
+                rope: view_a.rope(),
+                cursor: (0, 0),
+                timestamp: SystemTime::UNIX_EPOCH,
+                marks: Default::default(),
+            });
+        }
+        view_a.undo_step(view_a.rope(), (0, 1), Default::default());
+        assert!(!view_a.undo_stack_is_empty());
+        assert!(!view_a.redo_stack_is_empty());
 
         view_b.clear_undo_redo();
         assert!(view_a.undo_stack_is_empty());
