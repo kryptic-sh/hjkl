@@ -2,9 +2,13 @@
 
 Status: **proposal — awaiting sign-off.** No code yet. This document is the
 design target for reworking undo/redo so that (1) checkpoint grouping is clean
-and cheap, (2) the history becomes an nvim-style **undo tree**, and (3) the tree
-can be **persisted to disk** (`undofile`). The three are designed as one model,
-not three bolt-ons.
+and cheap, (2) the history becomes an nvim-style **undo tree**, (3) the tree is
+**persisted to disk** (`undofile`) with **position restore** across sessions,
+(4) the **uncommitted tail** rides the existing swap file so crash recovery
+keeps the undo history, and (5) a small **shada-style state store** remembers
+the last cursor per file. All five are one coherent model (a tree of states
+linked by reversible deltas), not five bolt-ons, and the split across undofile /
+swap / state store mirrors how neovim separates the same concerns (§5c).
 
 ---
 
@@ -63,6 +67,12 @@ first two rows.
   time, `:undolist` shows branches.
 - **Disk persistence** (`undofile`): compact, versioned, keyed to file identity,
   safe to ignore on mismatch — matching `:h persistent-undo`.
+- **Position restore:** reopening a file lands on the exact undo node it was
+  saved on, with redo still able to walk forward (see §6).
+- **Cross-session cursor memory:** reopening a file restores the last cursor
+  position on that buffer (the last-moved window wins when several share it),
+  best-effort — like vim's `'"` mark / nvim shada (see §6b). Independent of the
+  undo tree; can ship on its own.
 - No regression to the cheap in-RAM path (rope Arc-clones stay the hot path).
 
 **Non-goals (for now)**
@@ -267,43 +277,255 @@ tree walk). This is the highest-value verification and it's essentially free.
 
 ---
 
-## 6. Phase 3 — disk persistence (`undofile`)
+## 5c. Prior art — how nvim and helix handle this
 
-Serialize the Phase-2 tree. Because nodes hold **deltas**, the file is compact.
+**Neovim** uses **three separate systems**, and our design independently
+converged on the same split (with the same validity models):
+
+- **`undofile`** (persistent undo): written on `:w` to `undodir`; header carries
+  a magic + version + **hash of the buffer contents**; on read a hash mismatch ⇒
+  undo is **refused** (never applied stale). Stores the **whole undo tree** as
+  **diffs** (changed lines per `u_entry`, not full snapshots) plus sequence
+  numbers, so reopening positions at the file-matching state and **redo walks
+  forward** — the exact scenario in §6. Bounded by `undolevels`/`undoreload`.
+- **shada** (`:h shada`, viminfo's successor): the `'"` mark = cursor on last
+  leaving a buffer, jumped to on open (best-effort, **clamped**),
+  **path-keyed**, capped to ~100 files. This is our §6b state store.
+- **swap** (`.swp`): unsaved content + header (path, mtime, inode, PID, cursor),
+  written on `updatetime`, deleted on clean exit, for `:recover`. **Does not
+  preserve the undo tree** — recovery gives text but flat undo.
+
+Two decisions this validates directly: **diffs not snapshots**, and
+**content-hash gating**. It also exposes a gap (below) we can beat.
+
+**Helix** keeps undo as an **in-memory tree** of reversible `Transaction` /
+`ChangeSet` values (retain/insert/delete ops over the Rope, invertible against
+the original doc) — the cleanest existing form of our "reversible delta," worth
+borrowing over a bare `(start, old, new)` for multi-region groups. But Helix has
+**no persistent undo, no shada equivalent, and no swap** — undo and cursor are
+lost on close. It validates the _model_, offers no _persistence_ prior art.
+
+**Where we improve on both:** nvim's (and vim's) swap **loses the undo tree** on
+`:recover`. Because this repo's swap already persists unsaved content + cursor
+(see §6c), extending it to also carry the **uncommitted undo tail** lets
+recovery restore the undo history too — better than either editor.
+
+---
+
+## 6. Phase 3 — disk persistence with position restore (`undofile`)
+
+Serialize the Phase-2 tree **plus the current position**, so reopening the same
+file restores the exact node the user was on and lets `u`/`<C-r>` keep walking —
+forward _and_ back — across sessions. Because nodes hold **deltas**, the file is
+compact.
+
+### Target scenario (the contract)
+
+1. User makes 5 edits → `current = n5`.
+2. `u` twice → `current = n3`.
+3. `:wq` — the on-disk file now holds **n3's content**; the undofile stores the
+   **whole tree** (n0…n5, including the forward nodes n4/n5), `current = n3`,
+   and the hash of n3.
+4. Reopen the file → hash(disk) == stored current-hash → load tree, set
+   `current = n3`, buffer shows n3.
+5. `<C-r>` twice → forward deltas n3→n4→n5 replay → back on **n5** (buffer now
+   modified relative to disk, exactly like never having closed).
+
+### The invariant that makes this safe
+
+**Persist only on `:w`, and record `current` as the just-saved node.** At write
+time the buffer _is_ `current`, so `current`'s content == the file on disk. Thus
+the persisted `current` always equals the on-disk state — reopening never shows
+"phantom" unsaved content. Forward nodes (n4/n5 above) still live in the
+serialized tree, so `<C-r>` can reconstruct them, but `current` itself is always
+anchored to what's actually on disk. (Recovering _unsaved_ in-memory edits is a
+**swap-file** concern, deliberately out of scope here — undo persistence and
+swap recovery stay separate.)
 
 ### Format (`undofile`)
 
 ```
 Header:
-  magic         b"HJKLUNDO"
-  format_version u32                 // bump on incompatible change
-  buffer_hash    [u8; 32]            // hash of the on-disk file contents at save
-  buffer_mtime   i64                 // sanity cross-check
-  save_seq       u64                 // node seq that equals the saved file
-Body (serde, e.g. bincode/postcard):
-  nodes: Vec<SerNode>               // parent id, delta {start,old,new}, seq, ts, cursor, marks
-  root, current, next_seq
+  magic          b"HJKLUNDO"
+  format_version u32            // bump on incompatible change
+  content_hash   [u8; 32]       // hash of the on-disk file == current node at save
+  file_size      u64            // cheap pre-check before hashing
+  file_mtime     i64            // cheap pre-check; not authoritative
+  current_seq    u64            // node the buffer was on at save (== saved content)
+  header_crc     u32            // header integrity
+Body (serde, e.g. bincode/postcard, then whole-body checksum):
+  nodes: Vec<SerNode>           // parent id, delta {start,old,new}, seq, ts, cursor, (marks?)
+  root, next_seq
+  body_crc       u32            // truncated/partial write ⇒ ignore whole file
 ```
 
-- **File identity:** on open, compute the buffer hash; load the undofile only if
-  `buffer_hash` matches (else ignore — never corrupt). Matches nvim's
-  content-hash keying, safer than path-only.
-- **Location:** `undodir` setting (default under the XDG state dir), filename
-  derived from the absolute path (percent/`%`-escaped like nvim, or a hash).
-- **Triggers:** write on `:w` (if `undofile` set) and `:wundo {file}`; read on
-  buffer load and `:rundo {file}`. Settings: `undofile` (bool), `undodir` (path
-  list), `undolevels` (already exists, becomes the node budget), `undoreload`
-  (max lines to keep undo across a reload).
+- **File identity & position restore:** on open, stat the file (size/mtime cheap
+  gate), then hash it. If `content_hash` matches, load the tree and set
+  `current = current_seq`'s node — position restored, redo/undo both live.
+- **Location:** `undodir` setting (default under the XDG state dir); filename =
+  hash of the absolute path (avoids `%`-escaping collisions). Never written
+  beside the file.
+- **Triggers:** write on `:w`/`:wq` (when `undofile` is set) and
+  `:wundo {file}`; read on buffer load and `:rundo {file}`. Settings: `undofile`
+  (bool), `undodir` (path list), `undolevels` (node budget), `undoreload` (max
+  lines to keep undo across an external reload).
 - **Versioning:** `format_version` gate; unknown/newer → ignore with a message.
-  Deltas are self-describing, so forward migration is a node-walk.
-- **Bounds:** cap serialized size (drop oldest leaves first, like the in-RAM
-  budget); large `old`/`new` blobs can be zstd-compressed in the body.
+- **Bounds:** cap serialized size (drop oldest off-path leaves first, like the
+  in-RAM budget); zstd the body behind the format version.
+
+### Invalidation / reconciliation matrix
+
+The single authority is the **content hash**; everything degrades safely to
+"start fresh from the file as a new root" — an undofile is never allowed to
+corrupt a buffer.
+
+| On reopen, situation                                  | Detection                                    | Action                                                                                                                                                                                  |
+| ----------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Clean: file == saved `current`                        | `hash(disk) == content_hash`                 | Load tree, restore `current`, full undo+redo (the scenario)                                                                                                                             |
+| Force-quit **without** saving after edits             | undofile is from the last `:w`; file too     | Still clean — file == last-saved node == undofile's `current`. Post-save edits were never persisted; lost. No stale state to invalidate (that's why we persist only on `:w`)            |
+| File changed externally (git pull, other editor)      | `hash(disk) != content_hash`                 | Default: **discard** undofile, root = current file. Opt-in (`undoreconcile`): scan tree for a node whose hash == disk; if found, rebase `current` there and keep the tree; else discard |
+| File truncated / partially written / corrupt undofile | `header_crc`/`body_crc` mismatch, short read | Ignore undofile entirely, root = current file                                                                                                                                           |
+| Undofile version newer/unknown                        | `format_version` gate                        | Ignore with a message                                                                                                                                                                   |
+| File missing / undofile missing                       | stat fails                                   | No persistence this session; fresh tree                                                                                                                                                 |
+| Path reused for a different file                      | hash mismatch (content, not path)            | Same as "changed externally" — discard/reconcile                                                                                                                                        |
+
+Two guarantees fall out:
+
+- **Never trust path or mtime alone** — content hash decides. A `git pull` that
+  happens to preserve mtime is still caught.
+- **Fail safe, never fail dangerous** — any doubt ⇒ discard the undofile and
+  treat the on-disk file as a pristine root, so the worst case is "you lost your
+  cross-session undo," never "your buffer got corrupted."
 
 ### Why deltas are required here
 
 A 1 MB buffer with 500 undo states as full ropes = ~500 MB undofile. As deltas
 (typical edit = a few bytes) it's kilobytes. This is the concrete reason Phase 2
 switches off full-rope entries before Phase 3.
+
+---
+
+## 6b. Companion: cross-session cursor & file-state store
+
+Cursor memory is **not** part of the undofile, and **not** the swap file. It is
+its own small **shada/viminfo-style state store**. Three persistence artifacts,
+three distinct jobs and lifetimes:
+
+| Artifact                        | Holds                                                                  | Keyed by        | Lifetime / validity                                                    |
+| ------------------------------- | ---------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------- |
+| **undofile** (§6, new)          | durable undo tree + saved `current` **as of the last `:w`**            | content hash    | long-lived; **discarded** on hash mismatch (external change)           |
+| **swap** (`HSWP`, exists → §6c) | unsaved content + cursor + identity; **+ uncommitted undo tail** (new) | path hash + PID | **ephemeral** — live edit only, deleted on clean `:wq`; crash recovery |
+| **state store** (§6b, new)      | last cursor per file (later: jumplist, marks, `"`)                     | file path       | long-lived; **best-effort**, survives external change by clamping      |
+
+**Why cursor position lives here, not in the other two**
+
+- _Not the undofile:_ the undofile is content-hash gated and thrown away when
+  the file changes externally (git pull, other editor). Cursor memory must
+  **survive** that — you still want to land near where you were, just clamped.
+  Different validity model ⇒ different store.
+- _Not the swap file:_ swap is crash-recovery of unsaved content and is
+  **deleted on clean exit** — by the time you reopen normally it's already gone,
+  so it cannot carry cross-session cursor state. (Swap does stash a cursor for
+  the recovery flow, but that's only for recovering an unsaved session, not
+  normal reopen.)
+
+### What & where
+
+```
+state store (single file, e.g. undodir/../state or XDG state dir):
+  format_version u32
+  entries: Map<path_hash, FileState>          // capped, LRU by last_seen
+FileState {
+  path            String        // for collision check on the hashed key
+  cursor          (row, col)     // last-moved cursor on the buffer (see below)
+  content_hash    [u8; 32]       // optional: exact-restore vs clamp decision
+  last_seen       SystemTime     // for LRU capping (à la shada's file cap)
+}
+```
+
+- **Single indexed store, capped** (like shada's ~100-file cap), not a file per
+  document — cursor records are tiny and per-file sprawl isn't worth it.
+- Best-effort restore, **never gated, never errors**: on open, clamp `row` to
+  `[0, last_line]` and `col` to the line's length. If `content_hash` matches,
+  restore exactly; if not, still restore the clamped row (position may drift —
+  acceptable, matches vim).
+
+### Multi-window semantics (the "last-moved window wins" requirement)
+
+The cursor is **per-window** (it lives on the per-window `View`, #151), but the
+_document_ is the shared `Content`. To remember "the last cursor moved on this
+buffer" regardless of which split:
+
+- Add `Content.last_cursor: (usize, usize)`, updated whenever **any** view
+  commits a cursor move on that `Content`. Two windows on one buffer both write
+  it; the most recent move wins — exactly the requested behavior.
+- Persist `Content.last_cursor` (not any single view's) at write/close/exit.
+
+### Triggers & settings
+
+- Update `Content.last_cursor` in memory on cursor move (cheap, no I/O).
+- Persist on buffer close, `:w`, and editor exit — **debounced**, never
+  per-keystroke.
+- Setting to enable (shada-style), e.g. `restorecursor` / a `shada`-like option;
+  default on. Independent of `undofile`.
+
+### Independence & rollout
+
+This needs **none** of the undo-tree work (Phases 1–2) — it can ship as its own
+small slice **before or in parallel** with the undo phases. It only shares the
+generic persistence plumbing (XDG state dir, versioned format, path keying,
+fail-safe load). Future growth (jumplist, global marks, `:h '"`, registers,
+search history) extends `FileState`/the store, evolving it into a proper shada
+equivalent.
+
+---
+
+## 6c. Splitting the undo tree across `undofile` + swap (crash recovery)
+
+The undo tree splits cleanly by **durability trigger**, and this repo **already
+has the swap half**: `crates/hjkl-app/src/swap.rs` writes `HSWP` v2 files
+holding `{canonical_path, file_mtime, write_time, cursor, writer_pid}` + the
+unsaved buffer text, keyed by `fnv1a64(path)`, gated on `dirty_gen`,
+PID-guarded, deleted on clean exit (`-r` lists them, `-n` disables). So
+crash-recovery infra exists; we extend it rather than invent it.
+
+### The split
+
+| Part of the tree                          | Where         | Trigger                   | Matches disk? |
+| ----------------------------------------- | ------------- | ------------------------- | ------------- |
+| Nodes **up to the last `:w`** + saved ptr | **undofile**  | on `:w`                   | yes (hash)    |
+| **Tail since the last `:w`** + live ptr   | **swap** (v3) | on `dirty_gen` (like now) | no (unsaved)  |
+
+- **On `:w`:** fold the swap's tail into the undofile (now durable), then reset
+  the swap tail — the content is saved, so the tail is empty and the swap's
+  `current` == the saved node.
+- **On crash + `:recover`:** `undofile (last save)` + `swap tail` reconstructs
+  the full buffer **and** the full undo tree **and** the live `current`/cursor —
+  vim and nvim only recover the text here (flat undo), so this is a strict
+  improvement.
+- **On clean exit:** swap deleted (nothing uncommitted); undofile holds
+  everything; state store holds the clean-close cursor.
+
+### Swap format extension (`HSWP` v2 → v3)
+
+Add to the swap body: the **uncommitted undo tail** (a `Vec<Delta>`-encoded log
+of groups committed since the last save) and the **live `current` pointer**.
+postcard is not self-describing, so old v2 files deserialize as `Err` and are
+already treated as "no usable swap" — the bump is safe by construction. The
+header already has `cursor`; keep it as the live recovery cursor.
+
+### Shared primitives (avoid three encoders)
+
+- **One `Delta` type** (borrow Helix's retain/insert/delete `ChangeSet` for
+  multi-region groups) used by the in-RAM tree edges, the undofile nodes,
+  **and** the swap tail. One serializer, three consumers, guaranteed consistent.
+- **Three cursors, three lifetimes, not redundant:** swap = live recovery
+  cursor; undofile = saved-node cursor; state store = clean-close cursor. Each
+  is the authority for its own scenario; during `:recover` the swap cursor wins.
+- **Append-log option:** the swap tail can be an append-only delta log (cheaper
+  than the current full-body rewrite, crash-safe via per-record CRC).
+  Optimization, not required for a first cut — the existing `dirty_gen`-gated
+  full write works.
 
 ---
 
@@ -319,13 +541,22 @@ switches off full-rope entries before Phase 3.
 
 ## 8. Rollout, risk, testing
 
-1. **Phase 1** ships first as its own slice(s): `UndoGroup` guard + coalesce +
-   lazy snapshot; wrap `:g`/`:v`, de-hack `:normal`. Oracle + unit tests. Closes
-   issue #2. Low blast radius (no format/API change).
-2. **Phase 2** behind the existing undo API + a fallback flag; extensive oracle
-   tree-walk suite (`u`/`<C-r>`/`g-`/`g+`) vs nvim before removing the flag.
-3. **Phase 3** last; format is versioned from day one; hash-gated load is
-   fail-safe (ignore on mismatch).
+Ordered by dependency and risk. The **state store (§6b)** and **Phase 1** are
+independent of everything else and can go first / in parallel.
+
+0. **State store (§6b)** — cross-session cursor. No dependency on the undo work;
+   shares only the generic persistence plumbing. Small, self-contained slice.
+1. **Phase 1 (§4)** — `UndoGroup` guard + coalesce + lazy snapshot; wrap
+   `:g`/`:v`, de-hack `:normal`. Oracle + unit tests. **Closes issue #2.** No
+   format/API change, low blast radius.
+2. **Phase 2 (§5)** — the arena tree + delta nodes behind the existing undo API,
+   behind a fallback flag; extensive oracle tree-walk suite
+   (`u`/`<C-r>`/`g-`/`g+`) vs nvim before removing the flag. Introduces the
+   shared `Delta`/`ChangeSet` type.
+3. **Phase 3 (§6)** — `undofile` (durable tree, hash-gated, position restore),
+   **plus** the swap `v2→v3` tail extension (§6c) reusing Phase 2's `Delta`.
+   Format versioned from day one; every load path fail-safe (ignore on
+   mismatch).
 
 **Risks & mitigations**
 
@@ -336,23 +567,35 @@ switches off full-rope entries before Phase 3.
   keeps their signatures.
 - _Tree memory growth_ → node budget = `undolevels`, prune oldest off-path
   leaves.
-- _Undofile poisoning_ → content-hash gate + version gate + size cap.
+- _Undofile / swap poisoning_ → content-hash (undofile) + version + CRC + size
+  cap on both; anything wrong ⇒ discard, treat the file as a pristine root.
+- _Swap regression_ → the `v2→v3` bump must not break existing recovery; old v2
+  files already read as `Err` ("no usable swap"), and the PTY recovery tests
+  (`apps/hjkl/tests/pty_harness/recovery.rs`) must stay green.
 
 ## 9. Open questions (decide before Phase 2/3)
 
 - `g-`/`g+` ordering: strictly by `seq`, or by wall-clock `timestamp` (nvim uses
-  a change-number that is effectively seq)? Proposal: `seq`, with
+  a change-number that is effectively seq)? **Proposal:** `seq`, with
   `:earlier/later Ns` using `timestamp`.
-- Delta granularity: single coalesced `(start, old, new)` per group vs
-  `Vec<Delta>`? Proposal: `Vec<Delta>` first (simple, correct), coalesce later.
+- Delta representation: single `(start, old, new)` vs a Helix-style
+  retain/insert/delete **`ChangeSet`** per group? **Proposal:** `ChangeSet`
+  (composes/inverts cleanly for grouped multi-region edits), `Vec<Delta>` as the
+  simple fallback if `ChangeSet` is too much for a first cut.
+- State store shape: single capped shada-like index vs one tiny file per
+  document? **Proposal:** single capped index (shada-like; ~a few hundred files,
+  LRU).
+- Cursor restore validity: hash-match ⇒ exact (row+col); mismatch ⇒ clamp row
+  only, or skip? **Proposal:** always clamp-restore (row+col), best-effort.
 - Keyframe spacing K: start unset (materialize current + LRU only), add if cold
   jumps profile hot.
-- Undofile compression: zstd the body, or per-blob? Proposal: whole-body, behind
-  the format version.
-- Do we persist marks/cursor per node in v1, or only text deltas? Proposal:
-  persist cursor (cheap, better UX on reload); marks optional.
+- Undofile/swap compression: zstd whole-body behind the format version — ok?
+- Swap tail cadence: keep the current `dirty_gen`-gated full-body write, or move
+  to an append-only delta log? **Proposal:** full-body first, append-log later.
 
 ---
 
-**Requested decision:** approve this direction (or adjust §9), then Phase 1
-lands as the first implementation slice.
+**Requested decision:** approve this direction (or adjust §9). Suggested first
+slices to implement after sign-off, in any order between the two: the **state
+store (§6b)** and **Phase 1 (§4, closes #2)** — both are self-contained and
+low-risk.
