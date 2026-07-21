@@ -43,6 +43,18 @@ icons = "auto"
 # edit in another editor). Set false to disable reading and writing the store.
 restore_cursor = true
 
+# Persistent undo (like vim's `undofile`). When true, `:w` writes the whole undo
+# tree to disk and reopening the same, unchanged file restores the exact node it
+# was saved on — so `u` and `<C-r>` keep working across sessions. Content-hash
+# gated: if the file changed on disk (git pull, another editor) the stored tree
+# is discarded. Set false to disable reading and writing undofiles.
+undofile = true
+
+# Optional override for where undofiles are stored. When unset, they live under
+# `$XDG_STATE_HOME/hjkl/undo/` (e.g. ~/.local/state/hjkl/undo/). Uncomment to
+# redirect, e.g. undodir = "/home/you/.hjkl-undo".
+# undodir = ""
+
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"

@@ -878,6 +878,28 @@ pub(super) fn build_slot(
         }
     }
 
+    // Cross-session persistent undo (docs/undo-architecture.md §6). Best-effort,
+    // content-hash gated: if an undofile exists AND its stored hash matches the
+    // freshly-loaded file, install the saved delta tree so `u`/`<C-r>`/`g-`/`g+`
+    // walk history across the reopen. This must run BEFORE the first user edit
+    // (here, at load) and after the buffer text is populated — the tree's
+    // `current` node materializes to the loaded content. Any mismatch (external
+    // change), corruption, version drift, or missing file ⇒ leave the fresh
+    // single-node tree, never block or error. Skip new (nonexistent) files.
+    if config.editor.undofile
+        && let Some(ref p) = path
+        && !is_new_file
+    {
+        let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        let override_dir = config.editor.undodir.as_deref().map(std::path::Path::new);
+        if let Some(loaded) = hjkl_app::undofile::read(&canonical, override_dir) {
+            let hash = hjkl_app::filestate::content_hash(&buffer.as_string());
+            if loaded.content_hash == hash {
+                buffer.install_undo_tree(&loaded.tree);
+            }
+        }
+    }
+
     let mut slot = BufferSlot {
         buffer_id,
         is_explorer: false,

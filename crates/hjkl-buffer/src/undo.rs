@@ -4,7 +4,9 @@
 //! directly, keeping per-buffer state co-located with the rope.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 /// A single entry in the undo or redo stack.
 ///
@@ -39,7 +41,7 @@ pub struct UndoEntry {
 /// one buffer's undo stack; the engine is responsible for reattaching
 /// its own `buffer_id` when writing entries back into the session-global
 /// marks map (see `Editor::restore_marks`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkSnapshot {
     /// `ma`-`mz` local marks (`View::marks_cloned`).
     pub local_marks: BTreeMap<char, (usize, usize)>,
@@ -78,8 +80,8 @@ pub struct MarkSnapshot {
 /// (common-prefix / common-suffix diff); a `Vec<Delta>` for disjoint regions is
 /// an acceptable future generalization, but one spanning region is all Phase 3a
 /// needs.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct Delta {
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Delta {
     /// Char offset of the first differing char (the common-prefix length).
     pub start: usize,
     /// Chars present in the PARENT but not the CHILD (removed going forward).
@@ -871,6 +873,199 @@ impl UndoTree {
     }
 }
 
+// ─── Serializable projection (Phase 3b, docs/undo-architecture.md §6) ─────────
+//
+// The undofile persists the tree as a compact, self-consistent projection: the
+// root's full base text (String) plus, per node, its edge `delta` and links.
+// `rope_cache`/`warm` are runtime-only and dropped — every node reconstructs
+// from the root base + deltas, so the round-trip reproduces identical content
+// at every node. NodeIds are DENSE in the projection (the live-slab holes are
+// compacted away and links remapped), so `from_serializable` rebuilds a fresh
+// arena 1:1 with no free list.
+
+/// One node of the serialized undo tree. Mirrors [`UndoNode`] minus the
+/// runtime-only materialization cache; ids are dense indices into
+/// [`SerTree::nodes`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerNode {
+    /// Parent index, `None` only for the root.
+    pub parent: Option<u32>,
+    /// Child indices (order preserved; `> 1` ⇒ branch point).
+    pub children: Vec<u32>,
+    /// `<C-r>` target child index.
+    pub last_child: Option<u32>,
+    /// Reversible edge delta from the parent, `None` only for the root.
+    pub delta: Option<Delta>,
+    /// Post-state cursor `(row, col)`.
+    pub cursor: (u32, u32),
+    /// Wall-clock creation time, ms since the UNIX epoch.
+    pub timestamp_unix_ms: u64,
+    /// Marks / jumplist / changelist snapshot.
+    pub marks: MarkSnapshot,
+    /// Global monotonic change number.
+    pub seq: u64,
+}
+
+/// Serializable projection of an [`UndoTree`] for the undofile. Postcard-encoded
+/// (non-self-describing, so a schema/version drift surfaces as a parse `Err`
+/// that the reader discards). See [`UndoTree::to_serializable`] /
+/// [`UndoTree::from_serializable`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerTree {
+    /// Root base text (the anchor the delta chain replays from).
+    pub base: String,
+    /// Dense node arena (no holes).
+    pub nodes: Vec<SerNode>,
+    /// Root index into `nodes`.
+    pub root: u32,
+    /// Current (live) index into `nodes`.
+    pub current: u32,
+    /// Next `seq` to assign.
+    pub next_seq: u64,
+}
+
+/// [`SystemTime`] → ms since the UNIX epoch (saturating, pre-epoch ⇒ 0).
+fn system_time_to_unix_ms(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// ms since the UNIX epoch → [`SystemTime`].
+fn unix_ms_to_system_time(ms: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(ms)
+}
+
+impl UndoTree {
+    /// `seq` of the current (live) node — the header's `current_seq` for the
+    /// undofile (the just-saved content per the §6 invariant).
+    pub(crate) fn current_node_seq(&self) -> u64 {
+        self.get(self.current).seq
+    }
+
+    /// Stash `rope` into the current node as the live buffer state, preserving
+    /// that node's own cursor/timestamp/marks. Called just before serializing so
+    /// the on-disk tree's `current` edge is exact even when `current` is a fresh
+    /// (still-stale) leaf — the in-session self-heal (first undo/edit stashes
+    /// live) applied eagerly at save time.
+    pub(crate) fn sync_current(&mut self, rope: ropey::Rope) {
+        let cur = self.current;
+        let (cursor, ts, marks) = {
+            let n = self.get(cur);
+            (n.cursor, n.timestamp, n.marks.clone())
+        };
+        self.set_node_state(cur, rope, cursor, ts, marks);
+    }
+
+    /// Project the live tree into a serializable, dense form (holes compacted,
+    /// links remapped). `rope_cache`/`warm` are dropped; the root's `base`
+    /// carries the anchor text and every non-root node its edge `delta`.
+    pub(crate) fn to_serializable(&self) -> SerTree {
+        // Dense remap: old NodeId → new index, in slab order.
+        let mut map: Vec<Option<u32>> = vec![None; self.nodes.len()];
+        let mut order: Vec<NodeId> = Vec::new();
+        for (id, slot) in self.nodes.iter().enumerate() {
+            if slot.is_some() {
+                map[id] = Some(order.len() as u32);
+                order.push(id);
+            }
+        }
+        let remap = |id: NodeId| map[id].expect("live link points at a live node");
+        let nodes = order
+            .iter()
+            .map(|&id| {
+                let n = self.get(id);
+                SerNode {
+                    parent: n.parent.map(remap),
+                    children: n.children.iter().map(|&c| remap(c)).collect(),
+                    last_child: n.last_child.map(remap),
+                    delta: n.delta.clone(),
+                    cursor: (n.cursor.0 as u32, n.cursor.1 as u32),
+                    timestamp_unix_ms: system_time_to_unix_ms(n.timestamp),
+                    marks: n.marks.clone(),
+                    seq: n.seq,
+                }
+            })
+            .collect();
+        let base = self
+            .get(self.root)
+            .base
+            .as_ref()
+            .map(|r| r.to_string())
+            .unwrap_or_default();
+        SerTree {
+            base,
+            nodes,
+            root: remap(self.root),
+            current: remap(self.current),
+            next_seq: self.next_seq,
+        }
+    }
+
+    /// Rebuild an arena tree from a projection. Returns `None` on any structural
+    /// inconsistency (out-of-range link, a non-root node missing its delta, a
+    /// root carrying one) so a corrupt-but-parseable file degrades to a fresh
+    /// tree rather than a broken one. The root's content comes from `base`; the
+    /// current node's is materialized on demand from base + deltas.
+    pub(crate) fn from_serializable(s: &SerTree) -> Option<Self> {
+        let len = s.nodes.len();
+        if len == 0 || s.root as usize >= len || s.current as usize >= len {
+            return None;
+        }
+        // Validate links and the root/non-root delta discipline up front.
+        for (i, n) in s.nodes.iter().enumerate() {
+            let is_root = i as u32 == s.root;
+            match (is_root, &n.delta, &n.parent) {
+                (true, None, None) => {}
+                (false, Some(_), Some(_)) => {}
+                _ => return None,
+            }
+            if let Some(p) = n.parent
+                && p as usize >= len
+            {
+                return None;
+            }
+            if n.children.iter().any(|&c| c as usize >= len) {
+                return None;
+            }
+            if let Some(c) = n.last_child
+                && c as usize >= len
+            {
+                return None;
+            }
+        }
+        let base = ropey::Rope::from_str(&s.base);
+        let nodes: Vec<Option<UndoNode>> = s
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let is_root = i as u32 == s.root;
+                Some(UndoNode {
+                    parent: n.parent.map(|p| p as NodeId),
+                    children: n.children.iter().map(|&c| c as NodeId).collect(),
+                    last_child: n.last_child.map(|c| c as NodeId),
+                    delta: n.delta.clone(),
+                    base: if is_root { Some(base.clone()) } else { None },
+                    rope_cache: None,
+                    cursor: (n.cursor.0 as usize, n.cursor.1 as usize),
+                    timestamp: unix_ms_to_system_time(n.timestamp_unix_ms),
+                    marks: n.marks.clone(),
+                    seq: n.seq,
+                })
+            })
+            .collect();
+        Some(Self {
+            nodes,
+            free: Vec::new(),
+            warm: Vec::new(),
+            root: s.root as NodeId,
+            current: s.current as NodeId,
+            next_seq: s.next_seq,
+        })
+    }
+}
+
 #[cfg(test)]
 impl UndoTree {
     /// Ids of every live node, for warm-vs-cold materialization checks.
@@ -1630,5 +1825,126 @@ mod delta_tests {
             self.stash_and_move(target, live);
             Some(self.get(target).content.clone())
         }
+    }
+}
+
+// ─── Phase 3b serialize/deserialize tests (docs/undo-architecture.md §6) ──────
+//
+// The undofile is only as trustworthy as this round-trip: a projection that
+// loses a branch, mislinks a parent, or reconstructs a node's content wrong
+// would silently corrupt cross-session undo. These build the headline tree
+// (5 edits, u, u), project it, rebuild, and assert BOTH the per-node content
+// (keyed by the stable `seq`) and the live walk (`<C-r>` forward, `u` back)
+// survive the trip.
+#[cfg(test)]
+mod serialize_tests {
+    use super::*;
+
+    fn e(text: &str) -> UndoEntry {
+        UndoEntry {
+            rope: ropey::Rope::from_str(text),
+            cursor: (0, 0),
+            timestamp: SystemTime::now(),
+            marks: MarkSnapshot::default(),
+        }
+    }
+    fn l(text: &str) -> (ropey::Rope, (usize, usize), MarkSnapshot) {
+        (ropey::Rope::from_str(text), (0, 0), MarkSnapshot::default())
+    }
+
+    /// The headline tree: root "s0", five edits to live "s5", then `u` twice so
+    /// `current` sits on "s3" with the forward branch (s4/s5) retained — exactly
+    /// the state a `:wq` would persist.
+    fn headline_tree() -> UndoTree {
+        let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
+        for pre in ["s0", "s1", "s2", "s3", "s4"] {
+            t.push(e(pre)); // engine discipline: push the PRE-edit live state
+        }
+        let (r, c, m) = l("s5");
+        t.undo_step(r, c, m); // -> s4
+        let (r, c, m) = l("s4");
+        t.undo_step(r, c, m); // -> s3
+        t.sync_current(ropey::Rope::from_str("s3")); // stash exact live, like save
+        t
+    }
+
+    /// Every node's content (keyed by `seq`), materialized cold-then-warm.
+    fn content_by_seq(t: &mut UndoTree) -> std::collections::BTreeMap<u64, String> {
+        t.live_ids()
+            .into_iter()
+            .map(|id| {
+                let seq = t.get(id).seq;
+                (seq, t.materialize_for_test(id).to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn round_trip_reproduces_structure_and_content() {
+        let mut orig = headline_tree();
+        let cur_seq = orig.current_node_seq();
+        let ser = orig.to_serializable();
+        let orig_content = content_by_seq(&mut orig);
+
+        let mut back = UndoTree::from_serializable(&ser).expect("valid projection");
+        assert_eq!(back.current_node_seq(), cur_seq, "current preserved");
+        assert_eq!(back.next_seq, orig.next_seq, "next_seq preserved");
+        // Force cold reconstruction (fresh tree has no warm caches) and compare.
+        assert_eq!(
+            content_by_seq(&mut back),
+            orig_content,
+            "content at every node reproduced"
+        );
+        // Six states: s0..s5.
+        assert_eq!(orig_content.len(), 6);
+        assert_eq!(orig_content[&3], "s3");
+        assert_eq!(orig_content[&5], "s5");
+    }
+
+    #[test]
+    fn deserialized_tree_walks_forward_and_back() {
+        let ser = headline_tree().to_serializable();
+        let mut t = UndoTree::from_serializable(&ser).unwrap();
+        // `<C-r>` twice: s3 -> s4 -> s5 (the retained forward branch).
+        let (r, c, m) = l("s3");
+        assert_eq!(t.redo_step(r, c, m).unwrap().rope.to_string(), "s4");
+        let (r, c, m) = l("s4");
+        assert_eq!(t.redo_step(r, c, m).unwrap().rope.to_string(), "s5");
+        // `u` all the way back to the root.
+        let mut live = "s5".to_string();
+        for want in ["s4", "s3", "s2", "s1", "s0"] {
+            let (r, c, m) = l(&live);
+            assert_eq!(t.undo_step(r, c, m).unwrap().rope.to_string(), want);
+            live = want.to_string();
+        }
+        assert!(t.is_at_root());
+    }
+
+    #[test]
+    fn from_serializable_rejects_out_of_range_current() {
+        let mut ser = headline_tree().to_serializable();
+        ser.current = ser.nodes.len() as u32; // past the end
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    #[test]
+    fn from_serializable_rejects_non_root_missing_delta() {
+        let mut ser = headline_tree().to_serializable();
+        // Blank a non-root node's delta ⇒ structurally invalid ⇒ rejected.
+        let victim = if ser.root == 0 { 1 } else { 0 };
+        ser.nodes[victim].delta = None;
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    #[test]
+    fn multibyte_content_survives_round_trip() {
+        let mut t = UndoTree::new(ropey::Rope::from_str("café\n日本語"));
+        t.push(e("café\n日本語"));
+        t.push(e("cafés\n日本語"));
+        t.sync_current(ropey::Rope::from_str("cafés\n日本語です🎉"));
+        let want = content_by_seq(&mut t);
+        let ser = t.to_serializable();
+        let mut back = UndoTree::from_serializable(&ser).unwrap();
+        assert_eq!(content_by_seq(&mut back), want);
     }
 }

@@ -75,6 +75,53 @@ impl App {
         hjkl_app::filestate::record(&canonical.to_string_lossy(), (row as u32, col as u32), hash);
     }
 
+    /// Persist slot `idx`'s undo tree to its undofile (docs/undo-architecture.md
+    /// §6). Called on the `:w`/`:wq` save-Ok path, the same seam as
+    /// [`Self::persist_slot_cursor`]: at write time the buffer IS the tree's
+    /// current node, so the persisted `current` always equals the on-disk file.
+    ///
+    /// No-op when `undofile` is off, the slot is out of range or a special pane,
+    /// or the buffer is unnamed (scratch ⇒ no canonical path to key on).
+    /// Best-effort: any I/O or serialization error is swallowed, never surfaced
+    /// — a failed undofile write must never fail the save.
+    pub(crate) fn persist_slot_undofile(&mut self, idx: usize) {
+        if !self.config.editor.undofile {
+            return;
+        }
+        if idx >= self.slots.len() || self.slots[idx].is_explorer {
+            return;
+        }
+        let Some(filename) = self.slots[idx].filename.clone() else {
+            return;
+        };
+        let canonical = std::fs::canonicalize(&filename).unwrap_or(filename);
+        let content = self.slots[idx].buffer().as_string();
+        let content_hash = hjkl_app::filestate::content_hash(&content);
+        // `disk_len`/`disk_mtime` were refreshed from the file just written on
+        // the save-Ok path; they're the authoritative identity fields here.
+        let file_size = self.slots[idx].disk_len.unwrap_or(content.len() as u64);
+        let file_mtime_unix_ms = self.slots[idx]
+            .disk_mtime
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let (tree, _current_seq) = self.slots[idx].buffer().undo_to_serializable();
+        let override_dir = self
+            .config
+            .editor
+            .undodir
+            .as_deref()
+            .map(std::path::Path::new);
+        let _ = hjkl_app::undofile::write(
+            &canonical,
+            &tree,
+            content_hash,
+            file_size,
+            file_mtime_unix_ms,
+            override_dir,
+        );
+    }
+
     /// Persist every named slot's last-moved cursor in a SINGLE store write
     /// (load → upsert all → save once). Called on editor exit so a clean quit
     /// remembers where every open buffer's cursor was. No-op when

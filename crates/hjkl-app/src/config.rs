@@ -136,6 +136,20 @@ pub struct EditorConfig {
     /// configs predating this field keep parsing.
     #[serde(default = "default_restore_cursor")]
     pub restore_cursor: bool,
+    /// Persistent undo (`undofile`): when `true`, `:w` writes the whole undo
+    /// tree to disk and reopening the same, unchanged file restores the exact
+    /// node it was saved on so `u`/`<C-r>` walk across the session boundary
+    /// (docs/undo-architecture.md §6). Content-hash gated: an external change
+    /// discards the stored tree. When `false`, the undofile is neither read nor
+    /// written. Default `true`. `#[serde(default)]` so older configs still
+    /// parse.
+    #[serde(default = "default_undofile")]
+    pub undofile: bool,
+    /// Optional override for the undofile directory. When unset, undofiles live
+    /// under `<XDG_STATE_HOME>/hjkl/undo/`. `#[serde(default)]` so older configs
+    /// still parse.
+    #[serde(default)]
+    pub undodir: Option<String>,
 }
 
 fn default_icons() -> String {
@@ -143,6 +157,10 @@ fn default_icons() -> String {
 }
 
 fn default_restore_cursor() -> bool {
+    true
+}
+
+fn default_undofile() -> bool {
     true
 }
 

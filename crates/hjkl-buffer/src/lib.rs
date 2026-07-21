@@ -71,7 +71,7 @@ pub use search::search_match_ranges;
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
 pub(crate) use undo::UndoTree;
-pub use undo::{MarkSnapshot, UndoEntry};
+pub use undo::{Delta, MarkSnapshot, SerNode, SerTree, UndoEntry};
 pub use viewport::{Viewport, is_big_viewport_jump};
 pub use wrap::{Wrap, char_col_for_visual_offset, visual_offset_for_char_col, wrap_segments};
 

@@ -1182,6 +1182,11 @@ impl App {
                         // restore (docs §6b). Best-effort, keyed on the path
                         // just written (slot.filename updated above).
                         self.persist_slot_cursor(idx);
+                        // Persist the undo tree for cross-session undo/redo
+                        // (docs §6). Best-effort; the buffer IS the tree's
+                        // current node at save time, so the persisted `current`
+                        // matches the file just written.
+                        self.persist_slot_undofile(idx);
                         // Delete the swap file on successful save (#185).
                         if let Some(ref sp) = self.slots[idx].swap_path.clone() {
                             let _ = hjkl_app::swap::remove_swap(sp);

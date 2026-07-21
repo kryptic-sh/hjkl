@@ -18,3 +18,4 @@ pub mod picker_git;
 pub mod picker_sources;
 pub mod swap;
 pub mod trash;
+pub mod undofile;

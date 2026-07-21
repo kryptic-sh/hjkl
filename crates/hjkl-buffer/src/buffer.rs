@@ -543,6 +543,35 @@ impl View {
         self.content.lock().unwrap().undo.clear_all();
     }
 
+    // ── Undofile persistence (Phase 3b, docs/undo-architecture.md §6) ─────
+
+    /// Project this buffer's undo tree into its serializable form for the
+    /// undofile, plus the current node's `seq`. Syncs the current node to the
+    /// live buffer text first, so the on-disk tree's `current` edge is exact
+    /// even when `current` is a fresh (still-stale) leaf.
+    pub fn undo_to_serializable(&self) -> (crate::SerTree, u64) {
+        let mut c = self.content.lock().unwrap();
+        let rope = c.text.clone();
+        c.undo.sync_current(rope);
+        let seq = c.undo.current_node_seq();
+        (c.undo.to_serializable(), seq)
+    }
+
+    /// Replace this buffer's fresh single-node undo tree with one deserialized
+    /// from an undofile. Must run BEFORE the first user edit and after the
+    /// buffer text is populated (the tree's `current` materializes to the loaded
+    /// content). Returns `false` — leaving the fresh tree untouched — if the
+    /// projection is structurally inconsistent.
+    pub fn install_undo_tree(&self, ser: &crate::SerTree) -> bool {
+        match crate::UndoTree::from_serializable(ser) {
+            Some(tree) => {
+                self.content.lock().unwrap().undo = tree;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn clear_redo(&self) {
         self.content.lock().unwrap().undo.clear_redo();
     }
