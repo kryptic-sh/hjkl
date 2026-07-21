@@ -853,6 +853,101 @@ pub(crate) fn delete_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+// ---- normal ----------------------------------------------------------------
+
+/// Replay `keys` as Normal-mode input through the vim FSM, then force Normal
+/// mode at the end — nvim terminates an unclosed insert/visual/operator-pending
+/// state when a `:normal` invocation finishes (`:normal iX` leaves `X` inserted
+/// and returns to Normal). An `<Esc>` keystroke models this exactly.
+fn replay_normal_keys<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    keys: &[hjkl_engine::input::Input],
+) {
+    for k in keys.iter().copied() {
+        hjkl_vim::dispatch_input(editor, k);
+    }
+    hjkl_vim::dispatch_input(
+        editor,
+        hjkl_engine::input::Input {
+            key: hjkl_engine::input::Key::Esc,
+            ..Default::default()
+        },
+    );
+}
+
+/// `:[range]normal[!] {keys}` — execute `{keys}` as Normal-mode keystrokes via
+/// the vim FSM (issue #283, item V4).
+///
+/// - No range → run once at the current cursor position.
+/// - With a range → run once per line. nvim uses a FIXED upper line-number
+///   bound (`line2`, captured before any mutation) and walks the current line
+///   from `line1` upward by 1, forcing the cursor to column 0 of that line each
+///   step and CLAMPING it to the last line once the buffer shrinks. It does NOT
+///   re-mark rows the way `:g` does — verified against nvim v0.12.4:
+///   `:%normal dd` empties a 3-line buffer, but `:1,2normal dd` leaves the
+///   middle line, and `:%normal yyp` yields `a a a a b c` (only the first line
+///   is repeatedly duplicated because the cursor keeps landing on the growing
+///   run of copies at the top).
+///
+/// `args` is the verbatim key string: [`split_name_args`](crate::parse) already
+/// stripped the command name + leading whitespace but kept internal/trailing
+/// spaces and `|` (nvim: `:normal` consumes the rest of the line — `|` does not
+/// start a new command). An empty argument is an error (nvim E471).
+///
+/// The bang (`:normal!`) skips user mappings in vim; hjkl's macro replay never
+/// applies user mappings, so `:normal!` is observationally identical to
+/// `:normal` here and both route through this handler.
+///
+/// The whole invocation is a single undo group (nvim: one `u` reverts a
+/// `:%normal` entirely). We push a base checkpoint, then collapse the
+/// finer-grained per-command checkpoints the FSM records during replay back
+/// down to it.
+pub(crate) fn normal_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    if args.is_empty() {
+        return Some(ExEffect::Error("E471: Argument required: normal".into()));
+    }
+    let keys = hjkl_engine::decode_macro(args);
+
+    editor.push_undo();
+    let base_len = editor.buffer().undo_stack_len();
+
+    match range {
+        None => replay_normal_keys(editor, &keys),
+        Some(r) => {
+            let line2 = r.end_one_based();
+            let mut lnum = r.start_one_based();
+            while lnum <= line2 {
+                let count = editor.buffer().row_count();
+                if count == 0 {
+                    break;
+                }
+                let row = (lnum - 1).min(count - 1);
+                editor.jump_cursor(row, 0);
+                replay_normal_keys(editor, &keys);
+                lnum += 1;
+            }
+        }
+    }
+
+    // Collapse the FSM's per-command checkpoints into the single base entry.
+    let changed = editor.buffer().undo_stack_len() > base_len;
+    while editor.buffer().undo_stack_len() > base_len {
+        editor.pop_last_undo();
+    }
+    if !changed {
+        // Pure motion / no-op keys edited nothing — drop the base checkpoint so
+        // a no-op `:normal` doesn't pollute undo history (nvim records none).
+        editor.pop_last_undo();
+    }
+
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
+}
+
 // ---- sort ------------------------------------------------------------------
 
 /// `:[range]sort[!iun]` — sort lines in range (default: whole buffer).
@@ -1713,6 +1808,28 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 1,
         run: delete_handler::<H>,
+    });
+
+    // `:[range]normal[!] {keys}` — replay keystrokes through the vim FSM (#283).
+    // `norm` is vim's documented abbreviation (min_prefix=4). The bang form is
+    // registered separately because `split_name_args` glues a trailing `!` onto
+    // the NAME; its min_prefix equals the full length so an ambiguity-free
+    // shorter input (e.g. `:norma`) resolves to the non-bang entry, while the
+    // `norm!` alias still covers the abbreviated bang. Both route to the same
+    // handler (the bang only skips mappings, which hjkl replay never applies).
+    reg.add(ExCommand {
+        name: "normal",
+        aliases: &["norm"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4,
+        run: normal_handler::<H>,
+    });
+    reg.add(ExCommand {
+        name: "normal!",
+        aliases: &["norm!"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 7,
+        run: normal_handler::<H>,
     });
 
     // `:sort` (min_prefix=3; range-aware)

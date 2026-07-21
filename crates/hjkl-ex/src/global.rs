@@ -29,9 +29,14 @@
 //! standalone `:d` / `:s` / `:j` / `:y` ex commands (`crate::builtins`), so
 //! register/cursor semantics fixed there (B5/B6/B7) apply for free here too.
 //!
-//! `:g/pat/normal ...` is explicitly OUT OF SCOPE (see `DIVERGE.md`) — hjkl
-//! has no general `:normal {cmd}` ex command yet. It errors cleanly rather
-//! than silently no-op'ing.
+//! `:g/pat/normal[!] {keys}` (#283) replays `{keys}` through the vim FSM on
+//! each matching line, delegating to `builtins::normal_handler` with a
+//! single-line range — so it composes with the same two-pass row-shift
+//! tracking as the other sub-commands. Note the undo granularity: like the
+//! `d`/`s`/`j`/`y` sub-commands (each of which pushes its own undo checkpoint),
+//! `:g/…/normal` records one undo group PER matched line rather than a single
+//! group for the whole `:g` — a pre-existing divergence from vim shared by the
+//! entire `:g` family, not specific to `normal`.
 
 use crate::{effect::ExEffect, range::LineRange};
 use hjkl_engine::Host;
@@ -84,6 +89,16 @@ fn dispatch_sub_command<H: Host>(
         return Some(ExEffect::Error("global: missing sub-command".into()));
     }
     let range = Some(LineRange::single(row + 1));
+
+    // `:g/pat/normal[!] {keys}` (#283) — replay keystrokes on the matched line.
+    // Checked before the single-char `head` split below because the command
+    // word is multi-character. `split_name_args` yields the verbatim key string
+    // (leading whitespace stripped, `|` and internal spaces preserved).
+    let (word, keys) = crate::parse::split_name_args(cmd);
+    if matches!(word, "normal" | "norm" | "normal!" | "norm!") {
+        return crate::builtins::normal_handler(editor, keys, range);
+    }
+
     let (head, rest) = cmd.split_at(1);
     match head {
         "d" => crate::builtins::delete_handler(editor, rest.trim_start(), range),
@@ -93,9 +108,6 @@ fn dispatch_sub_command<H: Host>(
         // "/foo/bar/g") or empty/flags-only for the bare-repeat form (B17) —
         // exactly what `substitute_handler` expects as `args`.
         "s" => crate::builtins::substitute_handler(editor, rest, range),
-        _ if cmd.starts_with("normal") => Some(ExEffect::Error(
-            ":g/pat/normal is not supported (see DIVERGE.md)".into(),
-        )),
         _ => Some(ExEffect::Error(format!(
             ":g supports d/s/j/y today, got `{cmd}`"
         ))),
@@ -330,15 +342,40 @@ mod tests {
     }
 
     #[test]
-    fn global_normal_subcommand_errors_cleanly() {
-        // :g/pat/normal is out of scope (DIVERGE.md) — must error, not panic
-        // or silently no-op.
-        let mut editor = make_editor_with_lines(&["foo", "bar"]);
-        let result = global_match_handler(&mut editor, "/foo/normal x", None);
+    fn global_normal_appends_on_matching_lines() {
+        // nvim: printf 'foo1\nbar\nfoo2\n'; :g/foo/normal A!  → foo1!/bar/foo2!
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2"]);
+        let result = global_match_handler(&mut editor, "/foo/normal A!", None);
         assert!(
-            matches!(result, Some(ExEffect::Error(_))),
+            matches!(result, Some(ExEffect::Substituted { .. })),
             "got: {result:?}"
         );
+        assert_eq!(buf_lines(&editor), vec!["foo1!", "bar", "foo2!"]);
+    }
+
+    #[test]
+    fn vglobal_normal_deletes_non_matching_lines() {
+        // nvim: printf 'foo1\nbar\nfoo2\nbaz\n'; :v/foo/normal dd  → foo1/foo2
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2", "baz"]);
+        let result = vglobal_handler(&mut editor, "/foo/normal dd", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(buf_lines(&editor), vec!["foo1", "foo2"]);
+    }
+
+    #[test]
+    fn global_normal_abbreviation_and_bang() {
+        // `:g/foo/norm!` (abbreviated + bang) behaves like the full form.
+        // nvim: printf 'foo\nbar\n'; :g/foo/norm! IX  → Xfoo/bar
+        let mut editor = make_editor_with_lines(&["foo", "bar"]);
+        let result = global_match_handler(&mut editor, "/foo/norm! IX", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(buf_lines(&editor), vec!["Xfoo", "bar"]);
     }
 
     #[test]

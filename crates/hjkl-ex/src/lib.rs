@@ -2149,4 +2149,118 @@ mod tests {
         assert_eq!(buf_line(&editor, 1), "baz");
         assert_eq!(buf_line(&editor, 2), "bar");
     }
+
+    // ---- :normal (#283) ----------------------------------------------------
+    //
+    // Each expected value is verified against nvim v0.12.4 headless, e.g.:
+    //   printf 'abc\n' > t; nvim --headless --clean -n t -c 'normal IX' -c 'wq'
+
+    #[test]
+    fn dispatch_normal_insert_at_col0_auto_terminates() {
+        // nvim: `abc` + `:normal IX` → `Xabc` (insert at col 0, then force Normal)
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        let result = try_dispatch(&reg, &mut editor, "normal IX");
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        assert_eq!(buf_line(&editor, 0), "Xabc");
+    }
+
+    #[test]
+    fn dispatch_normal_returns_to_normal_mode() {
+        // nvim: `:normal iX` (no trailing Esc) still ends in Normal mode.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        try_dispatch(&reg, &mut editor, "normal iX").unwrap();
+        use hjkl_vim::VimEditorExt;
+        assert_eq!(editor.vim_mode(), hjkl_engine::VimMode::Normal);
+        assert_eq!(buf_line(&editor, 0), "Xabc");
+    }
+
+    #[test]
+    fn dispatch_percent_normal_append_every_line() {
+        // nvim: `a\nb\nc` + `:%normal A;` → `a;` / `b;` / `c;`
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c"]);
+        try_dispatch(&reg, &mut editor, "%normal A;").unwrap();
+        assert_eq!(buf_lines(&editor), vec!["a;", "b;", "c;"]);
+    }
+
+    #[test]
+    fn dispatch_ranged_normal_subset() {
+        // nvim: `abc\ndef\nghi` + `:2,3normal 0x` → `abc` / `ef` / `hi`
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc", "def", "ghi"]);
+        try_dispatch(&reg, &mut editor, "2,3normal 0x").unwrap();
+        assert_eq!(buf_lines(&editor), vec!["abc", "ef", "hi"]);
+    }
+
+    #[test]
+    fn dispatch_percent_normal_dd_empties_buffer() {
+        // nvim: `abc\ndef\nghi` + `:%normal dd` → empty buffer (single "" line).
+        // The fixed upper-bound + cursor-clamp model deletes every line.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc", "def", "ghi"]);
+        try_dispatch(&reg, &mut editor, "%normal dd").unwrap();
+        assert_eq!(buf_lines(&editor), vec![""]);
+    }
+
+    #[test]
+    fn dispatch_ranged_normal_dd_leaves_middle_line() {
+        // nvim: `abc\ndef\nghi` + `:1,2normal dd` → `def` (NOT `ghi`).
+        // Proves the model is fixed-line2 + clamp, not :g-style row marking.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc", "def", "ghi"]);
+        try_dispatch(&reg, &mut editor, "1,2normal dd").unwrap();
+        assert_eq!(buf_lines(&editor), vec!["def"]);
+    }
+
+    #[test]
+    fn dispatch_normal_bang_same_as_no_bang() {
+        // nvim: `abc` + `:normal! IX` → `Xabc` (bang identical here).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        try_dispatch(&reg, &mut editor, "normal! IX").unwrap();
+        assert_eq!(buf_line(&editor, 0), "Xabc");
+    }
+
+    #[test]
+    fn dispatch_normal_pipe_is_verbatim_keys() {
+        // nvim: `abc` + `:normal A|X` → `abc|X` (`|` does NOT start a new cmd).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        try_dispatch(&reg, &mut editor, "normal A|X").unwrap();
+        assert_eq!(buf_line(&editor, 0), "abc|X");
+    }
+
+    #[test]
+    fn dispatch_normal_empty_arg_errors() {
+        // nvim: bare `:normal` → E471: Argument required.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        let result = try_dispatch(&reg, &mut editor, "normal");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_percent_normal_single_undo_group() {
+        // nvim: `a\nb\nc` + `:%normal A;` then a single `u` → back to `a\nb\nc`.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c"]);
+        try_dispatch(&reg, &mut editor, "%normal A;").unwrap();
+        assert_eq!(buf_lines(&editor), vec!["a;", "b;", "c;"]);
+        editor.undo();
+        assert_eq!(buf_lines(&editor), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn dispatch_norm_abbreviation_resolves() {
+        // `:norm` is vim's documented abbreviation for `:normal`.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["abc"]);
+        try_dispatch(&reg, &mut editor, "norm IX").unwrap();
+        assert_eq!(buf_line(&editor, 0), "Xabc");
+    }
 }
