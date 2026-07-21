@@ -60,18 +60,6 @@ tracked as issues.
 
 ## Vim parity
 
-### V3. Visual-BLOCK operators do not participate in dot-repeat (#285)
-
-- **File:** `apply_block_operator` (`Mode::VisualBlock` arm); block-change path
-  (`InsertReason::BlockChange`).
-- **Defect:** `.` after a visual-block operator is a no-op —
-  `LastChange:: VisualOp` is only recorded for charwise (`v`) / linewise (`V`),
-  not block. nvim repeats the block op over a same-size rectangle at the cursor.
-- **Fix:** add a third extent shape (rows×cols rectangle + `$`-ragged `to_eol`
-  flag), synthesize `vim_state`'s `block_anchor`/`block_vcol` on replay, and
-  wire block-`c` through a dot-repeat patch site (it currently returns early via
-  `BlockChange`, never touching `last_change`).
-
 ### V4. `:g/pat/normal {cmd}` unsupported (#283)
 
 - **Defect:** `:g/foo/normal x` returns a clean "unsupported sub-command" error;
