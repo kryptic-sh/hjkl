@@ -366,9 +366,12 @@ pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
     }
 }
 /// Yank / delete / change / replace a rectangular selection. Yanked text
-/// is stored as one string per row joined with `\n` so pasting reproduces
-/// the block as sequential lines. (Vim's true block-paste reinserts as
-/// columns; we render the content with our char-wise paste path.)
+/// is stored as one string per row joined with `\n`, but the register is
+/// flagged BLOCKWISE (with the block's column width) so `p`/`P` re-insert
+/// it as columns at the cursor — vim's true block-paste geometry — rather
+/// than spilling each row onto its own new line (see the `blockwise` slot
+/// flag and `do_block_paste`). The joined-`\n` string is also what the RPC
+/// / charwise-fallback paths read.
 pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -382,13 +385,24 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
     let to_eol = vim(ed).block_to_eol;
     // Snapshot the block text for yank / clipboard.
     let yank = block_yank(ed, top, bot, left, right, to_eol);
+    // Column width the register pads every row segment to on paste. A
+    // ragged (`$`) block has no fixed right edge, so its width is the
+    // widest row segment; a normal block spans `left..=right` inclusive.
+    let block_width = if to_eol {
+        yank.split('\n')
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(0)
+    } else {
+        right + 1 - left
+    };
 
     match op {
         Operator::Yank => {
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
                 let target = vim_mut(ed).pending_register.take();
-                ed.record_yank(yank, false, target);
+                ed.record_yank_block(yank, block_width, target);
             }
             vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
@@ -399,7 +413,7 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
                 let target = vim_mut(ed).pending_register.take();
-                ed.record_delete(yank, false, target);
+                ed.record_delete_block(yank, block_width, target);
             }
             vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
@@ -413,7 +427,7 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
             if !yank.is_empty() {
                 ed.record_yank_to_host(yank.clone());
                 let target = vim_mut(ed).pending_register.take();
-                ed.record_delete(yank, false, target);
+                ed.record_delete_block(yank, block_width, target);
             }
             ed.jump_cursor(top, left);
             begin_insert_noundo(

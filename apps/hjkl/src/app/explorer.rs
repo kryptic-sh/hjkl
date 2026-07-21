@@ -1731,6 +1731,7 @@ impl super::App {
             r.unnamed = hjkl_engine::Slot {
                 text: block,
                 linewise: true,
+                ..Default::default()
             };
         });
         self.active_editor_mut().paste_after(1);

@@ -1914,7 +1914,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn set_yank(&mut self, text: impl Into<String>) {
         let text = text.into();
         let linewise = self.yank_linewise;
-        self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
+        self.registers.lock().unwrap().unnamed = crate::registers::Slot {
+            text,
+            linewise,
+            ..Default::default()
+        };
     }
 
     /// Record a yank into `"` and `"0`, plus the named target if the
@@ -1926,6 +1930,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .lock()
             .unwrap()
             .record_yank(text, linewise, target);
+    }
+
+    /// Record a blockwise (visual-block) yank. `width` is the block's
+    /// column width — every row segment pads to it (with trailing spaces)
+    /// on paste. `text` is the row segments joined with `\n` (kept as-is
+    /// for charwise-fallback / RPC). Clears the cached linewise flag.
+    pub fn record_yank_block(&mut self, text: String, width: usize, target: Option<char>) {
+        self.yank_linewise = false;
+        self.registers
+            .lock()
+            .unwrap()
+            .record_yank_block(text, width, target);
     }
 
     /// Direct write to a named OR numbered register slot — bypasses the
@@ -1962,6 +1978,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .lock()
             .unwrap()
             .record_delete(text, linewise, target);
+    }
+
+    /// Record a blockwise (visual-block) delete / change. See
+    /// [`Editor::record_yank_block`] for the `width` / `text` contract.
+    pub fn record_delete_block(&mut self, text: String, width: usize, target: Option<char>) {
+        self.yank_linewise = false;
+        self.registers
+            .lock()
+            .unwrap()
+            .record_delete_block(text, width, target);
     }
 
     /// Install styled syntax spans using the engine-native
@@ -3798,7 +3824,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn seed_yank(&mut self, text: String) {
         let linewise = text.ends_with('\n');
         self.yank_linewise = linewise;
-        self.registers.lock().unwrap().unnamed = crate::registers::Slot { text, linewise };
+        self.registers.lock().unwrap().unnamed = crate::registers::Slot {
+            text,
+            linewise,
+            ..Default::default()
+        };
     }
 
     /// Scroll the viewport down by `rows`. The cursor stays on its
@@ -6148,6 +6178,7 @@ mod shared_registers_tests {
             r.unnamed = crate::registers::Slot {
                 text: "hello".to_string(),
                 linewise: false,
+                ..Default::default()
             };
         });
         // Read from editor B — same bank, no copy needed
@@ -6174,6 +6205,7 @@ mod shared_registers_tests {
             r.unnamed = crate::registers::Slot {
                 text: "hello\n".to_string(),
                 linewise: true,
+                ..Default::default()
             };
         });
         // Read from editor B — same bank, so the linewise bit must be
@@ -6200,6 +6232,7 @@ mod shared_registers_tests {
             r.unnamed = crate::registers::Slot {
                 text: "round-trip".to_string(),
                 linewise: false,
+                ..Default::default()
             };
             r.unnamed.text.len()
         });

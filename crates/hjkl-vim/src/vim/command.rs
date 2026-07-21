@@ -597,15 +597,26 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     // before reading it below (audit-r2 fix 4) — otherwise this reads
     // whatever the internal slot last had from an in-editor `"+y`.
     sync_clipboard_register_for(ed, selector);
-    let (yank, linewise) = ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
-        Some(slot) => (slot.text.clone(), slot.linewise),
-        // Read both fields from the unnamed slot rather than mixing the
-        // slot's text with `vim.yank_linewise`. The cached vim flag is
-        // per-editor, so a register imported from another editor (e.g.
-        // cross-buffer yank/paste) carried the wrong linewise without
-        // this — pasting a linewise yank inserted at the char cursor.
-        None => (regs.unnamed.text.clone(), regs.unnamed.linewise),
-    });
+    let (yank, linewise, blockwise, block_width) =
+        ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
+            Some(slot) => (
+                slot.text.clone(),
+                slot.linewise,
+                slot.blockwise,
+                slot.block_width,
+            ),
+            // Read both fields from the unnamed slot rather than mixing the
+            // slot's text with `vim.yank_linewise`. The cached vim flag is
+            // per-editor, so a register imported from another editor (e.g.
+            // cross-buffer yank/paste) carried the wrong linewise without
+            // this — pasting a linewise yank inserted at the char cursor.
+            None => (
+                regs.unnamed.text.clone(),
+                regs.unnamed.linewise,
+                regs.unnamed.blockwise,
+                regs.unnamed.block_width,
+            ),
+        });
     // Vim `:h '[` / `:h ']`: after paste `[` = first inserted char of
     // the final paste, `]` = last inserted char of the final paste.
     // We track (lo, hi) across iterations; the last value wins.
@@ -627,6 +638,13 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     // Empty register: nothing to paste on any iteration — bail before the
     // loop instead of `continue`-spinning through a huge count prefix.
     if yank.is_empty() {
+        return;
+    }
+    // Blockwise register (`<C-v>` yank/delete): re-insert the row segments
+    // as columns at the cursor. Handles its own cursor / marks / sticky
+    // column, so return before the charwise/linewise loop below.
+    if blockwise {
+        do_block_paste(ed, before, count, block_width, &yank);
         return;
     }
     // Charwise pastes insert the register text repeated `count` times as a
@@ -743,6 +761,94 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
     }
     // Any paste re-anchors the sticky column to the new cursor position.
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+}
+/// Blockwise paste (`p`/`P` with a visual-block register). Re-inserts the
+/// register's row segments as COLUMNS at the cursor — vim's true
+/// block-paste geometry — rather than spilling each segment onto its own
+/// new line. `count` repeats each segment horizontally.
+///
+/// Geometry (verified against nvim v0.12.4):
+/// - `p` inserts starting at the column AFTER the cursor, `P` AT the
+///   cursor column; segment row `i` lands on buffer row `cursor.row + i`.
+/// - Rows past the buffer end are created; a target row shorter than the
+///   insert column is padded with spaces up to it.
+/// - Each segment is padded with trailing spaces to the register's block
+///   `width` and then repeated `count` times — but ONLY when there is text
+///   after the insert column on that row; at end-of-line no trailing
+///   padding is added (matches nvim).
+/// - The cursor lands on the top-left cell of the pasted block.
+///
+/// The caller (`do_paste`) has already pushed the undo checkpoint.
+fn do_block_paste<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    before: bool,
+    count: usize,
+    width: usize,
+    yank: &str,
+) {
+    ed.sync_buffer_content_from_textarea();
+    let mut lines: Vec<String> =
+        hjkl_engine::rope_util::rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
+    // Detach ropey's phantom trailing empty line (present iff the buffer
+    // ends with `\n`) so appending block rows past EOF doesn't consume the
+    // trailing newline. Re-added after the join below.
+    let trailing_nl = lines.len() > 1 && lines.last().is_some_and(String::is_empty);
+    if trailing_nl {
+        lines.pop();
+    }
+    let cursor = buf_cursor_pos(ed.buffer());
+    let start_row = cursor.row;
+    // Insert column (char index). `P` inserts at the cursor; `p` after it.
+    // On an empty line `p` has no char to sit after, so it inserts at col 0.
+    let cur_len = lines.get(start_row).map(|l| l.chars().count()).unwrap_or(0);
+    let insert_col = if before {
+        cursor.col
+    } else if cur_len == 0 {
+        0
+    } else {
+        cursor.col + 1
+    };
+    let segments: Vec<&str> = yank.split('\n').collect();
+    for (i, seg) in segments.iter().enumerate() {
+        let row = start_row + i;
+        // Rows past the buffer end are created as empty lines.
+        while row >= lines.len() {
+            lines.push(String::new());
+        }
+        let mut chars: Vec<char> = lines[row].chars().collect();
+        // Pad the target row up to the insert column with spaces.
+        if chars.len() < insert_col {
+            chars.resize(insert_col, ' ');
+        }
+        let head: String = chars[..insert_col].iter().collect();
+        let tail: String = chars[insert_col..].iter().collect();
+        // Pad the segment to the block width only when it is followed by
+        // text on this row — at EOL vim adds no trailing spaces.
+        let piece = if tail.is_empty() {
+            seg.repeat(count)
+        } else {
+            let seg_len = seg.chars().count();
+            let mut padded = seg.to_string();
+            if seg_len < width {
+                padded.extend(std::iter::repeat_n(' ', width - seg_len));
+            }
+            padded.repeat(count)
+        };
+        lines[row] = format!("{head}{piece}{tail}");
+    }
+    let mut joined = lines.join("\n");
+    if trailing_nl {
+        joined.push('\n');
+    }
+    hjkl_engine::types::BufferEdit::replace_all(ed.buffer_mut(), &joined);
+    ed.mark_content_dirty();
+    // Cursor lands on the top-left cell of the pasted block.
+    ed.jump_cursor(start_row, insert_col);
+    // `[` / `]` span the pasted block's top-left .. bottom-left column.
+    let bot_row = start_row + segments.len().saturating_sub(1);
+    ed.set_mark('[', (start_row, insert_col));
+    ed.set_mark(']', (bot_row, insert_col));
+    ed.set_sticky_col(Some(insert_col));
 }
 /// Visual-mode `p` / `P` — replace the active selection with the register.
 /// With `p` the deleted selection lands in the unnamed register (vim's swap);

@@ -90,3 +90,99 @@ keys = "0ll<C-v>jIXX<Esc>"
 expected_buffer = "foXXobar\nfoXXobar\n"
 expected_cursor = [0, 2]
 expected_mode = "normal"
+
+# ─── Blockwise yank + paste (true block-paste geometry) ──────────────────────
+# These verify vim's real block-paste: a `<C-v>` yank pastes back as COLUMNS at
+# the cursor, not as separate new lines. Every expected value below is checked
+# against real nvim by the oracle. Probed against nvim v0.12.4.
+
+# Headline: yank a 2×2 block (cols 0-1, rows 0-1), then `p`. nvim re-inserts the
+# block starting at the column AFTER the cursor (col 1), on each row — columns,
+# not new lines. After the yank the cursor sits at (0,0).
+[[cases]]
+name = "visual_block_yank_p_columns"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlyp"
+expected_buffer = "aabbcd\neeffgh\nijkl\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "ab\nef"]
+
+# `P` inserts AT the cursor column instead of after it. Cursor moved to col 2
+# first, so the block lands at column 2 on rows 0-1.
+[[cases]]
+name = "visual_block_yank_P_columns"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlyllP"
+expected_buffer = "ababcd\nefefgh\nijkl\n"
+expected_cursor = [0, 2]
+expected_register = ['"', "ab\nef"]
+
+# Block taller than the remaining buffer: yank a 3-row block, jump to the last
+# row with `G`, then `p`. Rows that don't exist yet are CREATED, padded with
+# spaces up to the insert column.
+[[cases]]
+name = "visual_block_paste_past_eof"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjlyGp"
+expected_buffer = "abcd\nefgh\niabjkl\n ef\n ij\n"
+expected_cursor = [2, 1]
+expected_register = ['"', "ab\nef\nij"]
+
+# Paste onto a row shorter than the insert column: the short middle line "ef"
+# is space-padded up to the insert column before the (empty) segment lands.
+[[cases]]
+name = "visual_block_paste_pads_short_line"
+initial_buffer = "abcd\nef\nijkl\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jjly0llp"
+expected_buffer = "abccdd\nef \nijkkll\n"
+expected_cursor = [0, 3]
+expected_register = ['"', "cd\n\nkl"]
+
+# `[count]p` repeats each row's segment horizontally (here `2p` doubles "ab" and
+# "ef").
+[[cases]]
+name = "visual_block_paste_count_2p"
+initial_buffer = "abcd\nefgh\nijkl\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jly2p"
+expected_buffer = "aababbcd\neefeffgh\nijkl\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "ab\nef"]
+
+# Ragged block yanked with `$` (`:h v_b_$`): rows have differing widths, but on
+# paste each shorter segment is space-padded to the widest row (5) before it is
+# inserted — nvim's blockwise register carries the max width.
+[[cases]]
+name = "visual_block_paste_ragged_dollar"
+initial_buffer = "abc\ndefgh\nij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jj$ygg0p"
+expected_buffer = "aabc  bc\nddefghefgh\niij   j\n"
+expected_cursor = [0, 1]
+expected_register = ['"', "abc\ndefgh\nij"]
+
+# ─── Regression guards: charwise / linewise paste must be UNCHANGED ──────────
+
+# Charwise yank+paste still inserts inline (no block geometry).
+[[cases]]
+name = "charwise_yank_paste_regression"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "vlyp"
+expected_buffer = "hheello\n"
+expected_cursor = [0, 2]
+expected_register = ['"', "he"]
+
+# Linewise yank+paste still opens a fresh line below.
+[[cases]]
+name = "linewise_yank_paste_regression"
+initial_buffer = "one\ntwo\n"
+initial_cursor = [0, 0]
+keys = "yyp"
+expected_buffer = "one\none\ntwo\n"
+expected_cursor = [1, 0]
+expected_register = ['"', "one\n"]

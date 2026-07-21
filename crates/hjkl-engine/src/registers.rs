@@ -20,11 +20,43 @@
 pub struct Slot {
     pub text: String,
     pub linewise: bool,
+    /// Blockwise (visual-block `<C-v>`) register. When set, `text` still
+    /// holds the row segments joined by `\n` (so charwise-fallback paste
+    /// and the `hjkl_get_register` RPC keep the same string), but `p`/`P`
+    /// re-insert it as COLUMNS at the cursor rather than spilling onto new
+    /// lines. Mutually exclusive with `linewise` in practice.
+    ///
+    /// Additive field: `#[serde(default)]` keeps old serialized register
+    /// banks deserializable, and the embed `hjkl_get_register` handler
+    /// serialises only `text` + `linewise`, so the wire shape is unchanged.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub blockwise: bool,
+    /// Column width of a blockwise register — the number of cells each row
+    /// segment is padded to (with trailing spaces) when pasted. Zero for
+    /// charwise/linewise slots. See [`Slot::blockwise`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub block_width: usize,
 }
 
 impl Slot {
     fn new(text: String, linewise: bool) -> Self {
-        Self { text, linewise }
+        Self {
+            text,
+            linewise,
+            blockwise: false,
+            block_width: 0,
+        }
+    }
+
+    /// Build a blockwise slot (see [`Slot::blockwise`]). `width` is the
+    /// column width every row segment pads to on paste.
+    fn new_block(text: String, width: usize) -> Self {
+        Self {
+            text,
+            linewise: false,
+            blockwise: true,
+            block_width: width,
+        }
     }
 }
 
@@ -68,7 +100,23 @@ impl Registers {
         if target == Some('_') {
             return;
         }
-        let slot = Slot::new(text, linewise);
+        self.store_yank(Slot::new(text, linewise), target);
+    }
+
+    /// Record a blockwise (visual-block) yank. Same routing as
+    /// [`Registers::record_yank`] but the resulting slot is flagged
+    /// blockwise with column `width` so `p`/`P` re-insert the segments as
+    /// columns (see [`Slot::blockwise`]).
+    pub fn record_yank_block(&mut self, text: String, width: usize, target: Option<char>) {
+        if target == Some('_') {
+            return;
+        }
+        self.store_yank(Slot::new_block(text, width), target);
+    }
+
+    /// Shared routing for charwise/linewise/blockwise yanks. Writes `"`,
+    /// `"0` (only when unnamed), and the named target if any.
+    fn store_yank(&mut self, slot: Slot, target: Option<char>) {
         self.unnamed = slot.clone();
         // vim: `"0` holds the last yank only when the command did not name
         // another register — `"ayy` leaves `"0` untouched.
@@ -105,7 +153,24 @@ impl Registers {
         if target == Some('_') {
             return;
         }
-        let slot = Slot::new(text, linewise);
+        self.store_delete(Slot::new(text, linewise), target);
+    }
+
+    /// Record a blockwise (visual-block) delete / change. Same routing as
+    /// [`Registers::record_delete`] but flags the slot blockwise with
+    /// column `width` (see [`Slot::blockwise`]).
+    pub fn record_delete_block(&mut self, text: String, width: usize, target: Option<char>) {
+        if text.is_empty() {
+            return;
+        }
+        if target == Some('_') {
+            return;
+        }
+        self.store_delete(Slot::new_block(text, width), target);
+    }
+
+    /// Shared routing for charwise/linewise/blockwise deletes/changes.
+    fn store_delete(&mut self, slot: Slot, target: Option<char>) {
         self.unnamed = slot.clone();
         if let Some(c) = target {
             // A named register suppresses the numbered ring and `"-`.
@@ -169,6 +234,8 @@ impl Registers {
             let cur = &mut self.named[idx];
             cur.text.push_str(&slot.text);
             cur.linewise = slot.linewise || cur.linewise;
+            cur.blockwise = slot.blockwise || cur.blockwise;
+            cur.block_width = cur.block_width.max(slot.block_width);
         } else if c == '+' || c == '*' {
             self.clip = slot;
         }
@@ -311,6 +378,53 @@ mod tests {
             .expect("'%' should return Some after set_filename");
         assert_eq!(slot.text, "src/main.rs");
         assert!(!slot.linewise, "'%' slot should be charwise");
+    }
+
+    #[test]
+    fn block_yank_flags_slot_blockwise_with_width() {
+        let mut r = Registers::default();
+        r.record_yank_block("ab\nef".into(), 2, None);
+        let s = r.read('"').unwrap();
+        assert_eq!(s.text, "ab\nef");
+        assert!(s.blockwise);
+        assert!(!s.linewise);
+        assert_eq!(s.block_width, 2);
+        // `"0` mirrors the yank and is blockwise too.
+        let z = r.read('0').unwrap();
+        assert!(z.blockwise);
+        assert_eq!(z.block_width, 2);
+    }
+
+    #[test]
+    fn block_yank_to_named_carries_kind_and_width() {
+        let mut r = Registers::default();
+        r.record_yank_block("cd\nkl".into(), 3, Some('a'));
+        let a = r.read('a').unwrap();
+        assert!(a.blockwise);
+        assert_eq!(a.block_width, 3);
+        // Unnamed mirrors the named write, kind intact.
+        assert!(r.read('"').unwrap().blockwise);
+        assert_eq!(r.read('"').unwrap().block_width, 3);
+    }
+
+    #[test]
+    fn charwise_yank_leaves_slot_non_block() {
+        let mut r = Registers::default();
+        r.record_yank("plain".into(), false, None);
+        let s = r.read('"').unwrap();
+        assert!(!s.blockwise);
+        assert_eq!(s.block_width, 0);
+    }
+
+    #[test]
+    fn block_delete_flags_slot_blockwise() {
+        let mut r = Registers::default();
+        // A blockwise delete spans a newline → routes to the numbered ring.
+        r.record_delete_block("a\nb".into(), 1, None);
+        let s = r.read('1').unwrap();
+        assert!(s.blockwise);
+        assert_eq!(s.block_width, 1);
+        assert!(r.read('"').unwrap().blockwise);
     }
 
     #[test]
