@@ -3148,10 +3148,10 @@ mod tests {
     /// `gh` → ExplorerToggleHidden; `gi` → ExplorerToggleGitignore.
     #[test]
     fn explorer_keymap_ctrl_open_and_g_toggles() {
-        use crate::app::keymap::HjklMode;
         use crate::app::keymap_build::build_explorer_keymap;
         use crate::keymap_actions::AppAction;
         use hjkl_keymap::{KeyEvent as KmKeyEvent, KeyResolve};
+        use hjkl_vim::Mode;
 
         let now = std::time::Instant::now();
 
@@ -3162,14 +3162,14 @@ mod tests {
             let mut km = build_explorer_keymap(' ');
             let mut result = None;
             for &ev in events {
-                match km.feed(HjklMode::Normal, ev, now) {
+                match km.feed(Mode::Normal, ev, now) {
                     KeyResolve::Match(b) => {
                         result = Some(b.action);
                         break;
                     }
                     KeyResolve::Pending => {}
                     KeyResolve::Ambiguous => {
-                        if let KeyResolve::Match(b) = km.timeout_resolve(HjklMode::Normal) {
+                        if let KeyResolve::Match(b) = km.timeout_resolve(Mode::Normal) {
                             result = Some(b.action);
                         }
                         break;

@@ -15,6 +15,8 @@ mod vim_state;
 pub use cmd::EngineCmd;
 pub use count::CountAccumulator;
 pub use editor_ext::VimEditorExt;
+pub use operator::OperatorKind;
+pub use pending::{Key, Outcome, PendingState, step};
 /// Build an `Editor` that interprets keys as vim, or retro-fit the discipline
 /// onto one that already exists.
 ///
@@ -22,10 +24,6 @@ pub use editor_ext::VimEditorExt;
 /// concrete discipline), so an editor built through it ignores vim keys. Every
 /// vim-driven editor goes through one of these two (#267).
 pub use vim::{install as install_vim_discipline, vim_editor};
-// MotionKind moved to hjkl-engine (Phase 6.6 cycle-break); re-exported here for back-compat.
-pub use hjkl_engine::MotionKind;
-pub use operator::OperatorKind;
-pub use pending::{Key, Outcome, PendingState, step};
 
 /// Mode discriminator for the hjkl editor stack.
 ///

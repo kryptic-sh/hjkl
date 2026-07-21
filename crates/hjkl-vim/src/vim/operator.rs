@@ -184,7 +184,6 @@ pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
             buf_set_cursor_rc(ed.buffer_mut(), end_t.0, end_t.1);
             vim_mut(ed).mode = Mode::Visual;
             vim_mut(ed).current_mode = hjkl_engine::VimMode::Visual;
-            ed.push_buffer_cursor_to_textarea();
         }
         Some(Operator::Delete) => {
             ed.push_undo();
@@ -192,7 +191,6 @@ pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
             // Deleting at the line end can leave the cursor one past the last
             // char; vim clamps it back onto the line.
             clamp_cursor_to_normal_mode(ed);
-            ed.push_buffer_cursor_to_textarea();
             if !vim(ed).replaying {
                 vim_mut(ed).last_change = Some(LastChange::GnOp {
                     op: Operator::Delete,
@@ -222,7 +220,6 @@ pub(crate) fn gn_operate<H: hjkl_engine::types::Host>(
                 ed.record_yank(text, false, target);
             }
             buf_set_cursor_rc(ed.buffer_mut(), start_t.0, start_t.1);
-            ed.push_buffer_cursor_to_textarea();
         }
         Some(other @ (Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase)) => {
             // Case op over a gn match: apply as a charwise op over the
@@ -538,7 +535,6 @@ pub(crate) fn apply_after_z<H: hjkl_engine::types::Host>(
                     cur_col.min(line_chars - 1)
                 };
                 buf_set_cursor_rc(ed.buffer_mut(), target_row, new_col);
-                ed.push_buffer_cursor_to_textarea();
             }
             let target = match ch {
                 'z' => CursorScrollTarget::Center,

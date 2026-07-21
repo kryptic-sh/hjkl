@@ -1,7 +1,6 @@
 //! App-level chord and action dispatch — `dispatch_action`, `dispatch_keymap`, and chord timeout.
 
 use super::App;
-use super::keymap;
 
 impl App {
     /// Dispatch an [`crate::keymap_actions::AppAction`] with an optional repeat count.
@@ -156,7 +155,7 @@ impl App {
         count: u32,
         out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
     ) -> bool {
-        self.dispatch_keymap_in_mode(km_ev, count, out_replay, keymap::HjklMode::Normal)
+        self.dispatch_keymap_in_mode(km_ev, count, out_replay, hjkl_vim::Mode::Normal)
     }
 
     /// Mode-generalized chord dispatch. Feed `km_ev` into the trie for `mode`
@@ -169,7 +168,7 @@ impl App {
         km_ev: hjkl_keymap::KeyEvent,
         count: u32,
         out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
-        mode: keymap::HjklMode,
+        mode: hjkl_vim::Mode,
     ) -> bool {
         use hjkl_keymap::KeyResolve;
         let now = std::time::Instant::now();
@@ -209,7 +208,7 @@ impl App {
     ///   needed so the which-key popup stays visible past the timeout).
     pub fn resolve_chord_timeout(
         &mut self,
-        mode: keymap::HjklMode,
+        mode: hjkl_vim::Mode,
     ) -> Option<Vec<hjkl_keymap::KeyEvent>> {
         use hjkl_keymap::KeyResolve;
         if self.app_keymap.pending(mode).is_empty() {

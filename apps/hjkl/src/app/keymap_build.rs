@@ -10,15 +10,13 @@ use hjkl_keymap::Keymap;
 use crate::app::{NavDir, SearchDir};
 use crate::keymap_actions::AppAction;
 
-use super::keymap;
-
 /// Build the Normal-mode application keymap for the given leader character.
 ///
 /// Every app-handled chord binding is registered here. The resulting
-/// `Keymap<AppAction, keymap::HjklMode>` is stored on [`App`] and consulted by the event loop
+/// `Keymap<AppAction, hjkl_vim::Mode>` is stored on [`App`] and consulted by the event loop
 /// before forwarding keys to the editor engine.
-pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
-    use keymap::HjklMode as Mode;
+pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
+    use hjkl_vim::Mode;
     let mut km = Keymap::new(leader);
     // Timeout matches the which-key delay default; overridden by `with_config`.
     km.set_timeout(Duration::from_millis(500));
@@ -211,7 +209,7 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
     }
 
     // Visual-mode operators — fire inline against the current selection.
-    // `d` / `y` / `c` / `>` / `<` bound in HjklMode::Visual (covers Visual,
+    // `d` / `y` / `c` / `>` / `<` bound in Mode::Visual (covers Visual,
     // VisualLine, and VisualBlock per the mode-collapse in keymap.rs:125).
     //
     // All three modes (Visual, VisualLine, VisualBlock) route through the
@@ -301,66 +299,78 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
     // Bound in Normal, Visual, VisualLine, and VisualBlock. Engine FSM arms
     // for these keys are kept intact for macro-replay defensive coverage.
     for (chord, kind, desc) in [
-        ("h", hjkl_vim::MotionKind::CharLeft, "char left"),
-        ("<BS>", hjkl_vim::MotionKind::CharLeft, "char left"),
-        ("l", hjkl_vim::MotionKind::CharRight, "char right"),
-        ("<Space>", hjkl_vim::MotionKind::CharRight, "char right"),
-        ("j", hjkl_vim::MotionKind::LineDown, "line down"),
-        ("k", hjkl_vim::MotionKind::LineUp, "line up"),
+        ("h", hjkl_engine::MotionKind::CharLeft, "char left"),
+        ("<BS>", hjkl_engine::MotionKind::CharLeft, "char left"),
+        ("l", hjkl_engine::MotionKind::CharRight, "char right"),
+        ("<Space>", hjkl_engine::MotionKind::CharRight, "char right"),
+        ("j", hjkl_engine::MotionKind::LineDown, "line down"),
+        ("k", hjkl_engine::MotionKind::LineUp, "line up"),
         (
             "+",
-            hjkl_vim::MotionKind::FirstNonBlankDown,
+            hjkl_engine::MotionKind::FirstNonBlankDown,
             "next line first non-blank",
         ),
         (
             "-",
-            hjkl_vim::MotionKind::FirstNonBlankUp,
+            hjkl_engine::MotionKind::FirstNonBlankUp,
             "prev line first non-blank",
         ),
-        ("w", hjkl_vim::MotionKind::WordForward, "word forward"),
+        ("w", hjkl_engine::MotionKind::WordForward, "word forward"),
         (
             "W",
-            hjkl_vim::MotionKind::BigWordForward,
+            hjkl_engine::MotionKind::BigWordForward,
             "BIG word forward",
         ),
-        ("b", hjkl_vim::MotionKind::WordBackward, "word back"),
-        ("B", hjkl_vim::MotionKind::BigWordBackward, "BIG word back"),
-        ("e", hjkl_vim::MotionKind::WordEnd, "word end"),
-        ("E", hjkl_vim::MotionKind::BigWordEnd, "BIG word end"),
+        ("b", hjkl_engine::MotionKind::WordBackward, "word back"),
+        (
+            "B",
+            hjkl_engine::MotionKind::BigWordBackward,
+            "BIG word back",
+        ),
+        ("e", hjkl_engine::MotionKind::WordEnd, "word end"),
+        ("E", hjkl_engine::MotionKind::BigWordEnd, "BIG word end"),
         // Phase 3c: line-anchor motions.
-        ("0", hjkl_vim::MotionKind::LineStart, "line start"),
-        ("<Home>", hjkl_vim::MotionKind::LineStart, "line start"),
-        ("^", hjkl_vim::MotionKind::FirstNonBlank, "first non-blank"),
-        ("$", hjkl_vim::MotionKind::LineEnd, "line end"),
-        ("<End>", hjkl_vim::MotionKind::LineEnd, "line end"),
+        ("0", hjkl_engine::MotionKind::LineStart, "line start"),
+        ("<Home>", hjkl_engine::MotionKind::LineStart, "line start"),
+        (
+            "^",
+            hjkl_engine::MotionKind::FirstNonBlank,
+            "first non-blank",
+        ),
+        ("$", hjkl_engine::MotionKind::LineEnd, "line end"),
+        ("<End>", hjkl_engine::MotionKind::LineEnd, "line end"),
         // Phase 3d: doc-level motion.
-        ("G", hjkl_vim::MotionKind::GotoLine, "goto line"),
+        ("G", hjkl_engine::MotionKind::GotoLine, "goto line"),
         // Phase 3e: find-repeat motions.
-        (";", hjkl_vim::MotionKind::FindRepeat, "find repeat"),
+        (";", hjkl_engine::MotionKind::FindRepeat, "find repeat"),
         (
             ",",
-            hjkl_vim::MotionKind::FindRepeatReverse,
+            hjkl_engine::MotionKind::FindRepeatReverse,
             "find repeat reverse",
         ),
         // Phase 3f: bracket-match motion.
-        ("%", hjkl_vim::MotionKind::BracketMatch, "match bracket"),
+        ("%", hjkl_engine::MotionKind::BracketMatch, "match bracket"),
         // Phase 3g: scroll / viewport motions.
         // NOTE: H and L are registered separately below (BufferCycleH/L for
         // Normal mode; Motion::Viewport* for Visual modes). Removed from this
         // array so they don't accidentally bind in Normal via the four-mode loop.
-        ("M", hjkl_vim::MotionKind::ViewportMiddle, "viewport middle"),
+        (
+            "M",
+            hjkl_engine::MotionKind::ViewportMiddle,
+            "viewport middle",
+        ),
         (
             "<C-d>",
-            hjkl_vim::MotionKind::HalfPageDown,
+            hjkl_engine::MotionKind::HalfPageDown,
             "half page down",
         ),
-        ("<C-u>", hjkl_vim::MotionKind::HalfPageUp, "half page up"),
+        ("<C-u>", hjkl_engine::MotionKind::HalfPageUp, "half page up"),
         (
             "<C-f>",
-            hjkl_vim::MotionKind::FullPageDown,
+            hjkl_engine::MotionKind::FullPageDown,
             "full page down",
         ),
-        ("<C-b>", hjkl_vim::MotionKind::FullPageUp, "full page up"),
+        ("<C-b>", hjkl_engine::MotionKind::FullPageUp, "full page up"),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [
@@ -380,8 +390,12 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
     // checks slots.len() at dispatch time). In all Visual modes H/L remain
     // viewport motions — no buffer-cycle semantics in Visual.
     for (chord, kind, desc) in [
-        ("H", hjkl_vim::MotionKind::ViewportTop, "viewport top"),
-        ("L", hjkl_vim::MotionKind::ViewportBottom, "viewport bottom"),
+        ("H", hjkl_engine::MotionKind::ViewportTop, "viewport top"),
+        (
+            "L",
+            hjkl_engine::MotionKind::ViewportBottom,
+            "viewport bottom",
+        ),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [Mode::Visual, Mode::VisualLine, Mode::VisualBlock] {
@@ -750,9 +764,9 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
 /// binds):
 ///   - `k` / `<Up>` at the top row → focus the search box.
 ///   - `<Esc>` with an active filter → clear the filter.
-pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
+pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
     use crate::keymap_actions::AppAction;
-    use keymap::HjklMode as Mode;
+    use hjkl_vim::Mode;
     let mut km = Keymap::new(leader);
     km.set_timeout(Duration::from_millis(500));
 

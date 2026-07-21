@@ -667,7 +667,7 @@ impl App {
                     // Single slot: fall back to viewport-top motion.
                     let n = self.pending_count.take_or(1) as usize;
                     self.active_editor_mut()
-                        .apply_motion(hjkl_vim::MotionKind::ViewportTop, n);
+                        .apply_motion(hjkl_engine::MotionKind::ViewportTop, n);
                 }
             }
             AppAction::BufferCycleL => {
@@ -677,7 +677,7 @@ impl App {
                     // Single slot: fall back to viewport-bottom motion.
                     let n = self.pending_count.take_or(1) as usize;
                     self.active_editor_mut()
-                        .apply_motion(hjkl_vim::MotionKind::ViewportBottom, n);
+                        .apply_motion(hjkl_engine::MotionKind::ViewportBottom, n);
                 }
             }
             _ => {}
@@ -705,7 +705,7 @@ impl App {
                         if linewise {
                             self.active_editor_mut().jump_cursor(row, 0);
                             self.active_editor_mut()
-                                .apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
+                                .apply_motion(hjkl_engine::MotionKind::FirstNonBlank, 1);
                         } else {
                             self.active_editor_mut().jump_cursor(row, col);
                         }

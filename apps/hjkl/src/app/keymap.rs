@@ -95,25 +95,18 @@ pub(crate) fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
     KmEvent::new(code, modifiers)
 }
 
-/// Editor modes used by the hjkl umbrella's keymap dispatch. Defined in
-/// `hjkl-vim`; re-exported here under the legacy alias so existing
-/// `crate::app::keymap::HjklMode` references continue to resolve unchanged.
-/// `hjkl-keymap` is generic over the mode discriminator — any
-/// `Copy + Eq + Hash + Debug` type satisfies the blanket `Mode` impl.
-pub use hjkl_vim::Mode as HjklMode;
-
-/// Map a [`MapMode`] to an [`HjklMode`].
+/// Map a [`MapMode`] to a [`hjkl_vim::Mode`].
 ///
 /// Returns `None` for [`MapMode::Terminal`] — there's no Terminal variant.
 /// Terminal-mode runtime maps are silently skipped with a status message at
 /// the call site.
-pub(crate) fn map_mode_to_km_mode(mode: MapMode) -> Option<HjklMode> {
+pub(crate) fn map_mode_to_km_mode(mode: MapMode) -> Option<hjkl_vim::Mode> {
     match mode {
-        MapMode::Normal => Some(HjklMode::Normal),
-        MapMode::Visual => Some(HjklMode::Visual),
-        MapMode::Insert => Some(HjklMode::Insert),
-        MapMode::OperatorPending => Some(HjklMode::OpPending),
-        MapMode::CommandLine => Some(HjklMode::CommandLine),
+        MapMode::Normal => Some(hjkl_vim::Mode::Normal),
+        MapMode::Visual => Some(hjkl_vim::Mode::Visual),
+        MapMode::Insert => Some(hjkl_vim::Mode::Insert),
+        MapMode::OperatorPending => Some(hjkl_vim::Mode::OpPending),
+        MapMode::CommandLine => Some(hjkl_vim::Mode::CommandLine),
         MapMode::Terminal => None,
     }
 }

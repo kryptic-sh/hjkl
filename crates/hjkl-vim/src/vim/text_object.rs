@@ -664,7 +664,6 @@ pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     // Move cursor to end of inserted rhs.
     let new_col = lhs_start + rhs.chars().count();
     buf_set_cursor_rc(ed.buffer_mut(), row, new_col);
-    ed.push_buffer_cursor_to_textarea();
 
     true
 }

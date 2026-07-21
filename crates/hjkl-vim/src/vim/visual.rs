@@ -270,11 +270,9 @@ pub(crate) fn goto_mark<H: hjkl_engine::types::Host>(
     let (r, c_clamped) = clamp_pos(ed, (row, col));
     if linewise {
         buf_set_cursor_rc(ed.buffer_mut(), r, 0);
-        ed.push_buffer_cursor_to_textarea();
         move_first_non_whitespace(ed);
     } else {
         buf_set_cursor_rc(ed.buffer_mut(), r, c_clamped);
-        ed.push_buffer_cursor_to_textarea();
     }
     if ed.cursor() != pre {
         ed.push_jump(pre);
@@ -319,11 +317,9 @@ pub(crate) fn try_goto_mark<H: hjkl_engine::types::Host>(
             let (r, c_clamped) = clamp_pos(ed, (row, col));
             if linewise {
                 buf_set_cursor_rc(ed.buffer_mut(), r, 0);
-                ed.push_buffer_cursor_to_textarea();
                 move_first_non_whitespace(ed);
             } else {
                 buf_set_cursor_rc(ed.buffer_mut(), r, c_clamped);
-                ed.push_buffer_cursor_to_textarea();
             }
             if ed.cursor() != pre {
                 ed.push_jump(pre);

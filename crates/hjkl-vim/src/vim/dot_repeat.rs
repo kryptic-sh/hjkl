@@ -26,7 +26,6 @@ pub(crate) fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
             hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-            ed.push_buffer_cursor_to_textarea();
         }
         vim_mut(ed).mode = Mode::Normal;
     }
@@ -224,7 +223,6 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
             if ed.cursor().1 > 0 {
                 hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         LastChange::DeleteToEol { inserted } => {
             use hjkl_buffer::{Edit, Position};
@@ -259,7 +257,6 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
                     text: "\n".to_string(),
                 });
             }
-            ed.push_buffer_cursor_to_textarea();
             let cursor = ed.cursor();
             ed.mutate_edit(Edit::InsertStr {
                 at: Position::new(cursor.0, cursor.1),
@@ -278,12 +275,10 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
                 InsertEntry::ShiftI => move_first_non_whitespace(ed),
                 InsertEntry::A => {
                     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-                    ed.push_buffer_cursor_to_textarea();
                 }
                 InsertEntry::ShiftA => {
                     hjkl_engine::motions::move_line_end(ed.buffer_mut());
                     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-                    ed.push_buffer_cursor_to_textarea();
                 }
             }
             for _ in 0..scaled(count).max(1) {

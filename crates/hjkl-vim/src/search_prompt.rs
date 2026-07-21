@@ -65,7 +65,6 @@ pub fn step_search_prompt<H: Host>(
                     if let Some(off) = offset.as_deref().filter(|s| !s.is_empty()) {
                         apply_search_offset(ed, off);
                     }
-                    ed.push_buffer_cursor_to_textarea();
                     // Operator-pending search (`d/pat`, `c/pat`, `y/pat`): apply
                     // the operator over the range to the match instead of just
                     // moving the cursor / pushing a jump.

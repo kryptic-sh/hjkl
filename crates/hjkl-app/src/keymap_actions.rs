@@ -217,7 +217,7 @@ pub enum AppAction {
     /// defensive coverage (macros re-feed raw keys through the FSM). This
     /// variant becomes authoritative for user input.
     Motion {
-        kind: hjkl_vim::MotionKind,
+        kind: hjkl_engine::MotionKind,
         count: u32,
     },
 
@@ -227,7 +227,7 @@ pub enum AppAction {
     /// When dispatched the active visual selection range is resolved from
     /// the engine, a range-mutation primitive is called directly, and the
     /// engine exits visual mode. Bound for `d` / `c` / `y` / `>` / `<` in
-    /// `HjklMode::Visual` (which covers Visual, VisualLine, and VisualBlock
+    /// `Mode::Visual` (which covers Visual, VisualLine, and VisualBlock
     /// per the mode-collapse in `keymap.rs`).
     ///
     /// VisualBlock ops fall back to the engine FSM because block-shape

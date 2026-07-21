@@ -2205,11 +2205,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.style_table.get(id as usize).copied()
     }
 
-    /// Historical reverse-sync hook from when the textarea mirrored
-    /// the buffer. Now that View is the cursor authority this is a
-    /// no-op; call sites can remain in place during the migration.
-    pub fn push_buffer_cursor_to_textarea(&mut self) {}
-
     /// Force the host viewport's top row without touching the
     /// cursor. Used by tests that simulate a scroll without the
     /// SCROLLOFF cursor adjustment that `scroll_down` / `scroll_up`
@@ -2920,7 +2915,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
         buf_set_cursor_rc(&mut self.buffer, target, 0);
         crate::motions::move_first_non_blank(&mut self.buffer);
-        self.push_buffer_cursor_to_textarea();
         self.sticky_col = Some(buf_cursor_pos(&self.buffer).col);
     }
 
@@ -2964,7 +2958,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let clamped = row.max(new_top).min(bot);
         if clamped != row {
             buf_set_cursor_rc(&mut self.buffer, clamped, col);
-            self.push_buffer_cursor_to_textarea();
         }
     }
 
@@ -4347,7 +4340,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 let after = crate::types::Query::rope(&self.buffer);
                 if let Some((row, col)) = first_diff_pos(&before, &after) {
                     buf_set_cursor_rc(&mut self.buffer, row, col);
-                    self.push_buffer_cursor_to_textarea();
                 }
             }
         }
@@ -4374,7 +4366,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let max_col = buf_line_chars(&self.buffer, row).saturating_sub(1);
         if col > max_col {
             buf_set_cursor_rc(&mut self.buffer, row, max_col);
-            self.push_buffer_cursor_to_textarea();
         }
         // audit-r2 fix 3(a): vim's 'foldopen' option includes "undo" — an
         // undo/redo that lands the cursor inside a closed fold's body must
@@ -4478,7 +4469,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.suppress_u_line_track = false;
         self.change_bank.lock().unwrap().u_line = Some((row, current));
         buf_set_cursor_rc(&mut self.buffer, row, 0);
-        self.push_buffer_cursor_to_textarea();
     }
 
     /// One `g-` step: restore the next-lower-`seq` state anywhere in the undo
@@ -4516,7 +4506,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let after = crate::types::Query::rope(&self.buffer);
             if let Some((row, col)) = first_diff_pos(&before, &after) {
                 buf_set_cursor_rc(&mut self.buffer, row, col);
-                self.push_buffer_cursor_to_textarea();
             }
             self.settle_after_history_jump();
             true
@@ -5101,8 +5090,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     // Invariants (enforced by the bridge fns):
     //   - View mutations go through `mutate_edit` (dirty/undo/change-list).
     //   - Navigation keys call `break_undo_group_in_insert` when the FSM did.
-    //   - `push_buffer_cursor_to_textarea` is called after every mutation
-    //     (currently a no-op, kept for migration hygiene).
 }
 
 // ── Phase 6.6b: FSM state accessors (for hjkl-vim ownership) ─────────────────

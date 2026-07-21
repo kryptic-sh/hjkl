@@ -1,18 +1,18 @@
 use super::*;
 
-use crate::app::keymap::HjklMode;
+use hjkl_vim::Mode;
 use hjkl_which_key::{Entry, entries_for};
 
 // ── entries_for integration tests (app + engine merge) ────────────────────────
 
-fn empty_keymap() -> hjkl_keymap::Keymap<crate::keymap_actions::AppAction, HjklMode> {
+fn empty_keymap() -> hjkl_keymap::Keymap<crate::keymap_actions::AppAction, Mode> {
     hjkl_keymap::Keymap::new(' ')
 }
 
 #[test]
 fn entries_include_engine_descriptors_at_root() {
     let km = empty_keymap();
-    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let entries = entries_for(&km, Mode::Normal, &[], ' ');
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
     for k in ["h", "j", "k", "l", "i", "a", "w", "b"] {
         assert!(keys.contains(&k), "entries_for missing engine key '{k}'");
@@ -22,12 +22,7 @@ fn entries_include_engine_descriptors_at_root() {
 #[test]
 fn entries_include_g_prefix_engine_children() {
     let km = empty_keymap();
-    let entries = entries_for(
-        &km,
-        HjklMode::Normal,
-        &[hjkl_keymap::KeyEvent::char('g')],
-        ' ',
-    );
+    let entries = entries_for(&km, Mode::Normal, &[hjkl_keymap::KeyEvent::char('g')], ' ');
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
     assert!(!entries.is_empty(), "g-prefix popup should be non-empty");
     assert!(keys.contains(&"g"), "g-prefix missing 'gg' entry");
@@ -37,12 +32,7 @@ fn entries_include_g_prefix_engine_children() {
 #[test]
 fn entries_include_z_prefix_engine_children() {
     let km = empty_keymap();
-    let entries = entries_for(
-        &km,
-        HjklMode::Normal,
-        &[hjkl_keymap::KeyEvent::char('z')],
-        ' ',
-    );
+    let entries = entries_for(&km, Mode::Normal, &[hjkl_keymap::KeyEvent::char('z')], ' ');
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
     assert!(!entries.is_empty(), "z-prefix popup should be non-empty");
     assert!(keys.contains(&"z"), "z-prefix missing 'zz' entry");
@@ -50,16 +40,16 @@ fn entries_include_z_prefix_engine_children() {
 
 #[test]
 fn app_entry_shadows_engine_entry() {
-    let mut km: hjkl_keymap::Keymap<crate::keymap_actions::AppAction, HjklMode> =
+    let mut km: hjkl_keymap::Keymap<crate::keymap_actions::AppAction, Mode> =
         hjkl_keymap::Keymap::new(' ');
     km.add(
-        HjklMode::Normal,
+        Mode::Normal,
         "i",
         crate::keymap_actions::AppAction::OpenFilePicker,
         "custom insert desc",
     )
     .expect("add failed");
-    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let entries = entries_for(&km, Mode::Normal, &[], ' ');
     let i_entry = entries.iter().find(|e| e.key == "i").expect("missing 'i'");
     assert_eq!(
         i_entry.desc, "custom insert desc",
@@ -70,7 +60,7 @@ fn app_entry_shadows_engine_entry() {
 #[test]
 fn entries_sorted_by_key() {
     let km = empty_keymap();
-    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let entries = entries_for(&km, Mode::Normal, &[], ' ');
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
     let mut sorted = keys.clone();
     sorted.sort();
@@ -89,7 +79,7 @@ fn nmap_leader_x_desc_shows_rhs_notation() {
     let leader = app.config.editor.leader;
     // The <leader>x binding lives under the leader key prefix.
     let leader_prefix = vec![hjkl_keymap::KeyEvent::char(leader)];
-    let entries = entries_for(&app.app_keymap, HjklMode::Normal, &leader_prefix, leader);
+    let entries = entries_for(&app.app_keymap, Mode::Normal, &leader_prefix, leader);
 
     let x_entry = entries
         .iter()
@@ -119,7 +109,7 @@ fn nmap_desc_truncated_at_40_chars() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex(&format!("nmap x {long_rhs}"));
 
-    let entries = entries_for(&app.app_keymap, HjklMode::Normal, &[], ' ');
+    let entries = entries_for(&app.app_keymap, Mode::Normal, &[], ' ');
     let x_entry = entries
         .iter()
         .find(|e| e.key == "x")

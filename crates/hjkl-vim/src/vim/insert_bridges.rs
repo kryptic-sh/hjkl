@@ -103,7 +103,6 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
             } else {
                 buf_set_cursor_rc(ed.buffer_mut(), cursor.row, cursor.col + 1);
             }
-            ed.push_buffer_cursor_to_textarea();
             return true;
         }
     }
@@ -160,7 +159,6 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
                 // logic checks the actual buffer char at cursor instead.
                 ed.pending_closes_mut()
                     .push((cursor.row, between_col, close));
-                ed.push_buffer_cursor_to_textarea();
                 return true;
             }
 
@@ -192,7 +190,6 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
                         buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
                     }
                 }
-                ed.push_buffer_cursor_to_textarea();
                 return true;
             }
         }
@@ -203,7 +200,6 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
         // user types content inside an auto-paired bracket.
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     }
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Insert a newline at the cursor, applying autoindent / smartindent and
@@ -277,7 +273,6 @@ pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
             let new_row = cursor.row + 1;
             let new_col = inner_indent.len();
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.push_buffer_cursor_to_textarea();
             return true;
         }
     }
@@ -303,7 +298,6 @@ pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
         let new_row = cursor.row + 1;
         let new_col = base_indent.chars().count();
         buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-        ed.push_buffer_cursor_to_textarea();
         return true;
     }
 
@@ -326,7 +320,6 @@ pub(crate) fn insert_newline_bridge<H: hjkl_engine::types::Host>(
         format!("\n{indent}")
     };
     ed.mutate_edit(Edit::InsertStr { at: cursor, text });
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Insert a tab character (or spaces up to the next softtabstop boundary when
@@ -354,7 +347,6 @@ pub(crate) fn insert_tab_bridge<H: hjkl_engine::types::Host>(
             ch: '\t',
         });
     }
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Delete the character before the cursor (vim Backspace / `^H`). With
@@ -403,7 +395,6 @@ fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
                     end: cursor,
                     kind: MotionKind::Char,
                 });
-                ed.push_buffer_cursor_to_textarea();
                 return true;
             }
         }
@@ -420,11 +411,10 @@ fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
                 end: cursor,
                 kind: MotionKind::Char,
             });
-            ed.push_buffer_cursor_to_textarea();
             return true;
         }
     }
-    let result = if cursor.col > 0 {
+    if cursor.col > 0 {
         ed.mutate_edit(Edit::DeleteRange {
             start: Position::new(cursor.row, cursor.col - 1),
             end: cursor,
@@ -443,9 +433,7 @@ fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
         true
     } else {
         false
-    };
-    ed.push_buffer_cursor_to_textarea();
-    result
+    }
 }
 
 /// Replace-mode `<BS>` (`:h Replace-mode`): restores the character that was
@@ -476,7 +464,6 @@ fn replace_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     if cursor.row != start_row || new_col < start_col {
         // Before where this Replace run started — move left, no restore.
         buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
-        ed.push_buffer_cursor_to_textarea();
         return false;
     }
 
@@ -498,7 +485,6 @@ fn replace_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     // Else: `new_col` was past the original line end (a pure append past
     // EOL) — the DeleteRange above already undid it; nothing to restore.
     buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 
@@ -511,7 +497,7 @@ pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
     let line_chars = buf_line_chars(ed.buffer(), cursor.row);
-    let result = if cursor.col < line_chars {
+    if cursor.col < line_chars {
         ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
@@ -529,9 +515,7 @@ pub(crate) fn insert_delete_bridge<H: hjkl_engine::types::Host>(
         true
     } else {
         false
-    };
-    ed.push_buffer_cursor_to_textarea();
-    result
+    }
 }
 /// Move the cursor one step in `dir`, breaking the undo group per
 /// `undo_break_on_motion`. Clears the autopair pending-closes stack (cursor
@@ -563,7 +547,6 @@ pub(crate) fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
         }
     }
     break_undo_group_in_insert(ed);
-    ed.push_buffer_cursor_to_textarea();
     false
 }
 /// Move the cursor to the start of the current line, breaking the undo group.
@@ -575,7 +558,6 @@ pub(crate) fn insert_home_bridge<H: hjkl_engine::types::Host>(
     ed.pending_closes_mut().clear();
     hjkl_engine::motions::move_line_start(ed.buffer_mut());
     break_undo_group_in_insert(ed);
-    ed.push_buffer_cursor_to_textarea();
     false
 }
 /// Move the cursor to the end of the current line, breaking the undo group.
@@ -587,7 +569,6 @@ pub(crate) fn insert_end_bridge<H: hjkl_engine::types::Host>(
     ed.pending_closes_mut().clear();
     hjkl_engine::motions::move_line_end(ed.buffer_mut());
     break_undo_group_in_insert(ed);
-    ed.push_buffer_cursor_to_textarea();
     false
 }
 /// Scroll up one full viewport height, moving the cursor with it.
@@ -636,7 +617,6 @@ pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
             with_space: false,
         });
         buf_set_cursor_rc(ed.buffer_mut(), prev_row, prev_chars);
-        ed.push_buffer_cursor_to_textarea();
         return true;
     }
     let iskeyword = ed.settings().iskeyword.clone();
@@ -651,7 +631,6 @@ pub(crate) fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
         end: cursor,
         kind: MotionKind::Char,
     });
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Delete backward on the current line (`Ctrl-U`, `:h i_CTRL-U`). No-op when
@@ -700,7 +679,6 @@ pub(crate) fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
             end: cursor,
             kind: MotionKind::Char,
         });
-        ed.push_buffer_cursor_to_textarea();
     }
     true
 }
@@ -729,7 +707,6 @@ pub(crate) fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
         });
         buf_set_cursor_rc(ed.buffer_mut(), prev_row, prev_chars);
     }
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// B1: insert the text typed during the most recent insert session
@@ -748,7 +725,6 @@ pub(crate) fn insert_ctrl_a_bridge<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
     ed.mutate_edit(Edit::InsertStr { at: cursor, text });
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// B1: insert the character in the same column of the line BELOW the cursor
@@ -791,7 +767,6 @@ fn insert_char_from_adjacent_line<H: hjkl_engine::types::Host>(
         return false;
     };
     ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Indent the current line by one `shiftwidth` and shift the cursor right by
@@ -880,7 +855,6 @@ pub(crate) fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).last_insert_pos = Some(ed.cursor());
     if col > 0 {
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-        ed.push_buffer_cursor_to_textarea();
     }
     ed.set_sticky_col(Some(ed.cursor().1));
     true

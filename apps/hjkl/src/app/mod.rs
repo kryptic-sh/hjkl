@@ -458,11 +458,11 @@ pub struct App {
     pub mouse_flags: MouseFlags,
     /// Application-level chord dispatch. Holds Normal-mode bindings for all
     /// leader / g / ] / [ / <C-w> sequences.
-    pub(crate) app_keymap: Keymap<AppAction, keymap::HjklMode>,
+    pub(crate) app_keymap: Keymap<AppAction, hjkl_vim::Mode>,
     /// Explorer-context chord dispatch. Holds Normal-mode bindings that are
     /// active only when the file-explorer sidebar window is focused. Consulted
     /// by `route_chord_key_inner` before `app_keymap` when `explorer_buf_focused()`.
-    pub(crate) explorer_keymap: Keymap<AppAction, keymap::HjklMode>,
+    pub(crate) explorer_keymap: Keymap<AppAction, hjkl_vim::Mode>,
     /// Background install worker pool shared across all `:Anvil install` calls.
     pub anvil_pool: hjkl_anvil::InstallPool,
     /// In-flight install handles keyed by tool name.
@@ -2870,19 +2870,15 @@ impl App {
     pub(crate) fn any_chord_pending(&self) -> bool {
         self.pending_state.is_some()
             || self.active_editor().is_chord_pending()
-            || !self
-                .ctx_keymap()
-                .pending(crate::app::keymap::HjklMode::Normal)
-                .is_empty()
+            || !self.ctx_keymap().pending(hjkl_vim::Mode::Normal).is_empty()
     }
 
     /// Cancel every in-flight chord (trie, app `pending_state`, engine pending)
     /// and reset the count prefix + which-key prefix timer. Does not touch
     /// `chord_history` (callers manage that).
     pub(crate) fn cancel_all_pending(&mut self) {
-        self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-        self.explorer_keymap
-            .reset(crate::app::keymap::HjklMode::Normal);
+        self.app_keymap.reset(hjkl_vim::Mode::Normal);
+        self.explorer_keymap.reset(hjkl_vim::Mode::Normal);
         self.pending_count.reset();
         self.pending_state = None;
         let _ = self.active_editor_mut().take_pending();
@@ -2894,7 +2890,7 @@ impl App {
     ///
     /// When the file-explorer sidebar is focused the explorer-specific keymap
     /// is returned; otherwise the global `app_keymap`.
-    pub(crate) fn ctx_keymap(&self) -> &Keymap<AppAction, keymap::HjklMode> {
+    pub(crate) fn ctx_keymap(&self) -> &Keymap<AppAction, hjkl_vim::Mode> {
         if self.explorer_buf_focused() {
             &self.explorer_keymap
         } else {
@@ -2913,7 +2909,7 @@ impl App {
     /// is empty, so callers see an empty `Vec` and suppress the popup.  See
     /// the comment in `render.rs::which_key_popup` for the full rationale.
     pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
-        let trie = self.ctx_keymap().pending(keymap::HjklMode::Normal);
+        let trie = self.ctx_keymap().pending(hjkl_vim::Mode::Normal);
         if !trie.is_empty() {
             return trie.to_vec();
         }
@@ -2962,9 +2958,9 @@ impl App {
     }
 }
 
-/// Return the current `HjklMode` based on the active editor's vim mode.
+/// Return the current `Mode` based on the active editor's vim mode.
 /// Returns `None` for modes with no keymap equivalent (currently none, but
 /// Terminal mode would be `None` if ever added here).
-pub(crate) fn current_km_mode(app: &App) -> Option<keymap::HjklMode> {
+pub(crate) fn current_km_mode(app: &App) -> Option<hjkl_vim::Mode> {
     keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active_editor().vim_mode())?)
 }

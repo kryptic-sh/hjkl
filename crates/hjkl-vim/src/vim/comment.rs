@@ -246,7 +246,6 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
             if top < bot {
                 replicate_block_text(ed, &repeated, top, bot, col, pad, to_eol);
                 buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
-                ed.push_buffer_cursor_to_textarea();
             }
             // Record for dot-repeat (`:h v_.`, block `I`/`A`). `cols` is the
             // block width `A` appends past: `cursor_col == left + 1` and
@@ -283,7 +282,6 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
                 let line_len = buf_line_chars(ed.buffer(), top);
                 let target_col = (col + ins_chars).min(line_len);
                 buf_set_cursor_rc(ed.buffer_mut(), top, target_col);
-                ed.push_buffer_cursor_to_textarea();
             }
             // Patch the retyped text into the `VisualOp{Change, Block}` entry
             // recorded at the block-`c` start (mirrors the charwise/linewise

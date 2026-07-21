@@ -897,14 +897,11 @@ impl App {
             && self.explorer_buf_focused()
             && self.active_editor().vim_mode() == hjkl_engine::VimMode::Normal
             && !self.active_editor().is_chord_pending()
-            && self
-                .app_keymap
-                .pending(super::keymap::HjklMode::Normal)
-                .is_empty()
+            && self.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty()
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
         {
             use hjkl_keymap::KeyResolve;
-            let mode = super::keymap::HjklMode::Normal;
+            let mode = hjkl_vim::Mode::Normal;
             let count = self.pending_count.peek().max(1);
             let now = std::time::Instant::now();
             match self.explorer_keymap.feed(mode, km_ev, now) {

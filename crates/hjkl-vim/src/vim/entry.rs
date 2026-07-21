@@ -170,7 +170,6 @@ pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
         }
     }
     buf_set_cursor_rc(ed.buffer_mut(), row, col);
-    ed.push_buffer_cursor_to_textarea();
     ed.mark_content_dirty();
     if let Some(ref mut session) = vim_mut(ed).insert_session {
         session.row_min = session.row_min.min(row);

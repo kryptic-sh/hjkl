@@ -261,7 +261,6 @@ pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffe
     // Restore the user's cursor — mutate_edit may have moved it during the
     // partner-side rewrite when the partner is on a row before the cursor.
     buf_set_cursor_rc(ed.buffer_mut(), row, col);
-    ed.push_buffer_cursor_to_textarea();
 }
 /// Resolve the HTML/XML tag-name pair under the cursor for matchparen-style
 /// highlight (#243). Returns `[(row, name_start_col, name_end_col); 2]` for

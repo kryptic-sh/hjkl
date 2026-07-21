@@ -2,7 +2,6 @@
 ///
 /// Moved from `hjkl-vim` into `hjkl-engine` (Phase 6.6 cycle-break) so that
 /// `hjkl-vim` can depend on `hjkl-engine` without a circular dependency.
-/// `hjkl-vim` re-exports this type as `hjkl_vim::MotionKind` for back-compat.
 ///
 /// The host converts a `MotionKind` to the appropriate `Editor::apply_motion`
 /// call. Designed for extensibility: future phases may add variants without

@@ -199,7 +199,6 @@ pub(crate) fn apply_motion_kind<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
@@ -211,7 +210,6 @@ pub(crate) fn apply_motion_kind<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
             ed.sync_buffer_from_textarea();
         }
@@ -417,7 +415,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::Left => {
             // `h` — View clamps at col 0 (no wrap), matching vim.
             hjkl_engine::motions::move_left(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::Right => {
             // `l` — operator-motion context (`dl`/`cl`/`yl`) is allowed
@@ -428,7 +425,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             } else {
                 hjkl_engine::motions::move_right_in_line(ed.buffer_mut(), count);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::SpaceFwd => {
             // `<Space>` — wraps to next line at EOL in cursor context; mid-line
@@ -438,7 +434,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             } else {
                 hjkl_engine::motions::move_space_fwd(ed.buffer_mut(), count);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::BackspaceBack => {
             // `<BS>` — wraps to prev line's last char at BOL in cursor context;
@@ -448,7 +443,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             } else {
                 hjkl_engine::motions::move_backspace_back(ed.buffer_mut(), count);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::Up => {
             // Final col is set by `apply_sticky_col` below — push the
@@ -458,14 +452,12 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             let mut sticky = ed.sticky_col();
             hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
             hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
             let v = *ed.host().viewport();
@@ -473,7 +465,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             let mut sticky = ed.sticky_col();
             hjkl_engine::motions::move_screen_up(ed.buffer_mut(), &folds, &v, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
             let v = *ed.host().viewport();
@@ -481,60 +472,48 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             let mut sticky = ed.sticky_col();
             hjkl_engine::motions::move_screen_down(ed.buffer_mut(), &folds, &v, count, &mut sticky);
             ed.set_sticky_col(sticky);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordBack => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEnd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_end(ed.buffer_mut(), false, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordBack => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_back(ed.buffer_mut(), true, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEnd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_end(ed.buffer_mut(), true, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEndBack => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_end_back(ed.buffer_mut(), false, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEndBack => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_end_back(ed.buffer_mut(), true, count, &iskeyword);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineStart => {
             hjkl_engine::motions::move_line_start(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlank => {
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineEnd => {
             // Vim normal-mode `$` lands on the last char, not one past it.
             hjkl_engine::motions::move_line_end(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FileTop => {
             // `count gg` jumps to line `count` (first non-blank);
@@ -544,7 +523,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             } else {
                 hjkl_engine::motions::move_top(ed.buffer_mut());
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FileBottom => {
             // `count G` jumps to line `count`; bare `G` lands at
@@ -554,7 +532,6 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             } else {
                 hjkl_engine::motions::move_bottom(ed.buffer_mut(), 0);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::Find { ch, forward, till } => {
             // Skip an adjacent target when this is a `;`/`,` repeat, and on the
@@ -602,17 +579,14 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                     ed.search_advance_backward(true);
                 }
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportTop => {
             let v = *ed.host().viewport();
             hjkl_engine::motions::move_viewport_top(ed.buffer_mut(), &v, count.saturating_sub(1));
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportMiddle => {
             let v = *ed.host().viewport();
             hjkl_engine::motions::move_viewport_middle(ed.buffer_mut(), &v);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportBottom => {
             let v = *ed.host().viewport();
@@ -621,11 +595,9 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                 &v,
                 count.saturating_sub(1),
             );
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::LastNonBlank => {
             hjkl_engine::motions::move_last_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineMiddle => {
             let row = ed.cursor().0;
@@ -646,11 +618,9 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         }
         Motion::ParagraphPrev => {
             hjkl_engine::motions::move_paragraph_prev(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::ParagraphNext => {
             hjkl_engine::motions::move_paragraph_next(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::SentencePrev => {
             for _ in 0..count.max(1) {
@@ -668,35 +638,27 @@ pub(crate) fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         }
         Motion::SectionBackward => {
             hjkl_engine::motions::move_section_backward(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionForward => {
             hjkl_engine::motions::move_section_forward(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndBackward => {
             hjkl_engine::motions::move_section_end_backward(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::SectionEndForward => {
             hjkl_engine::motions::move_section_end_forward(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankNextLine => {
             hjkl_engine::motions::move_first_non_blank_next_line(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankPrevLine => {
             hjkl_engine::motions::move_first_non_blank_prev_line(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlankLine => {
             hjkl_engine::motions::move_first_non_blank_line(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
         Motion::GotoColumn => {
             hjkl_engine::motions::move_goto_column(ed.buffer_mut(), count);
-            ed.push_buffer_cursor_to_textarea();
         }
     }
 }
@@ -710,7 +672,6 @@ pub(crate) fn move_first_non_whitespace<H: hjkl_engine::types::Host>(
     // textarea reflects the resolved column too.
     ed.sync_buffer_content_from_textarea();
     hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-    ed.push_buffer_cursor_to_textarea();
 }
 pub(crate) fn find_char_on_line<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -719,21 +680,12 @@ pub(crate) fn find_char_on_line<H: hjkl_engine::types::Host>(
     till: bool,
     skip_adjacent: bool,
 ) -> bool {
-    let moved =
-        hjkl_engine::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till, skip_adjacent);
-    if moved {
-        ed.push_buffer_cursor_to_textarea();
-    }
-    moved
+    hjkl_engine::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till, skip_adjacent)
 }
 pub(crate) fn matching_bracket<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
-    let moved = hjkl_engine::motions::match_bracket(ed.buffer_mut());
-    if moved {
-        ed.push_buffer_cursor_to_textarea();
-    }
-    moved
+    hjkl_engine::motions::match_bracket(ed.buffer_mut())
 }
 /// `[(` / `])` / `[{` / `]}` — move to the `count`-th previous (`forward =
 /// false`) / next (`forward = true`) unmatched bracket of the kind given by
@@ -773,7 +725,6 @@ pub(crate) fn goto_unmatched_bracket<H: hjkl_engine::types::Host>(
                         found += 1;
                         if found == target {
                             buf_set_cursor_rc(ed.buffer_mut(), r, ci);
-                            ed.push_buffer_cursor_to_textarea();
                             return;
                         }
                     } else {
@@ -805,7 +756,6 @@ pub(crate) fn goto_unmatched_bracket<H: hjkl_engine::types::Host>(
                         found += 1;
                         if found == target {
                             buf_set_cursor_rc(ed.buffer_mut(), r as usize, ci as usize);
-                            ed.push_buffer_cursor_to_textarea();
                             return;
                         }
                     } else {
@@ -884,7 +834,6 @@ pub(crate) fn word_at_cursor_search<H: hjkl_engine::types::Host>(
             ed.search_advance_backward(true);
         }
     }
-    ed.push_buffer_cursor_to_textarea();
 }
 pub(crate) fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

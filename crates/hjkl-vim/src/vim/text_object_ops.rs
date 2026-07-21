@@ -302,7 +302,6 @@ pub(crate) fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
         });
     }
     buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
-    ed.push_buffer_cursor_to_textarea();
     ed.set_yank(saved_yank);
     ed.set_yank_linewise(saved_yank_linewise);
     vim_mut(ed).mode = Mode::Normal;
@@ -571,6 +570,5 @@ pub(crate) fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
     let max_col = line_chars.saturating_sub(1);
     if col > max_col {
         buf_set_cursor_rc(ed.buffer_mut(), row, max_col);
-        ed.push_buffer_cursor_to_textarea();
     }
 }

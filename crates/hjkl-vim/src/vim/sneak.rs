@@ -40,7 +40,6 @@ pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
 
     if let Some((row, col)) = result {
         buf_set_cursor_rc(ed.buffer_mut(), row, col);
-        ed.push_buffer_cursor_to_textarea();
         let _ = row_count; // suppress unused-variable warning
     }
 

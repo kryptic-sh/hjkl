@@ -119,7 +119,6 @@ pub(crate) fn cut_vim_range<H: hjkl_engine::types::Host>(
         let target = vim_mut(ed).pending_register.take();
         ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
     }
-    ed.push_buffer_cursor_to_textarea();
     text
 }
 /// `D` / `C` — delete from cursor to end of line through the edit
@@ -148,7 +147,6 @@ pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_bu
         ed.set_yank(text);
     }
     buf_set_cursor_pos(ed.buffer_mut(), cursor);
-    ed.push_buffer_cursor_to_textarea();
 }
 pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -211,7 +209,6 @@ pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
     if line_chars > 0 && cursor.col >= line_chars {
         buf_set_cursor_pos(ed.buffer_mut(), Position::new(cursor.row, line_chars - 1));
     }
-    ed.push_buffer_cursor_to_textarea();
 }
 /// Vim `Ctrl-a` / `Ctrl-x` — find the next number at or after the cursor on the
 /// current line, add `delta`, leave the cursor on the last digit of the result.
@@ -322,7 +319,6 @@ pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
     });
     let new_len = new_s.chars().count();
     buf_set_cursor_rc(ed.buffer_mut(), row, span_start + new_len.saturating_sub(1));
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
@@ -356,7 +352,6 @@ pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
     }
     // Vim leaves the cursor on the last replaced char.
     hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-    ed.push_buffer_cursor_to_textarea();
 }
 /// Returns `false` when there is no char under the cursor to toggle
 /// (end of line / empty line) so counted loops can stop instead of
@@ -419,7 +414,6 @@ pub(crate) fn join_line<H: hjkl_engine::types::Host>(
     // point when no space went in (which is the same column either
     // way, since the space sits exactly at `cur_chars`).
     buf_set_cursor_rc(ed.buffer_mut(), row, cur_chars);
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// `gJ` — join the next line onto the current one without inserting a
@@ -442,7 +436,6 @@ pub(crate) fn join_line_raw<H: hjkl_engine::types::Host>(
     });
     // Vim leaves the cursor at the join point (end of original line).
     buf_set_cursor_rc(ed.buffer_mut(), row, join_col);
-    ed.push_buffer_cursor_to_textarea();
     true
 }
 /// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
@@ -473,7 +466,6 @@ pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
     let joins = (bot - top).max(1);
     ed.push_undo();
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
-    ed.push_buffer_cursor_to_textarea();
     for _ in 0..joins {
         let joined = if with_space {
             join_line(ed)
@@ -687,7 +679,6 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
             };
             buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
             // Linewise: `[` = (target_row, 0), `]` = (bot_row, last_col).
             let payload_lines = text.lines().count().max(1);
             let bot_row = target_row + payload_lines - 1;
@@ -723,7 +714,6 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
             // step-back there.
             if !cursor_after && ed.cursor().1 > 0 {
                 hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-                ed.push_buffer_cursor_to_textarea();
             }
             // Charwise: `[` = insert start, `]` = last pasted char.
             let lo = (at.row, at.col);
@@ -747,7 +737,6 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
             let last_row = buf_row_count(ed.buffer()).saturating_sub(1);
             let target = (bot_row + 1).min(last_row);
             buf_set_cursor_rc(ed.buffer_mut(), target, 0);
-            ed.push_buffer_cursor_to_textarea();
         }
     } else if let Some(orig_row) = original_row_for_linewise_after {
         // Linewise `p` (after) with count: cursor lands on the FIRST pasted
@@ -757,7 +746,6 @@ pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
         let first_target = orig_row.saturating_add(1);
         buf_set_cursor_rc(ed.buffer_mut(), first_target, 0);
         hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-        ed.push_buffer_cursor_to_textarea();
     }
     // Any paste re-anchors the sticky column to the new cursor position.
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
@@ -916,7 +904,6 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
                 buf_set_cursor_rc(ed.buffer_mut(), top, 0);
             }
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.push_buffer_cursor_to_textarea();
         }
         Mode::Visual => {
             let anchor = vim(ed).visual_anchor;
@@ -945,7 +932,6 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
                 let last_col = top.1 + inserted_len.saturating_sub(1);
                 buf_set_cursor_rc(ed.buffer_mut(), top.0, last_col);
             }
-            ed.push_buffer_cursor_to_textarea();
         }
         Mode::VisualBlock => {
             // `p`/`P` over a VISUAL-BLOCK selection: delete the rectangle,
@@ -994,14 +980,12 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
                 });
                 buf_set_cursor_rc(ed.buffer_mut(), bot + 1, 0);
                 hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-                ed.push_buffer_cursor_to_textarea();
             } else if reg_text.contains('\n') {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(top, left),
                     text: reg_text.clone(),
                 });
                 buf_set_cursor_rc(ed.buffer_mut(), top, left);
-                ed.push_buffer_cursor_to_textarea();
             } else {
                 // Single-line charwise: replicate at the left column on every
                 // block row. Rows shorter than `left` are SKIPPED (no
@@ -1020,7 +1004,6 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
                 }
                 let last_col = left + reg_text.chars().count().saturating_sub(1);
                 buf_set_cursor_rc(ed.buffer_mut(), top, last_col);
-                ed.push_buffer_cursor_to_textarea();
             }
         }
         _ => {}
@@ -1122,7 +1105,6 @@ pub(crate) fn adjust_number_visual<H: hjkl_engine::types::Host>(
     }
     // Vim leaves the cursor at the start of the selection.
     buf_set_cursor_rc(ed.buffer_mut(), top, block_left.unwrap_or(0));
-    ed.push_buffer_cursor_to_textarea();
     vim_mut(ed).mode = Mode::Normal;
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
 }

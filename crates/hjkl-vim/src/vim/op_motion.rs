@@ -211,7 +211,6 @@ pub(crate) fn change_linewise_rows<H: hjkl_engine::types::Host>(
         ed.record_delete(payload, true, target);
     }
     buf_set_cursor_rc(ed.buffer_mut(), top_row, indent_chars);
-    ed.push_buffer_cursor_to_textarea();
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
 pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
@@ -257,7 +256,6 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
             ed.set_mark('[', top);
             ed.set_mark(']', rbr);
             buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
-            ed.push_buffer_cursor_to_textarea();
         }
         Operator::Delete => {
             ed.push_undo();
@@ -304,7 +302,6 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
                     raw_target
                 };
                 buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-                ed.push_buffer_cursor_to_textarea();
             }
             vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: after a delete both marks park at
@@ -358,7 +355,6 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
                 });
             }
             buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
-            ed.push_buffer_cursor_to_textarea();
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Reflow => {
@@ -374,7 +370,6 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
             let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
             let (new_row, new_col) = reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(new_col));
             vim_mut(ed).mode = Mode::Normal;
         }

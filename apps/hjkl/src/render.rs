@@ -2930,18 +2930,14 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 
     let leader = app.config.editor.leader;
     // The popup is Normal-mode only by design: `entries_for` is called with a
-    // hardcoded `HjklMode::Normal` regardless of the current vim mode.
+    // hardcoded `Mode::Normal` regardless of the current vim mode.
     // Non-Normal modes (Visual, Insert, etc.) suppress the popup implicitly
     // because `active_which_key_prefix` reads the Normal pending buffer of the
     // context keymap, which is always empty when the mode is not Normal.
     // When the explorer sidebar is focused, `ctx_keymap()` returns
     // `explorer_keymap` so the popup lists explorer-specific bindings.
-    let entries = hjkl_which_key::entries_for(
-        app.ctx_keymap(),
-        crate::app::keymap::HjklMode::Normal,
-        &pending,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(app.ctx_keymap(), hjkl_vim::Mode::Normal, &pending, leader);
     if entries.is_empty() {
         return;
     }

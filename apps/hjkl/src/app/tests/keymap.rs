@@ -15,8 +15,8 @@ fn runtime_nmap_registers_on_trie_and_fires() {
         "record should be stored after nmap"
     );
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let km_ev = KmEvent::new(KmCode::Char('x'), KmMods::NONE);
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
@@ -39,8 +39,8 @@ fn noremap_does_not_recurse_through_trie() {
     app.dispatch_ex("nmap b y"); // recursive binding for b
     app.dispatch_ex("nnoremap a b"); // non-recursive: a → b raw
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
@@ -60,8 +60,8 @@ fn imap_jj_enters_normal_mode() {
     hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
     assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let j_ev = KmEvent::new(KmCode::Char('j'), KmMods::NONE);
     let mut replay = Vec::new();
 
@@ -129,8 +129,8 @@ fn cyclic_recursive_map_bails_without_stack_overflow() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("nmap a a");
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
@@ -153,8 +153,8 @@ fn unmap_removes_from_trie() {
     app.dispatch_ex("nmap a b");
     app.dispatch_ex("nunmap a");
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
@@ -175,8 +175,8 @@ fn colon_nmap_via_extracted_handler() {
         "record should be stored after nmap via extracted handler"
     );
     // Verify the trie picked it up: build the leader+x chord and look it up.
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let leader = app.config.editor.leader;
     let leader_ev = KmEvent::new(KmCode::Char(leader), KmMods::NONE);
     let x_ev = KmEvent::new(KmCode::Char('x'), KmMods::NONE);
@@ -199,8 +199,8 @@ fn colon_unmap_via_extracted_handler() {
     app.dispatch_ex("nmap a b");
     app.dispatch_ex("unmap a");
 
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    use hjkl_vim::Mode;
     let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
@@ -1014,7 +1014,7 @@ fn ambiguous_chord_resolves_to_shorter_on_timeout() {
     // Ambiguous; resolve_chord_timeout must fire the shorter `q` binding.
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
-    use crate::app::keymap::HjklMode as Mode;
+    use hjkl_vim::Mode;
     app.app_keymap
         .add(Mode::Normal, "q", AppAction::OpenFilePicker, "file picker")
         .unwrap();
@@ -1040,7 +1040,7 @@ fn ambiguous_chord_resolves_to_shorter_on_timeout() {
     assert!(app.picker.is_none(), "no picker yet — waiting for timeout");
 
     let out = app
-        .resolve_chord_timeout(crate::app::keymap::HjklMode::Normal)
+        .resolve_chord_timeout(hjkl_vim::Mode::Normal)
         .expect("chord was pending");
     assert!(out.is_empty(), "Match should leave nothing to replay");
     assert!(
@@ -1055,7 +1055,7 @@ fn ambiguous_chord_fires_longer_on_fast_second_key() {
     // the longer `qd` binding via the normal feed path.
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
-    use crate::app::keymap::HjklMode as Mode;
+    use hjkl_vim::Mode;
     app.app_keymap
         .add(Mode::Normal, "q", AppAction::OpenFilePicker, "file picker")
         .unwrap();
@@ -1097,8 +1097,7 @@ fn ambiguous_chord_fires_longer_on_fast_second_key() {
 fn resolve_chord_timeout_returns_none_when_no_chord_pending() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(
-        app.resolve_chord_timeout(crate::app::keymap::HjklMode::Normal)
-            .is_none(),
+        app.resolve_chord_timeout(hjkl_vim::Mode::Normal).is_none(),
         "no pending chord → None"
     );
 }
@@ -1114,12 +1113,8 @@ fn which_key_leader_submenu_shows_direct_leader_children() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<leader>");
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
 
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
 
@@ -1150,12 +1145,8 @@ fn which_key_leader_g_shows_git_actions() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<leader>g");
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
 
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
 
@@ -1173,12 +1164,8 @@ fn which_key_ctrl_w_shows_window_motions() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<C-w>");
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
 
     let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
 
@@ -1201,7 +1188,7 @@ fn which_key_runtime_nmap_appears_in_entries() {
     // Register <leader>z → OpenFilePicker at runtime (simulates :nmap).
     app.app_keymap
         .add(
-            crate::app::keymap::HjklMode::Normal,
+            hjkl_vim::Mode::Normal,
             "<leader>z",
             AppAction::OpenFilePicker,
             "runtime file picker",
@@ -1209,12 +1196,8 @@ fn which_key_runtime_nmap_appears_in_entries() {
         .unwrap();
 
     let prefix = km_prefix(&app, "<leader>");
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
 
     let found = entries.iter().find(|e| e.key == "z");
     assert!(found.is_some(), "runtime <leader>z must appear in entries");
@@ -1249,12 +1232,7 @@ fn which_key_app_wins_over_fsm_for_conflicting_key() {
     // the app-keymap overlay (step 2) overwrites the FSM entry (step 1).
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &[],
-        leader,
-    );
+    let entries = hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &[], leader);
 
     let h_entry = entries.iter().find(|e| e.key == "h");
     assert!(h_entry.is_some(), "h must appear in Normal root entries");
@@ -1276,12 +1254,8 @@ fn which_key_user_shadows_app_for_conflicting_chord() {
     app.dispatch_ex("nmap <leader>f :echo hi<CR>");
 
     let prefix = km_prefix(&app, "<leader>");
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let entries =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
 
     let f_entry = entries.iter().find(|e| e.key == "f");
     assert!(f_entry.is_some(), "f must appear under <leader> after nmap");
@@ -1306,12 +1280,8 @@ fn which_key_unmap_removes_entry_from_popup() {
     app.dispatch_ex("nmap <leader>z :echo hi<CR>");
 
     let prefix = km_prefix(&app, "<leader>");
-    let before = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let before =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
     assert!(
         before.iter().any(|e| e.key == "z"),
         "<leader>z must appear in popup before unmap"
@@ -1319,12 +1289,8 @@ fn which_key_unmap_removes_entry_from_popup() {
 
     app.dispatch_ex("nunmap <leader>z");
 
-    let after = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &prefix,
-        leader,
-    );
+    let after =
+        hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &prefix, leader);
     assert!(
         !after.iter().any(|e| e.key == "z"),
         "<leader>z must be gone from popup after :nunmap"
@@ -1338,12 +1304,7 @@ fn which_key_fsm_only_key_surfaces_in_popup() {
     // path (step 1) since no app binding overrides it.
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
-    let entries = hjkl_which_key::entries_for(
-        &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
-        &[],
-        leader,
-    );
+    let entries = hjkl_which_key::entries_for(&app.app_keymap, hjkl_vim::Mode::Normal, &[], leader);
 
     let found = entries.iter().find(|e| e.key == "{");
     assert!(
@@ -1397,7 +1358,7 @@ fn which_key_sticky_root_includes_fsm_entries() {
 
     let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
-        crate::app::keymap::HjklMode::Normal,
+        hjkl_vim::Mode::Normal,
         &[], // empty prefix = root
         leader,
     );
@@ -1442,21 +1403,19 @@ fn which_key_backspace_pops_one_key() {
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .len(),
+        app.app_keymap.pending(hjkl_vim::Mode::Normal).len(),
         2,
         "should have 2 pending keys after <leader>g"
     );
 
     // Simulate the Backspace intercept: pop the last key.
-    app.app_keymap.pop(crate::app::keymap::HjklMode::Normal);
+    app.app_keymap.pop(hjkl_vim::Mode::Normal);
     // sticky stays false since buffer still non-empty.
     assert!(
         !app.which_key_sticky,
         "sticky must be false when buffer non-empty after pop"
     );
-    let pending = app.app_keymap.pending(crate::app::keymap::HjklMode::Normal);
+    let pending = app.app_keymap.pending(hjkl_vim::Mode::Normal);
     assert_eq!(pending.len(), 1, "should have 1 pending key after pop");
     assert_eq!(
         pending[0].code,
@@ -1476,29 +1435,18 @@ fn which_key_backspace_to_empty_enters_sticky() {
         &mut app,
         KeyEvent::new(KeyCode::Char(leader), KeyModifiers::NONE),
     );
-    assert_eq!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .len(),
-        1
-    );
+    assert_eq!(app.app_keymap.pending(hjkl_vim::Mode::Normal).len(), 1);
 
     // Simulate the Backspace intercept: pop the last key.
-    let removed = app.app_keymap.pop(crate::app::keymap::HjklMode::Normal);
+    let removed = app.app_keymap.pop(hjkl_vim::Mode::Normal);
     assert!(removed.is_some(), "pop should return the removed key");
     // View is now empty — caller sets sticky.
-    if app
-        .app_keymap
-        .pending(crate::app::keymap::HjklMode::Normal)
-        .is_empty()
-    {
+    if app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty() {
         app.which_key_sticky = true;
     }
 
     assert!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .is_empty(),
+        app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty(),
         "buffer must be empty after popping last key"
     );
     assert!(
@@ -1514,27 +1462,16 @@ fn which_key_backspace_at_root_is_noop() {
     app.which_key_sticky = true;
 
     // Verify buffer is empty.
-    assert!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .is_empty()
-    );
+    assert!(app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty());
 
     // Simulate what the event loop does: pending_non_empty is false AND sticky is true → noop.
-    let pending_non_empty = !app
-        .app_keymap
-        .pending(crate::app::keymap::HjklMode::Normal)
-        .is_empty();
+    let pending_non_empty = !app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty();
     let would_noop = !pending_non_empty && app.which_key_sticky;
     assert!(would_noop, "backspace at root with sticky should noop");
 
     // App state unchanged.
     assert!(app.which_key_sticky, "sticky must remain true after noop");
-    assert!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .is_empty()
-    );
+    assert!(app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty());
 }
 
 #[test]
@@ -1544,17 +1481,13 @@ fn which_key_esc_clears_sticky() {
     app.which_key_sticky = true;
 
     // Simulate Esc handling (as in the event loop).
-    app.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+    app.app_keymap.reset(hjkl_vim::Mode::Normal);
     app.pending_count.reset();
     app.clear_prefix_state();
     app.which_key_sticky = false;
 
     assert!(!app.which_key_sticky, "Esc must clear sticky");
-    assert!(
-        app.app_keymap
-            .pending(crate::app::keymap::HjklMode::Normal)
-            .is_empty()
-    );
+    assert!(app.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty());
 }
 
 #[test]
@@ -3240,9 +3173,9 @@ fn all_phase3_keymap_motions_keep_window_synced() {
     // assert the SYNC INVARIANT (window cache mirrors engine state). That
     // is the bug class this test catches.
 
-    use hjkl_vim::MotionKind;
+    use hjkl_engine::MotionKind;
 
-    // ── Keep in sync with hjkl_vim::MotionKind variants ────────────────
+    // ── Keep in sync with hjkl_engine::MotionKind variants ────────────────
     // If you add a variant in hjkl-vim, add it here too.
     let kinds = [
         MotionKind::CharLeft,

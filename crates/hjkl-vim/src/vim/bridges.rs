@@ -33,7 +33,6 @@ pub(crate) fn enter_insert_a_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-    ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::A));
 }
 /// `A` — move to end-of-line then begin Insert. `count` for replay.
@@ -43,7 +42,6 @@ pub(crate) fn enter_insert_shift_a_bridge<H: hjkl_engine::types::Host>(
 ) {
     hjkl_engine::motions::move_line_end(ed.buffer_mut());
     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-    ed.push_buffer_cursor_to_textarea();
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::ShiftA));
 }
 /// `o` — open a new line below the cursor and begin Insert.
@@ -78,7 +76,6 @@ pub(crate) fn open_line_below_bridge<H: hjkl_engine::types::Host>(
         at: Position::new(row, line_chars),
         text: suffix,
     });
-    ed.push_buffer_cursor_to_textarea();
 }
 /// `O` — open a new line above the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
@@ -126,7 +123,6 @@ pub(crate) fn open_line_above_bridge<H: hjkl_engine::types::Host>(
     ed.set_sticky_col(sticky);
     let new_row = buf_cursor_pos(ed.buffer()).row;
     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());
-    ed.push_buffer_cursor_to_textarea();
 }
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.
 pub(crate) fn enter_replace_mode_bridge<H: hjkl_engine::types::Host>(
@@ -185,7 +181,6 @@ pub(crate) fn substitute_char_bridge<H: hjkl_engine::types::Host>(
             kind: MotionKind::Char,
         });
     }
-    ed.push_buffer_cursor_to_textarea();
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::OpMotion {
@@ -221,7 +216,6 @@ pub(crate) fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
     ed.push_undo();
     delete_to_eol(ed);
     hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-    ed.push_buffer_cursor_to_textarea();
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::DeleteToEol { inserted: None });
     }
@@ -279,7 +273,6 @@ pub(crate) fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
     let line_chars = buf_line_chars(ed.buffer(), cursor.row);
     if line_chars > 0 && cursor.col >= line_chars {
         buf_set_cursor_rc(ed.buffer_mut(), cursor.row, line_chars - 1);
-        ed.push_buffer_cursor_to_textarea();
     }
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::ToggleCase {
@@ -485,7 +478,6 @@ pub(crate) fn search_repeat_bridge<H: hjkl_engine::types::Host>(
             ed.search_advance_backward(true);
         }
     }
-    ed.push_buffer_cursor_to_textarea();
 }
 /// `*` / `#` / `g*` / `g#` — search for the word under the cursor.
 /// `forward` picks search direction; `whole_word` wraps in `\b...\b`.

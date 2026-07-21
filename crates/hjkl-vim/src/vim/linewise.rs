@@ -98,7 +98,6 @@ pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
             ed.set_mark('[', (row, 0));
             ed.set_mark(']', (end_row, last_col));
             buf_set_cursor_rc(ed.buffer_mut(), row, col);
-            ed.push_buffer_cursor_to_textarea();
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Delete => {
@@ -130,7 +129,6 @@ pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
                 raw_target
             };
             buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-            ed.push_buffer_cursor_to_textarea();
             move_first_non_whitespace(ed);
             ed.set_sticky_col(Some(ed.cursor().1));
             vim_mut(ed).mode = Mode::Normal;
@@ -184,7 +182,6 @@ pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
             let (before, after) = reflow_rows_keep_cursor(ed, row, end_row);
             let (new_row, new_col) = reflow_keep_cursor(row, saved.0, saved.1, &before, &after);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.push_buffer_cursor_to_textarea();
             ed.set_sticky_col(Some(new_col));
             vim_mut(ed).mode = Mode::Normal;
         }

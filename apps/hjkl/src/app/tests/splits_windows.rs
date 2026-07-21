@@ -224,10 +224,10 @@ fn ctrl_w_lt_resize_width_negative_registers() {
     // trailing bare `<` was interpreted as an unclosed tag. Fix is to use
     // the `<lt>` escape. Verify that the chord registers via app_keymap and
     // resolves to AppAction::ResizeWidth(-1).
-    use crate::app::keymap::HjklMode as Mode;
     use hjkl_keymap::{
         Chord, KeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods, KeyResolve,
     };
+    use hjkl_vim::Mode;
     let mut app = App::new(None, false, None, None).unwrap();
 
     let ctrl_w = KmKeyEvent::new(KeyCode::Char('w'), KmKeyMods::CTRL);

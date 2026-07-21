@@ -36,7 +36,6 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         ed.record_yank(text, true, target);
                     }
                     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
-                    ed.push_buffer_cursor_to_textarea();
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Delete => {
@@ -73,7 +72,6 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         raw_target
                     };
                     buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-                    ed.push_buffer_cursor_to_textarea();
                     record_visual_last_change(
                         ed,
                         op,
@@ -148,7 +146,6 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let (new_row, new_col) =
                         reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-                    ed.push_buffer_cursor_to_textarea();
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::AutoIndent => {
@@ -181,7 +178,6 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         ed.record_yank(text, false, target);
                     }
                     buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
-                    ed.push_buffer_cursor_to_textarea();
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Delete => {
@@ -249,7 +245,6 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let (new_row, new_col) =
                         reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-                    ed.push_buffer_cursor_to_textarea();
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::AutoIndent => {
@@ -496,7 +491,6 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
             let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
             let (new_row, new_col) = reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.push_buffer_cursor_to_textarea();
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
@@ -626,7 +620,6 @@ pub(crate) fn delete_block_contents<H: hjkl_engine::types::Host>(
             kind: MotionKind::Block,
         });
     }
-    ed.push_buffer_cursor_to_textarea();
 }
 /// Replace each character cell in the block with `ch`. Ragged (`:h
 /// v_b_$`) per row when `vim(ed).block_to_eol` is set.

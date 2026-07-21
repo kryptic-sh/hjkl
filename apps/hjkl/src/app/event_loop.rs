@@ -376,11 +376,7 @@ impl App {
                 let deadline = prefix_at + self.which_key_delay;
                 t = t.min(deadline.saturating_duration_since(now));
             }
-            if !self.which_key_active
-                && !self
-                    .app_keymap
-                    .pending(crate::app::keymap::HjklMode::Normal)
-                    .is_empty()
+            if !self.which_key_active && !self.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty()
             {
                 let deadline = prefix_at + self.app_keymap.timeout_duration();
                 t = t.min(deadline.saturating_duration_since(now));
@@ -743,7 +739,7 @@ impl App {
                     // key of any chord).  `children_all` with an
                     // empty prefix returns all root entries without
                     // mutating the pending-chord state.
-                    use crate::app::keymap::HjklMode as Mode;
+                    use hjkl_vim::Mode;
                     let could_start_chord = !self.app_keymap.pending(Mode::Normal).is_empty()
                         || to_km_event(key).is_some_and(|km_ev| {
                             let root = self
@@ -864,9 +860,8 @@ impl App {
             // mirroring the Normal-mode buffering above. Without this the
             // digit was dropped (and the count reset every key), so every
             // visual op / motion ran with count 1.
-            self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-            self.explorer_keymap
-                .reset(crate::app::keymap::HjklMode::Normal);
+            self.app_keymap.reset(hjkl_vim::Mode::Normal);
+            self.explorer_keymap.reset(hjkl_vim::Mode::Normal);
             self.clear_prefix_state();
             if key.code == KeyCode::Esc {
                 // Cancel a half-typed count; the engine still receives Esc
@@ -884,9 +879,8 @@ impl App {
             }
         } else {
             // Insert / other modes: reset any pending Normal-mode chord state.
-            self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-            self.explorer_keymap
-                .reset(crate::app::keymap::HjklMode::Normal);
+            self.app_keymap.reset(hjkl_vim::Mode::Normal);
+            self.explorer_keymap.reset(hjkl_vim::Mode::Normal);
             self.pending_count.reset();
             self.clear_prefix_state();
         }
@@ -2015,13 +2009,9 @@ impl App {
                 // and vim-which-key behaviour.
                 if !self.which_key_active
                     && let Some(prefix_at) = self.pending_prefix_at
-                    && !self
-                        .app_keymap
-                        .pending(crate::app::keymap::HjklMode::Normal)
-                        .is_empty()
+                    && !self.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty()
                     && now >= prefix_at + self.app_keymap.timeout_duration()
-                    && let Some(replay) =
-                        self.resolve_chord_timeout(crate::app::keymap::HjklMode::Normal)
+                    && let Some(replay) = self.resolve_chord_timeout(hjkl_vim::Mode::Normal)
                     && !replay.is_empty()
                 {
                     replay_to_engine(self, &replay);
