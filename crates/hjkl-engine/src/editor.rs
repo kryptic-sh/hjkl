@@ -727,6 +727,23 @@ pub struct ChangeBank {
     pub last_edit_end: Option<(usize, usize)>,
 }
 
+/// RAII guard returned by [`Editor::undo_group`]. Holds the shared `Content`
+/// so it can close its group on `Drop` regardless of how the enclosing scope
+/// exits (normal return, early return, or panic). Dropping the OUTERMOST guard
+/// commits the group's single undo entry (or discards it if the group mutated
+/// nothing); inner guards just decrement the depth. See `push_undo` and
+/// `docs/undo-architecture.md` §4.
+#[must_use]
+pub struct UndoGroup {
+    content: std::sync::Arc<std::sync::Mutex<hjkl_buffer::Buffer>>,
+}
+
+impl Drop for UndoGroup {
+    fn drop(&mut self) {
+        self.content.lock().unwrap().undo_group_exit();
+    }
+}
+
 pub struct Editor<
     B: crate::types::View = hjkl_buffer::View,
     H: crate::types::Host = crate::types::DefaultHost,
@@ -4542,10 +4559,34 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         self.push_undo_at(SystemTime::now());
     }
 
+    /// Open an undo group. Every [`push_undo`](Self::push_undo) until the
+    /// returned guard drops collapses into a single undo step. Re-entrant
+    /// (depth-counted): nested `undo_group()` calls just nest, and only the
+    /// OUTERMOST close commits — so a `:g` whose sub-command is itself grouped
+    /// still yields one undo step. A group that mutates nothing leaves zero
+    /// undo entries. Closing on `Drop` makes it early-return / panic safe.
+    ///
+    /// See `docs/undo-architecture.md` §4. The returned guard is `#[must_use]`;
+    /// bind it (`let _g = …`) so it lives for the whole grouped operation.
+    pub fn undo_group(&mut self) -> UndoGroup {
+        let content = self.buffer.content_arc();
+        content.lock().unwrap().undo_group_enter();
+        UndoGroup { content }
+    }
+
     /// Like [`push_undo`] but uses a caller-supplied timestamp. Used by
     /// tests that need deterministic time values without `sleep`.
     #[doc(hidden)]
     pub fn push_undo_at(&mut self, timestamp: SystemTime) {
+        // Inside an open undo group, coalesce: only the FIRST mutating
+        // push_undo in the outermost group takes a snapshot; every later one
+        // is suppressed (no create-then-pop). At depth 0 (`undo_group_active`
+        // is false) the `&&` short-circuits before `undo_group_arm`, so no
+        // group state is touched and the path below is byte-identical to the
+        // pre-group behavior.
+        if self.buffer.undo_group_active() && !self.buffer.undo_group_arm() {
+            return;
+        }
         let (rope, cursor) = self.snapshot();
         let marks = self.snapshot_marks();
         self.buffer.push_undo_entry(hjkl_buffer::UndoEntry {
@@ -6559,3 +6600,159 @@ mod scroll_anim_tests {
 // These tests prove the critical invariant: vim (InsertSession) is byte-
 // identical before and after this feature; Word granularity splits undo at
 // word boundaries.
+
+#[cfg(test)]
+mod undo_group_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::{Edit, Position, View};
+
+    fn make_ed(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
+        Editor::new(buf, DefaultHost::default(), Options::default())
+    }
+
+    fn insert_x(ed: &mut Editor<View, DefaultHost>, row: usize) {
+        ed.mutate_edit(Edit::InsertStr {
+            at: Position::new(row, 0),
+            text: "X".to_string(),
+        });
+    }
+
+    fn line0(ed: &Editor<View, DefaultHost>) -> String {
+        hjkl_buffer::rope_line_str(&ed.buffer().rope(), 0)
+    }
+
+    /// depth == 0: `push_undo` behaves exactly as before — every call snapshots
+    /// (no coalescing), even with no intervening mutation.
+    #[test]
+    fn depth_zero_push_undo_is_unchanged() {
+        let mut ed = make_ed("hello");
+        ed.push_undo();
+        ed.push_undo();
+        ed.push_undo();
+        assert_eq!(ed.undo_stack_len(), 3, "no coalescing outside a group");
+    }
+
+    /// A group with one real mutation records exactly ONE entry, and a single
+    /// undo reverts it.
+    #[test]
+    fn group_single_edit_is_one_entry() {
+        let mut ed = make_ed("hello");
+        {
+            let _g = ed.undo_group();
+            ed.push_undo();
+            insert_x(&mut ed, 0);
+        }
+        assert_eq!(ed.undo_stack_len(), 1);
+        assert_eq!(line0(&ed), "Xhello");
+        ed.undo();
+        assert_eq!(line0(&ed), "hello");
+        assert_eq!(ed.undo_stack_len(), 0);
+    }
+
+    /// Many `push_undo` + many edits inside one group still collapse to ONE
+    /// entry, and one undo reverts the whole batch.
+    #[test]
+    fn group_coalesces_many_edits_into_one() {
+        let mut ed = make_ed("hello");
+        {
+            let _g = ed.undo_group();
+            for _ in 0..5 {
+                ed.push_undo();
+                insert_x(&mut ed, 0);
+            }
+        }
+        assert_eq!(ed.undo_stack_len(), 1);
+        assert_eq!(line0(&ed), "XXXXXhello");
+        ed.undo();
+        assert_eq!(line0(&ed), "hello", "one undo reverts every grouped edit");
+    }
+
+    /// A group that pushes an undo but mutates nothing leaves ZERO entries.
+    #[test]
+    fn no_op_group_leaves_zero_entries() {
+        let mut ed = make_ed("hello");
+        {
+            let _g = ed.undo_group();
+            ed.push_undo();
+            // no mutation
+        }
+        assert_eq!(
+            ed.undo_stack_len(),
+            0,
+            "an unmutated group must discard its armed snapshot"
+        );
+    }
+
+    /// A completely empty group (no push_undo at all) leaves ZERO entries.
+    #[test]
+    fn empty_group_leaves_zero_entries() {
+        let mut ed = make_ed("hello");
+        {
+            let _g = ed.undo_group();
+        }
+        assert_eq!(ed.undo_stack_len(), 0);
+    }
+
+    /// Nested groups: only the OUTERMOST close commits; the inner guard drop
+    /// does not, so the whole thing is one entry.
+    #[test]
+    fn nested_groups_commit_only_at_outermost() {
+        let mut ed = make_ed("hello");
+        {
+            let _outer = ed.undo_group();
+            ed.push_undo();
+            insert_x(&mut ed, 0);
+            {
+                let _inner = ed.undo_group();
+                ed.push_undo();
+                insert_x(&mut ed, 0);
+                // inner drops here: depth 2 -> 1, NOT committed yet.
+            }
+            assert_eq!(
+                ed.undo_stack_len(),
+                1,
+                "inner close must not commit while the outer group is open"
+            );
+            insert_x(&mut ed, 0);
+        }
+        assert_eq!(
+            ed.undo_stack_len(),
+            1,
+            "outer close commits the single entry"
+        );
+        assert_eq!(line0(&ed), "XXXhello");
+        ed.undo();
+        assert_eq!(line0(&ed), "hello");
+    }
+
+    /// A group commits ONE entry that does not clobber a pre-existing entry:
+    /// after a prior depth-0 change, a grouped change adds exactly one more.
+    #[test]
+    fn group_adds_single_entry_over_prior_history() {
+        let mut ed = make_ed("hello");
+        // Prior standalone change (depth 0).
+        ed.push_undo();
+        insert_x(&mut ed, 0);
+        assert_eq!(ed.undo_stack_len(), 1);
+        // Grouped change.
+        {
+            let _g = ed.undo_group();
+            ed.push_undo();
+            insert_x(&mut ed, 0);
+            ed.push_undo();
+            insert_x(&mut ed, 0);
+        }
+        assert_eq!(ed.undo_stack_len(), 2, "group adds exactly one entry");
+        assert_eq!(line0(&ed), "XXXhello");
+        ed.undo();
+        assert_eq!(
+            line0(&ed),
+            "Xhello",
+            "one undo reverts only the grouped edits"
+        );
+        ed.undo();
+        assert_eq!(line0(&ed), "hello");
+    }
+}

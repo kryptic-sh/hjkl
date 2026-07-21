@@ -832,9 +832,16 @@ fn handle_play_macro_target<H: Host>(
     let times = count.max(1);
     let was_replaying = ed.is_replaying_macro_raw();
     ed.set_replaying_macro_raw(true);
-    for _ in 0..times {
-        for k in keys.iter().copied() {
-            crate::dispatch_input(ed, k);
+    // One undo group per `@reg` invocation (incl. `[count]@reg`): nvim reverts
+    // a whole macro replay — and every repeat of it — with a single `u`. The
+    // group is re-entrant, so a macro that itself plays a macro still collapses
+    // to one step. Verified against nvim v0.12.4.
+    {
+        let _undo_group = ed.undo_group();
+        for _ in 0..times {
+            for k in keys.iter().copied() {
+                crate::dispatch_input(ed, k);
+            }
         }
     }
     ed.set_replaying_macro_raw(was_replaying);

@@ -70,6 +70,18 @@ pub struct Buffer {
     pub(crate) undo_stack: Vec<crate::UndoEntry>,
     /// Redo history: entries pushed when the user undoes.
     pub(crate) redo_stack: Vec<crate::UndoEntry>,
+    /// Undo-group nesting depth. `> 0` while an [`crate::UndoGroup`] guard is
+    /// live (see hjkl-engine). At depth `0` `push_undo` behaves exactly as it
+    /// always has (one entry per call); at depth `> 0` every mutation inside
+    /// the outermost group coalesces into a single undo entry.
+    pub(crate) undo_group_depth: u32,
+    /// Set once the outermost open group has taken its single pre-group
+    /// snapshot; every later `push_undo` in the group is then suppressed.
+    pub(crate) undo_group_armed: bool,
+    /// `dirty_gen` captured when the outermost group opened. If it is
+    /// unchanged when the group closes, the group mutated nothing and its
+    /// armed snapshot is popped so a no-op group leaves zero undo entries.
+    pub(crate) undo_group_open_gen: u64,
     /// Set whenever the buffer content changes; cleared by the engine's
     /// `take_dirty` accessor.
     pub(crate) content_dirty: bool,
@@ -115,6 +127,9 @@ impl Buffer {
             cached_byte_len: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_depth: 0,
+            undo_group_armed: false,
+            undo_group_open_gen: 0,
             content_dirty: false,
             cached_editor_content: None,
             pending_fold_ops: Vec::new(),
@@ -138,6 +153,9 @@ impl Buffer {
             cached_byte_len: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_depth: 0,
+            undo_group_armed: false,
+            undo_group_open_gen: 0,
             content_dirty: false,
             cached_editor_content: None,
             pending_fold_ops: Vec::new(),
@@ -146,6 +164,58 @@ impl Buffer {
             pending_content_reset: false,
             marks: std::collections::BTreeMap::new(),
             syntax_fold_ranges: Vec::new(),
+        }
+    }
+
+    // ── Undo-group coalescing (Phase 1, see docs/undo-architecture.md §4) ──
+    //
+    // A group makes a composed operation (`:g`, `:normal`, a macro replay)
+    // record ONE undo step instead of one per underlying `push_undo`. The
+    // depth counter is re-entrant: nested groups just nest, only the
+    // outermost close commits.
+
+    /// Open (nest into) an undo group. On the outermost open (depth `0→1`)
+    /// record the current `dirty_gen` and disarm, so the group's first
+    /// mutating `push_undo` takes exactly one snapshot.
+    pub fn undo_group_enter(&mut self) {
+        if self.undo_group_depth == 0 {
+            self.undo_group_armed = false;
+            self.undo_group_open_gen = self.dirty_gen;
+        }
+        self.undo_group_depth = self.undo_group_depth.saturating_add(1);
+    }
+
+    /// Close (unnest) an undo group. On the outermost close (depth `1→0`), if
+    /// the group armed a snapshot but `dirty_gen` is unchanged since it opened
+    /// (nothing was mutated), pop that snapshot so a no-op group leaves zero
+    /// undo entries. Resets the group flags.
+    pub fn undo_group_exit(&mut self) {
+        if self.undo_group_depth == 0 {
+            return;
+        }
+        self.undo_group_depth -= 1;
+        if self.undo_group_depth == 0 {
+            if self.undo_group_armed && self.dirty_gen == self.undo_group_open_gen {
+                self.undo_stack.pop();
+            }
+            self.undo_group_armed = false;
+        }
+    }
+
+    /// Whether an undo group is currently open (depth `> 0`).
+    pub fn undo_group_active(&self) -> bool {
+        self.undo_group_depth > 0
+    }
+
+    /// Arm the open group's single snapshot. Returns `true` if this call armed
+    /// it (the first mutating `push_undo` in the group, which must take the
+    /// snapshot), `false` if it was already armed (a later push to suppress).
+    pub fn undo_group_arm(&mut self) -> bool {
+        if self.undo_group_armed {
+            false
+        } else {
+            self.undo_group_armed = true;
+            true
         }
     }
 }

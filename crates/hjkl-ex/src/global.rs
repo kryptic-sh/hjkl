@@ -32,11 +32,15 @@
 //! `:g/pat/normal[!] {keys}` (#283) replays `{keys}` through the vim FSM on
 //! each matching line, delegating to `builtins::normal_handler` with a
 //! single-line range — so it composes with the same two-pass row-shift
-//! tracking as the other sub-commands. Note the undo granularity: like the
-//! `d`/`s`/`j`/`y` sub-commands (each of which pushes its own undo checkpoint),
-//! `:g/…/normal` records one undo group PER matched line rather than a single
-//! group for the whole `:g` — a pre-existing divergence from vim shared by the
-//! entire `:g` family, not specific to `normal`.
+//! tracking as the other sub-commands.
+//!
+//! # Undo granularity (issue #294)
+//!
+//! The whole `:g`/`:v` invocation is wrapped in a single `Editor::undo_group`:
+//! the pre-`:g` `push_undo` arms the group and every sub-command checkpoint in
+//! pass 2 coalesces into it, so one `u` reverts the entire command — matching
+//! vim, and fixing the former "one undo step per matched line" divergence
+//! shared by the whole `:g` family.
 
 use crate::{effect::ExEffect, range::LineRange};
 use hjkl_engine::Host;
@@ -157,6 +161,12 @@ pub(crate) fn global_handler<H: Host>(
         Err(e) => return Some(ExEffect::Error(format!("bad pattern: {e}"))),
     };
 
+    // One undo group for the WHOLE `:g`/`:v` (issue #294): the pre-`:g`
+    // snapshot below arms it, every sub-command `push_undo` in pass 2 then
+    // coalesces, so a single `u` reverts the entire command. A `:g` matching
+    // zero lines mutates nothing, so the guard's drop discards the armed
+    // snapshot (replacing the old explicit `pop_last_undo`).
+    let _undo_group = editor.undo_group();
     editor.push_undo();
 
     // Pass 1: mark rows against the ORIGINAL (pre-mutation) buffer. Default
@@ -185,7 +195,8 @@ pub(crate) fn global_handler<H: Host>(
         }
     }
     if targets.is_empty() {
-        editor.pop_last_undo();
+        // No matches ⇒ no mutation. The `_undo_group` guard drops on return
+        // and discards its armed (unmutated) snapshot, leaving undo untouched.
         return Some(ExEffect::Substituted {
             count: 0,
             lines_changed: 0,
@@ -417,6 +428,85 @@ mod tests {
         let _result = global_match_handler(&mut editor, "/foo/d", None);
         let last_delete = editor.with_registers(|r| r.read('"').unwrap().text.clone());
         assert_eq!(last_delete, "foo2\n");
+    }
+
+    // ---- Undo grouping (issue #294) ----------------------------------------
+
+    #[test]
+    fn global_d_multiple_lines_is_one_undo_step() {
+        // `:g/foo/d` over 3 matches must record ONE undo entry, and a single
+        // undo must bring back ALL deleted lines at once.
+        let mut editor = make_editor_with_lines(&["foo", "bar", "foo", "baz", "foo"]);
+        assert_eq!(editor.undo_stack_len(), 0);
+        let result = global_match_handler(&mut editor, "/foo/d", None);
+        assert!(matches!(
+            result,
+            Some(ExEffect::Substituted { count: 3, .. })
+        ));
+        assert_eq!(buf_lines(&editor), vec!["bar", "baz"]);
+        assert_eq!(
+            editor.undo_stack_len(),
+            1,
+            "the whole :g must be a single undo group"
+        );
+        editor.undo();
+        assert_eq!(
+            buf_lines(&editor),
+            vec!["foo", "bar", "foo", "baz", "foo"],
+            "one undo reverts every :g deletion"
+        );
+        assert_eq!(editor.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn global_normal_multiple_lines_is_one_undo_step() {
+        // `:g/foo/normal Ax` appends to each match; one undo reverts them all.
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2", "foo3"]);
+        assert_eq!(editor.undo_stack_len(), 0);
+        let result = global_match_handler(&mut editor, "/foo/normal Ax", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(buf_lines(&editor), vec!["foo1x", "bar", "foo2x", "foo3x"]);
+        assert_eq!(editor.undo_stack_len(), 1);
+        editor.undo();
+        assert_eq!(buf_lines(&editor), vec!["foo1", "bar", "foo2", "foo3"]);
+    }
+
+    #[test]
+    fn vglobal_is_one_undo_step() {
+        // The inverse (`:v`) shares the same group path.
+        let mut editor = make_editor_with_lines(&["foo1", "bar", "foo2", "baz"]);
+        let result = vglobal_handler(&mut editor, "/foo/d", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(buf_lines(&editor), vec!["foo1", "foo2"]);
+        assert_eq!(editor.undo_stack_len(), 1);
+        editor.undo();
+        assert_eq!(buf_lines(&editor), vec!["foo1", "bar", "foo2", "baz"]);
+    }
+
+    #[test]
+    fn global_no_match_creates_zero_undo_entries() {
+        // Zero matches ⇒ the group mutates nothing ⇒ no undo entry is left.
+        let mut editor = make_editor_with_lines(&["hello", "world"]);
+        assert_eq!(editor.undo_stack_len(), 0);
+        let result = global_match_handler(&mut editor, "/xyz/d", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 0,
+                lines_changed: 0
+            })
+        );
+        assert_eq!(
+            editor.undo_stack_len(),
+            0,
+            "a no-op :g must not pollute the undo stack"
+        );
     }
 
     fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {

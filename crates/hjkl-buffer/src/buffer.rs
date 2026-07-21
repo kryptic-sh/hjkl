@@ -463,6 +463,17 @@ impl View {
         self.content.lock().unwrap().redo_stack.clear();
     }
 
+    /// Whether an undo group is currently open on this content (depth `> 0`).
+    /// Used by the engine's `push_undo` to decide whether to coalesce.
+    pub fn undo_group_active(&self) -> bool {
+        self.content.lock().unwrap().undo_group_active()
+    }
+
+    /// Arm the open group's single snapshot. See [`Buffer::undo_group_arm`].
+    pub fn undo_group_arm(&self) -> bool {
+        self.content.lock().unwrap().undo_group_arm()
+    }
+
     pub fn cap_undo(&self, cap: usize) {
         if cap > 0 {
             let mut c = self.content.lock().unwrap();

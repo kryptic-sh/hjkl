@@ -899,9 +899,10 @@ fn replay_normal_keys<H: Host>(
 /// `:normal` here and both route through this handler.
 ///
 /// The whole invocation is a single undo group (nvim: one `u` reverts a
-/// `:%normal` entirely). We push a base checkpoint, then collapse the
-/// finer-grained per-command checkpoints the FSM records during replay back
-/// down to it.
+/// `:%normal` entirely). An [`hjkl_engine::UndoGroup`] guard coalesces the
+/// base checkpoint and every per-command checkpoint the FSM records during
+/// replay into one undo entry; a no-op `:normal` (pure motion) mutates nothing
+/// so the guard drops its armed snapshot, recording none — exactly as nvim.
 pub(crate) fn normal_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
@@ -912,8 +913,10 @@ pub(crate) fn normal_handler<H: Host>(
     }
     let keys = hjkl_engine::decode_macro(args);
 
+    let _undo_group = editor.undo_group();
+    // Arm the group with the pre-`:normal` state (and cursor) up front, so the
+    // single coalesced entry restores to where the command started.
     editor.push_undo();
-    let base_len = editor.buffer().undo_stack_len();
 
     match range {
         None => replay_normal_keys(editor, &keys),
@@ -931,17 +934,6 @@ pub(crate) fn normal_handler<H: Host>(
                 lnum += 1;
             }
         }
-    }
-
-    // Collapse the FSM's per-command checkpoints into the single base entry.
-    let changed = editor.buffer().undo_stack_len() > base_len;
-    while editor.buffer().undo_stack_len() > base_len {
-        editor.pop_last_undo();
-    }
-    if !changed {
-        // Pure motion / no-op keys edited nothing — drop the base checkpoint so
-        // a no-op `:normal` doesn't pollute undo history (nvim records none).
-        editor.pop_last_undo();
     }
 
     editor.mark_content_dirty();
@@ -5051,5 +5043,47 @@ mod tests {
         assert_eq!(reg.resolve("ret").unwrap().name, "retab");
         assert!(reg.resolve("retab").is_some(), ":retab must resolve");
         assert!(reg.resolve("retab!").is_some(), ":retab! must resolve");
+    }
+
+    // ---- :normal undo grouping (issue #294) --------------------------------
+
+    #[test]
+    fn normal_percent_is_single_undo_step() {
+        // `:%normal Ax` appends "x" to every line; one undo reverts them all,
+        // recorded as exactly one undo entry (behavior preserved, now via the
+        // undo_group primitive rather than the base_len/pop_last_undo hack).
+        let mut ed = make_editor_with_lines(&["a", "b", "c"]);
+        assert_eq!(ed.undo_stack_len(), 0);
+        assert_eq!(dispatch(&mut ed, "%normal Ax"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["ax", "bx", "cx"]);
+        assert_eq!(ed.undo_stack_len(), 1, ":%normal must be one undo group");
+        ed.undo();
+        assert_eq!(buf_lines(&ed), vec!["a", "b", "c"]);
+        assert_eq!(ed.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn normal_single_line_is_single_undo_step() {
+        let mut ed = make_editor_with_lines(&["hello"]);
+        assert_eq!(dispatch(&mut ed, "normal A!"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["hello!"]);
+        assert_eq!(ed.undo_stack_len(), 1);
+        ed.undo();
+        assert_eq!(buf_lines(&ed), vec!["hello"]);
+    }
+
+    #[test]
+    fn normal_noop_creates_zero_undo_entries() {
+        // Pure-motion keys mutate nothing, so the group leaves no undo entry
+        // (nvim records none for a no-op :normal).
+        let mut ed = make_editor_with_lines(&["hello", "world"]);
+        assert_eq!(ed.undo_stack_len(), 0);
+        assert_eq!(dispatch(&mut ed, "%normal l"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["hello", "world"]);
+        assert_eq!(
+            ed.undo_stack_len(),
+            0,
+            "a no-op :normal must not push an undo entry"
+        );
     }
 }

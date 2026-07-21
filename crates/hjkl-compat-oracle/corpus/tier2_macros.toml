@@ -47,6 +47,20 @@ keys = "@z"
 expected_buffer = "hello\n"
 expected_cursor = [0, 0]
 
+# Undo grouping (issue #294): a macro replay that makes MULTIPLE edits is
+# reverted by a SINGLE `u`, matching nvim. Record `IX<Esc>j` (insert X at line
+# start, move down) into `a` on line0, then `2@a` inserts X on lines 2 and 3 in
+# one replay; a single `u` must revert BOTH of those inserts at once (leaving
+# the X from the recording on line 1). Before this fix hjkl recorded one undo
+# step per edit, so `u` reverted only the last insert.
+[[cases]]
+name = "macro_replay_multi_edit_single_undo"
+initial_buffer = "1\n2\n3\n4\n"
+initial_cursor = [0, 0]
+keys = "qaIX<Esc>jq2@au"
+expected_buffer = "X1\n2\n3\n4\n"
+expected_cursor = [1, 0]
+
 # Record A+text+Esc+motion into 'a' on line0, then replay on line1.
 # Regression: app-layer `@{reg}` chord replay was dropping every key after
 # the first because route_chord_key returned false for insert-mode chars
