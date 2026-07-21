@@ -313,3 +313,65 @@ fn nvim_mode_to_string(code: &str) -> String {
     }
     .to_owned()
 }
+
+#[cfg(test)]
+mod reconstruction_tests {
+    //! Buffer-string reconstruction contract for [`run_case`].
+    //!
+    //! These pin down how a collapsed buffer serialises, and guard against a
+    //! tempting-but-wrong "fix": unconditionally re-appending `\n` whenever the
+    //! source ended in one. That would match a naive reading of the trailing-
+    //! newline rule but DIVERGE from nvim, because the rope model already encodes
+    //! the distinction nvim tracks via `wordcount().bytes`:
+    //!
+    //! - A *linewise* delete that empties the buffer (`dd`, `dG`, `V…d`) removes
+    //!   the final newline too, leaving an empty rope (one empty row) → `join`
+    //!   yields `""`. Real nvim reports the same: an emptied buffer is its 0-byte
+    //!   "ML_EMPTY" state (`wordcount().bytes == 0`), so `nvim_driver` returns
+    //!   `""` as well (verified against nvim 0.12.4).
+    //! - A *charwise* delete that empties a line (`x` on a one-char line) keeps
+    //!   the newline, leaving rope `"\n"` (two empty rows) → `join` yields `"\n"`,
+    //!   matching nvim's 1-byte file.
+    //!
+    //! So the plain `join` is already correct on both sides; re-appending `\n`
+    //! for the linewise case would break the emptied-buffer oracle cases that
+    //! currently pass (e.g. `register_survives_noop_dd`, `r3_dG_from_row0_…`).
+
+    use super::run_case;
+    use crate::OracleCase;
+
+    /// Build a minimal [`OracleCase`] from just the fields the buffer-string
+    /// reconstruction contract depends on; all optional per-case knobs default
+    /// off. Deserialised from TOML (as real corpora are) so we don't have to
+    /// spell out every optional field.
+    fn case(initial_buffer: &str, keys: &str) -> OracleCase {
+        let toml = format!(
+            "name = \"recon\"\ninitial_buffer = {initial_buffer:?}\nkeys = {keys:?}\nexpected_buffer = \"\"\n"
+        );
+        toml::from_str(&toml).expect("valid case toml")
+    }
+
+    #[test]
+    fn linewise_empty_collapse_has_no_trailing_newline() {
+        // `dd` on the one-line buffer "abc\n" empties it to an empty rope. The
+        // final newline goes with the line, so the reconstruction is "" — NOT
+        // "\n". This mirrors real nvim, whose emptied buffer is a 0-byte file.
+        assert_eq!(run_case(&case("abc\n", "dd")).unwrap().buffer, "");
+        // A multi-line linewise empty (`V`-select all + delete) behaves the same.
+        assert_eq!(run_case(&case("one\ntwo\n", "VGd")).unwrap().buffer, "");
+    }
+
+    #[test]
+    fn charwise_empty_line_keeps_trailing_newline() {
+        // `x` on the one-char buffer "a\n" deletes the char but keeps the
+        // newline, leaving one empty line → "\n", matching nvim's 1-byte file.
+        assert_eq!(run_case(&case("a\n", "x")).unwrap().buffer, "\n");
+    }
+
+    #[test]
+    fn genuinely_empty_source_stays_empty() {
+        // A genuinely-empty source (no trailing newline) reconstructs to "" with
+        // no phantom "\n" — same as nvim's 0-byte read-back.
+        assert_eq!(run_case(&case("", "")).unwrap().buffer, "");
+    }
+}

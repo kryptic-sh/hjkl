@@ -120,15 +120,3 @@ buffer's own trailing `\n`, and the generic linewise-delete path (unlike the
   Repro: `:s/foo/BAR/` then `:s/~/baz/`. (`~` in the REPLACEMENT already works.)
 - **Fix:** expand pattern-side `~` to the last substitute string in
   `hjkl-engine::search` before compiling the regex. Small, low usage.
-
-### V6. Oracle driver drops trailing newline on single-row collapse (test harness)
-
-- **File:** `crates/hjkl-compat-oracle/src/hjkl_driver.rs:~88-94`
-- **Defect:** `run_case`'s `lines.join("\n")` over `rope.len_lines()` reports
-  `""` instead of `"\n"` when keys collapse the buffer to one row (e.g. `dd` on
-  `"abc\n"`), because a single-element join has no separator. The product API
-  `Editor::content()` is correct; `nvim_driver.rs` re-appends `\n` based on the
-  original buffer's trailing-newline-ness. Test-harness-only, but it forces
-  affected oracle cases to be relocated to hand-written tests.
-- **Fix:** mirror `nvim_driver`'s unconditional trailing-`\n` re-append based on
-  the original buffer.
