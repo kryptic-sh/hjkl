@@ -161,23 +161,35 @@ fn parse_address(s: &str) -> Option<(Address, i64, &str)> {
 /// Resolve a parsed address (base + offset) against the current editor
 /// state. Numbers are 1-based; the final `base + offset` is clamped to the
 /// buffer. Bad marks return an error.
+///
+/// `from_row` is the 1-based "current line" the address resolves against for
+/// `.` / bare-offset (`+N`/`-N`) bases and search anchors. It is `None` in the
+/// normal case (use the real editor cursor); a `;`-separated range passes
+/// `Some(first_addr_row)` so the SECOND address sees the first address's row as
+/// the cursor, matching vim's `;` semantics (`:h :;`).
 fn resolve_address<H: hjkl_engine::Host>(
     addr: Address,
     offset: i64,
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+    from_row: Option<usize>,
 ) -> Result<usize, String> {
     let line_count = editor.buffer().row_count();
     // 1-based last line (at least 1 so single-line buffers work)
     let last = line_count.max(1);
+    // 1-based current line: the `;`-separator override when present, else the
+    // real (0-based) editor cursor.
+    let current = from_row.unwrap_or(editor.cursor().0 + 1);
     let base: i64 = match addr {
         Address::Number(n) => n as i64,
-        Address::Current => editor.cursor().0 as i64 + 1, // cursor is 0-based
+        Address::Current => current as i64,
         Address::Last => last as i64,
         Address::Mark(c) => editor
             .mark(c)
             .map(|(r, _)| r as i64 + 1) // 0-based → 1-based
             .ok_or_else(|| format!("mark `{c}` not set"))?,
-        Address::Search { pattern, forward } => resolve_search_address(&pattern, forward, editor)?,
+        Address::Search { pattern, forward } => {
+            resolve_search_address(&pattern, forward, editor, from_row)?
+        }
     };
     Ok((base + offset).clamp(1, last as i64) as usize)
 }
@@ -188,10 +200,18 @@ fn resolve_address<H: hjkl_engine::Host>(
 /// `/foo/d` with the cursor already ON a line containing "foo" deletes the
 /// NEXT "foo" line, not the current one. Wraps past the buffer end/start
 /// when `'wrapscan'` is on (the default), matching `/`/`?`/`n`/`N`.
+///
+/// `from_row` (1-based) overrides the search anchor for a `;`-separated second
+/// address: the search starts from column 0 of that row instead of the live
+/// cursor. (Sub-limitation vs vim: vim anchors at the row's first-non-blank
+/// column, so a match earlier on the override row than that column could
+/// differ; range resolution is line-granular so this is immaterial in
+/// practice.)
 fn resolve_search_address<H: hjkl_engine::Host>(
     pattern: &str,
     forward: bool,
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+    from_row: Option<usize>,
 ) -> Result<i64, String> {
     use hjkl_engine::search::{CaseMode, resolve_case_mode};
     use hjkl_engine::{Cursor, Query, Search};
@@ -213,7 +233,12 @@ fn resolve_search_address<H: hjkl_engine::Host>(
     let re = regex::Regex::new(&src).map_err(|e| format!("bad pattern: {e}"))?;
 
     let buf = editor.buffer();
-    let cursor = Cursor::cursor(buf);
+    // Anchor from the `;`-override row (col 0) when present, else the live
+    // cursor.
+    let cursor = match from_row {
+        Some(line) => hjkl_engine::Pos::new((line - 1) as u32, 0),
+        None => Cursor::cursor(buf),
+    };
     let wrap = settings.wrapscan;
     // "Strictly after/before the cursor": advance the search anchor one
     // byte past (forward) / before (backward) the cursor first, mirroring
@@ -253,6 +278,8 @@ fn resolve_search_address<H: hjkl_engine::Host>(
 /// Parse a leading range prefix from `cmd`. Supports:
 /// - `5`        → single line 5
 /// - `5,10`     → 5 through 10
+/// - `5;+2`     → 5 through 5+2 (`;` moves the cursor to line 5 first, so the
+///   second address's `.`/offset/search anchors resolve from there)
 /// - `.,$`      → current line through last line
 /// - `'a,'b`    → mark a through mark b
 /// - `%`        → whole buffer (1 through line_count)
@@ -273,18 +300,43 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
         return Ok((None, cmd));
     };
 
-    let start = resolve_address(start_addr, start_offset, editor)?;
+    let start = resolve_address(start_addr, start_offset, editor, None)?;
 
-    if let Some(after_comma) = after_start.strip_prefix(',') {
-        // Expect a second address after the comma. If absent, error.
-        if after_comma.is_empty() {
-            return Err("missing end address after ','".into());
+    // A `,` or `;` separator introduces a second (end) address. They differ
+    // ONLY in cursor threading (`:h :;`):
+    //   `,` — both addresses resolve from the ORIGINAL cursor (`from_row: None`
+    //         for both). Unchanged.
+    //   `;` — the cursor MOVES to the first address's row before the second is
+    //         resolved, so the second address's `.` / bare-offset math AND
+    //         search anchors (`/pat/`, `?pat?`) resolve from `start`. Threaded
+    //         via `from_row: Some(start)`.
+    // Scope: hjkl's range grammar is two-address (a single separator); we match
+    // that exactly for `;` too — chaining (`a;b;c`, `a,b,c`) is not supported,
+    // same as the pre-existing `,`-only limit. A leading separator (`:;+1`,
+    // `:,5`) is likewise unsupported (parse_base_address rejects a leading
+    // `;`/`,`, so the whole thing falls through to command parsing), preserving
+    // the existing `,` scope rather than adding new behavior.
+    let separator = after_start.chars().next();
+    if let Some(after_sep) = after_start
+        .strip_prefix(',')
+        .or_else(|| after_start.strip_prefix(';'))
+    {
+        let semicolon = separator == Some(';');
+        // Expect a second address after the separator. If absent, error.
+        if after_sep.is_empty() {
+            return Err(format!(
+                "missing end address after '{}'",
+                if semicolon { ';' } else { ',' }
+            ));
         }
-        let Some((end_addr, end_offset, rest)) = parse_address(after_comma) else {
+        let Some((end_addr, end_offset, rest)) = parse_address(after_sep) else {
             // Something like `5,x` where `x` is not an address character
-            return Err(format!("invalid end address in range: `{after_comma}`"));
+            return Err(format!("invalid end address in range: `{after_sep}`"));
         };
-        let end = resolve_address(end_addr, end_offset, editor)?;
+        // `;` moves the cursor to `start` (1-based) before the end address
+        // resolves; `,` resolves it from the real cursor (no override).
+        let end_from = semicolon.then_some(start);
+        let end = resolve_address(end_addr, end_offset, editor, end_from)?;
         if start > end {
             // Vim parity: a backward range (`:8,3d`) is rejected outright in
             // non-interactive use — real vim only offers to swap it via an
@@ -322,7 +374,7 @@ pub fn parse_dest_address<H: hjkl_engine::Host>(
     if matches!(addr, Address::Number(0)) && offset == 0 {
         return Ok(0);
     }
-    resolve_address(addr, offset, editor)
+    resolve_address(addr, offset, editor, None)
 }
 
 // ---- tests -----------------------------------------------------------------
@@ -583,6 +635,52 @@ mod tests {
         assert_eq!((start, end), (3, 3));
         let (start, end) = parse_from_line("+-", 3).unwrap();
         assert_eq!((start, end), (3, 3));
+    }
+
+    // ---- V2: `;` range separator (address-resolution level) ---------------
+    //
+    // Two-address scope only: a single `;` (or `,`) separator, matching the
+    // pre-existing `,` grammar. `;` threads a "virtual cursor" (the first
+    // address's row) into the second address's `.`/offset/search resolution;
+    // `,` resolves both from the real cursor. nvim v0.12.4-verified.
+
+    #[test]
+    fn semicolon_relative_end_uses_first_address_as_cursor() {
+        // `:2;+2` from cursor line 1 → start 2, then cursor moves to 2 so
+        // `+2` = 4. Range 2-4. (`:2;+2d` deletes l2-l4 in nvim → "l1\nl5".)
+        let (start, end) = parse_from_line("2;+2", 1).unwrap();
+        assert_eq!((start, end), (2, 4));
+    }
+
+    #[test]
+    fn comma_relative_end_uses_real_cursor() {
+        // `:2,+2` from cursor line 1 → both resolve from the real cursor, so
+        // `+2` = 3. Range 2-3. Proves `,` is NOT affected by `;` threading.
+        let (start, end) = parse_from_line("2,+2", 1).unwrap();
+        assert_eq!((start, end), (2, 3));
+    }
+
+    #[test]
+    fn semicolon_dot_relative_end() {
+        // `:3;.+1` — `.` in the second address is the moved cursor (row 3), so
+        // `.+1` = 4. Range 3-4 (same as `:3;+1`).
+        let (start, end) = parse_from_line("3;.+1", 1).unwrap();
+        assert_eq!((start, end), (3, 4));
+    }
+
+    #[test]
+    fn semicolon_missing_end_address_errors_with_semicolon_in_message() {
+        let e = make_editor();
+        let err = parse_range("5;", &e).expect_err("missing end address must error");
+        assert!(err.contains(';'), "error should mention ';': {err}");
+    }
+
+    #[test]
+    fn semicolon_single_address_number_unchanged() {
+        // A lone address with no separator is still a single-line range.
+        let (r, rest) = parse("3").unwrap();
+        assert_eq!(r, Some((3, 3)));
+        assert_eq!(rest, "");
     }
 
     #[test]

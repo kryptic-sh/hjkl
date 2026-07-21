@@ -4169,6 +4169,55 @@ mod tests {
         assert_eq!(result, Some(ExEffect::Ok));
     }
 
+    // ── V2: `;` range separator (end-to-end via try_dispatch) ────────────────
+    //
+    // `;` moves the cursor to the first resolved address before the second
+    // address resolves; `,` resolves both from the original cursor. Scope is
+    // two-address (one separator), matching the pre-existing `,` grammar —
+    // chaining (`a;b;c`) is intentionally NOT supported (see `parse_range`).
+    // Every expected value below was verified against real nvim v0.12.4 with
+    // `nvim --headless --clean -n <file> -c '<cmds>' -c 'wq'`.
+
+    #[test]
+    fn semicolon_search_range_moves_cursor_between_addresses() {
+        // nvim-verified: `:/foo/;/foo/d` on this buffer → "aaa\nccc\n".
+        // `;` moves the cursor to the first `/foo/` (row 1), so the second
+        // `/foo/` searches strictly below it and lands on row 3 → delete 1-3.
+        let mut ed = make_editor_with_lines(&["aaa", "foo", "bbb", "foo", "ccc"]);
+        assert_eq!(dispatch(&mut ed, "/foo/;/foo/d"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["aaa", "ccc"]);
+    }
+
+    #[test]
+    fn comma_search_range_resolves_both_from_original_cursor() {
+        // nvim-verified: `:/foo/,/foo/d` on the same buffer → "aaa\nbbb\nfoo\nccc\n".
+        // Both `/foo/` resolve from the ORIGINAL cursor (row 0) to the SAME
+        // first foo (row 1); only row 1 is deleted. Regression guard: `,`
+        // must be completely unchanged by the `;` support.
+        let mut ed = make_editor_with_lines(&["aaa", "foo", "bbb", "foo", "ccc"]);
+        assert_eq!(dispatch(&mut ed, "/foo/,/foo/d"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["aaa", "bbb", "foo", "ccc"]);
+    }
+
+    #[test]
+    fn semicolon_relative_end_address_uses_first_address_row() {
+        // nvim-verified: `:2;+2d` → "l1\nl5\n" (cursor moves to row 2, `+2` = 4,
+        // range 2-4 deleted).
+        let mut ed = make_editor_with_lines(&["l1", "l2", "l3", "l4", "l5"]);
+        assert_eq!(dispatch(&mut ed, "2;+2d"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["l1", "l5"]);
+    }
+
+    #[test]
+    fn comma_relative_end_address_uses_original_cursor() {
+        // nvim-verified: `:2,+2d` → "l1\nl4\nl5\n". `+2` is relative to the
+        // ORIGINAL cursor (row 0 → line 1), so `+2` = 3, range 2-3 deleted.
+        // Distinguishes `;` (deletes 2-4) from `,` (deletes 2-3) cleanly.
+        let mut ed = make_editor_with_lines(&["l1", "l2", "l3", "l4", "l5"]);
+        assert_eq!(dispatch(&mut ed, "2,+2d"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["l1", "l4", "l5"]);
+    }
+
     // ── sort_handler ─────────────────────────────────────────────────────────
 
     #[test]
