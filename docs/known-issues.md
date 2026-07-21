@@ -10,6 +10,8 @@ Actionable, unresolved items for `hjkl`. Two tracks:
 Intentional trade-offs (deliberate no-ops, safer-than-nvim choices) and
 engine-limited impossibilities are **not** listed here — only things worth
 actually fixing. Each entry gives the file, the defect, and a fix direction.
+Vim-parity items carry their GitHub issue number; the security items are not yet
+tracked as issues.
 
 ---
 
@@ -58,43 +60,7 @@ actually fixing. Each entry gives the file, the defect, and a fix direction.
 
 ## Vim parity
 
-### V1. Phantom trailing row on linewise deletes that reach EOF
-
-Two symptoms of one root cause — ropey reports one extra empty "line" after a
-buffer's own trailing `\n`, and the generic linewise-delete path (unlike the
-`dd` handler) has no phantom-row clamp.
-
-- **V1a — register capture.** `crates/hjkl-engine` `apply_visual_operator`,
-  `Mode::VisualLine` `Operator::Delete` arm → `cut_vim_range` `Linewise` branch.
-  A linewise Visual delete reaching the true last row captures one extra
-  trailing `\n` in the register. Repro: `"one\ntwo\nthree\nfour\n"`, `VGd` →
-  register `"…four\n\n"` (nvim: `"…four\n"`). Buffer/cursor correct; only the
-  register text is wrong.
-- **V1b — cursor placement.** `run_operator_over_range` `Operator::Delete` arm,
-  `crates/hjkl-vim/src/vim/op_motion.rs`. A linewise operator-range delete
-  consuming through the true last row mis-lands the cursor on the phantom
-  trailing row and leaves an extra blank line in `content()`. Affects
-  `dap`/`dip`/`d}`/`d{` and any linewise-range operator reaching EOF. Repro:
-  `"foo\n\nbar\n"`, cursor on `"bar"`, `dap` → hjkl cursor `(1,0)` + trailing
-  blank; nvim `"foo\n"`, cursor `(0,0)`.
-- **Fix:** give the generic linewise-delete path the same phantom-row clamp
-  `linewise.rs`'s `dd` handler already applies; audit `cut_vim_range`'s
-  `Linewise` byte-range computation when the end row is phantom-adjacent.
-
-### V2. `;` range separator not supported
-
-- **File:** `parse_range` (hjkl-ex).
-- **Defect:** only `,` is recognized as a range separator. `;` should move the
-  cursor to the first resolved address before resolving the second. Repro:
-  `"aaa\nfoo\nbbb\nfoo\nccc\n"`, `:/foo/;/foo/d` → nvim deletes rows 1-3
-  (`"aaa\nccc\n"`); hjkl parses only the first address and errors on the
-  `;/foo/d` remainder. (Errors cleanly — no silent corruption.)
-- **Fix:** thread a "virtual cursor override" through `resolve_address` /
-  `resolve_search_address` so the second address (every kind, not just search)
-  sees the first address's resolved row. Broader plumbing than a new `Address`
-  variant.
-
-### V3. Visual-BLOCK operators do not participate in dot-repeat
+### V3. Visual-BLOCK operators do not participate in dot-repeat (#285)
 
 - **File:** `apply_block_operator` (`Mode::VisualBlock` arm); block-change path
   (`InsertReason::BlockChange`).
@@ -106,17 +72,9 @@ buffer's own trailing `\n`, and the generic linewise-delete path (unlike the
   wire block-`c` through a dot-repeat patch site (it currently returns early via
   `BlockChange`, never touching `last_change`).
 
-### V4. `:g/pat/normal {cmd}` unsupported
+### V4. `:g/pat/normal {cmd}` unsupported (#283)
 
 - **Defect:** `:g/foo/normal x` returns a clean "unsupported sub-command" error;
   nvim runs `normal x` on every matching line.
 - **Fix:** blocked on there being no general `:normal {cmd}` ex command yet.
   Implement `:normal` first, then have `:g` replay it per matching line.
-
-### V5. Magic `~` in a search/substitute PATTERN
-
-- **Defect:** `~` in the pattern half of `:s` (or a `/`/`?` search) is treated
-  as a literal tilde; nvim expands it to the previous `:s` replacement text.
-  Repro: `:s/foo/BAR/` then `:s/~/baz/`. (`~` in the REPLACEMENT already works.)
-- **Fix:** expand pattern-side `~` to the last substitute string in
-  `hjkl-engine::search` before compiling the regex. Small, low usage.
