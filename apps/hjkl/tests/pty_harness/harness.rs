@@ -244,6 +244,10 @@ impl TerminalSession {
         cmd.env("XDG_CONFIG_HOME", config_dir.path());
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
+        // Point XDG_STATE_HOME (where the cross-session cursor store lives) at
+        // the same per-session tempdir as the cache — different app subdirs, no
+        // collision — so real ~/.local/state is never touched by e2e runs.
+        cmd.env("XDG_STATE_HOME", cache_dir.path());
 
         for arg in extra_args {
             cmd.arg(arg);
@@ -302,7 +306,28 @@ impl TerminalSession {
     /// alive for the session's lifetime, same as the auto-generated case.
     #[allow(dead_code)]
     pub fn spawn_with_file_and_cache_dir(path: &Path, cache_dir: tempfile::TempDir) -> Self {
-        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[])
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[], None)
+    }
+
+    /// Spawn `hjkl` opening `file` with `XDG_STATE_HOME` pinned to the
+    /// caller-owned `state_home`, so several sequential spawns share the
+    /// cross-session cursor store under `<state_home>/hjkl/filestate.bin`.
+    /// Cache + config stay per-session (fresh, isolated). The caller keeps
+    /// `state_home` alive across spawns and owns its cleanup. Used by the
+    /// cursor-restore e2e test (move cursor + `:wq`, respawn, assert restore).
+    #[allow(dead_code)]
+    pub fn spawn_with_file_and_state_home(file: &Path, state_home: &Path) -> Self {
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        Self::spawn_inner_cwd_cache(
+            Some(file),
+            24,
+            80,
+            None,
+            cache_dir,
+            None,
+            &[],
+            Some(state_home),
+        )
     }
 
     /// Spawn `hjkl` opening `file` with a caller-supplied `cache_dir` as
@@ -316,7 +341,7 @@ impl TerminalSession {
         cache_dir: tempfile::TempDir,
         extra_args: &[&str],
     ) -> Self {
-        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, extra_args)
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, extra_args, None)
     }
 
     /// Spawn `hjkl` with `dir` as the cwd, opening `file`, after pre-seeding
@@ -339,6 +364,7 @@ impl TerminalSession {
             cache_dir,
             Some(config_toml),
             extra_args,
+            None,
         )
     }
 
@@ -372,6 +398,7 @@ impl TerminalSession {
             cache_dir,
             Some(config_toml),
             extra_args,
+            None,
         )
     }
 
@@ -387,9 +414,10 @@ impl TerminalSession {
         // cache dir would also leave fixture swaps behind across runs and
         // surface the recovery prompt. Unique per spawn → fresh + clean.
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
-        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir, None, &[])
+        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir, None, &[], None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_inner_cwd_cache(
         file: Option<&Path>,
         rows: u16,
@@ -398,6 +426,7 @@ impl TerminalSession {
         cache_dir: tempfile::TempDir,
         config_toml: Option<&str>,
         extra_args: &[&str],
+        state_home: Option<&Path>,
     ) -> Self {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -427,6 +456,15 @@ impl TerminalSession {
         let config_dir = tempfile::tempdir().expect("e2e config tempdir");
         cmd.env("XDG_CONFIG_HOME", config_dir.path());
         cmd.env("XDG_CACHE_HOME", cache_dir.path());
+        // Cross-session cursor store lives under XDG_STATE_HOME. Default it to
+        // this session's cache tempdir (distinct app subdir from swap, no
+        // clash) so real ~/.local/state is never written by e2e runs. A
+        // caller-supplied `state_home` overrides it so several sequential
+        // spawns can SHARE the cursor store (the cursor-restore e2e test).
+        cmd.env(
+            "XDG_STATE_HOME",
+            state_home.unwrap_or_else(|| cache_dir.path()),
+        );
 
         // Pre-seed a user config at the XDG path so a `--clean` test can
         // prove the flag actually IGNORES it (and a non-clean control can

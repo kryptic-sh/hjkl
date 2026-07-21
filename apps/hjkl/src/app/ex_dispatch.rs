@@ -1178,6 +1178,10 @@ impl App {
                             .set_filename(Some(p.to_string_lossy().into_owned()));
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
+                        // Persist the last-moved cursor for cross-session
+                        // restore (docs §6b). Best-effort, keyed on the path
+                        // just written (slot.filename updated above).
+                        self.persist_slot_cursor(idx);
                         // Delete the swap file on successful save (#185).
                         if let Some(ref sp) = self.slots[idx].swap_path.clone() {
                             let _ = hjkl_app::swap::remove_swap(sp);

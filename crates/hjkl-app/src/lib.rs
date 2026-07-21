@@ -8,6 +8,7 @@
 pub mod config;
 pub mod diff;
 pub mod editorconfig;
+pub mod filestate;
 pub mod git;
 pub mod git_worker;
 pub mod keymap_actions;

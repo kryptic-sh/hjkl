@@ -2154,6 +2154,10 @@ impl App {
                 break;
             }
         }
+        // Graceful exit: remember every open buffer's last cursor position for
+        // cross-session restore (docs §6b), in a single store write, BEFORE the
+        // swap files are removed. Best-effort — never blocks the quit.
+        self.persist_all_cursors();
         // Graceful exit: remove all swap files so clean sessions leave no stale
         // swap behind. Crashes / SIGKILL bypass this block and the swap survives
         // for recovery — which is exactly the distinction we want.

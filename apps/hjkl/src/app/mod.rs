@@ -852,6 +852,32 @@ pub(super) fn build_slot(
         None
     };
 
+    // Cross-session cursor restore (docs/undo-architecture.md §6b). Best-effort:
+    // look up the last-known cursor for this file and clamp it to the freshly
+    // loaded content. Never errors, never blocks — a missing / corrupt store
+    // just leaves the cursor at (0, 0). Independent of the swap/undofile: the
+    // store survives external change by clamping. Skip new (nonexistent) files.
+    // Seeding the cursor onto this slot's `View` here means the first window
+    // editor built for the slot inherits it (see `App::make_view_editor`).
+    if config.editor.restore_cursor
+        && let Some(ref p) = path
+        && !is_new_file
+    {
+        let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        if let Some(st) = hjkl_app::filestate::lookup(&canonical.to_string_lossy()) {
+            // Always clamp to the current buffer bounds (char columns, not
+            // bytes — `clamp_position` clamps col to the line's char count). On
+            // a content-hash match the stored position is in-bounds so the
+            // clamp is a no-op ⇒ exact restore; on a mismatch the row/col still
+            // land as close as possible, matching vim's `'"` best-effort.
+            let clamped = buffer.clamp_position(hjkl_buffer::Position::new(
+                st.cursor.0 as usize,
+                st.cursor.1 as usize,
+            ));
+            buffer.set_cursor(clamped);
+        }
+    }
+
     let mut slot = BufferSlot {
         buffer_id,
         is_explorer: false,
@@ -2385,6 +2411,13 @@ impl App {
                 }
             }
         }
+
+        // Reveal the cursor on the initial window. `build_slot` may have
+        // restored a cross-session cursor (docs §6b) that sits off-screen, and
+        // nothing above scrolled to it unless `+N` / `+/pat` ran. This is a
+        // no-op when the cursor is already visible (the default (0,0), or after
+        // a `+N` jump / initial search which reveal themselves).
+        app.active_editor_mut().ensure_cursor_in_scrolloff();
 
         // Check for crash recovery on the initial file slot (#185).
         // If no recovery prompt is needed, arm the PID-lock swap immediately so

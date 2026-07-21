@@ -129,10 +129,21 @@ pub struct EditorConfig {
     /// `hjkl-icons`). Defaults to `"auto"` so existing configs keep parsing.
     #[serde(default = "default_icons")]
     pub icons: String,
+    /// Cross-session cursor memory (shada-style): when `true`, reopening a file
+    /// restores the last cursor position on that buffer, clamped to the current
+    /// content (docs/undo-architecture.md §6b). When `false`, the state store
+    /// is neither read nor written. Default `true`. `#[serde(default)]` so
+    /// configs predating this field keep parsing.
+    #[serde(default = "default_restore_cursor")]
+    pub restore_cursor: bool,
 }
 
 fn default_icons() -> String {
     "auto".to_string()
+}
+
+fn default_restore_cursor() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -50,6 +50,65 @@ impl App {
         slot.snapshot_saved();
     }
 
+    /// Persist slot `idx`'s last-moved cursor into the cross-session state
+    /// store (docs/undo-architecture.md §6b).
+    ///
+    /// Uses `Content.last_cursor` — the last cursor moved on this buffer across
+    /// ALL windows, not any single view's live cursor. No-op when
+    /// `restore_cursor` is off, the slot is out of range or a special pane, or
+    /// the buffer is unnamed (scratch ⇒ no canonical path to key on).
+    /// Best-effort: any I/O error is swallowed, never surfaced. Debounced by
+    /// call site — only fires on `:w`, buffer close, and editor exit.
+    pub(crate) fn persist_slot_cursor(&mut self, idx: usize) {
+        if !self.config.editor.restore_cursor {
+            return;
+        }
+        if idx >= self.slots.len() || self.slots[idx].is_explorer {
+            return;
+        }
+        let Some(filename) = self.slots[idx].filename.clone() else {
+            return;
+        };
+        let canonical = std::fs::canonicalize(&filename).unwrap_or(filename);
+        let (row, col) = self.slots[idx].buffer().last_cursor();
+        let hash = hjkl_app::filestate::content_hash(&self.slots[idx].buffer().as_string());
+        hjkl_app::filestate::record(&canonical.to_string_lossy(), (row as u32, col as u32), hash);
+    }
+
+    /// Persist every named slot's last-moved cursor in a SINGLE store write
+    /// (load → upsert all → save once). Called on editor exit so a clean quit
+    /// remembers where every open buffer's cursor was. No-op when
+    /// `restore_cursor` is off.
+    pub(crate) fn persist_all_cursors(&mut self) {
+        if !self.config.editor.restore_cursor {
+            return;
+        }
+        let mut store = hjkl_app::filestate::FileStateStore::load();
+        let now = hjkl_app::filestate::now_unix_ms();
+        let mut any = false;
+        for idx in 0..self.slots.len() {
+            if self.slots[idx].is_explorer {
+                continue;
+            }
+            let Some(filename) = self.slots[idx].filename.clone() else {
+                continue;
+            };
+            let canonical = std::fs::canonicalize(&filename).unwrap_or(filename);
+            let (row, col) = self.slots[idx].buffer().last_cursor();
+            let hash = hjkl_app::filestate::content_hash(&self.slots[idx].buffer().as_string());
+            store.upsert(
+                &canonical.to_string_lossy(),
+                (row as u32, col as u32),
+                hash,
+                now,
+            );
+            any = true;
+        }
+        if any {
+            let _ = store.save();
+        }
+    }
+
     /// Switch the focused window to display slot `idx` and refresh its
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).
@@ -89,6 +148,10 @@ impl App {
         // recompute_and_install runs render_viewport sync (post fully-sync
         // refactor) — no need for a preview_render warm-up paint.
         self.recompute_and_install();
+        // Reveal the cursor after a switch: a freshly-built window editor for a
+        // just-opened file may inherit a restored, off-screen cross-session
+        // cursor (docs §6b). No-op when the cursor is already within scrolloff.
+        self.active_editor_mut().ensure_cursor_in_scrolloff();
         self.refresh_git_signs_force();
         // Follow the new active buffer in the explorer (select its row).
         self.explorer_reveal_active();
@@ -164,6 +227,8 @@ impl App {
             return;
         }
         let active_slot = self.focused_slot_idx();
+        // Remember this buffer's cursor before its identity is discarded (§6b).
+        self.persist_slot_cursor(active_slot);
         if self.slots.len() == 1 {
             self.lsp_detach_buffer(active_slot);
             self.reset_slot_to_scratch(0);
@@ -245,6 +310,8 @@ impl App {
             return;
         }
         let active_slot = self.focused_slot_idx();
+        // Remember this buffer's cursor before its identity is discarded (§6b).
+        self.persist_slot_cursor(active_slot);
         if self.slots.len() == 1 {
             // No explicit mark/jumplist wipe needed here (#151 Stage 2b
             // removed it as dead weight): `reset_slot_to_scratch` below

@@ -61,6 +61,11 @@ pub fn cache_home() -> Result<PathBuf, Error> {
     resolve("XDG_CACHE_HOME", ".cache")
 }
 
+/// `$XDG_STATE_HOME` or `~/.local/state`.
+pub fn state_home() -> Result<PathBuf, Error> {
+    resolve("XDG_STATE_HOME", ".local/state")
+}
+
 /// Resolve `<XDG_CONFIG_HOME>/<app>`, defaulting to `~/.config/<app>`.
 pub fn config_dir(app: &str) -> Result<PathBuf, Error> {
     Ok(config_home()?.join(app))
@@ -74,6 +79,11 @@ pub fn data_dir(app: &str) -> Result<PathBuf, Error> {
 /// Resolve `<XDG_CACHE_HOME>/<app>`, defaulting to `~/.cache/<app>`.
 pub fn cache_dir(app: &str) -> Result<PathBuf, Error> {
     Ok(cache_home()?.join(app))
+}
+
+/// Resolve `<XDG_STATE_HOME>/<app>`, defaulting to `~/.local/state/<app>`.
+pub fn state_dir(app: &str) -> Result<PathBuf, Error> {
+    Ok(state_home()?.join(app))
 }
 
 #[cfg(test)]
@@ -202,6 +212,30 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let r = resolve_xdg(Some(&env), Some(home.path()), ".cache").unwrap();
         assert_eq!(r, home.path().join(".cache"));
+    }
+
+    // ── state variants via resolve_xdg ────────────────────────────────────
+
+    #[test]
+    fn xdg_state_home_honors_env_var() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = os(tmp.path().to_str().unwrap());
+        let home = PathBuf::from("/some/home");
+        let r = resolve_xdg(Some(&env), Some(&home), ".local/state").unwrap();
+        assert_eq!(r, tmp.path());
+    }
+
+    #[test]
+    fn xdg_state_home_falls_back_when_unset() {
+        let home = tempfile::tempdir().unwrap();
+        let r = resolve_xdg(None, Some(home.path()), ".local/state").unwrap();
+        assert_eq!(r, home.path().join(".local/state"));
+    }
+
+    #[test]
+    fn state_dir_smoke() {
+        let p = state_dir("myapp").unwrap();
+        assert!(p.ends_with("myapp"));
     }
 
     // ── dir wrappers ──────────────────────────────────────────────────────

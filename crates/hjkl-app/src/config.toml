@@ -37,6 +37,12 @@ chord_timeout_ms = 1000
 # don't have one (that's the reliable fallback).
 icons = "auto"
 
+# Cross-session cursor memory (like vim's `'"` mark / nvim shada). When true,
+# reopening a file restores the last cursor position on that buffer — clamped
+# to the current file, so it survives the file changing on disk (git pull, an
+# edit in another editor). Set false to disable reading and writing the store.
+restore_cursor = true
+
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"

@@ -115,6 +115,14 @@ impl View {
         self.cursor
     }
 
+    /// The last cursor `(row, col)` committed on the shared [`Buffer`] by any
+    /// view (see [`View::set_cursor`]). This is the "last-moved cursor across
+    /// all windows" the cross-session cursor store persists — not this view's
+    /// own live cursor. Best-effort; read at write/close/exit.
+    pub fn last_cursor(&self) -> (usize, usize) {
+        self.content.lock().unwrap().last_cursor
+    }
+
     pub fn dirty_gen(&self) -> u64 {
         self.content.lock().unwrap().dirty_gen
     }
@@ -139,12 +147,16 @@ impl View {
     /// The optional sticky column for `j`/`k` motions is **not** reset
     /// by this call — it survives `set_cursor` intentionally.
     pub fn set_cursor(&mut self, pos: Position) {
-        let c = self.content.lock().unwrap();
+        let mut c = self.content.lock().unwrap();
         let n = c.text.len_lines();
         let last_row = n.saturating_sub(1);
         let row = pos.row.min(last_row);
         let line_chars = rope_line_char_count(&c.text, row);
         let col = pos.col.min(line_chars);
+        // Single choke point for cursor moves: record the last-moved cursor on
+        // the shared `Buffer` so the most-recent move across ALL views onto
+        // this document wins (docs/undo-architecture.md §6b). Cheap — no I/O.
+        c.last_cursor = (row, col);
         drop(c);
         self.cursor = Position::new(row, col);
     }
@@ -989,6 +1001,45 @@ mod tests {
         view_b.set_cursor(Position::new(0, 2));
         // view_a cursor must remain at (1, 3).
         assert_eq!(view_a.cursor(), Position::new(1, 3));
+    }
+
+    /// `last_cursor` on the shared `Buffer` reflects the most recent move
+    /// across two independent `View`s — the "last-moved window wins" contract
+    /// the cross-session cursor store depends on (docs §6b).
+    #[test]
+    fn last_cursor_reflects_most_recent_move_across_views() {
+        let a = View::from_str("aaaa\nbbbb\ncccc\ndddd");
+        let arc = a.content_arc();
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
+
+        view_a.set_cursor(Position::new(1, 2));
+        assert_eq!(view_a.last_cursor(), (1, 2));
+        // Both views see the same shared last_cursor.
+        assert_eq!(view_b.last_cursor(), (1, 2));
+
+        // A later move on view_b wins.
+        view_b.set_cursor(Position::new(3, 1));
+        assert_eq!(view_a.last_cursor(), (3, 1));
+        assert_eq!(view_b.last_cursor(), (3, 1));
+
+        // last_cursor stores the CLAMPED landing position, not the request.
+        view_a.set_cursor(Position::new(99, 99));
+        assert_eq!(view_a.last_cursor(), (3, 4));
+    }
+
+    /// Cursor-restore clamp contract (docs §6b): a stored row past EOF clamps
+    /// to the last line, and a col past the line's char count clamps to its
+    /// length. `clamp_position` is what `build_slot` runs on the stored cursor.
+    #[test]
+    fn clamp_position_restore_semantics() {
+        let b = View::from_str("ab\ncdef\ng");
+        // Row past the last line (2) → clamped to last line, col to its length.
+        assert_eq!(b.clamp_position(Position::new(99, 99)), Position::new(2, 1));
+        // Col past the line's char count → clamped to the char count (4).
+        assert_eq!(b.clamp_position(Position::new(1, 99)), Position::new(1, 4));
+        // In-bounds position is unchanged (exact restore on a content match).
+        assert_eq!(b.clamp_position(Position::new(1, 2)), Position::new(1, 2));
     }
 
     /// An edit applied via one view must be visible via the other.

@@ -23,6 +23,7 @@ pub mod backward_range;
 pub mod change_list;
 pub mod clean;
 pub mod comment;
+pub mod cursor_restore;
 pub mod dot_repeat;
 pub mod explorer;
 pub mod file_layout;

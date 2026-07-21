@@ -108,6 +108,13 @@ pub struct Buffer {
     /// Cached syntax-derived foldable block ranges that `:foldsyntax`
     /// consumes; a property of the buffer content, shared across views (#154).
     pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
+    /// Last cursor `(row, col)` committed on this document by ANY view.
+    /// Every [`crate::View::set_cursor`] (the single choke point all engine
+    /// cursor moves route through) writes it, so with several windows onto
+    /// one buffer the most-recently-moved cursor wins by construction. Read
+    /// at write/close/exit to persist cross-session cursor memory
+    /// (docs/undo-architecture.md §6b). In-memory only — no I/O on move.
+    pub(crate) last_cursor: (usize, usize),
 }
 
 impl Default for Buffer {
@@ -138,6 +145,7 @@ impl Buffer {
             pending_content_reset: false,
             marks: std::collections::BTreeMap::new(),
             syntax_fold_ranges: Vec::new(),
+            last_cursor: (0, 0),
         }
     }
 
@@ -164,6 +172,7 @@ impl Buffer {
             pending_content_reset: false,
             marks: std::collections::BTreeMap::new(),
             syntax_fold_ranges: Vec::new(),
+            last_cursor: (0, 0),
         }
     }
 
