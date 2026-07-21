@@ -306,7 +306,30 @@ impl TerminalSession {
     /// alive for the session's lifetime, same as the auto-generated case.
     #[allow(dead_code)]
     pub fn spawn_with_file_and_cache_dir(path: &Path, cache_dir: tempfile::TempDir) -> Self {
-        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[], None)
+        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, &[], None, None)
+    }
+
+    /// Spawn `hjkl` opening `file` with `XDG_CACHE_HOME` pinned to the
+    /// caller-owned `cache_home` path (rather than a per-session TempDir), so
+    /// several SEQUENTIAL spawns share the swap directory under
+    /// `<cache_home>/hjkl/swap/`. The caller keeps `cache_home` alive across
+    /// spawns and owns its cleanup. Used by the crash-recovery e2e test: spawn,
+    /// edit, kill uncleanly (the swap survives in `cache_home`), respawn to
+    /// recover from that same swap.
+    #[allow(dead_code)]
+    pub fn spawn_with_file_and_cache_home(file: &Path, cache_home: &Path) -> Self {
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        Self::spawn_inner_cwd_cache(
+            Some(file),
+            24,
+            80,
+            None,
+            cache_dir,
+            None,
+            &[],
+            None,
+            Some(cache_home),
+        )
     }
 
     /// Spawn `hjkl` opening `file` with `XDG_STATE_HOME` pinned to the
@@ -327,6 +350,7 @@ impl TerminalSession {
             None,
             &[],
             Some(state_home),
+            None,
         )
     }
 
@@ -341,7 +365,17 @@ impl TerminalSession {
         cache_dir: tempfile::TempDir,
         extra_args: &[&str],
     ) -> Self {
-        Self::spawn_inner_cwd_cache(Some(path), 24, 80, None, cache_dir, None, extra_args, None)
+        Self::spawn_inner_cwd_cache(
+            Some(path),
+            24,
+            80,
+            None,
+            cache_dir,
+            None,
+            extra_args,
+            None,
+            None,
+        )
     }
 
     /// Spawn `hjkl` with `dir` as the cwd, opening `file`, after pre-seeding
@@ -364,6 +398,7 @@ impl TerminalSession {
             cache_dir,
             Some(config_toml),
             extra_args,
+            None,
             None,
         )
     }
@@ -399,6 +434,7 @@ impl TerminalSession {
             Some(config_toml),
             extra_args,
             None,
+            None,
         )
     }
 
@@ -414,7 +450,7 @@ impl TerminalSession {
         // cache dir would also leave fixture swaps behind across runs and
         // surface the recovery prompt. Unique per spawn → fresh + clean.
         let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
-        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir, None, &[], None)
+        Self::spawn_inner_cwd_cache(file, rows, cols, cwd, cache_dir, None, &[], None, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -427,6 +463,7 @@ impl TerminalSession {
         config_toml: Option<&str>,
         extra_args: &[&str],
         state_home: Option<&Path>,
+        cache_home: Option<&Path>,
     ) -> Self {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -455,7 +492,14 @@ impl TerminalSession {
         // explorer.open) leaks into any other test's session.
         let config_dir = tempfile::tempdir().expect("e2e config tempdir");
         cmd.env("XDG_CONFIG_HOME", config_dir.path());
-        cmd.env("XDG_CACHE_HOME", cache_dir.path());
+        // A caller-supplied `cache_home` (borrowed path) overrides the owned
+        // per-session `cache_dir` so several sequential spawns SHARE the swap
+        // directory under `<cache_home>/hjkl/swap/` (the crash-recovery e2e
+        // test). The owned `cache_dir` still backs the field as a keep-alive.
+        cmd.env(
+            "XDG_CACHE_HOME",
+            cache_home.unwrap_or_else(|| cache_dir.path()),
+        );
         // Cross-session cursor store lives under XDG_STATE_HOME. Default it to
         // this session's cache tempdir (distinct app subdir from swap, no
         // clash) so real ~/.local/state is never written by e2e runs. A

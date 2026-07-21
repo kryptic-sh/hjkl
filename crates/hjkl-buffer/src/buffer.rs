@@ -572,6 +572,37 @@ impl View {
         }
     }
 
+    /// Install an undo tree recovered from a **swap** file (crash path,
+    /// docs/undo-architecture.md §6c), verifying it against the just-recovered
+    /// buffer text before committing. Unlike [`Self::install_undo_tree`] (the
+    /// undofile / clean-close path, whose caller gates on a content hash), the
+    /// swap tail rides an unsaved buffer, so this re-checks consistency itself.
+    ///
+    /// Returns `false` — leaving the fresh single-node tree seeded from the
+    /// recovered content untouched — when the projection is structurally
+    /// invalid, its current node's `seq` differs from `current_seq`, or its
+    /// current node doesn't materialize to the live buffer text. Must run AFTER
+    /// the recovered content is installed (which resets undo to a single node).
+    /// A trailing-newline difference is normalized away, matching how recovery
+    /// installs `body.strip_suffix('\n')`.
+    pub fn install_recovered_undo_tree(&self, ser: &crate::SerTree, current_seq: u64) -> bool {
+        let Some(mut tree) = crate::UndoTree::from_serializable(ser) else {
+            return false;
+        };
+        if tree.current_node_seq() != current_seq {
+            return false;
+        }
+        let mut c = self.content.lock().unwrap();
+        let materialized = tree.current_content();
+        if materialized.to_string().trim_end_matches('\n')
+            != c.text.to_string().trim_end_matches('\n')
+        {
+            return false;
+        }
+        c.undo = tree;
+        true
+    }
+
     pub fn clear_redo(&self) {
         self.content.lock().unwrap().undo.clear_redo();
     }
@@ -815,6 +846,49 @@ mod tests {
     #[test]
     fn dirty_gen_starts_at_zero() {
         assert_eq!(View::new().dirty_gen(), 0);
+    }
+
+    /// A minimal single-node [`crate::SerTree`] whose root materializes to
+    /// `base`, tagged with `seq`.
+    fn single_node_tree(base: &str, seq: u64) -> crate::SerTree {
+        crate::SerTree {
+            base: base.to_string(),
+            nodes: vec![crate::SerNode {
+                parent: None,
+                children: Vec::new(),
+                last_child: None,
+                delta: None,
+                cursor: (0, 0),
+                timestamp_unix_ms: 0,
+                marks: crate::MarkSnapshot::default(),
+                seq,
+            }],
+            root: 0,
+            current: 0,
+            next_seq: seq + 1,
+        }
+    }
+
+    /// `install_recovered_undo_tree` installs a tree whose current node matches
+    /// the live buffer content and whose `seq` matches — and rejects (leaves the
+    /// fresh tree) on a `seq` or content mismatch (the swap consistency guard).
+    #[test]
+    fn install_recovered_undo_tree_guards_seq_and_content() {
+        // Match: content + seq agree → installs.
+        let v = View::from_str("alpha\nhello");
+        assert!(v.install_recovered_undo_tree(&single_node_tree("alpha\nhello", 3), 3));
+
+        // Seq mismatch → rejected.
+        let v = View::from_str("alpha\nhello");
+        assert!(!v.install_recovered_undo_tree(&single_node_tree("alpha\nhello", 3), 4));
+
+        // Content mismatch → rejected.
+        let v = View::from_str("alpha\nhello");
+        assert!(!v.install_recovered_undo_tree(&single_node_tree("something else", 3), 3));
+
+        // A trailing-newline-only difference is normalized away → still installs.
+        let v = View::from_str("alpha\nhello");
+        assert!(v.install_recovered_undo_tree(&single_node_tree("alpha\nhello\n", 3), 3));
     }
 
     fn vp_wrap(width: u16, height: u16) -> Viewport {

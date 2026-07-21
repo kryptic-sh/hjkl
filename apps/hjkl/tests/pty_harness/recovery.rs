@@ -42,6 +42,20 @@ fn wait_for_text_anywhere(s: &TerminalSession, needle: &str, timeout_ms: u64) ->
     false
 }
 
+/// Poll the whole screen until `needle` is ABSENT from every row, up to
+/// `timeout_ms`. Used to assert an `u` actually removed content (the screen
+/// may take a settle tick to reflect the edit).
+fn wait_for_text_absent(s: &TerminalSession, needle: &str, timeout_ms: u64) -> bool {
+    let steps = (timeout_ms / 20).max(1);
+    for _ in 0..steps {
+        if !(0..24u16).any(|row| s.line(row).contains(needle)) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
 /// Pressing `q` at the recovery prompt on a single-file launch (the sole
 /// slot) must show an abort message and reset the buffer to an empty
 /// scratch — not silently dismiss the prompt while leaving the on-disk
@@ -120,5 +134,118 @@ fn recovery_q_on_sole_slot_aborts_and_resets_buffer() {
     assert!(
         wait_for_text_anywhere(&s, "[No Name]", 1000),
         "aborted slot must fall back to [No Name]; screen:\n{screen_text}"
+    );
+}
+
+/// A REAL crash (SIGKILL, no `:wq`) followed by `:recover` restores not just the
+/// unsaved CONTENT but the whole undo TREE + live position (docs
+/// undo-architecture.md §6c): `u` walks back through the pre-crash history and
+/// `<C-r>` walks forward again — including a branch the user had undone past,
+/// which vim/nvim would have flattened on recover. This is the headline
+/// behavioural proof for Phase 3c.
+#[test]
+fn recovery_restores_undo_tree_after_crash() {
+    // Shared XDG_CACHE_HOME (test-owned) so the swap dir survives the crash and
+    // the recovery spawn reads the same `<cache>/hjkl/swap/<hash>.swp`.
+    let cache_home = tempfile::tempdir().unwrap();
+
+    let file_dir = tempfile::tempdir().unwrap();
+    let file_path = file_dir.path().join("crashed.txt");
+    std::fs::write(&file_path, "alpha\n").unwrap();
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+
+    let hash = fnv1a64(canonical.to_string_lossy().as_bytes());
+    let swap_path = cache_home
+        .path()
+        .join("hjkl")
+        .join("swap")
+        .join(format!("{hash:016x}.swp"));
+
+    // ── Session 1: edit, build undo history, then CRASH (drop = SIGKILL). ──
+    {
+        let mut s = TerminalSession::spawn_with_file_and_cache_home(&file_path, cache_home.path());
+        // Flush the swap promptly after edits (default updatetime is 4000 ms).
+        s.keys(":set updatetime=200<Enter>");
+        // Build a non-trivial tree with a LIVE undo: add "hello", add "world",
+        // then undo "world" — the live current lands on the "hello" state, with
+        // "world" retained as a forward branch (the redo the crash must keep).
+        s.keys("ohello<Esc>");
+        s.keys("oworld<Esc>");
+        s.keys("u");
+
+        // Wait until the post-undo swap (current == the "hello" state, carrying
+        // the v3 undo tree) is durably on disk, THEN crash. Generous budget so
+        // the test still passes if `:set updatetime` didn't take (4000 ms
+        // default flush).
+        let mut ready = false;
+        for _ in 0..400 {
+            if let Ok((_h, body, undo)) = hjkl_app::swap::read_swap_full(&swap_path)
+                && body.contains("hello")
+                && !body.contains("world")
+                && undo.is_some()
+            {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            ready,
+            "swap with the post-undo content + v3 undo tree must reach disk before the crash"
+        );
+        // `s` drops here → `child.kill()` (SIGKILL) → unclean crash, no `:wq`;
+        // the swap file is NOT removed.
+    }
+
+    // The on-disk file was never saved — still the original single line.
+    assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "alpha\n");
+
+    // ── Session 2: recover from the surviving swap. ──
+    let mut s = TerminalSession::spawn_with_file_and_cache_home(&file_path, cache_home.path());
+    assert!(
+        wait_for_text_anywhere(&s, "Recover? [y/N/q]", 3000),
+        "recovery prompt must appear on the post-crash open; screen:\n{}",
+        s.dump_screen()
+    );
+    s.keys("y");
+
+    // (i) Unsaved CONTENT recovered: the "hello" state (the post-undo live
+    // current), NOT the "world" line we had undone past.
+    assert!(
+        wait_for_text_anywhere(&s, "hello", 2000),
+        "recovered buffer must show the unsaved 'hello' content; screen:\n{}",
+        s.dump_screen()
+    );
+    assert!(
+        !s.dump_screen().contains("world"),
+        "recovered current is the post-undo state — 'world' must be hidden; screen:\n{}",
+        s.dump_screen()
+    );
+
+    // (ii) Undo TREE recovered: `u` walks back through the pre-crash history
+    // (removes "hello", back toward the "alpha" root)…
+    s.keys("u");
+    assert!(
+        wait_for_text_absent(&s, "hello", 2000),
+        "`u` on the recovered buffer must walk back past 'hello' (undo tree restored, \
+         not a flat single-node tree); screen:\n{}",
+        s.dump_screen()
+    );
+    // …and `<C-r>` walks forward again (brings "hello" back).
+    s.keys("<C-r>");
+    assert!(
+        wait_for_text_anywhere(&s, "hello", 2000),
+        "`<C-r>` must redo forward to 'hello' (redo restored); screen:\n{}",
+        s.dump_screen()
+    );
+
+    // Strict improvement over vim/nvim: the forward branch we had undone past
+    // ("world") ALSO survived the crash — a second `<C-r>` reaches it.
+    s.keys("<C-r>");
+    assert!(
+        wait_for_text_anywhere(&s, "world", 2000),
+        "the retained forward branch ('world') must survive the crash and be reachable \
+         via redo; screen:\n{}",
+        s.dump_screen()
     );
 }

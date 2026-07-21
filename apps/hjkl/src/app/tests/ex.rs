@@ -2636,7 +2636,7 @@ fn recovery_y_resets_syntax_spans() {
     // highlighting breaks (#185). Drain build_slot's own reset first, then
     // install the recovered body and assert the reset fired.
     let _ = app.active_editor_mut().take_content_reset();
-    app.recover_install_content(idx, "recovered body line one\nline two\n", 0, 0);
+    app.recover_install_content(idx, "recovered body line one\nline two\n", 0, 0, None);
     assert!(
         app.active_editor_mut().take_content_reset(),
         "recovery content install must signal a full content reset (set_content), \

@@ -5,10 +5,18 @@
 //! Scratch (never-saved) buffers get `scratch_<pid>_<bufid>.swp` in the same
 //! directory; their header has `canonical_path = ""`.
 //!
-//! Format:
+//! Format (v3):
 //! - 4 bytes  magic `b"HSWP"`
 //! - then a postcard-encoded `SwapHeader` length-prefixed by a `u32` LE
+//! - then a `u32` LE undo-section length + that many bytes of a postcard
+//!   [`SwapUndo`] (`0` ⇒ no undo tree — content-only, older/degraded write)
 //! - then the raw UTF-8 body (rope chunks streamed directly)
+//!
+//! The undo section (v3, docs/undo-architecture.md §6c) carries the buffer's
+//! serialized undo tree + live current node so `:recover` restores undo/redo,
+//! not just the unsaved text. postcard is not self-describing, so a v2 file
+//! (no undo section) parses as `Err` under the v3 reader and is treated as "no
+//! usable swap" — no migration, the bump is safe by construction.
 
 #[cfg(unix)]
 use libc;
@@ -19,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use hjkl_buffer::SerTree;
 use ropey::Rope;
 
 // ── FNV-1a-64 hash ────────────────────────────────────────────────────────────
@@ -47,6 +56,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// **Version history**
 /// - v1: original fields (no `writer_pid`)
 /// - v2: adds `writer_pid` for PID-lock multi-instance protection
+/// - v3: adds a length-delimited [`SwapUndo`] section after the header (the
+///   serialized undo tree + live current node) so `:recover` restores undo/redo
 ///
 /// postcard is not self-describing, so v1 bytes deserialize as `Err` when
 /// read with a v2 schema.  Callers treat a read error as "no usable swap"
@@ -76,7 +87,24 @@ impl SwapHeader {
     /// Magic bytes for the swap format.
     pub const MAGIC: [u8; 4] = *b"HSWP";
     /// Current format version.
-    pub const VERSION: u16 = 2;
+    pub const VERSION: u16 = 3;
+}
+
+/// The v3 undo section (docs/undo-architecture.md §6c): the buffer's serialized
+/// undo tree plus the `seq` of the live current node, carried in the swap so a
+/// crash-`:recover` restores the whole undo/redo history — not just the unsaved
+/// text — a strict improvement over vim/nvim (which flatten undo on recover).
+///
+/// Serialized with `postcard` in its own length-delimited section between the
+/// header and the body. A read error (schema drift, truncation) makes recovery
+/// fall back to content-only; it never blocks or corrupts the recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapUndo {
+    /// The serialized undo tree (root base text + delta-encoded nodes).
+    pub tree: SerTree,
+    /// `seq` of the live current node — must match `tree`'s current node; a
+    /// mismatch on read rejects the tree (recover content only).
+    pub current_seq: u64,
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
@@ -126,6 +154,9 @@ pub struct OrphanScratch {
     pub header: SwapHeader,
     /// Full text body of the unsaved buffer.
     pub body: String,
+    /// The v3 undo section, if the swap carried one (else `None` ⇒ recover
+    /// content only).
+    pub undo: Option<SwapUndo>,
 }
 
 /// Scan `dir` for scratch swaps (`scratch_*.swp` with empty `canonical_path`)
@@ -147,7 +178,7 @@ pub fn scan_orphan_scratch_swaps_in(dir: &Path) -> Vec<OrphanScratch> {
             continue;
         }
         let path = entry.path();
-        let (header, body) = match read_swap(&path) {
+        let (header, body, undo) = match read_swap_full(&path) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -163,6 +194,7 @@ pub fn scan_orphan_scratch_swaps_in(dir: &Path) -> Vec<OrphanScratch> {
             swap_path: path,
             header,
             body,
+            undo,
         });
     }
     out
@@ -219,6 +251,21 @@ fn random_suffix() -> String {
 /// writers never share the same temporary file.  Retries up to 5 times on
 /// collision.
 pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Result<()> {
+    write_swap_full(path, header, rope, None)
+}
+
+/// Like [`write_swap`] but also embeds the v3 [`SwapUndo`] section (the
+/// serialized undo tree + live current node) between the header and the body,
+/// so a crash-`:recover` restores undo/redo (docs/undo-architecture.md §6c).
+///
+/// `undo == None` writes an empty undo section (length `0`) — behaviourally a
+/// content-only swap. The body is still streamed via `rope.chunks()`.
+pub fn write_swap_full(
+    path: &Path,
+    header: &SwapHeader,
+    rope: &Rope,
+    undo: Option<&SwapUndo>,
+) -> std::io::Result<()> {
     // Serialize header with postcard.
     let header_bytes = postcard::to_stdvec(header).map_err(|e| {
         std::io::Error::new(
@@ -226,6 +273,17 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
             format!("postcard serialize: {e}"),
         )
     })?;
+
+    // Serialize the optional undo section; empty (len 0) when absent.
+    let undo_bytes: Vec<u8> = match undo {
+        Some(u) => postcard::to_stdvec(u).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("postcard serialize undo: {e}"),
+            )
+        })?,
+        None => Vec::new(),
+    };
 
     const MAX_RETRIES: u32 = 5;
     let mut last_err: Option<std::io::Error> = None;
@@ -260,12 +318,16 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
             }
         };
 
-        // Write: 4-byte magic + u32-LE header length + header bytes + body chunks.
+        // Write: magic + u32-LE header length + header bytes + u32-LE undo
+        // length + undo bytes + body chunks.
         let write_result = (|| -> std::io::Result<()> {
             f.write_all(&SwapHeader::MAGIC)?;
             let hlen = header_bytes.len() as u32;
             f.write_all(&hlen.to_le_bytes())?;
             f.write_all(&header_bytes)?;
+            let ulen = undo_bytes.len() as u32;
+            f.write_all(&ulen.to_le_bytes())?;
+            f.write_all(&undo_bytes)?;
             for chunk in rope.chunks() {
                 f.write_all(chunk.as_bytes())?;
             }
@@ -315,6 +377,18 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
 /// the old swap is effectively ignored.  Swaps are transient cache; no
 /// migration is attempted.
 pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
+    let (header, body, _undo) = read_swap_full(path)?;
+    Ok((header, body))
+}
+
+/// Like [`read_swap`] but also returns the v3 [`SwapUndo`] section when present
+/// (`None` for a swap written without an undo tree). The header + body are
+/// parsed identically; the undo section sits between them.
+///
+/// Any structural / parse error in the undo section is fatal to the whole read
+/// (returns `Err` ⇒ "no usable swap") — consistent with treating a malformed
+/// swap as absent. Callers that only need the body use [`read_swap`].
+pub fn read_swap_full(path: &Path) -> std::io::Result<(SwapHeader, String, Option<SwapUndo>)> {
     let mut f = std::fs::File::open(path)?;
 
     // Magic check.
@@ -356,10 +430,42 @@ pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
         )
     })?;
 
+    // Undo section: u32-LE length prefix + that many postcard bytes. Length 0
+    // ⇒ no tree (content-only). Cap before allocating, like the header/body —
+    // the whole delta tree for a large buffer stays well under this.
+    const MAX_UNDO_LEN: u64 = 256 * 1024 * 1024;
+    let mut ulen_buf = [0u8; 4];
+    f.read_exact(&mut ulen_buf)?;
+    let ulen = u32::from_le_bytes(ulen_buf) as u64;
+    if ulen > MAX_UNDO_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("swap: undo length {ulen} exceeds {MAX_UNDO_LEN}"),
+        ));
+    }
+    let undo: Option<SwapUndo> = if ulen == 0 {
+        None
+    } else {
+        let mut undo_bytes = vec![0u8; ulen as usize];
+        f.read_exact(&mut undo_bytes)?;
+        let u: SwapUndo = postcard::from_bytes(&undo_bytes).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("postcard deserialize undo: {e}"),
+            )
+        })?;
+        Some(u)
+    };
+
     // Body: cap the remaining file length before allocating. Swaps are cache
     // entries, so oversized or corrupt bodies are discarded during recovery.
+    // Header section = 8 + hlen (magic+len prefix+header); undo section =
+    // 4 + ulen (len prefix + bytes); body = the remainder.
     const MAX_BODY_LEN: u64 = 64 * 1024 * 1024;
-    let body_len = f.metadata()?.len().saturating_sub(8 + hlen as u64);
+    let body_len = f
+        .metadata()?
+        .len()
+        .saturating_sub(8 + hlen as u64 + 4 + ulen);
     if body_len > MAX_BODY_LEN {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -375,7 +481,7 @@ pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
         ));
     }
 
-    Ok((header, body))
+    Ok((header, body, undo))
 }
 
 // ── Remove ────────────────────────────────────────────────────────────────────
@@ -564,7 +670,10 @@ mod tests {
         let header = sample_header("/tmp/large.rs");
         let header_bytes = postcard::to_allocvec(&header).unwrap();
         let file = std::fs::File::create(&swp).unwrap();
-        file.set_len(8 + header_bytes.len() as u64 + 64 * 1024 * 1024 + 1)
+        // magic(4) + hlen(4) + header + undo-len(4, left zero ⇒ no tree) + an
+        // oversized body (> MAX_BODY_LEN). The zeroed undo-length section is
+        // read as 0 so the whole remainder counts as body.
+        file.set_len(8 + header_bytes.len() as u64 + 4 + 64 * 1024 * 1024 + 1)
             .unwrap();
         drop(file);
         let mut file = std::fs::OpenOptions::new().write(true).open(&swp).unwrap();
@@ -772,5 +881,125 @@ mod tests {
         let (got, _body) = read_swap(&swp).unwrap();
         assert_eq!(got.writer_pid, 1234, "writer_pid must roundtrip");
         assert_eq!(got.version, SwapHeader::VERSION);
+    }
+
+    // ── v3 undo-section roundtrip ─────────────────────────────────────────────
+
+    /// A minimal but structurally-valid single-node [`SerTree`] (root == current,
+    /// no delta) — enough to exercise the swap's undo-section serialization.
+    fn sample_tree(base: &str, seq: u64) -> SerTree {
+        SerTree {
+            base: base.to_string(),
+            nodes: vec![hjkl_buffer::SerNode {
+                parent: None,
+                children: Vec::new(),
+                last_child: None,
+                delta: None,
+                cursor: (2, 5),
+                timestamp_unix_ms: 1_700_000_000_000,
+                marks: hjkl_buffer::MarkSnapshot::default(),
+                seq,
+            }],
+            root: 0,
+            current: 0,
+            next_seq: seq + 1,
+        }
+    }
+
+    /// v3: the undo tree + current_seq round-trip through write/read alongside
+    /// the body.
+    #[test]
+    fn v3_write_read_roundtrips_undo_tree_and_seq() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("v3.swp");
+
+        let header = sample_header("/tmp/v3.rs");
+        let body = "hello world\nline two\n";
+        let rope = Rope::from_str(body);
+        let undo = SwapUndo {
+            tree: sample_tree(body, 7),
+            current_seq: 7,
+        };
+        write_swap_full(&swp, &header, &rope, Some(&undo)).unwrap();
+
+        let (got_header, got_body, got_undo) = read_swap_full(&swp).unwrap();
+        assert_eq!(got_header, header);
+        assert_eq!(got_body, body);
+        let got_undo = got_undo.expect("v3 swap must carry the undo section");
+        assert_eq!(got_undo.current_seq, 7);
+        assert_eq!(got_undo.tree.base, body);
+        assert_eq!(got_undo.tree.nodes.len(), 1);
+        assert_eq!(got_undo.tree.root, 0);
+        assert_eq!(got_undo.tree.current, 0);
+        assert_eq!(got_undo.tree.next_seq, 8);
+        assert_eq!(got_undo.tree.nodes[0].seq, 7);
+        assert_eq!(got_undo.tree.nodes[0].cursor, (2, 5));
+    }
+
+    /// A swap written with body text but NO undo tree (the `write_swap` /
+    /// content-only path) reads back with `undo == None` and the body intact.
+    #[test]
+    fn v3_body_only_swap_has_no_undo_section() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("bodyonly.swp");
+
+        let header = sample_header("/tmp/bodyonly.rs");
+        let body = "no undo here\n";
+        let rope = Rope::from_str(body);
+        // write_swap delegates to write_swap_full(.., None).
+        write_swap(&swp, &header, &rope).unwrap();
+
+        let (_h, got_body, got_undo) = read_swap_full(&swp).unwrap();
+        assert_eq!(got_body, body);
+        assert!(
+            got_undo.is_none(),
+            "content-only swap must have no undo section"
+        );
+    }
+
+    /// An old v2-shaped swap — magic + header + body with NO undo-length prefix
+    /// section — must be rejected as "no usable swap" (`Err`) under the v3
+    /// reader, never panic. (v2 and v3 share the SwapHeader schema; the section
+    /// is what differs, so the reader mis-reads the body's first bytes as the
+    /// undo length and rejects it / short-reads.)
+    #[test]
+    fn v2_shaped_swap_is_rejected_no_panic() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("v2shaped.swp");
+
+        let header = sample_header("/tmp/v2shaped.rs");
+        let header_bytes = postcard::to_allocvec(&header).unwrap();
+        // Old layout: magic + u32 hlen + header + raw body (no undo section).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&SwapHeader::MAGIC);
+        bytes.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header_bytes);
+        bytes.extend_from_slice(b"old v2 body bytes with no undo length prefix\n");
+        std::fs::write(&swp, &bytes).unwrap();
+
+        // No panic; both read entry points surface an error → "no usable swap".
+        assert!(read_swap_full(&swp).is_err());
+        assert!(read_swap(&swp).is_err());
+    }
+
+    /// A truncated undo section (length prefix promises more bytes than exist)
+    /// is rejected without panicking.
+    #[test]
+    fn truncated_undo_section_is_rejected_no_panic() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("trunc.swp");
+
+        let header = sample_header("/tmp/trunc.rs");
+        let header_bytes = postcard::to_allocvec(&header).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&SwapHeader::MAGIC);
+        bytes.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header_bytes);
+        // Claim a 4096-byte undo section but provide only a few bytes.
+        bytes.extend_from_slice(&4096u32.to_le_bytes());
+        bytes.extend_from_slice(b"\x01\x02\x03");
+        std::fs::write(&swp, &bytes).unwrap();
+
+        assert!(read_swap_full(&swp).is_err());
     }
 }

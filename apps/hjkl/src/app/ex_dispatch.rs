@@ -1329,7 +1329,13 @@ impl App {
         };
 
         let rope = self.slots[idx].buffer().rope().clone();
-        if let Err(e) = swap::write_swap(&swap_path, &header, &rope) {
+        // Capture the undo tree + live current node alongside the body (docs
+        // §6c) so a crash-`:recover` restores undo/redo, not just the text.
+        // `undo_to_serializable` syncs the tree's current to the live rope, so
+        // the stored tree's current materializes to exactly this body.
+        let (tree, current_seq) = self.slots[idx].buffer().undo_to_serializable();
+        let swap_undo = swap::SwapUndo { tree, current_seq };
+        if let Err(e) = swap::write_swap_full(&swap_path, &header, &rope, Some(&swap_undo)) {
             tracing::debug!(path = %swap_path.display(), err = %e, "swap write failed");
             return;
         }
@@ -1441,6 +1447,13 @@ impl App {
             // signal a `ContentReset` to here).
             let stripped = orphan.body.strip_suffix('\n').unwrap_or(&orphan.body);
             hjkl_engine::BufferEdit::replace_all(&mut view, stripped);
+
+            // Restore the undo tree if the swap carried one (v3, docs §6c). MUST
+            // run after the content is installed. Fail-safe: an inconsistent /
+            // absent tree leaves the fresh single-node tree — content only.
+            if let Some(u) = &orphan.undo {
+                view.install_recovered_undo_tree(&u.tree, u.current_seq);
+            }
 
             // Restore cursor from swap header.
             let (row, col) = orphan.header.cursor;
@@ -1641,7 +1654,7 @@ impl App {
         if !swap_path.exists() {
             return false;
         }
-        let (header, body) = match swap::read_swap(&swap_path) {
+        let (header, body, undo) = match swap::read_swap_full(&swap_path) {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(%e, "failed to read swap on open");
@@ -1694,6 +1707,7 @@ impl App {
         self.pending_recovery = Some(super::PendingRecovery {
             header,
             body,
+            undo,
             slot_idx,
             written_ago,
         });
@@ -1716,6 +1730,7 @@ impl App {
         body: &str,
         row: usize,
         col: usize,
+        undo: Option<&hjkl_app::swap::SwapUndo>,
     ) {
         // Strip trailing newline — the engine's content format omits it.
         let stripped = body.strip_suffix('\n').unwrap_or(body);
@@ -1743,6 +1758,16 @@ impl App {
                 e.jump_cursor(row, col);
             }
         }
+        // Restore the undo tree if the swap carried one (v3, docs §6c). MUST run
+        // after `set_content` (which resets undo to a single node). Fail-safe:
+        // `install_recovered_undo_tree` re-verifies the tree materializes to the
+        // recovered content and its current `seq` matches, leaving the fresh
+        // single-node tree — content-only recovery — on any inconsistency.
+        if let Some(u) = undo {
+            self.slots[slot_idx]
+                .buffer()
+                .install_recovered_undo_tree(&u.tree, u.current_seq);
+        }
         self.slots[slot_idx].dirty = true;
     }
 
@@ -1762,7 +1787,14 @@ impl App {
                 let body = pr.body.clone();
                 let slot_idx = pr.slot_idx;
                 let (row, col) = pr.header.cursor;
-                self.recover_install_content(slot_idx, &body, row as usize, col as usize);
+                let undo = pr.undo.clone();
+                self.recover_install_content(
+                    slot_idx,
+                    &body,
+                    row as usize,
+                    col as usize,
+                    undo.as_ref(),
+                );
                 self.pending_recovery = None;
                 self.bus.info("Recovered from swap file. Use :w to save.");
                 self.sync_after_engine_mutation();

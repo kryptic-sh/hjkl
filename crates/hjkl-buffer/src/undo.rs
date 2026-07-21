@@ -943,6 +943,14 @@ impl UndoTree {
         self.get(self.current).seq
     }
 
+    /// Materialize the current (live) node's content. Used by the swap
+    /// recovery consistency guard (docs §6c) to check a deserialized tree
+    /// agrees with the freshly-recovered buffer text before it's installed.
+    pub(crate) fn current_content(&mut self) -> ropey::Rope {
+        let cur = self.current;
+        self.materialize(cur)
+    }
+
     /// Stash `rope` into the current node as the live buffer state, preserving
     /// that node's own cursor/timestamp/marks. Called just before serializing so
     /// the on-disk tree's `current` edge is exact even when `current` is a fresh

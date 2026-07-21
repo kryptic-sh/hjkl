@@ -635,6 +635,10 @@ pub(crate) struct PendingRecovery {
     pub header: hjkl_app::swap::SwapHeader,
     /// The swap body text.
     pub body: String,
+    /// The v3 undo section (serialized undo tree + live current node), if the
+    /// swap carried one. Installed on `y` so `:recover` restores undo/redo, not
+    /// just the text (docs/undo-architecture.md §6c). `None` ⇒ content-only.
+    pub undo: Option<hjkl_app::swap::SwapUndo>,
     /// Index of the slot whose content should be replaced on `y`.
     pub slot_idx: usize,
     /// Human-readable relative time string for the prompt ("42s ago", "3m ago", …).
