@@ -138,8 +138,8 @@ fn recovery_q_on_sole_slot_aborts_and_resets_buffer() {
 }
 
 /// A REAL crash (SIGKILL, no `:wq`) followed by `:recover` restores not just the
-/// unsaved CONTENT but the whole undo TREE + live position (docs
-/// undo-architecture.md §6c): `u` walks back through the pre-crash history and
+/// unsaved CONTENT but the whole undo TREE + live position: `u` walks back
+/// through the pre-crash history and
 /// `<C-r>` walks forward again — including a branch the user had undone past,
 /// which vim/nvim would have flattened on recover. This is the headline
 /// behavioural proof for Phase 3c.

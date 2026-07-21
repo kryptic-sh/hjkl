@@ -731,8 +731,7 @@ pub struct ChangeBank {
 /// so it can close its group on `Drop` regardless of how the enclosing scope
 /// exits (normal return, early return, or panic). Dropping the OUTERMOST guard
 /// commits the group's single undo entry (or discards it if the group mutated
-/// nothing); inner guards just decrement the depth. See `push_undo` and
-/// `docs/undo-architecture.md` §4.
+/// nothing); inner guards just decrement the depth. See `push_undo`.
 #[must_use]
 pub struct UndoGroup {
     content: std::sync::Arc<std::sync::Mutex<hjkl_buffer::Buffer>>,
@@ -4472,7 +4471,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     /// One `g-` step: restore the next-lower-`seq` state anywhere in the undo
-    /// tree (`docs/undo-architecture.md` §5). Branch-crossing counterpart of
+    /// tree. Branch-crossing counterpart of
     /// [`undo_core`](Self::undo_core); restores the destination snapshot exactly
     /// like an undo. Returns `false` when already at the lowest state.
     fn seq_earlier_core(&mut self) -> bool {
@@ -4616,7 +4615,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// still yields one undo step. A group that mutates nothing leaves zero
     /// undo entries. Closing on `Drop` makes it early-return / panic safe.
     ///
-    /// See `docs/undo-architecture.md` §4. The returned guard is `#[must_use]`;
+    /// The returned guard is `#[must_use]`;
     /// bind it (`let _g = …`) so it lives for the whole grouped operation.
     pub fn undo_group(&mut self) -> UndoGroup {
         let content = self.buffer.content_arc();

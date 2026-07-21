@@ -60,7 +60,7 @@ pub struct MarkSnapshot {
     pub global_marks: BTreeMap<char, (usize, usize)>,
 }
 
-// ─── Reversible edge delta (Phase 3a, docs/undo-architecture.md §3/§6) ─────────
+// ─── Reversible edge delta (Phase 3a) ──────────────────────────────────────────
 //
 // Phase 2b stored a FULL rope snapshot on every node. Phase 3a stores only a
 // reversible **delta** on each parent→child edge (the root keeps a full base
@@ -873,7 +873,7 @@ impl UndoTree {
     }
 }
 
-// ─── Serializable projection (Phase 3b, docs/undo-architecture.md §6) ─────────
+// ─── Serializable projection (Phase 3b) ───────────────────────────────────────
 //
 // The undofile persists the tree as a compact, self-consistent projection: the
 // root's full base text (String) plus, per node, its edge `delta` and links.
@@ -1390,7 +1390,7 @@ mod tree_tests {
     }
 }
 
-// ─── Phase 3a delta-storage tests (docs/undo-architecture.md §3/§6) ───────────
+// ─── Phase 3a delta-storage tests ─────────────────────────────────────────────
 //
 // Correctness of the reversible delta and the warm/cold materialization is
 // where text gets silently corrupted, so these lean hard on it: exact diff
@@ -1836,7 +1836,7 @@ mod delta_tests {
     }
 }
 
-// ─── Phase 3b serialize/deserialize tests (docs/undo-architecture.md §6) ──────
+// ─── Phase 3b serialize/deserialize tests ─────────────────────────────────────
 //
 // The undofile is only as trustworthy as this round-trip: a projection that
 // loses a branch, mislinks a parent, or reconstructs a node's content wrong

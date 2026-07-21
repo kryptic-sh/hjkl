@@ -66,8 +66,8 @@ pub struct Buffer {
     pub(crate) cached_byte_len: Option<(u64, usize)>,
 
     // ── Per-buffer engine state (relocated from hjkl-engine::Editor) ──────
-    /// Undo history: an arena tree of O(1)-clone rope snapshots (Phase 2a,
-    /// docs/undo-architecture.md §3/§5). Replaces the old `undo_stack` /
+    /// Undo history: an arena tree of O(1)-clone rope snapshots (Phase 2a).
+    /// Replaces the old `undo_stack` /
     /// `redo_stack` `Vec<UndoEntry>` pair; the tree stays linear (each node
     /// has ≤ 1 child) so its behaviour is byte-identical to the two stacks —
     /// see [`crate::UndoTree`]'s module comment for the mapping.
@@ -114,8 +114,8 @@ pub struct Buffer {
     /// Every [`crate::View::set_cursor`] (the single choke point all engine
     /// cursor moves route through) writes it, so with several windows onto
     /// one buffer the most-recently-moved cursor wins by construction. Read
-    /// at write/close/exit to persist cross-session cursor memory
-    /// (docs/undo-architecture.md §6b). In-memory only — no I/O on move.
+    /// at write/close/exit to persist cross-session cursor memory.
+    /// In-memory only — no I/O on move.
     pub(crate) last_cursor: (usize, usize),
 }
 
@@ -180,7 +180,7 @@ impl Buffer {
         }
     }
 
-    // ── Undo-group coalescing (Phase 1, see docs/undo-architecture.md §4) ──
+    // ── Undo-group coalescing (Phase 1) ────────────────────────────────────
     //
     // A group makes a composed operation (`:g`, `:normal`, a macro replay)
     // record ONE undo step instead of one per underlying `push_undo`. The

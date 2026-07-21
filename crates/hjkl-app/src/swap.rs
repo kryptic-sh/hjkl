@@ -12,7 +12,7 @@
 //!   [`SwapUndo`] (`0` ⇒ no undo tree — content-only, older/degraded write)
 //! - then the raw UTF-8 body (rope chunks streamed directly)
 //!
-//! The undo section (v3, docs/undo-architecture.md §6c) carries the buffer's
+//! The undo section (v3) carries the buffer's
 //! serialized undo tree + live current node so `:recover` restores undo/redo,
 //! not just the unsaved text. postcard is not self-describing, so a v2 file
 //! (no undo section) parses as `Err` under the v3 reader and is treated as "no
@@ -90,7 +90,7 @@ impl SwapHeader {
     pub const VERSION: u16 = 3;
 }
 
-/// The v3 undo section (docs/undo-architecture.md §6c): the buffer's serialized
+/// The v3 undo section: the buffer's serialized
 /// undo tree plus the `seq` of the live current node, carried in the swap so a
 /// crash-`:recover` restores the whole undo/redo history — not just the unsaved
 /// text — a strict improvement over vim/nvim (which flatten undo on recover).
@@ -256,7 +256,7 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
 
 /// Like [`write_swap`] but also embeds the v3 [`SwapUndo`] section (the
 /// serialized undo tree + live current node) between the header and the body,
-/// so a crash-`:recover` restores undo/redo (docs/undo-architecture.md §6c).
+/// so a crash-`:recover` restores undo/redo.
 ///
 /// `undo == None` writes an empty undo section (length `0`) — behaviourally a
 /// content-only swap. The body is still streamed via `rope.chunks()`.

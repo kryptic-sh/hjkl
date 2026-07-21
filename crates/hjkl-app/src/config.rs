@@ -131,7 +131,7 @@ pub struct EditorConfig {
     pub icons: String,
     /// Cross-session cursor memory (shada-style): when `true`, reopening a file
     /// restores the last cursor position on that buffer, clamped to the current
-    /// content (docs/undo-architecture.md §6b). When `false`, the state store
+    /// content. When `false`, the state store
     /// is neither read nor written. Default `true`. `#[serde(default)]` so
     /// configs predating this field keep parsing.
     #[serde(default = "default_restore_cursor")]
@@ -139,7 +139,7 @@ pub struct EditorConfig {
     /// Persistent undo (`undofile`): when `true`, `:w` writes the whole undo
     /// tree to disk and reopening the same, unchanged file restores the exact
     /// node it was saved on so `u`/`<C-r>` walk across the session boundary
-    /// (docs/undo-architecture.md §6). Content-hash gated: an external change
+    /// Content-hash gated: an external change
     /// discards the stored tree. When `false`, the undofile is neither read nor
     /// written. Default `true`. `#[serde(default)]` so older configs still
     /// parse.

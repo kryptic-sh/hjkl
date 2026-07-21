@@ -1,4 +1,4 @@
-//! Persistent undo store — the `undofile` (docs/undo-architecture.md §6).
+//! Persistent undo store — the `undofile`.
 //!
 //! On `:w` the whole delta-encoded undo tree (from `hjkl-buffer`) is serialized
 //! next to the file's identity so that reopening the same, unchanged file

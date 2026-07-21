@@ -637,7 +637,7 @@ pub(crate) struct PendingRecovery {
     pub body: String,
     /// The v3 undo section (serialized undo tree + live current node), if the
     /// swap carried one. Installed on `y` so `:recover` restores undo/redo, not
-    /// just the text (docs/undo-architecture.md §6c). `None` ⇒ content-only.
+    /// just the text. `None` ⇒ content-only.
     pub undo: Option<hjkl_app::swap::SwapUndo>,
     /// Index of the slot whose content should be replaced on `y`.
     pub slot_idx: usize,
@@ -856,7 +856,7 @@ pub(super) fn build_slot(
         None
     };
 
-    // Cross-session cursor restore (docs/undo-architecture.md §6b). Best-effort:
+    // Cross-session cursor restore. Best-effort:
     // look up the last-known cursor for this file and clamp it to the freshly
     // loaded content. Never errors, never blocks — a missing / corrupt store
     // just leaves the cursor at (0, 0). Independent of the swap/undofile: the
@@ -882,7 +882,7 @@ pub(super) fn build_slot(
         }
     }
 
-    // Cross-session persistent undo (docs/undo-architecture.md §6). Best-effort,
+    // Cross-session persistent undo. Best-effort,
     // content-hash gated: if an undofile exists AND its stored hash matches the
     // freshly-loaded file, install the saved delta tree so `u`/`<C-r>`/`g-`/`g+`
     // walk history across the reopen. This must run BEFORE the first user edit

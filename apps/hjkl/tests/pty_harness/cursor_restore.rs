@@ -1,5 +1,4 @@
-//! Cross-session cursor-position memory end-to-end test
-//! (docs/undo-architecture.md §6b, issue #295).
+//! Cross-session cursor-position memory end-to-end test (issue #295).
 //!
 //! Drives the real `hjkl` binary under a pty: open a file, move the cursor to
 //! a known line/column, `:wq`, then respawn on the SAME file and assert the

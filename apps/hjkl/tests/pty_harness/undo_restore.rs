@@ -1,5 +1,4 @@
-//! Cross-session persistent-undo end-to-end test
-//! (docs/undo-architecture.md §6, issue #299).
+//! Cross-session persistent-undo end-to-end test (issue #299).
 //!
 //! Drives the real `hjkl` binary under a pty for the headline scenario: make 5
 //! distinct edits, `u` twice (landing on state 3), `:wq`; then respawn on the

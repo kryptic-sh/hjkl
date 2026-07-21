@@ -51,7 +51,7 @@ impl App {
     }
 
     /// Persist slot `idx`'s last-moved cursor into the cross-session state
-    /// store (docs/undo-architecture.md §6b).
+    /// store.
     ///
     /// Uses `Content.last_cursor` — the last cursor moved on this buffer across
     /// ALL windows, not any single view's live cursor. No-op when
@@ -75,8 +75,8 @@ impl App {
         hjkl_app::filestate::record(&canonical.to_string_lossy(), (row as u32, col as u32), hash);
     }
 
-    /// Persist slot `idx`'s undo tree to its undofile (docs/undo-architecture.md
-    /// §6). Called on the `:w`/`:wq` save-Ok path, the same seam as
+    /// Persist slot `idx`'s undo tree to its undofile. Called on the `:w`/`:wq`
+    /// save-Ok path, the same seam as
     /// [`Self::persist_slot_cursor`]: at write time the buffer IS the tree's
     /// current node, so the persisted `current` always equals the on-disk file.
     ///

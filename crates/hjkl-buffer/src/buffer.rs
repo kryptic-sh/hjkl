@@ -155,7 +155,7 @@ impl View {
         let col = pos.col.min(line_chars);
         // Single choke point for cursor moves: record the last-moved cursor on
         // the shared `Buffer` so the most-recent move across ALL views onto
-        // this document wins (docs/undo-architecture.md §6b). Cheap — no I/O.
+        // this document wins. Cheap — no I/O.
         c.last_cursor = (row, col);
         drop(c);
         self.cursor = Position::new(row, col);
@@ -543,7 +543,7 @@ impl View {
         self.content.lock().unwrap().undo.clear_all();
     }
 
-    // ── Undofile persistence (Phase 3b, docs/undo-architecture.md §6) ─────
+    // ── Undofile persistence (Phase 3b) ───────────────────────────────────
 
     /// Project this buffer's undo tree into its serializable form for the
     /// undofile, plus the current node's `seq`. Syncs the current node to the
@@ -572,8 +572,8 @@ impl View {
         }
     }
 
-    /// Install an undo tree recovered from a **swap** file (crash path,
-    /// docs/undo-architecture.md §6c), verifying it against the just-recovered
+    /// Install an undo tree recovered from a **swap** file (crash path),
+    /// verifying it against the just-recovered
     /// buffer text before committing. Unlike [`Self::install_undo_tree`] (the
     /// undofile / clean-close path, whose caller gates on a content hash), the
     /// swap tail rides an unsaved buffer, so this re-checks consistency itself.

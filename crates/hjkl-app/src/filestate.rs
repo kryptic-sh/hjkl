@@ -1,6 +1,6 @@
 //! Cross-session file-state store — a small shada/viminfo-style index that
 //! remembers the last cursor position per file so reopening a file lands you
-//! back where you were (docs/undo-architecture.md §6b).
+//! back where you were.
 //!
 //! This is deliberately **independent** of the swap file and any future
 //! undofile: it has a different validity model (best-effort, survives external
