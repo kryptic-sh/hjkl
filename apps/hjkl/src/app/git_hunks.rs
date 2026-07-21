@@ -176,7 +176,10 @@ impl App {
                 None => header,
             }
         };
-        self.hover_popup = Some(crate::hover_popup::new(content, cell));
+        self.hover_popup = Some(hjkl_hover::HoverState::new(
+            content,
+            hjkl_hover::HoverAnchor::new(cell.0, cell.1),
+        ));
     }
 
     /// `:GitStage` / gutter "Stage Hunk" — stage the unstaged hunk under the

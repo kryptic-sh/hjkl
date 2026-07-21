@@ -64,13 +64,8 @@ pub fn feed_input<H: hjkl_engine::Host>(
 
 /// Drive the vim FSM with one [`hjkl_engine::Input`].
 ///
-/// This is the Phase 6.6 entry-point that decouples callers from the engine's
+/// This is the sole entry-point that decouples callers from the engine's
 /// internal FSM. Returns `true` if the engine consumed the keystroke.
-///
-/// # Migration guide
-///
-/// Replace `editor.step_input(input)` with `hjkl_vim::dispatch_input(&mut editor, input)`.
-/// The `Editor::step_input` method is deprecated; remove it in a later release.
 ///
 /// # Phase 6.6c / 6.6d / 6.6e
 ///
@@ -83,15 +78,12 @@ pub fn feed_input<H: hjkl_engine::Host>(
 /// are hosted in `hjkl-vim::normal::step_normal`. Both are wrapped with
 /// `begin_step` / `end_step` so macro recording, viewport scrolling, and
 /// `current_mode` sync all fire correctly.
-///
-/// The deprecated `Editor::step_input_raw` shim path is retained for
-/// back-compat until Phase 6.6h.
 pub fn dispatch_input<H: hjkl_engine::Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: hjkl_engine::Input,
 ) -> bool {
-    // Search-prompt intercept: short-circuits before begin_step, matching
-    // vim::step's own search-prompt handling (which also skips begin_step).
+    // Search-prompt intercept: short-circuits before begin_step because it
+    // needs no prelude/epilogue.
     if editor.search_prompt_state().is_some() {
         return search_prompt::step_search_prompt(editor, input);
     }

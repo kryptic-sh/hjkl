@@ -13,7 +13,6 @@ mod completion;
 mod embed;
 mod headless;
 mod host;
-pub(crate) mod hover_popup;
 mod keymap_actions;
 mod keymap_translate;
 pub(crate) mod menu;
@@ -27,7 +26,6 @@ mod save;
 mod start_screen;
 mod syntax;
 mod theme;
-mod which_key;
 
 #[cfg(test)]
 pub(crate) mod test_cwd;

@@ -2,14 +2,8 @@ use crate::editor_ext::VimEditorExt;
 /// Phase 6.6c: `step_search_prompt` relocated from `hjkl-engine::vim`.
 ///
 /// This module owns the search-prompt FSM arm. It is dispatched by
-/// [`crate::dispatch_input`] *before* the deprecated `Editor::step_input`
-/// shim so callers that have migrated to `dispatch_input` get the
-/// hjkl-vim–hosted implementation.
-///
-/// The engine's `vim::step` still contains an in-engine copy of this body
-/// (reached only via the deprecated `Editor::step_input` → `vim::step`
-/// shim path). Both copies are intentionally kept in sync until Phase 6.6h
-/// removes the engine-side `step` / `step_input` entirely.
+/// [`crate::dispatch_input`] before `begin_step`, since it needs no
+/// prelude/epilogue.
 use hjkl_engine::{Host, Input, Key};
 
 /// Drive the search-prompt FSM for one keystroke.

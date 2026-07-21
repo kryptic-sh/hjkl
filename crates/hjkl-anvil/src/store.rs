@@ -106,29 +106,14 @@ pub fn data_root_in(paths: &AnvilPaths) -> PathBuf {
     paths.data_root.clone()
 }
 
-/// `<XDG_DATA_HOME>/anvil/`.
-pub fn data_root() -> Result<PathBuf, StoreError> {
-    Ok(data_root_in(&AnvilPaths::from_xdg()?))
-}
-
 /// `<paths.cache_root>/`.
 pub fn cache_root_in(paths: &AnvilPaths) -> PathBuf {
     paths.cache_root.clone()
 }
 
-/// `<XDG_CACHE_HOME>/anvil/`.
-pub fn cache_root() -> Result<PathBuf, StoreError> {
-    Ok(cache_root_in(&AnvilPaths::from_xdg()?))
-}
-
 /// `<data_root>/packages/`.
 pub fn packages_dir_in(paths: &AnvilPaths) -> PathBuf {
     paths.data_root.join("packages")
-}
-
-/// `<data_root>/packages/`.
-pub fn packages_dir() -> Result<PathBuf, StoreError> {
-    Ok(packages_dir_in(&AnvilPaths::from_xdg()?))
 }
 
 /// `<data_root>/packages/<name>/`.
@@ -150,11 +135,6 @@ pub fn rev_file_in(paths: &AnvilPaths, name: &str) -> Result<PathBuf, StoreError
     Ok(package_dir_in(paths, name)?.join(".rev"))
 }
 
-/// `<data_root>/packages/<name>/.rev`.
-pub fn rev_file(name: &str) -> Result<PathBuf, StoreError> {
-    rev_file_in(&AnvilPaths::from_xdg()?, name)
-}
-
 /// `<data_root>/checksums/`.
 ///
 /// Directory of per-tool TOFU checksum sidecars. Created on first call.
@@ -162,11 +142,6 @@ pub fn checksums_dir_in(paths: &AnvilPaths) -> Result<PathBuf, StoreError> {
     let dir = paths.data_root.join("checksums");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
-}
-
-/// `<data_root>/checksums/`.
-pub fn checksums_dir() -> Result<PathBuf, StoreError> {
-    checksums_dir_in(&AnvilPaths::from_xdg()?)
 }
 
 /// `<data_root>/bin/`.

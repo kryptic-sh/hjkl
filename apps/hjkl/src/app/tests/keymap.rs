@@ -1114,7 +1114,7 @@ fn which_key_leader_submenu_shows_direct_leader_children() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<leader>");
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1150,7 +1150,7 @@ fn which_key_leader_g_shows_git_actions() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<leader>g");
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1173,7 +1173,7 @@ fn which_key_ctrl_w_shows_window_motions() {
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
     let prefix = km_prefix(&app, "<C-w>");
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1209,7 +1209,7 @@ fn which_key_runtime_nmap_appears_in_entries() {
         .unwrap();
 
     let prefix = km_prefix(&app, "<leader>");
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1249,7 +1249,7 @@ fn which_key_app_wins_over_fsm_for_conflicting_key() {
     // the app-keymap overlay (step 2) overwrites the FSM entry (step 1).
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &[],
@@ -1276,7 +1276,7 @@ fn which_key_user_shadows_app_for_conflicting_chord() {
     app.dispatch_ex("nmap <leader>f :echo hi<CR>");
 
     let prefix = km_prefix(&app, "<leader>");
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1306,7 +1306,7 @@ fn which_key_unmap_removes_entry_from_popup() {
     app.dispatch_ex("nmap <leader>z :echo hi<CR>");
 
     let prefix = km_prefix(&app, "<leader>");
-    let before = crate::which_key::entries_for(
+    let before = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1319,7 +1319,7 @@ fn which_key_unmap_removes_entry_from_popup() {
 
     app.dispatch_ex("nunmap <leader>z");
 
-    let after = crate::which_key::entries_for(
+    let after = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &prefix,
@@ -1338,7 +1338,7 @@ fn which_key_fsm_only_key_surfaces_in_popup() {
     // path (step 1) since no app binding overrides it.
     let app = App::new(None, false, None, None).unwrap();
     let leader = app.config.editor.leader;
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &[],
@@ -1395,7 +1395,7 @@ fn which_key_sticky_root_includes_fsm_entries() {
     app.which_key_sticky = true;
     let leader = app.config.editor.leader;
 
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,
         &[], // empty prefix = root

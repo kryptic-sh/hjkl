@@ -1,9 +1,6 @@
 //! Phase 6.6d: insert-mode FSM body relocated from `hjkl-engine::vim`.
 //!
-//! Dispatched by [`crate::dispatch_input`] before the deprecated
-//! `Editor::step_input` shim. The engine keeps an in-engine duplicate
-//! body in `vim::step` (`Mode::Insert` arm) for back-compat with the
-//! deprecated shim path until Phase 6.6h.
+//! Dispatched by [`crate::dispatch_input`] for insert mode.
 use crate::editor_ext::VimEditorExt;
 use hjkl_engine::{Host, Input, Key};
 

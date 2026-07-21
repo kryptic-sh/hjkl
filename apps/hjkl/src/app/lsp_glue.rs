@@ -2702,7 +2702,10 @@ impl App {
             let (doc_row, doc_col) = origin;
             let cell =
                 crate::app::mouse::doc_to_cell(self, win_id, doc_row, doc_col).unwrap_or((0, 0));
-            self.hover_popup = Some(crate::hover_popup::new(text, cell));
+            self.hover_popup = Some(hjkl_hover::HoverState::new(
+                text,
+                hjkl_hover::HoverAnchor::new(cell.0, cell.1),
+            ));
         }
     }
 
@@ -2742,7 +2745,10 @@ impl App {
         if text.trim().is_empty() {
             return;
         }
-        self.hover_popup = Some(crate::hover_popup::new(text, timer_cell));
+        self.hover_popup = Some(hjkl_hover::HoverState::new(
+            text,
+            hjkl_hover::HoverAnchor::new(timer_cell.0, timer_cell.1),
+        ));
     }
 }
 

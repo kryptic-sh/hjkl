@@ -439,9 +439,9 @@ mod border_drag_tests {
 
         let mut app = App::new(None, false, None, None).unwrap();
 
-        app.hover_popup = Some(crate::hover_popup::new(
+        app.hover_popup = Some(hjkl_hover::HoverState::new(
             "stale content".to_string(),
-            (50, 5),
+            hjkl_hover::HoverAnchor::new(50, 5),
         ));
         app.hover_timer = Some(HoverTimer {
             cell: (50, 5),

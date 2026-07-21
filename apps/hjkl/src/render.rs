@@ -2936,7 +2936,7 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     // context keymap, which is always empty when the mode is not Normal.
     // When the explorer sidebar is focused, `ctx_keymap()` returns
     // `explorer_keymap` so the popup lists explorer-specific bindings.
-    let entries = crate::which_key::entries_for(
+    let entries = hjkl_which_key::entries_for(
         app.ctx_keymap(),
         crate::app::keymap::HjklMode::Normal,
         &pending,

@@ -212,7 +212,7 @@ pub enum LspPendingRequest {
         origin: (usize, usize),
     },
     /// Mouse-hover variant of `Hover` — result goes to the floating
-    /// [`HoverPopup`] instead of `info_popup`. Phase 5 mouse support.
+    /// [`hjkl_hover::HoverState`] instead of `info_popup`. Phase 5 mouse support.
     HoverAtMouse {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),

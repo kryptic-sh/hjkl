@@ -1703,18 +1703,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .collect()
     }
 
-    /// Look up a buffer-local lowercase mark (`'a`–`'z`). Kept as a
-    /// thin wrapper over [`Editor::mark`] for source compatibility
-    /// with pre-0.0.36 callers; new code should call
-    /// [`Editor::mark`] directly.
-    #[deprecated(
-        since = "0.0.36",
-        note = "use Editor::mark — lowercase + uppercase marks now live in a single map"
-    )]
-    pub fn buffer_mark(&self, c: char) -> Option<(usize, usize)> {
-        self.mark(c)
-    }
-
     /// Discard the most recent undo entry. Used by ex commands that
     /// pre-emptively pushed an undo state (`:s`, `:r`) but ended up
     /// matching nothing — popping prevents a no-op undo step from
@@ -1731,21 +1719,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// output is stable.
     pub fn marks(&self) -> impl Iterator<Item = (char, (usize, usize))> {
         self.buffer.marks_cloned().into_iter()
-    }
-
-    /// Read all buffer-local lowercase marks. Kept for source
-    /// compatibility with pre-0.0.36 callers (e.g. `:marks` ex
-    /// command); new code should use [`Editor::marks`] which
-    /// iterates the unified map.
-    #[deprecated(
-        since = "0.0.36",
-        note = "use Editor::marks — lowercase + uppercase marks now live in a single map"
-    )]
-    pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> {
-        self.buffer
-            .marks_cloned()
-            .into_iter()
-            .filter(|(c, _)| c.is_ascii_lowercase())
     }
 
     /// Position of the last edit (where `.` would replay). `None` if

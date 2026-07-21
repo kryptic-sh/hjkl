@@ -2,10 +2,6 @@
 //!
 //! Dispatched by [`crate::dispatch_input`] for all non-insert,
 //! non-search-prompt modes (Normal, Visual, VisualLine, VisualBlock).
-//!
-//! The engine keeps in-engine duplicate bodies (`step_normal` +
-//! `handle_normal_only`) in `vim::step` for back-compat with the deprecated
-//! `Editor::step_input` / `Editor::step_input_raw` shim path until Phase 6.6h.
 use crate::vim::{op_is_change, parse_motion};
 use hjkl_engine::{
     FsmMode, Host, Input, Key, LastChange, Motion, Operator, Pending, ScrollDir, VimMode,

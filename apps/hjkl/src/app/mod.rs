@@ -505,7 +505,7 @@ pub struct App {
     /// Floating LSP hover popup (Phase 5 mouse support).
     /// Shown after the mouse rests on a Code zone for [`HOVER_DELAY`].
     /// Dismissed by mouse move, any key press, or 8-second auto-fade.
-    pub(crate) hover_popup: Option<crate::hover_popup::HoverPopup>,
+    pub(crate) hover_popup: Option<hjkl_hover::HoverState>,
     /// "Mouse has been resting at this cell since `started_at`" tracker.
     /// Reset on any cell change; fires the LSP hover RPC after [`HOVER_DELAY`].
     pub(crate) hover_timer: Option<HoverTimer>,
@@ -2905,7 +2905,7 @@ impl App {
     /// Return the currently-pending chord buffer for Normal mode, or an empty
     /// `Vec` when no prefix is active.
     ///
-    /// The caller uses this to drive `which_key::entries_for` directly —
+    /// The caller uses this to drive `hjkl_which_key::entries_for` directly —
     /// the static `Prefix` enum is no longer needed.
     ///
     /// **Popup-mode note:** this intentionally reads only the Normal pending
