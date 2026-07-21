@@ -1,17 +1,13 @@
 # Known issues
 
-Actionable, unresolved items for `hjkl`. Two tracks:
-
-1. **Security** — from the 2026-07-18 workspace audit (17 findings; the rest are
-   fixed and shipped on `main`).
-2. **Vim parity** — real behavioral divergences from nvim found during
-   compatibility rounds.
+Actionable, unresolved items for `hjkl`. Only the **Security** track remains —
+every vim-parity divergence found during the compatibility rounds has been fixed
+and shipped on `main`.
 
 Intentional trade-offs (deliberate no-ops, safer-than-nvim choices) and
 engine-limited impossibilities are **not** listed here — only things worth
-actually fixing. Each entry gives the file, the defect, and a fix direction.
-Vim-parity items carry their GitHub issue number; the security items are not yet
-tracked as issues.
+actually fixing. Each entry gives the file, the defect, and a fix direction. The
+security items are not yet tracked as GitHub issues.
 
 ---
 
@@ -55,14 +51,3 @@ tracked as issues.
   count crashes the editor; in RPC modes this is a DoS vector.
 - **Fix:** return `Option`/`Result` and let callers handle OOB gracefully. API
   change touching many call sites.
-
----
-
-## Vim parity
-
-### V4. `:g/pat/normal {cmd}` unsupported (#283)
-
-- **Defect:** `:g/foo/normal x` returns a clean "unsupported sub-command" error;
-  nvim runs `normal x` on every matching line.
-- **Fix:** blocked on there being no general `:normal {cmd}` ex command yet.
-  Implement `:normal` first, then have `:g` replay it per matching line.
