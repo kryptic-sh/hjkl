@@ -14,8 +14,68 @@ pub struct ExpandContext<'a> {
     pub cword: Option<Cow<'a, str>>,
     /// WORD under cursor — broader vim semantic, no whitespace at all (for `<cWORD>`).
     pub cwword: Option<Cow<'a, str>>,
+    /// Filename under cursor (for `<cfile>`) — like `<cword>` but using the
+    /// filename character class ([`filename_under_cursor`]) so paths such as
+    /// `src/main.rs` expand whole.
+    pub cfile: Option<Cow<'a, str>>,
     /// cwd for resolving `:p` modifier (defaults to std::env::current_dir() if None).
     pub cwd: Option<&'a Path>,
+}
+
+/// `true` when `c` belongs to the filename character class used by `<cfile>`.
+///
+/// Mirrors vim's `isfname` intent: letters, digits, and the path-punctuation
+/// set `/ . - _ ~ $ + , #`. Kept deliberately narrow — brackets, spaces, and
+/// quotes are excluded so a `<cfile>` on `see src/main.rs here` stops at the
+/// surrounding whitespace.
+fn is_fname_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_' | '~' | '$' | '+' | ',' | '#')
+}
+
+/// vim keyword character class for `<cword>`: alphanumerics plus `_`. (vim's
+/// `iskeyword` is configurable, but the cursor-word family here uses the
+/// common default.)
+fn is_keyword_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Extract the maximal run of characters satisfying `pred` around `col` (a
+/// **char** index into `line`). Returns `None` when the cursor is past
+/// end-of-line or sits on a character that fails `pred` — matching vim, where
+/// a `<cword>`/`<cfile>` off its token yields nothing.
+fn token_around(line: &str, col: usize, pred: impl Fn(char) -> bool) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() || !pred(chars[col]) {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && pred(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col + 1;
+    while end < chars.len() && pred(chars[end]) {
+        end += 1;
+    }
+    Some(chars[start..end].iter().collect())
+}
+
+/// Maximal run of filename characters around `col` (char index). `None` off a
+/// filename char / past EOL. Hosts use this to fill [`ExpandContext::cfile`].
+pub fn filename_under_cursor(line: &str, col: usize) -> Option<String> {
+    token_around(line, col, is_fname_char)
+}
+
+/// The keyword-class word under `col` (char index), for `<cword>`. `None` when
+/// the cursor is on a non-keyword char (whitespace, punctuation) or past EOL.
+pub fn word_under_cursor(line: &str, col: usize) -> Option<String> {
+    token_around(line, col, is_keyword_char)
+}
+
+/// The whitespace-delimited WORD under `col` (char index), for `<cWORD>`: the
+/// maximal run of non-whitespace around the cursor. `None` when the cursor is
+/// on whitespace or past EOL.
+pub fn big_word_under_cursor(line: &str, col: usize) -> Option<String> {
+    token_around(line, col, |c| !c.is_whitespace())
 }
 
 /// Apply a single modifier (`:p`, `:h`, `:t`) to a path string.
@@ -74,7 +134,7 @@ fn apply_modifiers(mut value: String, modifiers: &str, cwd: Option<&Path>) -> Op
     Some(value)
 }
 
-/// Expand a single token (`%`, `#`, `<cword>`, `<cWORD>`, possibly with
+/// Expand a single token (`%`, `#`, `<cword>`, `<cWORD>`, `<cfile>`, possibly with
 /// modifier suffix `:p:h:t`) to its literal value. Returns None when the
 /// token isn't a recognized expansion form OR when the underlying source
 /// is unavailable (e.g. `%` with no current_path).
@@ -123,23 +183,35 @@ pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
         return apply_modifiers(base, mods, ctx.cwd);
     }
 
+    // Try `<cfile>` with optional `:mod` chain.
+    if token == "<cfile>" || token.starts_with("<cfile>:") {
+        let base = ctx.cfile.as_deref()?.to_string();
+        let mods = token
+            .strip_prefix("<cfile>")
+            .unwrap()
+            .strip_prefix(':')
+            .unwrap_or("");
+        return apply_modifiers(base, mods, ctx.cwd);
+    }
+
     None
 }
 
 /// Extract the expansion token starting at `s` (which must start with `%`,
-/// `#`, `<cword>`, or `<cWORD>`). Returns `(token, rest)` where `token`
+/// `#`, `<cword>`, `<cWORD>`, or `<cfile>`). Returns `(token, rest)` where `token`
 /// includes any trailing `:mod` chain consumed, and `rest` is the unconsumed
 /// tail of `s`.
 fn extract_token(s: &str) -> (&str, &str) {
     // Determine the base length.
-    let base_len = if s.starts_with("<cword>") || s.starts_with("<cWORD>") {
-        7
-    } else if s.starts_with('%') || s.starts_with('#') {
-        1
-    } else {
-        // Should not be called without a known prefix.
-        return (s, "");
-    };
+    let base_len =
+        if s.starts_with("<cword>") || s.starts_with("<cWORD>") || s.starts_with("<cfile>") {
+            7
+        } else if s.starts_with('%') || s.starts_with('#') {
+            1
+        } else {
+            // Should not be called without a known prefix.
+            return (s, "");
+        };
 
     // Consume optional `:mod` chain.
     let mut end = base_len;
@@ -162,7 +234,8 @@ fn extract_token(s: &str) -> (&str, &str) {
 }
 
 /// Walk an arg string left-to-right, replacing every `%[:mods]`, `#[:mods]`,
-/// `<cword>[:mods]`, `<cWORD>[:mods]` occurrence with its expansion. Tokens
+/// `<cword>[:mods]`, `<cWORD>[:mods]`, `<cfile>[:mods]` occurrence with its
+/// expansion. Tokens
 /// that fail to expand are LEFT IN PLACE unchanged (vim parity).
 ///
 /// Token boundaries: a `%` or `#` not preceded by a backslash is a
@@ -189,6 +262,7 @@ pub fn expand_args(ctx: &ExpandContext<'_>, args: &str) -> String {
             || bytes[i] == b'#'
             || rest.starts_with("<cword>")
             || rest.starts_with("<cWORD>")
+            || rest.starts_with("<cfile>")
         {
             let (token, after) = extract_token(rest);
             match expand_filename(ctx, token) {
@@ -257,6 +331,155 @@ mod tests {
     fn cword_none_returns_none() {
         let ctx = ExpandContext::default();
         assert_eq!(expand_filename(&ctx, "<cword>"), None);
+    }
+
+    #[test]
+    fn cfile_with_value() {
+        let ctx = ExpandContext {
+            cfile: Some(Cow::Borrowed("src/main.rs")),
+            ..Default::default()
+        };
+        assert_eq!(
+            expand_filename(&ctx, "<cfile>"),
+            Some("src/main.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn cfile_none_returns_none() {
+        let ctx = ExpandContext::default();
+        assert_eq!(expand_filename(&ctx, "<cfile>"), None);
+    }
+
+    #[test]
+    fn cfile_modifier_basename() {
+        // `<cfile>:t` should apply the `:t` modifier like any other token.
+        let ctx = ExpandContext {
+            cfile: Some(Cow::Borrowed("src/main.rs")),
+            ..Default::default()
+        };
+        assert_eq!(
+            expand_filename(&ctx, "<cfile>:t"),
+            Some("main.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn expand_args_cfile_surrounded() {
+        let ctx = ExpandContext {
+            cfile: Some(Cow::Borrowed("src/main.rs")),
+            ..Default::default()
+        };
+        assert_eq!(expand_args(&ctx, "e <cfile>!"), "e src/main.rs!");
+    }
+
+    #[test]
+    fn filename_under_cursor_on_path() {
+        // Cursor sits on the path token; expansion grabs the whole path,
+        // stopping at the surrounding spaces.
+        let line = "see src/main.rs here";
+        let col = line.find("main").unwrap();
+        assert_eq!(
+            filename_under_cursor(line, col).as_deref(),
+            Some("src/main.rs")
+        );
+    }
+
+    #[test]
+    fn filename_under_cursor_on_path_start() {
+        // Anchoring on the first char of the path still yields the full run.
+        let line = "see src/main.rs here";
+        let col = line.find("src").unwrap();
+        assert_eq!(
+            filename_under_cursor(line, col).as_deref(),
+            Some("src/main.rs")
+        );
+    }
+
+    #[test]
+    fn filename_under_cursor_plain_word() {
+        // A filename-legal plain word extracts as itself.
+        let line = "hello world";
+        let col = 0;
+        assert_eq!(filename_under_cursor(line, col).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn filename_under_cursor_on_whitespace_is_none() {
+        // Cursor on a space is not on a filename char → None (empty), like
+        // `<cword>` off a word.
+        let line = "see src/main.rs here";
+        let col = line.find(' ').unwrap();
+        assert_eq!(filename_under_cursor(line, col), None);
+    }
+
+    #[test]
+    fn filename_under_cursor_rich_char_class() {
+        // Exercise the full path punctuation set: `/`, `.`, `-`, `_`, `~`.
+        let line = "open ~/foo-bar/base_name.v2.txt now";
+        let col = line.find("base").unwrap();
+        assert_eq!(
+            filename_under_cursor(line, col).as_deref(),
+            Some("~/foo-bar/base_name.v2.txt")
+        );
+    }
+
+    #[test]
+    fn filename_under_cursor_past_eol_is_none() {
+        let line = "abc";
+        assert_eq!(filename_under_cursor(line, 3), None);
+        assert_eq!(filename_under_cursor(line, 99), None);
+    }
+
+    #[test]
+    fn word_under_cursor_on_word() {
+        let line = "let foo_bar = 1";
+        let col = line.find("foo").unwrap();
+        assert_eq!(word_under_cursor(line, col).as_deref(), Some("foo_bar"));
+    }
+
+    #[test]
+    fn word_under_cursor_stops_at_punctuation() {
+        // Keyword class excludes `.` and `/`, so `<cword>` on a path grabs only
+        // the keyword segment under the cursor (unlike `<cfile>`).
+        let line = "see src/main.rs here";
+        let col = line.find("main").unwrap();
+        assert_eq!(word_under_cursor(line, col).as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn word_under_cursor_off_word_is_none() {
+        let line = "a . b";
+        // Cursor on the `.` (non-keyword) → None.
+        let col = line.find('.').unwrap();
+        assert_eq!(word_under_cursor(line, col), None);
+        // Cursor on whitespace → None.
+        assert_eq!(word_under_cursor(line, 1), None);
+    }
+
+    #[test]
+    fn big_word_under_cursor_whitespace_delimited() {
+        // WORD is whitespace-delimited, so the whole `src/main.rs:12` token
+        // comes back, punctuation and all.
+        let line = "at src/main.rs:12 now";
+        let col = line.find("main").unwrap();
+        assert_eq!(
+            big_word_under_cursor(line, col).as_deref(),
+            Some("src/main.rs:12")
+        );
+    }
+
+    #[test]
+    fn big_word_under_cursor_on_whitespace_is_none() {
+        let line = "a bb c";
+        assert_eq!(big_word_under_cursor(line, 1), None); // the space after `a`
+        assert_eq!(big_word_under_cursor(line, 2).as_deref(), Some("bb"));
+    }
+
+    #[test]
+    fn big_word_under_cursor_past_eol_is_none() {
+        let line = "abc";
+        assert_eq!(big_word_under_cursor(line, 3), None);
     }
 
     #[test]

@@ -15,7 +15,10 @@ pub use complete::{
     range_prefix_len,
 };
 pub use effect::{ExEffect, QfCommand};
-pub use expand::{ExpandContext, expand_args, expand_filename};
+pub use expand::{
+    ExpandContext, big_word_under_cursor, expand_args, expand_filename, filename_under_cursor,
+    word_under_cursor,
+};
 pub use range::{LineRange, parse_range};
 pub use registry::{ArgKind, ExCommand, HostCmd, HostRegistry, Registry};
 

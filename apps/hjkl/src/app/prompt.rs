@@ -14,19 +14,22 @@ pub(crate) fn set_field_text(field: &mut TextFieldEditor, text: &str) {
 }
 
 /// Build an [`hjkl_ex::ExpandContext`] from app state for tab-time inline
-/// expansion. Same wiring as `build_expand_context` in ex_dispatch.rs.
-/// cword/cwword stay None (see TODO in ex_dispatch.rs).
+/// expansion. Same wiring as `build_expand_context` in ex_dispatch.rs:
+/// `<cword>`/`<cWORD>`/`<cfile>` come from the active buffer's cursor.
 fn build_inline_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
     let alt_path = app
         .prev_active
         .and_then(|i| app.slots.get(i))
         .and_then(|s| s.filename.as_deref());
 
+    let (cword, cwword, cfile) = super::ex_dispatch::cursor_word_tokens(app);
+
     hjkl_ex::ExpandContext {
         current_path: app.active().filename.as_deref(),
         alt_path,
-        cword: None,
-        cwword: None,
+        cword: cword.map(std::borrow::Cow::Owned),
+        cwword: cwword.map(std::borrow::Cow::Owned),
+        cfile: cfile.map(std::borrow::Cow::Owned),
         cwd: None,
     }
 }
@@ -375,14 +378,24 @@ impl App {
         if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
             // Tab-time inline expansion (%, #, <cword>) takes priority.
             if self.command_field.is_some() {
-                let line = self.command_field.as_ref().unwrap().text();
-                let caret = line.len();
+                let field = self.command_field.as_ref().unwrap();
+                let line = field.text();
+                // Expand at the REAL caret, not end-of-line. `cursor()` reports
+                // the column in chars; translate it to a byte offset so the
+                // token slice / splice below index correctly on multi-byte lines.
+                let (_, col) = field.cursor();
+                let caret = line
+                    .char_indices()
+                    .nth(col)
+                    .map(|(b, _)| b)
+                    .unwrap_or(line.len());
                 let token_start = find_token_start(&line, caret);
                 let token = &line[token_start..caret];
                 if token.starts_with('%')
                     || token.starts_with('#')
                     || token.starts_with("<cword>")
                     || token.starts_with("<cWORD>")
+                    || token.starts_with("<cfile>")
                 {
                     let ctx = build_inline_expand_context(self);
                     if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {

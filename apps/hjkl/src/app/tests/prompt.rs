@@ -687,3 +687,89 @@ fn colon_ctrl_n_navigates_popup_when_open() {
         assert_ne!(sel_before, sel_after, "C-n must advance selection in popup");
     }
 }
+
+#[test]
+fn tab_expands_percent_at_caret_not_eol() {
+    // `%` must expand at the REAL caret, not end-of-line. Build a command line
+    // with the caret parked in the MIDDLE (right after `%`), then Tab: the
+    // `%` under the caret expands and the trailing text is preserved.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(std::path::PathBuf::from("src/main.rs"));
+    app.open_command_prompt();
+    // Line "e % x"; caret lands at end (col 5) after typing.
+    type_str(&mut app, "e % x");
+    // Move caret left twice: col 5 → 3, i.e. onto the space right after `%`,
+    // so the token under the caret is `%` (mid-line, NOT at EOL where it'd be `x`).
+    app.handle_command_field_key(key(KeyCode::Left));
+    app.handle_command_field_key(key(KeyCode::Left));
+    assert_eq!(
+        app.command_field.as_ref().unwrap().cursor().1,
+        3,
+        "caret must be parked mid-line before Tab"
+    );
+    app.handle_command_field_key(key(KeyCode::Tab));
+    // `%` spliced at the caret; the trailing " x" is preserved verbatim.
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "e src/main.rs x",
+        "mid-line % must expand at the caret, leaving the tail intact"
+    );
+}
+
+#[test]
+fn tab_expands_cfile_from_buffer_cursor() {
+    // End-to-end: `<cfile>` on the command line expands to the path under the
+    // ACTIVE BUFFER's cursor (not the command line's caret).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let content = "see src/main.rs here";
+    seed_buffer(&mut app, content);
+    // Park the buffer cursor on the path (char col == byte col; line is ASCII).
+    let col = content.find("main").unwrap();
+    app.active_editor_mut().jump_cursor(0, col);
+    app.open_command_prompt();
+    type_str(&mut app, "e <cfile>");
+    app.handle_command_field_key(key(KeyCode::Tab));
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "e src/main.rs",
+        "<cfile> must expand to the filename under the buffer cursor"
+    );
+}
+
+#[test]
+fn tab_expands_cword_from_buffer_cursor() {
+    // End-to-end: `<cword>` expands to the keyword-class word under the buffer
+    // cursor — stopping at punctuation (here the path's `/` and `.`).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let content = "let foo_bar = 1";
+    seed_buffer(&mut app, content);
+    let col = content.find("foo").unwrap();
+    app.active_editor_mut().jump_cursor(0, col);
+    app.open_command_prompt();
+    type_str(&mut app, "e <cword>");
+    app.handle_command_field_key(key(KeyCode::Tab));
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "e foo_bar",
+        "<cword> must expand to the word under the buffer cursor"
+    );
+}
+
+#[test]
+fn tab_cfile_on_whitespace_leaves_token() {
+    // Cursor on whitespace → `<cfile>` yields nothing, so the token is left in
+    // place unchanged (vim parity).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let content = "word   other";
+    seed_buffer(&mut app, content);
+    // Column 5 sits in the run of spaces.
+    app.active_editor_mut().jump_cursor(0, 5);
+    app.open_command_prompt();
+    type_str(&mut app, "e <cfile>");
+    app.handle_command_field_key(key(KeyCode::Tab));
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "e <cfile>",
+        "off-token <cfile> must be left in place"
+    );
+}

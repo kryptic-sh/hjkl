@@ -3021,25 +3021,41 @@ fn sev_label(s: super::DiagSeverity) -> &'static str {
     }
 }
 
+/// Extract the `<cword>` / `<cWORD>` / `<cfile>` tokens under the active
+/// buffer's cursor as owned strings. Each is `None` when the cursor sits on
+/// whitespace (or off the relevant char class), matching vim's empty
+/// expansion. The cursor column is a **char** index; the primitives index the
+/// line string by chars, so no byte/char conversion is needed here.
+pub(crate) fn cursor_word_tokens(app: &App) -> (Option<String>, Option<String>, Option<String>) {
+    let (row, col) = app.active_editor().cursor();
+    let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), row);
+    (
+        hjkl_ex::word_under_cursor(&line, col),
+        hjkl_ex::big_word_under_cursor(&line, col),
+        hjkl_ex::filename_under_cursor(&line, col),
+    )
+}
+
 /// Build an [`hjkl_ex::ExpandContext`] from current app state for Phase 7
-/// filename expansion (`%`, `#`, `<cword>`, `<cWORD>`).
+/// filename expansion (`%`, `#`, `<cword>`, `<cWORD>`, `<cfile>`).
 ///
-/// `cword` / `cwword` are wired to `None` for now — the engine API for
-/// word-under-cursor is not trivially accessible without a borrow chain
-/// that conflicts with the `&mut App` call sites.
-/// TODO(phase7): wire cword/cwword once `Editor::word_under_cursor()` is
-/// stable in hjkl-engine.
+/// `cword` / `cwword` / `cfile` are sourced from the active buffer's cursor
+/// via [`cursor_word_tokens`] (owned strings, so they don't extend any borrow
+/// of `app`).
 fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
     let alt_path = app
         .prev_active
         .and_then(|i| app.slots.get(i))
         .and_then(|s| s.filename.as_deref());
 
+    let (cword, cwword, cfile) = cursor_word_tokens(app);
+
     hjkl_ex::ExpandContext {
         current_path: app.active().filename.as_deref(),
         alt_path,
-        cword: None,
-        cwword: None,
+        cword: cword.map(std::borrow::Cow::Owned),
+        cwword: cwword.map(std::borrow::Cow::Owned),
+        cfile: cfile.map(std::borrow::Cow::Owned),
         cwd: None,
     }
 }
