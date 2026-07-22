@@ -56,6 +56,7 @@ fn map_ex_kind(kind: hjkl_ex::CompletionKind) -> CompletionKind {
         hjkl_ex::CompletionKind::View => CompletionKind::Variable,
         hjkl_ex::CompletionKind::Register => CompletionKind::Other,
         hjkl_ex::CompletionKind::Mark => CompletionKind::Other,
+        hjkl_ex::CompletionKind::Colorscheme => CompletionKind::Variable,
         hjkl_ex::CompletionKind::None => CompletionKind::Other,
     }
 }
@@ -67,6 +68,7 @@ type ArgSourcesData = (
     Vec<String>,                // buffers
     Vec<String>,                // registers
     Vec<String>,                // marks
+    Vec<String>,                // colorschemes
 );
 
 /// Build the arg sources (cwd / settings / buffers / registers / marks) for
@@ -112,7 +114,11 @@ fn build_arg_sources_data(app: &App) -> ArgSourcesData {
         .marks()
         .map(|(c, _)| c.to_string())
         .collect();
-    (cwd, settings, buffers, registers, marks)
+    let colorschemes: Vec<String> = crate::theme::bundled_theme_names()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    (cwd, settings, buffers, registers, marks, colorschemes)
 }
 
 impl App {
@@ -220,13 +226,14 @@ impl App {
         }
 
         // Fall back to arg-position completion.
-        let (cwd, settings, buffers, registers, marks) = build_arg_sources_data(self);
+        let (cwd, settings, buffers, registers, marks, colorschemes) = build_arg_sources_data(self);
         let sources = hjkl_ex::ArgSources {
             cwd: cwd.as_deref(),
             settings: &settings,
             buffers: &buffers,
             registers: &registers,
             marks: &marks,
+            colorschemes: &colorschemes,
         };
         let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources);
         if comp.kind == hjkl_ex::CompletionKind::None || comp.candidates.is_empty() {

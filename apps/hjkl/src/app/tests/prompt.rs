@@ -334,6 +334,63 @@ fn colon_popup_items_have_docs() {
 }
 
 #[test]
+fn colon_colo_completes_to_colorscheme_command() {
+    // `:colo<Tab>`-style: typing "colo" must surface the registered
+    // `colorscheme` command as a candidate now that it lives in the host
+    // registry.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "colo");
+    let popup = app
+        .completion
+        .as_ref()
+        .expect("popup must be open for 'colo'");
+    assert!(
+        popup.all_items.iter().any(|i| i.label == "colorscheme"),
+        "typing 'colo' must offer the 'colorscheme' command candidate"
+    );
+}
+
+#[test]
+fn colon_colorscheme_arg_completes_theme_names() {
+    // `:colorscheme tok` must complete to `tokyonight` (theme-name arg
+    // completion driven by ArgSources.colorschemes).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "colorscheme tok");
+    let popup = app
+        .completion
+        .as_ref()
+        .expect("popup must be open for 'colorscheme tok'");
+    assert!(
+        popup.all_items.iter().any(|i| i.label == "tokyonight"),
+        "'colorscheme tok' must complete to 'tokyonight'"
+    );
+    assert!(
+        popup.all_items.iter().all(|i| i.label.starts_with("tok")),
+        "arg candidates must all match the typed prefix"
+    );
+}
+
+#[test]
+fn colon_colorscheme_arg_completes_all_bundled_names() {
+    // `:colorscheme ` (empty arg prefix) must offer every bundled scheme.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "colorscheme ");
+    let popup = app
+        .completion
+        .as_ref()
+        .expect("popup must be open for 'colorscheme '");
+    for name in crate::theme::bundled_theme_names() {
+        assert!(
+            popup.all_items.iter().any(|i| i.label == name),
+            "'colorscheme ' must offer bundled scheme {name:?}"
+        );
+    }
+}
+
+#[test]
 fn colon_tab_navigates_popup_forward() {
     // "w" opens popup; Tab moves selection forward.
     let mut app = App::new(None, false, None, None).unwrap();

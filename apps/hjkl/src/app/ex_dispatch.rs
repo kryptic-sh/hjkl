@@ -232,35 +232,9 @@ impl App {
             }
         }
 
-        // `:colorscheme [name]` / `:colo` — vim alias for switching the active
-        // theme. Any registered scheme (`theme::bundled_theme_names()`:
-        // tokyonight/dark/light) is accepted; unknown names → E185. Bare or `?`
-        // reports current.
-        {
-            let mut parts = cmd.split_whitespace();
-            if let Some(kw) = parts.next()
-                && matches!(kw, "colorscheme" | "colorsc" | "colors" | "color" | "colo")
-            {
-                let arg = parts.next().unwrap_or("").trim();
-                match arg {
-                    "" | "?" => {
-                        let cur = self.colorscheme.clone();
-                        self.bus.info(format!("colorscheme {cur}"));
-                    }
-                    name if crate::theme::load_named(name).is_some() => {
-                        self.apply_colorscheme(name);
-                        self.bus.info(format!("colorscheme {name}"));
-                    }
-                    other => {
-                        let avail = crate::theme::bundled_theme_names().join(", ");
-                        self.bus.error(format!(
-                            "E185: cannot find colorscheme '{other}' (available: {avail})"
-                        ));
-                    }
-                }
-                return;
-            }
-        }
+        // `:colorscheme [name]` / `:colo` — migrated to the host registry
+        // (ex_host_cmds.rs `ColorschemeCmd`). `:set background=` above still
+        // calls `apply_colorscheme` directly.
 
         // `:picker` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
         // `:rg [pattern]` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).

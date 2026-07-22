@@ -13,6 +13,7 @@ pub enum CompletionKind {
     View,
     Register,
     Mark,
+    Colorscheme,
 }
 
 /// Sources for arg completion. Caller fills the slots applicable to
@@ -29,6 +30,8 @@ pub struct ArgSources<'a> {
     pub registers: &'a [String],
     /// Live mark names for `:marks`/`:delmarks`. Empty disables.
     pub marks: &'a [String],
+    /// Bundled colorscheme names for `:colorscheme <Tab>`. Empty disables.
+    pub colorschemes: &'a [String],
 }
 
 /// Completion candidates for an input line at a given caret offset.
@@ -237,6 +240,7 @@ pub fn arg_kind_usage(kind: ArgKind) -> &'static str {
         ArgKind::Setting => "<setting>",
         ArgKind::Register => "<register>",
         ArgKind::Mark => "<mark>",
+        ArgKind::Colorscheme => "<colorscheme>",
         ArgKind::Raw => "<args>",
     }
 }
@@ -389,6 +393,17 @@ pub fn complete_arg(
             c.sort();
             c.dedup();
             (c, CompletionKind::Mark)
+        }
+        ArgKind::Colorscheme => {
+            let mut c: Vec<String> = sources
+                .colorschemes
+                .iter()
+                .filter(|s| s.starts_with(prefix))
+                .cloned()
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Colorscheme)
         }
     };
 
@@ -710,7 +725,27 @@ mod tests {
         assert_eq!(arg_kind_usage(ArgKind::Setting), "<setting>");
         assert_eq!(arg_kind_usage(ArgKind::Register), "<register>");
         assert_eq!(arg_kind_usage(ArgKind::Mark), "<mark>");
+        assert_eq!(arg_kind_usage(ArgKind::Colorscheme), "<colorscheme>");
         assert_eq!(arg_kind_usage(ArgKind::Raw), "<args>");
+    }
+
+    #[test]
+    fn complete_colorscheme_filters() {
+        let schemes = str_vec(&["dark", "light", "tokyonight", "gruvbox", "nord"]);
+        let sources = ArgSources {
+            colorschemes: &schemes,
+            ..Default::default()
+        };
+        // Empty prefix → all bundled names.
+        let result = complete_arg("colorscheme ", 12, ArgKind::Colorscheme, &sources);
+        assert_eq!(result.kind, CompletionKind::Colorscheme);
+        assert!(result.candidates.contains(&"dark".to_string()));
+        assert!(result.candidates.contains(&"tokyonight".to_string()));
+        assert_eq!(result.candidates.len(), 5);
+
+        // Prefix "tok" → only tokyonight.
+        let result2 = complete_arg("colorscheme tok", 15, ArgKind::Colorscheme, &sources);
+        assert_eq!(result2.candidates, vec!["tokyonight".to_string()]);
     }
 
     #[test]

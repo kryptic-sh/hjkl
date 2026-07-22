@@ -10,6 +10,7 @@ pub enum ArgKind {
     Setting,
     Register,
     Mark,
+    Colorscheme,
     Raw,
 }
 

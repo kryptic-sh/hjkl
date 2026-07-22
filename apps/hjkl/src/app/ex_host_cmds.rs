@@ -1485,6 +1485,50 @@ impl HostCmd<App> for SyntaxCmd {
     }
 }
 
+/// `:colorscheme [name]` / `:colo` — switch the active theme (UI chrome +
+/// syntax). Any registered scheme (`theme::bundled_theme_names()`:
+/// dark/light/tokyonight/catppuccin/gruvbox/nord/dracula/onedark) is accepted;
+/// unknown names → `E185`. Bare `:colorscheme` (or `?`) reports the current
+/// scheme.
+pub(crate) struct ColorschemeCmd;
+
+impl HostCmd<App> for ColorschemeCmd {
+    fn name(&self) -> &'static str {
+        "colorscheme"
+    }
+
+    /// Vim accepts `:colo` (4 chars) as the minimum abbreviation; matching that
+    /// covers `:colo`/`:color`/`:colors`/`:colorsc` without explicit aliases.
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Colorscheme
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let arg = args.split_whitespace().next().unwrap_or("");
+        match arg {
+            "" | "?" => {
+                let cur = app.colorscheme.clone();
+                app.bus.info(format!("colorscheme {cur}"));
+            }
+            name if crate::theme::load_named(name).is_some() => {
+                app.apply_colorscheme(name);
+                app.bus.info(format!("colorscheme {name}"));
+            }
+            other => {
+                let avail = crate::theme::bundled_theme_names().join(", ");
+                app.bus.error(format!(
+                    "E185: cannot find colorscheme '{other}' (available: {avail})"
+                ));
+            }
+        }
+        Some(ExEffect::Ok)
+    }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────────
 
 fn build_registry() -> hjkl_ex::HostRegistry<App> {
@@ -1543,6 +1587,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(AnvilCmd));
     reg.add(Box::new(NotificationsCmd));
     reg.add(Box::new(SyntaxCmd));
+    reg.add(Box::new(ColorschemeCmd));
     reg
 }
 
