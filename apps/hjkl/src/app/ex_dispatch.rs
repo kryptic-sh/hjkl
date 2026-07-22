@@ -46,6 +46,68 @@ fn trimmed_trailing_whitespace(slot: &super::BufferSlot) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// Supplemental ex-command NAMES for the `:` completion popup (issue #307).
+///
+/// These commands EXECUTE via bespoke intercepts and are NOT in either ex
+/// registry, so command-name completion never surfaces them. We inject them as
+/// completion-only candidates (they resolve to `ArgKind::None` — no typed-arg
+/// completion here, which is fine).
+///
+/// KEEP IN SYNC with the two dispatch sites that own these names:
+///   - the `:map`-family verbs accepted by `keymap::parse_mode_groups`
+///     (executed in `mappings_dispatch.rs::try_handle_runtime_map`), and
+///   - the app-intercepted command names matched directly in `dispatch_ex`
+///     below (`:b#`, `:debug`) that no registry knows about.
+///
+/// Names that ARE registered (`:set`, `:write`, `:wall`, `:qall`, `:wqall`, …)
+/// are intentionally excluded — completion already lists them. `:set mouse`
+/// is an arg-level intercept of the registered `:set` command, not a distinct
+/// command name, so it contributes nothing here.
+pub(crate) fn extra_ex_command_names() -> Vec<String> {
+    [
+        // ── `:map` family — see keymap::parse_mode_groups ──
+        "map",
+        "noremap",
+        "nm", //
+        "nmap",
+        "nnoremap",
+        "nunmap",
+        "nmapclear", //
+        "vmap",
+        "vnoremap",
+        "vunmap",
+        "vmapclear", //
+        "xmap",
+        "xnoremap",
+        "xunmap",
+        "xmapclear", //
+        "imap",
+        "inoremap",
+        "iunmap",
+        "imapclear", //
+        "omap",
+        "onoremap",
+        "ounmap",
+        "omapclear", //
+        "cmap",
+        "cnoremap",
+        "cunmap",
+        "cmapclear", //
+        "tmap",
+        "tnoremap",
+        "tunmap",
+        "tmapclear", //
+        "unmap",
+        "mapclear", //
+        // ── app-intercepted, unregistered — see dispatch_ex match arm ──
+        "b#",
+        "debug",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {

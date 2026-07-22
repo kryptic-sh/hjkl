@@ -392,11 +392,18 @@ pub struct CommandCandidate {
 /// command name) it returns an EMPTY vec with the arg-token replace_range — arg
 /// candidates have no command metadata, so callers use plain `complete()` for
 /// those. Use this for command-name docs; fall back to `complete()` for args.
+///
+/// `extra_names` supplies supplemental command NAMES the caller wants listed as
+/// candidates even though they live in neither registry — e.g. app-intercepted
+/// commands (`:map` family, `:debug`, `:b#`). They are merged with the
+/// registry-derived names (sorted + deduped) and resolve to [`ArgKind::None`]
+/// (no typed-arg completion), since no registry knows their arg kind.
 pub fn complete_command_meta<H, Ctx>(
     line: &str,
     caret: usize,
     editor_reg: &Registry<H>,
     host_reg: &HostRegistry<Ctx>,
+    extra_names: &[String],
 ) -> (std::ops::Range<usize>, Vec<CommandCandidate>)
 where
     H: hjkl_engine::Host,
@@ -415,6 +422,7 @@ where
     // Gather all candidate names, same as the command-name path in complete().
     let mut names = collect_host_registry_names(host_reg);
     names.extend(collect_registry_names(editor_reg));
+    names.extend(extra_names.iter().cloned());
     names.sort();
     names.dedup();
     // Filter to those that start with the typed prefix.
@@ -590,12 +598,16 @@ pub fn complete_arg(
 ///
 /// Falls back to Phase 5a's command completer when caret is in command-name
 /// position.
+///
+/// `extra_names` — supplemental command NAMES (see [`complete_command_meta`])
+/// merged into the command-name candidate set. Pass `&[]` when not needed.
 pub fn complete<H, Ctx>(
     line: &str,
     caret: usize,
     editor_reg: &Registry<H>,
     host_reg: &HostRegistry<Ctx>,
     sources: &ArgSources<'_>,
+    extra_names: &[String],
 ) -> Completions
 where
     H: hjkl_engine::Host,
@@ -610,6 +622,7 @@ where
         // Command-name completion path (on the sub-line past the range).
         let mut names = collect_host_registry_names(host_reg);
         names.extend(collect_registry_names(editor_reg));
+        names.extend(extra_names.iter().cloned());
         names.sort();
         names.dedup();
         let mut result = complete_command_from_names(sub, caret - range_len, &names);
@@ -1038,7 +1051,7 @@ mod tests {
         let sources = ArgSources::default();
 
         // caret=1, line="e" → command position
-        let result = complete("e", 1, &reg, &host_reg, &sources);
+        let result = complete("e", 1, &reg, &host_reg, &sources, &[]);
         assert_eq!(result.kind, CompletionKind::Command);
     }
 
@@ -1052,7 +1065,7 @@ mod tests {
         let sources = ArgSources::default();
 
         // "xxx " with unknown command → kind=None
-        let result = complete("xxx ", 4, &reg, &host_reg, &sources);
+        let result = complete("xxx ", 4, &reg, &host_reg, &sources, &[]);
         assert_eq!(result.kind, CompletionKind::None);
         assert!(result.candidates.is_empty());
     }
@@ -1121,7 +1134,7 @@ mod tests {
         let host_reg = HostRegistry::<()>::new();
 
         // "e" at caret=1 → command position; matches both "e" (alias) and "edit"
-        let (range, candidates) = complete_command_meta("e", 1, &reg, &host_reg);
+        let (range, candidates) = complete_command_meta("e", 1, &reg, &host_reg, &[]);
         assert_eq!(range, 0..1);
 
         let edit_cand = candidates.iter().find(|c| c.name == "edit");
@@ -1135,7 +1148,7 @@ mod tests {
         assert_eq!(edit_cand.usage, "<path>");
 
         // "quit" doesn't start with "e", but verify a None-arg command via full match
-        let (_, all_candidates) = complete_command_meta("quit", 4, &reg, &host_reg);
+        let (_, all_candidates) = complete_command_meta("quit", 4, &reg, &host_reg, &[]);
         let quit_cand = all_candidates.iter().find(|c| c.name == "quit");
         assert!(
             quit_cand.is_some(),
@@ -1171,7 +1184,7 @@ mod tests {
         let host_reg = HostRegistry::<()>::new();
 
         // "edit " with caret=5 → arg position (past the command name + space)
-        let (_, candidates) = complete_command_meta("edit ", 5, &reg, &host_reg);
+        let (_, candidates) = complete_command_meta("edit ", 5, &reg, &host_reg, &[]);
         assert!(
             candidates.is_empty(),
             "expected empty candidates for arg position, got: {candidates:?}"
@@ -1327,20 +1340,20 @@ mod tests {
         let sources = ArgSources::default();
 
         // `%sor` → completes `sort`, replace range starts AFTER the `%`.
-        let r = complete("%sor", 4, &reg, &host_reg, &sources);
+        let r = complete("%sor", 4, &reg, &host_reg, &sources, &[]);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 1..4);
         assert!(r.candidates.contains(&"sort".to_string()));
 
         // `2d` → completes delete/d, replace range starts AFTER the `2`.
-        let r = complete("2d", 2, &reg, &host_reg, &sources);
+        let r = complete("2d", 2, &reg, &host_reg, &sources, &[]);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 1..2);
         assert!(r.candidates.contains(&"delete".to_string()));
         assert!(r.candidates.contains(&"d".to_string()));
 
         // `'a,'bmov` → completes `move`, replace range starts after the range.
-        let r = complete("'a,'bmov", 8, &reg, &host_reg, &sources);
+        let r = complete("'a,'bmov", 8, &reg, &host_reg, &sources, &[]);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 5..8);
         assert!(r.candidates.contains(&"move".to_string()));
@@ -1351,9 +1364,63 @@ mod tests {
         let reg = range_test_registry();
         let host_reg = HostRegistry::<()>::new();
 
-        let (range, cands) = complete_command_meta("%sor", 4, &reg, &host_reg);
+        let (range, cands) = complete_command_meta("%sor", 4, &reg, &host_reg, &[]);
         assert_eq!(range, 1..4);
         assert!(cands.iter().any(|c| c.name == "sort"));
+    }
+
+    // ── extra_names supplemental completion (issue #307) ──────────────────────
+
+    #[test]
+    fn complete_command_meta_includes_extra_names() {
+        use crate::Registry;
+        use hjkl_engine::DefaultHost;
+
+        // No registry commands — every candidate must come from extra_names.
+        let reg = Registry::<DefaultHost>::new();
+        let host_reg = HostRegistry::<()>::new();
+        let extra = str_vec(&["map", "noremap", "nmap", "unmap", "debug", "b#"]);
+
+        // `:map` → the `map`-family verb is offered as a candidate.
+        let (range, cands) = complete_command_meta("map", 3, &reg, &host_reg, &extra);
+        assert_eq!(range, 0..3);
+        let map_cand = cands.iter().find(|c| c.name == "map");
+        assert!(map_cand.is_some(), "expected 'map' in {cands:?}");
+        // Extra names carry no typed-arg metadata → ArgKind::None.
+        let map_cand = map_cand.unwrap();
+        assert_eq!(map_cand.arg_kind, ArgKind::None);
+        assert!(!map_cand.takes_arg);
+        assert_eq!(map_cand.usage, "");
+
+        // `:nore` → the `noremap` family verb.
+        let (_, cands) = complete_command_meta("nore", 4, &reg, &host_reg, &extra);
+        assert!(cands.iter().any(|c| c.name == "noremap"));
+        assert!(cands.iter().all(|c| c.name.starts_with("nore")));
+
+        // `:debug` → the app-intercepted `debug` command.
+        let (_, cands) = complete_command_meta("debug", 5, &reg, &host_reg, &extra);
+        assert!(cands.iter().any(|c| c.name == "debug"));
+    }
+
+    #[test]
+    fn complete_command_meta_empty_extra_names_unchanged() {
+        // Registry-derived completion must be identical whether extra_names is
+        // empty or contains names that don't match the typed prefix.
+        let reg = range_test_registry(); // sort / delete / move
+        let host_reg = HostRegistry::<()>::new();
+
+        // `:map` matches no registry command, and with `&[]` no extra name is
+        // injected → no candidates at all.
+        let (_, cands) = complete_command_meta("map", 3, &reg, &host_reg, &[]);
+        assert!(
+            cands.iter().all(|c| c.name != "map"),
+            "extra names must not leak in with empty extra_names: {cands:?}"
+        );
+
+        // `:m` completion is the same as before this change (move / m).
+        let (_, cands) = complete_command_meta("m", 1, &reg, &host_reg, &[]);
+        assert!(cands.iter().any(|c| c.name == "move"));
+        assert!(cands.iter().any(|c| c.name == "m"));
     }
 
     // ── :put → Register completion (issue #305) ───────────────────────────────
@@ -1387,13 +1454,13 @@ mod tests {
         };
 
         // `:put ` → all register selectors.
-        let r = complete("put ", 4, &reg, &host_reg, &sources);
+        let r = complete("put ", 4, &reg, &host_reg, &sources, &[]);
         assert_eq!(r.kind, CompletionKind::Register);
         assert!(r.candidates.contains(&"\"a".to_string()));
         assert!(r.candidates.contains(&"\"b".to_string()));
 
         // `:put "a` → filters to `"a`.
-        let r2 = complete("put \"a", 6, &reg, &host_reg, &sources);
+        let r2 = complete("put \"a", 6, &reg, &host_reg, &sources, &[]);
         assert_eq!(r2.kind, CompletionKind::Register);
         assert!(r2.candidates.contains(&"\"a".to_string()));
         assert!(!r2.candidates.contains(&"\"b".to_string()));

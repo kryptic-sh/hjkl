@@ -352,6 +352,41 @@ fn colon_colo_completes_to_colorscheme_command() {
 }
 
 #[test]
+fn colon_map_completes_to_map_family_command() {
+    // Issue #307: `:map` executes via a bespoke intercept (it lives in neither
+    // ex registry), so command-name completion must inject it as a supplemental
+    // candidate. Typing "map" must surface map-family verbs like `noremap`.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "map");
+    let popup = app
+        .completion
+        .as_ref()
+        .expect("popup must be open for 'map'");
+    assert!(
+        popup.all_items.iter().any(|i| i.label == "map"),
+        "typing 'map' must offer the 'map' command candidate"
+    );
+}
+
+#[test]
+fn colon_debug_completes_to_debug_command() {
+    // Issue #307: `:debug` is an app-intercepted, unregistered command; it must
+    // still appear as a completion candidate.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "deb");
+    let popup = app
+        .completion
+        .as_ref()
+        .expect("popup must be open for 'deb'");
+    assert!(
+        popup.all_items.iter().any(|i| i.label == "debug"),
+        "typing 'deb' must offer the 'debug' command candidate"
+    );
+}
+
+#[test]
 fn colon_colorscheme_arg_completes_theme_names() {
     // `:colorscheme tok` must complete to `tokyonight` (theme-name arg
     // completion driven by ArgSources.colorschemes).

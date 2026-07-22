@@ -185,9 +185,13 @@ impl App {
 
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
+        // Supplemental command names for app-intercepted commands that live in
+        // neither registry (`:map` family, `:debug`, `:b#`) — see issue #307.
+        let extra_names = super::ex_dispatch::extra_ex_command_names();
 
         // Try command-name position first.
-        let (range, metas) = hjkl_ex::complete_command_meta(&line, caret, &editor_reg, host_reg);
+        let (range, metas) =
+            hjkl_ex::complete_command_meta(&line, caret, &editor_reg, host_reg, &extra_names);
 
         if !metas.is_empty() {
             // Don't surface the popup on a bare `:` (no command name typed yet):
@@ -236,7 +240,7 @@ impl App {
             marks: &marks,
             colorschemes: &colorschemes,
         };
-        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources);
+        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources, &extra_names);
         if comp.kind == hjkl_ex::CompletionKind::None || comp.candidates.is_empty() {
             self.completion = None;
             self.command_completion_range = None;
