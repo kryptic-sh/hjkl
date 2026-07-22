@@ -485,11 +485,15 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             .collect();
         let prefetch_base = top_row;
         let prefetch_end_idx = prefetch_end;
-        let line_at = |row: usize| -> String {
+        // Borrow the prefetched string for rows inside the fetched window;
+        // only rows outside it (closed folds can advance `doc_row` past the
+        // precomputed bound) pay for a fresh owned fetch. Avoids a String
+        // clone per visible row across the main + EOL-hint + indent passes.
+        let line_at = |row: usize| -> std::borrow::Cow<'_, str> {
             if row >= prefetch_base && row < prefetch_end_idx {
-                lines_prefetch[row - prefetch_base].clone()
+                std::borrow::Cow::Borrowed(lines_prefetch[row - prefetch_base].as_str())
             } else {
-                hjkl_buffer::rope_line_str(&rope, row)
+                std::borrow::Cow::Owned(hjkl_buffer::rope_line_str(&rope, row))
             }
         };
 
@@ -557,7 +561,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 .find(|f| f.closed && f.start_row == doc_row)
                 .copied();
             let line_owned = line_at(doc_row);
-            let line: &str = line_owned.as_str();
+            let line: &str = &line_owned;
             let row_spans = spans.get(doc_row).map(Vec::as_slice).unwrap_or(&[]);
             let sel_range = self.selection.and_then(|s| s.row_span(doc_row));
             let is_cursor_row = doc_row == cursor_line_row;
@@ -822,7 +826,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     continue;
                 }
                 let line_owned = line_at(ig_doc_row);
-                let line: &str = line_owned.as_str();
+                let line: &str = &line_owned;
                 // Compute leading visual column count: walk until non-whitespace.
                 let mut leading_vcols: usize = 0;
                 for ch in line.chars() {
@@ -1065,14 +1069,30 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let Some(re) = self.search_pattern else {
             return Vec::new();
         };
-        hjkl_buffer::search_match_ranges(re, line)
-            .into_iter()
-            .map(|(s, e)| {
-                let start = line[..s].chars().count();
-                let end = line[..e].chars().count();
-                (start, end)
-            })
-            .collect()
+        let matches = hjkl_buffer::search_match_ranges(re, line);
+        // Matches arrive byte-ascending and non-overlapping (`find_iter`), so a
+        // single forward walk of `char_indices()` converts every boundary — the
+        // cursor only ever moves right. `col` counts chars whose byte offset is
+        // `< target`, i.e. `line[..target].chars().count()`, so a boundary that
+        // lands exactly on a char start (or at EOL, where the iterator is
+        // exhausted and `col` is the total char count) resolves identically to
+        // the old per-match `line[..b].chars().count()` walk.
+        let mut ranges = Vec::with_capacity(matches.len());
+        let mut chars = line.char_indices().peekable();
+        let mut col = 0usize;
+        for (s, e) in matches {
+            while chars.peek().is_some_and(|&(b, _)| b < s) {
+                chars.next();
+                col += 1;
+            }
+            let start = col;
+            while chars.peek().is_some_and(|&(b, _)| b < e) {
+                chars.next();
+                col += 1;
+            }
+            ranges.push((start, col));
+        }
+        ranges
     }
 
     fn paint_signs(
@@ -1298,6 +1318,9 @@ impl<R: StyleResolver> BufferView<'_, R> {
 
         let mut byte_offset: usize = 0;
         let mut line_col: usize = 0;
+        // Reused across every cell in this row so `resolve_span_style` refills
+        // and sorts the SAME allocation instead of allocating a Vec per cell.
+        let mut span_scratch: Vec<&hjkl_buffer::Span> = Vec::new();
         let mut chars_iter = line.chars().enumerate().peekable();
         while let Some((col_idx, ch)) = chars_iter.next() {
             let ch_byte_len = ch.len_utf8();
@@ -1315,7 +1338,9 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     } else {
                         self.background
                     };
-                    if let Some(span_style) = self.resolve_span_style(row_spans, byte_offset) {
+                    if let Some(span_style) =
+                        self.resolve_span_style(row_spans, byte_offset, &mut span_scratch)
+                    {
                         style = style.patch(span_style);
                     }
                     for rch in conc.replacement.chars() {
@@ -1372,7 +1397,9 @@ impl<R: StyleResolver> BufferView<'_, R> {
             } else {
                 self.background
             };
-            if let Some(span_style) = self.resolve_span_style(row_spans, byte_offset) {
+            if let Some(span_style) =
+                self.resolve_span_style(row_spans, byte_offset, &mut span_scratch)
+            {
                 style = style.patch(span_style);
             }
             // Search bg first, then selection bg — so when a visual
@@ -1539,22 +1566,33 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// Hosts that want the old behaviour can ensure their narrower spans
     /// set every field explicitly — `Style::patch` only carries broader
     /// fields through `None` slots.
-    fn resolve_span_style(
+    ///
+    /// `scratch` is a caller-owned reusable buffer (hoisted out of the
+    /// per-cell paint loop): it is `clear()`ed, refilled with the overlapping
+    /// spans, and sorted in place each call so no per-cell heap allocation
+    /// happens. The filter predicate, the sort key (`Reverse` span width, a
+    /// stable sort preserving `row_spans` order among equal widths), and the
+    /// resulting layered style are identical to the old
+    /// collect-into-fresh-Vec form.
+    fn resolve_span_style<'s>(
         &self,
-        row_spans: &[hjkl_buffer::Span],
+        row_spans: &'s [hjkl_buffer::Span],
         byte_offset: usize,
+        scratch: &mut Vec<&'s hjkl_buffer::Span>,
     ) -> Option<Style> {
         // Collect every span containing this byte, sorted broadest first.
-        let mut overlapping: Vec<&hjkl_buffer::Span> = row_spans
-            .iter()
-            .filter(|s| byte_offset >= s.start_byte && byte_offset < s.end_byte)
-            .collect();
-        if overlapping.is_empty() {
+        scratch.clear();
+        scratch.extend(
+            row_spans
+                .iter()
+                .filter(|s| byte_offset >= s.start_byte && byte_offset < s.end_byte),
+        );
+        if scratch.is_empty() {
             return None;
         }
-        overlapping.sort_by_key(|s| std::cmp::Reverse(s.end_byte.saturating_sub(s.start_byte)));
-        let mut style = self.resolver.resolve(overlapping[0].style);
-        for s in &overlapping[1..] {
+        scratch.sort_by_key(|s| std::cmp::Reverse(s.end_byte.saturating_sub(s.start_byte)));
+        let mut style = self.resolver.resolve(scratch[0].style);
+        for s in &scratch[1..] {
             style = style.patch(self.resolver.resolve(s.style));
         }
         Some(style)
