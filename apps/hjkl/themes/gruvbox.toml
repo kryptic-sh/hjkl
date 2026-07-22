@@ -1,0 +1,195 @@
+# hjkl bundled theme — Gruvbox (dark medium variant).
+#
+# SINGLE-FILE theme: this one document carries BOTH halves of an `AppTheme`:
+#   1. The `@capture` + `[palette]` syntax tables parsed by
+#      `DotFallbackTheme::from_toml` (hjkl-theme schema). Captures MAY use
+#      `$name` refs into `[palette]`.
+#   2. The fixed UI-chrome tables (`[chrome] [mode] [cursor_line] …`) parsed by
+#      `apps/hjkl/src/theme.rs`'s `UiTheme::from_toml`. These MUST use literal
+#      `#rrggbb` colors — the UI parser does not resolve `$palette` refs.
+# Each parser ignores the other's tables (neither uses deny_unknown_fields), so
+# one file drives the whole theme, loaded via `AppTheme::from_toml`. See #303.
+#
+# ORDERING MATTERS: every bare `@capture` assignment MUST come BEFORE the first
+# `[table]` header — TOML nests bare keys under the most recent table header, so
+# a capture placed after `[palette]` would silently become a palette entry. The
+# `[palette]` + UI tables therefore all live at the bottom.
+#
+# Canonical dark-medium palette:
+#   bg #282828  bg0_h #1d2021  bg1 #3c3836  bg2 #504945  fg #ebdbb2
+#   fg2 #d5c4a1  gray #928374  red #fb4934  green #b8bb26  yellow #fabd2f
+#   blue #83a598  purple #d3869b  aqua #8ec07c  orange #fe8019
+
+# ── Syntax captures (hjkl-theme schema; $refs into [palette]) ─────────────────
+
+"@default"                        = { fg = "$fg" }
+
+"@keyword"                        = { fg = "$magenta", modifiers = ["italic"] }
+"@keyword.control"                = { fg = "$magenta", modifiers = ["italic"] }
+"@keyword.return"                 = { fg = "$magenta", modifiers = ["italic"] }
+"@keyword.operator"               = { fg = "$purple" }
+"@keyword.sql"                    = { fg = "$magenta", modifiers = ["bold"] }
+
+"@string"                         = { fg = "$green" }
+"@string.escape"                  = { fg = "$magenta" }
+"@string.special"                 = { fg = "$blue5" }
+
+"@comment"                        = { fg = "$comment", modifiers = ["italic"] }
+
+"@number"                         = { fg = "$orange" }
+
+"@function"                       = { fg = "$blue" }
+"@function.builtin"               = { fg = "$cyan" }
+"@function.method"                = { fg = "$blue" }
+"@function.macro"                 = { fg = "$cyan", modifiers = ["bold"] }
+
+"@type"                           = { fg = "$cyan" }
+"@type.builtin"                   = { fg = "$green1", modifiers = ["italic"] }
+
+"@variable"                       = { fg = "$fg" }
+"@variable.builtin"               = { fg = "$red" }
+"@variable.parameter"             = { fg = "$yellow" }
+
+"@constant"                       = { fg = "$orange" }
+"@constant.builtin"               = { fg = "$orange", modifiers = ["bold"] }
+
+"@punctuation"                    = { fg = "$fg_dark" }
+"@punctuation.bracket"            = { fg = "$fg_dark" }
+"@punctuation.delimiter"          = { fg = "$blue5" }
+
+"@operator"                       = { fg = "$blue5" }
+
+"@tag"                            = { fg = "$blue" }
+"@heading"                        = { fg = "$magenta", modifiers = ["bold"] }
+"@link"                           = { fg = "$blue", modifiers = ["underline"] }
+"@code"                           = { fg = "$green" }
+
+"@property"                       = { fg = "$green1" }
+"@table"                          = { fg = "$orange" }
+
+"@identifier"                     = { fg = "$fg" }
+
+"@attribute"                      = { fg = "$cyan" }
+"@field"                          = { fg = "$green1" }
+"@namespace"                      = { fg = "$yellow" }
+"@module"                         = { fg = "$yellow" }
+"@import"                         = { fg = "$magenta" }
+
+# Markdown (tree-sitter-markdown / markdown_inline). `@markup.foo.bar` falls
+# back to `@markup.foo`, so specific heading levels inherit `@markup.heading`.
+"@markup.heading"                 = { fg = "$magenta", modifiers = ["bold"] }
+"@markup.heading.1"               = { fg = "$magenta", modifiers = ["bold", "underline"] }
+"@markup.heading.2"               = { fg = "$blue", modifiers = ["bold"] }
+"@markup.heading.3"               = { fg = "$cyan", modifiers = ["bold"] }
+"@markup.italic"                  = { fg = "$fg", modifiers = ["italic"] }
+"@markup.strong"                  = { fg = "$fg", modifiers = ["bold"] }
+"@markup.strikethrough"           = { fg = "$comment", modifiers = ["strikethrough"] }
+"@markup.raw"                     = { fg = "$green" }
+"@markup.raw.block"               = { bg = "$codeblock_bg" }
+"@markup.link"                    = { fg = "$blue", modifiers = ["underline"] }
+"@markup.link.label"              = { fg = "$blue" }
+"@markup.link.url"                = { fg = "$comment", modifiers = ["underline"] }
+"@markup.list"                    = { fg = "$magenta" }
+"@markup.list.checked"            = { fg = "$green", modifiers = ["bold"] }
+"@markup.list.unchecked"          = { fg = "$comment" }
+"@markup.quote"                   = { fg = "$comment", modifiers = ["italic"] }
+"@label"                          = { fg = "$blue", modifiers = ["italic"] }
+
+# Comment markers (TODO / FIXME / NOTE / WARN badges).
+"@comment.marker.todo"            = { fg = "$bg", bg = "$orange", modifiers = ["bold"] }
+"@comment.marker.tail.todo"       = { fg = "$orange", modifiers = ["italic"] }
+
+"@comment.marker.fixme"           = { fg = "$bg", bg = "$red", modifiers = ["bold"] }
+"@comment.marker.tail.fixme"      = { fg = "$red", modifiers = ["italic"] }
+
+"@comment.marker.note"            = { fg = "$bg", bg = "$blue", modifiers = ["bold"] }
+"@comment.marker.tail.note"       = { fg = "$blue", modifiers = ["italic"] }
+
+"@comment.marker.warn"            = { fg = "$bg", bg = "$yellow", modifiers = ["bold"] }
+"@comment.marker.tail.warn"       = { fg = "$yellow", modifiers = ["italic"] }
+
+"@error"                          = { fg = "$red1" }
+"@warning"                        = { fg = "$yellow" }
+
+# ── Syntax palette (referenced by the $refs above) ────────────────────────────
+
+[palette]
+bg           = "#282828"
+fg           = "#ebdbb2"
+fg_dark      = "#d5c4a1"
+comment      = "#928374"
+magenta      = "#d3869b"
+purple       = "#d3869b"
+blue         = "#83a598"
+cyan         = "#fabd2f"
+blue5        = "#8ec07c"
+green        = "#b8bb26"
+green1       = "#8ec07c"
+orange       = "#fe8019"
+yellow       = "#fabd2f"
+red          = "#fb4934"
+red1         = "#fb4934"
+# Slightly elevated tint for fenced/indented code blocks.
+codeblock_bg = "#32302f"
+
+# ── UI chrome (literal hex only — no $refs; read by UiTheme::from_toml) ────────
+
+[chrome]
+background    = "#282828"  # editor text-area + gutter bg (bg)
+text          = "#ebdbb2"  # default fg on status/tab lines (fg)
+text_dim      = "#928374"  # inactive tab labels, status hints (gray)
+panel_bg      = "#3c3836"  # status bar fill — a touch lighter than bg (bg1)
+surface_bg    = "#504945"  # mid sections (filename slot, tag bg) (bg2)
+border        = "#504945"  # popup/list borders, dim separators (bg2)
+border_active = "#83a598"  # active popup borders (blue)
+gutter        = "#928374"  # line-number gutter fg (gray)
+on_accent     = "#282828"  # fg painted on bright bg (bg)
+non_text      = "#504945"  # `~` tilde markers past end-of-buffer (bg2)
+
+[mode]
+normal_bg     = "#83a598"  # NORMAL — blue
+insert_bg     = "#b8bb26"  # INSERT — green
+visual_bg     = "#d3869b"  # VISUAL — purple
+
+[cursor_line]
+bg            = "#3c3836"  # cursor row highlight (bg1)
+inactive_bg   = "#1d2021"  # fainter cursor row on unfocused windows (bg0_h)
+column_bg     = "#3c3836"  # cursorcolumn highlight (bg1)
+fold_bg       = "#504945"  # closed fold header row — distinct tint (bg2)
+
+[colorcolumn]
+bg            = "#1d2021"  # muted dark ruler background (bg0_h)
+
+[search]
+bg            = "#fe8019"  # match highlight bg (orange)
+fg            = "#282828"  # match fg on bright bg (bg)
+
+[picker]
+selection_bg  = "#504945"  # highlighted picker entry (bg2)
+
+[form]
+normal_bg     = "#3c3836"  # form-Normal field bg (bg1)
+insert_bg     = "#504945"  # form-Insert field bg (bg2)
+tag_normal_fg = "#928374"  # [N] tag fg (gray)
+tag_insert_fg = "#fe8019"  # [I] tag fg (orange)
+
+[status]
+dirty_marker  = "#fe8019"  # `[+]` modified-buffer marker (orange)
+
+[recording]
+bg            = "#d3869b"  # `REC@r` badge bg (purple)
+fg            = "#282828"  # badge fg (bg)
+
+[indent_flash]
+bg            = "#3a3320"  # auto-indent (=) flash row — muted amber, 150 ms
+
+[indent_guide]
+fg            = "#3c3836"  # inactive indent guide fg (bg1)
+active_fg     = "#504945"  # active indent guide fg (bg2)
+
+[match_paren]
+bg            = "#504945"  # matched bracket pair bg (bg2)
+
+[hop]
+label_fg      = "#282828"  # hop label fg — dark text on bright bg (bg)
+label_bg      = "#fe8019"  # hop label bg (orange)

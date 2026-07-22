@@ -48,7 +48,14 @@ pub struct AppTheme {
 /// `"dark"` / `"light"` are NOT listed here: they keep their historical
 /// two-file construction (`default_dark`) so the theme.rs unit tests that assert
 /// dark hex values stay green. New bundled themes are single-file and land here.
-const BUNDLED: &[(&str, &str)] = &[("tokyonight", include_str!("../themes/tokyonight.toml"))];
+const BUNDLED: &[(&str, &str)] = &[
+    ("tokyonight", include_str!("../themes/tokyonight.toml")),
+    ("catppuccin", include_str!("../themes/catppuccin.toml")),
+    ("gruvbox", include_str!("../themes/gruvbox.toml")),
+    ("nord", include_str!("../themes/nord.toml")),
+    ("dracula", include_str!("../themes/dracula.toml")),
+    ("onedark", include_str!("../themes/onedark.toml")),
+];
 
 impl AppTheme {
     /// Default dark theme — palette mirrors hjkl.kryptic.sh.
@@ -556,9 +563,68 @@ mod tests {
         assert!(theme.syntax.style("@comment").is_some());
     }
 
+    /// #303 Slice B: the five additional bundled single-file themes must each
+    /// load BOTH halves — all 34 UI-chrome fields (`UiTheme::from_toml` hard-fails
+    /// on any missing key, so a successful parse proves the full set is present)
+    /// AND a non-empty syntax capture set (`DotFallbackTheme::from_toml`) — from
+    /// one document, keyed by their expected editor `background`.
+    #[test]
+    fn slice_b_bundled_themes_load_both_halves() {
+        // (name, editor background from the theme's [chrome].background).
+        let cases: &[(&str, Color)] = &[
+            ("catppuccin", Color::Rgb(0x1e, 0x1e, 0x2e)),
+            ("gruvbox", Color::Rgb(0x28, 0x28, 0x28)),
+            ("nord", Color::Rgb(0x2e, 0x34, 0x40)),
+            ("dracula", Color::Rgb(0x28, 0x2a, 0x36)),
+            ("onedark", Color::Rgb(0x28, 0x2c, 0x34)),
+        ];
+        for (name, bg) in cases {
+            let toml = BUNDLED
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} must be registered in BUNDLED"))
+                .1;
+            let theme = AppTheme::from_toml(toml)
+                .unwrap_or_else(|e| panic!("{name}.toml must parse as a full AppTheme: {e}"));
+
+            // UI half: the editor background matches the theme's [chrome] bg.
+            // A successful parse already guarantees all 34 UiTheme fields are
+            // present — the loader rejects any missing key.
+            assert_eq!(
+                theme.ui.background, *bg,
+                "{name} editor background must match its [chrome].background"
+            );
+
+            // Syntax half: the high-traffic captures resolve to a non-empty spec.
+            for cap in [
+                "@keyword",
+                "@function",
+                "@string",
+                "@comment",
+                "@type",
+                "@number",
+            ] {
+                assert!(
+                    theme.syntax.style(cap).is_some(),
+                    "{name} must resolve syntax capture {cap}"
+                );
+            }
+
+            // load_named must resolve to the same background.
+            let via_named =
+                load_named(name).unwrap_or_else(|| panic!("load_named({name:?}) must be Some"));
+            assert_eq!(via_named.ui.background, *bg);
+        }
+    }
+
     #[test]
     fn load_named_resolves_bundled_and_rejects_unknown() {
         assert!(load_named("tokyonight").is_some());
+        assert!(load_named("catppuccin").is_some());
+        assert!(load_named("gruvbox").is_some());
+        assert!(load_named("nord").is_some());
+        assert!(load_named("dracula").is_some());
+        assert!(load_named("onedark").is_some());
         assert!(load_named("dark").is_some());
         assert!(load_named("light").is_some());
         assert!(load_named("nonesuch").is_none());
@@ -571,6 +637,11 @@ mod tests {
     fn bundled_theme_names_contains_all_schemes() {
         let names = bundled_theme_names();
         assert!(names.contains(&"tokyonight"));
+        assert!(names.contains(&"catppuccin"));
+        assert!(names.contains(&"gruvbox"));
+        assert!(names.contains(&"nord"));
+        assert!(names.contains(&"dracula"));
+        assert!(names.contains(&"onedark"));
         assert!(names.contains(&"dark"));
         assert!(names.contains(&"light"));
     }

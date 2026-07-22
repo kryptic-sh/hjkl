@@ -3332,6 +3332,22 @@ fn colorscheme_updates_ui_chrome_not_just_syntax() {
     );
 }
 
+/// #303 Slice B: a second bundled single-file theme switches its chrome too —
+/// proving the registry generalises past the first entry. `:colorscheme gruvbox`
+/// flips the editor background to gruvbox dark-medium `bg` (#282828).
+#[test]
+fn colorscheme_gruvbox_switches_chrome() {
+    use ratatui::style::Color;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("colorscheme gruvbox");
+    assert_eq!(app.colorscheme, "gruvbox");
+    assert_eq!(
+        app.theme.ui.background,
+        Color::Rgb(0x28, 0x28, 0x28),
+        "gruvbox bg #282828 must drive the UI chrome background"
+    );
+}
+
 #[test]
 fn colorscheme_unknown_errors_and_keeps_current() {
     let mut app = App::new(None, false, None, None).unwrap();
