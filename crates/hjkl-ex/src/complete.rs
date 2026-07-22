@@ -473,13 +473,35 @@ pub fn complete_arg(
         // Caret still in command-name territory.
         return Completions::empty(caret);
     }
-    // Find token under caret: walk back from caret to previous whitespace.
-    let slice = &line[arg_start..caret];
-    let token_offset = slice
-        .rfind(|c: char| c.is_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let token_start = arg_start + token_offset;
+    // Find the token under the caret. Two rules:
+    //
+    // - `ArgKind::Path`: every file command consumes the ENTIRE trimmed
+    //   argument as ONE verbatim path — `:e`/`:w`/`:r`/`:saveas`/`:file`
+    //   (builtins.rs, all `args.trim()`), and the host `:split`/`:vsplit`/
+    //   `:tabnew`/`:diffsplit` (ex_host_cmds.rs, `args.trim()`), which reach
+    //   the disk via `PathBuf::from(arg)` with NO `\`-unescaping or
+    //   quote-stripping. So a space inside a filename is a literal path
+    //   character, not a token boundary: the path token is the whole argument
+    //   (only leading whitespace, which `trim()` drops on dispatch, is
+    //   skipped). This lets `:e my file.txt<Tab>` and `:e dir with space/<Tab>`
+    //   complete instead of truncating at the first space.
+    //
+    // - Everything else (settings, buffers, registers, …): a single
+    //   whitespace-delimited word — walk back from the caret to the previous
+    //   whitespace.
+    let token_start = if matches!(arg_kind, ArgKind::Path) {
+        let lead_ws = line[arg_start..caret]
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(caret - arg_start);
+        arg_start + lead_ws
+    } else {
+        let slice = &line[arg_start..caret];
+        let token_offset = slice
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        arg_start + token_offset
+    };
     let prefix = &line[token_start..caret];
 
     let (candidates, kind) = match arg_kind {
@@ -1024,6 +1046,126 @@ mod tests {
         // prefix "." → hidden shown
         let result2 = complete_arg("e .", 3, ArgKind::Path, &sources);
         assert!(result2.candidates.iter().any(|c| c.contains(".hidden")));
+    }
+
+    // ── spaces in ex path completion (issue #308) ─────────────────────────────
+
+    #[test]
+    fn complete_path_dir_with_space_lists_entries() {
+        // A directory whose name contains a space: completing `:e dir with
+        // space/` must list its entries. The leading part with the space must
+        // NOT be truncated at the first whitespace.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("dir with space");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("inner.txt"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        let line = "e dir with space/";
+        let result = complete_arg(line, line.len(), ArgKind::Path, &sources);
+        assert_eq!(result.kind, CompletionKind::Path);
+        assert!(
+            result
+                .candidates
+                .contains(&"dir with space/inner.txt".to_string()),
+            "expected the spaced dir's entry in {:?}",
+            result.candidates
+        );
+        // The replace range covers the WHOLE path arg (from just after the
+        // command's space), so accepting swaps in the complete literal path.
+        assert_eq!(result.replace_range, 2..line.len());
+        assert_eq!(&line[result.replace_range.clone()], "dir with space/");
+    }
+
+    #[test]
+    fn complete_path_file_with_space_completes() {
+        // A file whose name contains a space, in the scanned dir, completes.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("my file.txt"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        // Partial prefix that already contains a space must not truncate.
+        let line = "e my fi";
+        let result = complete_arg(line, line.len(), ArgKind::Path, &sources);
+        assert_eq!(result.kind, CompletionKind::Path);
+        assert_eq!(result.candidates, vec!["my file.txt".to_string()]);
+        // Whole-arg replace range, and the completed candidate is a literal,
+        // openable path (no escaping) — exactly what `PathBuf::from(arg)` on
+        // the dispatch side expects.
+        assert_eq!(result.replace_range, 2..line.len());
+        assert_eq!(&line[result.replace_range.clone()], "my fi");
+    }
+
+    #[test]
+    fn complete_path_no_space_regression() {
+        // A normal no-space path completes exactly as before: single token,
+        // replace range covers just that token.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src").join("main.rs"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        let line = "e src/ma";
+        let result = complete_arg(line, line.len(), ArgKind::Path, &sources);
+        assert_eq!(result.kind, CompletionKind::Path);
+        assert_eq!(result.candidates, vec!["src/main.rs".to_string()]);
+        assert_eq!(result.replace_range, 2..line.len());
+    }
+
+    #[test]
+    fn complete_path_skips_leading_whitespace_run() {
+        // Extra spaces between the command and the path (vim trims them on
+        // dispatch) must be skipped, not swallowed into the path prefix.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("my file.txt"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        let line = "e   my fi";
+        let result = complete_arg(line, line.len(), ArgKind::Path, &sources);
+        assert_eq!(result.candidates, vec!["my file.txt".to_string()]);
+        // Replace range starts at the first non-space, so accepting yields
+        // `e   my file.txt` → `args.trim()` == `my file.txt`.
+        assert_eq!(&line[result.replace_range.clone()], "my fi");
+    }
+
+    #[test]
+    fn complete_path_with_space_still_expands_var() {
+        // `$VAR` expansion (issue #305) keeps working even with a spaced tail:
+        // the space lives entirely in the file part (after the last `/`), so
+        // expansion of the dir part is unaffected. Uses a uniquely-named var so
+        // it can't collide with the HOME-mutating expansion test above.
+        let base = tempfile::tempdir().unwrap();
+        std::fs::write(base.path().join("my file.txt"), b"x").unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let sources = ArgSources {
+            cwd: Some(cwd.path()),
+            ..Default::default()
+        };
+
+        // SAFETY: a uniquely-named var this test owns; set then removed.
+        unsafe { std::env::set_var("HJKL_308_BASE", base.path()) };
+
+        let line = "e $HJKL_308_BASE/my fi";
+        let result = complete_arg(line, line.len(), ArgKind::Path, &sources);
+        assert_eq!(
+            result.candidates,
+            vec!["$HJKL_308_BASE/my file.txt".to_string()]
+        );
+
+        // SAFETY: remove the var this test set.
+        unsafe { std::env::remove_var("HJKL_308_BASE") };
     }
 
     #[test]
