@@ -31,18 +31,6 @@ security items are not yet tracked as GitHub issues.
 - **Fix:** pin grammar sources by content hash in `bonsai.toml`, verify before
   compile/dlopen; optionally run grammars out-of-process. Large, architectural.
 
-### S2. [MEDIUM] macOS ObjC `transmute(objc_msgSend)` — type-safety hazard
-
-- **File:** `crates/hjkl-clipboard/src/backend/macos.rs:120,130,140`
-- **Defect:** `msg0`/`msg1`/`msg2` `transmute` the variadic `objc_msgSend` stub
-  to concrete fn-pointer types. A signature mismatch is UB; a future call site
-  with wrong arg types would corrupt the stack / segfault. macOS-only, not
-  driven by external input — maintenance hazard.
-- **Mitigations present:** documented ABI constraints; all args/results are
-  pointer/usize-sized (no float/SIMD/large-struct returns).
-- **Fix:** adopt `objc2`'s type-safe message-send macros, or add a compile-time
-  ABI assertion per call site.
-
 ### S3. [LOW] `Buffer::line()` panics on out-of-bounds index
 
 - **File:** `crates/hjkl-engine/src/buffer_impl.rs:130-139`
