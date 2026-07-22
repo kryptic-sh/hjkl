@@ -8,8 +8,68 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-07-22
+
+### Added
+
+- **Undo tree with persistence.** Undo history is now a branching tree instead
+  of a linear stack: editing after an undo keeps the old redo branch, `g-`/`g+`
+  traverse every state by change number across branches, and `:undolist` shows
+  the branch tips. The tree is delta-encoded and persisted to an `undofile`
+  (content-hash gated), so undo/redo **and the current position survive closing
+  and reopening a file**; a crash `:recover` restores the undo tree too. New
+  settings: `undofile`, `undodir`.
+- **Cross-session cursor memory.** Reopening a file restores the last cursor
+  position on that buffer (the last-moved window wins across splits),
+  best-effort and clamped to the file. New setting: `restore_cursor`.
+- **Bundled color themes.** Six named themes — `tokyonight` (new default),
+  `catppuccin`, `gruvbox`, `nord`, `dracula`, `onedark` — selectable with
+  `:colorscheme <name>` or `theme.name`. Themes now drive the terminal
+  background, with a `theme.transparent` override (nvim-style) that lets the
+  terminal background show through.
+- **`:normal[!]` ex command**, including `:[range]normal` and
+  `:g`/`:v`/…/`normal`.
+- **`;` ex range separator** (`:/foo/;/foo/d`): the cursor moves to the first
+  address before the second is resolved, matching vim.
+- **Magic `~`** (last substitute string) in search/substitute patterns.
+- **Visual-block parity.** True blockwise register yank/paste (pastes as
+  columns, not new lines); full block-operator coverage
+  (`C`/`D`/`X`/`Y`/`S`/`R`, `[count]I`/`[count]A`, visual-mode block paste); and
+  dot-repeat (`.`) for visual-block operators.
+- **Dot-repeat for charwise/linewise Visual `r`.**
+- **RPC/headless hardening controls:** `--allow-shell` gates shell-out (`:!`,
+  `:r !`, range filters), and embed/nvim-api file I/O is confined to the working
+  directory.
+
+### Changed
+
+- **`:colorscheme` now switches UI chrome and syntax together** (previously it
+  recolored syntax only) and accepts any bundled theme name; `config.theme.name`
+  is applied at startup (it was previously ignored). The default color theme is
+  now `tokyonight`.
+- **Undo storage** was reworked from linear undo/redo stacks into a
+  delta-encoded arena tree with a materialization cache (internal; in-session
+  behavior is unchanged apart from the new tree/branching features above).
+- **`:g`/`:v`, `:normal`, and macro replay are each a single undo step** now,
+  instead of one undo step per affected line.
+
+### Removed
+
+- Early-development backward-compatibility scaffolding: the deprecated
+  `Editor::buffer_mark`/`buffer_marks` accessors, the `hover_popup` and
+  `which_key` re-export shims, the `HjklMode` / `hjkl_vim::MotionKind` aliases,
+  and the `push_buffer_cursor_to_textarea` no-op.
+
 ### Fixed
 
+- **`dap` at end of buffer** now absorbs the leading blank line (`:h ap`), and a
+  linewise Visual delete reaching the last line no longer parks the cursor on a
+  phantom trailing row.
+- **Config lock on non-Linux:** an unprobeable owner PID is no longer treated as
+  dead, so a live lock is not falsely reclaimed on macOS/Windows.
+- **LSP:** a language server configured with an empty `command` is rejected
+  before spawn.
+- **Save permission-probe TOCTOU** closed with a single non-truncating open.
 - **Audit hardening:** Config persistence retains live locks; grammar manifests
   reject escaping source paths and use full pinned revisions for cache identity;
   failed async grammar dispatches resolve callers; LSP exits clear runtime
