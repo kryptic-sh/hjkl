@@ -101,17 +101,47 @@ unsafe extern "C" {
 }
 
 // ---------------------------------------------------------------------------
-// msg helpers — transmute per call site.
+// msg helpers — transmute per call site, ABI-guarded by `MsgAbi`.
 // ---------------------------------------------------------------------------
 //
-// Each helper transmutes `objc_msgSend` to the concrete signature matching
-// the number of extra arguments. All types involved are pointer-sized or
-// `usize`, so the C calling convention matches Apple's ABI on both targets
-// without surprises. Do NOT use these for methods that return value types
-// larger than 16 bytes or take float/SIMD arguments — none of our calls do.
+// Each helper transmutes `objc_msgSend` to the concrete signature matching the
+// number of extra arguments. The `MsgAbi` bound on every generic type is a
+// COMPILE-TIME guard: the transmute is only sound for values passed/returned in
+// INTEGER registers under the Apple `objc_msgSend` ABI (x86_64 + ARM64) —
+// pointers and integer scalars (including `bool`, `NSUInteger`, `NSInteger`). A
+// future call site that tries to pass or return an `f32`/`f64`/SIMD vector or a
+// large/aggregate value — which use a different register class and would
+// corrupt the stack / ABI — fails to compile because that type does not
+// implement `MsgAbi`. This cannot verify the argument order/count against the
+// ObjC method prototype (that needs typed selectors), but it rules out the
+// ABI-class mismatches that actually cause UB / segfaults — the realistic
+// maintenance hazard. Every current call site uses only pointer/integer/bool
+// types, so the bound is satisfied without changing behaviour.
+
+/// Marker for types that ride in integer registers under the Apple
+/// `objc_msgSend` ABI and are therefore sound to pass through the transmuted
+/// stub. Private to this module, so it is effectively sealed — no external
+/// code can widen the ABI-safe set. Note `impl<T> for *const/*mut T` requires
+/// `T: Sized` (the default), so FAT pointers (`*const [u8]`, `*const dyn _`)
+/// are intentionally excluded — they are two words and would break the ABI.
+trait MsgAbi {}
+
+impl<T> MsgAbi for *const T {}
+impl<T> MsgAbi for *mut T {}
+impl MsgAbi for bool {}
+impl MsgAbi for usize {}
+impl MsgAbi for isize {}
+impl MsgAbi for u8 {}
+impl MsgAbi for i8 {}
+impl MsgAbi for u16 {}
+impl MsgAbi for i16 {}
+impl MsgAbi for u32 {}
+impl MsgAbi for i32 {}
+impl MsgAbi for u64 {}
+impl MsgAbi for i64 {}
 
 /// Message with no extra arguments.
-unsafe fn msg0<R>(obj: Id, sel: Sel) -> R {
+unsafe fn msg0<R: MsgAbi>(obj: Id, sel: Sel) -> R {
     // SAFETY: `obj` is a valid Objective-C object, `sel` is a registered
     // selector. The return type `R` must exactly match the ObjC method's
     // return type. ARM64/x86_64 ABI requires this exact prototype cast.
@@ -123,7 +153,7 @@ unsafe fn msg0<R>(obj: Id, sel: Sel) -> R {
 }
 
 /// Message with one extra argument.
-unsafe fn msg1<A, R>(obj: Id, sel: Sel, a: A) -> R {
+unsafe fn msg1<A: MsgAbi, R: MsgAbi>(obj: Id, sel: Sel, a: A) -> R {
     // SAFETY: same as `msg0`; A must exactly match the first argument type.
     let f: unsafe extern "C" fn(Id, Sel, A) -> R =
         // SAFETY: transmuting the stub — see module doc.
@@ -133,7 +163,7 @@ unsafe fn msg1<A, R>(obj: Id, sel: Sel, a: A) -> R {
 }
 
 /// Message with two extra arguments.
-unsafe fn msg2<A, B, R>(obj: Id, sel: Sel, a: A, b: B) -> R {
+unsafe fn msg2<A: MsgAbi, B: MsgAbi, R: MsgAbi>(obj: Id, sel: Sel, a: A, b: B) -> R {
     // SAFETY: same as `msg0`; A and B must match the method's argument types.
     let f: unsafe extern "C" fn(Id, Sel, A, B) -> R =
         // SAFETY: transmuting the stub — see module doc.
