@@ -384,6 +384,7 @@ pub fn arg_kind_usage(kind: ArgKind) -> &'static str {
         ArgKind::Mark => "<mark>",
         ArgKind::Colorscheme => "<colorscheme>",
         ArgKind::Enum => "<value>",
+        ArgKind::ExCommand => "<cmd>",
         ArgKind::Raw => "<args>",
     }
 }
@@ -520,7 +521,11 @@ pub fn complete_arg(
     let prefix = &line[token_start..caret];
 
     let (candidates, kind) = match arg_kind {
-        ArgKind::None | ArgKind::Raw => return Completions::empty(caret),
+        // `ExCommand` (inner-command args) is handled entirely in [`complete`]
+        // before this dispatch; it never reaches `complete_arg`.
+        ArgKind::None | ArgKind::Raw | ArgKind::ExCommand => {
+            return Completions::empty(caret);
+        }
         ArgKind::Path => {
             let cwd = match sources.cwd {
                 Some(p) => p,
@@ -654,6 +659,74 @@ pub fn complete_arg(
     }
 }
 
+/// For `:global`/`:g`/`:vglobal`/`:v`, find the byte offset in `line` where the
+/// INNER sub-command begins — one past the closing pattern separator.
+///
+/// `sep_scan_from` is the byte offset just past the command word (e.g. `1` for
+/// `g/foo/d`, `2` for `g!/foo/d`). The separator is the first non-whitespace
+/// char there (vim strips leading blanks before the separator), the pattern
+/// runs to the next UNescaped separator, and the inner command starts after it.
+///
+/// Returns `None` (⇒ no inner-command completion) when:
+/// - there is no separator yet, or it is alphanumeric / `\` (invalid, matching
+///   [`global_handler`]'s own guard),
+/// - the closing separator hasn't been typed — the caret is still inside the
+///   pattern (`caret < inner_start`).
+fn global_inner_start(line: &str, sep_scan_from: usize, caret: usize) -> Option<usize> {
+    let rest = line.get(sep_scan_from..)?;
+    // First non-whitespace char after the command word is the separator.
+    let ws = rest.find(|c: char| !c.is_whitespace())?;
+    let sep_pos = sep_scan_from + ws;
+    let sep = line[sep_pos..].chars().next()?;
+    if sep.is_alphanumeric() || sep == '\\' {
+        return None;
+    }
+    // Scan for the next UNescaped separator (`\<sep>` is a literal, skipped).
+    let after = sep_pos + sep.len_utf8();
+    let mut chars = line[after..].char_indices();
+    let close_rel = loop {
+        match chars.next() {
+            Some((_, '\\')) => {
+                chars.next(); // skip the escaped char
+            }
+            Some((i, c)) if c == sep => break i,
+            Some(_) => {}
+            None => return None, // pattern not closed yet
+        }
+    };
+    let inner_start = after + close_rel + sep.len_utf8();
+    // The closing separator must sit before the caret for the inner command to
+    // have started; otherwise the caret is still within the pattern delimiter.
+    (caret >= inner_start).then_some(inner_start)
+}
+
+/// Complete the NAME of an inner ex command inside `inner` (the slice of the
+/// original line beginning at the inner command). `inner_caret` is the caret
+/// relative to `inner`; the returned ranges are ALSO relative to `inner` — the
+/// caller shifts them back by the inner-start offset.
+///
+/// Reuses [`range_prefix_len`] so an inner range (`:cdo %s/…`) doesn't block
+/// inner-NAME completion, mirroring the top-level command-name path. Does NOT
+/// recurse into the inner command's own arguments: once the caret is past the
+/// inner command-name token, returns empty (no inner-arg completion).
+fn complete_inner_command_name(
+    inner: &str,
+    inner_caret: usize,
+    candidate_names: &[String],
+) -> Completions {
+    let inner_caret = inner_caret.min(inner.len());
+    let range_len = range_prefix_len(inner);
+    let sub = &inner[range_len..];
+    let (sub_cmd_end, _) = first_word_end(sub);
+    if inner_caret < range_len || inner_caret - range_len > sub_cmd_end {
+        return Completions::empty(inner_caret);
+    }
+    let mut result = complete_command_from_names(sub, inner_caret - range_len, candidate_names);
+    result.replace_range.start += range_len;
+    result.replace_range.end += range_len;
+    result
+}
+
 /// High-level orchestrator: resolve the command name in `line` against both
 /// registries, then dispatch to arg completer or command-name completer.
 ///
@@ -694,16 +767,69 @@ where
         return result;
     }
     let (cmd_token_end, has_arg_space) = first_word_end(line);
-    if !has_arg_space {
-        return Completions::empty(caret);
-    }
-    // Arg position — resolve command name to find arg_kind.
+    // Arg position — resolve command name to find arg_kind. (Done BEFORE the
+    // `has_arg_space` gate because `:g/foo/d` has no space after the command
+    // word — its separator abuts the name.)
     let cmd_name = &line[..cmd_token_end];
     let arg_kind = host_reg
         .resolve(cmd_name)
         .map(|c| c.arg_kind())
         .or_else(|| editor_reg.resolve(cmd_name).map(|c| c.arg_kind))
         .unwrap_or(ArgKind::None);
+
+    // `ExCommand`: the argument is itself an inner ex command whose NAME we
+    // complete. Two forms, distinguished by the resolved CANONICAL name:
+    //   - `:global`/`:vglobal` family — `g<sep>pattern<sep><subcmd>`; the inner
+    //     command starts one past the closing separator, and candidates are
+    //     filtered to the set `:g` actually dispatches ([`GLOBAL_SUBCOMMANDS`]).
+    //   - `:cdo`/`:cfdo`/`:ldo`/`:lfdo` — the whole argument is the inner
+    //     command; it starts at the first non-blank after the command word, and
+    //     any ex command name is a candidate (registries + `extra_names`).
+    if arg_kind == ArgKind::ExCommand {
+        let canonical = editor_reg
+            .resolve(cmd_name)
+            .map(|c| c.name)
+            .or_else(|| host_reg.resolve(cmd_name).map(|c| c.name()));
+        let is_global = matches!(canonical, Some("global" | "global!" | "vglobal"));
+        let (inner_start, candidates): (usize, Vec<String>) = if is_global {
+            match global_inner_start(line, cmd_token_end, caret) {
+                Some(start) => (
+                    start,
+                    crate::global::GLOBAL_SUBCOMMANDS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
+                // Pattern not closed / invalid separator → offer nothing.
+                None => return Completions::empty(caret),
+            }
+        } else {
+            if !has_arg_space {
+                return Completions::empty(caret);
+            }
+            let inner_start = line[cmd_token_end..]
+                .find(|c: char| !c.is_whitespace())
+                .map(|i| cmd_token_end + i)
+                .unwrap_or(line.len());
+            let mut names = collect_host_registry_names(host_reg);
+            names.extend(collect_registry_names(editor_reg));
+            names.extend(extra_names.iter().cloned());
+            (inner_start, names)
+        };
+        // Caret parked in the blank gap before the inner token → nothing yet.
+        if caret < inner_start {
+            return Completions::empty(caret);
+        }
+        let inner = &line[inner_start..];
+        let mut result = complete_inner_command_name(inner, caret - inner_start, &candidates);
+        result.replace_range.start += inner_start;
+        result.replace_range.end += inner_start;
+        return result;
+    }
+
+    if !has_arg_space {
+        return Completions::empty(caret);
+    }
     // For `ArgKind::Enum`, augment the sources with the resolved command's
     // fixed choice list (host commands only — the editor registry carries no
     // enum values) so `complete_arg` can offer them.
@@ -1836,5 +1962,213 @@ mod tests {
         assert_eq!(r2.kind, CompletionKind::Register);
         assert!(r2.candidates.contains(&"\"a".to_string()));
         assert!(!r2.candidates.contains(&"\"b".to_string()));
+    }
+
+    // ── inner ex-command completion for :g/:v and :cdo family (issue #311) ─────
+
+    /// A registry mirroring the real one for the commands these tests touch:
+    /// the `:g`/`:v` family (ExCommand) plus a handful of inner-command names.
+    fn ex_command_registry() -> Registry<hjkl_engine::DefaultHost> {
+        use crate::ExCommand;
+        use hjkl_engine::DefaultHost;
+
+        fn noop(
+            _: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
+            _: &str,
+            _: Option<crate::range::LineRange>,
+        ) -> Option<crate::effect::ExEffect> {
+            None
+        }
+
+        let mut reg = Registry::<DefaultHost>::new();
+        for (name, aliases, kind, min) in [
+            ("global", &["g"][..], ArgKind::ExCommand, 1usize),
+            ("vglobal", &["v"][..], ArgKind::ExCommand, 1),
+            ("cdo", &[][..], ArgKind::ExCommand, 3),
+            ("edit", &["e"][..], ArgKind::Path, 1),
+            ("enew", &[][..], ArgKind::None, 2),
+            ("substitute", &[][..], ArgKind::Raw, 1),
+            ("delete", &["d"][..], ArgKind::Raw, 1),
+        ] {
+            reg.add(ExCommand {
+                name,
+                aliases,
+                arg_kind: kind,
+                min_prefix: min,
+                run: noop,
+            });
+        }
+        reg
+    }
+
+    #[test]
+    fn complete_global_offers_subcommands_after_pattern() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:g/foo/` → the dispatchable `:g` sub-commands (d/s/j/y/normal…).
+        let line = "g/foo/";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        for want in ["d", "j", "normal", "s", "y"] {
+            assert!(
+                r.candidates.contains(&want.to_string()),
+                "expected {want:?} in {:?}",
+                r.candidates
+            );
+        }
+        // Filtered to the `:g` set — no arbitrary registry command leaks in.
+        assert!(!r.candidates.contains(&"edit".to_string()));
+        assert!(!r.candidates.contains(&"substitute".to_string()));
+        // Replace range is the empty slice just past the closing `/`.
+        assert_eq!(r.replace_range, line.len()..line.len());
+    }
+
+    #[test]
+    fn complete_global_filters_and_scopes_replace_range_past_slash() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:g/foo/d` → filters to `d`; replace range covers ONLY the inner `d`,
+        // starting AFTER the closing `/` (byte 6), so accepting keeps `g/foo/`.
+        let line = "g/foo/d";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        assert_eq!(r.candidates, vec!["d".to_string()]);
+        assert_eq!(r.replace_range, 6..7);
+        assert_eq!(&line[r.replace_range.clone()], "d");
+    }
+
+    #[test]
+    fn complete_global_no_completion_while_in_pattern() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // Caret still inside the pattern (closing `/` not typed) → no candidates.
+        let line = "g/foo";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::None);
+        assert!(r.candidates.is_empty());
+
+        // Only the opening separator typed → still inside the pattern.
+        let line = "g/";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert!(r.candidates.is_empty());
+    }
+
+    #[test]
+    fn complete_vglobal_offers_subcommands() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:v/foo/n` → the `normal`/`norm` family, filtered to the `:g` set.
+        let line = "v/foo/n";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        assert!(r.candidates.contains(&"normal".to_string()));
+        assert!(r.candidates.contains(&"norm".to_string()));
+        assert!(r.candidates.iter().all(|c| c.starts_with('n')));
+        assert_eq!(&line[r.replace_range.clone()], "n");
+    }
+
+    #[test]
+    fn complete_global_alt_separator_and_escaped_sep() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // A non-`/` separator works the same: `:g#foo#d`.
+        let line = "g#foo#d";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.candidates, vec!["d".to_string()]);
+        assert_eq!(&line[r.replace_range.clone()], "d");
+
+        // An escaped separator inside the pattern does NOT close it: the real
+        // closing `/` is the second one, so the inner command begins after it.
+        let line = r"g/fo\/o/d";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.candidates, vec!["d".to_string()]);
+        assert_eq!(&line[r.replace_range.clone()], "d");
+    }
+
+    #[test]
+    fn complete_cdo_offers_ex_command_names() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:cdo ` → any ex command name (registries + extra_names).
+        let line = "cdo ";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        assert!(r.candidates.contains(&"edit".to_string()));
+        assert!(r.candidates.contains(&"substitute".to_string()));
+        assert_eq!(r.replace_range, line.len()..line.len());
+
+        // `:cdo e` → the `e`-prefixed names; replace range covers only `e`.
+        let line = "cdo e";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert!(r.candidates.contains(&"edit".to_string()));
+        assert!(r.candidates.contains(&"enew".to_string()));
+        assert!(r.candidates.iter().all(|c| c.starts_with('e')));
+        assert_eq!(r.replace_range, 4..5);
+        assert_eq!(&line[r.replace_range.clone()], "e");
+    }
+
+    #[test]
+    fn complete_cdo_includes_extra_names_and_no_inner_arg_recursion() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+        let extra = str_vec(&["Anvil", "debug"]);
+
+        // extra_names are candidates for the inner command too.
+        let line = "cdo de";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &extra);
+        assert!(r.candidates.contains(&"debug".to_string()));
+
+        // No recursion into the inner command's OWN args: once past the inner
+        // command name (`:cdo e <path>`), nothing is offered.
+        let line = "cdo edit foo";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &extra);
+        assert_eq!(r.kind, CompletionKind::None);
+        assert!(r.candidates.is_empty());
+    }
+
+    #[test]
+    fn complete_cdo_inner_range_does_not_block_name() {
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:cdo %s` — the inner `%` range must not block inner-NAME completion;
+        // the replace range covers only the `s` name after the range.
+        let line = "cdo %s";
+        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        assert!(r.candidates.contains(&"substitute".to_string()));
+        assert_eq!(&line[r.replace_range.clone()], "s");
+    }
+
+    #[test]
+    fn complete_global_still_dispatches_arg_kind_is_completion_only() {
+        // Regression: adding ArgKind::ExCommand is completion-only; the top-level
+        // command-NAME completion for `:g`/`:cdo` is unchanged (still offered).
+        let reg = ex_command_registry();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // `:g` (caret in command name) still resolves as a command-name candidate.
+        let r = complete("g", 1, &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        assert!(r.candidates.contains(&"global".to_string()));
+
+        // `:cd` still completes to `cdo` at the command-name position.
+        let r = complete("cd", 2, &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Command);
+        assert!(r.candidates.contains(&"cdo".to_string()));
     }
 }

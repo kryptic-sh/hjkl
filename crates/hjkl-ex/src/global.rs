@@ -79,6 +79,14 @@ fn split_first_unescaped(s: &str, sep: char) -> Option<(String, String)> {
     None
 }
 
+/// The sub-command NAMES `:g`/`:v` actually dispatch (see
+/// [`dispatch_sub_command`]): the single-char line ops `d`/`y`/`j`/`s` and the
+/// keystroke-replay `normal`/`norm` (with their `!` variants). Kept beside the
+/// dispatcher so completion (`complete::complete`) can offer exactly this set
+/// and never drift from what `run` accepts. Sorted for stable completion order.
+pub(crate) const GLOBAL_SUBCOMMANDS: &[&str] =
+    &["d", "j", "norm", "norm!", "normal", "normal!", "s", "y"];
+
 /// Execute `cmd` (the sub-command tail after the `:g/pat/` delimiter, e.g.
 /// `"d"`, `"d a"`, `"s/foo/bar/g"`, `"j"`, `"y a 2"`) at `row` (0-based).
 /// Delegates to the standalone ex-command handlers with a single-line range

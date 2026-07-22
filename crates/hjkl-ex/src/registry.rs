@@ -17,6 +17,12 @@ pub enum ArgKind {
     /// itself (host commands via [`HostCmd::arg_choices`]) — e.g. `:syntax`
     /// (`on`/`off`/…), `:Anvil` (`install`/`uninstall`/`update`).
     Enum,
+    /// The argument is itself an INNER ex command — `:cdo`/`:cfdo`/`:ldo`/
+    /// `:lfdo` (the whole argument is the inner command) and `:global`/`:g`/
+    /// `:vglobal`/`:v` (the inner command follows the `/pattern/` delimiter).
+    /// Completion offers the inner command NAME; it never recurses into the
+    /// inner command's own arguments. Completion-only — dispatch is unaffected.
+    ExCommand,
     Raw,
 }
 

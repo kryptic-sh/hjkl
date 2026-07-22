@@ -1918,7 +1918,8 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "global",
         aliases: &["g"],
-        arg_kind: ArgKind::Raw,
+        // Completion-only: the argument is an inner ex command after `/pat/`.
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 1,
         run: |editor, args, range| global_match_handler(editor, args, range),
     });
@@ -1931,7 +1932,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "global!",
         aliases: &["g!"],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 7,
         run: |editor, args, range| crate::global::global_handler(editor, args, range, true),
     });
@@ -1940,7 +1941,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "vglobal",
         aliases: &["v"],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 1,
         run: |editor, args, range| vglobal_handler(editor, args, range),
     });
@@ -2343,28 +2344,29 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "cdo",
         aliases: &[],
-        arg_kind: ArgKind::Raw,
+        // Completion-only: the whole argument is an inner ex command.
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 3, // "cdo"
         run: cdo_handler::<H>,
     });
     reg.add(ExCommand {
         name: "cfdo",
         aliases: &[],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 3, // "cfd" — avoids :cfirst (min=2 "cf")
         run: cfdo_handler::<H>,
     });
     reg.add(ExCommand {
         name: "ldo",
         aliases: &[],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 3, // "ldo"
         run: ldo_handler::<H>,
     });
     reg.add(ExCommand {
         name: "lfdo",
         aliases: &[],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::ExCommand,
         min_prefix: 3, // "lfd" — avoids :lfirst (min=3 "lfi")
         run: lfdo_handler::<H>,
     });
