@@ -1,10 +1,8 @@
-use hjkl_bonsai::DotFallbackTheme;
 use hjkl_engine::Query;
 use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_ex::ExEffect;
 use hjkl_info_popup::InfoPopup;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 // Used when handling SubstituteConfirm to compute char-column from byte offset.
 use hjkl_buffer::rope_line_str;
@@ -235,7 +233,9 @@ impl App {
         }
 
         // `:colorscheme [name]` / `:colo` — vim alias for switching the active
-        // theme. Bundled schemes: `dark`, `light`. Bare or `?` reports current.
+        // theme. Any registered scheme (`theme::bundled_theme_names()`:
+        // tokyonight/dark/light) is accepted; unknown names → E185. Bare or `?`
+        // reports current.
         {
             let mut parts = cmd.split_whitespace();
             if let Some(kw) = parts.next()
@@ -247,13 +247,15 @@ impl App {
                         let cur = self.colorscheme.clone();
                         self.bus.info(format!("colorscheme {cur}"));
                     }
-                    "dark" | "light" => {
-                        self.apply_colorscheme(arg);
-                        self.bus.info(format!("colorscheme {arg}"));
+                    name if crate::theme::load_named(name).is_some() => {
+                        self.apply_colorscheme(name);
+                        self.bus.info(format!("colorscheme {name}"));
                     }
                     other => {
-                        self.bus
-                            .error(format!("E185: cannot find colorscheme '{other}'"));
+                        let avail = crate::theme::bundled_theme_names().join(", ");
+                        self.bus.error(format!(
+                            "E185: cannot find colorscheme '{other}' (available: {avail})"
+                        ));
                     }
                 }
                 return;
@@ -1607,17 +1609,35 @@ impl App {
         }
     }
 
-    /// Switch the active syntax theme to a bundled colorscheme (`"dark"` /
-    /// `"light"`), recompute the visible spans, and record the name for
-    /// `:colorscheme?`. Shared by `:set background=` and `:colorscheme`.
-    pub(crate) fn apply_colorscheme(&mut self, name: &str) {
-        let theme: Arc<dyn hjkl_bonsai::Theme + Send + Sync> = match name {
-            "light" => Arc::new(DotFallbackTheme::light()),
-            _ => Arc::new(DotFallbackTheme::dark()),
+    /// Apply a bundled colorscheme by name, swapping the WHOLE [`AppTheme`] —
+    /// UI chrome (`self.theme.ui`) AND the syntax layer — then reinstalling the
+    /// visible spans and recording the name for `:colorscheme?`. Returns `false`
+    /// (leaving the current theme untouched) when `name` is not a registered
+    /// scheme, so callers can emit `E185` / a startup warning.
+    ///
+    /// This is the single source of truth for a theme switch: startup (`main`),
+    /// `:colorscheme <name>`, and `:set background=` all route through it, which
+    /// is what fixes the historical bug where the chrome didn't follow the
+    /// syntax when the scheme changed.
+    pub(crate) fn apply_named_theme(&mut self, name: &str) -> bool {
+        let Some(theme) = crate::theme::load_named(name) else {
+            return false;
         };
-        self.syntax.set_theme(theme);
+        self.theme = theme;
+        // `AppTheme::syntax` is `Arc<DotFallbackTheme>`; it unsize-coerces to the
+        // `Arc<dyn Theme + Send + Sync>` the syntax layer stores.
+        self.syntax.set_theme(self.theme.syntax.clone());
         self.recompute_and_install();
         self.colorscheme = name.to_string();
+        true
+    }
+
+    /// Switch the active colorscheme (UI chrome + syntax) to a bundled scheme
+    /// and record the name for `:colorscheme?`. Unknown names are ignored (the
+    /// caller validated via [`crate::theme::load_named`] first). Shared by
+    /// `:set background=` and `:colorscheme`.
+    pub(crate) fn apply_colorscheme(&mut self, name: &str) {
+        self.apply_named_theme(name);
     }
 
     /// Check whether opening `slot_idx` (which has just been loaded) requires

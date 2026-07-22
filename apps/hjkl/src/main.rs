@@ -615,15 +615,6 @@ fn main() -> Result<()> {
             std::process::exit(2);
         }
     }
-    // Theme validation: only "dark" is bundled today. Warn (don't fail) on
-    // unknown names so the editor still starts with the dark palette.
-    if cfg.theme.name != "dark" {
-        eprintln!(
-            "hjkl: warning: theme.name = {:?} is not bundled; falling back to \"dark\"",
-            cfg.theme.name
-        );
-    }
-
     // `hjkl -` (vim/nvim `-`): read the buffer from stdin instead of opening
     // a file. Only recognised here in the TUI path — `--headless -` falls
     // through to headless's own file-loading, which treats `-` as a literal
@@ -653,6 +644,16 @@ fn main() -> Result<()> {
     } else {
         base_app
     };
+    // Apply the configured colorscheme (#303). `App::new` seeds the dark theme;
+    // resolve the config name to a bundled scheme (`tokyonight`/`dark`/`light`)
+    // and install its UI chrome + syntax. Unknown non-empty names warn and keep
+    // the dark fallback rather than aborting, so a typo still opens the editor.
+    if !app.apply_named_theme(&cfg.theme.name) {
+        eprintln!(
+            "hjkl: warning: theme.name = {:?} is not a bundled colorscheme; falling back to \"dark\"",
+            cfg.theme.name
+        );
+    }
     // `-n`: disable swap files for the rest of the session. Must run before
     // stdin loading and the extra-files loop below so nothing opened this
     // session ever arms or writes a swap. This also removes the swap `new()`

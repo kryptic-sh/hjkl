@@ -56,8 +56,14 @@ undofile = true
 # undodir = ""
 
 [theme]
-# Theme name. Currently only "dark" is bundled.
-name = "dark"
+# Theme name. Bundled schemes: "tokyonight" (default), "dark", "light".
+# Unknown non-empty names fall back to the default with a startup warning.
+name = "tokyonight"
+
+# When true, the editor text-area + gutter are left unpainted so the terminal's
+# own background shows through (vim's transparent behaviour). The statusline and
+# top-bar always paint their own backgrounds regardless.
+transparent = false
 
 [explorer]
 # Width (columns) of the left file-explorer dock. Interactively resizable

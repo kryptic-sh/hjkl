@@ -167,8 +167,17 @@ fn default_undofile() -> bool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeConfig {
-    /// Theme name. Currently only `"dark"` is bundled.
+    /// Theme name. Bundled schemes: `"tokyonight"` (default), `"dark"`,
+    /// `"light"`. Unknown non-empty names fall back to the default with a
+    /// startup warning.
     pub name: String,
+    /// When `true`, the editor text-area + gutter are NOT painted with the
+    /// theme background — the terminal's own background shows through (vim's
+    /// transparent behaviour). The statusline/top-bar always paint their own
+    /// backgrounds regardless. `#[serde(default)]` so configs predating this
+    /// field keep parsing (defaults to `false`).
+    #[serde(default)]
+    pub transparent: bool,
 }
 
 impl Default for Config {
@@ -241,7 +250,8 @@ mod tests {
         assert_eq!(cfg.editor.tab_width, 4);
         assert!(cfg.editor.expandtab);
         assert!(cfg.editor.mouse, "mouse defaults on");
-        assert_eq!(cfg.theme.name, "dark");
+        assert_eq!(cfg.theme.name, "tokyonight");
+        assert!(!cfg.theme.transparent, "transparent defaults off");
     }
 
     #[test]
@@ -251,6 +261,7 @@ mod tests {
         assert_eq!(parsed.editor.leader, dflt.editor.leader);
         assert_eq!(parsed.editor.tab_width, dflt.editor.tab_width);
         assert_eq!(parsed.theme.name, dflt.theme.name);
+        assert_eq!(parsed.theme.transparent, dflt.theme.transparent);
     }
 
     #[test]
@@ -265,7 +276,7 @@ mod tests {
             "non-overridden field keeps default"
         );
         assert_eq!(
-            cfg.theme.name, "dark",
+            cfg.theme.name, "tokyonight",
             "non-overridden section keeps default"
         );
     }

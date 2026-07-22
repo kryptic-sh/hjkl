@@ -3300,6 +3300,36 @@ fn colorscheme_switches_and_reports() {
     // `:colo` abbreviation switches back.
     app.dispatch_ex("colo dark");
     assert_eq!(app.colorscheme, "dark");
+
+    // A bundled single-file theme switches and reports too (#303).
+    app.dispatch_ex("colorscheme tokyonight");
+    assert_eq!(app.colorscheme, "tokyonight");
+    assert!(
+        app.bus
+            .last_body_or_empty()
+            .contains("colorscheme tokyonight"),
+        "switching to a bundled single-file theme must report it"
+    );
+}
+
+/// #303: `:colorscheme <name>` must update the UI CHROME (`self.theme.ui`), not
+/// just the syntax layer — the historical bug was that chrome stayed on the old
+/// palette. Proven by the editor background changing to tokyonight's `bg`.
+#[test]
+fn colorscheme_updates_ui_chrome_not_just_syntax() {
+    use ratatui::style::Color;
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Default (dark) editor background = ui-dark.toml `#0b0d10`.
+    assert_eq!(app.theme.ui.background, Color::Rgb(0x0b, 0x0d, 0x10));
+
+    app.dispatch_ex("colorscheme tokyonight");
+    assert_eq!(app.colorscheme, "tokyonight");
+    // tokyonight Night bg = #1a1b26 — the UI theme now follows the scheme.
+    assert_eq!(
+        app.theme.ui.background,
+        Color::Rgb(0x1a, 0x1b, 0x26),
+        "UI chrome background must follow the colorscheme, not stay on the old palette"
+    );
 }
 
 #[test]

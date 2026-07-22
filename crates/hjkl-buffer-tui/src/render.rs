@@ -210,6 +210,13 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// pushing subsequent real rows down so two diff windows stay aligned. The
     /// cursor never lands on filler (it's display-only). `None` = no filler.
     pub diff_filler: Option<&'a DiffFiller>,
+    /// Base background painted across the whole text area + gutter before any
+    /// glyph, syntax, cursorline, or selection styling — so those all layer on
+    /// top. `Style::default()` (the default) paints nothing, leaving the
+    /// terminal's own background to show through (vim's transparent behaviour).
+    /// Set a `bg` to paint the editor background (theme-driven); the host clears
+    /// it to honour a `transparent = true` config.
+    pub background: Style,
 }
 
 /// Diff-mode filler plan for one window ([`BufferView::diff_filler`]).
@@ -434,6 +441,20 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         if let Some(plan) = self.blame_plan {
             self.render_blame_plan(area, term_buf, plan);
             return;
+        }
+        // Base background fill: paint the whole area (gutter + text) with the
+        // theme background before any glyph/syntax/cursorline styling so those
+        // layer on top, and so empty trailing cells past each line's text (and
+        // blank rows past EOB) carry the editor bg too. `Style::default()` = no
+        // fill (transparent), preserving the terminal's own background.
+        if self.background != Style::default() {
+            for y in area.y..area.y.saturating_add(area.height) {
+                for x in area.x..area.x.saturating_add(area.width) {
+                    if let Some(cell) = term_buf.cell_mut((x, y)) {
+                        cell.set_style(self.background);
+                    }
+                }
+            }
         }
         let viewport = *self.viewport;
         let cursor = self.buffer.cursor();
@@ -678,7 +699,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let y = text_area.y + screen_row;
                 if let Some(cell) = term_buf.cell_mut((text_area.x, y)) {
                     cell.set_char('~');
-                    cell.set_style(self.non_text_style);
+                    cell.set_style(self.background.patch(self.non_text_style));
                 }
             }
             screen_row += 1;
@@ -1072,7 +1093,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         for x in sign_x..sign_x + gutter.sign_column_width {
             if let Some(cell) = term_buf.cell_mut((x, y)) {
                 cell.set_char(' ');
-                cell.set_style(gutter.style);
+                cell.set_style(self.background.patch(gutter.style));
             }
         }
         // Paint the highest-priority sign for this row in the leftmost cell.
@@ -1104,7 +1125,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         for x in area.x..(area.x + total) {
             if let Some(cell) = term_buf.cell_mut((x, y)) {
                 cell.set_char(' ');
-                cell.set_style(gutter.style);
+                cell.set_style(self.background.patch(gutter.style));
             }
         }
     }
@@ -1148,7 +1169,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 for x in num_start..(num_start + gutter.width) {
                     if let Some(cell) = term_buf.cell_mut((x, y)) {
                         cell.set_char(' ');
-                        cell.set_style(gutter.style);
+                        cell.set_style(self.background.patch(gutter.style));
                     }
                 }
                 return;
@@ -1185,7 +1206,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
             }
             if let Some(cell) = term_buf.cell_mut((x, y)) {
                 cell.set_char(ch);
-                cell.set_style(gutter.style);
+                cell.set_style(self.background.patch(gutter.style));
             }
             x = x.saturating_add(1);
         }
@@ -1194,7 +1215,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let spacer_x = num_start + gutter.width.saturating_sub(1);
         if let Some(cell) = term_buf.cell_mut((spacer_x, y)) {
             cell.set_char(' ');
-            cell.set_style(gutter.style);
+            cell.set_style(self.background.patch(gutter.style));
         }
     }
 
@@ -1224,7 +1245,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         for (i, x) in (fold_x..fold_x + gutter.fold_column_width).enumerate() {
             if let Some(cell) = term_buf.cell_mut((x, y)) {
                 cell.set_char(if i == 0 { glyph } else { ' ' });
-                cell.set_style(gutter.style);
+                cell.set_style(self.background.patch(gutter.style));
             }
         }
     }
@@ -1292,7 +1313,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     let mut style = if is_cursor_row {
                         self.cursor_line_bg
                     } else {
-                        Style::default()
+                        self.background
                     };
                     if let Some(span_style) = self.resolve_span_style(row_spans, byte_offset) {
                         style = style.patch(span_style);
@@ -1349,7 +1370,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
             let mut style = if is_cursor_row {
                 self.cursor_line_bg
             } else {
-                Style::default()
+                self.background
             };
             if let Some(span_style) = self.resolve_span_style(row_spans, byte_offset) {
                 style = style.patch(span_style);
@@ -1658,6 +1679,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         // Non-zero area.x so the old `area.x + truncated_dx` overflowed u16.
         let area = Rect::new(100, 0, 20, 1);
@@ -1714,12 +1736,119 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
         assert_eq!(term.cell((4, 0)).unwrap().symbol(), "o");
         assert_eq!(term.cell((0, 1)).unwrap().symbol(), "w");
         assert_eq!(term.cell((4, 1)).unwrap().symbol(), "d");
+    }
+
+    /// #303: a non-default `background` fills the WHOLE area — including cells
+    /// past a line's text and blank rows past EOB — while syntax fg still layers
+    /// on top. `Style::default()` (transparent) leaves cell backgrounds unset so
+    /// the terminal's own bg shows through.
+    #[test]
+    fn background_fills_area_and_transparent_leaves_it_unset() {
+        let bg = Color::Rgb(0x1a, 0x1b, 0x26);
+        // Opaque: every cell — the text cell, the trailing empty cell on the
+        // same row, and a blank row past the single line — carries the bg.
+        let b = View::from_str("hi");
+        let v = vp(6, 3);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_line_row: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
+            folds_override: None,
+            eol_hints: &[],
+            blame_plan: None,
+            diff_filler: None,
+            background: Style::default().bg(bg),
+        };
+        let term = run_render(view, 6, 3);
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
+        assert_eq!(term.cell((0, 0)).unwrap().bg, bg, "text cell carries bg");
+        assert_eq!(
+            term.cell((4, 0)).unwrap().bg,
+            bg,
+            "trailing empty cell past text carries bg"
+        );
+        assert_eq!(
+            term.cell((3, 2)).unwrap().bg,
+            bg,
+            "blank row past EOB carries bg"
+        );
+
+        // Transparent: identical geometry, default background → no fill.
+        let b2 = View::from_str("hi");
+        let view2 = BufferView {
+            buffer: &b2,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_line_row: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
+            folds_override: None,
+            eol_hints: &[],
+            blame_plan: None,
+            diff_filler: None,
+            background: Style::default(),
+        };
+        let term2 = run_render(view2, 6, 3);
+        assert_eq!(
+            term2.cell((4, 0)).unwrap().bg,
+            Color::Reset,
+            "transparent leaves trailing cell bg unset (terminal shows through)"
+        );
+        assert_eq!(term2.cell((3, 2)).unwrap().bg, Color::Reset);
     }
 
     #[test]
@@ -1760,6 +1889,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1807,6 +1937,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1859,6 +1990,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1906,6 +2038,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1956,6 +2089,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -2020,6 +2154,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -2088,6 +2223,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -2161,6 +2297,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -2223,6 +2360,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -2272,6 +2410,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -2329,6 +2468,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -2391,6 +2531,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -2445,6 +2586,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -2500,6 +2642,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -2556,6 +2699,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -2622,6 +2766,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -2676,6 +2821,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -2728,6 +2874,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a" — normal line, no fold bg.
@@ -2811,6 +2958,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 30, 5);
         // Row 1 is the fold header AND the cursor row → blended bg.
@@ -2859,6 +3007,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -2904,6 +3053,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -2949,6 +3099,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         }
     }
 
@@ -3158,6 +3309,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         }
     }
 
@@ -3343,6 +3495,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -3412,6 +3565,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 8);
         // Rows 3-7 are past EOF — with show_eob off they must NOT show `~`.
@@ -3472,6 +3626,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -3541,6 +3696,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 2);
 
@@ -3612,6 +3768,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -3680,6 +3837,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -3761,6 +3919,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.
@@ -3822,6 +3981,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         }
     }
 
@@ -3863,6 +4023,7 @@ mod tests {
             eol_hints: &[],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 20, 2);
         // No cell should contain '│' anywhere.
@@ -4051,6 +4212,7 @@ mod tests {
             eol_hints: &[hint],
             blame_plan: None,
             diff_filler: None,
+            background: Style::default(),
         };
         let term = run_render(view, 30, 1);
         // "ab" is at x=0 and x=1; hint starts at x = 2 + 2 (gap) = 4.

@@ -9,6 +9,7 @@
 # missing fields rather than silently defaulting.
 
 [chrome]
+background    = "#0b0d10"  # editor text-area + gutter bg (--bg); painted unless theme.transparent
 text          = "#e5e9f0"  # default fg on status/tab lines
 text_dim      = "#8b95a7"  # inactive tab labels, status hints
 panel_bg      = "#141820"  # status bar fill / inactive surfaces

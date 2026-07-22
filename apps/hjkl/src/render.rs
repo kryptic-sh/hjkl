@@ -531,6 +531,21 @@ fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
     Style::default().bg(theme.cursor_line_bg)
 }
 
+/// Base background painted behind the editor text area + gutter (#303).
+///
+/// Returns `Style::default()` (no fill — the terminal's own background shows
+/// through, vim's transparent behaviour) when `app.theme_transparent` is set;
+/// otherwise a `bg`-only style using the theme's editor background. Threaded
+/// into [`hjkl_buffer_tui::BufferView::background`], which layers it under
+/// syntax / cursorline / selection styling.
+pub(crate) fn buffer_background_style(app: &App) -> Style {
+    if app.theme_transparent {
+        Style::default()
+    } else {
+        Style::default().bg(app.theme.ui.background)
+    }
+}
+
 /// Split a `Rect` into two parts according to `dir` and `ratio`.
 fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
     match dir.axis() {
@@ -1207,6 +1222,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             None
         },
         diff_filler: diff_filler_plan.as_ref(),
+        // Terminal-background painting (#303): fill the text area + gutter with
+        // the theme's editor background so the terminal's own bg doesn't show
+        // through. `transparent = true` in config clears it (no fill), restoring
+        // vim's see-through behaviour.
+        background: buffer_background_style(app),
     };
     frame.render_widget(view, area);
 
@@ -3074,6 +3094,44 @@ mod tests {
     #[test]
     fn top_bar_height_is_one() {
         assert_eq!(crate::app::TOP_BAR_HEIGHT, 1);
+    }
+
+    /// #303: `transparent = false` (the default) paints the editor text area +
+    /// gutter with the theme's editor background; `transparent = true` clears
+    /// the fill so the terminal's own background shows through.
+    #[test]
+    fn buffer_background_honours_transparent_flag() {
+        use crate::app::App;
+        use ratatui::style::{Color, Style};
+
+        // Opaque (default): the base background carries the theme's editor bg.
+        let mut cfg = hjkl_app::config::Config::default();
+        cfg.theme.transparent = false;
+        let app = App::new(None, false, None, None)
+            .unwrap()
+            .with_config(cfg.clone());
+        assert!(!app.theme_transparent);
+        assert_eq!(
+            buffer_background_style(&app),
+            Style::default().bg(app.theme.ui.background),
+            "opaque config must fill with the theme background"
+        );
+        // Sanity: a bg is actually set (not Reset).
+        assert!(matches!(
+            buffer_background_style(&app).bg,
+            Some(Color::Rgb(_, _, _))
+        ));
+
+        // Transparent: no fill — BufferView.background is the empty default.
+        cfg.theme.transparent = true;
+        let app_t = App::new(None, false, None, None).unwrap().with_config(cfg);
+        assert!(app_t.theme_transparent);
+        assert_eq!(
+            buffer_background_style(&app_t),
+            Style::default(),
+            "transparent config must leave the background unpainted (terminal shows through)"
+        );
+        assert_eq!(buffer_background_style(&app_t).bg, None);
     }
 
     /// A file's name in the explorer must be colored uniformly — every cell of

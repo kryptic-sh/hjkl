@@ -39,6 +39,17 @@ pub struct AppTheme {
     pub syntax: Arc<DotFallbackTheme>,
 }
 
+/// One-file-per-theme registry. Each entry is `(name, toml)` where the TOML is
+/// a SINGLE document carrying BOTH the fixed `[chrome]`/`[mode]`/… UI tables
+/// AND the hjkl-theme `[palette]` + `@capture` syntax tables. `AppTheme::from_toml`
+/// parses it twice — once as [`UiTheme`], once as [`DotFallbackTheme`] — and
+/// each parser ignores the other's tables (neither uses `deny_unknown_fields`).
+///
+/// `"dark"` / `"light"` are NOT listed here: they keep their historical
+/// two-file construction (`default_dark`) so the theme.rs unit tests that assert
+/// dark hex values stay green. New bundled themes are single-file and land here.
+const BUNDLED: &[(&str, &str)] = &[("tokyonight", include_str!("../themes/tokyonight.toml"))];
+
 impl AppTheme {
     /// Default dark theme — palette mirrors hjkl.kryptic.sh.
     pub fn default_dark() -> Self {
@@ -49,6 +60,51 @@ impl AppTheme {
         );
         Self { ui, syntax }
     }
+
+    /// Light colorscheme. Historically light is *syntax-only*: the chrome stays
+    /// the dark UI palette while the syntax layer flips to `DotFallbackTheme::light`.
+    /// Preserved verbatim so `:colorscheme light` / `:set background=light` don't
+    /// regress.
+    pub fn default_light() -> Self {
+        let ui = UiTheme::from_toml(UI_DARK_TOML).expect("bundled ui-dark.toml is malformed");
+        let syntax = Arc::new(DotFallbackTheme::light());
+        Self { ui, syntax }
+    }
+
+    /// Parse a single-document theme TOML into a full [`AppTheme`]: the same
+    /// string feeds both [`UiTheme::from_toml`] (reads the `[chrome]`/`[mode]`/…
+    /// tables) and [`DotFallbackTheme::from_toml`] (reads `[palette]` + `@capture`
+    /// keys). The two parsers ignore each other's tables — neither derives
+    /// `deny_unknown_fields` — so one file drives the whole theme.
+    pub fn from_toml(s: &str) -> Result<Self> {
+        let ui = UiTheme::from_toml(s)?;
+        let syntax = Arc::new(DotFallbackTheme::from_toml(s)?);
+        Ok(Self { ui, syntax })
+    }
+}
+
+/// Resolve a colorscheme name to a fully-built [`AppTheme`]. Returns `None` for
+/// unknown names so callers can emit `E185` / a startup warning. `"dark"` and
+/// `"light"` map to the historical two-file builders; every other name is looked
+/// up in [`BUNDLED`] and parsed via [`AppTheme::from_toml`].
+pub fn load_named(name: &str) -> Option<AppTheme> {
+    match name {
+        "dark" => Some(AppTheme::default_dark()),
+        "light" => Some(AppTheme::default_light()),
+        _ => BUNDLED
+            .iter()
+            .find(|(n, _)| *n == name)
+            .and_then(|(_, toml)| AppTheme::from_toml(toml).ok()),
+    }
+}
+
+/// All colorscheme names hjkl knows how to load: the two historical schemes
+/// (`dark`, `light`) plus every single-file [`BUNDLED`] theme. Used to validate
+/// `:colorscheme <name>` and to power future completion.
+pub fn bundled_theme_names() -> Vec<&'static str> {
+    let mut names = vec!["dark", "light"];
+    names.extend(BUNDLED.iter().map(|(n, _)| *n));
+    names
 }
 
 /// UI chrome palette — status bar, mode badges, cursor row, picker
@@ -60,6 +116,11 @@ impl AppTheme {
 #[derive(Clone)]
 pub struct UiTheme {
     // [chrome]
+    /// Editor text-area + gutter background. Painted as the base layer under
+    /// syntax/cursorline (see `BufferView::background`) so the terminal's own
+    /// background doesn't show through. Honoured only when `theme.transparent`
+    /// is `false`.
+    pub background: Color,
     pub text: Color,
     pub text_dim: Color,
     pub panel_bg: Color,
@@ -146,6 +207,7 @@ impl UiTheme {
     pub fn from_toml(s: &str) -> Result<Self> {
         let raw: RawUiTheme = toml::from_str(s).context("parse ui theme TOML")?;
         Ok(Self {
+            background: parse_hex(&raw.chrome.background)?,
             text: parse_hex(&raw.chrome.text)?,
             text_dim: parse_hex(&raw.chrome.text_dim)?,
             panel_bg: parse_hex(&raw.chrome.panel_bg)?,
@@ -214,6 +276,7 @@ struct RawUiTheme {
 
 #[derive(Deserialize)]
 struct RawChrome {
+    background: String,
     text: String,
     text_dim: String,
     panel_bg: String,
@@ -469,6 +532,60 @@ mod tests {
     #[test]
     fn parse_hex_rejects_non_hex() {
         assert!(parse_hex("#zzggbb").is_err());
+    }
+
+    /// #303: the single-file tokyonight theme must load BOTH halves — all 34
+    /// UI-chrome fields (via `UiTheme::from_toml`) and a valid syntax layer
+    /// (via `DotFallbackTheme::from_toml`) — from one document. Neither parser
+    /// may choke on the other's tables.
+    #[test]
+    fn tokyonight_single_file_loads_both_halves() {
+        let toml = include_str!("../themes/tokyonight.toml");
+        let theme =
+            AppTheme::from_toml(toml).expect("tokyonight.toml must parse as a full AppTheme");
+        // UI half: the editor background is the Night `bg`.
+        assert_eq!(theme.ui.background, Color::Rgb(0x1a, 0x1b, 0x26));
+        // A few more UI fields to prove the whole 34-field struct populated.
+        assert_eq!(theme.ui.mode_insert_bg, Color::Rgb(0x9e, 0xce, 0x6a));
+        assert_eq!(theme.ui.cursor_line_bg, Color::Rgb(0x29, 0x2e, 0x42));
+        assert_eq!(theme.ui.hop_label_bg, Color::Rgb(0xff, 0x9e, 0x64));
+        // Syntax half: high-traffic captures resolve.
+        assert!(theme.syntax.style("@keyword").is_some());
+        assert!(theme.syntax.style("@function").is_some());
+        assert!(theme.syntax.style("@string").is_some());
+        assert!(theme.syntax.style("@comment").is_some());
+    }
+
+    #[test]
+    fn load_named_resolves_bundled_and_rejects_unknown() {
+        assert!(load_named("tokyonight").is_some());
+        assert!(load_named("dark").is_some());
+        assert!(load_named("light").is_some());
+        assert!(load_named("nonesuch").is_none());
+        // tokyonight via load_named matches from_toml directly.
+        let via_named = load_named("tokyonight").unwrap();
+        assert_eq!(via_named.ui.background, Color::Rgb(0x1a, 0x1b, 0x26));
+    }
+
+    #[test]
+    fn bundled_theme_names_contains_all_schemes() {
+        let names = bundled_theme_names();
+        assert!(names.contains(&"tokyonight"));
+        assert!(names.contains(&"dark"));
+        assert!(names.contains(&"light"));
+    }
+
+    /// `default_light` preserves the historical syntax-only light behaviour: the
+    /// chrome stays the dark UI palette while the syntax layer flips to light.
+    #[test]
+    fn default_light_keeps_dark_chrome_with_light_syntax() {
+        let light = AppTheme::default_light();
+        let dark = AppTheme::default_dark();
+        assert_eq!(
+            light.ui.background, dark.ui.background,
+            "light is syntax-only: chrome must stay the dark UI palette"
+        );
+        assert!(light.syntax.style("@keyword").is_some());
     }
 
     #[test]

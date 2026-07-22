@@ -302,6 +302,11 @@ pub struct App {
     /// App-wide theme (UI chrome + syntax). Loaded once at startup from
     /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
     pub theme: crate::theme::AppTheme,
+    /// When `true`, the editor text-area + gutter are left unpainted so the
+    /// terminal's own background shows through (`[theme] transparent = true`).
+    /// Threaded into `BufferView::background` by `render.rs`. Set from config in
+    /// [`Self::with_config`]; default `false`.
+    pub theme_transparent: bool,
     /// Per-language `Highlighter` cache used by the picker preview pane
     /// (computed via [`Self::preview_spans_for`]). Centralised here so
     /// every preview source — files, rg results, open buffers, git diff
@@ -2385,6 +2390,7 @@ impl App {
             blame_prev_cursor: None,
             blame_cursor_moved_at: std::time::Instant::now(),
             colorscheme: "dark".to_string(),
+            theme_transparent: false,
             fs_watch: None,
             scroll_anim: None,
             hop: None,
@@ -2530,6 +2536,11 @@ impl App {
         // reliable fallback for non-Nerd setups.
         self.icon_mode = hjkl_icons::IconMode::from_config(&config.editor.icons)
             .unwrap_or(hjkl_icons::IconMode::Nerd);
+        // Terminal-background painting (#303): store the transparent flag so
+        // `render.rs` can decide whether to fill the editor bg. The theme
+        // itself is applied by `main` via `apply_named_theme` from
+        // `config.theme.name`.
+        self.theme_transparent = config.theme.transparent;
         self.config = config;
         for idx in 0..self.slots.len() {
             let slot = &mut self.slots[idx];
