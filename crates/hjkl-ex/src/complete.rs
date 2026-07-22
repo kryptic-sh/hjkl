@@ -10,6 +10,9 @@ pub enum CompletionKind {
     Command,
     Path,
     Setting,
+    /// A value for a `name=value` `:set` option (e.g. the `dark` in
+    /// `background=dark`). Distinct from `Setting` so the UI can label it.
+    SettingValue,
     View,
     Register,
     Mark,
@@ -481,15 +484,53 @@ pub fn complete_arg(
             (complete_path_entries(prefix, cwd), CompletionKind::Path)
         }
         ArgKind::Setting => {
-            let mut c: Vec<String> = sources
-                .settings
-                .iter()
-                .filter(|s| s.starts_with(prefix))
-                .cloned()
-                .collect();
-            c.sort();
-            c.dedup();
-            (c, CompletionKind::Setting)
+            if let Some(eq) = prefix.find('=') {
+                // `name=value` — complete VALUES for the option, scoping the
+                // replace range to ONLY the value token (after the `=`) so
+                // accepting inserts the value, not the whole `name=`.
+                let name = &prefix[..eq];
+                let value_prefix = &prefix[eq + 1..];
+                let value_start = token_start + eq + 1;
+                let mut c: Vec<String> = crate::setting_value_candidates(name)
+                    .into_iter()
+                    .filter(|v| v.starts_with(value_prefix))
+                    .map(|v| v.to_string())
+                    .collect();
+                c.sort();
+                c.dedup();
+                return Completions {
+                    replace_range: value_start..caret,
+                    candidates: c,
+                    kind: CompletionKind::SettingValue,
+                };
+            }
+            if let Some(rest) = prefix
+                .strip_prefix("no")
+                .or_else(|| prefix.strip_prefix("inv"))
+            {
+                // `no…` / `inv…` — offer the boolean option names carrying the
+                // typed `no`/`inv` prefix (vim's `:set no<Tab>` behaviour).
+                let toggle = &prefix[..prefix.len() - rest.len()]; // "no" or "inv"
+                let mut c: Vec<String> = crate::boolean_setting_names()
+                    .into_iter()
+                    .map(|n| format!("{toggle}{n}"))
+                    .filter(|n| n.starts_with(prefix))
+                    .collect();
+                c.sort();
+                c.dedup();
+                (c, CompletionKind::Setting)
+            } else {
+                // Bare option-name completion (unchanged).
+                let mut c: Vec<String> = sources
+                    .settings
+                    .iter()
+                    .filter(|s| s.starts_with(prefix))
+                    .cloned()
+                    .collect();
+                c.sort();
+                c.dedup();
+                (c, CompletionKind::Setting)
+            }
         }
         ArgKind::View => {
             let mut c: Vec<String> = sources
@@ -734,6 +775,167 @@ mod tests {
         assert!(result2.candidates.contains(&"nu".to_string()));
         assert!(!result2.candidates.contains(&"noic".to_string()));
         assert!(!result2.candidates.contains(&"relativenumber".to_string()));
+    }
+
+    // ── :set value + no/inv completion (issue #306) ───────────────────────────
+
+    fn setting_names() -> Vec<String> {
+        crate::all_setting_names()
+    }
+
+    #[test]
+    fn complete_set_value_background_offers_dark_light() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set background=` → dark, light; replace range starts AFTER the `=`.
+        let line = "set background=";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::SettingValue);
+        assert_eq!(
+            result.candidates,
+            vec!["dark".to_string(), "light".to_string()]
+        );
+        // "set background=" is 15 bytes; the value token is the empty slice at 15.
+        assert_eq!(result.replace_range, 15..15);
+    }
+
+    #[test]
+    fn complete_set_value_filters_and_scopes_to_value_token() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set background=d` → only `dark`; replace range covers ONLY `d`, so
+        // accepting yields `background=dark`, not `dark`.
+        let line = "set background=d";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::SettingValue);
+        assert_eq!(result.candidates, vec!["dark".to_string()]);
+        // The `d` sits at byte 15; replace range is 15..16 (the value only).
+        assert_eq!(result.replace_range, 15..16);
+        assert_eq!(&line[result.replace_range.clone()], "d");
+    }
+
+    #[test]
+    fn complete_set_value_foldmethod() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set foldmethod=` → the real accepted values.
+        let line = "set foldmethod=";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::SettingValue);
+        assert_eq!(
+            result.candidates,
+            vec![
+                "expr".to_string(),
+                "manual".to_string(),
+                "marker".to_string(),
+                "syntax".to_string(),
+            ]
+        );
+        // `:set foldmethod=mar` → only `marker` (hjkl has no `indent` value).
+        let line = "set foldmethod=mar";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.candidates, vec!["marker".to_string()]);
+    }
+
+    #[test]
+    fn complete_set_value_alias_and_signcolumn() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // Alias resolves too: `:set scl=` → auto/no/yes.
+        let line = "set scl=";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(
+            result.candidates,
+            vec!["auto".to_string(), "no".to_string(), "yes".to_string()]
+        );
+    }
+
+    #[test]
+    fn complete_set_value_non_enum_is_empty() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // A numeric option has no value candidates.
+        let line = "set tabstop=";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::SettingValue);
+        assert!(result.candidates.is_empty());
+    }
+
+    #[test]
+    fn complete_set_no_prefix_offers_boolean_negations() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set no` → boolean names carrying the `no` prefix.
+        let line = "set no";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::Setting);
+        assert!(result.candidates.contains(&"nonumber".to_string()));
+        assert!(result.candidates.contains(&"noignorecase".to_string()));
+        assert!(result.candidates.contains(&"nofoldenable".to_string()));
+        // Every candidate must carry the `no` prefix.
+        assert!(result.candidates.iter().all(|c| c.starts_with("no")));
+        // A numeric option name is not offered as a `no…` toggle.
+        assert!(!result.candidates.contains(&"notabstop".to_string()));
+    }
+
+    #[test]
+    fn complete_set_inv_prefix_offers_boolean_inversions() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set inv` → boolean names carrying the `inv` prefix.
+        let line = "set inv";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::Setting);
+        assert!(result.candidates.contains(&"invnumber".to_string()));
+        assert!(result.candidates.iter().all(|c| c.starts_with("inv")));
+        // Filtered further: `:set invnu` → invnumber only.
+        let line = "set invnu";
+        let result = complete_arg(line, line.len(), ArgKind::Setting, &sources);
+        assert_eq!(result.candidates, vec!["invnumber".to_string()]);
+    }
+
+    #[test]
+    fn complete_set_name_completion_unchanged_regression() {
+        let settings = setting_names();
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        // `:set ` → all names (bare name case, unchanged).
+        let result = complete_arg("set ", 4, ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::Setting);
+        assert!(result.candidates.contains(&"foldmethod".to_string()));
+        assert!(result.candidates.contains(&"number".to_string()));
+        assert_eq!(result.replace_range, 4..4);
+
+        // `:set fold` → the fold-family names (bare name case, unchanged).
+        let result = complete_arg("set fold", 8, ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::Setting);
+        assert!(result.candidates.contains(&"foldmethod".to_string()));
+        assert!(result.candidates.contains(&"foldenable".to_string()));
+        assert!(result.candidates.iter().all(|c| c.starts_with("fold")));
+        assert_eq!(result.replace_range, 4..8);
     }
 
     #[test]

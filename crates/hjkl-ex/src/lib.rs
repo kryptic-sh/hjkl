@@ -32,7 +32,10 @@ mod registry;
 mod setopt;
 mod shell;
 
-pub use setopt::{all_setting_names, apply_set_token, query_option_value};
+pub use setopt::{
+    all_setting_names, apply_set_token, boolean_setting_names, query_option_value,
+    setting_value_candidates,
+};
 
 /// Try to dispatch `input` (without the leading `:`) through the registry.
 ///

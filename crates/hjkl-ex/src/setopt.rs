@@ -118,6 +118,76 @@ pub fn all_setting_names() -> Vec<String> {
     ]
 }
 
+/// Canonical names of every boolean `:set` option — exactly the arms of
+/// [`apply_bool_option`] that flip a `bool` (excluding `background`, which is an
+/// enum handled by the host). This is the single source of truth for the
+/// `:set no…` / `:set inv…` completion so the completer can't offer a `no`
+/// prefix on a non-boolean option. The `boolean_names_are_applyable` test keeps
+/// it honest against the parser.
+const BOOLEAN_CANONICAL_NAMES: &[&str] = &[
+    "ignorecase",
+    "smartcase",
+    "wrapscan",
+    "expandtab",
+    "autoindent",
+    "autoreload",
+    "smartindent",
+    "undobreak",
+    "readonly",
+    "modifiable",
+    "number",
+    "relativenumber",
+    "cursorline",
+    "cursorcolumn",
+    "wrap",
+    "linebreak",
+    "autopair",
+    "autoclose-tag",
+    "motion_sneak",
+    "list",
+    "tabline_icons",
+    "blame_inline",
+    "indent_guides",
+    "format_on_save",
+    "trim_trailing_whitespace",
+    "rainbow_brackets",
+    "matchparen",
+    "foldenable",
+];
+
+/// Canonical names of the boolean `:set` options, for the `:set no…`/`inv…`
+/// completion arm. Names only (no aliases) — vim lists the long forms.
+pub fn boolean_setting_names() -> Vec<String> {
+    BOOLEAN_CANONICAL_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// The valid completion values for an ENUM-valued `:set` option, keyed by
+/// canonical name or alias. Derived directly from the `name=value` arms of
+/// [`apply_set_token`] so the candidates can't drift from what the parser
+/// actually accepts:
+///
+/// - `signcolumn`/`scl` → `yes`/`no`/`auto`
+/// - `foldmethod`/`fdm` → `manual`/`expr`/`syntax`/`marker` (all four are
+///   accepted; `syntax` is an alias for `expr`)
+/// - `diagnostics_inline`/`diaginline` → the canonical `off`/`current`/`all`
+/// - `background`/`bg` → `dark`/`light` (completion-only; the host intercepts
+///   the actual apply — see the NOTE in `apply_bool_option`)
+///
+/// Returns an empty vec for non-enum options (numeric / free-string / boolean)
+/// and unknown names.
+pub fn setting_value_candidates(name: &str) -> Vec<&'static str> {
+    match name {
+        "signcolumn" | "scl" => vec!["auto", "no", "yes"],
+        "foldmethod" | "fdm" => vec!["expr", "manual", "marker", "syntax"],
+        "diagnostics_inline" | "diaginline" => vec!["all", "current", "off"],
+        "background" | "bg" => vec!["dark", "light"],
+        _ => Vec::new(),
+    }
+}
+
 /// `:set [opt ...]` body. Splits on whitespace and applies each token.
 /// Bare `:set` reports the current values for the supported options.
 pub(crate) fn apply_set<H: Host>(
@@ -1449,6 +1519,80 @@ mod tests {
         let mut editor = make_editor();
         assert_eq!(apply_set(&mut editor, "fls=5"), ExEffect::Ok);
         assert_eq!(editor.settings().foldlevelstart, 5);
+    }
+
+    // ── value + boolean completion metadata (issue #306) ─────────────────────
+
+    #[test]
+    fn setting_value_candidates_enum_options() {
+        assert_eq!(
+            setting_value_candidates("background"),
+            vec!["dark", "light"]
+        );
+        assert_eq!(setting_value_candidates("bg"), vec!["dark", "light"]);
+        assert_eq!(
+            setting_value_candidates("signcolumn"),
+            vec!["auto", "no", "yes"]
+        );
+        assert_eq!(
+            setting_value_candidates("foldmethod"),
+            vec!["expr", "manual", "marker", "syntax"]
+        );
+        assert_eq!(
+            setting_value_candidates("diagnostics_inline"),
+            vec!["all", "current", "off"]
+        );
+        // Aliases resolve to the same values.
+        assert_eq!(
+            setting_value_candidates("fdm"),
+            setting_value_candidates("foldmethod")
+        );
+        assert_eq!(
+            setting_value_candidates("scl"),
+            setting_value_candidates("signcolumn")
+        );
+    }
+
+    #[test]
+    fn setting_value_candidates_non_enum_and_unknown_are_empty() {
+        // Numeric, free-string, boolean, and unknown options have no enum values.
+        assert!(setting_value_candidates("tabstop").is_empty());
+        assert!(setting_value_candidates("filetype").is_empty());
+        assert!(setting_value_candidates("number").is_empty());
+        assert!(setting_value_candidates("bogus").is_empty());
+    }
+
+    #[test]
+    fn boolean_setting_names_sanity() {
+        let names = boolean_setting_names();
+        assert!(names.iter().any(|n| n == "number"));
+        assert!(names.iter().any(|n| n == "ignorecase"));
+        assert!(names.iter().any(|n| n == "foldenable"));
+        // Non-boolean options must NOT appear.
+        assert!(!names.iter().any(|n| n == "tabstop"));
+        assert!(!names.iter().any(|n| n == "foldmethod"));
+        assert!(!names.iter().any(|n| n == "background"));
+        // Canonical names only — no short aliases.
+        assert!(!names.iter().any(|n| n == "nu"));
+    }
+
+    #[test]
+    fn boolean_names_are_applyable() {
+        // Guard against drift from the parser: every advertised boolean name
+        // must apply both bare (`name`) and negated (`noname`) without error.
+        for name in boolean_setting_names() {
+            let mut editor = make_editor();
+            assert_eq!(
+                apply_set(&mut editor, &name),
+                ExEffect::Ok,
+                "`:set {name}` must succeed"
+            );
+            assert_eq!(
+                apply_set(&mut editor, &format!("no{name}")),
+                ExEffect::Ok,
+                "`:set no{name}` must succeed"
+            );
+        }
     }
 
     #[test]

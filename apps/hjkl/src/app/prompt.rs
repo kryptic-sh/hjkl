@@ -53,6 +53,7 @@ fn map_ex_kind(kind: hjkl_ex::CompletionKind) -> CompletionKind {
         hjkl_ex::CompletionKind::Command => CompletionKind::Keyword,
         hjkl_ex::CompletionKind::Path => CompletionKind::File,
         hjkl_ex::CompletionKind::Setting => CompletionKind::Variable,
+        hjkl_ex::CompletionKind::SettingValue => CompletionKind::Variable,
         hjkl_ex::CompletionKind::View => CompletionKind::Variable,
         hjkl_ex::CompletionKind::Register => CompletionKind::Other,
         hjkl_ex::CompletionKind::Mark => CompletionKind::Other,
