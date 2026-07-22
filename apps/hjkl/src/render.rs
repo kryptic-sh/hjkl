@@ -741,12 +741,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Per-window state (#151 Phase D): settings, cursor, viewport, blame-view
     // come from THIS window's editor. Buffer + syntax spans + per-buffer
     // metadata (blame data, diag/git signs) stay on the slot editor (shared).
-    let win_settings = app
-        .window_editors
-        .get(&win_id)
-        .map(|e| e.settings().clone())
-        .unwrap_or_else(|| app.slots()[slot_idx].settings().clone());
-    let s = &win_settings;
     // `is_blame` has no slot-level counterpart (#151 Stage 2b — it's
     // transient per-window UI state, never meant to persist beyond a
     // window's life); default it off in the (should-not-happen) fallback.
@@ -755,15 +749,43 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .get(&win_id)
         .map(|e| (e.buffer().cursor().row, e.is_blame()))
         .unwrap_or_else(|| (app.slots()[slot_idx].buffer().cursor().row, false));
-    let (nu, rnu) = (s.number, s.relativenumber);
-    let (cul, cuc) = (s.cursorline, s.cursorcolumn);
-    let colorcolumn = s.colorcolumn.clone();
-    let list_active = s.list;
-    let listchars_owned = s.listchars.clone();
-    let indent_guides_enabled = s.indent_guides;
-    let indent_guide_char = s.indent_guide_char;
-    let indent_guide_shiftwidth = s.shiftwidth;
-    let indent_guide_tabstop = s.tabstop;
+    // Scalar (Copy) settings copied out of THIS window's editor (or the slot
+    // fallback) without cloning the whole `Settings` struct (#312). The two
+    // owned fields (`colorcolumn: String`, `listchars: ListChars`) are borrowed
+    // further below — AFTER the mutable-viewport block — so their immutable
+    // `app` borrow doesn't collide with the `get_mut` there.
+    let (
+        nu,
+        rnu,
+        cul,
+        cuc,
+        list_active,
+        indent_guides_enabled,
+        indent_guide_char,
+        indent_guide_shiftwidth,
+        indent_guide_tabstop,
+        diagnostics_inline_mode,
+        blame_inline,
+    ) = {
+        let st = app
+            .window_editors
+            .get(&win_id)
+            .map(|e| e.settings())
+            .unwrap_or_else(|| app.slots()[slot_idx].settings());
+        (
+            st.number,
+            st.relativenumber,
+            st.cursorline,
+            st.cursorcolumn,
+            st.list,
+            st.indent_guides,
+            st.indent_guide_char,
+            st.shiftwidth,
+            st.tabstop,
+            st.diagnostics_inline,
+            st.blame_inline,
+        )
+    };
 
     // Stable sign + fold columns: reserve the max width each would need across
     // ALL open buffers, so a diagnostic/git sign (or fold) appearing in one
@@ -793,7 +815,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // For the focused window: publish viewport dims into the engine so
     // scrolloff math and cursor-screen-pos work correctly.
     if is_focused {
-        let tabstop = s.tabstop as u16;
+        let tabstop = indent_guide_tabstop as u16;
         if let Some(e) = app.window_editors.get_mut(&win_id) {
             let vp = e.host_mut().viewport_mut();
             vp.width = text_width;
@@ -803,6 +825,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             e.set_viewport_height(area.height);
         }
     }
+
+    // Borrow the two owned `Settings` fields (`colorcolumn: String`,
+    // `listchars: ListChars`) for the rest of the draw instead of cloning the
+    // whole struct (#312). Bound AFTER the mutable-viewport block above so this
+    // immutable `app` borrow doesn't collide with the `get_mut` there.
+    let settings_ref = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.settings())
+        .unwrap_or_else(|| app.slots()[slot_idx].settings());
+    let colorcolumn: &str = settings_ref.colorcolumn.as_str();
+    let listchars_ref = &settings_ref.listchars;
 
     // Relative/hybrid line numbers count from THIS window's cursor row. The
     // focused window's editor cursor is authoritative and matches its saved
@@ -942,12 +976,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         Style::default()
     };
 
+    // Borrow this window editor's style table (#312) instead of cloning the
+    // whole `Vec<Style>` per window per frame — the resolver only reads it. The
+    // borrow lives until the `BufferView` is rendered below; no `app` mutation
+    // happens in between (the only `get_mut` is the viewport block far above).
     let style_table = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.style_table().to_owned())
-        .unwrap_or_default();
-    let resolver = move |id: u32| {
+        .map(|e| e.style_table())
+        .unwrap_or(&[]);
+    let resolver = |id: u32| {
         hjkl_engine_tui::style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
     };
 
@@ -973,7 +1011,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     };
 
     // Colorcolumn indices (1-based) — rendered under syntax.
-    let cc_cols = parse_colorcolumn(&colorcolumn);
+    let cc_cols = parse_colorcolumn(colorcolumn);
     let cc_style = Style::default().bg(app.theme.ui.colorcolumn_bg);
 
     // Compute indent guide active column from the cursor row's leading whitespace.
@@ -1031,7 +1069,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let eol_hints: Vec<EolHint> = {
         let slot = &app.slots()[slot_idx];
         let cursor_row = w_cursor_row;
-        let diag_mode = s.diagnostics_inline;
+        let diag_mode = diagnostics_inline_mode;
 
         let mut hints: Vec<EolHint> = Vec::new();
 
@@ -1073,7 +1111,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
         // 2. Inline blame on the cursor line, unless a diagnostic already
         //    annotates it (errors take precedence over blame).
-        let blame_show = s.blame_inline
+        let blame_show = blame_inline
             && !w_is_blame
             && is_focused
             && app.blame_cursor_moved_at.elapsed() >= BLAME_IDLE_DELAY
@@ -1131,25 +1169,34 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // covers [byte of US .. end of line] with an empty replacement so the tail
     // is invisible. The buffer text itself is unchanged; only the rendered cells
     // differ. In debug_mode the raw ids are shown for diagnostics.
-    let explorer_conceals: Vec<hjkl_buffer_tui::Conceal> = if is_explorer_slot && !app.debug_mode {
-        use crate::app::explorer_reconcile::ID_SEP;
-        let buf_text = app.slots()[slot_idx].buffer().as_string();
-        buf_text
-            .lines()
-            .enumerate()
-            .filter_map(|(row, line)| {
-                let us_byte = line.find(ID_SEP)?;
-                Some(hjkl_buffer_tui::Conceal {
-                    row,
-                    start_byte: us_byte,
-                    end_byte: line.len(),
-                    replacement: String::new(),
-                })
-            })
-            .collect()
+    // Whole-buffer text copy shared by the explorer conceal pass here and the
+    // glyph-overlay pass below — computed ONCE per frame (#312) instead of a
+    // second `as_string()` (a full rope→String copy) in the overlay.
+    let explorer_buf_text: Option<String> = if is_explorer_slot && !app.debug_mode {
+        Some(app.slots()[slot_idx].buffer().as_string())
     } else {
-        Vec::new()
+        None
     };
+
+    let explorer_conceals: Vec<hjkl_buffer_tui::Conceal> =
+        if let Some(buf_text) = explorer_buf_text.as_deref() {
+            use crate::app::explorer_reconcile::ID_SEP;
+            buf_text
+                .lines()
+                .enumerate()
+                .filter_map(|(row, line)| {
+                    let us_byte = line.find(ID_SEP)?;
+                    Some(hjkl_buffer_tui::Conceal {
+                        row,
+                        start_byte: us_byte,
+                        end_byte: line.len(),
+                        replacement: String::new(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
     // Diff-mode filler plan (#250): blank rows that keep the two diff windows
     // aligned. Built once and reused by the renderer, the cursor placement, and
@@ -1204,7 +1251,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         colorcolumn_cols: &cc_cols,
         colorcolumn_style: cc_style,
         listchars: if list_active {
-            Some(&listchars_owned)
+            Some(listchars_ref)
         } else {
             None
         },
@@ -1278,21 +1325,23 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // `buffer.folds()`, an UNFOCUSED one from its `window_folds` snapshot
         // (window-level folds). Reading the wrong source here desyncs the glyph
         // overlay from the drawn rows and garbles the tree.
-        let (explorer_folds, buf_text): (Vec<hjkl_buffer::Fold>, String) =
+        let explorer_folds: Vec<hjkl_buffer::Fold> =
             if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
                 let b = app.slots()[slot_idx].buffer();
-                let folds = if is_focused {
+                if is_focused {
                     b.folds()
                 } else {
                     app.window_folds
                         .get(&win_id)
                         .cloned()
                         .unwrap_or_else(|| b.folds())
-                };
-                (folds, b.as_string())
+                }
             } else {
-                (Vec::new(), String::new())
+                Vec::new()
             };
+        // Reuse the whole-buffer text computed once above for the conceal pass
+        // (#312) rather than a second `as_string()` copy.
+        let buf_text: &str = explorer_buf_text.as_deref().unwrap_or("");
 
         // Layout (icons, guides, depth) is derived from the LIVE buffer text —
         // NOT the last-reconciled `pane.tree.nodes` — so glyphs stay aligned
@@ -1300,7 +1349,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // before the Normal-mode reconcile rebuilds the tree). `None` slots are
         // blank lines (e.g. a fresh open-line awaiting a name).
         let overlay_nodes =
-            crate::app::explorer::overlay_nodes_from_buffer(&buf_text, &pane.tree.root);
+            crate::app::explorer::overlay_nodes_from_buffer(buf_text, &pane.tree.root);
 
         // Git status follows the PATH, not the row: resolve each row's color
         // from the reconciled tree's status map (which carries rollup + the
