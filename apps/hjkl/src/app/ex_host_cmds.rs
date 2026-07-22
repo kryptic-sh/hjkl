@@ -1340,7 +1340,12 @@ impl HostCmd<App> for AnvilCmd {
     }
 
     fn arg_kind(&self) -> ArgKind {
-        ArgKind::Raw
+        ArgKind::Enum
+    }
+
+    /// Subcommands accepted by `run`'s match below.
+    fn arg_choices(&self) -> &'static [&'static str] {
+        &["install", "uninstall", "update"]
     }
 
     fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
@@ -1460,7 +1465,13 @@ impl HostCmd<App> for SyntaxCmd {
     }
 
     fn arg_kind(&self) -> ArgKind {
-        ArgKind::Raw
+        ArgKind::Enum
+    }
+
+    /// The meaningful subcommands `run` matches below (other args are accepted
+    /// as vim-permissive no-ops but aren't offered for completion).
+    fn arg_choices(&self) -> &'static [&'static str] {
+        &["disable", "enable", "off", "on"]
     }
 
     fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {

@@ -58,6 +58,7 @@ fn map_ex_kind(kind: hjkl_ex::CompletionKind) -> CompletionKind {
         hjkl_ex::CompletionKind::Register => CompletionKind::Other,
         hjkl_ex::CompletionKind::Mark => CompletionKind::Other,
         hjkl_ex::CompletionKind::Colorscheme => CompletionKind::Variable,
+        hjkl_ex::CompletionKind::Choice => CompletionKind::Keyword,
         hjkl_ex::CompletionKind::None => CompletionKind::Other,
     }
 }
@@ -239,6 +240,9 @@ impl App {
             registers: &registers,
             marks: &marks,
             colorschemes: &colorschemes,
+            // Populated inside `complete()` from the resolved command's
+            // `arg_choices()` for `ArgKind::Enum` args.
+            enum_choices: &[],
         };
         let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources, &extra_names);
         if comp.kind == hjkl_ex::CompletionKind::None || comp.candidates.is_empty() {

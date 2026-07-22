@@ -6,11 +6,17 @@ use hjkl_engine::Host;
 pub enum ArgKind {
     None,
     Path,
+    /// Like `Path`, but only directory entries are offered (`:cd`).
+    Directory,
     View,
     Setting,
     Register,
     Mark,
     Colorscheme,
+    /// A fixed set of enum-style subcommand values supplied by the command
+    /// itself (host commands via [`HostCmd::arg_choices`]) — e.g. `:syntax`
+    /// (`on`/`off`/…), `:Anvil` (`install`/`uninstall`/`update`).
+    Enum,
     Raw,
 }
 
@@ -124,6 +130,14 @@ pub trait HostCmd<Ctx>: Send + Sync {
     }
     fn arg_kind(&self) -> ArgKind {
         ArgKind::None
+    }
+    /// Fixed enum-style argument values this command accepts, for
+    /// [`ArgKind::Enum`] completion. Defaults to none. Commands with
+    /// `arg_kind() == ArgKind::Enum` override this to return their real,
+    /// handler-accepted subcommands so completion can never drift from
+    /// what `run` actually matches.
+    fn arg_choices(&self) -> &'static [&'static str] {
+        &[]
     }
     /// Returns `Some(effect)` to claim the invocation, `None` to defer.
     fn run(&self, ctx: &mut Ctx, args: &str) -> Option<crate::effect::ExEffect>;

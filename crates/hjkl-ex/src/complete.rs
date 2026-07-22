@@ -17,11 +17,17 @@ pub enum CompletionKind {
     Register,
     Mark,
     Colorscheme,
+    /// A fixed enum-style subcommand value (e.g. `on` for `:syntax`,
+    /// `install` for `:Anvil`). Distinct so the UI can label it.
+    Choice,
 }
 
 /// Sources for arg completion. Caller fills the slots applicable to
 /// their context. None means "no candidates" — completer returns empty.
-#[derive(Default)]
+///
+/// `Copy` so [`complete`] can cheaply clone-and-augment it with the resolved
+/// command's [`ArgKind::Enum`] choices before dispatching to [`complete_arg`].
+#[derive(Copy, Clone, Default)]
 pub struct ArgSources<'a> {
     /// cwd to scan for `:e <Tab>` style path completion. None disables.
     pub cwd: Option<&'a std::path::Path>,
@@ -35,6 +41,10 @@ pub struct ArgSources<'a> {
     pub marks: &'a [String],
     /// Bundled colorscheme names for `:colorscheme <Tab>`. Empty disables.
     pub colorschemes: &'a [String],
+    /// Fixed enum-value choices for an [`ArgKind::Enum`] argument (e.g.
+    /// `:syntax on`). Populated by [`complete`] from the resolved command's
+    /// [`HostCmd::arg_choices`]; empty disables.
+    pub enum_choices: &'a [&'a str],
 }
 
 /// Completion candidates for an input line at a given caret offset.
@@ -311,7 +321,10 @@ fn expand_path_prefix(s: &str, home: &str, getenv: impl Fn(&str) -> Option<Strin
 /// A leading `~` / `~/` and `$VAR` / `${VAR}` in the directory portion are
 /// expanded for the scan only; the returned candidates keep the original typed
 /// `dir_part`, so accepting one preserves the `~` / `$VAR` the user typed.
-fn complete_path_entries(prefix: &str, cwd: &std::path::Path) -> Vec<String> {
+///
+/// When `dirs_only` is true, non-directory entries are filtered out (`:cd`
+/// completion); directories still get their trailing `/`.
+fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -> Vec<String> {
     // A bare `~` scans the home dir with entries prefixed `~/`.
     let prefix = if prefix == "~" { "~/" } else { prefix };
     // Split prefix at the last '/' into (dir_part, file_part).
@@ -346,11 +359,11 @@ fn complete_path_entries(prefix: &str, cwd: &std::path::Path) -> Vec<String> {
             if !name_str.starts_with(file_part) {
                 return None;
             }
-            let suffix = if e.file_type().ok()?.is_dir() {
-                "/"
-            } else {
-                ""
-            };
+            let is_dir = e.file_type().ok()?.is_dir();
+            if dirs_only && !is_dir {
+                return None;
+            }
+            let suffix = if is_dir { "/" } else { "" };
             Some(format!("{dir_part}{name_str}{suffix}"))
         })
         .collect();
@@ -364,11 +377,13 @@ pub fn arg_kind_usage(kind: ArgKind) -> &'static str {
     match kind {
         ArgKind::None => "",
         ArgKind::Path => "<path>",
+        ArgKind::Directory => "<dir>",
         ArgKind::View => "<buffer>",
         ArgKind::Setting => "<setting>",
         ArgKind::Register => "<register>",
         ArgKind::Mark => "<mark>",
         ArgKind::Colorscheme => "<colorscheme>",
+        ArgKind::Enum => "<value>",
         ArgKind::Raw => "<args>",
     }
 }
@@ -475,8 +490,8 @@ pub fn complete_arg(
     }
     // Find the token under the caret. Two rules:
     //
-    // - `ArgKind::Path`: every file command consumes the ENTIRE trimmed
-    //   argument as ONE verbatim path — `:e`/`:w`/`:r`/`:saveas`/`:file`
+    // - `ArgKind::Path` / `ArgKind::Directory`: every file command consumes the
+    //   ENTIRE trimmed argument as ONE verbatim path — `:e`/`:w`/`:r`/`:saveas`/`:file`
     //   (builtins.rs, all `args.trim()`), and the host `:split`/`:vsplit`/
     //   `:tabnew`/`:diffsplit` (ex_host_cmds.rs, `args.trim()`), which reach
     //   the disk via `PathBuf::from(arg)` with NO `\`-unescaping or
@@ -489,7 +504,7 @@ pub fn complete_arg(
     // - Everything else (settings, buffers, registers, …): a single
     //   whitespace-delimited word — walk back from the caret to the previous
     //   whitespace.
-    let token_start = if matches!(arg_kind, ArgKind::Path) {
+    let token_start = if matches!(arg_kind, ArgKind::Path | ArgKind::Directory) {
         let lead_ws = line[arg_start..caret]
             .find(|c: char| !c.is_whitespace())
             .unwrap_or(caret - arg_start);
@@ -511,7 +526,31 @@ pub fn complete_arg(
                 Some(p) => p,
                 None => return Completions::empty(caret),
             };
-            (complete_path_entries(prefix, cwd), CompletionKind::Path)
+            (
+                complete_path_entries(prefix, cwd, false),
+                CompletionKind::Path,
+            )
+        }
+        ArgKind::Directory => {
+            let cwd = match sources.cwd {
+                Some(p) => p,
+                None => return Completions::empty(caret),
+            };
+            (
+                complete_path_entries(prefix, cwd, true),
+                CompletionKind::Path,
+            )
+        }
+        ArgKind::Enum => {
+            let mut c: Vec<String> = sources
+                .enum_choices
+                .iter()
+                .filter(|v| v.starts_with(prefix))
+                .map(|v| v.to_string())
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Choice)
         }
         ArgKind::Setting => {
             if let Some(eq) = prefix.find('=') {
@@ -665,6 +704,20 @@ where
         .map(|c| c.arg_kind())
         .or_else(|| editor_reg.resolve(cmd_name).map(|c| c.arg_kind))
         .unwrap_or(ArgKind::None);
+    // For `ArgKind::Enum`, augment the sources with the resolved command's
+    // fixed choice list (host commands only — the editor registry carries no
+    // enum values) so `complete_arg` can offer them.
+    let mut owned;
+    let sources = if arg_kind == ArgKind::Enum {
+        owned = *sources;
+        owned.enum_choices = host_reg
+            .resolve(cmd_name)
+            .map(|c| c.arg_choices())
+            .unwrap_or(&[]);
+        &owned
+    } else {
+        sources
+    };
     complete_arg(line, caret, arg_kind, sources)
 }
 
@@ -1048,6 +1101,137 @@ mod tests {
         assert!(result2.candidates.iter().any(|c| c.contains(".hidden")));
     }
 
+    // ── :cd directory-only completion (issue #309) ────────────────────────────
+
+    #[test]
+    fn complete_cd_lists_only_directories() {
+        // A dir with both files and subdirs: `:cd <Tab>` must list ONLY the
+        // subdirs (each with a trailing `/`), never the files.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::create_dir(tmp.path().join("tests")).unwrap();
+        std::fs::write(tmp.path().join("file.txt"), b"x").unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        let result = complete_arg("cd ", 3, ArgKind::Directory, &sources);
+        assert_eq!(result.kind, CompletionKind::Path);
+        assert!(result.candidates.contains(&"src/".to_string()));
+        assert!(result.candidates.contains(&"tests/".to_string()));
+        // No files, and every candidate is a directory (trailing `/`).
+        assert!(!result.candidates.iter().any(|c| c.contains("file.txt")));
+        assert!(!result.candidates.iter().any(|c| c.contains("Cargo.toml")));
+        assert!(result.candidates.iter().all(|c| c.ends_with('/')));
+    }
+
+    #[test]
+    fn complete_cd_expands_tilde() {
+        // `:cd ~/…` still expands `~` and keeps the typed `~/` prefix, listing
+        // directories only.
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("Documents")).unwrap();
+        std::fs::write(home.path().join("notes.txt"), b"x").unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let sources = ArgSources {
+            cwd: Some(cwd.path()),
+            ..Default::default()
+        };
+
+        let prev = std::env::var("HOME").ok();
+        // SAFETY: single-threaded test logic; restored below.
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        let line = "cd ~/";
+        let result = complete_arg(line, line.len(), ArgKind::Directory, &sources);
+        assert!(
+            result.candidates.contains(&"~/Documents/".to_string()),
+            "expected ~/Documents/ in {:?}",
+            result.candidates
+        );
+        assert!(!result.candidates.iter().any(|c| c.contains("notes.txt")));
+
+        // SAFETY: restore prior HOME.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn complete_cd_expands_var() {
+        // `:cd $VAR/` expands the variable and lists directories only.
+        let base = tempfile::tempdir().unwrap();
+        std::fs::create_dir(base.path().join("sub")).unwrap();
+        std::fs::write(base.path().join("leaf.txt"), b"x").unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let sources = ArgSources {
+            cwd: Some(cwd.path()),
+            ..Default::default()
+        };
+
+        // SAFETY: a uniquely-named var this test owns; set then removed.
+        unsafe { std::env::set_var("HJKL_309_BASE", base.path()) };
+
+        let line = "cd $HJKL_309_BASE/";
+        let result = complete_arg(line, line.len(), ArgKind::Directory, &sources);
+        assert_eq!(result.candidates, vec!["$HJKL_309_BASE/sub/".to_string()]);
+
+        // SAFETY: remove the var this test set.
+        unsafe { std::env::remove_var("HJKL_309_BASE") };
+    }
+
+    // ── :syntax / :Anvil enum-value completion (issue #309) ───────────────────
+
+    #[test]
+    fn complete_enum_lists_choices() {
+        let choices = ["disable", "enable", "off", "on"];
+        let sources = ArgSources {
+            enum_choices: &choices,
+            ..Default::default()
+        };
+        // `:syntax ` → all choices, sorted.
+        let result = complete_arg("syntax ", 7, ArgKind::Enum, &sources);
+        assert_eq!(result.kind, CompletionKind::Choice);
+        assert_eq!(
+            result.candidates,
+            vec![
+                "disable".to_string(),
+                "enable".to_string(),
+                "off".to_string(),
+                "on".to_string(),
+            ]
+        );
+        assert_eq!(result.replace_range, 7..7);
+    }
+
+    #[test]
+    fn complete_enum_filters_by_prefix() {
+        let choices = ["disable", "enable", "off", "on"];
+        let sources = ArgSources {
+            enum_choices: &choices,
+            ..Default::default()
+        };
+        // `:syntax of` → only `off`.
+        let line = "syntax of";
+        let result = complete_arg(line, line.len(), ArgKind::Enum, &sources);
+        assert_eq!(result.candidates, vec!["off".to_string()]);
+        assert_eq!(&line[result.replace_range.clone()], "of");
+    }
+
+    #[test]
+    fn complete_enum_empty_without_choices() {
+        // No choices supplied → no candidates (default-empty enum_choices).
+        let sources = ArgSources::default();
+        let result = complete_arg("syntax ", 7, ArgKind::Enum, &sources);
+        assert_eq!(result.kind, CompletionKind::Choice);
+        assert!(result.candidates.is_empty());
+    }
+
     // ── spaces in ex path completion (issue #308) ─────────────────────────────
 
     #[test]
@@ -1218,11 +1402,13 @@ mod tests {
     fn arg_kind_usage_labels() {
         assert_eq!(arg_kind_usage(ArgKind::None), "");
         assert_eq!(arg_kind_usage(ArgKind::Path), "<path>");
+        assert_eq!(arg_kind_usage(ArgKind::Directory), "<dir>");
         assert_eq!(arg_kind_usage(ArgKind::View), "<buffer>");
         assert_eq!(arg_kind_usage(ArgKind::Setting), "<setting>");
         assert_eq!(arg_kind_usage(ArgKind::Register), "<register>");
         assert_eq!(arg_kind_usage(ArgKind::Mark), "<mark>");
         assert_eq!(arg_kind_usage(ArgKind::Colorscheme), "<colorscheme>");
+        assert_eq!(arg_kind_usage(ArgKind::Enum), "<value>");
         assert_eq!(arg_kind_usage(ArgKind::Raw), "<args>");
     }
 
@@ -1389,7 +1575,7 @@ mod tests {
         // SAFETY: single-threaded within this test's logic; see comment above.
         unsafe { std::env::set_var("HOME", home.path()) };
 
-        let all = complete_path_entries("~/", cwd.path());
+        let all = complete_path_entries("~/", cwd.path(), false);
         assert!(
             all.contains(&"~/Documents/".to_string()),
             "expected ~/Documents/ in {all:?}"
@@ -1400,15 +1586,15 @@ mod tests {
         );
 
         // Filtering on a partial tail keeps the `~/` prefix too.
-        let docs = complete_path_entries("~/Doc", cwd.path());
+        let docs = complete_path_entries("~/Doc", cwd.path(), false);
         assert_eq!(docs, vec!["~/Documents/".to_string()]);
 
         // A `$HOME/`-style prefix expands and preserves the typed `$HOME/`.
-        let via_var = complete_path_entries("$HOME/no", cwd.path());
+        let via_var = complete_path_entries("$HOME/no", cwd.path(), false);
         assert_eq!(via_var, vec!["$HOME/notes.txt".to_string()]);
 
         // Unknown var → directory doesn't exist → no candidates.
-        let nope = complete_path_entries("$NOPE_305/", cwd.path());
+        let nope = complete_path_entries("$NOPE_305/", cwd.path(), false);
         assert!(
             nope.is_empty(),
             "expected empty for unknown var, got {nope:?}"
@@ -1563,6 +1749,50 @@ mod tests {
         let (_, cands) = complete_command_meta("m", 1, &reg, &host_reg, &[]);
         assert!(cands.iter().any(|c| c.name == "move"));
         assert!(cands.iter().any(|c| c.name == "m"));
+    }
+
+    // ── enum host-command completion via complete() (issue #309) ──────────────
+
+    #[test]
+    fn complete_threads_host_arg_choices_for_enum() {
+        use crate::{ExEffect, HostCmd, Registry};
+        use hjkl_engine::DefaultHost;
+
+        struct SyntaxCmd;
+        impl HostCmd<()> for SyntaxCmd {
+            fn name(&self) -> &'static str {
+                "syntax"
+            }
+            fn min_prefix(&self) -> usize {
+                3
+            }
+            fn arg_kind(&self) -> ArgKind {
+                ArgKind::Enum
+            }
+            fn arg_choices(&self) -> &'static [&'static str] {
+                &["disable", "enable", "off", "on"]
+            }
+            fn run(&self, _ctx: &mut (), _args: &str) -> Option<ExEffect> {
+                Some(ExEffect::Ok)
+            }
+        }
+
+        let reg = Registry::<DefaultHost>::new();
+        let mut host_reg = HostRegistry::<()>::new();
+        host_reg.add(Box::new(SyntaxCmd));
+        // No enum_choices supplied by the caller — complete() must inject them
+        // from the resolved command's arg_choices().
+        let sources = ArgSources::default();
+
+        // `:syntax ` → all choices.
+        let r = complete("syntax ", 7, &reg, &host_reg, &sources, &[]);
+        assert_eq!(r.kind, CompletionKind::Choice);
+        assert!(r.candidates.contains(&"on".to_string()));
+        assert!(r.candidates.contains(&"disable".to_string()));
+
+        // `:syntax of` → filters to `off`.
+        let r2 = complete("syntax of", 9, &reg, &host_reg, &sources, &[]);
+        assert_eq!(r2.candidates, vec!["off".to_string()]);
     }
 
     // ── :put → Register completion (issue #305) ───────────────────────────────

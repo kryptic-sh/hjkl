@@ -1712,10 +1712,11 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     });
 
     // `:cd [{path}]` — change working directory (no-arg → $HOME) (min_prefix=2).
+    // Directory-only completion: `:cd <Tab>` offers subdirectories, not files.
     reg.add(ExCommand {
         name: "cd",
         aliases: &[],
-        arg_kind: ArgKind::Path,
+        arg_kind: ArgKind::Directory,
         min_prefix: 2,
         run: cd_handler::<H>,
     });
