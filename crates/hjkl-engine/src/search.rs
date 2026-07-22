@@ -449,7 +449,16 @@ impl SearchState {
 
     /// Refresh `matches[row]` if either the row's gen has rolled or
     /// we never scanned it. Returns the cached slice.
-    pub fn matches_for(&mut self, row: usize, line: &str, dirty_gen: u64) -> &[(usize, usize)] {
+    ///
+    /// `get_line` is materialized lazily — only invoked on a cache
+    /// miss (never scanned, or the row's gen rolled). A steady-state
+    /// warm cache returns the cached runs without allocating the line.
+    pub fn matches_for(
+        &mut self,
+        row: usize,
+        dirty_gen: u64,
+        get_line: impl FnOnce() -> String,
+    ) -> &[(usize, usize)] {
         let Some(ref re) = self.pattern else {
             return &[];
         };
@@ -462,7 +471,7 @@ impl SearchState {
             // byte-range computation the hlsearch painter and the quickfix
             // dock's match overlay use, so navigation and highlighting can
             // never disagree about where a match is.
-            self.matches[row] = hjkl_buffer::search_match_ranges(re, line);
+            self.matches[row] = hjkl_buffer::search_match_ranges(re, &get_line());
             self.generations[row] = dirty_gen;
         }
         &self.matches[row]
@@ -581,8 +590,11 @@ pub fn search_matches<B: Query>(
     if row >= line_count {
         return Vec::new();
     }
-    let line = buf.line(row as u32);
-    state.matches_for(row, &line, dirty_gen).to_vec()
+    // Materialize the line lazily — only when the cache misses. A warm
+    // steady-state cache skips the per-row allocation entirely.
+    state
+        .matches_for(row, dirty_gen, || buf.line(row as u32))
+        .to_vec()
 }
 
 #[cfg(test)]
