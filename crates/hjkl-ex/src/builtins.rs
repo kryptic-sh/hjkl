@@ -1733,7 +1733,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "put",
         aliases: &["pu"],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::Register,
         min_prefix: 2,
         run: put_handler::<H>,
     });
@@ -1742,7 +1742,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "put!",
         aliases: &["pu!"],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::Register,
         min_prefix: 3,
         run: put_above_handler::<H>,
     });
@@ -2383,7 +2383,7 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     reg.add(ExCommand {
         name: "recover",
         aliases: &[],
-        arg_kind: ArgKind::Raw,
+        arg_kind: ArgKind::Path,
         min_prefix: 3,
         run: recover_handler::<H>,
     });

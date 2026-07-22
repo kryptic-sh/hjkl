@@ -462,7 +462,7 @@ impl HostCmd<App> for RgCmd {
     }
 
     fn arg_kind(&self) -> ArgKind {
-        ArgKind::Path
+        ArgKind::Raw
     }
 
     fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {

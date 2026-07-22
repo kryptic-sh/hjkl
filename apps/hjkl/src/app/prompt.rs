@@ -330,10 +330,14 @@ impl App {
             Some(f) => f.text(),
             None => return false,
         };
+        // Skip a leading range/count prefix (`%`, `2`, `.,$`, `'a,'b`, …) so a
+        // ranged command like `:8,3d` resolves its command token (`d`) and Enter
+        // executes it directly, rather than accepting the popup that command-name
+        // completion now surfaces for ranged commands.
+        let after_range = &line[hjkl_ex::range_prefix_len(&line).min(line.len())..];
         // Leading command word: alphanumeric / `_` run after trimming leading
-        // whitespace. (Range-prefixed commands won't resolve here and fall back
-        // to the accept path, which is fine.)
-        let token: String = line
+        // whitespace.
+        let token: String = after_range
             .trim_start()
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')

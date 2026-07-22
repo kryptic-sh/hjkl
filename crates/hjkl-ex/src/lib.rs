@@ -12,6 +12,7 @@ pub use complete::{
     ArgSources, CommandCandidate, CompletionKind, Completions, arg_kind_usage,
     collect_host_registry_names, collect_registry_names, complete, complete_arg,
     complete_command_from_names, complete_command_meta, first_word_end, longest_common_prefix,
+    range_prefix_len,
 };
 pub use effect::{ExEffect, QfCommand};
 pub use expand::{ExpandContext, expand_args, expand_filename};
