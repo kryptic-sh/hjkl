@@ -667,10 +667,15 @@ fn main() -> Result<()> {
     // crossterm's Unix event source reads keystrokes from `/dev/tty`, not
     // fd 0, so draining stdin never steals input the TUI needs. When stdin
     // is a real TTY (no pipe) this blocks until EOF (Ctrl-D), same as vim.
+    const MAX_STDIN_BYTES: u64 = 256 * 1024 * 1024;
     if read_stdin {
         use std::io::Read;
         let mut stdin_text = String::new();
-        if let Err(e) = std::io::stdin().lock().read_to_string(&mut stdin_text) {
+        if let Err(e) = std::io::stdin()
+            .lock()
+            .take(MAX_STDIN_BYTES)
+            .read_to_string(&mut stdin_text)
+        {
             eprintln!("hjkl: reading stdin: {e}");
         } else {
             app.load_stdin_buffer(&stdin_text);
