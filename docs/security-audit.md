@@ -40,7 +40,10 @@ values.
 **H3 — Unbounded stdin read with `hjkl -`** `apps/hjkl/src/main.rs:672-673`
 
 > **Resolved 2026-07-23:** Added `.take(256 MiB)` bound before `read_to_string`
-> (commit `350ff8d8`).
+> (commit `350ff8d8`). Residual (benign): if input reaches exactly 256 MiB the
+> cut can fall mid-UTF-8-char, so `read_to_string` returns `InvalidData` and the
+> buffer is skipped (error printed) rather than truncated-and-loaded — only
+> reachable at a 256 MiB stdin, acceptable.
 
 The `-` flag reads stdin to EOF with `read_to_string` and no size cap. If stdin
 is connected to `/dev/zero`, a named FIFO that never closes, or a malicious
@@ -60,7 +63,7 @@ malformed cmsg data could trigger undefined behavior.
 
 ---
 
-### Medium Severity (8)
+### Medium Severity (9)
 
 **M1 — `:make` runs user-configured `makeprg` as command**
 `apps/hjkl/src/app/quickfix.rs:781,787`
@@ -126,7 +129,10 @@ operations without `openat`+`renameat`+`O_NOFOLLOW`.
 
 > **Resolved 2026-07-23:** Replaced `lock()` with `try_lock()`, explicitly
 > handling `WouldBlock` and `Poisoned` variants without blocking the notify
-> thread (commit `bb4a0e10`).
+> thread (commit `bb4a0e10`). Tradeoff (accepted): under lock contention the
+> filter now returns `false` and skips that event, so a watch event arriving
+> during a set update could be dropped — contention is rare and brief, and not
+> blocking the OS event thread is the priority.
 
 The filter closure is called from the `notify` library's raw event thread. Using
 `lock()` (blocking) rather than `try_lock()` means the notify thread can be
@@ -163,6 +169,26 @@ configuration" and "the single choke point to extend if project-local
 2-second `recv_timeout`. If the LSP process hangs indefinitely, the helper
 thread is orphaned — it stays alive as a detached OS thread until process exit.
 Bounded: one thread per shutdown call, typically once per process lifetime.
+
+**M9 — `:grep` spawns a subprocess unguarded in RPC modes** (open)
+`apps/hjkl/src/app/quickfix.rs:699,709-715`
+
+> **Found 2026-07-23 while reviewing the M1 fix.** The `shell_disabled()` gate
+> added for `:make` (M1, commit `b89337a1`) was **not** applied to
+> `qf_run_grep`, which forks `rg` / `grep` / `findstr` (lines 709–715). So an
+> `--embed` / `--nvim-api` / `--headless` host without `--allow-shell` can still
+> cause hjkl to spawn a subprocess via `:grep`, which is inconsistent with the
+> shell-out policy.
+>
+> Severity is **lower than M1**: the program is a fixed binary (never
+> user-configurable, unlike `makeprg`), and the pattern is passed with a `--`
+> separator (findstr `/c:`), so there is **no arbitrary code execution or
+> argument injection** — only an unexpected process spawn.
+>
+> **Fix options:** (a) gate `qf_run_grep` behind `shell_disabled()` too,
+> matching `:make`; or (b) treat `:grep` as an intentional allowance (fixed
+> binary, safe args) and document why the shell-disabled contract excludes it.
+> Not yet decided.
 
 ---
 
@@ -255,9 +281,11 @@ The codebase demonstrates strong defensive security practices:
 | Severity  | Count  | Resolved                              |
 | --------- | ------ | ------------------------------------- |
 | High      | 4      | 1 (H3)                                |
-| Medium    | 8      | 4 (M1, M2, M5, M6) + 1 test-only (M3) |
+| Medium    | 9      | 4 (M1, M2, M5, M6) + 1 test-only (M3) |
 | Low       | 6      | 0 (by design / low risk)              |
-| **Total** | **18** | **5 fixed + 1 confirmed test-only**   |
+| **Total** | **19** | **5 fixed + 1 confirmed test-only**   |
+
+M9 (added during review of the M1 fix) is open — see below.
 
 **Resolved 2026-07-23:**
 
@@ -272,6 +300,9 @@ The codebase demonstrates strong defensive security practices:
 
 **Not fixed (by design / tracked / infrastructure):**
 
+- **M9:** `:grep` still spawns `rg`/`grep`/`findstr` unguarded in RPC modes —
+  low risk (fixed binary, `--`-separated args, no arbitrary exec); decide
+  whether to gate it behind `shell_disabled()` or document as intentional.
 - **H1:** `:!` is unrestricted shell access by design (vim parity), fully
   guarded in RPC modes.
 - **H2:** Tracked as
