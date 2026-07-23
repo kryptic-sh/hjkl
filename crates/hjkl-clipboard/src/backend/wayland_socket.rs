@@ -248,6 +248,14 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
 
     let mut cmsg_buf = vec![0u8; cmsg_space];
 
+    // Defensive: verify fds truly fits in the allocated CMSG buffer.
+    // SAFETY: CMSG_LEN is pure arithmetic.
+    let hdr_size = unsafe { libc::CMSG_LEN(0) } as usize;
+    let fds_bytes = std::mem::size_of_val(fds);
+    if fds_bytes + hdr_size > cmsg_space {
+        return Err(ClipboardError::io_other("too many fds for CMSG buffer"));
+    }
+
     let mut iov = libc::iovec {
         iov_base: bytes.as_ptr() as *mut libc::c_void,
         iov_len: bytes.len(),
@@ -283,7 +291,8 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
 
         // Copy fd integers into the CMSG data region.
         // SAFETY: CMSG_DATA returns a pointer into cmsg's data region which is
-        // large enough for `fds.len()` c_int values per CMSG_SPACE above.
+        // large enough for `fds.len()` c_int values per CMSG_SPACE above and
+        // the defensive fds_bytes + hdr_size check verified earlier.
         let data_ptr = libc::CMSG_DATA(cmsg) as *mut c_int;
         std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, fds.len());
     }
@@ -374,6 +383,9 @@ fn recv_into(
     rx_buf.extend(&data_buf[..n as usize]);
 
     // Extract any received fds from ancillary data.
+    // Kernel updates msg_controllen to actual control-data bytes received.
+    // Use this as the authoritative bound for the cmsg walk + fd extraction.
+    let control_len = msg.msg_controllen as usize;
     // SAFETY: msg is valid after recvmsg; CMSG_FIRSTHDR reads msg_control.
     let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
     while !cmsg.is_null() {
@@ -386,10 +398,31 @@ fn recv_into(
             let cmsg_len = unsafe { (*cmsg).cmsg_len } as usize;
             // SAFETY: CMSG_LEN(0) gives the header size.
             let hdr_size = unsafe { libc::CMSG_LEN(0) } as usize;
-            let data_len = cmsg_len.saturating_sub(hdr_size);
+            // Reject a malformed cmsg that claims to be smaller than its own header.
+            if cmsg_len < hdr_size {
+                // Skip this cmsg — malicious or corrupt data.
+                cmsg = unsafe { libc::CMSG_NXTHDR(&msg, cmsg) };
+                continue;
+            }
+            let data_len = cmsg_len - hdr_size;
             let n_fds = data_len / std::mem::size_of::<c_int>();
+            if n_fds == 0 {
+                cmsg = unsafe { libc::CMSG_NXTHDR(&msg, cmsg) };
+                continue;
+            }
+            // Bounds-check: the fd data must fit within the control-message
+            // buffer the kernel filled. A malicious compositor or kernel bug
+            // could set cmsg_len larger than the actual buffer.
+            let data_end = (data as *const c_int).wrapping_add(n_fds);
+            let buf_end = unsafe { cmsg_buf.as_ptr().add(control_len) } as *const c_int;
+            if data_end > buf_end {
+                // Corrupt cmsg — skip.
+                cmsg = unsafe { libc::CMSG_NXTHDR(&msg, cmsg) };
+                continue;
+            }
             for i in 0..n_fds {
-                // SAFETY: data + i*sizeof(c_int) is within the cmsg data region.
+                // SAFETY: data_end <= buf_end verified above; each add(i)
+                // for i < n_fds stays within [data, data_end).
                 let received_fd = unsafe { *(data as *const c_int).add(i) };
                 rx_fds.push_back(received_fd);
             }
