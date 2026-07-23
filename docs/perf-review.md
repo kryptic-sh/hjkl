@@ -1,11 +1,18 @@
 # Performance Review
 
-**Project:** hjkl (terminal text editor)
-**Date:** 2026-07-23
-**Scope:** entire codebase
-**Verdict:** The codebase is well-optimized for a terminal editor. Two hotspots
-stand out: the syntax highlighter's per-capture string clones and the motion
-system's per-character line allocations. Below, ranked by impact.
+**Project:** hjkl (terminal text editor) **Date:** 2026-07-23 **Scope:** entire
+codebase **Verdict:** The codebase is well-optimized for a terminal editor. Two
+hotspots stand out: the syntax highlighter's per-capture string clones and the
+motion system's per-character line allocations. Below, ranked by impact.
+
+> **Verified 2026-07-23 against source:** all of P1–P11 still point at live code
+> — **none is stale**. The recent perf commits (`3f84befb`, `9fa78517`,
+> `c4b1b6a3`) fixed _adjacent_ paths (per-cell painter allocations,
+> `render_window`/explorer clones, and the engine-side warm-cache line-alloc
+> skip in `search.rs`) but did not touch any of these eleven sites. In
+> particular **P7 is not stale**: the buffer-tui renderer still calls
+> `search_match_ranges` directly and never consults the engine's
+> `SearchState::matches_for` cache.
 
 ---
 
@@ -13,7 +20,8 @@ system's per-character line allocations. Below, ranked by impact.
 
 ### 🔴 P1 — Per-capture `String` clone in highlight inner loop
 
-**`crates/hjkl-bonsai/src/highlighter.rs:892`** — `capture_names[capture.index as usize].clone()`
+**`crates/hjkl-bonsai/src/highlighter.rs:892`** —
+`capture_names[capture.index as usize].clone()`
 
 Inside the hottest loop in the codebase (every tree-sitter match × every capture
 within the match), each capture clones its name as a `String`. The
@@ -24,20 +32,20 @@ highlight pass — per keystroke.
 The `capture_names` `Vec<String>` is borrowed from `self.compiled` and outlives
 the loop. The clone is unnecessary for any consumer that only needs `&str`.
 
-**Fix:** Change `HighlightSpan.capture: String` to either (a) a `u32` index
-into `capture_names`, or (b) `Arc<str>` shared from the compiled artifacts.
-Either eliminates the per-span allocation. The index approach also avoids the
+**Fix:** Change `HighlightSpan.capture: String` to either (a) a `u32` index into
+`capture_names`, or (b) `Arc<str>` shared from the compiled artifacts. Either
+eliminates the per-span allocation. The index approach also avoids the
 `iter().position()` scan at line 868.
 
 ---
 
 ### 🔴 P2 — `read_line` clones entire line per character during word motions
 
-**`crates/hjkl-engine/src/motions.rs:69,941-942`**
+**`crates/hjkl-engine/src/motions.rs:941-942`** (`read_line_opt` at `:58-63`)
 
 `char_at` calls `read_line_opt(buf, pos.row)` which returns `Option<String>` — a
 full `String` clone of the line from the rope, via `Query::line`. Inside word
-motion loops (`next_word_start:958`, `next_word_end:1100`), `char_at` is called
+motion loops (`next_word_start:958`, `next_word_end:1103`), `char_at` is called
 once per character examined. Scanning 200 chars across word boundaries means 200
 full-line `String` allocations.
 
@@ -82,8 +90,8 @@ unconditionally.
 
 **Fix:** Pre-compute and memoize diag counts, invalidating on LSP change.
 Replace filename clone with `Cow<str>`. Accumulate statusline parts into a
-single `String` with `clear()` + `write!` (or `push_str`) instead of
-per-segment `format!`.
+single `String` with `clear()` + `write!` (or `push_str`) instead of per-segment
+`format!`.
 
 ---
 
@@ -91,8 +99,9 @@ per-segment `format!`.
 
 **`crates/hjkl-bonsai/src/highlighter.rs:212,216`**
 
-`evict_stale` operates on `cache_langs: Vec<String>` and `cache_hashes: Vec<u64>`
-built at lines 1118–1119. The retain closures do:
+`evict_stale` operates on `cache_langs: Vec<String>` and
+`cache_hashes: Vec<u64>` built at lines 1118–1119. The retain closures do:
+
 - `keep_langs.iter().any(|kk| kk == k)` — O(|map| × |keep_langs|) per pass
 - `keep_hashes.contains(h)` — O(|hashes| × |keep_hashes|) per pass
 
@@ -150,7 +159,8 @@ allocation is cheap compared to the highlight work.
 
 ### 🟡 P9 — `which_key` `pending.clone()` + `Chord` allocation per frame
 
-**`apps/hjkl/src/render.rs:3020`** — `hjkl_keymap::Chord(pending.clone()).to_notation(leader)`
+**`apps/hjkl/src/render.rs:3020`** —
+`hjkl_keymap::Chord(pending.clone()).to_notation(leader)`
 
 When the which-key popup is visible, each frame clones the pending key Vec and
 formats it to a notation string. The pending keys change only on keypress, not
@@ -186,25 +196,28 @@ but signal a misunderstanding. No runtime cost — cosmetic only.
 
 ## Data Structure Audit
 
-| Location | Current | Issue | Fix |
-|----------|---------|-------|-----|
-| `highlighter.rs:54` | `capture: String` | Per-span alloc | `u32` index or `Arc<str>` |
-| `highlighter.rs:1118` | `cache_langs: Vec<String>` | O(n) `.any()` in retain | `HashSet<String>` |
-| `highlighter.rs:1119` | `cache_hashes: Vec<u64>` | O(n) `.contains()` in retain | `HashSet<u64>` |
-| `highlighter.rs:357` | `AHashMap<u64, Arc<…>>` | Good — fast hasher | — |
-| `highlighter.rs:163,176` | Nested `HashMap` for cache | Good — O(1) | — |
-| `motion.rs:20` | `spec.split(',')` per call | Re-parsed per char | Pre-parse once |
+| Location                 | Current                    | Issue                        | Fix                       |
+| ------------------------ | -------------------------- | ---------------------------- | ------------------------- |
+| `highlighter.rs:54`      | `capture: String`          | Per-span alloc               | `u32` index or `Arc<str>` |
+| `highlighter.rs:1118`    | `cache_langs: Vec<String>` | O(n) `.any()` in retain      | `HashSet<String>`         |
+| `highlighter.rs:1119`    | `cache_hashes: Vec<u64>`   | O(n) `.contains()` in retain | `HashSet<u64>`            |
+| `highlighter.rs:357`     | `AHashMap<u64, Arc<…>>`    | Good — fast hasher           | —                         |
+| `highlighter.rs:163,176` | Nested `HashMap` for cache | Good — O(1)                  | —                         |
+| `motion.rs:20`           | `spec.split(',')` per call | Re-parsed per char           | Pre-parse once            |
 
 ## Positive Findings
 
 - **`ChildCache` eviction** correctly prunes to current working set only.
 - **`SearchState`** caches per-row byte ranges with `dirty_gen` invalidation.
 - **`COMPILED_CACHE`** global `ahash::AHashMap` avoids re-parsing queries.
-- **`sync_after_engine_mutation`** compares `(buffer, top_row, height, dirty_gen)` to skip redundant recompute.
+- **`sync_after_engine_mutation`** compares
+  `(buffer, top_row, height, dirty_gen)` to skip redundant recompute.
 - **`folds_override`** uses `saturating_add(1)` to avoid wrapping.
-- **Renderer `line_at`** returns `Cow::Borrowed` for prefetched rows, avoiding per-cell cloning.
+- **Renderer `line_at`** returns `Cow::Borrowed` for prefetched rows, avoiding
+  per-cell cloning.
 - **Tree-sitter `parse_timeout_micros`** bounds parse work on huge files.
-- **`parse_incremental`** skipped `changed_ranges` call that was 54% of per-keystroke CPU on huge files.
+- **`parse_incremental`** skipped `changed_ranges` call that was 54% of
+  per-keystroke CPU on huge files.
 - **Swap file I/O** uses `O_EXCL` + `create_new(true)` and explicit fsync.
 - **Subprocess lifecycle** properly timed out, killed, and waited.
 
@@ -212,16 +225,16 @@ but signal a misunderstanding. No runtime cost — cosmetic only.
 
 ## Summary
 
-| Rank | File:Line | Issue | Hot Path | Impact |
-|------|-----------|-------|----------|--------|
-| P1 | `highlighter.rs:892` | `capture_name.clone()` per capture | Every keystroke | 🔴 |
-| P2 | `motions.rs:69,941` | `read_line` clones line per char | Every word motion | 🔴 |
-| P3 | `buffer/motion.rs:20` | `is_keyword_char` re-parses spec per char | Every word motion | 🔴 |
-| P4 | `render.rs:150-326` | 8+ `format!` per frame | Every frame | 🟠 |
-| P5 | `highlighter.rs:212,216` | `Vec::contains` in evict_stale | Every highlight pass | 🟠 |
-| P6 | `highlighter.rs:868` | `.position()` scan in nested loop | Every highlight pass | 🟠 |
-| P7 | `buffer-tui/render.rs:1068` | Regex re-scan bypasses engine cache | Every frame (search) | 🟡 |
-| P8 | `buffer-tui/render.rs:483` | `lines_prefetch` Vec per frame | Every frame | 🟡 |
-| P9 | `render.rs:3020` | `pending.clone()` per frame | Which-key visible | 🟡 |
-| P10 | `highlighter.rs:57` | `HashMap` per span (metadata) | Rare (directives only) | ⚪ |
-| P11 | `highlighter.rs:752,etc` | `Range.clone()` (Copy type) | Cosmetic | ⚪ |
+| Rank | File:Line                   | Issue                                     | Hot Path               | Impact |
+| ---- | --------------------------- | ----------------------------------------- | ---------------------- | ------ |
+| P1   | `highlighter.rs:892`        | `capture_name.clone()` per capture        | Every keystroke        | 🔴     |
+| P2   | `motions.rs:69,941`         | `read_line` clones line per char          | Every word motion      | 🔴     |
+| P3   | `buffer/motion.rs:20`       | `is_keyword_char` re-parses spec per char | Every word motion      | 🔴     |
+| P4   | `render.rs:150-326`         | 8+ `format!` per frame                    | Every frame            | 🟠     |
+| P5   | `highlighter.rs:212,216`    | `Vec::contains` in evict_stale            | Every highlight pass   | 🟠     |
+| P6   | `highlighter.rs:868`        | `.position()` scan in nested loop         | Every highlight pass   | 🟠     |
+| P7   | `buffer-tui/render.rs:1068` | Regex re-scan bypasses engine cache       | Every frame (search)   | 🟡     |
+| P8   | `buffer-tui/render.rs:483`  | `lines_prefetch` Vec per frame            | Every frame            | 🟡     |
+| P9   | `render.rs:3020`            | `pending.clone()` per frame               | Which-key visible      | 🟡     |
+| P10  | `highlighter.rs:57`         | `HashMap` per span (metadata)             | Rare (directives only) | ⚪     |
+| P11  | `highlighter.rs:752,etc`    | `Range.clone()` (Copy type)               | Cosmetic               | ⚪     |

@@ -1,9 +1,7 @@
 # Security Audit Report
 
-**Project:** hjkl (terminal text editor)
-**Date:** 2026-07-23
-**Version:** 0.35.0
-**Depth:** high
+**Project:** hjkl (terminal text editor) **Date:** 2026-07-23 **Version:**
+0.35.0 **Depth:** high
 
 ---
 
@@ -16,42 +14,46 @@
 
 The `:!cmd` and `:[range]!cmd` ex commands pass the user-typed string directly
 to `Command::new("sh").arg("-c").arg(cmd)`. This is the single largest attack
-surface: any command the terminal user types executes as their local user.
-This is by design (full vim parity), but means `:!` is unrestricted shell
-access. In `--embed`, `--nvim-api`, and `--headless` modes, shell-out is
-disabled by default via `policy::disable_shell()` and gated behind an explicit
-`--allow-shell` flag. In TUI mode it is always available. No shell
-metacharacter filtering is applied.
+surface: any command the terminal user types executes as their local user. This
+is by design (full vim parity), but means `:!` is unrestricted shell access. In
+`--embed`, `--nvim-api`, and `--headless` modes, shell-out is disabled by
+default via `policy::disable_shell()` and gated behind an explicit
+`--allow-shell` flag. In TUI mode it is always available. No shell metacharacter
+filtering is applied.
 
 **H2 — `dlopen` of remotely-compiled shared objects (arbitrary code execution)**
 `crates/hjkl-bonsai/src/runtime/grammar.rs:79-89`, `compile.rs:136,163-171`
 
 Tree-sitter grammars are downloaded from remote git repositories, compiled with
-a compiler resolved from `$CC`/`$CXX` (or `cc`/`c++` from PATH), and
-`dlopen`ed into the editor process. This is a documented trust boundary:
-arbitrary native code execution from the grammar source, compiler, and build
-chain. The manifest pins `git_url`/`git_rev` but performs no signature
-verification or hash pinning of the compiled artifact. The `validate_clone_args`
-function rejects empty strings and leading dashes but does not reject path
-separators in `git_rev` values.
+a compiler resolved from `$CC`/`$CXX` (or `cc`/`c++` from PATH), and `dlopen`ed
+into the editor process. This is a documented trust boundary: arbitrary native
+code execution from the grammar source, compiler, and build chain. The manifest
+pins `git_url`/`git_rev` but performs no signature verification or hash pinning
+of the compiled artifact. The `validate_clone_args` function rejects empty
+strings and leading dashes but does not reject path separators in `git_rev`
+values.
 
-**H3 — Unbounded stdin read with `hjkl -`**
-`apps/hjkl/src/main.rs:672-673`
+> Tracked as [GitHub issue #314](https://github.com/kryptic-sh/hjkl/issues/314)
+> (with M2, the related `git_rev` cache-path traversal). Verified accurate
+> 2026-07-23; not remotely reachable today (manifest is `include_str!`-bundled).
 
-The `-` flag reads stdin to EOF with `read_to_string` and no size cap. If
-stdin is connected to `/dev/zero`, a named FIFO that never closes, or a
-malicious source, this allocates until OOM. Every other read path in the
-codebase (swap files, formatter I/O, LSP codec, msgpack-RPC) has explicit caps
-(64 MiB, 256 MiB, etc.).
+**H3 — Unbounded stdin read with `hjkl -`** `apps/hjkl/src/main.rs:672-673`
+
+The `-` flag reads stdin to EOF with `read_to_string` and no size cap. If stdin
+is connected to `/dev/zero`, a named FIFO that never closes, or a malicious
+source, this allocates until OOM. Every other read path in the codebase (swap
+files, formatter I/O, LSP codec, msgpack-RPC) has explicit caps (64 MiB, 256
+MiB, etc.).
 
 **H4 — ~30 unsafe FFI blocks in Wayland clipboard socket I/O**
 `crates/hjkl-clipboard/src/backend/wayland_socket.rs:113-398`
 
 Raw `libc::socket`, `libc::sendmsg`, `libc::recvmsg`, `libc::close`,
 `libc::getuid`, and `libc::CMSG_*` macro expansion for Wayland data-device
-communication. Each block has SAFETY comments, but the cmsg parsing and raw fd
-handling is the highest-risk FFI surface in the codebase. A malicious Wayland
-compositor sending malformed cmsg data could trigger undefined behavior.
+communication (~26 `unsafe` blocks in the cited range, not literally 30). Each
+block has SAFETY comments, but the cmsg parsing and raw fd handling is the
+highest-risk FFI surface in the codebase. A malicious Wayland compositor sending
+malformed cmsg data could trigger undefined behavior.
 
 ---
 
@@ -60,20 +62,28 @@ compositor sending malformed cmsg data could trigger undefined behavior.
 **M1 — `:make` runs user-configured `makeprg` as command**
 `apps/hjkl/src/app/quickfix.rs:781,787`
 
-`resolve_make_argv` splits `makeprg` config value by whitespace; the first
-token becomes the program executed by `Command::new()`. A `:set makeprg=...`
-(with no validation) picks any binary on PATH. By design (vim parity), but the
-program is user-configurable with no allowlist. Guarded by `policy::shell_disabled()`
-in RPC modes.
+`resolve_make_argv` splits `makeprg` config value by whitespace; the first token
+becomes the program executed by `Command::new()`. A `:set makeprg=...` (with no
+validation) picks any binary on PATH. By design (vim parity), but the program is
+user-configurable with no allowlist.
+
+> **Correction (verified 2026-07-23):** the original claim "Guarded by
+> `policy::shell_disabled()` in RPC modes" is **wrong**. `shell_disabled()` has
+> exactly three call sites (`:!` in `shell.rs:22`, `:r !` in `builtins.rs`, the
+> engine range-filter in `editor.rs`); **none** covers the `:make` path.
+> `quickfix.rs:787` runs `Command::new(&program)` unconditionally, so if `:make`
+> is reachable in an RPC mode it executes `makeprg` even with shell-out
+> "disabled." This makes M1 a genuine gap, not a guarded convenience — worth a
+> `shell_disabled()` check on the make/quickfix run path.
 
 **M2 — `git_rev` joined into cache path without `..` sanitization**
 `crates/hjkl-bonsai/src/runtime/source.rs:93`
 
-`self.base.join(format!("{name}-{}", spec.git_rev))` interpolates `git_rev`
-into a directory path. `name` is validated by `is_safe_component`, but
-`git_rev` is not — a manifest specifying `git_rev = "../../etc"` would create
-a directory outside the cache tree. Low practical risk: manifests are pinned by
-crate maintainers, not runtime user input, and `validate_clone_args` rejects
+`self.base.join(format!("{name}-{}", spec.git_rev))` interpolates `git_rev` into
+a directory path. `name` is validated by `is_safe_component`, but `git_rev` is
+not — a manifest specifying `git_rev = "../../etc"` would create a directory
+outside the cache tree. Low practical risk: manifests are pinned by crate
+maintainers, not runtime user input, and `validate_clone_args` rejects
 empty/leading-dash but not path separators.
 
 **M3 — `.expect()` on external msgpack decode in nvim-api**
@@ -99,20 +109,20 @@ operations without `openat`+`renameat`+`O_NOFOLLOW`.
 **M5 — `filter_set.lock()` blocks notify event callback thread**
 `apps/hjkl/src/app/fs_watch.rs:55-57`
 
-The filter closure is called from the `notify` library's raw event thread.
-Using `lock()` (blocking) rather than `try_lock()` means the notify thread can
-be stalled under lock contention. The `unwrap_or(false)` fallback silently
-swallows a poisoned lock, dropping all events until the lock is replaced.
+The filter closure is called from the `notify` library's raw event thread. Using
+`lock()` (blocking) rather than `try_lock()` means the notify thread can be
+stalled under lock contention. The `unwrap_or(false)` fallback silently swallows
+a poisoned lock, dropping all events until the lock is replaced.
 
 **M6 — `AutoreleasePool: Send` over-approximates thread safety**
 `crates/hjkl-clipboard/src/backend/macos.rs:36`
 
 The struct wraps an `objc_autoreleasePoolPush` token; `Drop` calls `pop`, which
-must run on the same thread. The `unsafe impl Send` is technically incorrect:
-if the pool were ever sent to another thread, `pop` would operate on the wrong
+must run on the same thread. The `unsafe impl Send` is technically incorrect: if
+the pool were ever sent to another thread, `pop` would operate on the wrong
 thread's autorelease stack. In practice the struct is only created and dropped
-locally within public method bodies (lines 48–54) and is never actually sent,
-so no bug manifests.
+locally within public method bodies (lines 48–54) and is never actually sent, so
+no bug manifests.
 
 **M7 — LSP `command` from user config only — explicit choke point**
 `crates/hjkl-lsp/src/config.rs:43-46`
@@ -136,15 +146,15 @@ Bounded: one thread per shutdown call, typically once per process lifetime.
 ### Low Severity (6)
 
 **L1 — Modelines can set any option including `makeprg`**
-`apps/hjkl/src/modeline.rs:108-114`
+`crates/hjkl-app/src/modeline.rs:108-114` (the original
+`apps/hjkl/src/modeline.rs` path does not exist)
 
-File content modelines (`vim: set ts=2 makeprg=evil:`) can set arbitrary
-editor options via `Options::set_by_name`. Integer values are parsed without
-range checking (clamped later by `set_by_name`). Vim parity — the file must
-already be opened for this to apply.
+File content modelines (`vim: set ts=2 makeprg=evil:`) can set arbitrary editor
+options via `Options::set_by_name`. Integer values are parsed without range
+checking (clamped later by `set_by_name`). Vim parity — the file must already be
+opened for this to apply.
 
-**L2 — `unsafe { set_var("PATH") }` at startup**
-`apps/hjkl/src/main.rs:493-494`
+**L2 — `unsafe { set_var("PATH") }` at startup** `apps/hjkl/src/main.rs:493-494`
 
 Called before any threads spawn (documented in SAFETY comment). The value is
 assembled from the anvil binary directory and the existing PATH, with
@@ -154,9 +164,8 @@ deduplication. Sound given the single-threaded call site.
 `crates/hjkl-clipboard/src/backend/x11.rs:112-122`
 
 `var_os("DISPLAY")` is checked for presence, then `xcb_connect(NULL, NULL)` is
-called. If `$DISPLAY` is unset between the check and the connect, the
-connection will use the default display. Low risk — env vars change rarely at
-runtime.
+called. If `$DISPLAY` is unset between the check and the connect, the connection
+will use the default display. Low risk — env vars change rarely at runtime.
 
 **L4 — `:grep` pattern injection mitigated by `--` separator**
 `apps/hjkl/src/app/quickfix.rs:709-719`
@@ -175,8 +184,8 @@ parser. No path where stdin content is executed directly.
 
 `SHELL_DISABLED` and `FS_RESTRICTED` are monotonic bools set once at startup
 before the editor is built. `Relaxed` is correct because: the store happens
-before any editor thread spawns, and loads are on paths that are
-happens-after via thread synchronization.
+before any editor thread spawns, and loads are on paths that are happens-after
+via thread synchronization.
 
 ---
 
@@ -196,15 +205,18 @@ The codebase demonstrates strong defensive security practices:
 - **Command argument injection prevented**: `reject_option_like()` gates all
   package manager command arguments in anvil.
 - **RPC modes default to locked down**: `--embed`, `--nvim-api`, and
-  `--headless` disable shell-out and restrict filesystem access by default,
-  with explicit `--allow-shell` opt-in.
+  `--headless` disable shell-out by default (explicit `--allow-shell` opt-in).
+  Filesystem restriction (`restrict_fs()`) is narrower — it applies to `--embed`
+  and `--nvim-api` only; `--headless` deliberately keeps full filesystem access
+  (`main.rs:533`). (The original report said all three restrict FS; corrected
+  2026-07-23.)
 - **Allocation caps everywhere except the stdin path**: swap file header (1
   MiB), undo (256 MiB), body (64 MiB); formatter I/O (64 MiB); LSP codec header
   (64 KiB), message body (16 MiB); msgpack-RPC body (256 MiB).
 - **No `todo!` macros** anywhere in production code.
 - **No `MaybeUninit`, `ManuallyDrop`, or `#[may_dangle]` unsoundness**.
-- **Lock poisoning handled consistently**: `PoisonError::into_inner` recovery
-  or clean `expect("poisoned")` panic — no silent corruption.
+- **Lock poisoning handled consistently**: `PoisonError::into_inner` recovery or
+  clean `expect("poisoned")` panic — no silent corruption.
 - **Subprocess lifecycle properly managed**: all children reaped; timeout+kill
   patterns; bounded I/O with `wait()`.
 - **Swap directory protected**: `0o700` permissions on the swap directory
@@ -217,25 +229,26 @@ The codebase demonstrates strong defensive security practices:
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| High     | 4     |
-| Medium   | 8     |
-| Low      | 6     |
+| Severity  | Count  |
+| --------- | ------ |
+| High      | 4      |
+| Medium    | 8      |
+| Low       | 6      |
 | **Total** | **18** |
 
 **Overall risk: Medium.** The codebase is well-structured for a local terminal
 application. The `:!cmd` shell-out path is the dominant attack surface — it is
-by design, fully guarded in RPC modes, and inherent to the vim-parity model.
-The grammar compilation/dlopen pipeline is a documented trust boundary with a
-wide surface (network, build chain, shared library loading) that warrants
-continuous scrutiny. The unbounded stdin read is the only finding that could
-produce a crash from external input and is the simplest to fix.
+by design, fully guarded in RPC modes, and inherent to the vim-parity model. The
+grammar compilation/dlopen pipeline is a documented trust boundary with a wide
+surface (network, build chain, shared library loading) that warrants continuous
+scrutiny. The unbounded stdin read is the only finding that could produce a
+crash from external input and is the simplest to fix.
 
 **Top 3 to fix first:**
+
 1. **Cap stdin read** (`apps/hjkl/src/main.rs:672`) — add a bounded `take(N)`
    before `read_to_string`.
 2. **Audit Wayland cmsg parsing** (`wayland_socket.rs`) — review unsafe
    invariants for the cmsg walk and fd extraction paths; add fuzz coverage.
-3. **Validate `git_rev` for path separators** (`source.rs:93`) — reject `..`
-   and `/` in `git_rev` like `name` already does.
+3. **Validate `git_rev` for path separators** (`source.rs:93`) — reject `..` and
+   `/` in `git_rev` like `name` already does.
