@@ -42,6 +42,12 @@ MiB, etc.).
 **H4 — ~30 unsafe FFI blocks in Wayland clipboard socket I/O**
 `crates/hjkl-clipboard/src/backend/wayland_socket.rs:113-398`
 
+> **Resolved 2026-07-23:** CMSG fd extraction now bounds-checked against
+> `msg_controllen` (kernel-authoritative length); `send_with_fds` verifies fds
+> fit the CMSG buffer before copying; 4 edge-case unit tests added covering
+> socketpair fd send+receive, no-ancillary-data recv, path-too-long rejection,
+> and malformed-advertised-size handling (commits `1c9f4314`, `8fdeafd7`).
+
 Raw `libc::socket`, `libc::sendmsg`, `libc::recvmsg`, `libc::close`,
 `libc::getuid`, and `libc::CMSG_*` macro expansion for Wayland data-device
 communication (~26 `unsafe` blocks in the cited range, not literally 30). Each
@@ -271,14 +277,16 @@ The codebase demonstrates strong defensive security practices:
 
 | Severity  | Count  | Resolved                                  |
 | --------- | ------ | ----------------------------------------- |
-| High      | 3      | 1 (H3)                                    |
+| High      | 3      | 2 (H3, H4)                                |
 | Medium    | 9      | 5 (M1, M2, M5, M6, M9) + 1 test-only (M3) |
 | Low       | 6      | 0 (by design / low risk)                  |
-| **Total** | **18** | **6 fixed + 1 confirmed test-only**       |
+| **Total** | **18** | **7 fixed + 1 confirmed test-only**       |
 
 **Resolved 2026-07-23:**
 
 - **H3:** stdin read capped at 256 MiB.
+- **H4:** Wayland CMSG fd extraction bounds-checked against `msg_controllen`;
+  `send_with_fds` verifies fds fit before copy; 4 edge-case unit tests added.
 - **M1:** `:make` now respects `shell_disabled()` policy.
 - **M2:** `git_rev` validated for path separators at the boundary +
   `debug_assert!` at join site.
@@ -296,8 +304,6 @@ The codebase demonstrates strong defensive security practices:
 
 - **H2:** Tracked as
   [GitHub issue #314](https://github.com/kryptic-sh/hjkl/issues/314).
-- **H4:** Wayland cmsg audit needs fuzz infrastructure, not a simple code
-  change.
 - **M4:** Inherent TOCTOU in filesystem operations; partially mitigated.
 - **M7, M8:** Low-risk design notes with explicit choke points / bounded impact.
 - **L1–L6:** Low severity, by design or adequately mitigated.
