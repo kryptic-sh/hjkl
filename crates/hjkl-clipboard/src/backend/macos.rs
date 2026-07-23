@@ -30,11 +30,6 @@ struct AutoreleasePool {
     token: *mut c_void,
 }
 
-// SAFETY: the token is an opaque thread-local stack frame pointer pushed by
-// the ObjC runtime. It is only read back on the same thread by `Drop`, which
-// is guaranteed by Rust's ownership rules.
-unsafe impl Send for AutoreleasePool {}
-
 impl Drop for AutoreleasePool {
     fn drop(&mut self) {
         // SAFETY: `token` was returned by `objc_autoreleasePoolPush` on this
