@@ -3,6 +3,25 @@
 //! Without a range: runs the command and shows stdout as an Info toast.
 //! With a range: pipes the rows through the command and replaces them with
 //! stdout. Ported verbatim from `hjkl_editor::ex::apply_shell_filter`.
+//!
+//! # Security: `:!` is intentional unrestricted shell access
+//!
+//! This module passes user-typed text directly to `sh -c` with no sanitization.
+//! That is **by design** — full vim parity — and is not a vulnerability:
+//!
+//! * In interactive TUI mode the user is the local operator typing their own
+//!   commands; `:!` is no more dangerous than the terminal they are already in.
+//! * In `--embed` / `--nvim-api` / `--headless` modes, shell-out is **disabled
+//!   by default** via `policy::disable_shell()` at startup. The
+//!   `shell_disabled()` gate below returns an error before `Command` is ever
+//!   built. Hosts must pass an explicit `--allow-shell` flag to opt back in.
+//! * No amount of metacharacter filtering would make `sh -c` "safe" — a
+//!   user-restricted shell is a lower-privilege shell, not a sandbox — so the
+//!   defense is architectural (off-by-default in non-interactive modes) rather
+//!   than input-validation-based.
+//!
+//! Auditors: see also `policy.rs`, the `:make` / `:grep` guards in
+//! `quickfix.rs`, and the `:r !cmd` gate in `builtins.rs`.
 
 use crate::{effect::ExEffect, range::LineRange};
 use hjkl_engine::Host;

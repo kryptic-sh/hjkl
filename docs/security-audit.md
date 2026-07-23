@@ -7,19 +7,7 @@
 
 ## Findings
 
-### High Severity (4)
-
-**H1 — `:!cmd` passes unsanitized user input to `sh -c`**
-`crates/hjkl-ex/src/shell.rs:32,80`
-
-The `:!cmd` and `:[range]!cmd` ex commands pass the user-typed string directly
-to `Command::new("sh").arg("-c").arg(cmd)`. This is the single largest attack
-surface: any command the terminal user types executes as their local user. This
-is by design (full vim parity), but means `:!` is unrestricted shell access. In
-`--embed`, `--nvim-api`, and `--headless` modes, shell-out is disabled by
-default via `policy::disable_shell()` and gated behind an explicit
-`--allow-shell` flag. In TUI mode it is always available. No shell metacharacter
-filtering is applied.
+### High Severity (3)
 
 **H2 — `dlopen` of remotely-compiled shared objects (arbitrary code execution)**
 `crates/hjkl-bonsai/src/runtime/grammar.rs:79-89`, `compile.rs:136,163-171`
@@ -281,14 +269,12 @@ The codebase demonstrates strong defensive security practices:
 
 ## Summary
 
-| Severity  | Count  | Resolved                              |
-| --------- | ------ | ------------------------------------- |
-| High      | 4      | 1 (H3)                                |
-| Medium    | 9      | 4 (M1, M2, M5, M6) + 1 test-only (M3) |
-| Low       | 6      | 0 (by design / low risk)              |
-| **Total** | **19** | **5 fixed + 1 confirmed test-only**   |
-
-M9 (added during review of the M1 fix) is open — see below.
+| Severity  | Count  | Resolved                                  |
+| --------- | ------ | ----------------------------------------- |
+| High      | 3      | 1 (H3)                                    |
+| Medium    | 9      | 5 (M1, M2, M5, M6, M9) + 1 test-only (M3) |
+| Low       | 6      | 0 (by design / low risk)                  |
+| **Total** | **18** | **6 fixed + 1 confirmed test-only**       |
 
 **Resolved 2026-07-23:**
 
@@ -299,12 +285,15 @@ M9 (added during review of the M1 fix) is open — see below.
 - **M5:** fs-watch notify filter uses `try_lock()` — never blocks the event
   thread.
 - **M6:** Unsound `unsafe impl Send` removed from `AutoreleasePool`.
+- **M9:** `:grep` now respects `shell_disabled()` policy, consistent with
+  `:make`.
 - **M3:** Confirmed test-only (`#[cfg(test)]`) — not production code.
+- **H1:** Pruned — intentional unrestricted shell access (vim parity), fully
+  guarded in RPC modes. Module-level doc comment added in `shell.rs` explaining
+  the design to future auditors.
 
 **Not fixed (by design / tracked / infrastructure):**
 
-- **H1:** `:!` is unrestricted shell access by design (vim parity), fully
-  guarded in RPC modes.
 - **H2:** Tracked as
   [GitHub issue #314](https://github.com/kryptic-sh/hjkl/issues/314).
 - **H4:** Wayland cmsg audit needs fuzz infrastructure, not a simple code
