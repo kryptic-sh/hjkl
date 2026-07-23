@@ -697,6 +697,12 @@ impl crate::app::App {
     /// (blocking), parse hits into the target list, and open the popup. Reuses
     /// `hjkl-picker`'s rg parsers.
     fn qf_run_grep(&mut self, w: QfWhich, pat: &str) {
+        if hjkl_engine::policy::shell_disabled() {
+            self.bus.error(
+                "shell-out is disabled (--embed / --nvim-api / --headless without --allow-shell)",
+            );
+            return;
+        }
         use hjkl_picker::source::rg::{
             GrepBackend, detect_grep_backend, parse_grep_line, parse_rg_json_line,
         };

@@ -170,9 +170,12 @@ configuration" and "the single choke point to extend if project-local
 thread is orphaned — it stays alive as a detached OS thread until process exit.
 Bounded: one thread per shutdown call, typically once per process lifetime.
 
-**M9 — `:grep` spawns a subprocess unguarded in RPC modes** (open)
+**M9 — `:grep` spawns a subprocess unguarded in RPC modes** (resolved)
 `apps/hjkl/src/app/quickfix.rs:699,709-715`
 
+> **Resolved 2026-07-23:** Added `shell_disabled()` guard — `:grep` now honors
+> the shell-out policy, consistent with `:make` (M1).
+>
 > **Found 2026-07-23 while reviewing the M1 fix.** The `shell_disabled()` gate
 > added for `:make` (M1, commit `b89337a1`) was **not** applied to
 > `qf_run_grep`, which forks `rg` / `grep` / `findstr` (lines 709–715). So an
@@ -300,9 +303,6 @@ M9 (added during review of the M1 fix) is open — see below.
 
 **Not fixed (by design / tracked / infrastructure):**
 
-- **M9:** `:grep` still spawns `rg`/`grep`/`findstr` unguarded in RPC modes —
-  low risk (fixed binary, `--`-separated args, no arbitrary exec); decide
-  whether to gate it behind `shell_disabled()` or document as intentional.
 - **H1:** `:!` is unrestricted shell access by design (vim parity), fully
   guarded in RPC modes.
 - **H2:** Tracked as
