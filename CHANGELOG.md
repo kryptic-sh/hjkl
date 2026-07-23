@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security audit fixes (2026-07-23):** Stdin read capped at 256 MiB to prevent
+  OOM from unbounded input (`hjkl -`); `:make` guarded behind `shell_disabled()`
+  so RPC modes without `--allow-shell` reject it; grammar `git_rev` validated
+  for path separators/`..` traversal before cache-directory join; fs-watch
+  notify filter uses `try_lock()` to never block the raw event thread; macOS
+  `AutoreleasePool` unsound `unsafe impl Send` removed.
+
 ## [0.35.0] - 2026-07-22
 
 ### Added

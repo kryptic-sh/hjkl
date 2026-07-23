@@ -39,6 +39,9 @@ values.
 
 **H3 — Unbounded stdin read with `hjkl -`** `apps/hjkl/src/main.rs:672-673`
 
+> **Resolved 2026-07-23:** Added `.take(256 MiB)` bound before `read_to_string`
+> (commit `350ff8d8`).
+
 The `-` flag reads stdin to EOF with `read_to_string` and no size cap. If stdin
 is connected to `/dev/zero`, a named FIFO that never closes, or a malicious
 source, this allocates until OOM. Every other read path in the codebase (swap
@@ -62,6 +65,10 @@ malformed cmsg data could trigger undefined behavior.
 **M1 — `:make` runs user-configured `makeprg` as command**
 `apps/hjkl/src/app/quickfix.rs:781,787`
 
+> **Resolved 2026-07-23:** Added `hjkl_engine::policy::shell_disabled()` guard
+> at the top of `qf_run_make`, closing the gap where `:make` bypassed the
+> shell-out policy in RPC modes (commit `b89337a1`).
+
 `resolve_make_argv` splits `makeprg` config value by whitespace; the first token
 becomes the program executed by `Command::new()`. A `:set makeprg=...` (with no
 validation) picks any binary on PATH. By design (vim parity), but the program is
@@ -79,6 +86,10 @@ user-configurable with no allowlist.
 **M2 — `git_rev` joined into cache path without `..` sanitization**
 `crates/hjkl-bonsai/src/runtime/source.rs:93`
 
+> **Resolved 2026-07-23:** `validate_clone_args` now rejects path separators in
+> `git_rev` via `is_safe_component`, and `source_dir` adds a `debug_assert!`
+> defense-in-depth check (commit `c9a964dd`).
+
 `self.base.join(format!("{name}-{}", spec.git_rev))` interpolates `git_rev` into
 a directory path. `name` is validated by `is_safe_component`, but `git_rev` is
 not — a manifest specifying `git_rev = "../../etc"` would create a directory
@@ -88,6 +99,10 @@ empty/leading-dash but not path separators.
 
 **M3 — `.expect()` on external msgpack decode in nvim-api**
 `apps/hjkl/src/nvim_api.rs:2563-2565`
+
+> **Confirmed 2026-07-23:** `decode_response` and the test helper at line 2573
+> are inside `#[cfg(test)] mod tests` — test-only code, not production dispatch.
+> Not a bug.
 
 `decode_response` calls `.expect("decode_response")` on msgpack input from an
 external Neovim process. If the external process sends malformed msgpack, this
@@ -109,6 +124,10 @@ operations without `openat`+`renameat`+`O_NOFOLLOW`.
 **M5 — `filter_set.lock()` blocks notify event callback thread**
 `apps/hjkl/src/app/fs_watch.rs:55-57`
 
+> **Resolved 2026-07-23:** Replaced `lock()` with `try_lock()`, explicitly
+> handling `WouldBlock` and `Poisoned` variants without blocking the notify
+> thread (commit `bb4a0e10`).
+
 The filter closure is called from the `notify` library's raw event thread. Using
 `lock()` (blocking) rather than `try_lock()` means the notify thread can be
 stalled under lock contention. The `unwrap_or(false)` fallback silently swallows
@@ -116,6 +135,10 @@ a poisoned lock, dropping all events until the lock is replaced.
 
 **M6 — `AutoreleasePool: Send` over-approximates thread safety**
 `crates/hjkl-clipboard/src/backend/macos.rs:36`
+
+> **Resolved 2026-07-23:** Removed the unsound `unsafe impl Send` — the struct
+> is only used as a local RAII guard in synchronous method bodies and does not
+> need to be `Send` (commit `de495a2d`).
 
 The struct wraps an `objc_autoreleasePoolPush` token; `Drop` calls `pop`, which
 must run on the same thread. The `unsafe impl Send` is technically incorrect: if
@@ -229,26 +252,32 @@ The codebase demonstrates strong defensive security practices:
 
 ## Summary
 
-| Severity  | Count  |
-| --------- | ------ |
-| High      | 4      |
-| Medium    | 8      |
-| Low       | 6      |
-| **Total** | **18** |
+| Severity  | Count  | Resolved                              |
+| --------- | ------ | ------------------------------------- |
+| High      | 4      | 1 (H3)                                |
+| Medium    | 8      | 4 (M1, M2, M5, M6) + 1 test-only (M3) |
+| Low       | 6      | 0 (by design / low risk)              |
+| **Total** | **18** | **5 fixed + 1 confirmed test-only**   |
 
-**Overall risk: Medium.** The codebase is well-structured for a local terminal
-application. The `:!cmd` shell-out path is the dominant attack surface — it is
-by design, fully guarded in RPC modes, and inherent to the vim-parity model. The
-grammar compilation/dlopen pipeline is a documented trust boundary with a wide
-surface (network, build chain, shared library loading) that warrants continuous
-scrutiny. The unbounded stdin read is the only finding that could produce a
-crash from external input and is the simplest to fix.
+**Resolved 2026-07-23:**
 
-**Top 3 to fix first:**
+- **H3:** stdin read capped at 256 MiB.
+- **M1:** `:make` now respects `shell_disabled()` policy.
+- **M2:** `git_rev` validated for path separators at the boundary +
+  `debug_assert!` at join site.
+- **M5:** fs-watch notify filter uses `try_lock()` — never blocks the event
+  thread.
+- **M6:** Unsound `unsafe impl Send` removed from `AutoreleasePool`.
+- **M3:** Confirmed test-only (`#[cfg(test)]`) — not production code.
 
-1. **Cap stdin read** (`apps/hjkl/src/main.rs:672`) — add a bounded `take(N)`
-   before `read_to_string`.
-2. **Audit Wayland cmsg parsing** (`wayland_socket.rs`) — review unsafe
-   invariants for the cmsg walk and fd extraction paths; add fuzz coverage.
-3. **Validate `git_rev` for path separators** (`source.rs:93`) — reject `..` and
-   `/` in `git_rev` like `name` already does.
+**Not fixed (by design / tracked / infrastructure):**
+
+- **H1:** `:!` is unrestricted shell access by design (vim parity), fully
+  guarded in RPC modes.
+- **H2:** Tracked as
+  [GitHub issue #314](https://github.com/kryptic-sh/hjkl/issues/314).
+- **H4:** Wayland cmsg audit needs fuzz infrastructure, not a simple code
+  change.
+- **M4:** Inherent TOCTOU in filesystem operations; partially mitigated.
+- **M7, M8:** Low-risk design notes with explicit choke points / bounded impact.
+- **L1–L6:** Low severity, by design or adequately mitigated.
