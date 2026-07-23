@@ -433,3 +433,167 @@ fn recv_into(
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Tests — CMSG fd extraction edge cases (Security Audit H4)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// Send raw fds via `sendmsg` with SCM_RIGHTS — standalone, no WaylandSocket.
+    fn send_raw_fds(sender_fd: c_int, fds: &[c_int]) {
+        let dummy: [u8; 1] = [0];
+        let cmsg_space =
+            unsafe { libc::CMSG_SPACE((fds.len() * std::mem::size_of::<c_int>()) as libc::c_uint) }
+                as usize;
+        let mut cmsg_buf = vec![0u8; cmsg_space];
+        let mut iov = libc::iovec {
+            iov_base: dummy.as_ptr() as *mut libc::c_void,
+            iov_len: dummy.len(),
+        };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
+        msg.msg_controllen = cmsg_space.try_into().expect("cmsg_space fits");
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+        assert!(!cmsg.is_null());
+        unsafe {
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg).cmsg_len =
+                libc::CMSG_LEN((fds.len() * std::mem::size_of::<c_int>()) as libc::c_uint) as _;
+            let data_ptr = libc::CMSG_DATA(cmsg) as *mut c_int;
+            std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, fds.len());
+        }
+        let n = unsafe { libc::sendmsg(sender_fd, &msg, 0) };
+        assert!(n >= 0, "sendmsg: {}", std::io::Error::last_os_error());
+    }
+
+    #[test]
+    fn test_send_recv_fds_socketpair() {
+        let mut fds = [0i32; 2];
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "socketpair: {}", std::io::Error::last_os_error());
+        let sender_fd = fds[0];
+        let receiver_fd = fds[1];
+
+        // Wrap the receiver in a WaylandSocket.
+        let mut receiver = unsafe { WaylandSocket::from_raw_fd(receiver_fd) };
+
+        // Create valid fds (e.g. /dev/null) — the kernel rejects SCM_RIGHTS
+        // with invalid fds (EBADF).
+        let null0 = unsafe {
+            libc::open(
+                b"/dev/null\0".as_ptr() as *const libc::c_char,
+                libc::O_RDONLY,
+            )
+        };
+        assert!(
+            null0 >= 0,
+            "open /dev/null: {}",
+            std::io::Error::last_os_error()
+        );
+        let null1 = unsafe {
+            libc::open(
+                b"/dev/null\0".as_ptr() as *const libc::c_char,
+                libc::O_RDONLY,
+            )
+        };
+        assert!(
+            null1 >= 0,
+            "open /dev/null: {}",
+            std::io::Error::last_os_error()
+        );
+        let sent_fds: [c_int; 2] = [null0, null1];
+        send_raw_fds(sender_fd, &sent_fds);
+
+        // Receive.
+        receiver.recv(true).unwrap();
+
+        let mut got = Vec::new();
+        while let Some(fd) = receiver.next_fd() {
+            got.push(fd);
+        }
+        assert_eq!(got.len(), 2);
+        // Close the received fds (they are copies of null0/null1).
+        for fd in &got {
+            unsafe { libc::close(*fd) };
+        }
+        // Close sender fd and the original null fds.
+        unsafe {
+            libc::close(sender_fd);
+            libc::close(null0);
+            libc::close(null1);
+        }
+    }
+
+    #[test]
+    fn test_recv_no_ancillary_data() {
+        let mut fds = [0i32; 2];
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let sender = fds[0];
+        let receiver_fd = fds[1];
+        let mut receiver = unsafe { WaylandSocket::from_raw_fd(receiver_fd) };
+
+        // Send one byte with no ancillary data.
+        let byte: [u8; 1] = [0x42];
+        let n = unsafe { libc::send(sender, byte.as_ptr() as *const libc::c_void, 1, 0) };
+        assert_eq!(n, 1);
+
+        receiver.recv(true).unwrap();
+        assert_eq!(receiver.next_fd(), None);
+        // The received byte is in rx_buf — verify we got it.
+        assert_eq!(receiver.rx_buf.len(), 1);
+        assert_eq!(receiver.rx_buf[0], 0x42);
+
+        unsafe { libc::close(sender) };
+    }
+
+    #[test]
+    fn test_connect_path_too_long() {
+        // UNIX_PATH_MAX is 108 including NUL — so 108 chars is too long.
+        let long_path = "/".repeat(108);
+        let result = connect_to_path(&long_path);
+        match result {
+            Err(ClipboardError::Io(e)) => {
+                assert!(e.to_string().contains("too long") || e.to_string().contains("108"))
+            }
+            _ => panic!(
+                "expected ClipboardError::Io, got: {:?}",
+                result.as_ref().err()
+            ),
+        }
+    }
+
+    #[test]
+    fn test_next_message_rejects_small_size() {
+        // Use a pipe fd for harmless null-fd that won't be a real socket.
+        // Construct the struct manually to avoid from_raw_fd's Drop closing
+        // the underlying fd. We use ManuallyDrop so we can test next_message
+        // without triggering Drop's libc::close on a bogus fd.
+        let mut socket = WaylandSocket {
+            fd: -1,
+            rx_buf: VecDeque::new(),
+            rx_fds: VecDeque::new(),
+        };
+
+        // Fake a message: object_id=0, size=4 (less than 8), opcode=0.
+        // Wire format: [object_id:4 LE][opcode:2 LE | size:2 LE]
+        // For size=4, opcode=0: bytes = [0,0,0,0, 0,0, 4,0] (little-endian)
+        socket.rx_buf.extend(&[0, 0, 0, 0, 0, 0, 4, 0]);
+        // next_message should drain the header and return None.
+        let result = socket.next_message();
+        assert!(result.is_none());
+        // The 8 header bytes should be drained.
+        assert!(socket.rx_buf.is_empty());
+
+        // Prevent Drop from closing fd -1 — set fd to a known-bad value and
+        // forget the struct.
+        socket.fd = -1;
+        std::mem::forget(socket);
+    }
+}
