@@ -39,15 +39,41 @@ pub struct ServerConfig {
 impl ServerConfig {
     /// Validate the config before it is used to spawn a process.
     ///
-    /// `command` is trusted user configuration (absolute paths to language
-    /// servers are legitimate), so this only rejects an empty/whitespace
-    /// command — spawning that would either fail opaquely or, with a shell
-    /// wrapper, run nothing useful. It is the single choke point to extend if
-    /// project-local (untrusted) config is ever added.
+    /// # Security
+    ///
+    /// `command` is **trusted user configuration** accessed from the user's
+    /// own config file. Absolute paths to language servers are legitimate;
+    /// bare names (e.g. `"rust-analyzer"`) rely on `$PATH` and are also
+    /// intentional — they match every editor's LSP config convention.
+    ///
+    /// If **project-local config** (`.hjkl.toml`, `.editorconfig`, etc.) is
+    /// ever supported, this `validate` method MUST become the enforcement
+    /// point for untrusted-command restrictions. At minimum, that means:
+    ///
+    /// * Reject the command when the config source is not the user's global
+    ///   config (add a `trusted: bool` parameter or source-tracking).
+    /// * Reject relative paths (prevent `./malicious-binary` from a cloned
+    ///   repo).  Today relative paths are allowed because trusted user config
+    ///   is the only source; that MUST change when project-local config lands.
+    /// * Consider an allowlist of known LSP binary names, or at minimum
+    ///   reject commands containing path separators (`/`, `\\`) from
+    ///   project-local sources.
+    ///
+    /// For now, as a defense-in-depth measure even for user config, reject
+    /// commands with `..` path components — a typo like `"../bin/foo"` has
+    /// no legitimate use for a language server and is likely a path traversal.
     pub fn validate(&self, language_id: &str) -> Result<(), String> {
         if self.command.trim().is_empty() {
             return Err(format!(
                 "lsp: server for {language_id:?} has an empty `command`"
+            ));
+        }
+        // Defense-in-depth: reject `..` path traversal in the command even
+        // for trusted user config — no legitimate LSP binary lives in a
+        // parent directory relative to cwd.
+        if self.command.contains("..") {
+            return Err(format!(
+                "lsp: server command for {language_id:?} contains path traversal (`..`)"
             ));
         }
         Ok(())
