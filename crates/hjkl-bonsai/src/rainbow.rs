@@ -277,11 +277,15 @@ fn count_scope_depth(node: tree_sitter::Node<'_>, grammar: &Grammar, source: &[u
 /// Materialises only the requested node's byte range from the rope's B-tree
 /// chunks — never the full document.
 fn rope_node_chunks(rope: &ropey::Rope, start: usize, end: usize) -> impl Iterator<Item = Vec<u8>> {
-    if start >= end {
+    // Snap to char boundaries: a stale retained tree can hand us offsets that
+    // split a multi-byte char in the current rope, which `byte_slice` panics
+    // on. Aligned nodes are unaffected (identity).
+    let range = crate::rope_slice::safe_char_range(rope, start, end);
+    if range.is_empty() {
         Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Vec<u8>>>
     } else {
         let bytes: Vec<u8> = rope
-            .byte_slice(start..end)
+            .byte_slice(range)
             .chunks()
             .flat_map(|c| c.as_bytes().iter().copied())
             .collect();

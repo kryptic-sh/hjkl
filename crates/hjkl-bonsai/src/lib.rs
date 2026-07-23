@@ -72,6 +72,7 @@ pub mod highlighter;
 pub mod predicate;
 pub mod query_sanitize;
 pub mod rainbow;
+mod rope_slice;
 pub mod runtime;
 pub mod theme;
 

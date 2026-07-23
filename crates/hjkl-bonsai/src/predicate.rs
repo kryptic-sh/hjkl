@@ -49,7 +49,11 @@ impl<'a> Source<'a> {
                 if end > r.len_bytes() || start > end {
                     return None;
                 }
-                Some(Cow::Owned(r.byte_slice(start..end).to_string()))
+                // Snap: a stale tree can hand offsets that split a multi-byte
+                // char (in-bounds but non-boundary), which `byte_slice` panics
+                // on. Aligned ranges are unaffected.
+                let range = crate::rope_slice::safe_char_range(r, start, end);
+                Some(Cow::Owned(r.byte_slice(range).to_string()))
             }
         }
     }
@@ -68,7 +72,10 @@ impl<'a> Source<'a> {
                 if end > r.len_bytes() || start > end {
                     return None;
                 }
-                let s = r.byte_slice(start..end).to_string();
+                // Snap to char boundaries (see `text_slice`) to avoid a
+                // mid-multibyte-char `byte_slice` panic on a stale tree.
+                let range = crate::rope_slice::safe_char_range(r, start, end);
+                let s = r.byte_slice(range).to_string();
                 Some(Cow::Owned(s.into_bytes()))
             }
         }

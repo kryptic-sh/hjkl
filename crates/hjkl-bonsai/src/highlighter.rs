@@ -1687,7 +1687,10 @@ impl Highlighter {
                         let e = cap.node.end_byte();
                         if s < e && e <= source_len {
                             // Language name is always short (≤ 64 bytes per spec).
-                            let name = rope.byte_slice(s..e).to_string();
+                            // Snap in case a stale tree split a multi-byte char.
+                            let name = rope
+                                .byte_slice(crate::rope_slice::safe_char_range(rope, s, e))
+                                .to_string();
                             let name = name.trim().to_string();
                             lang_name = Some(name);
                         }
@@ -1695,7 +1698,9 @@ impl Highlighter {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
                         if s < e && e <= source_len {
-                            content_range = Some(s..e);
+                            // Snap to char boundaries so the later `byte_slice`
+                            // of this range can't split a multi-byte char.
+                            content_range = Some(crate::rope_slice::safe_char_range(rope, s, e));
                         }
                     }
                 }
@@ -1843,12 +1848,16 @@ impl Highlighter {
 /// (a few to a few hundred bytes), and the query cursor calls this at most
 /// once per captured node per match.
 fn rope_node_chunks(rope: &ropey::Rope, start: usize, end: usize) -> impl Iterator<Item = Vec<u8>> {
-    if start >= end {
+    // Snap to char boundaries: a stale retained tree (reparse timed out) can
+    // hand us offsets that split a multi-byte char in the current rope, and
+    // `byte_slice` panics on those. Aligned nodes are unaffected (identity).
+    let range = crate::rope_slice::safe_char_range(rope, start, end);
+    if range.is_empty() {
         // Empty range — return an empty iterator. We box it to unify the type.
         Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Vec<u8>>>
     } else {
         let bytes: Vec<u8> = rope
-            .byte_slice(start..end)
+            .byte_slice(range)
             .chunks()
             .flat_map(|c| c.as_bytes().iter().copied())
             .collect();
