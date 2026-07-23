@@ -50,9 +50,21 @@ pub(crate) fn save_file_durable(
     // bypass the file's own permission bits. Probe with a single non-truncating
     // write-open (contents and mtime untouched). A single open (rather than a
     // separate `exists()` check followed by an open) closes the TOCTOU gap where
-    // the target could be swapped between the two syscalls. `NotFound` means a
-    // brand-new file, which is allowed.
-    match std::fs::OpenOptions::new().write(true).open(&target) {
+    // the target could be swapped between the two syscalls. `O_NOFOLLOW` (Unix)
+    // hardens this further: if the target was swapped with a symlink after
+    // canonicalize resolved it, the open fails rather than following the link
+    // to an unintended file. `NotFound` means a brand-new file, which is allowed.
+    #[cfg(unix)]
+    let open = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&target)
+    };
+    #[cfg(not(unix))]
+    let open = std::fs::OpenOptions::new().write(true).open(&target);
+    match open {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
