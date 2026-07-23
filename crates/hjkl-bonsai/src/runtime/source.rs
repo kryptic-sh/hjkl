@@ -90,6 +90,13 @@ impl SourceCache {
     /// Path where the source tree for `(name, spec)` would live (whether or
     /// not it has been cloned yet).
     pub fn source_dir(&self, name: &str, spec: &LangSpec) -> PathBuf {
+        // Security: git_rev must be a safe path component — path separators or
+        // ".." could escape the cache directory. (M2 audit finding)
+        debug_assert!(
+            is_safe_component(&spec.git_rev),
+            "git_rev contains path separators: {:?}",
+            spec.git_rev
+        );
         self.base.join(format!("{name}-{}", spec.git_rev))
     }
 
@@ -490,6 +497,9 @@ fn validate_clone_args(url: &str, rev: &str) -> Result<()> {
     }
     if rev.is_empty() || rev.starts_with('-') {
         bail!("refusing suspicious git rev: {rev:?}");
+    }
+    if !is_safe_component(rev) {
+        bail!("git_rev contains path separators: {rev:?}");
     }
     Ok(())
 }
