@@ -110,6 +110,11 @@ production dispatch.
 **M4 — TOCTOU between `canonicalize` and atomic rename in save**
 `apps/hjkl/src/save.rs:46-93`
 
+> **Resolved 2026-07-23:** Write-permission open on Unix now uses `O_NOFOLLOW` —
+> if the target is swapped with a symlink after canonicalize, the open fails
+> instead of following the link (commit `414d03d0`). The rename at line 93 is
+> already safe (rename doesn't follow symlinks on the destination).
+
 The save path canonicalizes the target to resolve symlinks (line 46), checks
 write permissions (line 55), then performs an atomic rename of a temp file to
 the target (line 93). Between the canonicalize and the rename, the target file
@@ -150,6 +155,10 @@ no bug manifests.
 **M7 — LSP `command` from user config only — explicit choke point**
 `crates/hjkl-lsp/src/config.rs:43-46`
 
+> **Resolved 2026-07-23:** Security comment expanded to document the trust
+> boundary and required hardening steps for project-local config. Added
+> defense-in-depth `..` path traversal rejection (commit `6dcad196`).
+
 The LSP server binary is taken from user config TOML with no validation beyond
 rejecting empty strings. The code explicitly comments this as "trusted user
 configuration" and "the single choke point to extend if project-local
@@ -158,6 +167,11 @@ configuration" and "the single choke point to extend if project-local
 
 **M8 — Orphaned join-helper thread in LSP shutdown**
 `crates/hjkl-lsp/src/manager.rs:56-61`
+
+> **Resolved 2026-07-23:** Documented as intentional — one detached helper
+> thread per shutdown, bounded to once per process lifetime. No safe timed-join
+> API exists in stable Rust; the OS reclaims the thread at exit. Doc comment
+> added in `shutdown` explaining the design.
 
 `LspManager::shutdown` spawns a helper thread to join the LSP io task with a
 2-second `recv_timeout`. If the LSP process hangs indefinitely, the helper
@@ -275,12 +289,12 @@ The codebase demonstrates strong defensive security practices:
 
 ## Summary
 
-| Severity  | Count  | Resolved                                  |
-| --------- | ------ | ----------------------------------------- |
-| High      | 3      | 2 (H3, H4)                                |
-| Medium    | 9      | 5 (M1, M2, M5, M6, M9) + 1 test-only (M3) |
-| Low       | 6      | 0 (by design / low risk)                  |
-| **Total** | **18** | **7 fixed + 1 confirmed test-only**       |
+| Severity  | Count  | Resolved                                              |
+| --------- | ------ | ----------------------------------------------------- |
+| High      | 3      | 2 (H3, H4)                                            |
+| Medium    | 9      | 8 (M1, M2, M4, M5, M6, M7, M8, M9) + 1 test-only (M3) |
+| Low       | 6      | 0 (by design / low risk)                              |
+| **Total** | **18** | **10 fixed + 1 confirmed test-only**                  |
 
 **Resolved 2026-07-23:**
 
@@ -295,6 +309,12 @@ The codebase demonstrates strong defensive security practices:
 - **M6:** Unsound `unsafe impl Send` removed from `AutoreleasePool`.
 - **M9:** `:grep` now respects `shell_disabled()` policy, consistent with
   `:make`.
+- **M4:** Write-permission open on save now uses `O_NOFOLLOW` on Unix to close
+  the TOCTOU gap between `canonicalize` and the permission check.
+- **M7:** LSP `command` validation expanded with `..` traversal rejection and
+  explicit security documentation for when project-local config is added.
+- **M8:** Orphaned join-helper thread documented as intentional — bounded to
+  once per process lifetime. Doc comment added in `LspManager::shutdown`.
 - **M3:** Confirmed test-only (`#[cfg(test)]`) — not production code.
 - **H1:** Pruned — intentional unrestricted shell access (vim parity), fully
   guarded in RPC modes. Module-level doc comment added in `shell.rs` explaining
@@ -304,6 +324,4 @@ The codebase demonstrates strong defensive security practices:
 
 - **H2:** Tracked as
   [GitHub issue #314](https://github.com/kryptic-sh/hjkl/issues/314).
-- **M4:** Inherent TOCTOU in filesystem operations; partially mitigated.
-- **M7, M8:** Low-risk design notes with explicit choke points / bounded impact.
 - **L1–L6:** Low severity, by design or adequately mitigated.

@@ -47,12 +47,20 @@ impl LspManager {
     }
 
     /// Gracefully shut down: sends `ShutdownAll`, joins the thread (≤ 2 s).
+    ///
+    /// If the LSP background thread hangs past the 2 s deadline, the helper
+    /// thread becomes an intentionally detached OS thread until process exit
+    /// (audit M8). This is bounded: one thread per shutdown call, typically
+    /// once per process lifetime. A proper timed join on `JoinHandle` would
+    /// require nightly `JoinHandleExt::join_timeout` or a full `pthread_timedjoin`.
     pub fn shutdown(mut self) {
         let _ = self.cmd_tx.send(LspCommand::ShutdownAll);
         if let Some(handle) = self.thread.take() {
             // Park the current thread with a 2-second timeout.
             // `std::thread::JoinHandle` doesn't have a timed join in stable Rust,
             // so we use a helper thread to enforce the deadline.
+            // If `handle.join()` takes > 2 s the helper is intentionally
+            // detached — the OS reclaims it at process exit. (M8)
             let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
             std::thread::spawn(move || {
                 let _ = handle.join();
