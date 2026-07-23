@@ -54,7 +54,18 @@ impl App {
             .debounce(Duration::from_millis(100))
             .filter(move |p| {
                 let c = canon_for_match(p);
-                filter_set.lock().map(|s| s.contains(&c)).unwrap_or(false)
+                match filter_set.try_lock() {
+                    Ok(s) => s.contains(&c),
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        // Called from notify's raw event thread — never block.
+                        // If we can't get the lock immediately, skip this event.
+                        false
+                    }
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        // Lock is poisoned; skip until the set is replaced.
+                        false
+                    }
+                }
             })
             .build();
         match build {
