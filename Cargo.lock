@@ -1318,6 +1318,7 @@ dependencies = [
  "hjkl-vim-tui",
  "hjkl-which-key",
  "hjkl-which-key-tui",
+ "libc",
  "lsp-types",
  "memchr",
  "mimalloc",
