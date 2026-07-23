@@ -776,6 +776,13 @@ impl crate::app::App {
     /// the target list, and open the popup. Blocking: the TUI is frozen for the
     /// build's duration (cargo check can take seconds). Async is a follow-up.
     fn qf_run_make(&mut self, w: QfWhich, extra: &str) {
+        if hjkl_engine::policy::shell_disabled() {
+            self.bus.error(
+                "shell-out is disabled (--embed / --nvim-api / --headless without --allow-shell)",
+            );
+            return;
+        }
+
         const MAX_ENTRIES: usize = 10_000;
         let makeprg = self.active_editor().settings().makeprg.clone();
         let Some((program, rest)) = resolve_make_argv(&makeprg, extra) else {
