@@ -3,6 +3,16 @@
 **Project:** hjkl (terminal text editor) **Date:** 2026-07-23 **Scope:** entire
 codebase
 
+> **Status 2026-07-24 — implemented:** #1 status-bar clones (`7af516a7`), #2
+> `Arc::clone(&self.registry)` → borrow (`b0dcdfd4`), #3 completion
+> `filter_text` clone (`5d19681e`), #4 `or_insert_with` (`5d19681e`), #5
+> `unwrap_or_else` in embed/headless (`5d19681e`), #7 which-key slice notation
+> (`7af516a7`), #9 14 production redundant clones (`5d19681e`). #6 was
+> **withdrawn** (the `#[allow]` is load-bearing). **#8 deferred** — ~53
+> `redundant_clone` in test files only; a nursery lint not in the `-D warnings`
+> gate, zero runtime impact, and auto-`--fix` across 50+ test files would need
+> individual review for the modest benefit. Left as optional cleanup.
+
 ---
 
 ## Findings
