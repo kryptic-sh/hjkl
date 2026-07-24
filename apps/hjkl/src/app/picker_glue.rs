@@ -108,7 +108,7 @@ impl App {
         // Resolve relative path inside the repo workdir.
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let abs = if filename.is_absolute() {
-            filename.clone()
+            filename
         } else {
             cwd.join(&filename)
         };
@@ -351,7 +351,7 @@ impl App {
                 }
             }
             AppAction::AnvilInstall(name) => {
-                self.anvil_install(&name.clone());
+                self.anvil_install(&name);
             }
             AppAction::AnvilNoOp(_name) => {
                 // Tool already installed — no-op from picker <CR>.

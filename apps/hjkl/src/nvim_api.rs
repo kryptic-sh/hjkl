@@ -1920,7 +1920,7 @@ fn dispatch(
             // whitespace (e.g. `makeprg=cargo build`) are treated as a single
             // token without being split by apply_set's split_whitespace loop.
             let set_token = match &value {
-                Value::Boolean(true) => name.clone(),
+                Value::Boolean(true) => name,
                 Value::Boolean(false) => format!("no{name}"),
                 Value::Integer(n) => {
                     let n = n.as_i64().unwrap_or(0);

@@ -136,8 +136,8 @@ fn dispatch(
             };
             let cmd = cmd.strip_prefix(':').unwrap_or(&cmd).to_string();
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
-            let effect =
-                hjkl_ex::try_dispatch(&reg, editor, &cmd).unwrap_or(ExEffect::Unknown(cmd.clone()));
+            let effect = hjkl_ex::try_dispatch(&reg, editor, &cmd)
+                .unwrap_or_else(|| ExEffect::Unknown(cmd.clone()));
             match effect {
                 ExEffect::None
                 | ExEffect::Ok
@@ -151,7 +151,7 @@ fn dispatch(
                 }
                 ExEffect::Save => {
                     if let Err(e) = write_buffer(editor, current_filename) {
-                        error_resp(id, ERR_EX_COMMAND, &e.to_string())
+                        error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         success(id, Value::Null)
                     }
@@ -159,7 +159,7 @@ fn dispatch(
                 ExEffect::SaveAs(path_str) => {
                     let new_path = PathBuf::from(&path_str);
                     if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
-                        error_resp(id, ERR_EX_COMMAND, &e.to_string())
+                        error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         *current_filename = Some(new_path);
                         success(id, Value::Null)
@@ -167,7 +167,7 @@ fn dispatch(
                 }
                 ExEffect::Quit { save, force: _ } => {
                     if save && let Err(e) = write_buffer(editor, current_filename) {
-                        return error_resp(id, ERR_EX_COMMAND, &e.to_string());
+                        return error_resp(id, ERR_EX_COMMAND, &e);
                     }
                     *should_quit = true;
                     success(id, Value::Null)
@@ -200,7 +200,7 @@ fn dispatch(
                 ExEffect::SaveAndRename { path } => {
                     let new_path = PathBuf::from(&path);
                     if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
-                        error_resp(id, ERR_EX_COMMAND, &e.to_string())
+                        error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         *current_filename = Some(new_path);
                         success(id, Value::Null)

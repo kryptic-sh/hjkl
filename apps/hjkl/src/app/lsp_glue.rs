@@ -535,7 +535,7 @@ impl App {
             let prio = severity_priority(severity);
             let entry = sign_map
                 .entry(start_row)
-                .or_insert((severity, 'E', Style::default(), 0));
+                .or_insert_with(|| (severity, 'E', Style::default(), 0));
             if prio > entry.3 {
                 let (ch, style) = severity_sign(severity);
                 *entry = (severity, ch, style, prio);

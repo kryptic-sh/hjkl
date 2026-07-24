@@ -47,7 +47,7 @@ pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
                 let hi_unclamped = if row == bot.0 {
                     if inclusive { bot.1 + 1 } else { bot.1 }
                 } else {
-                    line.chars().count() + 1
+                    line.chars().count()
                 };
                 let row_chars: Vec<char> = line.chars().collect();
                 let hi = hi_unclamped.min(row_chars.len());

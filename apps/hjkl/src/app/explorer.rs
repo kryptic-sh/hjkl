@@ -712,7 +712,7 @@ impl super::App {
         let active_file = self.active().filename.clone();
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut tree = ExplorerTree::new(cwd.clone());
+        let mut tree = ExplorerTree::new(cwd);
 
         // Reveal the active file's path before rendering, so the initial cursor
         // lands on it and its ancestor dirs are expanded. `reveal` is robust to
@@ -1579,7 +1579,7 @@ impl super::App {
             // Expanding reads that dir's one level from disk (instant); collapsing
             // drops its subtree from `nodes`. `explorer_rebuild_buffer` re-renders
             // and keeps the cursor on this dir's path.
-            let path = node.path.clone();
+            let path = node.path;
             if let Some(ref mut ep) = self.explorer {
                 let now = ep.tree.is_expanded(&path);
                 ep.tree.set_expanded(&path, !now);
@@ -1928,7 +1928,7 @@ impl super::App {
         if !allow {
             return;
         }
-        self.explorer_git_discard_confirm = Some(node.path.clone());
+        self.explorer_git_discard_confirm = Some(node.path);
     }
 
     /// Called when the user confirms a git-discard with `y`.

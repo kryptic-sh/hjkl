@@ -114,7 +114,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             let cmd = cmd.strip_prefix(':').unwrap_or(cmd);
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
             let effect = hjkl_ex::try_dispatch(&reg, &mut editor, cmd)
-                .unwrap_or(ExEffect::Unknown(cmd.to_string()));
+                .unwrap_or_else(|| ExEffect::Unknown(cmd.to_string()));
             match effect {
                 ExEffect::None => {}
 

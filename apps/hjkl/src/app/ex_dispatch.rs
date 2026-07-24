@@ -603,10 +603,7 @@ impl App {
                 let p = PathBuf::from(&name);
                 self.slots[idx].filename = Some(p.clone());
                 self.slots[idx].git_repo_present = None; // re-probe for new path
-                self.registers
-                    .lock()
-                    .unwrap()
-                    .set_filename(Some(name.clone()));
+                self.registers.lock().unwrap().set_filename(Some(name));
                 self.bus.info(format!("\"{}\" [Not edited]", p.display()));
             }
             ExEffect::Cwd(new_cwd) => {
@@ -1366,7 +1363,7 @@ impl App {
             writer_pid: std::process::id(),
         };
 
-        let rope = self.slots[idx].buffer().rope().clone();
+        let rope = self.slots[idx].buffer().rope();
         // Capture the undo tree + live current node alongside the body (docs
         // §6c) so a crash-`:recover` restores undo/redo, not just the text.
         // `undo_to_serializable` syncs the tree's current to the live rope, so

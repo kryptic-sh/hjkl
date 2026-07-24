@@ -345,7 +345,7 @@ pub fn item_from_lsp(src: lsp_types::CompletionItem) -> CompletionItem {
         detail: src.detail.clone(),
         kind: kind_from_lsp(src.kind),
         insert_text,
-        filter_text: src.filter_text.clone(),
+        filter_text: src.filter_text,
     }
 }
 
