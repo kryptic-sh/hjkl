@@ -4,6 +4,8 @@
 //! It splits the terminal area into a buffer pane + status line row and
 //! delegates to [`buffer_pane`] and [`status_line`].
 
+use std::borrow::Cow;
+
 use hjkl_buffer::Viewport;
 use hjkl_buffer_tui::{BufferView, DiagOverlay, Gutter, GutterNumbers};
 use hjkl_engine::{Host, Query};
@@ -140,13 +142,13 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     } else {
         ""
     };
-    let raw_filename: String = app
+    let raw_filename: Cow<str> = app
         .active()
         .filename
         .as_ref()
         .and_then(|p| p.to_str())
-        .unwrap_or("[No Name]")
-        .to_owned();
+        .map(Cow::Borrowed)
+        .unwrap_or(Cow::Borrowed("[No Name]"));
     let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
 
     // Reserve space for all right-side blocks + filename padding + suffix
@@ -201,22 +203,15 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         if diags.is_empty() {
             String::new()
         } else {
-            let e = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Error)
-                .count();
-            let w2 = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Warning)
-                .count();
-            let i = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Info)
-                .count();
-            let h = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Hint)
-                .count();
+            let (mut e, mut w2, mut i, mut h) = (0usize, 0usize, 0usize, 0usize);
+            for d in diags {
+                match d.severity {
+                    DiagSeverity::Error => e += 1,
+                    DiagSeverity::Warning => w2 += 1,
+                    DiagSeverity::Info => i += 1,
+                    DiagSeverity::Hint => h += 1,
+                }
+            }
             let mut parts = Vec::new();
             if e > 0 {
                 parts.push(format!("E:{e}"));
@@ -294,7 +289,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         ));
         // Replace last segment with the actual pre-formatted content.
         if let Some(SlSegment::Text { content, .. }) = bar.left.last_mut() {
-            *content = search_count_content.clone().into();
+            *content = search_count_content.into();
         }
     }
 
@@ -312,7 +307,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
             theme.diag_hint_fg
         };
         bar.left.push(SlSegment::Text {
-            content: diag_count_content.clone().into(),
+            content: diag_count_content.into(),
             style: SlStyle::default_style()
                 .bg(ratatui_rgb_to_sl(ui.surface_bg))
                 .fg(diag_fg),
@@ -3017,7 +3012,7 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     let header_label = if pending.is_empty() {
         "root".to_string()
     } else {
-        hjkl_keymap::Chord(pending.clone()).to_notation(leader)
+        hjkl_keymap::chord_to_notation(&pending, leader)
     };
 
     let theme = hjkl_which_key_tui::PopupTheme::new(

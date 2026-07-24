@@ -10,7 +10,7 @@ pub mod key;
 pub mod keymap;
 pub mod trie;
 
-pub use chord::{Chord, ChordParseError};
+pub use chord::{Chord, ChordParseError, chord_to_notation};
 pub use key::{KeyCode, KeyEvent, KeyModifiers};
 pub use keymap::{KeyResolve, Keymap, KeymapError, Mode};
 pub use trie::{Binding, Predicate};

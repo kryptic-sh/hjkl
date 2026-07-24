@@ -78,12 +78,19 @@ impl Chord {
     /// `leader` is the char that was used as the leader expansion so we can
     /// represent the leader key as `<leader>` when it appears.
     pub fn to_notation(&self, leader: char) -> String {
-        let mut out = String::new();
-        for ev in &self.0 {
-            out.push_str(&event_to_notation(ev, leader));
-        }
-        out
+        chord_to_notation(&self.0, leader)
     }
+}
+
+/// Render a slice of key events to vim-style notation without allocating a
+/// [`Chord`]. Mirrors [`Chord::to_notation`] so borrowed pending sequences can
+/// be formatted without cloning into an owned `Vec`.
+pub fn chord_to_notation(keys: &[KeyEvent], leader: char) -> String {
+    let mut out = String::new();
+    for ev in keys {
+        out.push_str(&event_to_notation(ev, leader));
+    }
+    out
 }
 
 impl fmt::Display for Chord {
