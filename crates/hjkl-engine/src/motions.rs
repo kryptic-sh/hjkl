@@ -486,9 +486,10 @@ pub fn move_bottom<B: Cursor + Query>(buf: &mut B, count: usize) {
 /// supplied since 0.0.28 (was a buffer field before).
 pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
     let spec = KeywordSpec::parse(iskeyword);
+    let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(next) = next_word_start(buf, from, big, &spec) {
+        if let Some(next) = next_word_start(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, next);
         } else {
             break;
@@ -499,9 +500,10 @@ pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, is
 /// `b` / `B` — start of previous word.
 pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
     let spec = KeywordSpec::parse(iskeyword);
+    let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(prev) = prev_word_start(buf, from, big, &spec) {
+        if let Some(prev) = prev_word_start(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, prev);
         } else {
             break;
@@ -512,9 +514,10 @@ pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, i
 /// `e` / `E` — end of current/next word.
 pub fn move_word_end<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
     let spec = KeywordSpec::parse(iskeyword);
+    let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(end) = next_word_end(buf, from, big, &spec) {
+        if let Some(end) = next_word_end(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, end);
         } else {
             break;
@@ -532,9 +535,10 @@ pub fn move_word_end_back<B: Cursor + Query>(
     iskeyword: &str,
 ) {
     let spec = KeywordSpec::parse(iskeyword);
+    let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        match prev_word_end(buf, from, big, &spec) {
+        match prev_word_end(buf, &mut cache, from, big, &spec) {
             Some(p) => write_cursor(buf, p),
             None => break,
         }
@@ -916,10 +920,60 @@ fn char_kind(c: char, big: bool, iskeyword: &KeywordSpec) -> CharKind {
     }
 }
 
+/// Single-entry per-row line cache for word-motion scans.
+///
+/// Word scans (`w`/`b`/`e`/`ge`) step one character at a time and mostly
+/// stay within a row before crossing to the next, so a single `(row,
+/// String)` slot collapses what used to be one whole-line clone *per
+/// character examined* down to one clone *per row*. Every accessor
+/// mirrors [`read_line`] exactly — an out-of-bounds row yields an empty
+/// string — so lookups are byte-for-byte identical to the old
+/// `read_line_opt(..)?.chars()…` path (`chars().nth(col)` on an empty
+/// string is `None`, matching the old early-return on an OOB row). The
+/// cache holds an owned copy independent of `buf`, so it stays valid
+/// across the cursor writes between counted iterations (word motions
+/// never mutate text).
+#[derive(Default)]
+struct LineCache {
+    row: usize,
+    line: String,
+    loaded: bool,
+}
+
+impl LineCache {
+    /// Borrow row `row`'s text, refreshing the slot when the scan
+    /// crosses to a different row. Mirrors [`read_line`].
+    #[inline]
+    fn line<B: Query + ?Sized>(&mut self, buf: &B, row: usize) -> &str {
+        if !self.loaded || self.row != row {
+            self.line = read_line(buf, row);
+            self.row = row;
+            self.loaded = true;
+        }
+        &self.line
+    }
+
+    /// Char count of row `row` — mirrors `line_chars(&read_line(buf, row))`.
+    #[inline]
+    fn char_count<B: Query + ?Sized>(&mut self, buf: &B, row: usize) -> usize {
+        line_chars(self.line(buf, row))
+    }
+
+    /// Char at `pos`, or `None` past end-of-line / out-of-bounds row.
+    /// Byte-for-byte identical to the pre-cache free `char_at`.
+    #[inline]
+    fn char_at<B: Query + ?Sized>(&mut self, buf: &B, pos: Position) -> Option<char> {
+        self.line(buf, pos.row).chars().nth(pos.col)
+    }
+}
+
 /// Step one position forward, wrapping into the next row.
-fn step_forward<B: Query + ?Sized>(buf: &B, pos: Position) -> Option<Position> {
-    let line = read_line_opt(buf, pos.row)?;
-    let len = line_chars(&line);
+fn step_forward<B: Query + ?Sized>(
+    buf: &B,
+    cache: &mut LineCache,
+    pos: Position,
+) -> Option<Position> {
+    let len = cache.char_count(buf, pos.row);
     if pos.col + 1 < len {
         return Some(Position::new(pos.row, pos.col + 1));
     }
@@ -930,7 +984,7 @@ fn step_forward<B: Query + ?Sized>(buf: &B, pos: Position) -> Option<Position> {
 }
 
 /// Step one position back, wrapping into the previous row.
-fn step_back<B: Query + ?Sized>(buf: &B, pos: Position) -> Option<Position> {
+fn step_back<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Option<Position> {
     if pos.col > 0 {
         return Some(Position::new(pos.row, pos.col - 1));
     }
@@ -938,30 +992,33 @@ fn step_back<B: Query + ?Sized>(buf: &B, pos: Position) -> Option<Position> {
         return None;
     }
     let prev_row = pos.row - 1;
-    let prev_len = line_chars(&read_line(buf, prev_row));
+    let prev_len = cache.char_count(buf, prev_row);
     Some(Position::new(prev_row, prev_len.saturating_sub(1)))
-}
-
-fn char_at<B: Query + ?Sized>(buf: &B, pos: Position) -> Option<char> {
-    read_line_opt(buf, pos.row)?.chars().nth(pos.col)
 }
 
 fn next_word_start<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     from: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    let start_kind = char_at(buf, from).map(|c| char_kind(c, big, iskeyword));
+    let start_kind = cache
+        .char_at(buf, from)
+        .map(|c| char_kind(c, big, iskeyword));
     let mut cur = from;
     // Skip the rest of the current word kind. Vim treats line
     // breaks as whitespace separators for `w`, so a row crossing
     // implicitly ends the current word — break and let the
     // skip-space pass handle anything beyond.
     if let Some(kind) = start_kind {
-        while char_at(buf, cur).map(|c| char_kind(c, big, iskeyword)) == Some(kind) {
+        while cache
+            .char_at(buf, cur)
+            .map(|c| char_kind(c, big, iskeyword))
+            == Some(kind)
+        {
             let prev_row = cur.row;
-            match step_forward(buf, cur) {
+            match step_forward(buf, cache, cur) {
                 Some(next) => {
                     cur = next;
                     if next.row != prev_row {
@@ -977,15 +1034,19 @@ fn next_word_start<B: Query + ?Sized>(
         // below then lands on the next word start (possibly another empty
         // line, which stops the scan since its char kind is neither Space
         // nor a word char).
-        match step_forward(buf, cur) {
+        match step_forward(buf, cache, cur) {
             Some(next) => cur = next,
             None => return Some(end_of_buffer(buf)),
         }
     }
     // Skip whitespace runs (within row + across rows) to land on
     // the next non-space char.
-    while char_at(buf, cur).map(|c| char_kind(c, big, iskeyword)) == Some(CharKind::Space) {
-        match step_forward(buf, cur) {
+    while cache
+        .char_at(buf, cur)
+        .map(|c| char_kind(c, big, iskeyword))
+        == Some(CharKind::Space)
+    {
+        match step_forward(buf, cache, cur) {
             Some(next) => cur = next,
             None => return Some(end_of_buffer(buf)),
         }
@@ -1004,22 +1065,33 @@ fn end_of_buffer<B: Query + ?Sized>(buf: &B) -> Position {
 
 fn prev_word_start<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     from: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    let mut cur = step_back(buf, from)?;
+    let mut cur = step_back(buf, cache, from)?;
     // Skip whitespace backwards.
-    while char_at(buf, cur).map(|c| char_kind(c, big, iskeyword)) == Some(CharKind::Space) {
-        cur = step_back(buf, cur)?;
+    while cache
+        .char_at(buf, cur)
+        .map(|c| char_kind(c, big, iskeyword))
+        == Some(CharKind::Space)
+    {
+        cur = step_back(buf, cache, cur)?;
     }
-    let target_kind = char_at(buf, cur).map(|c| char_kind(c, big, iskeyword))?;
+    let target_kind = cache
+        .char_at(buf, cur)
+        .map(|c| char_kind(c, big, iskeyword))?;
     // Walk back while the previous char is still the same kind.
     loop {
-        let Some(prev) = step_back(buf, cur) else {
+        let Some(prev) = step_back(buf, cache, cur) else {
             return Some(cur);
         };
-        if char_at(buf, prev).map(|c| char_kind(c, big, iskeyword)) == Some(target_kind) {
+        if cache
+            .char_at(buf, prev)
+            .map(|c| char_kind(c, big, iskeyword))
+            == Some(target_kind)
+        {
             cur = prev;
         } else {
             return Some(cur);
@@ -1033,20 +1105,25 @@ fn prev_word_start<B: Query + ?Sized>(
 /// (or end-of-line / end-of-buffer).
 fn prev_word_end<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     from: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    let mut cur = step_back(buf, from)?;
+    let mut cur = step_back(buf, cache, from)?;
     loop {
         // Skip whitespace; if it spans across a row boundary, the
         // step_back walk handles the row crossing for us.
-        if char_at(buf, cur).map(|c| char_kind(c, big, iskeyword)) == Some(CharKind::Space) {
-            cur = step_back(buf, cur)?;
+        if cache
+            .char_at(buf, cur)
+            .map(|c| char_kind(c, big, iskeyword))
+            == Some(CharKind::Space)
+        {
+            cur = step_back(buf, cache, cur)?;
             continue;
         }
-        let here = char_kind_or_space(buf, cur, big, iskeyword);
-        let next = next_char_kind_in_row(buf, cur, big, iskeyword);
+        let here = char_kind_or_space(buf, cache, cur, big, iskeyword);
+        let next = next_char_kind_in_row(buf, cache, cur, big, iskeyword);
         let same = if big {
             here != CharKind::Space && next != CharKind::Space
         } else {
@@ -1055,7 +1132,7 @@ fn prev_word_end<B: Query + ?Sized>(
         if !same {
             return Some(cur);
         }
-        cur = step_back(buf, cur)?;
+        cur = step_back(buf, cache, cur)?;
     }
 }
 
@@ -1065,11 +1142,13 @@ fn prev_word_end<B: Query + ?Sized>(
 /// implicit whitespace at end-of-line.
 fn char_kind_or_space<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     pos: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> CharKind {
-    char_at(buf, pos)
+    cache
+        .char_at(buf, pos)
         .map(|c| char_kind(c, big, iskeyword))
         .unwrap_or(CharKind::Space)
 }
@@ -1079,14 +1158,20 @@ fn char_kind_or_space<B: Query + ?Sized>(
 /// `e` / `ge` end-of-word detection.
 fn next_char_kind_in_row<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     pos: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> CharKind {
-    let line = read_line(buf, pos.row);
-    let len = line_chars(&line);
+    let len = cache.char_count(buf, pos.row);
     if pos.col + 1 < len {
-        char_kind_or_space(buf, Position::new(pos.row, pos.col + 1), big, iskeyword)
+        char_kind_or_space(
+            buf,
+            cache,
+            Position::new(pos.row, pos.col + 1),
+            big,
+            iskeyword,
+        )
     } else {
         CharKind::Space
     }
@@ -1094,22 +1179,33 @@ fn next_char_kind_in_row<B: Query + ?Sized>(
 
 fn next_word_end<B: Query + ?Sized>(
     buf: &B,
+    cache: &mut LineCache,
     from: Position,
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     // Vim's `e` advances at least one cell, then walks forward
     // until the *next* char is a different kind (or eof).
-    let mut cur = step_forward(buf, from)?;
-    while char_at(buf, cur).map(|c| char_kind(c, big, iskeyword)) == Some(CharKind::Space) {
-        cur = step_forward(buf, cur)?;
+    let mut cur = step_forward(buf, cache, from)?;
+    while cache
+        .char_at(buf, cur)
+        .map(|c| char_kind(c, big, iskeyword))
+        == Some(CharKind::Space)
+    {
+        cur = step_forward(buf, cache, cur)?;
     }
-    let kind = char_at(buf, cur).map(|c| char_kind(c, big, iskeyword))?;
+    let kind = cache
+        .char_at(buf, cur)
+        .map(|c| char_kind(c, big, iskeyword))?;
     loop {
-        let Some(next) = step_forward(buf, cur) else {
+        let Some(next) = step_forward(buf, cache, cur) else {
             return Some(cur);
         };
-        if char_at(buf, next).map(|c| char_kind(c, big, iskeyword)) == Some(kind) {
+        if cache
+            .char_at(buf, next)
+            .map(|c| char_kind(c, big, iskeyword))
+            == Some(kind)
+        {
             cur = next;
         } else {
             return Some(cur);
