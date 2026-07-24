@@ -22,4 +22,6 @@
 
 pub mod render;
 
-pub use render::{BufferView, Conceal, DiagOverlay, Gutter, GutterNumbers, Sign, StyleResolver};
+pub use render::{
+    BufferView, Conceal, DiagOverlay, Gutter, GutterNumbers, SearchRanges, Sign, StyleResolver,
+};

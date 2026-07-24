@@ -79,6 +79,11 @@ impl<F: Fn(u32) -> Style> StyleResolver for F {
 /// step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The host now feeds
 /// each into the view per draw — populated from
 /// `Editor::buffer_spans()` and `Editor::search_state().pattern`.
+/// `(base_row, covered)` — engine-computed search match byte-ranges for the
+/// rows repopulated this frame, where `covered[i]` holds the ranges for
+/// absolute doc row `base_row + i`. See [`BufferView::search_ranges`].
+pub type SearchRanges<'a> = (usize, &'a [Vec<(usize, usize)>]);
+
 pub struct BufferView<'a, R: StyleResolver> {
     pub buffer: &'a View,
     /// Viewport snapshot the host published this frame. Owned by the
@@ -150,6 +155,15 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// per step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine
     /// publishes the pattern via `Editor::search_state().pattern`.
     pub search_pattern: Option<&'a regex::Regex>,
+    /// Engine-computed search match byte-ranges for ONLY the rows populated
+    /// this frame: `(base_row, covered)` where `covered[i]` holds the ranges
+    /// for absolute doc row `base_row + i`. When a row falls in this window the
+    /// painter uses the cached ranges instead of re-running the regex. Rows
+    /// OUTSIDE the window (beyond the populated viewport, or revealed by a fold
+    /// compressing enough doc rows) fall back to `search_pattern` — the cache's
+    /// `dirty_gen` is a single global counter, so a leftover `matches[row]` from
+    /// a prior frame is only trustworthy for rows repopulated this frame.
+    pub search_ranges: Option<SearchRanges<'a>>,
     /// Style for the `~` tilde marker painted on screen rows that are
     /// past the last buffer line (vim's `NonText` highlight group).
     /// Pass `Style::default()` to use terminal defaults.
@@ -575,7 +589,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 // (real syntax highlighting, selection, search matches, conceals).
                 // Only the first screen segment (Wrap::None: top_col..MAX) is needed
                 // since a closed fold collapses to exactly one screen row.
-                let fold_search_ranges = self.row_search_ranges(line);
+                let fold_search_ranges = self.row_search_ranges(doc_row, line);
                 let fold_conceals: Vec<&Conceal> = {
                     let mut v: Vec<&Conceal> =
                         self.conceals.iter().filter(|c| c.row == doc_row).collect();
@@ -632,7 +646,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 doc_row = fold.end_row.saturating_add(1);
                 continue;
             }
-            let search_ranges = self.row_search_ranges(line);
+            let search_ranges = self.row_search_ranges(doc_row, line);
             let row_has_hit_at_cursor_col = search_ranges
                 .iter()
                 .any(|&(s, e)| cursor.col >= s && cursor.col < e);
@@ -987,7 +1001,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                         self.paint_signs(term_buf, inner, screen_row, dr, gutter);
                         self.paint_fold_column(term_buf, inner, screen_row, dr, gutter, &folds);
                     }
-                    let search_ranges = self.row_search_ranges(line);
+                    let search_ranges = self.row_search_ranges(dr, line);
                     let row_conceals: Vec<&Conceal> = {
                         let mut v: Vec<&Conceal> =
                             self.conceals.iter().filter(|c| c.row == dr).collect();
@@ -1065,11 +1079,26 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// (byte ranges — the same helper the engine's `SearchState` cache and
     /// the app's quickfix-dock overlay use); only the byte→char-column
     /// conversion for cell painting is local.
-    fn row_search_ranges(&self, line: &str) -> Vec<(usize, usize)> {
-        let Some(re) = self.search_pattern else {
-            return Vec::new();
+    fn row_search_ranges(&self, doc_row: usize, line: &str) -> Vec<(usize, usize)> {
+        // Prefer the engine-computed cache when this row is inside the window
+        // populated THIS frame (`base + i`): the cache stores exactly what
+        // `search_match_ranges` produces, so the byte→char conversion below is
+        // byte-for-byte identical either way. Rows outside the window (beyond
+        // the populated viewport, or revealed by a fold) fall back to re-running
+        // the regex — their cached ranges may be stale after an edit — so no
+        // highlight is ever wrong or lost.
+        let matches: std::borrow::Cow<'_, [(usize, usize)]> = match self
+            .search_ranges
+            .and_then(|(base, cov)| doc_row.checked_sub(base).and_then(|i| cov.get(i)))
+        {
+            Some(byte_ranges) => std::borrow::Cow::Borrowed(byte_ranges.as_slice()),
+            None => {
+                let Some(re) = self.search_pattern else {
+                    return Vec::new();
+                };
+                std::borrow::Cow::Owned(hjkl_buffer::search_match_ranges(re, line))
+            }
         };
-        let matches = hjkl_buffer::search_match_ranges(re, line);
         // Matches arrive byte-ascending and non-overlapping (`find_iter`), so a
         // single forward walk of `char_indices()` converts every boundary — the
         // cursor only ever moves right. `col` counts chars whose byte offset is
@@ -1080,7 +1109,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let mut ranges = Vec::with_capacity(matches.len());
         let mut chars = line.char_indices().peekable();
         let mut col = 0usize;
-        for (s, e) in matches {
+        for &(s, e) in matches.iter() {
             while chars.peek().is_some_and(|&(b, _)| b < s) {
                 chars.next();
                 col += 1;
@@ -1700,6 +1729,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -1757,6 +1787,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -1810,6 +1841,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -1861,6 +1893,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -1910,6 +1943,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -1958,6 +1992,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2011,6 +2046,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2059,6 +2095,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2110,6 +2147,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2175,6 +2213,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2244,6 +2283,7 @@ mod tests {
             conceals: &[],
             spans: &spans,
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2318,6 +2358,7 @@ mod tests {
             conceals: &[],
             spans: &spans,
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2381,6 +2422,7 @@ mod tests {
             conceals: &[],
             spans: &spans,
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2431,6 +2473,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2489,6 +2532,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2552,6 +2596,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2607,6 +2652,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2663,6 +2709,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: Some(&pat),
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2720,6 +2767,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: Some(&pat),
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2787,6 +2835,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2842,6 +2891,7 @@ mod tests {
             conceals: &conceals,
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2897,6 +2947,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -2981,6 +3032,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3028,6 +3080,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3074,6 +3127,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3122,6 +3176,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3332,6 +3387,7 @@ mod tests {
             conceals: &[],
             spans,
             search_pattern,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3516,6 +3572,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default().fg(non_text_fg),
             show_eob: true,
             diag_overlays: &[],
@@ -3586,6 +3643,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default().fg(Color::DarkGray),
             show_eob: false,
             diag_overlays: &[],
@@ -3647,6 +3705,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default().fg(non_text_fg),
             show_eob: true,
             diag_overlays: &[],
@@ -3717,6 +3776,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[overlay],
@@ -3789,6 +3849,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[overlay],
@@ -3858,6 +3919,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -3940,6 +4002,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -4004,6 +4067,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -4044,6 +4108,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],
@@ -4235,6 +4300,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            search_ranges: None,
             non_text_style: Style::default(),
             show_eob: true,
             diag_overlays: &[],

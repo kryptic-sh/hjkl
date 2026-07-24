@@ -191,6 +191,7 @@ pub fn preview_pane(
         conceals: &[],
         spans: &preview_spans.by_row,
         search_pattern: None,
+        search_ranges: None,
         non_text_style: theme.non_text,
         show_eob: true,
         diag_overlays: &[],

@@ -3672,6 +3672,20 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .collect()
     }
 
+    /// Populate the per-row hlsearch match cache for rows `top..bottom`
+    /// (no-op when no pattern). Lets the renderer read cached byte ranges
+    /// instead of re-scanning each visible line every frame.
+    pub fn populate_search_cache(&mut self, top: usize, bottom: usize) {
+        if self.search_state.pattern.is_none() {
+            return;
+        }
+        let dgen = crate::types::Query::dirty_gen(&self.buffer);
+        let end = bottom.min(crate::types::Query::line_count(&self.buffer) as usize);
+        for row in top..end {
+            let _ = crate::search::search_matches(&self.buffer, &mut self.search_state, dgen, row);
+        }
+    }
+
     /// Build the engine's [`crate::types::RenderFrame`] for the
     /// current state. Hosts call this once per redraw and diff
     /// across frames.

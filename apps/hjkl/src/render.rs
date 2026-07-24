@@ -821,6 +821,25 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // P7: populate the engine's per-row hlsearch match cache for exactly the
+    // rows this frame will paint, so `BufferView` reads cached byte ranges
+    // instead of re-running the search regex on every visible line every frame.
+    // The range mirrors the widget's prefetch (`viewport.top_row` for
+    // `area.height` rows); the animated render top is derived the same way as
+    // `vp_top` far below, so the two agree. This `&mut` borrow MUST finish
+    // before the long-lived immutable `settings()` / `buffer_spans()` /
+    // `search_state()` borrows taken below to build the view.
+    let render_top = app
+        .window_editors
+        .get(&win_id)
+        .map(|e| e.host().viewport().top_row)
+        .unwrap_or_default();
+    let populate_top = app.scroll_anim_render_top(win_id).unwrap_or(render_top);
+    let populate_bot = populate_top + area.height as usize;
+    if let Some(e) = app.window_editors.get_mut(&win_id) {
+        e.populate_search_cache(populate_top, populate_bot);
+    }
+
     // Borrow the two owned `Settings` fields (`colorcolumn: String`,
     // `listchars: ListChars`) for the rest of the draw instead of cloning the
     // whole struct (#312). Bound AFTER the mutable-viewport block above so this
@@ -964,6 +983,22 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .get(&win_id)
         .and_then(|e| e.search_state().pattern.clone());
     let search_pattern = search_pattern_owned.as_ref();
+    // Engine-computed per-row match cache. Only expose the rows repopulated
+    // THIS frame (`[populate_top, populate_bot)`), carried as `(base, covered)`
+    // so the widget indexes relative to `base`. `dirty_gen` is a single global
+    // counter, so a leftover `matches[row]` from a prior frame is stale after
+    // any edit until repopulated; rows outside this window fall back to
+    // `search_pattern` (the regex), so no highlight is ever wrong or lost.
+    let search_ranges: Option<hjkl_buffer_tui::SearchRanges<'_>> = if search_pattern.is_some() {
+        app.window_editors.get(&win_id).map(|e| {
+            let m = e.search_state().matches.as_slice();
+            let end = m.len().min(populate_bot);
+            let base = populate_top.min(end);
+            (base, &m[base..end])
+        })
+    } else {
+        None
+    };
 
     let search_bg = if search_pattern.is_some() {
         app.theme.ui.search_match_style()
@@ -1240,6 +1275,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         conceals: &explorer_conceals,
         spans: buffer_spans,
         search_pattern,
+        search_ranges,
         non_text_style: Style::default().fg(app.theme.ui.non_text),
         show_eob: app.slots()[slot_idx].features.end_of_buffer,
         diag_overlays: &diag_overlays,
