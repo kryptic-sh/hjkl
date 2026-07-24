@@ -443,11 +443,15 @@ mod tests {
     use super::*;
 
     /// Send raw fds via `sendmsg` with SCM_RIGHTS — standalone, no WaylandSocket.
+    // `msg_controllen` is `socklen_t` (u32) on macOS but `size_t` (usize) on
+    // Linux, so `cmsg_space.try_into()` is a real narrowing on macOS and a
+    // no-op on Linux — allow the Linux-only `useless_conversion` to keep the
+    // one assignment portable.
+    #[allow(clippy::useless_conversion)]
     fn send_raw_fds(sender_fd: c_int, fds: &[c_int]) {
         let dummy: [u8; 1] = [0];
         let cmsg_space =
-            unsafe { libc::CMSG_SPACE((fds.len() * std::mem::size_of::<c_int>()) as libc::c_uint) }
-                as usize;
+            unsafe { libc::CMSG_SPACE(std::mem::size_of_val(fds) as libc::c_uint) } as usize;
         let mut cmsg_buf = vec![0u8; cmsg_space];
         let mut iov = libc::iovec {
             iov_base: dummy.as_ptr() as *mut libc::c_void,
@@ -463,8 +467,7 @@ mod tests {
         unsafe {
             (*cmsg).cmsg_level = libc::SOL_SOCKET;
             (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len =
-                libc::CMSG_LEN((fds.len() * std::mem::size_of::<c_int>()) as libc::c_uint) as _;
+            (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of_val(fds) as libc::c_uint) as _;
             let data_ptr = libc::CMSG_DATA(cmsg) as *mut c_int;
             std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, fds.len());
         }
@@ -485,23 +488,13 @@ mod tests {
 
         // Create valid fds (e.g. /dev/null) — the kernel rejects SCM_RIGHTS
         // with invalid fds (EBADF).
-        let null0 = unsafe {
-            libc::open(
-                b"/dev/null\0".as_ptr() as *const libc::c_char,
-                libc::O_RDONLY,
-            )
-        };
+        let null0 = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
         assert!(
             null0 >= 0,
             "open /dev/null: {}",
             std::io::Error::last_os_error()
         );
-        let null1 = unsafe {
-            libc::open(
-                b"/dev/null\0".as_ptr() as *const libc::c_char,
-                libc::O_RDONLY,
-            )
-        };
+        let null1 = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
         assert!(
             null1 >= 0,
             "open /dev/null: {}",
