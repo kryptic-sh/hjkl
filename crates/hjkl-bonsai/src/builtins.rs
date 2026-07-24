@@ -738,7 +738,7 @@ mod tests {
             source,
             src: None,
             args: &args,
-            capture_names: &["string.special.url".to_string()],
+            capture_names: &[std::sync::Arc::from("string.special.url")],
         };
 
         let pred = ContainsPredicate;
@@ -779,7 +779,7 @@ mod tests {
             source,
             src: None,
             args: &args,
-            capture_names: &["string.special.url".to_string()],
+            capture_names: &[std::sync::Arc::from("string.special.url")],
         };
 
         let pred = ContainsPredicate;

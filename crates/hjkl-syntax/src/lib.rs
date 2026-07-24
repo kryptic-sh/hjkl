@@ -1354,7 +1354,7 @@ mod tests {
         );
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 10..17,
-            capture: HEX_COLOR_CAPTURE.to_string(),
+            capture: Arc::from(HEX_COLOR_CAPTURE),
             metadata,
         };
         let by_row = build_by_row(&[span], bytes, &[0], 1, &DotFallbackTheme::dark());
@@ -1379,7 +1379,7 @@ mod tests {
         );
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 0..3,
-            capture: HEX_COLOR_CAPTURE.to_string(),
+            capture: Arc::from(HEX_COLOR_CAPTURE),
             metadata,
         };
         let by_row = build_by_row(&[span], bytes, &[0], 3, &DotFallbackTheme::dark());
@@ -1393,7 +1393,7 @@ mod tests {
     fn build_by_row_hex_color_without_metadata_skips() {
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 0..3,
-            capture: HEX_COLOR_CAPTURE.to_string(),
+            capture: Arc::from(HEX_COLOR_CAPTURE),
             metadata: std::collections::HashMap::new(),
         };
         let by_row = build_by_row(&[span], b"foo", &[0], 1, &DotFallbackTheme::dark());

@@ -26,6 +26,7 @@
 //! luminance > 0.5, else `#ffffff`.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::HighlightSpan;
 use crate::predicate::MetaValue;
@@ -81,7 +82,7 @@ impl HexColorPass {
             let fg_hex = contrasting_fg_rgb(rgb);
             let mut span = HighlightSpan {
                 byte_range: abs_hit,
-                capture: HEX_COLOR_CAPTURE.to_string(),
+                capture: Arc::from(HEX_COLOR_CAPTURE),
                 metadata: std::collections::HashMap::new(),
             };
             span.metadata
@@ -132,7 +133,7 @@ impl HexColorPass {
             let fg_hex = contrasting_fg_rgb(rgb);
             let mut span = HighlightSpan {
                 byte_range: abs_start..abs_end,
-                capture: HEX_COLOR_CAPTURE.to_string(),
+                capture: Arc::from(HEX_COLOR_CAPTURE),
                 metadata: std::collections::HashMap::new(),
             };
             span.metadata
@@ -837,7 +838,7 @@ mod tests {
         let mut spans: Vec<HighlightSpan> = Vec::new();
         HexColorPass::new().apply(&mut spans, src);
         assert_eq!(spans.len(), 1, "expected one span");
-        assert_eq!(spans[0].capture, HEX_COLOR_CAPTURE);
+        assert_eq!(spans[0].capture(), HEX_COLOR_CAPTURE);
         assert_eq!(
             spans[0].metadata.get(HEX_BG_KEY),
             Some(&MetaValue::Str("#ff0000".into()))
@@ -1007,7 +1008,7 @@ mod tests {
         HexColorPass::new().apply(&mut spans, bytes);
         assert_eq!(spans.len(), 1);
         let s = &spans[0];
-        assert_eq!(s.capture, HEX_COLOR_CAPTURE);
+        assert_eq!(s.capture(), HEX_COLOR_CAPTURE);
         assert_eq!(s.byte_range, 10..17);
         assert_eq!(
             s.metadata.get(HEX_BG_KEY),

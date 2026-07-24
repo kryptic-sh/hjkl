@@ -51,7 +51,11 @@ pub struct HighlightSpan {
     /// Byte range in the source buffer.
     pub byte_range: Range<usize>,
     /// The capture name from the highlights.scm query, e.g. `"keyword.control"`.
-    pub capture: String,
+    ///
+    /// Stored as `Arc<str>` so the per-span clone in the highlight hot loop is
+    /// a refcount bump instead of a fresh heap allocation. The names are
+    /// interned once at query-compile time (see [`CompiledArtifacts`]).
+    pub capture: Arc<str>,
     /// Per-capture metadata written by directives such as `#set!`.
     /// Empty map when no directives produced metadata for this capture.
     pub metadata: HashMap<String, MetaValue>,
@@ -339,7 +343,7 @@ impl PatternInfo {
 pub(crate) struct CompiledArtifacts {
     query: Query,
     injection_query: Option<Query>,
-    capture_names: Vec<String>,
+    capture_names: Vec<Arc<str>>,
     /// name → capture index, built once at compile time so directive
     /// application is O(1) instead of scanning `capture_names` per match.
     capture_index: HashMap<String, u32>,
@@ -348,7 +352,7 @@ pub(crate) struct CompiledArtifacts {
 }
 
 // SAFETY: tree_sitter::Query has unsafe Send+Sync impls (see tree-sitter
-// lib.rs:3902-3903). The remaining fields (Vec<String>, HashMap<String, u32>,
+// lib.rs:3902-3903). The remaining fields (Vec<Arc<str>>, HashMap<String, u32>,
 // Vec<PatternInfo>, Vec<CaptureSetDirective>, Option<Query>) are all Send+Sync.
 unsafe impl Send for CompiledArtifacts {}
 unsafe impl Sync for CompiledArtifacts {}
@@ -382,17 +386,19 @@ fn compile_artifacts(grammar: &Grammar) -> Result<CompiledArtifacts> {
     let (query, pre_extracted) =
         compile_query(grammar.language(), grammar.highlights_scm(), grammar.name())?;
 
-    let capture_names: Vec<String> = query
+    // Intern each capture name once as an `Arc<str>` so the per-span clone in
+    // the highlight hot loop is a refcount bump, not a heap allocation.
+    let capture_names: Vec<Arc<str>> = query
         .capture_names()
         .iter()
-        .map(|s| s.to_string())
+        .map(|s| Arc::from(*s))
         .collect();
 
     // First-occurrence wins, matching the `capture_names.position(..)` scan this
     // replaces (relevant when a capture name repeats in the names table).
     let mut capture_index: HashMap<String, u32> = HashMap::with_capacity(capture_names.len());
     for (i, n) in capture_names.iter().enumerate() {
-        capture_index.entry(n.clone()).or_insert(i as u32);
+        capture_index.entry(n.to_string()).or_insert(i as u32);
     }
 
     let pattern_count = query.pattern_count();
@@ -2004,7 +2010,7 @@ mod tests {
     fn span(start: usize, end: usize, capture: &str) -> HighlightSpan {
         HighlightSpan {
             byte_range: start..end,
-            capture: capture.to_string(),
+            capture: Arc::from(capture),
             metadata: HashMap::new(),
         }
     }
@@ -2021,8 +2027,8 @@ mod tests {
     fn sort_puts_deeper_capture_first_on_identical_range() {
         let mut spans = vec![span(10, 30, "markup.link"), span(10, 30, "markup.link.url")];
         sort_by_start_then_depth(&mut spans);
-        assert_eq!(spans[0].capture, "markup.link.url");
-        assert_eq!(spans[1].capture, "markup.link");
+        assert_eq!(spans[0].capture(), "markup.link.url");
+        assert_eq!(spans[1].capture(), "markup.link");
     }
 
     /// Reverse-order regression: even when the broader capture is pushed
@@ -2031,8 +2037,8 @@ mod tests {
     fn sort_is_order_independent_on_identical_range() {
         let mut spans = vec![span(10, 30, "markup.link.url"), span(10, 30, "markup.link")];
         sort_by_start_then_depth(&mut spans);
-        assert_eq!(spans[0].capture, "markup.link.url");
-        assert_eq!(spans[1].capture, "markup.link");
+        assert_eq!(spans[0].capture(), "markup.link.url");
+        assert_eq!(spans[1].capture(), "markup.link");
     }
 
     /// Three-deep tie: `@markup.heading.1` must beat `@markup.heading`
@@ -2045,9 +2051,9 @@ mod tests {
             span(0, 5, "markup.heading"),
         ];
         sort_by_start_then_depth(&mut spans);
-        assert_eq!(spans[0].capture, "markup.heading.1");
-        assert_eq!(spans[1].capture, "markup.heading");
-        assert_eq!(spans[2].capture, "markup");
+        assert_eq!(spans[0].capture(), "markup.heading.1");
+        assert_eq!(spans[1].capture(), "markup.heading");
+        assert_eq!(spans[2].capture(), "markup");
     }
 
     /// Sort still orders by start byte first; depth is a tie-breaker.
@@ -2060,9 +2066,9 @@ mod tests {
         ];
         sort_by_start_then_depth(&mut spans);
         assert_eq!(spans[0].byte_range.start, 10);
-        assert_eq!(spans[0].capture, "markup.link.url");
+        assert_eq!(spans[0].capture(), "markup.link.url");
         assert_eq!(spans[1].byte_range.start, 10);
-        assert_eq!(spans[1].capture, "markup.link");
+        assert_eq!(spans[1].capture(), "markup.link");
         assert_eq!(spans[2].byte_range.start, 20);
     }
 
@@ -2337,10 +2343,10 @@ mod tests {
         parser.set_language(language).unwrap();
         let source = b"<a href=\"x\">text</a>";
         let tree = parser.parse(source, None).unwrap();
-        let capture_names: Vec<String> = query
+        let capture_names: Vec<Arc<str>> = query
             .capture_names()
             .iter()
-            .map(|s| s.to_string())
+            .map(|s| Arc::from(*s))
             .collect();
 
         let registry = PredicateRegistry::with_builtins();
@@ -2388,7 +2394,7 @@ mod tests {
             if !skip {
                 for cap in m.captures {
                     let name = &capture_names[cap.index as usize];
-                    if name == "tag" {
+                    if &**name == "tag" {
                         found_tag = true;
                     }
                 }
@@ -2419,10 +2425,10 @@ mod tests {
         let result = compile_query(language, query_text, "html-test");
         assert!(result.is_ok());
         let (query, _) = result.unwrap();
-        let capture_names: Vec<String> = query
+        let capture_names: Vec<Arc<str>> = query
             .capture_names()
             .iter()
-            .map(|s| s.to_string())
+            .map(|s| Arc::from(*s))
             .collect();
 
         let mut registry = PredicateRegistry::with_builtins();
@@ -2471,7 +2477,7 @@ mod tests {
             if !skip {
                 for cap in m.captures {
                     let name = &capture_names[cap.index as usize];
-                    if name == "tag" {
+                    if &**name == "tag" {
                         found_tag = true;
                     }
                 }

@@ -151,7 +151,7 @@ pub struct MatchContext<'a> {
     /// Arguments from the predicate/directive step (excluding the operator name).
     pub args: &'a [PredicateArg<'a>],
     /// All capture names from the compiled query (indexed by capture index).
-    pub capture_names: &'a [String],
+    pub capture_names: &'a [std::sync::Arc<str>],
 }
 
 impl<'a> MatchContext<'a> {

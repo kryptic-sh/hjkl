@@ -21,6 +21,7 @@
 //! the first visible comment already has the right tint.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::highlighter::HighlightSpan;
 
@@ -184,7 +185,7 @@ impl CommentMarkerPass {
                 if let Some(mw) = active {
                     extra.push(HighlightSpan {
                         byte_range: body_start..body_end,
-                        capture: mw.tail_capture.to_string(),
+                        capture: Arc::from(mw.tail_capture),
                         metadata: Default::default(),
                     });
                 }
@@ -202,14 +203,14 @@ impl CommentMarkerPass {
                 {
                     extra.push(HighlightSpan {
                         byte_range: cursor..label_start,
-                        capture: mw.tail_capture.to_string(),
+                        capture: Arc::from(mw.tail_capture),
                         metadata: Default::default(),
                     });
                 }
                 // Label span: char before marker through end of word.
                 extra.push(HighlightSpan {
                     byte_range: label_start..m.word_end,
-                    capture: m.marker.label_capture.to_string(),
+                    capture: Arc::from(m.marker.label_capture),
                     metadata: Default::default(),
                 });
                 // Trail char after the word (e.g. ':').
@@ -221,7 +222,7 @@ impl CommentMarkerPass {
                 if trail_end > m.word_end {
                     extra.push(HighlightSpan {
                         byte_range: m.word_end..trail_end,
-                        capture: m.marker.label_capture.to_string(),
+                        capture: Arc::from(m.marker.label_capture),
                         metadata: Default::default(),
                     });
                 }
@@ -234,7 +235,7 @@ impl CommentMarkerPass {
             {
                 extra.push(HighlightSpan {
                     byte_range: cursor..body_end,
-                    capture: mw.tail_capture.to_string(),
+                    capture: Arc::from(mw.tail_capture),
                     metadata: Default::default(),
                 });
             }
@@ -457,7 +458,7 @@ impl CommentMarkerPass {
                 if let Some(mw) = active {
                     extra.push(HighlightSpan {
                         byte_range: body_start..body_end,
-                        capture: mw.tail_capture.to_string(),
+                        capture: Arc::from(mw.tail_capture),
                         metadata: Default::default(),
                     });
                 }
@@ -477,13 +478,13 @@ impl CommentMarkerPass {
                 {
                     extra.push(HighlightSpan {
                         byte_range: win_cursor_abs..label_start,
-                        capture: mw.tail_capture.to_string(),
+                        capture: Arc::from(mw.tail_capture),
                         metadata: Default::default(),
                     });
                 }
                 extra.push(HighlightSpan {
                     byte_range: label_start..abs_word_end,
-                    capture: m.marker.label_capture.to_string(),
+                    capture: Arc::from(m.marker.label_capture),
                     metadata: Default::default(),
                 });
                 let trail_end = if abs_word_end < body_end {
@@ -494,7 +495,7 @@ impl CommentMarkerPass {
                 if trail_end > abs_word_end {
                     extra.push(HighlightSpan {
                         byte_range: abs_word_end..trail_end,
-                        capture: m.marker.label_capture.to_string(),
+                        capture: Arc::from(m.marker.label_capture),
                         metadata: Default::default(),
                     });
                 }
@@ -507,7 +508,7 @@ impl CommentMarkerPass {
             {
                 extra.push(HighlightSpan {
                     byte_range: win_cursor_abs..body_end,
-                    capture: mw.tail_capture.to_string(),
+                    capture: Arc::from(mw.tail_capture),
                     metadata: Default::default(),
                 });
             }
@@ -969,7 +970,7 @@ mod tests {
         // Fabricate a comment span covering the full string.
         let comment_span = HighlightSpan {
             byte_range: 0..bytes.len(),
-            capture: "comment".to_string(),
+            capture: Arc::from("comment"),
             metadata: Default::default(),
         };
 
@@ -1062,7 +1063,7 @@ mod tests {
 
         let mut spans = vec![HighlightSpan {
             byte_range: comment_start..src.len(),
-            capture: "comment".to_string(),
+            capture: Arc::from("comment"),
             metadata: Default::default(),
         }];
         CommentMarkerPass::new().apply_rope(&mut spans, &rope);

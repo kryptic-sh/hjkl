@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use tree_sitter::{Query, QueryCursor, StreamingIterator as _};
 
@@ -209,7 +209,7 @@ pub fn rainbow_spans(
         metadata.insert(RAINBOW_DEPTH_KEY.to_string(), MetaValue::Int(depth as i64));
         spans.push(HighlightSpan {
             byte_range: start..end,
-            capture: RAINBOW_BRACKET_CAPTURE.to_string(),
+            capture: Arc::from(RAINBOW_BRACKET_CAPTURE),
             metadata,
         });
     }
@@ -389,7 +389,7 @@ pub fn rainbow_spans_rope(
         metadata.insert(RAINBOW_DEPTH_KEY.to_string(), MetaValue::Int(depth as i64));
         spans.push(HighlightSpan {
             byte_range: start..end,
-            capture: RAINBOW_BRACKET_CAPTURE.to_string(),
+            capture: Arc::from(RAINBOW_BRACKET_CAPTURE),
             metadata,
         });
     }
