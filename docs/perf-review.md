@@ -27,19 +27,18 @@ motion system's per-character line allocations. Below, ranked by impact.
 >   (needs an invalidation-key design → left for a decision).
 > - **P5** ✅ `evict_stale` uses `HashSet` (`b0dcdfd4`).
 > - **P6** ✅ prebuilt capture-name→index `HashMap` (`b0dcdfd4`).
-> - **P9** ✅ `chord_to_notation(&[KeyEvent])` — no which-key Vec clone
->   (`7af516a7`).
+> - **P7** ✅ hlsearch painter now consults the engine's per-row
+>   `SearchState.matches` cache instead of re-running the regex every frame.
+>   Done without a layering inversion: `Editor::populate_search_cache` fills the
+>   viewport rows and the app passes a base-relative `SearchRanges` window into
+>   the widget; rows outside the populated window fall back to the regex so no
+>   highlight is lost (`0a83b354`).
 > - **P11** ✅ one redundant `Range` clone removed; the doc's premise was wrong
 >   — `Range<usize>` is `Clone`, **not** `Copy`, so the other three are
 >   load-bearing and stay (`b0dcdfd4`).
 >
-> **Deferred (need a decision, not mechanical):**
+> **Deferred (low value / deliberate):**
 >
-> - **P7** — the buffer-tui renderer cannot reach `SearchState::matches_for`:
->   `hjkl-buffer-tui` depends only on `hjkl-buffer`, not `hjkl-engine`. Wiring
->   the cache in means either a layering inversion or plumbing engine-computed
->   ranges through the widget API — an architecture call. Current cost is
->   bounded (single-pass regex over ≤ viewport visible lines). **Needs input.**
 > - **P8** (`lines_prefetch` Vec/frame) and **P10** (`HashMap` metadata/span) —
 >   the report already rates these low / deliberate tradeoffs; left as-is.
 
