@@ -24,7 +24,7 @@
 //! `iskeyword` spec so the host can change it without re-publishing
 //! it onto the buffer. Both have lived as `Editor` fields since 0.0.28.
 //!
-use hjkl_buffer::{Position, Wrap, is_keyword_char, wrap};
+use hjkl_buffer::{KeywordSpec, Position, Wrap, wrap};
 
 use crate::types::{Cursor, FoldProvider, Pos, Query};
 
@@ -485,9 +485,10 @@ pub fn move_bottom<B: Cursor + Query>(buf: &mut B, count: usize) {
 /// the live spec from `Editor::settings.iskeyword`; it's caller-
 /// supplied since 0.0.28 (was a buffer field before).
 pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+    let spec = KeywordSpec::parse(iskeyword);
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(next) = next_word_start(buf, from, big, iskeyword) {
+        if let Some(next) = next_word_start(buf, from, big, &spec) {
             write_cursor(buf, next);
         } else {
             break;
@@ -497,9 +498,10 @@ pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, is
 
 /// `b` / `B` — start of previous word.
 pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+    let spec = KeywordSpec::parse(iskeyword);
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(prev) = prev_word_start(buf, from, big, iskeyword) {
+        if let Some(prev) = prev_word_start(buf, from, big, &spec) {
             write_cursor(buf, prev);
         } else {
             break;
@@ -509,9 +511,10 @@ pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, i
 
 /// `e` / `E` — end of current/next word.
 pub fn move_word_end<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+    let spec = KeywordSpec::parse(iskeyword);
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        if let Some(end) = next_word_end(buf, from, big, iskeyword) {
+        if let Some(end) = next_word_end(buf, from, big, &spec) {
             write_cursor(buf, end);
         } else {
             break;
@@ -528,9 +531,10 @@ pub fn move_word_end_back<B: Cursor + Query>(
     count: usize,
     iskeyword: &str,
 ) {
+    let spec = KeywordSpec::parse(iskeyword);
     for _ in 0..count.max(1) {
         let from = read_cursor(buf);
-        match prev_word_end(buf, from, big, iskeyword) {
+        match prev_word_end(buf, from, big, &spec) {
             Some(p) => write_cursor(buf, p),
             None => break,
         }
@@ -886,8 +890,8 @@ fn move_vertical<B: Cursor + Query>(
 }
 
 /// True if `c` qualifies as a word character under `spec`.
-fn is_word(c: char, spec: &str) -> bool {
-    is_keyword_char(c, spec)
+fn is_word(c: char, spec: &KeywordSpec) -> bool {
+    spec.matches(c)
 }
 
 /// Classify a char into vim's three "word kinds" so transitions
@@ -900,7 +904,7 @@ enum CharKind {
     Space,
 }
 
-fn char_kind(c: char, big: bool, iskeyword: &str) -> CharKind {
+fn char_kind(c: char, big: bool, iskeyword: &KeywordSpec) -> CharKind {
     if c.is_whitespace() {
         CharKind::Space
     } else if big || is_word(c, iskeyword) {
@@ -946,7 +950,7 @@ fn next_word_start<B: Query + ?Sized>(
     buf: &B,
     from: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     let start_kind = char_at(buf, from).map(|c| char_kind(c, big, iskeyword));
     let mut cur = from;
@@ -1002,7 +1006,7 @@ fn prev_word_start<B: Query + ?Sized>(
     buf: &B,
     from: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     let mut cur = step_back(buf, from)?;
     // Skip whitespace backwards.
@@ -1031,7 +1035,7 @@ fn prev_word_end<B: Query + ?Sized>(
     buf: &B,
     from: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     let mut cur = step_back(buf, from)?;
     loop {
@@ -1063,7 +1067,7 @@ fn char_kind_or_space<B: Query + ?Sized>(
     buf: &B,
     pos: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> CharKind {
     char_at(buf, pos)
         .map(|c| char_kind(c, big, iskeyword))
@@ -1077,7 +1081,7 @@ fn next_char_kind_in_row<B: Query + ?Sized>(
     buf: &B,
     pos: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> CharKind {
     let line = read_line(buf, pos.row);
     let len = line_chars(&line);
@@ -1092,7 +1096,7 @@ fn next_word_end<B: Query + ?Sized>(
     buf: &B,
     from: Position,
     big: bool,
-    iskeyword: &str,
+    iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     // Vim's `e` advances at least one cell, then walks forward
     // until the *next* char is a different kind (or eof).

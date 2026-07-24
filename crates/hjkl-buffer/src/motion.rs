@@ -12,45 +12,110 @@
 //! `iskeyword` string and a single `char`; it has no buffer
 //! dependency, so the engine motions module re-exports it from here.
 
+/// One parsed `iskeyword` token. The classification precedence is
+/// exactly that of the original per-token decision tree so both
+/// [`is_keyword_char`] and [`KeywordSpec`] agree byte-for-byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Token {
+    /// `@` — any alphabetic char.
+    Alpha,
+    /// `N-M` — decimal char-code range, inclusive.
+    Range(u32, u32),
+    /// bare integer `N` — single char code.
+    Code(u32),
+    /// single char — literal match.
+    Literal(char),
+}
+
+impl Token {
+    /// Classify one already-trimmed, non-empty token, or `None` for
+    /// unrecognized tokens (which the matcher ignores). Precedence
+    /// mirrors the original inline parser: `@`, then `N-M` range,
+    /// then bare code, then single-char literal.
+    fn parse(token: &str) -> Option<Token> {
+        if token == "@" {
+            return Some(Token::Alpha);
+        }
+        if let Some((lo, hi)) = token.split_once('-')
+            && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
+        {
+            return Some(Token::Range(lo, hi));
+        }
+        if let Ok(n) = token.parse::<u32>() {
+            return Some(Token::Code(n));
+        }
+        let mut chars = token.chars();
+        if let (Some(only), None) = (chars.next(), chars.next()) {
+            return Some(Token::Literal(only));
+        }
+        None
+    }
+
+    #[inline]
+    fn matches(self, c: char) -> bool {
+        match self {
+            Token::Alpha => c.is_alphabetic(),
+            Token::Range(lo, hi) => (lo..=hi).contains(&(c as u32)),
+            Token::Code(n) => c as u32 == n,
+            Token::Literal(only) => c == only,
+        }
+    }
+}
+
+/// A vim-style `iskeyword` spec parsed once into its tokens.
+///
+/// The spec (e.g. `"@,48-57,_,192-255"`) changes only when the
+/// option is set, but word motions classify every stepped-over char.
+/// Pre-parsing with [`KeywordSpec::parse`] and reusing it via
+/// [`KeywordSpec::matches`] avoids re-splitting/re-parsing the spec
+/// string on every character. The boolean result is identical to
+/// calling [`is_keyword_char`] with the same spec string.
+#[derive(Debug, Clone, Default)]
+pub struct KeywordSpec {
+    tokens: Vec<Token>,
+}
+
+impl KeywordSpec {
+    /// Parse a comma-separated `iskeyword` spec into a reusable
+    /// matcher. Understood forms: `@` (any alphabetic), `_` (literal
+    /// underscore), `N-M` (decimal char-code range, inclusive), bare
+    /// integer `N` (single char code), single char (literal).
+    /// Unknown tokens are dropped.
+    pub fn parse(spec: &str) -> Self {
+        let tokens = spec
+            .split(',')
+            .filter_map(|raw| {
+                let token = raw.trim();
+                if token.is_empty() {
+                    None
+                } else {
+                    Token::parse(token)
+                }
+            })
+            .collect();
+        Self { tokens }
+    }
+
+    /// True if `c` matches any token in the pre-parsed spec.
+    #[inline]
+    pub fn matches(&self, c: char) -> bool {
+        self.tokens.iter().any(|token| token.matches(c))
+    }
+}
+
 /// Match `c` against a vim-style `iskeyword` spec. Tokens are
 /// comma-separated; understood forms: `@` (any alphabetic),
 /// `_` (literal underscore), `N-M` (decimal char-code range, inclusive),
 /// bare integer `N` (single char code), single ASCII punctuation char
 /// (literal). Unknown tokens are ignored.
+///
+/// This is a zero-allocation convenience for one-off checks; hot
+/// per-character loops should pre-parse once with [`KeywordSpec`].
 pub fn is_keyword_char(c: char, spec: &str) -> bool {
-    for raw in spec.split(',') {
+    spec.split(',').any(|raw| {
         let token = raw.trim();
-        if token.is_empty() {
-            continue;
-        }
-        if token == "@" {
-            if c.is_alphabetic() {
-                return true;
-            }
-            continue;
-        }
-        if let Some((lo, hi)) = token.split_once('-')
-            && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
-        {
-            if (lo..=hi).contains(&(c as u32)) {
-                return true;
-            }
-            continue;
-        }
-        if let Ok(n) = token.parse::<u32>() {
-            if c as u32 == n {
-                return true;
-            }
-            continue;
-        }
-        let mut chars = token.chars();
-        if let (Some(only), None) = (chars.next(), chars.next())
-            && c == only
-        {
-            return true;
-        }
-    }
-    false
+        !token.is_empty() && Token::parse(token).is_some_and(|t| t.matches(c))
+    })
 }
 
 #[cfg(test)]
