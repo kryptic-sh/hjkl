@@ -4,7 +4,7 @@
 //! keeps a reference to the [`Grammar`] alive (so the underlying `dlopen`-ed
 //! shared library outlives any tree the parser produces).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
@@ -208,10 +208,10 @@ impl ChildCache {
     /// Consistent with the `(lang, hash)` key: langs not in `keep_langs` lose
     /// their whole inner map, and surviving langs are pruned to only the
     /// hashes still referenced this render.
-    fn evict_stale(&mut self, keep_langs: &[String], keep_hashes: &[u64]) {
-        self.map.retain(|k, _| keep_langs.iter().any(|kk| kk == k));
+    fn evict_stale(&mut self, keep_langs: &HashSet<String>, keep_hashes: &HashSet<u64>) {
+        self.map.retain(|k, _| keep_langs.contains(k));
         self.spans_by_hash.retain(|lang, hashes| {
-            let keep = keep_langs.iter().any(|kk| kk == lang);
+            let keep = keep_langs.contains(lang);
             if keep {
                 hashes.retain(|h, _| keep_hashes.contains(h));
             }
@@ -340,13 +340,16 @@ pub(crate) struct CompiledArtifacts {
     query: Query,
     injection_query: Option<Query>,
     capture_names: Vec<String>,
+    /// name → capture index, built once at compile time so directive
+    /// application is O(1) instead of scanning `capture_names` per match.
+    capture_index: HashMap<String, u32>,
     pattern_info: Vec<PatternInfo>,
     pre_extracted: Vec<CaptureSetDirective>,
 }
 
 // SAFETY: tree_sitter::Query has unsafe Send+Sync impls (see tree-sitter
-// lib.rs:3902-3903). The remaining fields (Vec<String>, Vec<PatternInfo>,
-// Vec<CaptureSetDirective>, Option<Query>) are all Send+Sync.
+// lib.rs:3902-3903). The remaining fields (Vec<String>, HashMap<String, u32>,
+// Vec<PatternInfo>, Vec<CaptureSetDirective>, Option<Query>) are all Send+Sync.
 unsafe impl Send for CompiledArtifacts {}
 unsafe impl Sync for CompiledArtifacts {}
 
@@ -385,6 +388,13 @@ fn compile_artifacts(grammar: &Grammar) -> Result<CompiledArtifacts> {
         .map(|s| s.to_string())
         .collect();
 
+    // First-occurrence wins, matching the `capture_names.position(..)` scan this
+    // replaces (relevant when a capture name repeats in the names table).
+    let mut capture_index: HashMap<String, u32> = HashMap::with_capacity(capture_names.len());
+    for (i, n) in capture_names.iter().enumerate() {
+        capture_index.entry(n.clone()).or_insert(i as u32);
+    }
+
     let pattern_count = query.pattern_count();
     let mut pattern_info: Vec<PatternInfo> = vec![PatternInfo::default(); pattern_count];
     for (idx, info) in pattern_info.iter_mut().enumerate() {
@@ -418,6 +428,7 @@ fn compile_artifacts(grammar: &Grammar) -> Result<CompiledArtifacts> {
         query,
         injection_query,
         capture_names,
+        capture_index,
         pattern_info,
         pre_extracted,
     })
@@ -749,10 +760,10 @@ impl Highlighter {
         };
 
         let mut cursor = QueryCursor::new();
-        cursor.set_byte_range(byte_range.clone());
+        cursor.set_byte_range(byte_range);
         let mut matches = cursor.matches(&self.compiled.query, tree.root_node(), source);
 
-        let registry = Arc::clone(&self.registry);
+        let registry = &self.registry;
         let capture_names = &self.compiled.capture_names;
         let pre_extracted = &self.compiled.pre_extracted;
 
@@ -863,10 +874,7 @@ impl Highlighter {
                         .iter()
                         .filter(|d| d.pattern_index == pattern_idx)
                     {
-                        let cap_idx = capture_names
-                            .iter()
-                            .position(|n| n == &pe.capture_name)
-                            .map(|i| i as u32);
+                        let cap_idx = self.compiled.capture_index.get(&pe.capture_name).copied();
                         if let Some(cap_idx) = cap_idx {
                             let value = match &pe.value {
                                 Some(v) => MetaValue::Str(v.clone()),
@@ -1115,8 +1123,9 @@ impl Highlighter {
         // Per-lang highlighter cache + per-content-hash span cache (one HTML
         // doc with many `<style>` blocks shares the css Highlighter but each
         // block has its own spans entry — no re-parse on scroll).
-        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
-        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
+        let cache_langs: HashSet<String> =
+            injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: HashSet<u64> = HashSet::with_capacity(injections.len());
 
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
@@ -1125,7 +1134,7 @@ impl Highlighter {
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
-            cache_hashes.push(content_hash);
+            cache_hashes.insert(content_hash);
 
             // Span cache hit — skip parse + highlight entirely.
             if let Some(cached) = self.child_cache.get_spans(lang_name, content_hash) {
@@ -1318,8 +1327,9 @@ impl Highlighter {
         }
 
         // Per-lang highlighter cache + per-content-hash span cache.
-        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
-        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
+        let cache_langs: HashSet<String> =
+            injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: HashSet<u64> = HashSet::with_capacity(injections.len());
 
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
@@ -1328,7 +1338,7 @@ impl Highlighter {
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
-            cache_hashes.push(content_hash);
+            cache_hashes.insert(content_hash);
 
             let cached_spans_opt: Option<Vec<HighlightSpan>> =
                 self.child_cache.get_spans(lang_name, content_hash).cloned();
@@ -1448,7 +1458,7 @@ impl Highlighter {
             },
         );
 
-        let registry = Arc::clone(&self.registry);
+        let registry = &self.registry;
         let capture_names = &self.compiled.capture_names;
         let pre_extracted = &self.compiled.pre_extracted;
         let pattern_info = &self.compiled.pattern_info;
@@ -1555,10 +1565,7 @@ impl Highlighter {
                         .iter()
                         .filter(|d| d.pattern_index == pattern_idx)
                     {
-                        let cap_idx = capture_names
-                            .iter()
-                            .position(|n| n == &pe.capture_name)
-                            .map(|i| i as u32);
+                        let cap_idx = self.compiled.capture_index.get(&pe.capture_name).copied();
                         if let Some(cap_idx) = cap_idx {
                             let value = match &pe.value {
                                 Some(v) => MetaValue::Str(v.clone()),
@@ -1736,8 +1743,9 @@ impl Highlighter {
             return parent_spans;
         }
 
-        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
-        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
+        let cache_langs: HashSet<String> =
+            injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: HashSet<u64> = HashSet::with_capacity(injections.len());
 
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
@@ -1752,7 +1760,7 @@ impl Highlighter {
                 .collect();
             let content_hash = hash_bytes(&slice);
             let offset = content_range.start;
-            cache_hashes.push(content_hash);
+            cache_hashes.insert(content_hash);
 
             let cached_spans_opt: Option<Vec<HighlightSpan>> =
                 self.child_cache.get_spans(lang_name, content_hash).cloned();
