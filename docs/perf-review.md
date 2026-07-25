@@ -83,6 +83,50 @@ probe — which is why it improves the long-line case that P8-C made worse.
 
 ---
 
+## Benchmarks
+
+Three criterion benches, all runnable with `cargo bench -p <crate>`:
+
+| Bench                               | Measures                                                       |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `hjkl-buffer-tui/benches/render.rs` | viewport render, short vs long (multi-chunk) lines             |
+| `hjkl-buffer/benches/undo.rs`       | cold `g-` jump cost vs undo depth                              |
+| `hjkl-app/benches/swap.rs`          | full swap write + undo-section serialization vs size and depth |
+
+### Issue #302 findings (undo/swap deferred items)
+
+Both perf items in [#302](https://github.com/kryptic-sh/hjkl/issues/302) were
+benchmarked rather than guessed at. They land on opposite verdicts:
+
+**Keyframe materialization — justified.** `g-`/`:earlier` reaches a cold node by
+replaying deltas from the nearest warm ancestor, and the warm LRU is only
+`WARM_CAP = 16` deep. Per-jump cost is **linear in depth**, so a tip→root walk
+is **quadratic**:
+
+| undo depth | one cold `g-` | full tip→root walk |
+| ---------- | ------------- | ------------------ |
+| 16         | (all warm)    | 77.7 µs            |
+| 64         | 22.6 µs       | 612 µs             |
+| 256        | 106.8 µs      | 11.9 ms            |
+| 1024       | ~445 µs       | ~200 ms            |
+
+`:earlier 9999` on a 1024-deep history costs ~200 ms today and would be ~3.2 s
+at 4096. Keyframes every K nodes would bound each jump at O(K) and the walk at
+O(N).
+
+**Swap append-log — attacks the wrong cost.** Worst cell in the whole matrix is
+457 µs (20 000-line doc, 1024 undo nodes), on a path that fires at most once per
+`updatetime` idle gap per dirty slot. More importantly the undo section's cost
+is dominated by **`SerTree.base` — a full copy of the root document text** — not
+by the node count: a _single-node_ tree on a 20 000-line doc already serializes
+in ~99 µs, while the marginal per-node cost is only ~30–40 ns. An append-only
+per-group delta log would not remove that base copy, and it cannot avoid the
+`fsync`. If this is ever worth attention, **de-duplicating `SerTree.base`
+against the streamed rope body** (the swap currently stores the document roughly
+twice) is the higher-leverage target.
+
+---
+
 ## Positive Findings
 
 - **`ChildCache` eviction** prunes to current working set only.
