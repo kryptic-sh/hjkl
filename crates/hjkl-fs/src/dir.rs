@@ -161,12 +161,17 @@ fn copy_tree(from: &Path, into: &Path, opts: &WriteOptions) -> io::Result<()> {
                 pending.push((src, dst));
             } else if file_type.is_file() {
                 std::fs::copy(&src, &dst)?;
-                apply_file_mode(&dst, opts.mode)?;
+                // Flush BEFORE applying the mode, and through a writable
+                // handle. `FlushFileBuffers` on Windows requires write access,
+                // so a read handle fails there with "Access is denied" — and a
+                // mode applied first can itself remove write access (a `0444`
+                // source becomes a read-only file), which would make the open
+                // fail for a second reason. Ordering it this way keeps one code
+                // path correct on both platforms.
                 if opts.fsync {
-                    // A read handle is enough to `fsync`, and it avoids
-                    // re-opening the file for write just to flush it.
-                    File::open(&dst)?.sync_all()?;
+                    File::options().write(true).open(&dst)?.sync_all()?;
                 }
+                apply_file_mode(&dst, opts.mode)?;
             } else {
                 // A fifo, socket or device node. Refusing is the honest answer:
                 // `fs::copy` on a fifo blocks forever waiting for a writer, and

@@ -108,6 +108,16 @@ pub fn canonicalize_nearest(path: &Path) -> PathBuf {
             Component::ParentDir => {
                 resolved.pop();
             }
+            // A `Normal` component spelled `.` or `..` is still a traversal.
+            // Windows verbatim (`\\?\`) paths are handed to the OS literally, so
+            // Rust does not classify their dot segments as `CurDir`/`ParentDir` —
+            // taking them at face value here would let exactly the traversal this
+            // function exists to stop survive into the result. Nothing is lost by
+            // resolving them: no real file can be named `.` or `..`.
+            Component::Normal(name) if name.as_encoded_bytes() == b"." => {}
+            Component::Normal(name) if name.as_encoded_bytes() == b".." => {
+                resolved.pop();
+            }
             Component::Normal(name) => resolved.push(name),
             // An absolute component can only appear at index 0, which is always
             // inside the canonicalized prefix; re-rooting here would mean the
@@ -310,7 +320,18 @@ mod tests {
     fn resolve_under_rejects_dot_dot_escape_that_fools_starts_with() {
         let td = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(td.path()).unwrap();
-        let attack = root.join("nonexistent/../../etc/passwd");
+        // Built one component at a time rather than from
+        // `"nonexistent/../../etc/passwd"`, so the test means the same thing on
+        // every platform: on Windows `canonicalize` returns a verbatim (`\\?\`)
+        // path, inside which `/` is an ordinary character rather than a
+        // separator, and the string spelling would collapse into a single
+        // component that tests nothing.
+        let attack = root
+            .join("nonexistent")
+            .join("..")
+            .join("..")
+            .join("etc")
+            .join("passwd");
 
         // The trap, demonstrated: unresolved `..` and the prefix test still says
         // "inside".
@@ -327,6 +348,36 @@ mod tests {
         let resolved = canonicalize_nearest(&attack);
         assert!(!resolved.starts_with(&root), "{}", resolved.display());
         assert_no_parent_components(&resolved);
+    }
+
+    /// Dot segments that arrive as `Normal` components must still be resolved.
+    ///
+    /// This is the Windows verbatim-path shape reproduced portably: a caller can
+    /// hand us a component whose *text* is `..` without the parser having
+    /// classified it as `ParentDir`. Taking that at face value would let the
+    /// traversal survive into the result, so it is resolved either way — and no
+    /// real file can be named `.` or `..`, so nothing legitimate is lost.
+    #[test]
+    fn dot_segments_spelled_as_normal_components_are_still_resolved() {
+        let td = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(td.path()).unwrap();
+        let escape = root
+            .join("a")
+            .join(std::ffi::OsStr::new(".."))
+            .join(std::ffi::OsStr::new(".."))
+            .join("outside");
+
+        let resolved = canonicalize_nearest(&escape);
+        assert_no_parent_components(&resolved);
+        assert!(
+            !resolved.starts_with(&root),
+            "traversal survived: {}",
+            resolved.display()
+        );
+        assert_eq!(
+            resolve_under(&root, &escape).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     /// The relative spelling of the same attack, which is how it arrives over an
