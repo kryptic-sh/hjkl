@@ -1572,6 +1572,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-fs"
+version = "0.35.0"
+dependencies = [
+ "hjkl-xdg",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "hjkl-fs-watch"
 version = "0.35.0"
 dependencies = [

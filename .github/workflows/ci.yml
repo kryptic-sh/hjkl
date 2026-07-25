@@ -735,6 +735,7 @@ jobs:
           #
           # Absorbed crates (21, in dep order):
           #   1.  hjkl-xdg              — XDG dirs helper (no hjkl deps).
+          #   1a. hjkl-fs               — disk I/O seam: atomic writes, locks (#1).
           #   2.  hjkl-anvil            — config-dir abstraction (depends on #1).
           #   3.  hjkl-theme            — colour/style tokens (no hjkl deps).
           #   4.  hjkl-bonsai           — tree-sitter highlight layer (#3, #1).
@@ -883,6 +884,7 @@ jobs:
             exit 1
           }
           publish_if_missing hjkl-xdg
+          publish_if_missing hjkl-fs
           publish_if_missing hjkl-kitty
           publish_if_missing hjkl-anvil
           publish_if_missing hjkl-theme

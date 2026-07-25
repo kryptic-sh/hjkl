@@ -1,0 +1,29 @@
+[package]
+name = "hjkl-fs"
+description = "Single seam for hjkl disk I/O — XDG-rooted paths, atomic writes, capped reads, multi-instance locks"
+keywords = ["filesystem", "atomic", "lock", "xdg"]
+categories = ["filesystem", "os"]
+version.workspace = true
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-xdg.workspace = true
+
+# `O_NOFOLLOW` for the write-permission probe. Unix-only; the probe degrades to a
+# plain write-open elsewhere.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

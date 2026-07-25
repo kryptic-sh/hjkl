@@ -29,6 +29,7 @@ hjkl-engine = { path = "crates/hjkl-engine", version = "0.35", default-features 
 hjkl-engine-tui = { path = "crates/hjkl-engine-tui", version = "0.35" }
 hjkl-ex = { path = "crates/hjkl-ex", version = "0.35" }
 hjkl-form = { path = "crates/hjkl-form", version = "0.35" }
+hjkl-fs = { path = "crates/hjkl-fs", version = "0.35" }
 hjkl-fs-watch = { path = "crates/hjkl-fs-watch", version = "0.35" }
 hjkl-fuzzy = { path = "crates/hjkl-fuzzy", version = "0.35" }
 hjkl-holler = { path = "crates/hjkl-holler", version = "0.35" }
