@@ -35,16 +35,25 @@ open:** cross-frame memoization of the diag counts (recomputed each frame from
 needs an invalidation-key design (what to key the memo on so it drops when
 diagnostics change). Not started pending that decision.
 
-### 🟡 P8 — `lines_prefetch: Vec<String>` allocates every frame
+### ⚪ P8 — `lines_prefetch: Vec<String>` per frame — measured, WONTFIX
 
-**`crates/hjkl-buffer-tui/src/render.rs:483-485`**
+**`crates/hjkl-buffer-tui/src/render.rs` (`line_at` closure)**
 
-Every frame allocates a `Vec<String>` of `area.height` (~50) cloned lines from
-the rope, feeding `Cow::Borrowed` accessors during the render walk (avoids
-further per-line clones). Deliberate tradeoff (comment at `:491`) — 50
-allocations/frame is cheap vs the highlight work. Could be avoided with a
-borrowed `rope.slice()` or a reused line-buffer struct. Low priority; left
-as-is.
+Every frame allocates a `Vec<String>` of `area.height` (~50) lines from the
+rope, feeding `Cow::Borrowed` accessors during the render walk. The proposed fix
+(P8-C) was to borrow each line directly from the rope via `RopeSlice::as_str()`
+(borrow when the line is single-chunk, owned fallback for multi-chunk long
+lines), eliminating the per-frame Vec.
+
+**Benchmarked and dropped** (see `benches/render.rs`, added `e9dc813a`). Best
+variant (borrow + O(1) `strip_suffix`, slice reused in the owned branch to avoid
+a double tree-walk): **short lines −4-5%** (~41.7µs → ~39.7µs, saves the ~50
+String allocs) but **long/multi-chunk lines +3.1%** (~102µs → ~105.5µs — the
+`as_str()` chunk-probe that returns `None` is pure overhead on the owned path).
+Absolute scale is single-digit µs on a render that is itself <0.3% of a 16ms
+frame budget, and the change regresses long-line/minified-file editing. Net not
+worth the complexity + regression vector — the prefetch stays. The bench is kept
+for future perf work.
 
 ---
 
