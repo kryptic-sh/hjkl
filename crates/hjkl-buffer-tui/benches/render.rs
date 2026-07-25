@@ -92,7 +92,7 @@ fn bench_render(c: &mut Criterion) {
             };
             let mut term = TermBuffer::empty(area);
             view.render(area, &mut term);
-            criterion::black_box(&term);
+            std::hint::black_box(&term);
         });
     });
 
@@ -136,7 +136,7 @@ fn bench_render(c: &mut Criterion) {
             };
             let mut term = TermBuffer::empty(area);
             view.render(area, &mut term);
-            criterion::black_box(&term);
+            std::hint::black_box(&term);
         });
     });
 
