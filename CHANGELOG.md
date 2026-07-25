@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Macro recorder dropped every literal `q` key.** Insert-mode text containing
+  `q` (e.g. `iquick<Esc>`) recorded as `iuick<Esc>`, and `f`/`t` pending targets
+  of `q` recorded as just the operator (desynchronising the whole macro on
+  replay). The redundant `q`-exclusion clause in the recorder hook is removed.
+
 ## [0.37.0] - 2026-07-26
 
 ### Fixed
