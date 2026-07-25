@@ -17,22 +17,19 @@ documented vim-parity behaviour.
   needed.
 - **H2 → L3 — fixed.** `read_vim_range` dead `+1` on the non-final-row branch
   removed; it now uses `line.chars().count()` (commit `5d19681e`).
+- **M1 — withdrawn, superseded by the security-audit M4 fix (`414d03d0`).** The
+  original suggestion was to replace the save write-permission probe
+  (`OpenOptions::write(true).open(&target)` at `save.rs:57-66`) with
+  `std::fs::metadata` to save one syscall. That open is now **load-bearing**: M4
+  added `custom_flags(O_NOFOLLOW)` to it as the symlink-swap TOCTOU guard.
+  `std::fs::metadata` follows symlinks (reopening the M4 hole), and
+  `symlink_metadata` + a manual mode check is racy and doesn't actually test
+  writability. The single non-truncating `O_NOFOLLOW` write-open does both jobs
+  in one syscall — keep it. No change.
 
 ---
 
 ## Open (non-blocking)
-
-### M1 — Save write-permission probe opens target for write
-
-**`apps/hjkl/src/save.rs:55-59`** —
-`OpenOptions::new().write(true).open(&target)`
-
-Permission probe only (handle dropped unused). The original "ctime/mtime churn"
-concern is overstated: a bare `O_WRONLY` open with no write does not touch
-timestamps on Linux, so the only cost is one extra syscall. TOCTOU (perms change
-before rename) is real but harmless — rename fails, temp is cleaned, error
-propagates, no data loss. **Cosmetic fix:** use `std::fs::metadata(&target)` for
-the readability check instead of a write-open. Not done.
 
 ### M2 — `undo_group_enter`/`exit` state machine fragile on depth re-entry
 
