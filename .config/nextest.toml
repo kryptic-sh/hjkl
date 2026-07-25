@@ -86,3 +86,17 @@ test-group = 'grammar-cache'
 # under nextest's process-per-test model regardless of host core count.
 filter = 'package(hjkl) & binary(e2e)'
 test-group = 'pty-e2e'
+# Retry pty tests before failing the run. The harness now waits for the child to
+# stop emitting rather than sleeping a fixed guess (see `wait_settle` /
+# `wait_first_frame` in `pty_harness/harness.rs`), which removes the mechanism
+# behind the observed flakes — a keystroke written while the editor was still
+# redrawing the previous one, so it was interpreted in the wrong state. But the
+# e2e binary is serialized while ~5000 other tests load the runner in parallel,
+# and this suite has a history of timing failures on constrained CI (see the
+# group comment above, and a docs-only commit that failed here). A retry budget
+# keeps a residual timing blip from red-building an unrelated change.
+#
+# This does NOT hide breakage: nextest reports a test that only passed on retry
+# as FLAKY in the summary, so a genuine regression still shows up as a
+# consistent failure across all three attempts.
+retries = 2

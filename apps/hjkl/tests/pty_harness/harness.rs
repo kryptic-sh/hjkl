@@ -16,6 +16,7 @@
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem as _};
 use std::io::{Read as _, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -149,6 +150,10 @@ pub struct TerminalSession {
     child: Box<dyn Child + Send + Sync>,
     /// Shared vt100 parser state updated by the reader thread.
     parser: Arc<Mutex<vt100::Parser>>,
+    /// Total bytes the reader thread has fed into the parser. Only ever read
+    /// for *changes*, which is what lets the settle wait detect that the child
+    /// has stopped emitting instead of sleeping a fixed guess.
+    bytes_seen: Arc<AtomicU64>,
     /// Terminal height in rows (used for screen iteration bounds).
     rows: u16,
     /// Terminal width in columns.
@@ -260,7 +265,9 @@ impl TerminalSession {
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
 
+        let bytes_seen = Arc::new(AtomicU64::new(0));
         let parser_clone = Arc::clone(&parser);
+        let bytes_clone = Arc::clone(&bytes_seen);
         let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -270,6 +277,10 @@ impl TerminalSession {
                     Ok(n) => {
                         let mut p = parser_clone.lock().unwrap();
                         p.process(&buf[..n]);
+                        drop(p);
+                        // After the parser is updated, so an observer that sees
+                        // the bump also sees the parsed screen.
+                        bytes_clone.fetch_add(n as u64, Ordering::Release);
                     }
                 }
             }
@@ -282,13 +293,14 @@ impl TerminalSession {
             writer,
             child,
             parser,
+            bytes_seen,
             rows,
             cols,
             cache_dir,
             config_dir,
         };
 
-        session.wait_ms(spawn_ms());
+        session.wait_first_frame();
         session
     }
 
@@ -539,7 +551,9 @@ impl TerminalSession {
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
 
         // Spawn a reader thread that pipes pty output into the vt100 parser.
+        let bytes_seen = Arc::new(AtomicU64::new(0));
         let parser_clone = Arc::clone(&parser);
+        let bytes_clone = Arc::clone(&bytes_seen);
         let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -549,6 +563,10 @@ impl TerminalSession {
                     Ok(n) => {
                         let mut p = parser_clone.lock().unwrap();
                         p.process(&buf[..n]);
+                        drop(p);
+                        // After the parser is updated, so an observer that sees
+                        // the bump also sees the parsed screen.
+                        bytes_clone.fetch_add(n as u64, Ordering::Release);
                     }
                 }
             }
@@ -561,6 +579,7 @@ impl TerminalSession {
             writer,
             child,
             parser,
+            bytes_seen,
             rows,
             cols,
             cache_dir,
@@ -568,7 +587,7 @@ impl TerminalSession {
         };
 
         // Wait for the first frame to appear.
-        session.wait_ms(spawn_ms());
+        session.wait_first_frame();
 
         session
     }
@@ -602,7 +621,7 @@ impl TerminalSession {
                 std::thread::sleep(Duration::from_millis(60));
             }
         }
-        self.wait_ms(settle_ms());
+        self.wait_settle();
     }
 
     /// Send `text` as a terminal **bracketed paste**: wrap it in the
@@ -622,7 +641,7 @@ impl TerminalSession {
             .write_all(b"\x1b[201~")
             .expect("write paste end");
         self.writer.flush().expect("flush pty");
-        self.wait_ms(settle_ms());
+        self.wait_settle();
     }
 
     /// Send raw bytes to the pty and wait for the screen to settle.
@@ -635,7 +654,7 @@ impl TerminalSession {
             .write_all(bytes)
             .expect("write raw bytes to pty");
         self.writer.flush().expect("flush pty");
-        self.wait_ms(settle_ms());
+        self.wait_settle();
     }
 
     /// Path to the config file this session's `hjkl` reads/writes —
@@ -787,10 +806,78 @@ impl TerminalSession {
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    fn wait_ms(&self, ms: u64) {
-        // Simple sleep: the reader thread keeps the parser updated continuously,
-        // so after sleeping the parser reflects whatever the binary emitted.
-        std::thread::sleep(Duration::from_millis(ms));
+    /// Wait for the child's first frame, then for it to stop drawing.
+    ///
+    /// Startup is the worst case for a fixed sleep: process spawn, config load
+    /// and the first full-screen paint all have to fit inside it, and if they
+    /// do not, the test's opening keystrokes are written into an editor that is
+    /// not listening yet — they are simply lost, and every later assertion is
+    /// about a screen that never received them. Waiting for real output removes
+    /// the guess.
+    fn wait_first_frame(&self) {
+        let deadline = Duration::from_millis(spawn_ms() * 10);
+        let poll = Duration::from_millis(5);
+        let start = std::time::Instant::now();
+        // Phase 1: wait until the child has drawn anything at all.
+        while self.bytes_seen.load(Ordering::Acquire) == 0 {
+            if start.elapsed() >= deadline {
+                return;
+            }
+            std::thread::sleep(poll);
+        }
+        // Phase 2: let that first paint finish before anyone types into it.
+        self.wait_settle();
+    }
+
+    /// Wait until the child stops emitting, rather than sleeping a fixed guess.
+    ///
+    /// A fixed sleep has to be long enough for the slowest machine the suite
+    /// will ever run on, and is still wrong when that machine is slower — which
+    /// is how this suite produced intermittent CI failures where a keystroke
+    /// landed while the editor was still redrawing from the previous one, so
+    /// the next `keys()` was interpreted in the wrong state. Waiting for
+    /// quiescence is both faster on an idle machine (it returns as soon as the
+    /// screen stops changing) and correct on a loaded one (it keeps waiting).
+    ///
+    /// Returns once the byte stream has been silent for `quiet`, or when
+    /// `deadline_ms` elapses. When the child never emits anything — a key that
+    /// produces no redraw — it falls back to `grace`, which is the old fixed
+    /// settle, so no-op keys cost no more than they used to.
+    fn wait_settle(&self) {
+        let grace = Duration::from_millis(settle_ms());
+        // A full redraw arrives as a burst; 40 ms of silence after one means the
+        // child is done, well above scheduler jitter between adjacent writes.
+        let quiet = Duration::from_millis(40);
+        // Cap generously: this bounds a pathological stall, it is not a timeout
+        // anyone should hit on a healthy run.
+        let deadline = Duration::from_millis(settle_ms() * 10);
+        let poll = Duration::from_millis(5);
+
+        let start = std::time::Instant::now();
+        let mut last = self.bytes_seen.load(Ordering::Acquire);
+        let mut last_change = start;
+        let mut saw_output = false;
+
+        loop {
+            std::thread::sleep(poll);
+            let now = self.bytes_seen.load(Ordering::Acquire);
+            if now != last {
+                last = now;
+                last_change = std::time::Instant::now();
+                saw_output = true;
+            }
+            if start.elapsed() >= deadline {
+                return;
+            }
+            if saw_output {
+                if last_change.elapsed() >= quiet {
+                    return;
+                }
+            } else if start.elapsed() >= grace {
+                // Nothing was emitted at all; there is nothing to settle.
+                return;
+            }
+        }
     }
 }
 
