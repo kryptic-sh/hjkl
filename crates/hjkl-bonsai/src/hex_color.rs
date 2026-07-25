@@ -80,16 +80,14 @@ impl HexColorPass {
             let abs_hit = (hit.start + start)..(hit.end + start);
             let bg_hex = rgb_to_hex(rgb);
             let fg_hex = contrasting_fg_rgb(rgb);
-            let mut span = HighlightSpan {
+            let mut meta = std::collections::HashMap::new();
+            meta.insert(HEX_BG_KEY.to_string(), MetaValue::Str(bg_hex));
+            meta.insert(HEX_FG_KEY.to_string(), MetaValue::Str(fg_hex.to_string()));
+            spans.push(HighlightSpan {
                 byte_range: abs_hit,
                 capture: Arc::from(HEX_COLOR_CAPTURE),
-                metadata: std::collections::HashMap::new(),
-            };
-            span.metadata
-                .insert(HEX_BG_KEY.to_string(), MetaValue::Str(bg_hex));
-            span.metadata
-                .insert(HEX_FG_KEY.to_string(), MetaValue::Str(fg_hex.to_string()));
-            spans.push(span);
+                metadata: Some(Box::new(meta)),
+            });
         }
     }
 
@@ -131,16 +129,14 @@ impl HexColorPass {
             let abs_end = win_start + hit.end;
             let bg_hex = rgb_to_hex(rgb);
             let fg_hex = contrasting_fg_rgb(rgb);
-            let mut span = HighlightSpan {
+            let mut meta = std::collections::HashMap::new();
+            meta.insert(HEX_BG_KEY.to_string(), MetaValue::Str(bg_hex));
+            meta.insert(HEX_FG_KEY.to_string(), MetaValue::Str(fg_hex.to_string()));
+            spans.push(HighlightSpan {
                 byte_range: abs_start..abs_end,
                 capture: Arc::from(HEX_COLOR_CAPTURE),
-                metadata: std::collections::HashMap::new(),
-            };
-            span.metadata
-                .insert(HEX_BG_KEY.to_string(), MetaValue::Str(bg_hex));
-            span.metadata
-                .insert(HEX_FG_KEY.to_string(), MetaValue::Str(fg_hex.to_string()));
-            spans.push(span);
+                metadata: Some(Box::new(meta)),
+            });
         }
     }
 }
@@ -840,7 +836,7 @@ mod tests {
         assert_eq!(spans.len(), 1, "expected one span");
         assert_eq!(spans[0].capture(), HEX_COLOR_CAPTURE);
         assert_eq!(
-            spans[0].metadata.get(HEX_BG_KEY),
+            spans[0].metadata().and_then(|m| m.get(HEX_BG_KEY)),
             Some(&MetaValue::Str("#ff0000".into()))
         );
     }
@@ -852,7 +848,7 @@ mod tests {
         HexColorPass::new().apply(&mut spans, src);
         assert_eq!(spans.len(), 1);
         assert_eq!(
-            spans[0].metadata.get(HEX_BG_KEY),
+            spans[0].metadata().and_then(|m| m.get(HEX_BG_KEY)),
             Some(&MetaValue::Str("#0080ff".into()))
         );
     }
@@ -864,7 +860,7 @@ mod tests {
         HexColorPass::new().apply(&mut spans, src);
         assert_eq!(spans.len(), 1);
         assert_eq!(
-            spans[0].metadata.get(HEX_BG_KEY),
+            spans[0].metadata().and_then(|m| m.get(HEX_BG_KEY)),
             Some(&MetaValue::Str("#ff0000".into()))
         );
     }
@@ -876,7 +872,7 @@ mod tests {
         HexColorPass::new().apply(&mut spans, src);
         assert_eq!(spans.len(), 1, "expected span for named color 'tomato'");
         assert_eq!(
-            spans[0].metadata.get(HEX_BG_KEY),
+            spans[0].metadata().and_then(|m| m.get(HEX_BG_KEY)),
             Some(&MetaValue::Str("#ff6347".into()))
         );
     }
@@ -941,8 +937,8 @@ mod tests {
         let hex_spans: Vec<_> = spans
             .iter()
             .filter(|s| {
-                s.metadata
-                    .get(HEX_BG_KEY)
+                s.metadata()
+                    .and_then(|m| m.get(HEX_BG_KEY))
                     .and_then(|v| {
                         if let MetaValue::Str(s) = v {
                             Some(s.as_str())
@@ -1011,11 +1007,11 @@ mod tests {
         assert_eq!(s.capture(), HEX_COLOR_CAPTURE);
         assert_eq!(s.byte_range, 10..17);
         assert_eq!(
-            s.metadata.get(HEX_BG_KEY),
+            s.metadata().and_then(|m| m.get(HEX_BG_KEY)),
             Some(&MetaValue::Str("#bb9af7".into())),
         );
         assert_eq!(
-            s.metadata.get(HEX_FG_KEY),
+            s.metadata().and_then(|m| m.get(HEX_FG_KEY)),
             Some(&MetaValue::Str("#ffffff".into())),
         );
     }
@@ -1066,8 +1062,8 @@ mod tests {
             assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
             assert_eq!(b.capture, r.capture, "capture mismatch");
             assert_eq!(
-                b.metadata.get(HEX_BG_KEY),
-                r.metadata.get(HEX_BG_KEY),
+                b.metadata().and_then(|m| m.get(HEX_BG_KEY)),
+                r.metadata().and_then(|m| m.get(HEX_BG_KEY)),
                 "HEX_BG_KEY mismatch"
             );
         }

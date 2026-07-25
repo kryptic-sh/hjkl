@@ -210,7 +210,7 @@ pub fn rainbow_spans(
         spans.push(HighlightSpan {
             byte_range: start..end,
             capture: Arc::from(RAINBOW_BRACKET_CAPTURE),
-            metadata,
+            metadata: Some(Box::new(metadata)),
         });
     }
     spans
@@ -390,7 +390,7 @@ pub fn rainbow_spans_rope(
         spans.push(HighlightSpan {
             byte_range: start..end,
             capture: Arc::from(RAINBOW_BRACKET_CAPTURE),
-            metadata,
+            metadata: Some(Box::new(metadata)),
         });
     }
 

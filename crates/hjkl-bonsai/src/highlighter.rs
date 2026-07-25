@@ -57,14 +57,24 @@ pub struct HighlightSpan {
     /// interned once at query-compile time (see [`CompiledArtifacts`]).
     pub capture: Arc<str>,
     /// Per-capture metadata written by directives such as `#set!`.
-    /// Empty map when no directives produced metadata for this capture.
-    pub metadata: HashMap<String, MetaValue>,
+    ///
+    /// `None` when no directives produced metadata for this capture (the common
+    /// case) — boxed so the empty span is a null pointer (8 bytes) rather than
+    /// an inline 48-byte `HashMap`. INVARIANT: an empty map is always stored as
+    /// `None`, never `Some(Box::new(HashMap::new()))`, so that two logically
+    /// equal spans compare equal under the derived `PartialEq`.
+    pub metadata: Option<Box<HashMap<String, MetaValue>>>,
 }
 
 impl HighlightSpan {
     /// The capture name as a `&str` slice.
     pub fn capture(&self) -> &str {
         &self.capture
+    }
+
+    /// Read-only access to per-capture metadata; `None` when absent.
+    pub fn metadata(&self) -> Option<&HashMap<String, MetaValue>> {
+        self.metadata.as_deref()
     }
 }
 
@@ -927,7 +937,11 @@ impl Highlighter {
                 spans.push(HighlightSpan {
                     byte_range: start..end,
                     capture: capture_name,
-                    metadata: span_meta,
+                    metadata: if span_meta.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(span_meta))
+                    },
                 });
             }
         }
@@ -1614,7 +1628,11 @@ impl Highlighter {
                 spans.push(HighlightSpan {
                     byte_range: start..end,
                     capture: capture_name,
-                    metadata: span_meta,
+                    metadata: if span_meta.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(span_meta))
+                    },
                 });
             }
         }
@@ -2011,7 +2029,7 @@ mod tests {
         HighlightSpan {
             byte_range: start..end,
             capture: Arc::from(capture),
-            metadata: HashMap::new(),
+            metadata: None,
         }
     }
 
@@ -2302,7 +2320,7 @@ mod tests {
         // The metadata["url"] key should be set.
         if let Some(span) = url_span {
             assert!(
-                span.metadata.contains_key("url"),
+                span.metadata().is_some_and(|m| m.contains_key("url")),
                 "expected metadata[\"url\"] on url span; metadata: {:?}",
                 span.metadata
             );

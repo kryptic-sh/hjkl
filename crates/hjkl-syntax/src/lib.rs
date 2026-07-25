@@ -1013,11 +1013,11 @@ fn build_by_row_range(
 
     for span in flat_spans {
         let hex_style: Option<StyleSpec> = if span.capture() == HEX_COLOR_CAPTURE {
-            let bg = match span.metadata.get(HEX_BG_KEY) {
+            let bg = match span.metadata().and_then(|m| m.get(HEX_BG_KEY)) {
                 Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
                 _ => None,
             };
-            let fg = match span.metadata.get(HEX_FG_KEY) {
+            let fg = match span.metadata().and_then(|m| m.get(HEX_FG_KEY)) {
                 Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
                 _ => None,
             };
@@ -1027,7 +1027,7 @@ fn build_by_row_range(
                 modifiers: hjkl_theme::Modifiers::default(),
             })
         } else if span.capture() == RAINBOW_BRACKET_CAPTURE {
-            let depth = match span.metadata.get(RAINBOW_DEPTH_KEY) {
+            let depth = match span.metadata().and_then(|m| m.get(RAINBOW_DEPTH_KEY)) {
                 Some(MetaValue::Int(d)) => *d as usize,
                 _ => 0,
             };
@@ -1099,11 +1099,11 @@ pub fn build_by_row(
 
     for span in flat_spans {
         let hex_style: Option<StyleSpec> = if span.capture() == HEX_COLOR_CAPTURE {
-            let bg = match span.metadata.get(HEX_BG_KEY) {
+            let bg = match span.metadata().and_then(|m| m.get(HEX_BG_KEY)) {
                 Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
                 _ => None,
             };
-            let fg = match span.metadata.get(HEX_FG_KEY) {
+            let fg = match span.metadata().and_then(|m| m.get(HEX_FG_KEY)) {
                 Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
                 _ => None,
             };
@@ -1113,7 +1113,7 @@ pub fn build_by_row(
                 modifiers: hjkl_theme::Modifiers::default(),
             })
         } else if span.capture() == RAINBOW_BRACKET_CAPTURE {
-            let depth = match span.metadata.get(RAINBOW_DEPTH_KEY) {
+            let depth = match span.metadata().and_then(|m| m.get(RAINBOW_DEPTH_KEY)) {
                 Some(MetaValue::Int(d)) => *d as usize,
                 _ => 0,
             };
@@ -1355,7 +1355,7 @@ mod tests {
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 10..17,
             capture: Arc::from(HEX_COLOR_CAPTURE),
-            metadata,
+            metadata: Some(Box::new(metadata)),
         };
         let by_row = build_by_row(&[span], bytes, &[0], 1, &DotFallbackTheme::dark());
         assert_eq!(by_row.len(), 1);
@@ -1380,7 +1380,7 @@ mod tests {
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 0..3,
             capture: Arc::from(HEX_COLOR_CAPTURE),
-            metadata,
+            metadata: Some(Box::new(metadata)),
         };
         let by_row = build_by_row(&[span], bytes, &[0], 3, &DotFallbackTheme::dark());
         assert_eq!(by_row.len(), 3);
@@ -1394,7 +1394,7 @@ mod tests {
         let span = hjkl_bonsai::HighlightSpan {
             byte_range: 0..3,
             capture: Arc::from(HEX_COLOR_CAPTURE),
-            metadata: std::collections::HashMap::new(),
+            metadata: None,
         };
         let by_row = build_by_row(&[span], b"foo", &[0], 1, &DotFallbackTheme::dark());
         assert_eq!(by_row.len(), 1);

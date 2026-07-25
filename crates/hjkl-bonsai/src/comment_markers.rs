@@ -186,7 +186,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: body_start..body_end,
                         capture: Arc::from(mw.tail_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 prev_end = Some(comment_range.end);
@@ -204,14 +204,14 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: cursor..label_start,
                         capture: Arc::from(mw.tail_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 // Label span: char before marker through end of word.
                 extra.push(HighlightSpan {
                     byte_range: label_start..m.word_end,
                     capture: Arc::from(m.marker.label_capture),
-                    metadata: Default::default(),
+                    metadata: None,
                 });
                 // Trail char after the word (e.g. ':').
                 let trail_end = if m.word_end < body_end {
@@ -223,7 +223,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: m.word_end..trail_end,
                         capture: Arc::from(m.marker.label_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 cursor = trail_end;
@@ -236,7 +236,7 @@ impl CommentMarkerPass {
                 extra.push(HighlightSpan {
                     byte_range: cursor..body_end,
                     capture: Arc::from(mw.tail_capture),
-                    metadata: Default::default(),
+                    metadata: None,
                 });
             }
 
@@ -459,7 +459,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: body_start..body_end,
                         capture: Arc::from(mw.tail_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 prev_end = Some(comment_range.end);
@@ -479,13 +479,13 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: win_cursor_abs..label_start,
                         capture: Arc::from(mw.tail_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 extra.push(HighlightSpan {
                     byte_range: label_start..abs_word_end,
                     capture: Arc::from(m.marker.label_capture),
-                    metadata: Default::default(),
+                    metadata: None,
                 });
                 let trail_end = if abs_word_end < body_end {
                     abs_word_end + 1
@@ -496,7 +496,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: abs_word_end..trail_end,
                         capture: Arc::from(m.marker.label_capture),
-                        metadata: Default::default(),
+                        metadata: None,
                     });
                 }
                 cursor = m.word_end + (trail_end - abs_word_end);
@@ -509,7 +509,7 @@ impl CommentMarkerPass {
                 extra.push(HighlightSpan {
                     byte_range: win_cursor_abs..body_end,
                     capture: Arc::from(mw.tail_capture),
-                    metadata: Default::default(),
+                    metadata: None,
                 });
             }
 
@@ -971,7 +971,7 @@ mod tests {
         let comment_span = HighlightSpan {
             byte_range: 0..bytes.len(),
             capture: Arc::from("comment"),
-            metadata: Default::default(),
+            metadata: None,
         };
 
         let pass = CommentMarkerPass::new();
@@ -1064,7 +1064,7 @@ mod tests {
         let mut spans = vec![HighlightSpan {
             byte_range: comment_start..src.len(),
             capture: Arc::from("comment"),
-            metadata: Default::default(),
+            metadata: None,
         }];
         CommentMarkerPass::new().apply_rope(&mut spans, &rope);
 
