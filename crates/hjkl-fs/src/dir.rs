@@ -160,18 +160,23 @@ fn copy_tree(from: &Path, into: &Path, opts: &WriteOptions) -> io::Result<()> {
                 dirs.push((src.clone(), dst.clone()));
                 pending.push((src, dst));
             } else if file_type.is_file() {
-                std::fs::copy(&src, &dst)?;
-                // Flush BEFORE applying the mode, and through a writable
-                // handle. `FlushFileBuffers` on Windows requires write access,
-                // so a read handle fails there with "Access is denied" — and a
-                // mode applied first can itself remove write access (a `0444`
-                // source becomes a read-only file), which would make the open
-                // fail for a second reason. Ordering it this way keeps one code
-                // path correct on both platforms.
+                // One writable handle for the whole copy: `fs::copy` would
+                // stamp the source's mode onto `dst` immediately, making a
+                // read-only source impossible to fsync through a fresh
+                // write-open. Copy the bytes through handles we own, flush
+                // while the handle is still writable, and only then apply the
+                // final mode.
+                let mut reader = File::open(&src)?;
+                let mut writer = File::create(&dst)?;
+                std::io::copy(&mut reader, &mut writer)?;
                 if opts.fsync {
-                    File::options().write(true).open(&dst)?.sync_all()?;
+                    writer.sync_all()?;
                 }
-                apply_file_mode(&dst, opts.mode)?;
+                drop(writer);
+                match opts.mode {
+                    Some(_) => apply_file_mode(&dst, opts.mode)?,
+                    None => copy_mode(&src, &dst)?,
+                }
             } else {
                 // A fifo, socket or device node. Refusing is the honest answer:
                 // `fs::copy` on a fifo blocks forever waiting for a writer, and
@@ -973,6 +978,45 @@ mod tests {
             std::fs::read(outside.path().join("sub/mid.txt")).unwrap(),
             b"mid",
             "deleted through the link"
+        );
+    }
+
+    // ── read-only file in a copied tree (B3) ──────────────────────────────
+
+    /// `copy_dir_atomic` must not fail when the source tree contains a
+    /// read-only (0444) file. Before the fix, `std::fs::copy` stamped the
+    /// read-only mode onto the destination immediately and the subsequent
+    /// `.write(true).open(...)` for fsync failed `EACCES`.
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_atomic_copies_tree_with_readonly_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("src");
+        let dst = td.path().join("dst");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("top.txt"), b"hello").unwrap();
+        std::fs::write(src.join("sub/ro.txt"), b"world").unwrap();
+        let mut perms = std::fs::metadata(src.join("sub/ro.txt"))
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(src.join("sub/ro.txt"), perms).unwrap();
+
+        // Default options: fsync on — this is the path that used to fail.
+        copy_dir_atomic(&src, &dst, &WriteOptions::default()).unwrap();
+
+        assert_eq!(std::fs::read(dst.join("top.txt")).unwrap(), b"hello");
+        assert_eq!(std::fs::read(dst.join("sub/ro.txt")).unwrap(), b"world");
+        let dst_mode = std::fs::metadata(dst.join("sub/ro.txt"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            dst_mode & 0o777,
+            0o444,
+            "destination's read-only file must carry the source's mode (0444); got {dst_mode:#o}"
         );
     }
 }
