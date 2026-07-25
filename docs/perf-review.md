@@ -2,8 +2,8 @@
 
 **Project:** hjkl (terminal text editor) **Date:** 2026-07-23 (pruned
 2026-07-25) **Scope:** entire codebase **Verdict:** Well-optimized for a
-terminal editor. All ranked hotspots (P1–P3, P5–P7, P9, P11) have shipped; only
-deliberate low-value tradeoffs and one design-gated item remain.
+terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) have shipped; only a
+deliberate tradeoff (P8) and one design-gated item (P4 memo) remain.
 
 ## Resolved (pruned)
 
@@ -18,6 +18,7 @@ Full finding text removed once shipped — see the commit for the change.
 | P6  | prebuilt capture-name→index `HashMap`                                                          | `b0dcdfd4` |
 | P7  | hlsearch painter consults engine per-row cache (no inversion)                                  | `0a83b354` |
 | P9  | which-key `chord_to_notation(&[KeyEvent])` — no Vec clone                                      | `7af516a7` |
+| P10 | `HighlightSpan.metadata` → `Option<Box<HashMap>>` (span 48B→8B, empty normalizes to `None`)    | `66617a18` |
 | P11 | one redundant `Range` clone removed (other three load-bearing — `Range` is `Clone` not `Copy`) | `b0dcdfd4` |
 
 ---
@@ -44,15 +45,6 @@ further per-line clones). Deliberate tradeoff (comment at `:491`) — 50
 allocations/frame is cheap vs the highlight work. Could be avoided with a
 borrowed `rope.slice()` or a reused line-buffer struct. Low priority; left
 as-is.
-
-### ⚪ P10 — `HighlightSpan.metadata: HashMap<String, MetaValue>` per span
-
-**`crates/hjkl-bonsai/src/highlighter.rs:57,897-910`**
-
-Empty-map path is short-circuited (zero-alloc until first insert). Spans _with_
-metadata (from `#set!` directives, rare — mostly injection patterns) allocate
-per span. Could use `Box`/`Option` to save 48 bytes in the no-metadata case. Low
-priority; left as-is.
 
 ---
 
