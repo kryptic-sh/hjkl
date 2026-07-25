@@ -19,6 +19,12 @@ patch bumps.
   `body.ends_with(b"\n")`, but the load path strips exactly one trailing newline
   — so `"x\n\n"` loaded as `"x\n"` and `:w` wrote the shorter form on a no-edit
   save. The condition now matches headless/embed: `!body.is_empty()`.
+- **`copy_dir_atomic` failed on trees containing a read-only file.**
+  `std::fs::copy` stamps the source's mode onto the destination immediately,
+  rendering it read-only, and the subsequent `write(true).open(…)` for fsync
+  returned EACCES. The file-copy arm now copies bytes through owned read/write
+  handles, flushes while the destination is still writable, and only then
+  applies the final mode.
 
 ## [0.37.0] - 2026-07-26
 
