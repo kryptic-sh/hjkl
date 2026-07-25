@@ -30,6 +30,30 @@ use unicode_width::UnicodeWidthChar;
 use hjkl_buffer::wrap::wrap_segments;
 use hjkl_buffer::{Selection, Span, View, Viewport, Wrap};
 
+thread_local! {
+    /// Reusable per-frame line buffers. `String::clear()` retains each buffer's
+    /// capacity, so steady-state frames allocate nothing; a fresh `Vec` is only
+    /// built on the very first frame (or after a `take` that never came back).
+    static LINE_SCRATCH: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Borrows the thread-local line scratch for one frame and returns it on drop,
+/// so an early return or a panic mid-render cannot lose the retained capacity.
+struct LineScratch(Vec<String>);
+
+impl LineScratch {
+    fn take() -> Self {
+        Self(LINE_SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut())))
+    }
+}
+
+impl Drop for LineScratch {
+    fn drop(&mut self) {
+        LINE_SCRATCH.with(|c| *c.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
 /// Map a C0/C1 control character or DEL to a printable, single-width glyph so
 /// raw terminal escape sequences embedded in a file (e.g. `ESC`, OSC 52
 /// clipboard writes, title-spoofing) can never reach the terminal when the
@@ -494,11 +518,29 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // panic `rope.line()` past the snapshot's last line.
         let total_rows = rope.len_lines();
         let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
-        let lines_prefetch: Vec<String> = (top_row..prefetch_end)
-            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
-            .collect();
         let prefetch_base = top_row;
         let prefetch_end_idx = prefetch_end;
+        let n_prefetch = prefetch_end.saturating_sub(top_row);
+        let mut scratch = LineScratch::take();
+        // Grow to cover the window; never truncate — keeping the extra Strings
+        // alive preserves their capacity for later frames (bounded by the max
+        // viewport height).
+        if scratch.0.len() < n_prefetch {
+            scratch.0.resize_with(n_prefetch, String::new);
+        }
+        for (i, row) in (top_row..prefetch_end).enumerate() {
+            let s = &mut scratch.0[i];
+            s.clear(); // retains capacity
+            for chunk in rope.line(row).chunks() {
+                s.push_str(chunk);
+            }
+            // ropey includes the trailing '\n' on non-final lines; strip it to
+            // match `hjkl_buffer::rope_line_str` semantics exactly.
+            if s.ends_with('\n') {
+                s.pop();
+            }
+        }
+        let lines_prefetch: &[String] = &scratch.0[..n_prefetch];
         // Borrow the prefetched string for rows inside the fetched window;
         // only rows outside it (closed folds can advance `doc_row` past the
         // precomputed bound) pay for a fresh owned fetch. Avoids a String
