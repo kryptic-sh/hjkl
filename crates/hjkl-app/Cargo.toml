@@ -20,6 +20,7 @@ hjkl-anvil.workspace = true
 hjkl-buffer.workspace = true
 hjkl-config.workspace = true
 hjkl-engine.workspace = true
+hjkl-fs.workspace = true
 hjkl-keymap.workspace = true
 hjkl-lsp.workspace = true
 hjkl-picker.workspace = true
@@ -31,7 +32,6 @@ ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 tracing = "0.1"
-hjkl-xdg.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

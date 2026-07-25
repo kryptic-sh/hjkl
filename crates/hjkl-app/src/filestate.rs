@@ -21,10 +21,11 @@
 //! do **not** migrate old versions; we simply discard and start fresh.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hjkl_fs::{WriteOptions, ensure_private_dir, with_lock_exclusive, write_atomic};
 use serde::{Deserialize, Serialize};
 
 /// Magic prefix for the file-state store.
@@ -88,16 +89,11 @@ struct StoreData {
 
 /// Return (and auto-create) `<XDG_STATE_HOME>/hjkl/`, owner-only.
 pub fn filestate_dir() -> std::io::Result<PathBuf> {
-    let dir = hjkl_xdg::state_dir("hjkl")
-        .map_err(|e| std::io::Error::other(format!("xdg state_dir: {e}")))?;
-    std::fs::create_dir_all(&dir)?;
-    // Cursor records are low-sensitivity, but keep parity with the swap dir's
-    // owner-only policy so nothing about a user's open files leaks.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
+    // Cursor records are low-sensitivity, but `ensure_private_dir` keeps parity
+    // with the swap dir's owner-only policy so nothing about a user's open files
+    // leaks.
+    let dir = hjkl_fs::dirs::state_dir("hjkl").map_err(hjkl_fs::dirs::to_io)?;
+    ensure_private_dir(&dir)?;
     Ok(dir)
 }
 
@@ -126,6 +122,11 @@ impl FileStateStore {
     /// Load the real store from [`store_path`]. Any error (missing file, bad
     /// magic, short read, parse failure, version mismatch) yields an empty
     /// store — never panics, never blocks.
+    ///
+    /// Read-only use is fine. Pairing this with [`Self::save`] to mutate the
+    /// index is **not**: `filestate.bin` is shared by every hjkl instance, so an
+    /// unlocked load → mutate → save loses a concurrent instance's entries. Use
+    /// [`update`] (or [`record`]) for that.
     pub fn load() -> Self {
         match store_path() {
             Ok(p) => Self::load_from(&p),
@@ -216,13 +217,20 @@ impl FileStateStore {
 
     /// Save to the real [`store_path`]. Errors are returned but callers treat
     /// persistence as best-effort and ignore them.
+    ///
+    /// Takes no lock, so it is only safe on a store that was loaded under one —
+    /// i.e. from inside [`update`]. See [`Self::load`].
     pub fn save(&mut self) -> std::io::Result<()> {
         let p = store_path()?;
         self.save_to(&p)
     }
 
     /// Save to an explicit path (test seam / redirect). Applies the LRU cap,
-    /// then writes atomically via a temp file + rename.
+    /// then writes atomically through the [`hjkl_fs`] seam.
+    ///
+    /// This is the *store* half of a read-modify-write; on its own it does not
+    /// make [`record`] safe against a concurrent instance. That is why `record`
+    /// holds the store's lock across load → upsert → save.
     pub fn save_to(&mut self, path: &Path) -> std::io::Result<()> {
         self.cap_lru();
         let data = StoreData {
@@ -235,26 +243,17 @@ impl FileStateStore {
                 format!("postcard serialize: {e}"),
             )
         })?;
+        // `WriteOptions::state()` has no non-atomic fallback, so the parent must
+        // exist for the temp file to be created beside the target.
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("bin.tmp");
-        {
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut f = opts.open(&tmp)?;
-            f.write_all(&MAGIC)?;
-            f.write_all(&(body.len() as u32).to_le_bytes())?;
-            f.write_all(&body)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        // magic + u32-LE body length + postcard body — the format is unchanged.
+        let mut bytes = Vec::with_capacity(MAGIC.len() + 4 + body.len());
+        bytes.extend_from_slice(&MAGIC);
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&body);
+        write_atomic(path, &bytes, &WriteOptions::state())
     }
 
     /// Number of entries — test/introspection helper.
@@ -276,12 +275,38 @@ pub fn lookup(canonical_path: &str) -> Option<FileState> {
     FileStateStore::load().get(canonical_path).cloned()
 }
 
-/// Record a single file's cursor into the real store (load → upsert → save).
-/// Best-effort: any I/O error is swallowed.
+/// Mutate the real store under its exclusive lock: load → `mutate` → save, all
+/// inside one lock.
+///
+/// This is the ONLY correct way to change the index. `filestate.bin` is a SINGLE
+/// file shared by every hjkl instance, so an unlocked read-modify-write loses
+/// updates: two instances both load the same snapshot, both mutate their own
+/// copy, and the second atomic rename silently discards the first's entries. An
+/// atomic write does not fix that — only a lock spanning the whole sequence does,
+/// which is why the lock is taken here rather than inside
+/// [`FileStateStore::save`].
+///
+/// [`FileStateStore::load`] deliberately stays lock-free: it keeps a documented
+/// "never panics, never blocks" contract, and a stale read is harmless when
+/// nothing is written back.
+pub fn update<F>(mutate: F) -> std::io::Result<()>
+where
+    F: FnOnce(&mut FileStateStore),
+{
+    let path = store_path()?;
+    with_lock_exclusive(&path, || {
+        let mut store = FileStateStore::load_from(&path);
+        mutate(&mut store);
+        store.save_to(&path)
+    })
+}
+
+/// Record a single file's cursor into the real store (load → upsert → save under
+/// the store lock). Best-effort: any I/O error is swallowed.
 pub fn record(canonical_path: &str, cursor: (u32, u32), content_hash: u64) {
-    let mut store = FileStateStore::load();
-    store.upsert(canonical_path, cursor, content_hash, now_unix_ms());
-    let _ = store.save();
+    let _ = update(|store| {
+        store.upsert(canonical_path, cursor, content_hash, now_unix_ms());
+    });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -308,6 +333,69 @@ mod tests {
         assert_eq!(st.cursor, (50, 20));
         assert_eq!(st.content_hash, 0xabcd);
         assert_eq!(st.path, "/home/u/a.rs");
+    }
+
+    /// Format lock: magic + `u32`-LE body length + postcard body, built here
+    /// independently of `save_to`. `try_load_from` parses exactly this shape, so a
+    /// layout change would discard every existing index.
+    #[test]
+    fn on_disk_layout_is_byte_exact() {
+        let td = tempfile::tempdir().unwrap();
+        let p = store_file(&td);
+
+        let mut store = FileStateStore::default();
+        store.upsert("/home/u/layout.rs", (7, 3), 0x1234, 9_999);
+        store.save_to(&p).unwrap();
+
+        let body = postcard::to_stdvec(&StoreData {
+            version: VERSION,
+            entries: store.entries.clone(),
+        })
+        .unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&MAGIC);
+        expected.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&body);
+
+        assert_eq!(std::fs::read(&p).unwrap(), expected);
+    }
+
+    /// The RMW that [`record`] performs, driven concurrently against one shared
+    /// index under the same lock `record` takes. Without the lock spanning
+    /// load → upsert → save, threads overwrite each other's entries and far fewer
+    /// than `N` survive; with it, every entry must be present.
+    #[test]
+    fn locked_read_modify_write_keeps_every_concurrent_entry() {
+        let td = tempfile::tempdir().unwrap();
+        let p = std::sync::Arc::new(store_file(&td));
+
+        const N: usize = 16;
+        let mut handles = Vec::new();
+        for i in 0..N {
+            let p = std::sync::Arc::clone(&p);
+            handles.push(std::thread::spawn(move || {
+                // Mirrors `record`'s body exactly: the lock spans the whole
+                // load → upsert → save, not just the save.
+                hjkl_fs::with_lock_exclusive(&p, || {
+                    let mut store = FileStateStore::load_from(&p);
+                    store.upsert(&format!("/f{i}"), (i as u32, 0), i as u64, 1_000 + i as u64);
+                    store.save_to(&p)
+                })
+                .unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let loaded = FileStateStore::load_from(&p);
+        assert_eq!(loaded.len(), N, "an interleaved write lost entries");
+        for i in 0..N {
+            assert!(
+                loaded.get(&format!("/f{i}")).is_some(),
+                "/f{i} was overwritten by a concurrent record()"
+            );
+        }
     }
 
     #[test]

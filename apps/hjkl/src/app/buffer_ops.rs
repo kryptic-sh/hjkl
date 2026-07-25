@@ -126,13 +126,19 @@ impl App {
     /// (load → upsert all → save once). Called on editor exit so a clean quit
     /// remembers where every open buffer's cursor was. No-op when
     /// `restore_cursor` is off.
+    ///
+    /// The store mutation goes through `filestate::update`, which holds the
+    /// index's exclusive lock across the whole load → upsert → save. Doing the
+    /// load and the save as separate unlocked steps would discard the entries a
+    /// concurrently-exiting instance wrote in between — and because this path
+    /// rewrites the whole index, it would discard them wholesale.
     pub(crate) fn persist_all_cursors(&mut self) {
         if !self.config.editor.restore_cursor {
             return;
         }
-        let mut store = hjkl_app::filestate::FileStateStore::load();
-        let now = hjkl_app::filestate::now_unix_ms();
-        let mut any = false;
+        // Gather first, so the (blocking, cross-process) lock is held only for
+        // the store I/O and not for canonicalizing paths and hashing buffers.
+        let mut pending: Vec<(String, (u32, u32), u64)> = Vec::new();
         for idx in 0..self.slots.len() {
             if self.slots[idx].is_explorer {
                 continue;
@@ -143,17 +149,21 @@ impl App {
             let canonical = std::fs::canonicalize(&filename).unwrap_or(filename);
             let (row, col) = self.slots[idx].buffer().last_cursor();
             let hash = hjkl_app::filestate::content_hash(&self.slots[idx].buffer().as_string());
-            store.upsert(
-                &canonical.to_string_lossy(),
+            pending.push((
+                canonical.to_string_lossy().into_owned(),
                 (row as u32, col as u32),
                 hash,
-                now,
-            );
-            any = true;
+            ));
         }
-        if any {
-            let _ = store.save();
+        if pending.is_empty() {
+            return;
         }
+        let now = hjkl_app::filestate::now_unix_ms();
+        let _ = hjkl_app::filestate::update(|store| {
+            for (path, cursor, hash) in &pending {
+                store.upsert(path, *cursor, *hash, now);
+            }
+        });
     }
 
     /// Switch the focused window to display slot `idx` and refresh its

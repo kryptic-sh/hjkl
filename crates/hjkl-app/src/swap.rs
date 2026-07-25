@@ -110,20 +110,12 @@ pub struct SwapUndo {
 // ── Directory helpers ─────────────────────────────────────────────────────────
 
 /// Return (and auto-create) `<XDG_CACHE_HOME>/hjkl/swap/`.
+///
+/// Owner-only: swap files hold unsaved buffer contents (potentially credentials,
+/// private keys, etc.), so other local users must not be able to enumerate or
+/// read them.
 pub fn swap_dir() -> std::io::Result<PathBuf> {
-    let base = hjkl_xdg::cache_dir("hjkl")
-        .map_err(|e| std::io::Error::other(format!("xdg cache_dir: {e}")))?;
-    let dir = base.join("swap");
-    std::fs::create_dir_all(&dir)?;
-    // Swap files hold unsaved buffer contents (potentially credentials, private
-    // keys, etc.). Keep the directory owner-only so other local users cannot
-    // enumerate or read them.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(dir)
+    hjkl_fs::private_cache_subdir("hjkl", "swap")
 }
 
 /// Stable swap path for a file: `swap_dir()/<hash16>.swp`
@@ -210,46 +202,11 @@ pub fn scan_orphan_scratch_swaps() -> Vec<OrphanScratch> {
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
-/// Generate a 16-char hex suffix from a platform-secure random source for
-/// temp-file uniqueness.  Falls back to a time / pid / counter mix on
-/// platforms without `/dev/urandom` (the fallback is not crypto-grade but is
-/// unique enough in-practice for a temp filename).
-fn random_suffix() -> String {
-    #[cfg(unix)]
-    {
-        let mut buf = [0u8; 8];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom")
-            && f.read_exact(&mut buf).is_ok()
-        {
-            return format!("{:016x}", u64::from_le_bytes(buf));
-        }
-    }
-    // Fallback (non-Unix, or /dev/urandom unavailable).
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let pid = std::process::id() as u64;
-    // Mix with Knuth's multiplicative hash constants.
-    let combined = now
-        .wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add(pid.wrapping_mul(1_442_695_040_888_963_407))
-        .wrapping_add(count);
-    format!("{:016x}", combined)
-}
-
-/// Atomically write a swap file: stream header + rope body to a unique
-/// temporary file (`<path>.<random>.tmp`), fsync, then rename to `path`.
+/// Atomically write a swap file: stream header + rope body to a temp file beside
+/// the target, fsync, rename, fsync the parent — all through [`hjkl_fs`].
 ///
 /// `path` is the final `.swp` path (as returned by [`swap_path_for`]).
 /// `rope` body is streamed via `rope.chunks()` — no full-document allocation.
-///
-/// Uses `create_new` (O_CREAT | O_EXCL) on a random temp path so concurrent
-/// writers never share the same temporary file.  Retries up to 5 times on
-/// collision.
 pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Result<()> {
     write_swap_full(path, header, rope, None)
 }
@@ -285,86 +242,26 @@ pub fn write_swap_full(
         None => Vec::new(),
     };
 
-    const MAX_RETRIES: u32 = 5;
-    let mut last_err: Option<std::io::Error> = None;
-
-    for _ in 0..MAX_RETRIES {
-        let suffix = random_suffix();
-        let tmp_name = format!(
-            "{}.{}.tmp",
-            path.file_name().unwrap_or_default().to_string_lossy(),
-            suffix
-        );
-        let tmp = path.with_file_name(&tmp_name);
-
-        // Open with create_new (O_EXCL) so we never open a pre-existing file.
-        // On Unix set mode 0o600 so unsaved contents are owner-only even on
-        // first creation (create_new guarantees this is first creation).
-        let mut f = {
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            match opts.open(&tmp) {
-                Ok(f) => f,
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    last_err = Some(e);
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        };
-
-        // Write: magic + u32-LE header length + header bytes + u32-LE undo
-        // length + undo bytes + body chunks.
-        let write_result = (|| -> std::io::Result<()> {
-            f.write_all(&SwapHeader::MAGIC)?;
-            let hlen = header_bytes.len() as u32;
-            f.write_all(&hlen.to_le_bytes())?;
-            f.write_all(&header_bytes)?;
-            let ulen = undo_bytes.len() as u32;
-            f.write_all(&ulen.to_le_bytes())?;
-            f.write_all(&undo_bytes)?;
-            for chunk in rope.chunks() {
-                f.write_all(chunk.as_bytes())?;
-            }
-            f.sync_all()?;
-            Ok(())
-        })();
-
-        if let Err(e) = write_result {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
+    // Write: magic + u32-LE header length + header bytes + u32-LE undo length +
+    // undo bytes + body chunks. `write_atomic_with` owns the temp-name retries,
+    // the 0600 mode, the fsync and the rename.
+    //
+    // The closure is `Fn` (it may be re-run on a temp-name collision), so it
+    // borrows `header_bytes` / `undo_bytes` / `rope` and consumes nothing — every
+    // call emits the identical byte sequence.
+    hjkl_fs::write_atomic_with(path, &hjkl_fs::WriteOptions::state(), |f| {
+        f.write_all(&SwapHeader::MAGIC)?;
+        let hlen = header_bytes.len() as u32;
+        f.write_all(&hlen.to_le_bytes())?;
+        f.write_all(&header_bytes)?;
+        let ulen = undo_bytes.len() as u32;
+        f.write_all(&ulen.to_le_bytes())?;
+        f.write_all(&undo_bytes)?;
+        for chunk in rope.chunks() {
+            f.write_all(chunk.as_bytes())?;
         }
-
-        drop(f);
-
-        match std::fs::rename(&tmp, path) {
-            Ok(()) => {
-                // fsync the parent directory so the rename is durable.
-                if let Some(parent) = path.parent()
-                    && let Ok(pdir) = std::fs::File::open(parent)
-                {
-                    let _ = pdir.sync_all();
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                return Err(e);
-            }
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "failed to create unique swap temp file after retries",
-        )
-    }))
+        Ok(())
+    })
 }
 
 // ── Read ──────────────────────────────────────────────────────────────────────
@@ -980,6 +877,60 @@ mod tests {
         // No panic; both read entry points surface an error → "no usable swap".
         assert!(read_swap_full(&swp).is_err());
         assert!(read_swap(&swp).is_err());
+    }
+
+    /// Format lock: the exact bytes `write_swap_full` produces, built here
+    /// independently of the writer. `read_swap_full` is the only consumer of this
+    /// layout, so a reordering or an extra field would break `:recover` on every
+    /// swap written by an older build — this test fails instead.
+    #[test]
+    fn on_disk_layout_is_byte_exact() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("layout.swp");
+
+        let header = sample_header("/tmp/layout.rs");
+        let body = "line one\nline two\n";
+        let rope = Rope::from_str(body);
+        let undo = SwapUndo {
+            tree: sample_tree(body, 3),
+            current_seq: 3,
+        };
+        write_swap_full(&swp, &header, &rope, Some(&undo)).unwrap();
+
+        let header_bytes = postcard::to_stdvec(&header).unwrap();
+        let undo_bytes = postcard::to_stdvec(&undo).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&SwapHeader::MAGIC);
+        expected.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&header_bytes);
+        expected.extend_from_slice(&(undo_bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&undo_bytes);
+        expected.extend_from_slice(body.as_bytes());
+
+        assert_eq!(std::fs::read(&swp).unwrap(), expected);
+    }
+
+    /// Format lock for the content-only arm: `undo == None` must still emit a
+    /// zero-length undo section, not omit it (omitting it is the v2 layout, which
+    /// the v3 reader rejects).
+    #[test]
+    fn content_only_layout_keeps_zero_undo_section() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("layout_nodo.swp");
+
+        let header = sample_header("/tmp/nodo.rs");
+        let body = "just text\n";
+        write_swap(&swp, &header, &Rope::from_str(body)).unwrap();
+
+        let header_bytes = postcard::to_stdvec(&header).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&SwapHeader::MAGIC);
+        expected.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&header_bytes);
+        expected.extend_from_slice(&0u32.to_le_bytes());
+        expected.extend_from_slice(body.as_bytes());
+
+        assert_eq!(std::fs::read(&swp).unwrap(), expected);
     }
 
     /// A truncated undo section (length prefix promises more bytes than exist)

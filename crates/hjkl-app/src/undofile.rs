@@ -76,18 +76,14 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 pub fn undofile_dir(override_dir: Option<&Path>) -> std::io::Result<PathBuf> {
     let dir = match override_dir {
         Some(d) => d.to_path_buf(),
-        None => hjkl_xdg::state_dir("hjkl")
-            .map_err(|e| std::io::Error::other(format!("xdg state_dir: {e}")))?
+        None => hjkl_fs::dirs::state_dir("hjkl")
+            .map_err(hjkl_fs::dirs::to_io)?
             .join("undo"),
     };
-    std::fs::create_dir_all(&dir)?;
     // Undofiles embed the full buffer history (potentially credentials, private
-    // keys, etc.). Keep the directory owner-only, matching swap.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
+    // keys, etc.). `ensure_private_dir` keeps the directory owner-only, matching
+    // swap — including when an `undodir` override points at a looser directory.
+    hjkl_fs::ensure_private_dir(&dir)?;
     Ok(dir)
 }
 
@@ -125,36 +121,8 @@ pub struct LoadedUndo {
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
-/// Generate a 16-char hex temp suffix from a secure random source (mirrors
-/// `swap::random_suffix`), for atomic-write temp-file uniqueness.
-fn random_suffix() -> String {
-    #[cfg(unix)]
-    {
-        let mut buf = [0u8; 8];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom")
-            && f.read_exact(&mut buf).is_ok()
-        {
-            return format!("{:016x}", u64::from_le_bytes(buf));
-        }
-    }
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let pid = std::process::id() as u64;
-    let combined = now
-        .wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add(pid.wrapping_mul(1_442_695_040_888_963_407))
-        .wrapping_add(count);
-    format!("{combined:016x}")
-}
-
 /// Serialize `tree` and write the undofile for `canonical_path` atomically
-/// (temp file + fsync + rename). `content_hash` / `file_size` /
+/// (temp file + fsync + rename, via [`hjkl_fs`]). `content_hash` / `file_size` /
 /// `file_mtime_unix_ms` describe the on-disk file at save time (== the current
 /// node); `current_seq` is read from the tree's current node.
 ///
@@ -181,39 +149,20 @@ pub fn write(
         )
     })?;
 
-    let tmp = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        random_suffix()
-    ));
-    {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        let write_result = (|| -> std::io::Result<()> {
-            f.write_all(&MAGIC)?;
-            f.write_all(&VERSION.to_le_bytes())?;
-            f.write_all(&content_hash.to_le_bytes())?;
-            f.write_all(&file_size.to_le_bytes())?;
-            f.write_all(&file_mtime_unix_ms.to_le_bytes())?;
-            f.write_all(&current_seq.to_le_bytes())?;
-            f.write_all(&(body.len() as u32).to_le_bytes())?;
-            f.write_all(&body)?;
-            f.sync_all()?;
-            Ok(())
-        })();
-        if let Err(e) = write_result {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
-        }
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    // Fixed header + u32-LE body length + postcard body — the format is
+    // unchanged. The closure is `Fn` (it may be re-run on a temp-name collision)
+    // and borrows everything it writes, so each call emits identical bytes.
+    hjkl_fs::write_atomic_with(&path, &hjkl_fs::WriteOptions::state(), |f| {
+        f.write_all(&MAGIC)?;
+        f.write_all(&VERSION.to_le_bytes())?;
+        f.write_all(&content_hash.to_le_bytes())?;
+        f.write_all(&file_size.to_le_bytes())?;
+        f.write_all(&file_mtime_unix_ms.to_le_bytes())?;
+        f.write_all(&current_seq.to_le_bytes())?;
+        f.write_all(&(body.len() as u32).to_le_bytes())?;
+        f.write_all(&body)?;
+        Ok(())
+    })
 }
 
 // ── Read ──────────────────────────────────────────────────────────────────────
@@ -389,6 +338,42 @@ mod tests {
         // value round-trips so an accept/reject decision is trustworthy.
         assert_eq!(loaded.content_hash, 0x1234_5678_9ABC_DEF0);
         assert_ne!(loaded.content_hash, 0x1234_5678_9ABC_DEF1);
+    }
+
+    /// Format lock: the exact bytes [`write`] produces, built here independently
+    /// of the writer. [`read_from`] parses this layout by fixed offsets, so a
+    /// reordered or resized field would silently discard every undofile written
+    /// by an older build — this test fails instead.
+    #[test]
+    fn on_disk_layout_is_byte_exact() {
+        let td = tempfile::tempdir().unwrap();
+        let canon = Path::new("/home/u/layout.rs");
+        let tree = sample_tree(1);
+        write(
+            canon,
+            &tree,
+            0x0102_0304_0506_0708,
+            77,
+            1_234_567,
+            Some(td.path()),
+        )
+        .unwrap();
+
+        let body = postcard::to_stdvec(&tree).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&MAGIC);
+        expected.extend_from_slice(&VERSION.to_le_bytes());
+        expected.extend_from_slice(&0x0102_0304_0506_0708u64.to_le_bytes());
+        expected.extend_from_slice(&77u64.to_le_bytes());
+        expected.extend_from_slice(&1_234_567u64.to_le_bytes());
+        // current_seq: tree.nodes[current == 1].seq == 1.
+        expected.extend_from_slice(&1u64.to_le_bytes());
+        expected.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&body);
+        assert_eq!(expected.len(), HEADER_LEN + body.len());
+
+        let path = undofile_path_for(canon, Some(td.path())).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
     }
 
     #[test]

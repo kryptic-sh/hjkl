@@ -11,21 +11,11 @@ use std::path::{Path, PathBuf};
 
 /// Return (and auto-create) `<XDG_CACHE_HOME>/hjkl/trash/`.
 ///
-/// Resolution mirrors [`crate::swap::swap_dir`]:
-/// - reads `$XDG_CACHE_HOME` via `hjkl_xdg::cache_dir`.
-/// - appends `trash/`.
-/// - creates the directory if absent (`create_dir_all`).
+/// Resolution mirrors [`crate::swap::swap_dir`] — the same
+/// `hjkl_fs::private_cache_subdir` call, so `$XDG_CACHE_HOME` resolution,
+/// creation and the owner-only mode are decided in one place.
 pub fn trash_dir() -> std::io::Result<PathBuf> {
-    let base = hjkl_xdg::cache_dir("hjkl")
-        .map_err(|e| std::io::Error::other(format!("xdg cache_dir: {e}")))?;
-    let dir = base.join("trash");
-    std::fs::create_dir_all(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(dir)
+    hjkl_fs::private_cache_subdir("hjkl", "trash")
 }
 
 // ── Unique destination path ───────────────────────────────────────────────────
