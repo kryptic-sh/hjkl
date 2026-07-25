@@ -104,7 +104,11 @@ fn next_temp_seq() -> u64 {
 ///
 /// Beside, not in a temp dir, because `rename` must stay on one filesystem. The
 /// leading dot keeps it out of directory listings and of hjkl's own explorer.
-fn temp_path(target: &Path, attempt: u32) -> PathBuf {
+///
+/// Shared with [`crate::dir`] so a staged *tree* is named the same way a staged
+/// file is: one naming scheme means one thing to recognize (and one thing to
+/// clean up) when a process dies mid-write.
+pub(crate) fn temp_path(target: &Path, attempt: u32) -> PathBuf {
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -134,7 +138,7 @@ fn open_temp(path: &Path, mode: Option<u32>) -> io::Result<File> {
 ///
 /// Best-effort: some filesystems reject `fsync` on a directory handle, and a
 /// failure costs durability of the *name*, not integrity of the data.
-fn sync_parent(path: &Path) {
+pub(crate) fn sync_parent(path: &Path) {
     let parent = path.parent().unwrap_or(Path::new("."));
     let dir = if parent.as_os_str().is_empty() {
         Path::new(".")

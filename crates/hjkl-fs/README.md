@@ -14,6 +14,7 @@ caps are decided once, instead of being re-derived — and occasionally forgotte
 | -------- | --------------------------------------------------------------------------------------------- |
 | `dirs`   | XDG-rooted paths, threaded through `hjkl-xdg`; owner-only directory creation                  |
 | `atomic` | temp → fsync → rename → fsync-parent writes; permission and fallback policy in `WriteOptions` |
+| `dir`    | staged recursive copy, swap-then-delete replacement, cross-device move, type-correct removal  |
 | `lock`   | cross-process (`std::fs::File::lock`) **and** in-process locking                              |
 | `read`   | reads bounded by an explicit cap                                                              |
 | `open`   | owner-only `OpenOptions` for callers that hold a handle and append                            |
@@ -43,6 +44,39 @@ Installers get the same footing instead of rolling their own staging-and-rename:
 `fs::copy`, carries the source's mode across; `symlink_atomic` stages a symlink
 beside its destination and renames it over the old one, so replacing a link
 never leaves a window with no link at all.
+
+## Directories
+
+A tree gets the same policy as a file. `copy_dir_atomic` builds the copy under a
+staging name beside its destination and swaps it in only when it is complete, so
+a copy that dies halfway leaves no half-populated directory — the partial result
+that is dangerous precisely because nothing about it reads as damaged. When the
+destination already exists the old tree is moved aside, the new one renamed in,
+and only then is the old one deleted; a swap that fails partway puts the
+original back.
+
+```rust
+use hjkl_fs::{WriteOptions, copy_dir_atomic, move_atomic, remove_path_all};
+use std::path::Path;
+
+copy_dir_atomic(Path::new("build"), Path::new("dist"), &WriteOptions::default())?;
+
+// `rename`, falling back to a staged copy-then-delete across a filesystem
+// boundary — the source is never removed until the copy is complete.
+move_atomic(Path::new("a/pkg"), Path::new("/other/fs/pkg"), &WriteOptions::default())?;
+
+// File, tree or symlink. A symlink is unlinked, never deleted through.
+remove_path_all(Path::new("dist"))?;
+# Ok::<(), std::io::Error>(())
+```
+
+`move_atomic` is what trashing an entry and installing a package both need:
+`$XDG_CACHE_HOME` and the file being deleted are routinely on different
+filesystems, where `rename` fails outright and the naive fallback loses the
+thing it was asked to preserve. `remove_path_all` exists so "is this a link?" is
+answered once, in one place — `remove_dir_all` on a symlink to a populated
+directory is where someone eventually deletes a user's real data through a name
+that only claims to be a directory.
 
 ## Appending
 

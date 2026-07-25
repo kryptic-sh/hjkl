@@ -77,6 +77,38 @@ pub fn trash_path(original: &Path, is_dir: bool) -> std::io::Result<PathBuf> {
     }
 }
 
+// ── Moving the entry in ───────────────────────────────────────────────────────
+
+/// Move `original` into the `dest` slot [`trash_path`] reserved for it.
+///
+/// The trash lives under `$XDG_CACHE_HOME`; the entry being deleted can be
+/// anywhere. So this move regularly crosses a filesystem boundary — a separate
+/// `/home`, a mounted volume, an editor started in `/tmp` — where `rename` fails
+/// outright with `EXDEV` and the obvious fallback (copy into the trash slot, then
+/// delete the original) is precisely the shape that loses the user's data if it
+/// dies halfway through.
+///
+/// [`hjkl_fs::move_atomic`] is the seam's answer: `rename` when it can, and
+/// otherwise a copy staged beside the destination that is swapped in only once it
+/// is complete, with the original unlinked only after that. The point of trashing
+/// something rather than deleting it is not losing it, and that ordering is the
+/// whole guarantee.
+///
+/// It also handles all three shapes the explorer can hand it — file, directory
+/// tree, symlink — so the call site no longer has to pick a mover by type. A
+/// symlink is moved as a symlink; the data it points at is neither copied nor
+/// deleted.
+///
+/// The reservation made by [`trash_path`] is left intact: the placeholder (a
+/// 0-byte file, or an empty directory) is replaced by a single `rename` on both
+/// the same-device and the cross-device path, so the slot is never briefly free
+/// for a concurrent caller to claim.
+pub fn move_to_trash(original: &Path, dest: &Path) -> std::io::Result<()> {
+    // Durable by default: a trashed file is the one thing the user might want
+    // back after a crash.
+    hjkl_fs::move_atomic(original, dest, &hjkl_fs::WriteOptions::default())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -164,6 +196,52 @@ mod tests {
             got.to_string_lossy().ends_with(".1"),
             "expected counter 1 (first gap), got {got:?}"
         );
+    }
+
+    #[test]
+    fn move_to_trash_moves_a_file_into_its_reserved_slot() {
+        let (_lock, _td, _expected) = isolated_trash_dir();
+        let work = tempfile::tempdir().unwrap();
+        let victim = work.path().join("notes.txt");
+        std::fs::write(&victim, b"contents").unwrap();
+
+        let dest = trash_path(&victim, false).unwrap();
+        move_to_trash(&victim, &dest).unwrap();
+
+        assert!(!victim.exists(), "original must be gone");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"contents",
+            "the reserved 0-byte placeholder must have been replaced by the file"
+        );
+    }
+
+    #[test]
+    fn move_to_trash_moves_a_directory_tree_into_its_reserved_slot() {
+        let (_lock, _td, _expected) = isolated_trash_dir();
+        let work = tempfile::tempdir().unwrap();
+        let victim = work.path().join("project");
+        std::fs::create_dir_all(victim.join("sub")).unwrap();
+        std::fs::write(victim.join("sub/file.txt"), b"deep").unwrap();
+
+        let dest = trash_path(&victim, true).unwrap();
+        move_to_trash(&victim, &dest).unwrap();
+
+        assert!(!victim.exists(), "original tree must be gone");
+        assert_eq!(std::fs::read(dest.join("sub/file.txt")).unwrap(), b"deep");
+    }
+
+    /// A failed move must not consume the reservation *or* the original — the
+    /// caller reports the error and the user still has the file.
+    #[test]
+    fn move_to_trash_failure_keeps_the_original() {
+        let (_lock, _td, _expected) = isolated_trash_dir();
+        let work = tempfile::tempdir().unwrap();
+        let missing = work.path().join("never-existed");
+        let dest = trash_path(&missing, false).unwrap();
+
+        assert!(move_to_trash(&missing, &dest).is_err());
+        assert!(dest.is_file(), "the reserved slot must survive");
     }
 
     #[test]

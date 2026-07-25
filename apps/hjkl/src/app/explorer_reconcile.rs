@@ -536,11 +536,10 @@ pub(crate) fn apply_ops(
                         continue;
                     }
                 };
-                let result = if is_dir {
-                    move_dir(path, &dest)
-                } else {
-                    move_file(path, &dest)
-                };
+                // The trash is under `$XDG_CACHE_HOME` and `path` can be on any
+                // filesystem, so this move can cross a device boundary; the seam
+                // is what keeps the entry from being lost when it does.
+                let result = hjkl_app::trash::move_to_trash(path, &dest);
                 match result {
                     Ok(()) => {
                         let name = path
@@ -736,11 +735,7 @@ pub(crate) fn revert_ops(
                         continue;
                     }
                 };
-                let result = if is_dir {
-                    move_dir(path, &dest)
-                } else {
-                    move_file(path, &dest)
-                };
+                let result = hjkl_app::trash::move_to_trash(path, &dest);
                 match result {
                     Ok(()) => {
                         let name = path
@@ -831,11 +826,7 @@ pub(crate) fn revert_ops(
                         continue;
                     }
                 };
-                let result = if is_dir {
-                    move_dir(to, &new_dest)
-                } else {
-                    move_file(to, &new_dest)
-                };
+                let result = hjkl_app::trash::move_to_trash(to, &new_dest);
                 match result {
                     Ok(()) => {
                         let name = to
@@ -912,11 +903,7 @@ pub(crate) fn apply_applied(
                         continue;
                     }
                 };
-                let result = if is_dir {
-                    move_dir(original, &new_dest)
-                } else {
-                    move_file(original, &new_dest)
-                };
+                let result = hjkl_app::trash::move_to_trash(original, &new_dest);
                 match result {
                     Ok(()) => {
                         let name = original

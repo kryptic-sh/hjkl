@@ -15,6 +15,11 @@
 //!   [`atomic::copy_atomic`] and [`atomic::symlink_atomic`] put file copies and
 //!   symlink installs on the same footing, so an installer never rolls its own
 //!   staging-and-rename.
+//! - [`dir`] — the same policy applied to a *tree*: [`dir::copy_dir_atomic`]
+//!   stages a recursive copy beside its destination and swaps it in,
+//!   [`dir::move_atomic`] renames and falls back to copy-then-delete across a
+//!   filesystem boundary, and [`dir::remove_path_all`] removes a file, tree or
+//!   symlink — unlinking a symlink rather than deleting through it.
 //! - [`lock`] — cross-process (`std::fs::File::lock`) plus in-process locking, so
 //!   two hjkl instances and two threads are equally safe.
 //! - [`read`] — reads that are bounded by an explicit cap.
@@ -84,6 +89,7 @@
 //! this crate owns the mechanism, not the policy.
 
 pub mod atomic;
+pub mod dir;
 pub mod dirs;
 pub mod lock;
 pub mod open;
@@ -96,6 +102,7 @@ pub use atomic::{
     WriteOptions, copy_atomic, probe_writable_nofollow, symlink_atomic, write_atomic,
     write_atomic_with,
 };
+pub use dir::{copy_dir_atomic, move_atomic, remove_path_all};
 pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
 pub use open::{owner_only_options, owner_only_options_no_follow};

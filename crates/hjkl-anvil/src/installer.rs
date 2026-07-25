@@ -258,39 +258,34 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
     result
 }
 
-/// Move a directory tree across filesystem boundaries (EXDEV).
+/// Move a directory tree across filesystem boundaries (EXDEV), through the disk
+/// I/O seam ([`hjkl_fs::move_atomic`]: `rename`, then a staged copy-then-delete).
 ///
-/// Tries `fs::rename` first. On EXDEV falls back to a recursive copy of every
-/// file followed by `fs::remove_dir_all(src)`.
+/// The package tree is downloaded and extracted under the cache root and lands
+/// under the data root, so `$XDG_CACHE_HOME` and `$XDG_DATA_HOME` on different
+/// filesystems is the case this exists for — the `rename` simply fails there.
+///
+/// The seam improves on the hand-rolled walk this replaces in three ways that
+/// matter for an archive whose contents nobody vetted:
+///
+/// - The fallback copy is **staged** beside its destination and swapped in, so
+///   an install that dies mid-copy leaves no half-populated package directory
+///   for `find_bin` to pick a stale binary out of later.
+/// - Symlinks in the extracted tree are reproduced as symlinks. The old walk
+///   classified with `is_dir()` (which follows) and copied with `fs::copy` (which
+///   also follows), so a link became a full copy of its target — and a link to a
+///   directory was recursed into.
+/// - A fifo or device node in the tree is an error rather than a hang: `fs::copy`
+///   on a fifo blocks forever waiting for a writer.
+///
+/// The source is never removed until the copy is complete, so a failed move
+/// still leaves the extracted tree where it was.
 fn move_dir_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
-    match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-            // Walk and copy every file, preserving relative structure.
-            let mut stack = vec![src.to_path_buf()];
-            while let Some(dir) = stack.pop() {
-                let rel = dir
-                    .strip_prefix(src)
-                    .map_err(|_| io::Error::other("strip_prefix failed"))?;
-                let dst_dir = dst.join(rel);
-                std::fs::create_dir_all(&dst_dir)?;
-                for entry in std::fs::read_dir(&dir)?.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else {
-                        let rel_file = path
-                            .strip_prefix(src)
-                            .map_err(|_| io::Error::other("strip_prefix failed"))?;
-                        std::fs::copy(&path, dst.join(rel_file))?;
-                    }
-                }
-            }
-            std::fs::remove_dir_all(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+    // Default options: files keep the source's mode (the `chmod 0755` applied to
+    // the binary before this point survives the move, as it did with `fs::copy`),
+    // and the copy is durable — an install is exactly the write a user expects to
+    // still be there after a crash.
+    hjkl_fs::move_atomic(src, dst, &hjkl_fs::WriteOptions::default())
 }
 
 /// Create the symlink atomically, through the disk-I/O seam
