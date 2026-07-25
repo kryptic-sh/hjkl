@@ -2,8 +2,8 @@
 
 **Project:** hjkl (terminal text editor) **Date:** 2026-07-23 (pruned
 2026-07-25) **Scope:** entire codebase **Verdict:** Well-optimized for a
-terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) have shipped; only a
-deliberate tradeoff (P8) and one design-gated item (P4 memo) remain.
+terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) have shipped; P8 was
+benchmarked and dropped (WONTFIX); only one design-gated item (P4 memo) remains.
 
 ## Resolved (pruned)
 
