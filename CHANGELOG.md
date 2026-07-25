@@ -14,6 +14,11 @@ patch bumps.
   `q` (e.g. `iquick<Esc>`) recorded as `iuick<Esc>`, and `f`/`t` pending targets
   of `q` recorded as just the operator (desynchronising the whole macro on
   replay). The redundant `q`-exclusion clause in the recorder hook is removed.
+- **TUI `:w` silently deleted a file's trailing blank line.** The save path
+  decided whether a trailing newline was needed by checking
+  `body.ends_with(b"\n")`, but the load path strips exactly one trailing newline
+  — so `"x\n\n"` loaded as `"x\n"` and `:w` wrote the shorter form on a no-edit
+  save. The condition now matches headless/embed: `!body.is_empty()`.
 
 ## [0.37.0] - 2026-07-26
 
