@@ -335,6 +335,19 @@ mod tests {
 
         // The trap, demonstrated: unresolved `..` and the prefix test still says
         // "inside".
+        //
+        // Unix-only, and deliberately so. This asserts the *premise* — that the
+        // naive check really is fooled — so the scenario cannot rot into
+        // something that passes vacuously. But being fooled is a fact about how
+        // a platform parses paths, not about `resolve_under`: on Windows `root`
+        // is a verbatim (`\\?\`) path, whose components compare differently, and
+        // empirically the prefix test is *not* fooled by this spelling there.
+        // That is a weaker attack on Windows, not a weaker defence, so gating
+        // the premise is honest. Every assertion below — the rejection, and the
+        // proof that it is a genuine escape — runs on every platform, and
+        // `dot_segments_spelled_as_normal_components_are_still_resolved` covers
+        // the verbatim shape directly.
+        #[cfg(unix)]
         assert!(
             attack.starts_with(&root),
             "naive starts_with should be fooled here; test no longer covers the trap"
