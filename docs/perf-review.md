@@ -2,9 +2,9 @@
 
 **Project:** hjkl (terminal text editor) **Date:** 2026-07-23 (pruned
 2026-07-25) **Scope:** entire codebase **Verdict:** Well-optimized for a
-terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) shipped; P8 (bench)
-and P4 (invalidation trap) were analyzed and closed WONTFIX. **No open items
-remain.**
+terminal editor. All ranked hotspots (P1–P3, P5–P11) shipped — P8 via buffer
+reuse after a first approach benchmarked as a regression. P4 closed WONTFIX (no
+invalidation-safe memo). **No open items remain.**
 
 ## Resolved (pruned)
 
@@ -50,25 +50,34 @@ Magnitude is below P8's (which the `benches/render.rs` A/B proved is
 single-digit µs on a render that is <0.3% of a 16ms frame). Not worth a
 per-frame O(n) pass or an invalidation footgun for a sub-µs gain. Closed.
 
-### ⚪ P8 — `lines_prefetch: Vec<String>` per frame — measured, WONTFIX
+### ✅ P8 — `lines_prefetch: Vec<String>` per frame — fixed by buffer reuse (`35b4c61c`)
 
-**`crates/hjkl-buffer-tui/src/render.rs` (`line_at` closure)**
+**`crates/hjkl-buffer-tui/src/render.rs` (`LineScratch` + `line_at`)**
 
-Every frame allocates a `Vec<String>` of `area.height` (~50) lines from the
-rope, feeding `Cow::Borrowed` accessors during the render walk. The proposed fix
-(P8-C) was to borrow each line directly from the rope via `RopeSlice::as_str()`
-(borrow when the line is single-chunk, owned fallback for multi-chunk long
-lines), eliminating the per-frame Vec.
+Every frame allocated a `Vec<String>` of `area.height` (~50) lines from the
+rope, feeding `Cow::Borrowed` accessors during the render walk.
 
-**Benchmarked and dropped** (see `benches/render.rs`, added `e9dc813a`). Best
-variant (borrow + O(1) `strip_suffix`, slice reused in the owned branch to avoid
-a double tree-walk): **short lines −4-5%** (~41.7µs → ~39.7µs, saves the ~50
-String allocs) but **long/multi-chunk lines +3.1%** (~102µs → ~105.5µs — the
-`as_str()` chunk-probe that returns `None` is pure overhead on the owned path).
-Absolute scale is single-digit µs on a render that is itself <0.3% of a 16ms
-frame budget, and the change regresses long-line/minified-file editing. Net not
-worth the complexity + regression vector — the prefetch stays. The bench is kept
-for future perf work.
+**Shipped fix (P8-D):** hold the line buffers in a thread-local scratch and
+`String::clear()` each entry — clearing retains capacity, so steady-state frames
+allocate **nothing**, while keeping the original shape of exactly one
+`rope.line()` walk per row. A `Drop` guard returns the `Vec` to the
+thread-local, so an early return or panic mid-render can't lose the capacity,
+and a nested render would take an empty `Vec` rather than panic on a held
+`RefCell` borrow. Measured A/B (`benches/render.rs`, `e9dc813a`), both
+significant at p=0.00:
+
+| fixture       | before    | after    | change    |
+| ------------- | --------- | -------- | --------- |
+| `short_lines` | 42.59 µs  | 41.30 µs | **−2.9%** |
+| `long_lines`  | 104.82 µs | 96.82 µs | **−7.9%** |
+
+**Rejected alternative (P8-C) — do not retry:** borrowing each line straight
+from the rope via `RopeSlice::as_str()` (borrow single-chunk lines, owned
+fallback for multi-chunk). Three variants were benchmarked; the best gave short
+lines −4-5% but **regressed long/multi-chunk lines +3.1%**, because `as_str()`
+returns `None` there and the chunk-probe is pure overhead on the owned path.
+Reverted. Buffer reuse wins because it removes the allocation without adding a
+probe — which is why it improves the long-line case that P8-C made worse.
 
 ---
 
