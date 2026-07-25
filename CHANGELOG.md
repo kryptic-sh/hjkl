@@ -8,14 +8,70 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-07-26
+
+### Added
+
+- **`hjkl-fs` — one seam for every disk read and write.** hjkl's own state (swap
+  files, undo history, the cursor index, trash, config) and your documents
+  (`:w`, buffer loads) now go through a single crate, so atomicity, locking,
+  permissions and size caps are decided once instead of being re-derived at each
+  call site. It replaces seven separate hand-rolled temp-file-and-rename
+  implementations that had drifted apart — only one of them carried the
+  `O_NOFOLLOW` symlink guard, only two forced `0600`.
+- **Ex-command completion** now covers far more ground: `:set opt=value` (with
+  `no`/`inv` boolean prefixes), the map family and app-intercepted command
+  names, typed argument kinds for `:cd` (directories only), `:syntax` and
+  `:Anvil`, sub-commands for `:g`/`:v` and the `:cdo` family, `:colorscheme`
+  with theme names, `~`/`$VAR` path expansion, paths containing spaces, and
+  `<cfile>`/`<cword>`/`<cWORD>` expansion at the real caret.
+- Benchmarks for the viewport render, cold undo-tree jumps and swap writes
+  (`cargo bench -p hjkl-buffer-tui | -p hjkl-buffer | -p hjkl-app`).
+
 ### Fixed
 
-- **Security audit fixes (2026-07-23):** Stdin read capped at 256 MiB to prevent
-  OOM from unbounded input (`hjkl -`); `:make` guarded behind `shell_disabled()`
-  so RPC modes without `--allow-shell` reject it; grammar `git_rev` validated
-  for path separators/`..` traversal before cache-directory join; fs-watch
-  notify filter uses `try_lock()` to never block the raw event thread; macOS
-  `AutoreleasePool` unsound `unsafe impl Send` removed.
+- **Two hjkl instances no longer lose each other's data.** The cursor index is a
+  single shared file, and its load-upsert-save was unlocked — two instances each
+  loaded the same snapshot, mutated their own copy, and the second save silently
+  discarded the first's entries. The same unlocked sequence existed at editor
+  exit, where it rewrote the whole index and so discarded them wholesale. Swap
+  files and undofiles are now locked too, and swap recovery holds one lock
+  across read-decide-act: previously another instance could write a fresh swap
+  between the read and the removal, and have it deleted — destroying its record
+  of unsaved work.
+- **Crash when highlighting multi-byte text.** A tree-sitter parse timeout keeps
+  the previous tree, whose byte offsets can split a multi-byte character in the
+  edited text; slicing there panicked
+  (`byte_slice(): Byte range does not align with char boundaries`). All
+  highlight-path slices are now snapped to character boundaries.
+- **Grammar installs no longer certify a stale parser as fresh.** Any error was
+  treated as success when the destination already existed, so a mid-copy
+  out-of-space or missing source produced a "successful" install that the
+  revision sidecar then vouched for.
+- **Security audit fixes (2026-07-23):** stdin read capped at 256 MiB
+  (`hjkl -`); `:make` and `:grep` honour `shell_disabled()`, so RPC modes
+  without `--allow-shell` reject them; grammar `git_rev` validated for path
+  separators and `..` traversal before the cache-directory join; fs-watch notify
+  filter uses `try_lock()` and never blocks the raw event thread; macOS
+  `AutoreleasePool` unsound `unsafe impl Send` removed; save's write-permission
+  probe uses `O_NOFOLLOW`, closing a symlink-swap gap; LSP command validation
+  rejects `..`; Wayland CMSG file-descriptor extraction is bounds-checked
+  against the kernel-reported control length.
+- Cross-session cursor and undo state resolve through one XDG implementation.
+  `hjkl-config` carried a duplicate resolver; the layout is unchanged (`$XDG_*`
+  when absolute, else `~/.config`, `~/.local/share`, `~/.cache`,
+  `~/.local/state`) and uniform on Linux, macOS and Windows.
+
+### Changed
+
+- **Rendering and motions do less work per keystroke.** Syntax capture names are
+  interned rather than allocated per span, span metadata is boxed (80 to 40
+  bytes per span), highlight-cache eviction is O(1), search highlighting reuses
+  the engine's per-row match cache instead of re-running the regex every frame,
+  word motions cache the line per row and pre-parse `iskeyword` once per motion,
+  and the viewport's per-frame line buffers are reused instead of reallocated.
+- `hjkl -` rejects input over its 256 MiB cap with a clear "too large" error
+  instead of failing obscurely when the cut landed mid-character.
 
 ## [0.35.0] - 2026-07-22
 
