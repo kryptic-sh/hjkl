@@ -296,7 +296,7 @@ impl View {
                 }
             }
             MotionKind::Line => {
-                let (removed_text, new_cursor, lo) = {
+                let (_removed_text, inverse_at, inverse_text, new_cursor) = {
                     let mut c = self.content.lock().unwrap();
                     let n = c.text.len_lines();
                     // Clamp BOTH endpoints. An unclamped `lo` past the last
@@ -350,13 +350,35 @@ impl View {
                         s.push('\n');
                         s
                     };
-                    (removed_joined, Position::new(target_row, 0), lo)
+                    // For the last-row-delete-when-there-are-rows-above case
+                    // (lo > 0, hi+1 == n), the removed span includes the '\n'
+                    // that ended row lo-1. The inverse must insert a
+                    // *leading*-separator form at the end of the new last row
+                    // (row lo-1), because the trailing-separator form targeted
+                    // at (lo, 0) references a row that no longer exists.
+                    // The other two branches round-trip with the original
+                    // trailing-separator form at (lo, 0).
+                    let (inverse_at, inverse_text) = if lo > 0 && hi + 1 == n {
+                        let last_row_chars = c.text.line(lo - 1).len_chars();
+                        (
+                            Position::new(lo - 1, last_row_chars),
+                            "\n".to_string() + &removed_lines.join("\n"),
+                        )
+                    } else {
+                        (Position::new(lo, 0), removed_joined.clone())
+                    };
+                    (
+                        removed_joined,
+                        inverse_at,
+                        inverse_text,
+                        Position::new(target_row, 0),
+                    )
                 };
                 self.dirty_gen_bump();
                 self.set_cursor(new_cursor);
                 Edit::InsertStr {
-                    at: Position::new(lo, 0),
-                    text: removed_text,
+                    at: inverse_at,
+                    text: inverse_text,
                 }
             }
             MotionKind::Block => {

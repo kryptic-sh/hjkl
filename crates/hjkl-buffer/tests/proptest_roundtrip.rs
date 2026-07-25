@@ -92,6 +92,42 @@ proptest! {
         buf.apply_edit(inv);
         prop_assert_eq!(lines_before, buf_lines(&buf));
     }
+
+    /// Round-trip: applying a linewise delete and then its inverse must
+    /// restore line-by-line content — including last-row deletes with
+    /// rows above them (audit B4). The whole-buffer delete case
+    /// (`lo == 0` and `hi == last`) is excluded: it has a known
+    /// trailing-newline issue in the inverse that the plan defers.
+    #[test]
+    fn delete_range_linewise_roundtrip(
+        text in prop::collection::vec("[a-zA-Z0-9 ]{1,20}", 1..=5)
+            .prop_map(|lines| lines.join("\n")),
+        a_row_f in 0.0_f64..=1.0,
+        b_row_f in 0.0_f64..=1.0,
+    ) {
+        let mut buf = View::from_str(&text);
+        let rope = buf.rope();
+        let n = rope.len_lines();
+        if n == 0 {
+            return Ok(());
+        }
+        let lo = ((a_row_f.clamp(0.0, 1.0)) * (n as f64 - 1.0)).round() as usize;
+        let hi = ((b_row_f.clamp(0.0, 1.0)) * (n as f64 - 1.0)).round() as usize;
+        let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+        // Skip the whole-buffer delete: the inverse has a trailing-newline
+        // issue in the `lo == 0 && hi == last` branch that is deferred.
+        if lo == 0 && hi + 1 >= n {
+            return Ok(());
+        }
+        let lines_before = buf_lines(&buf);
+        let inv = buf.apply_edit(Edit::DeleteRange {
+            start: Position::new(lo, 0),
+            end: Position::new(hi, 0),
+            kind: MotionKind::Line,
+        });
+        buf.apply_edit(inv);
+        prop_assert_eq!(lines_before, buf_lines(&buf));
+    }
 }
 
 #[test]
@@ -104,4 +140,24 @@ fn empty_buffer_insert_then_delete_roundtrip() {
     });
     buf.apply_edit(inv);
     assert_eq!(lines_before, buf_lines(&buf));
+}
+
+/// B4 regression: linewise delete of the last row with rows above it
+/// must round-trip. Before the fix, the inverse inserted at a row that
+/// no longer existed, corrupting the buffer.
+#[test]
+fn linewise_delete_last_row_roundtrips() {
+    let mut buf = View::from_str("a\nb\nc");
+    let lines_before = buf_lines(&buf);
+    // Delete row 2 ("c") — last row, rows above exist.
+    let inv = buf.apply_edit(Edit::DeleteRange {
+        start: Position::new(2, 0),
+        end: Position::new(2, 0),
+        kind: MotionKind::Line,
+    });
+    // Buffer should now be "a\nb".
+    assert_eq!(buf_lines(&buf), &["a".to_string(), "b".to_string()]);
+    // Applying the inverse must restore the original.
+    buf.apply_edit(inv);
+    assert_eq!(buf_lines(&buf), lines_before);
 }
