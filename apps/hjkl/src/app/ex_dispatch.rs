@@ -1176,7 +1176,7 @@ impl App {
                 use hjkl_engine::Query;
                 let joined = self.slots[idx].buffer().content_joined();
                 let body: &[u8] = joined.as_bytes();
-                let needs_trailing_nl = !body.is_empty() && !body.ends_with(b"\n");
+                let needs_trailing_nl = !body.is_empty();
                 let line_count = self.slots[idx].buffer().line_count() as usize;
                 let byte_count = body.len() + usize::from(needs_trailing_nl);
                 // Create parent dir(s) if missing so writing into a fresh
