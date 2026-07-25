@@ -18,6 +18,10 @@
 //! - [`lock`] — cross-process (`std::fs::File::lock`) plus in-process locking, so
 //!   two hjkl instances and two threads are equally safe.
 //! - [`read`] — reads that are bounded by an explicit cap.
+//! - [`open`] — owner-only [`std::fs::OpenOptions`] for callers that keep a
+//!   handle and append, which a whole-file atomic write cannot serve.
+//! - [`path`] — normalization that cannot be fooled by an unresolved `..`, and
+//!   the confinement check built on it.
 //!
 //! # Choosing the write
 //!
@@ -59,10 +63,31 @@
 //! Take the lock first and let the atomic write happen under it. The reverse
 //! cannot work — the lock guards a *sequence*, and a write that has already
 //! renamed itself into place is not something a later lock can protect.
+//!
+//! # Confining a path before writing it
+//!
+//! A path that came from outside the process is not inside a directory just
+//! because it is spelled that way: `root/nonexistent/../../etc/passwd` passes a
+//! `starts_with(root)` test and escapes anyway. [`resolve_under`] resolves before
+//! it compares, so the check sees the real destination:
+//!
+//! ```no_run
+//! use hjkl_fs::resolve_under;
+//! use std::path::Path;
+//!
+//! // Errors rather than escaping, even though the file does not exist yet.
+//! let target = resolve_under(Path::new("/srv/data"), Path::new("notes/today.md"))?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! Which roots are allowed, and what a violation means, stay with the caller —
+//! this crate owns the mechanism, not the policy.
 
 pub mod atomic;
 pub mod dirs;
 pub mod lock;
+pub mod open;
+pub mod path;
 pub mod read;
 
 // The flat re-exports are the common vocabulary; the modules stay public for
@@ -73,6 +98,8 @@ pub use atomic::{
 };
 pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
+pub use open::{owner_only_options, owner_only_options_no_follow};
+pub use path::{canonicalize_nearest, resolve_under};
 pub use read::{
     read_capped, read_capped_from, read_to_string_capped, read_to_string_capped_from,
     read_to_string_unbounded,

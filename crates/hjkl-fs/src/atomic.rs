@@ -120,17 +120,14 @@ fn temp_path(target: &Path, attempt: u32) -> PathBuf {
 
 /// Open the temp file with `create_new` (`O_EXCL`) so an existing file is never
 /// clobbered and the requested mode is genuinely applied at creation.
+///
+/// The mode is applied by [`crate::open::options_with_mode`], the crate's one
+/// cfg-gated `mode` call; `None` still means "leave it to the umask".
 fn open_temp(path: &Path, mode: Option<u32>) -> io::Result<File> {
-    let mut o = File::options();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    if let Some(mode) = mode {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(mode);
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    o.open(path)
+    crate::open::options_with_mode(mode)
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 /// `fsync` the directory holding `path`, making a rename into it durable.
@@ -409,15 +406,16 @@ pub fn symlink_atomic(link_path: &Path, target: &Path) -> io::Result<()> {
 /// link to an unintended file.
 ///
 /// `NotFound` is success: a brand-new file has no permissions to violate.
+///
+/// The options come from [`crate::owner_only_options_no_follow`] — the probe
+/// never passes `create`, so the owner-only mode it carries is inert here (the OS
+/// only consults a mode when the open creates the file) and `O_NOFOLLOW` is the
+/// part that matters.
 pub fn probe_writable_nofollow(target: &Path) -> io::Result<()> {
-    let mut opts = File::options();
-    opts.write(true);
-    #[cfg(unix)]
+    match crate::open::owner_only_options_no_follow()
+        .write(true)
+        .open(target)
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    match opts.open(target) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),

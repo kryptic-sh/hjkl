@@ -137,16 +137,16 @@ pub fn lock_path_for(target: &Path) -> PathBuf {
 /// Opened `read(true).write(true)` because Windows refuses to lock a handle
 /// opened append-only, and `truncate(false)` because the file's contents are
 /// irrelevant — only the lock on it matters.
+///
+/// Lock files sit beside state that is already owner-only, so they are created
+/// through [`crate::owner_only_options`] and match it.
 fn open_lock_file(path: &Path) -> io::Result<File> {
-    let mut opts = File::options();
-    opts.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // Lock files sit beside state that is already owner-only; match it.
-        opts.mode(0o600);
-    }
-    opts.open(path)
+    crate::open::owner_only_options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
 }
 
 /// An acquired lock. Releases the OS lock and the in-process claim on drop.

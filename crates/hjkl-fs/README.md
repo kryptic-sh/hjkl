@@ -16,6 +16,8 @@ caps are decided once, instead of being re-derived — and occasionally forgotte
 | `atomic` | temp → fsync → rename → fsync-parent writes; permission and fallback policy in `WriteOptions` |
 | `lock`   | cross-process (`std::fs::File::lock`) **and** in-process locking                              |
 | `read`   | reads bounded by an explicit cap                                                              |
+| `open`   | owner-only `OpenOptions` for callers that hold a handle and append                            |
+| `path`   | normalization that cannot be fooled by an unresolved `..`, plus confinement                   |
 
 ## Writing
 
@@ -41,6 +43,48 @@ Installers get the same footing instead of rolling their own staging-and-rename:
 `fs::copy`, carries the source's mode across; `symlink_atomic` stages a symlink
 beside its destination and renames it over the old one, so replacing a link
 never leaves a window with no link at all.
+
+## Appending
+
+A whole-file atomic write is the wrong shape for a caller that holds a
+long-lived handle and appends per event — a log, an event transcript, an
+incrementally written index. Those callers take the options instead of the
+write, and get the same `0600` hjkl gives swap and undo files without
+re-deriving `#[cfg(unix)] opts.mode(0o600)` at the call site:
+
+```rust
+use hjkl_fs::owner_only_options;
+
+let log = owner_only_options().append(true).create(true).open("events.log")?;
+# Ok::<(), std::io::Error>(())
+```
+
+`owner_only_options_no_follow` adds `O_NOFOLLOW` on Unix, so a symlinked final
+component fails the open instead of redirecting the stream — the open _is_ the
+symlink check. On Windows neither sets an explicit ACL; confidentiality comes
+from the containing per-user directory, the same way `ensure_private_dir`
+describes.
+
+## Confinement
+
+`root/nonexistent/../../etc/passwd` passes a `starts_with(root)` check and
+escapes anyway, because the `..` has not been resolved yet. `fs::canonicalize`
+resolves it but fails when the path does not exist — exactly the case for a file
+about to be created. `canonicalize_nearest` canonicalizes the nearest existing
+ancestor and resolves the remainder lexically against it, so a `ParentDir`
+component never survives into the result, and `resolve_under` compares only
+after that:
+
+```rust
+use hjkl_fs::resolve_under;
+use std::path::Path;
+
+let target = resolve_under(Path::new("/srv/data"), Path::new("notes/today.md"))?;
+# Ok::<(), std::io::Error>(())
+```
+
+Which roots are allowed and what a violation means stay with the consumer; the
+crate owns the mechanism, not the policy.
 
 ## Locking
 
