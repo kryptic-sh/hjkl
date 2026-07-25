@@ -504,3 +504,57 @@ fn insert_unhandled_ctrl_key_is_noop_not_literal_letter() {
         "unhandled ctrl key must not insert its letter literally"
     );
 }
+
+// ── macro recorder literal q (audit B1) ─────────────────────────────────
+
+/// Recording must not drop literal `q` keys — the recorder's
+/// `input.key != Key::Char('q')` clause was filtering every `q`,
+/// including insert-mode text (`iquick<Esc>` recorded as `iuick<Esc>`)
+/// and pending-operator targets (`fq` recorded as `f`).
+#[test]
+fn macro_records_literal_q_in_insert_mode() {
+    let mut e = editor_with("\n");
+    dispatch_keys(&mut e, "qaiquick<Esc>q");
+    // Register "a must hold the encoded recording.
+    let text = e
+        .with_registers(|r| r.read('a').map(|slot| slot.text.clone()))
+        .expect("recording must populate register a");
+    assert_eq!(
+        text, "iquick<Esc>",
+        "insert-mode literal q must survive recording; got {text:?}"
+    );
+    // Replay on a fresh empty buffer — copy the register to a new editor
+    // so the replay has the macro text available.
+    let mut e2 = editor_with("\n");
+    e2.with_registers_mut(|r| r.record_yank(text, false, Some('a')));
+    dispatch_keys(&mut e2, "@a");
+    assert_eq!(
+        e2.content().trim_end_matches('\n'),
+        "quick",
+        "replay of register a must produce 'quick'; got {:?}",
+        e2.content()
+    );
+}
+
+/// When `f`/`t`/`F`/`T` targets the letter `q`, that target must be
+/// recorded so the macro replays the correct search character instead of
+/// desynchronising by reusing the next recorded key.
+#[test]
+fn macro_records_q_as_pending_target() {
+    let mut e = editor_with("qx\n");
+    dispatch_keys(&mut e, "qb0fqq");
+    let text = e
+        .with_registers(|r| r.read('b').map(|slot| slot.text.clone()))
+        .expect("recording must populate register b");
+    assert_eq!(
+        text, "0fq",
+        "pending-target q must survive recording; got {text:?}"
+    );
+    // The cursor should have landed on 'q' during recording.
+    assert_eq!(
+        e.cursor(),
+        (0, 0),
+        "fq must move cursor to col 0 (the q char); got {:?}",
+        e.cursor()
+    );
+}

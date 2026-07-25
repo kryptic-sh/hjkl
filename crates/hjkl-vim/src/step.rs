@@ -106,7 +106,6 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     consumed: bool,
 ) -> bool {
     use crate::vim::{Mode, Pending};
-    use hjkl_engine::input::Key;
     let StepBookkeeping {
         pending_was_macro_chord,
         was_insert,
@@ -173,7 +172,6 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
     // ── Recorder hook ─────────────────────────────────────────────────────
     if crate::vim_state::vim(ed).recording_macro.is_some()
         && !crate::vim_state::vim(ed).replaying_macro
-        && input.key != Key::Char('q')
         && !pending_was_macro_chord
     {
         crate::vim_state::vim_mut(ed).recording_keys.push(input);
