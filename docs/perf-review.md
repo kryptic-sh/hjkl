@@ -18,13 +18,14 @@ Full finding text removed once shipped — see the commit for the change.
 | P5  | `evict_stale` uses `HashSet`                                                                   | `b0dcdfd4` |
 | P6  | prebuilt capture-name→index `HashMap`                                                          | `b0dcdfd4` |
 | P7  | hlsearch painter consults engine per-row cache (no inversion)                                  | `0a83b354` |
+| P8  | line-prefetch `String` buffers reused across frames (see detail below)                         | `35b4c61c` |
 | P9  | which-key `chord_to_notation(&[KeyEvent])` — no Vec clone                                      | `7af516a7` |
 | P10 | `HighlightSpan.metadata` → `Option<Box<HashMap>>` (span 48B→8B, empty normalizes to `None`)    | `66617a18` |
 | P11 | one redundant `Range` clone removed (other three load-bearing — `Range` is `Clone` not `Copy`) | `b0dcdfd4` |
 
 ---
 
-## Analyzed & closed
+## Closed, with detail worth keeping
 
 ### ⚪ P4 — statusline diag-count memoization — WONTFIX (no clean design)
 
@@ -46,9 +47,10 @@ inspection there is no representation that is both cheap and invalidation-safe:
   formats run only when diagnostics are actually shown, over a Vec of tens of
   entries.
 
-Magnitude is below P8's (which the `benches/render.rs` A/B proved is
-single-digit µs on a render that is <0.3% of a 16ms frame). Not worth a
-per-frame O(n) pass or an invalidation footgun for a sub-µs gain. Closed.
+Magnitude is well below P8's (a few µs on a render that is itself <0.3% of a
+16ms frame), and unlike P8 there is no representation that removes the per-frame
+work without risking a stale statusline. Not worth an invalidation footgun for a
+sub-µs gain. Closed.
 
 ### ✅ P8 — `lines_prefetch: Vec<String>` per frame — fixed by buffer reuse (`35b4c61c`)
 
