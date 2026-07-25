@@ -1456,15 +1456,64 @@ impl App {
     /// real-XDG scanning).
     pub(crate) fn recover_orphan_scratch_buffers_from(&mut self, dir: &std::path::Path) -> usize {
         use hjkl_app::swap;
-        use hjkl_buffer::View;
 
-        let orphans = swap::scan_orphan_scratch_swaps_in(dir);
-        let n = orphans.len();
+        // The scan is only a CANDIDATE list: its `pid_is_alive` answers are
+        // stale the instant it returns, and a fresh process can claim a scratch
+        // slot (or rewrite one) between the scan and the removal below. So keep
+        // nothing but the paths here and re-decide per file under that file's
+        // lock.
+        let candidates: Vec<std::path::PathBuf> = swap::scan_orphan_scratch_swaps_in(dir)
+            .into_iter()
+            .map(|o| o.swap_path)
+            .collect();
+        if candidates.is_empty() {
+            return 0;
+        }
+
+        let mut n = 0usize;
+        for swap_path in candidates {
+            // One exclusive lock per orphan spanning re-check → recover →
+            // remove. Locking per file (never two at once) means there is no
+            // ordering between orphans to get wrong. `orphan_scratch_at`
+            // re-reads under the lock, so both the liveness decision and the
+            // recovered content come from the bytes this lock protects. A lock
+            // failure just skips that orphan — it stays on disk for next launch.
+            let recovered = hjkl_fs::with_lock_exclusive(&swap_path, || {
+                Ok(self.recover_one_orphan_locked(&swap_path))
+            })
+            .unwrap_or(false);
+            if recovered {
+                n += 1;
+            }
+        }
         if n == 0 {
             return 0;
         }
 
-        for orphan in orphans {
+        self.bus.info(format!(
+            "Recovered {n} unsaved buffer(s) from a previous session"
+        ));
+        n
+    }
+
+    /// Recover the single orphan scratch swap at `swap_path`, with that path's
+    /// exclusive lock held by the caller. Returns whether a buffer was recovered
+    /// (`false` when the re-check under the lock says it is no longer an orphan
+    /// — a live process claimed it, or it became unreadable).
+    ///
+    /// Must not be called without the lock: it re-reads, decides, and removes.
+    fn recover_one_orphan_locked(&mut self, swap_path: &std::path::Path) -> bool {
+        use hjkl_app::swap;
+        use hjkl_buffer::View;
+
+        // Re-decide INSIDE the lock. The scan said this was a dead writer's
+        // scratch swap; that may no longer be true, and removing a live
+        // instance's swap would destroy its unsaved work.
+        let Some(orphan) = swap::orphan_scratch_at(swap_path) else {
+            return false;
+        };
+
+        {
             // Build a fresh unnamed slot (mirrors build_slot with path=None).
             // No editor here (#151 Stage 2b): these buffers are pushed as
             // background slots that may never get a window this session
@@ -1534,15 +1583,13 @@ impl App {
             // Re-mark dirty after snapshot (snapshot_saved clears dirty).
             slot.dirty = true;
             self.slots.push(slot);
-
-            // Delete the orphan swap so it won't recover again next launch.
-            let _ = swap::remove_swap(&orphan.swap_path);
         }
 
-        self.bus.info(format!(
-            "Recovered {n} unsaved buffer(s) from a previous session"
-        ));
-        n
+        // Delete the orphan swap so it won't recover again next launch. Still
+        // under the caller's lock, so this deletes exactly the bytes recovered
+        // above — not a swap some other instance wrote in the meantime.
+        let _ = swap::remove_swap(swap_path);
+        true
     }
 
     /// Convenience wrapper: scan the real `swap_dir()`.
@@ -1694,8 +1741,6 @@ impl App {
     }
 
     fn check_recovery_on_open_inner(&mut self, slot_idx: usize, force: bool) -> bool {
-        use hjkl_app::swap;
-
         let filename = match self.slots[slot_idx].filename.as_ref() {
             Some(p) => p.clone(),
             None => return false,
@@ -1707,7 +1752,39 @@ impl App {
         if !swap_path.exists() {
             return false;
         }
-        let (header, body, undo) = match swap::read_swap_full(&swap_path) {
+        // ONE exclusive lock across the whole read → decide → act. Everything
+        // below decides from bytes read at the top (writer pid, write time) and
+        // then acts on the file — `remove_swap` for a stale swap. Without a lock
+        // spanning both halves another instance can write a *fresh* swap in the
+        // gap and have it deleted here, destroying its record of unsaved work.
+        //
+        // Exclusive from the start, not shared-then-upgrade: the sequence may
+        // write and the lock has no upgrade path. The inner `read_swap_full`
+        // (shared) and `remove_swap` (exclusive) re-enter this guard on the same
+        // thread and are satisfied by it.
+        //
+        // A lock failure (I/O on the sidecar) degrades to "no recovery", the
+        // same fail-safe every other error in this function takes.
+        hjkl_fs::with_lock_exclusive(&swap_path, || {
+            Ok(self.check_recovery_locked(slot_idx, force, &filename, &swap_path))
+        })
+        .unwrap_or(false)
+    }
+
+    /// The read → decide → act body of [`check_recovery_on_open_inner`], run
+    /// with `swap_path`'s exclusive lock held by the caller. Split out only so
+    /// the lock scope is a single obvious expression; it must not be called
+    /// without that lock.
+    fn check_recovery_locked(
+        &mut self,
+        slot_idx: usize,
+        force: bool,
+        filename: &std::path::Path,
+        swap_path: &std::path::Path,
+    ) -> bool {
+        use hjkl_app::swap;
+
+        let (header, body, undo) = match swap::read_swap_full(swap_path) {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(%e, "failed to read swap on open");
@@ -1741,7 +1818,7 @@ impl App {
         }
 
         // Determine file mtime.
-        let file_mtime_ms = std::fs::metadata(&filename)
+        let file_mtime_ms = std::fs::metadata(filename)
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| {
@@ -1751,8 +1828,10 @@ impl App {
             })
             .unwrap_or(0);
         if !force && header.write_time_unix_ms <= file_mtime_ms {
-            // Swap is stale (on-disk is newer). Delete silently.
-            let _ = swap::remove_swap(&swap_path);
+            // Swap is stale (on-disk is newer). Delete silently — safe because
+            // the caller's lock has held since `header` was read, so no other
+            // instance has written a newer swap here in the meantime.
+            let _ = swap::remove_swap(swap_path);
             return false;
         }
         // Swap is newer than disk (or forced) → prompt for recovery.

@@ -169,27 +169,42 @@ pub fn scan_orphan_scratch_swaps_in(dir: &Path) -> Vec<OrphanScratch> {
         if !name_str.starts_with("scratch_") || !name_str.ends_with(".swp") {
             continue;
         }
-        let path = entry.path();
-        let (header, body, undo) = match read_swap_full(&path) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        // Only scratch swaps have an empty canonical_path.
-        if !header.canonical_path.is_empty() {
-            continue;
+        if let Some(orphan) = orphan_scratch_at(&entry.path()) {
+            out.push(orphan);
         }
-        // Skip swaps owned by a live process (another hjkl instance).
-        if pid_is_alive(header.writer_pid) {
-            continue;
-        }
-        out.push(OrphanScratch {
-            swap_path: path,
-            header,
-            body,
-            undo,
-        });
     }
     out
+}
+
+/// Read `path` and return it as an [`OrphanScratch`] if — right now — it is a
+/// scratch swap whose writer is dead.
+///
+/// This is the per-file half of [`scan_orphan_scratch_swaps_in`], exposed so a
+/// caller that acts on a scan result can re-decide **inside** the exclusive lock
+/// it is about to remove the file under. A scan's `pid_is_alive` answer is stale
+/// the moment it is returned: a new process can claim that scratch slot before
+/// the removal runs, and deleting it then destroys a live session's record of
+/// unsaved work. Re-reading rather than only re-checking the pid also means the
+/// content acted on is the content that was locked.
+///
+/// `None` on any of: unreadable/corrupt swap, a named swap (non-empty
+/// `canonical_path`), or a writer pid that is still alive.
+pub fn orphan_scratch_at(path: &Path) -> Option<OrphanScratch> {
+    let (header, body, undo) = read_swap_full(path).ok()?;
+    // Only scratch swaps have an empty canonical_path.
+    if !header.canonical_path.is_empty() {
+        return None;
+    }
+    // Skip swaps owned by a live process (another hjkl instance).
+    if pid_is_alive(header.writer_pid) {
+        return None;
+    }
+    Some(OrphanScratch {
+        swap_path: path.to_path_buf(),
+        header,
+        body,
+        undo,
+    })
 }
 
 /// Convenience: scan the real `swap_dir()`.
@@ -223,44 +238,51 @@ pub fn write_swap_full(
     rope: &Rope,
     undo: Option<&SwapUndo>,
 ) -> std::io::Result<()> {
-    // Serialize header with postcard.
-    let header_bytes = postcard::to_stdvec(header).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("postcard serialize: {e}"),
-        )
-    })?;
-
-    // Serialize the optional undo section; empty (len 0) when absent.
-    let undo_bytes: Vec<u8> = match undo {
-        Some(u) => postcard::to_stdvec(u).map_err(|e| {
+    // Exclusive for the whole write: an atomic rename makes each write
+    // self-consistent, it does not stop a concurrent instance's reader from
+    // seeing the file mid-swap or a concurrent recovery from removing it under
+    // us. Re-entrant, so a caller already holding this path's lock across a
+    // read-decide-write passes straight through.
+    hjkl_fs::with_lock_exclusive(path, || {
+        // Serialize header with postcard.
+        let header_bytes = postcard::to_stdvec(header).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("postcard serialize undo: {e}"),
+                format!("postcard serialize: {e}"),
             )
-        })?,
-        None => Vec::new(),
-    };
+        })?;
 
-    // Write: magic + u32-LE header length + header bytes + u32-LE undo length +
-    // undo bytes + body chunks. `write_atomic_with` owns the temp-name retries,
-    // the 0600 mode, the fsync and the rename.
-    //
-    // The closure is `Fn` (it may be re-run on a temp-name collision), so it
-    // borrows `header_bytes` / `undo_bytes` / `rope` and consumes nothing — every
-    // call emits the identical byte sequence.
-    hjkl_fs::write_atomic_with(path, &hjkl_fs::WriteOptions::state(), |f| {
-        f.write_all(&SwapHeader::MAGIC)?;
-        let hlen = header_bytes.len() as u32;
-        f.write_all(&hlen.to_le_bytes())?;
-        f.write_all(&header_bytes)?;
-        let ulen = undo_bytes.len() as u32;
-        f.write_all(&ulen.to_le_bytes())?;
-        f.write_all(&undo_bytes)?;
-        for chunk in rope.chunks() {
-            f.write_all(chunk.as_bytes())?;
-        }
-        Ok(())
+        // Serialize the optional undo section; empty (len 0) when absent.
+        let undo_bytes: Vec<u8> = match undo {
+            Some(u) => postcard::to_stdvec(u).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("postcard serialize undo: {e}"),
+                )
+            })?,
+            None => Vec::new(),
+        };
+
+        // Write: magic + u32-LE header length + header bytes + u32-LE undo
+        // length + undo bytes + body chunks. `write_atomic_with` owns the
+        // temp-name retries, the 0600 mode, the fsync and the rename.
+        //
+        // The closure is `Fn` (it may be re-run on a temp-name collision), so it
+        // borrows `header_bytes` / `undo_bytes` / `rope` and consumes nothing —
+        // every call emits the identical byte sequence.
+        hjkl_fs::write_atomic_with(path, &hjkl_fs::WriteOptions::state(), |f| {
+            f.write_all(&SwapHeader::MAGIC)?;
+            let hlen = header_bytes.len() as u32;
+            f.write_all(&hlen.to_le_bytes())?;
+            f.write_all(&header_bytes)?;
+            let ulen = undo_bytes.len() as u32;
+            f.write_all(&ulen.to_le_bytes())?;
+            f.write_all(&undo_bytes)?;
+            for chunk in rope.chunks() {
+                f.write_all(chunk.as_bytes())?;
+            }
+            Ok(())
+        })
     })
 }
 
@@ -274,8 +296,12 @@ pub fn write_swap_full(
 /// the old swap is effectively ignored.  Swaps are transient cache; no
 /// migration is attempted.
 pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
-    let (header, body, _undo) = read_swap_full(path)?;
-    Ok((header, body))
+    // Shared: concurrent readers may overlap, writers may not. Re-entrant, so
+    // the nested `read_swap_full` lock below is satisfied by this one.
+    hjkl_fs::with_lock_shared(path, || {
+        let (header, body, _undo) = read_swap_full(path)?;
+        Ok((header, body))
+    })
 }
 
 /// Like [`read_swap`] but also returns the v3 [`SwapUndo`] section when present
@@ -286,6 +312,14 @@ pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
 /// (returns `Err` ⇒ "no usable swap") — consistent with treating a malformed
 /// swap as absent. Callers that only need the body use [`read_swap`].
 pub fn read_swap_full(path: &Path) -> std::io::Result<(SwapHeader, String, Option<SwapUndo>)> {
+    // Shared: a swap being rewritten by another instance must not be parsed
+    // half-written. Re-entrant, so a caller holding the exclusive lock across a
+    // read-decide-write (recovery) passes straight through without upgrading.
+    hjkl_fs::with_lock_shared(path, || read_swap_full_locked(path))
+}
+
+/// The parse half of [`read_swap_full`], run with `path`'s lock already held.
+fn read_swap_full_locked(path: &Path) -> std::io::Result<(SwapHeader, String, Option<SwapUndo>)> {
     let mut f = std::fs::File::open(path)?;
 
     // Magic check.
@@ -385,11 +419,15 @@ pub fn read_swap_full(path: &Path) -> std::io::Result<(SwapHeader, String, Optio
 
 /// Delete a swap file.  Silently succeeds when the file is absent.
 pub fn remove_swap(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
+    // Exclusive: deleting a swap another instance is mid-write would drop its
+    // record of unsaved work. Callers that decided to remove based on a prior
+    // read must hold this same lock across the whole read→decide→remove — the
+    // re-entrancy here is what lets them.
+    hjkl_fs::with_lock_exclusive(path, || match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
-    }
+    })
 }
 
 // ── Time helper ───────────────────────────────────────────────────────────────

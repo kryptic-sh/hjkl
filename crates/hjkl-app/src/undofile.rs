@@ -152,16 +152,23 @@ pub fn write(
     // Fixed header + u32-LE body length + postcard body — the format is
     // unchanged. The closure is `Fn` (it may be re-run on a temp-name collision)
     // and borrows everything it writes, so each call emits identical bytes.
-    hjkl_fs::write_atomic_with(&path, &hjkl_fs::WriteOptions::state(), |f| {
-        f.write_all(&MAGIC)?;
-        f.write_all(&VERSION.to_le_bytes())?;
-        f.write_all(&content_hash.to_le_bytes())?;
-        f.write_all(&file_size.to_le_bytes())?;
-        f.write_all(&file_mtime_unix_ms.to_le_bytes())?;
-        f.write_all(&current_seq.to_le_bytes())?;
-        f.write_all(&(body.len() as u32).to_le_bytes())?;
-        f.write_all(&body)?;
-        Ok(())
+    //
+    // Exclusive lock for the whole write: two instances saving the same file
+    // would otherwise interleave, and a reader in a third could parse a
+    // half-replaced file. Re-entrant, so a caller holding this path's lock
+    // across a wider sequence passes through.
+    hjkl_fs::with_lock_exclusive(&path, || {
+        hjkl_fs::write_atomic_with(&path, &hjkl_fs::WriteOptions::state(), |f| {
+            f.write_all(&MAGIC)?;
+            f.write_all(&VERSION.to_le_bytes())?;
+            f.write_all(&content_hash.to_le_bytes())?;
+            f.write_all(&file_size.to_le_bytes())?;
+            f.write_all(&file_mtime_unix_ms.to_le_bytes())?;
+            f.write_all(&current_seq.to_le_bytes())?;
+            f.write_all(&(body.len() as u32).to_le_bytes())?;
+            f.write_all(&body)?;
+            Ok(())
+        })
     })
 }
 
@@ -173,11 +180,26 @@ pub fn write(
 /// `content_hash` before installing the tree.
 pub fn read(canonical_path: &Path, override_dir: Option<&Path>) -> Option<LoadedUndo> {
     let path = undofile_path_for(canonical_path, override_dir).ok()?;
-    read_from(&path)
+    // Lock the *resolved* path — the sidecar guards the `.und` file, not the
+    // document. The nested lock inside `read_from` is re-entrant.
+    hjkl_fs::with_lock_shared(&path, || Ok(read_from(&path)))
+        .ok()
+        .flatten()
 }
 
 /// Read from an explicit undofile path (test seam / redirect). Fail-safe.
+///
+/// Takes the path's shared lock so a concurrent instance's `write` (which holds
+/// the exclusive lock across its temp+rename) cannot be observed half-applied.
+/// A lock failure degrades to `None`, like every other read failure here.
 pub fn read_from(path: &Path) -> Option<LoadedUndo> {
+    hjkl_fs::with_lock_shared(path, || Ok(read_from_locked(path)))
+        .ok()
+        .flatten()
+}
+
+/// The parse half of [`read_from`], run with `path`'s lock already held.
+fn read_from_locked(path: &Path) -> Option<LoadedUndo> {
     let mut f = std::fs::File::open(path).ok()?;
     let mut hdr = [0u8; HEADER_LEN];
     f.read_exact(&mut hdr).ok()?;

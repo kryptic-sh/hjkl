@@ -24,43 +24,95 @@
 //! defence against a writer that ignores them. Windows locks are mandatory.
 //! Everything in hjkl goes through this module, so cooperation is the norm.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
 
-/// In-process wait set: paths currently locked by *this* process.
+/// Who holds a path's in-process claim, and how many times over.
+#[derive(Debug)]
+struct Holder {
+    thread: std::thread::ThreadId,
+    depth: usize,
+}
+
+/// In-process claims: paths currently locked by *this* process.
 ///
 /// A `Condvar` rather than a per-path `Mutex` because `std::sync::Mutex` has no
 /// owned-guard form — parking a `MutexGuard` inside [`FileLock`] would need an
-/// unsafe lifetime transmute. Acquire/release around a `HashSet` is safe and
-/// does the same job.
-fn wait_set() -> &'static (Mutex<HashSet<PathBuf>>, Condvar) {
-    static SET: OnceLock<(Mutex<HashSet<PathBuf>>, Condvar)> = OnceLock::new();
-    SET.get_or_init(|| (Mutex::new(HashSet::new()), Condvar::new()))
+/// unsafe lifetime transmute. Acquire/release around a map is safe and does the
+/// same job, and the map is what makes re-entrancy possible.
+fn wait_set() -> &'static (Mutex<HashMap<PathBuf, Holder>>, Condvar) {
+    static SET: OnceLock<(Mutex<HashMap<PathBuf, Holder>>, Condvar)> = OnceLock::new();
+    SET.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()))
 }
 
-/// Block until no other thread in this process holds `key`, then claim it.
-fn acquire_in_process(key: &Path) {
+/// Claim `key` for this thread, blocking while another thread holds it.
+///
+/// Returns `true` when the claim is **re-entrant** — this thread already held
+/// the path, so the caller must not take the OS lock a second time. That matters
+/// beyond convenience: `flock` is per-open-file-description, so a second lock on
+/// a fresh handle for the same file blocks against the first even within one
+/// process. Without re-entrancy, a sequence that holds a lock across a
+/// read-decide-write would deadlock the moment the inner read tried to lock too.
+///
+/// Re-entrant acquisition is satisfied by the outer lock and does not upgrade it:
+/// taking a shared lock inside an exclusive one stays exclusive, which is safe.
+/// Taking an *exclusive* lock inside a *shared* one would be an upgrade and is
+/// not supported — hold the exclusive lock from the start.
+fn acquire_in_process(key: &Path) -> bool {
     let (mutex, cv) = wait_set();
     // A poisoned wait set means some thread panicked mid-critical-section. The
-    // set itself is still structurally sound (a HashSet of paths), so recover
-    // rather than propagating the panic into every future disk write.
+    // map is still structurally sound, so recover rather than propagating the
+    // panic into every future disk write.
     let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
-    while held.contains(key) {
-        held = cv.wait(held).unwrap_or_else(|e| e.into_inner());
+    let me = std::thread::current().id();
+    loop {
+        match held.get_mut(key) {
+            Some(h) if h.thread == me => {
+                h.depth += 1;
+                return true;
+            }
+            Some(_) => {
+                held = cv.wait(held).unwrap_or_else(|e| e.into_inner());
+            }
+            None => {
+                held.insert(
+                    key.to_path_buf(),
+                    Holder {
+                        thread: me,
+                        depth: 1,
+                    },
+                );
+                return false;
+            }
+        }
     }
-    held.insert(key.to_path_buf());
 }
 
-/// Release `key` and wake anyone waiting on it.
-fn release_in_process(key: &Path) {
+/// Drop one level of this thread's claim on `key`.
+///
+/// Returns `true` when the outermost level was released, meaning the caller
+/// should now drop the OS lock and wake waiters.
+fn release_in_process(key: &Path) -> bool {
     let (mutex, cv) = wait_set();
     let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
-    held.remove(key);
+    let fully_released = match held.get_mut(key) {
+        Some(h) => {
+            h.depth -= 1;
+            h.depth == 0
+        }
+        None => false,
+    };
+    if fully_released {
+        held.remove(key);
+    }
     drop(held);
-    cv.notify_all();
+    if fully_released {
+        cv.notify_all();
+    }
+    fully_released
 }
 
 /// Normalize a lock path so two spellings of one file share a wait-set entry.
@@ -98,18 +150,27 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
 }
 
 /// An acquired lock. Releases the OS lock and the in-process claim on drop.
+///
+/// A re-entrant acquisition carries no `File`: the outer guard owns the OS lock
+/// and releasing it early would drop the whole nest's protection.
 #[derive(Debug)]
 pub struct FileLock {
-    file: File,
+    file: Option<File>,
     key: PathBuf,
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        // OS lock first, then the in-process claim: a waiter woken by the
-        // release must not find the OS lock still held.
-        let _ = self.file.unlock();
-        release_in_process(&self.key);
+        // Release the in-process level first to learn whether this was the
+        // outermost one; only then drop the OS lock. A waiter woken by the
+        // release must not find the OS lock still held, so the notify inside
+        // `release_in_process` happens before the file handle is unlocked —
+        // waiters block on the wait set, not on the OS lock, so this ordering is
+        // what they actually observe.
+        let outermost = release_in_process(&self.key);
+        if outermost && let Some(file) = self.file.take() {
+            let _ = file.unlock();
+        }
     }
 }
 
@@ -119,7 +180,11 @@ impl Drop for FileLock {
 /// or [`lock_path_for`].
 pub fn lock_exclusive(lock_path: &Path) -> io::Result<FileLock> {
     let key = normalize(lock_path);
-    acquire_in_process(&key);
+    // Re-entrant: this thread already holds the path, so the outer guard's OS
+    // lock still covers us and taking another would deadlock against it.
+    if acquire_in_process(&key) {
+        return Ok(FileLock { file: None, key });
+    }
     // From here every early return must release the in-process claim.
     let file = match open_lock_file(lock_path) {
         Ok(f) => f,
@@ -132,7 +197,10 @@ pub fn lock_exclusive(lock_path: &Path) -> io::Result<FileLock> {
         release_in_process(&key);
         return Err(e);
     }
-    Ok(FileLock { file, key })
+    Ok(FileLock {
+        file: Some(file),
+        key,
+    })
 }
 
 /// Take a shared (read) lock on `lock_path`, blocking until it is available.
@@ -143,7 +211,11 @@ pub fn lock_exclusive(lock_path: &Path) -> io::Result<FileLock> {
 /// reader-count map that buys nothing at this scale.
 pub fn lock_shared(lock_path: &Path) -> io::Result<FileLock> {
     let key = normalize(lock_path);
-    acquire_in_process(&key);
+    // Re-entrant: satisfied by the outer guard, whatever its mode. A shared
+    // request nested inside an exclusive lock stays exclusive, which is safe.
+    if acquire_in_process(&key) {
+        return Ok(FileLock { file: None, key });
+    }
     let file = match open_lock_file(lock_path) {
         Ok(f) => f,
         Err(e) => {
@@ -155,7 +227,10 @@ pub fn lock_shared(lock_path: &Path) -> io::Result<FileLock> {
         release_in_process(&key);
         return Err(e);
     }
-    Ok(FileLock { file, key })
+    Ok(FileLock {
+        file: Some(file),
+        key,
+    })
 }
 
 /// Run `f` holding an exclusive lock on `target`'s sidecar.
@@ -260,6 +335,66 @@ mod tests {
             max.load(Ordering::SeqCst),
             1,
             "two threads held the same lock at once"
+        );
+    }
+
+    /// Nesting must not deadlock. This is what lets a caller hold a lock across
+    /// a read-decide-write while the low-level read and write each lock too —
+    /// the shape swap recovery needs (read swap, check the writer pid, remove).
+    #[test]
+    fn nested_locks_on_one_path_are_reentrant() {
+        let td = tempfile::tempdir().unwrap();
+        let target = td.path().join("swap.swp");
+        let got = with_lock_exclusive(&target, || {
+            // Inner exclusive (a write) inside the outer sequence lock.
+            with_lock_exclusive(&target, || Ok(()))?;
+            // Inner shared (a read) inside the outer exclusive lock.
+            with_lock_shared(&target, || Ok(()))?;
+            // Three deep, to prove depth counting rather than a boolean.
+            with_lock_exclusive(&target, || with_lock_exclusive(&target, || Ok(7usize)))
+        })
+        .unwrap();
+        assert_eq!(got, 7);
+        // Fully released afterwards: a fresh acquisition must still succeed.
+        drop(lock_exclusive(&lock_path_for(&target)).unwrap());
+    }
+
+    /// Re-entrancy is per thread: another thread must still be excluded while
+    /// the first holds the path, however deeply nested it is.
+    #[test]
+    fn reentrancy_does_not_leak_across_threads() {
+        let td = tempfile::tempdir().unwrap();
+        let target = Arc::new(td.path().join("t.bin"));
+        let inside = Arc::new(AtomicUsize::new(0));
+        let max = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let target = Arc::clone(&target);
+            let inside = Arc::clone(&inside);
+            let max = Arc::clone(&max);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    with_lock_exclusive(&target, || {
+                        let n = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                        max.fetch_max(n, Ordering::SeqCst);
+                        // Nest while holding it — the other threads must still
+                        // be excluded for the whole nested span.
+                        with_lock_exclusive(&target, || Ok(()))?;
+                        std::thread::yield_now();
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            max.load(Ordering::SeqCst),
+            1,
+            "re-entrancy leaked to another thread"
         );
     }
 
