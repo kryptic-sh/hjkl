@@ -1099,7 +1099,7 @@ fn readonly_w_own_file_errors_e45() {
     let td = tempfile::tempdir().unwrap();
     let file = td.path().join("ro_test.txt");
     std::fs::write(&file, "content\n").unwrap();
-    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    let mut app = App::new(Some(file), true, None, None).unwrap();
     assert!(app.active_editor().is_readonly());
     app.dispatch_ex("write");
     let msgs: Vec<String> = app.bus.history().map(|h| h.body.clone()).collect();
@@ -1115,7 +1115,7 @@ fn readonly_w_force_overrides_e45() {
     let td = tempfile::tempdir().unwrap();
     let file = td.path().join("ro_force_test.txt");
     std::fs::write(&file, "content\n").unwrap();
-    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    let mut app = App::new(Some(file), true, None, None).unwrap();
     assert!(app.active_editor().is_readonly());
     // `:write!` must succeed despite readonly.
     let saved = app.do_save_force(None, true);
@@ -1129,7 +1129,7 @@ fn readonly_w_different_path_succeeds() {
     let file = td.path().join("readonly_orig.txt");
     let other = td.path().join("readonly_other.txt");
     std::fs::write(&file, "content\n").unwrap();
-    let mut app = App::new(Some(file.clone()), true, None, None).unwrap();
+    let mut app = App::new(Some(file), true, None, None).unwrap();
     assert!(app.active_editor().is_readonly());
     // `:w othername` must write without E45.
     let saved = app.do_save(Some(other.clone()));

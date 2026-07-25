@@ -748,7 +748,7 @@ fn opening_rust_file_auto_sets_filetype_so_gcc_works() {
     let file_path = dir.join("a.rs");
     std::fs::write(&file_path, "let x = 1;\nlet y = 2;\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.active_editor_mut().jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 

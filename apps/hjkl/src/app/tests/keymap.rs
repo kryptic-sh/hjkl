@@ -2685,7 +2685,7 @@ fn gw_reflows_long_line_to_textwidth_cursor_stable() {
 
     assert!(app.pending_state.is_none(), "pending must clear after gw$");
     // Line reflowed — should now be multiple lines.
-    let rope = app.active_editor().buffer().rope().clone();
+    let rope = app.active_editor().buffer().rope();
     let line_count = rope.len_lines();
     assert!(
         line_count > 1,
@@ -2775,7 +2775,7 @@ fn gww_reflows_current_line_cursor_stable() {
     drive_chars(&mut app, "gww");
 
     assert!(app.pending_state.is_none(), "pending must clear after gww");
-    let rope = app.active_editor().buffer().rope().clone();
+    let rope = app.active_editor().buffer().rope();
     let line_count = rope.len_lines();
     assert!(
         line_count > 1,

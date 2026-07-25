@@ -135,7 +135,7 @@ fn publish_diagnostics_clears_on_empty() {
 fn publish_diagnostics_ignores_unknown_uri() {
     let mut app = App::new(None, false, None, None).unwrap();
     let path = tmp_path("hjkl_diag_known.rs");
-    app.active_mut().filename = Some(path.clone());
+    app.active_mut().filename = Some(path);
     seed_buffer(&mut app, "a");
 
     // Params targeting a *different* file — should be silently ignored.
@@ -319,7 +319,7 @@ fn plus_slash_argv_scrolls_window_viewport_to_match() {
     // test helper.
     // Easier path: build a small file where the first match is on row 5
     // and assert window.top_row > 0 (proxy for "scrolled").
-    let mut app = App::new(Some(path.clone()), false, None, Some("target".into())).unwrap();
+    let mut app = App::new(Some(path), false, None, Some("target".into())).unwrap();
     let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 80, "+/target must move cursor to row 80");
     // The window's stored top_row should reflect the editor's scrolled
@@ -414,7 +414,7 @@ fn plus_slash_argv_with_realistic_rust_source() {
         writeln!(f, "}}").unwrap();
         writeln!(f, "fn main_helper() {{}}").unwrap(); // row 8: 'main_helper'
     }
-    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let app = App::new(Some(path), false, None, Some("main".into())).unwrap();
     let (row, _col) = app.active_editor().cursor();
     assert_eq!(
         row, 5,
@@ -443,7 +443,7 @@ fn plus_slash_argv_search_lands_on_first_forward_match() {
         writeln!(f, "main two").unwrap();
         writeln!(f, "main three").unwrap();
     }
-    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let app = App::new(Some(path), false, None, Some("main".into())).unwrap();
     let (row, col) = app.active_editor().cursor();
     assert_eq!(
         row, 2,
@@ -473,7 +473,7 @@ fn plus_slash_argv_search_with_goto_line_searches_forward() {
     }
     // +5 goto_line=5 then +/main forward search. Should land on row 6,
     // NOT wrap back to row 0.
-    let app = App::new(Some(path.clone()), false, Some(5), Some("main".into())).unwrap();
+    let app = App::new(Some(path), false, Some(5), Some("main".into())).unwrap();
     let (row, _col) = app.active_editor().cursor();
     assert_eq!(
         row, 6,
@@ -502,7 +502,7 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
         writeln!(f, "main two").unwrap(); // 4 — `n` should jump here
         writeln!(f, "main three").unwrap(); // 5
     }
-    let mut app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let mut app = App::new(Some(path), false, None, Some("main".into())).unwrap();
     let (row0, _) = app.active_editor().cursor();
     assert_eq!(row0, 2, "+/main must land on first match (row 2)");
     // last_search must be persisted so `n` knows the pattern.

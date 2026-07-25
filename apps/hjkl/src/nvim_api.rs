@@ -3055,7 +3055,7 @@ mod tests {
                 &mut app,
                 "nvim_buf_get_lines",
                 vec![
-                    new_handle.clone(),
+                    new_handle,
                     Value::from(0i64),
                     Value::from(-1i64),
                     Value::Boolean(false),
@@ -5129,7 +5129,7 @@ mod tests {
                 &mut app,
                 "nvim_win_set_cursor",
                 vec![
-                    win.clone(),
+                    win,
                     Value::Array(vec![Value::from(2i64), Value::from(3i64)]),
                 ],
             );

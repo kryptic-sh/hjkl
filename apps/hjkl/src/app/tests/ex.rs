@@ -89,7 +89,7 @@ fn edit_literal_percent_filename_not_reexpanded() {
     std::fs::write(&first, "first\n").unwrap();
     let pct = dir.path().join("100%.txt");
     std::fs::write(&pct, "pct-content\n").unwrap();
-    let mut app = App::new(Some(first.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(first), false, None, None).unwrap();
     app.do_edit(pct.to_str().unwrap(), false);
     let active = app
         .active()
@@ -111,7 +111,7 @@ fn escape_ex_path_roundtrips_through_dispatch_ex() {
     std::fs::write(&first, "first\n").unwrap();
     let pct = dir.path().join("pct%name.txt");
     std::fs::write(&pct, "via-dispatch\n").unwrap();
-    let mut app = App::new(Some(first.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(first), false, None, None).unwrap();
     let escaped = crate::app::ex_dispatch::escape_ex_path(&pct.to_string_lossy());
     app.dispatch_ex(&format!("edit {escaped}"));
     let active = app
@@ -1267,7 +1267,7 @@ fn fs_event_removed_flags_deleted() {
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
     std::fs::remove_file(&path).unwrap();
-    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Removed(path.clone())]);
+    let reloaded = app.apply_fs_events(vec![hjkl_fs_watch::FsEvent::Removed(path)]);
 
     assert!(!reloaded);
     assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
@@ -1450,9 +1450,9 @@ fn fs_event_mixed_batch_reloads_only_open() {
     let noise_a = std::env::temp_dir().join("hjkl_fsw_mixed_noise_a.txt");
     let noise_b = std::env::temp_dir().join("hjkl_fsw_mixed_noise_b.txt");
     let reloaded = app.apply_fs_events(vec![
-        hjkl_fs_watch::FsEvent::Created(noise_a.clone()),
+        hjkl_fs_watch::FsEvent::Created(noise_a),
         hjkl_fs_watch::FsEvent::Modified(open.clone()),
-        hjkl_fs_watch::FsEvent::Removed(noise_b.clone()),
+        hjkl_fs_watch::FsEvent::Removed(noise_b),
     ]);
 
     assert!(reloaded);
@@ -2363,7 +2363,7 @@ fn colon_write_removes_swap_file() {
     let file_path = td.path().join("test_write_swap.txt");
     std::fs::write(&file_path, "hello\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Inject a swap path directly into the slot.
@@ -2394,7 +2394,7 @@ fn colon_preserve_writes_swap() {
     let file_path = td.path().join("test_preserve_swap.txt");
     std::fs::write(&file_path, "initial\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Inject a swap path directly into the slot.
@@ -2449,11 +2449,11 @@ fn open_file_with_newer_swap_enters_recovery_state() {
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
     // Create app without a pre-existing swap so App::new doesn't interfere.
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     // Clear any pending_recovery from App::new, then inject our swap path
     // directly and re-check.
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     let recovery_needed = app.check_recovery_on_open(idx);
     assert!(
@@ -2496,9 +2496,9 @@ fn recovery_y_loads_swap_body() {
     let rope = ropey::Rope::from_str("recovered content");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     app.check_recovery_on_open(idx);
     assert!(app.pending_recovery.is_some(), "must be in recovery state");
@@ -2551,9 +2551,9 @@ fn recovery_q_on_sole_slot_aborts_with_message_and_resets_to_scratch() {
     let rope = ropey::Rope::from_str("swap body that must NOT survive abort");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     app.check_recovery_on_open(idx);
     assert!(app.pending_recovery.is_some(), "must be in recovery state");
@@ -2623,9 +2623,9 @@ fn recovery_y_resets_syntax_spans() {
     let rope = ropey::Rope::from_str("recovered body line one\nline two\n");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
 
     let idx = app.focused_slot_idx();
 
@@ -2686,10 +2686,10 @@ fn open_locked_file_refused_when_pid_alive() {
     let rope = ropey::Rope::from_str("locked content");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
     let slot_count_before = app.slots.len();
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     let recovery = app.check_recovery_on_open(idx);
 
@@ -2751,9 +2751,9 @@ fn open_with_dead_pid_enters_recovery() {
     let rope = ropey::Rope::from_str("recovered from dead pid");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     let recovery = app.check_recovery_on_open(idx);
 
@@ -2805,9 +2805,9 @@ fn colon_recover_forces_prompt_even_when_file_newer() {
     let rope = ropey::Rope::from_str("stale swap body");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
 
     // :recover (no arg) → must force recovery even though swap is "stale".
     app.dispatch_ex("recover");
@@ -2826,7 +2826,7 @@ fn colon_recover_no_swap_reports_not_found() {
     let file_path = td.path().join("no_swap.txt");
     std::fs::write(&file_path, "some content\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Point swap_path at a non-existent file.
@@ -2861,7 +2861,7 @@ fn open_writes_swap_immediately() {
     let file_path = td.path().join("arm_on_open.txt");
     std::fs::write(&file_path, "initial content\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Inject a swap path in the tempdir (controlled location).
@@ -2894,7 +2894,7 @@ fn graceful_exit_removes_swap() {
     let file_path = td.path().join("cleanup_exit.txt");
     std::fs::write(&file_path, "content\n").unwrap();
 
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Inject a swap path in the tempdir and write a real swap file.
@@ -2958,9 +2958,9 @@ fn second_instance_refused_after_first_opens_unmodified() {
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
 
     // Second instance opens the file and injects the pre-existing swap.
-    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file_path), false, None, None).unwrap();
     app.pending_recovery = None;
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
     let idx = app.focused_slot_idx();
     let recovery = app.check_recovery_on_open(idx);
 
@@ -3015,7 +3015,7 @@ fn open_locked_sole_buffer_is_readonly() {
     app.pending_recovery = None;
     let idx = app.focused_slot_idx();
     assert_eq!(app.slots.len(), 1, "precondition: sole buffer");
-    app.active_mut().swap_path = Some(swap_path.clone());
+    app.active_mut().swap_path = Some(swap_path);
 
     let recovery = app.check_recovery_on_open(idx);
     assert!(!recovery, "locked sole buffer must not enter recovery");
@@ -3080,12 +3080,12 @@ fn locked_secondary_slot_is_readonly_not_removed() {
     };
     hjkl_app::swap::write_swap(&swap2, &header, &ropey::Rope::from_str("x")).unwrap();
 
-    let mut app = App::new(Some(file1.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(file1), false, None, None).unwrap();
     app.pending_recovery = None;
     // Open file2 as a second slot (mirrors CLI `hjkl file1 file2`).
-    let idx2 = app.open_new_slot(file2.clone()).unwrap();
+    let idx2 = app.open_new_slot(file2).unwrap();
     assert_eq!(app.slots.len(), 2, "precondition: two slots");
-    app.slots[idx2].swap_path = Some(swap2.clone());
+    app.slots[idx2].swap_path = Some(swap2);
 
     let recovery = app.check_recovery_on_open(idx2);
     assert!(!recovery, "locked secondary slot must not enter recovery");
@@ -3218,7 +3218,7 @@ fn idle_swap_sweep_writes_all_dirty_slots_not_just_focused() {
     std::fs::write(&path_a, "alpha\n").unwrap();
     std::fs::write(&path_b, "beta\n").unwrap();
 
-    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    let mut app = App::new(Some(path_a), false, None, None).unwrap();
     app.pending_recovery = None;
 
     // Slot 0 (path_a): inject a swap path, dirty it — then defocus by

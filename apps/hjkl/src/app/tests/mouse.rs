@@ -1098,7 +1098,7 @@ mod border_drag_tests {
         // View differs from HEAD/index on row 1 → unstaged hunk at row 1.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
-        app.slots_mut()[0].filename = Some(f.clone());
+        app.slots_mut()[0].filename = Some(f);
 
         app.handle_mouse(right_down(0, 1));
 
@@ -1157,7 +1157,7 @@ mod border_drag_tests {
         // View matches the staged worktree content → row 1 is a *staged* hunk.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
-        app.slots_mut()[0].filename = Some(f.clone());
+        app.slots_mut()[0].filename = Some(f);
 
         app.handle_mouse(right_down(0, 1));
 
@@ -1254,7 +1254,7 @@ mod border_drag_tests {
         // View differs from HEAD on row 1 → one hunk covering row 1.
         let mut app =
             make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
-        app.slots_mut()[0].filename = Some(f.clone());
+        app.slots_mut()[0].filename = Some(f);
         app.slots_mut()[0].git_signs.push(Sign {
             row: 1,
             ch: '~',

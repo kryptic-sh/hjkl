@@ -826,7 +826,7 @@ fn make_app_with_qf_files() -> (App, std::path::PathBuf, tempfile::TempDir) {
             message: "second hit".into(),
         },
         QfEntry {
-            path: file_b.clone(),
+            path: file_b,
             row: 0,
             col: 0,
             kind: QfKind::Grep,

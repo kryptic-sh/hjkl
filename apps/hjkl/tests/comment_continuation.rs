@@ -82,7 +82,7 @@ fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
 
 /// Return the full buffer text as a String.
 fn buf_text(ed: &Editor<View, DefaultHost>) -> String {
-    ed.content().to_string()
+    ed.content()
 }
 
 // ---------------------------------------------------------------------------

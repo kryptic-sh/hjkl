@@ -3291,7 +3291,7 @@ mod tests {
         std::fs::write(&a, "alpha\nbeta\ngamma\n").unwrap();
         std::fs::write(&b, "alpha\nBETA\ngamma\n").unwrap();
 
-        let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+        let mut app = App::new(Some(a), false, None, None).unwrap();
         app.dispatch_ex(&format!("diffsplit {}", b.display()));
 
         let backend = TestBackend::new(80, 24);
@@ -3340,7 +3340,7 @@ mod tests {
         std::fs::write(&a, "l0\nl1\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
         std::fs::write(&b, "l0\nl1\nins\nl2\nl3\nl4\nl5\nzebra\n").unwrap();
 
-        let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+        let mut app = App::new(Some(a), false, None, None).unwrap();
         app.dispatch_ex(&format!("diffsplit {}", b.display()));
 
         let backend = TestBackend::new(80, 24);
