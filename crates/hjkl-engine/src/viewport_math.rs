@@ -161,7 +161,9 @@ where
     B: Cursor + Query + ?Sized,
 {
     let cursor = Cursor::cursor(buf);
-    let cursor_row = cursor.line as usize;
+    // Clamp: a per-window cursor goes stale when another view shrinks the
+    // shared buffer, and Query::line panics past the last line by spec.
+    let cursor_row = (cursor.line as usize).min(Query::line_count(buf).saturating_sub(1) as usize);
     let cursor_col = cursor.col as usize;
     if cursor_row < top {
         return None;
