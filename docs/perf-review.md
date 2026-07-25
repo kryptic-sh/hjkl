@@ -2,8 +2,9 @@
 
 **Project:** hjkl (terminal text editor) **Date:** 2026-07-23 (pruned
 2026-07-25) **Scope:** entire codebase **Verdict:** Well-optimized for a
-terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) have shipped; P8 was
-benchmarked and dropped (WONTFIX); only one design-gated item (P4 memo) remains.
+terminal editor. All ranked hotspots (P1–P3, P5–P7, P9–P11) shipped; P8 (bench)
+and P4 (invalidation trap) were analyzed and closed WONTFIX. **No open items
+remain.**
 
 ## Resolved (pruned)
 
@@ -23,17 +24,31 @@ Full finding text removed once shipped — see the commit for the change.
 
 ---
 
-## Open findings
+## Analyzed & closed
 
-### 🟠 P4 — statusline `format!` allocations per frame — _partial_
+### ⚪ P4 — statusline diag-count memoization — WONTFIX (no clean design)
 
-**`apps/hjkl/src/render.rs:150,158,161,183,188,220-236,243,326`**
+**`apps/hjkl/src/render.rs:200-234`**
 
-Single-pass diag tally + `Cow<str>` filename shipped (`7af516a7`). **Still
-open:** cross-frame memoization of the diag counts (recomputed each frame from
-`lsp_diags`, which changes only on LSP notifications). Deferred deliberately —
-needs an invalidation-key design (what to key the memo on so it drops when
-diagnostics change). Not started pending that decision.
+The single-pass diag tally + `Cow<str>` filename already shipped (`7af516a7`).
+The remaining idea was to memoize the diag-count string across frames. On
+inspection there is no representation that is both cheap and invalidation-safe:
+
+- **Precompute at the write sites** (`lsp_glue.rs:563` assign,
+  `buffer_ops.rs:375` clear) — direct `slot.lsp_diags = …` assignments elsewhere
+  (tests today; any future writer) bypass the recompute and leave a **stale
+  statusline**. Invalidation trap.
+- **Fingerprint (len + severity hash) in a `&mut` refresh pass** — the hash is
+  itself an **O(n) pass over `lsp_diags` every frame**, the same cost as the
+  count loop it would replace; it only saves ~4 tiny `format!`s. Net ~nothing.
+- **Leave as-is** — the block already early-returns an empty string when there
+  are no diagnostics (the common case → **zero cost**); the count loop + small
+  formats run only when diagnostics are actually shown, over a Vec of tens of
+  entries.
+
+Magnitude is below P8's (which the `benches/render.rs` A/B proved is
+single-digit µs on a render that is <0.3% of a 16ms frame). Not worth a
+per-frame O(n) pass or an invalidation footgun for a sub-µs gain. Closed.
 
 ### ⚪ P8 — `lines_prefetch: Vec<String>` per frame — measured, WONTFIX
 
