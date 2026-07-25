@@ -322,6 +322,11 @@ pub fn copy_atomic(from: &Path, to: &Path, opts: &WriteOptions) -> io::Result<()
 ///
 /// Matches [`WriteOptions::temp_retries`]'s default; there is no options struct
 /// here because a symlink has no contents, no mode and nothing to fsync.
+///
+/// Unix-gated to match its only use: the non-unix arm of [`symlink_atomic`]
+/// returns `Unsupported` without staging anything, and an unconditional
+/// constant would be dead code there — which `-D warnings` rejects.
+#[cfg(unix)]
 const SYMLINK_TEMP_RETRIES: u32 = 5;
 
 /// Point `link_path` at `target`, replacing any existing link atomically.
