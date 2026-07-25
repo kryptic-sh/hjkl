@@ -1349,6 +1349,7 @@ dependencies = [
  "crossbeam-channel",
  "flate2",
  "hex",
+ "hjkl-fs",
  "hjkl-xdg",
  "reqwest",
  "serde",
@@ -1395,6 +1396,7 @@ version = "0.35.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "hjkl-fs",
  "hjkl-theme",
  "hjkl-xdg",
  "libloading",

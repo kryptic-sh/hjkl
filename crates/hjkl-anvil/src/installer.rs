@@ -258,28 +258,6 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
     result
 }
 
-/// Atomic move that survives cross-filesystem boundaries (EXDEV).
-///
-/// Tries `fs::rename` first (atomic on same filesystem). On EXDEV
-/// (`io::ErrorKind::CrossesDevices`) falls back to `fs::copy` + `fs::remove_file`
-/// — non-atomic but unavoidable when source and dest live on different
-/// filesystems (common with tmpfs `TempDir` in tests).
-///
-/// Currently only used on Unix paths; Windows has its own NTFS rename
-/// semantics that don't emit `CrossesDevices`. Allow dead on Windows.
-#[cfg_attr(windows, allow(dead_code))]
-fn move_file_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
-    match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-            std::fs::copy(src, dst)?;
-            std::fs::remove_file(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-
 /// Move a directory tree across filesystem boundaries (EXDEV).
 ///
 /// Tries `fs::rename` first. On EXDEV falls back to a recursive copy of every
@@ -315,42 +293,37 @@ fn move_dir_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-/// Create the symlink atomically: write to `<target>.tmp`, then rename.
+/// Create the symlink atomically, through the disk-I/O seam
+/// ([`hjkl_fs::symlink_atomic`]: stage beside the destination, then rename).
+///
+/// The seam's staging name (`.<file_name>.hjkl-tmp.<pid>`) satisfies what the
+/// old `.anvil-tmp` suffix was written for: it is *appended* to the whole file
+/// name rather than replacing an extension, so `foo.sh` and `foo.py` never
+/// collide on one staging path, and it carries the pid so two concurrent
+/// workers cannot pick the same name. It also improves on it — the seam retries
+/// a taken staging name instead of `remove_file`-ing it, so a bin that happens
+/// to be named like a staging file is never deleted, and the leading dot keeps
+/// it out of directory listings.
+///
+/// The staging link is a sibling of `link_path`, so the rename is always within
+/// one directory and can never hit EXDEV — the old `move_file_cross_device`
+/// fallback here was unreachable (and, for a symlink, wrong: `fs::copy` follows
+/// the link, so it would have replaced the link with a regular copy of its
+/// target). `move_dir_cross_device`, which moves the package tree from the
+/// cache root to the data root and *can* genuinely cross devices, is untouched.
 ///
 /// On Windows, symlink creation requires elevated privileges or Developer Mode.
 /// TODO: On Windows, consider copying the binary instead of symlinking.
 fn atomic_symlink(link_path: &Path, target: &Path) -> Result<(), InstallError> {
-    // Append (not `with_extension`, which *replaces* the extension) so that
-    // bins like `foo.sh` and `foo.py` don't collide on the same `foo.tmp`
-    // staging path when two workers install concurrently, and so the staging
-    // name can never equal another tool's live symlink (e.g. bin `foo.tmp`),
-    // which the `remove_file` below would otherwise delete.
-    let tmp = match link_path.file_name() {
-        Some(fname) => {
-            let mut f = fname.to_os_string();
-            f.push(".anvil-tmp");
-            link_path.with_file_name(f)
-        }
-        None => link_path.with_extension("anvil-tmp"),
-    };
-    // Remove stale temp if present.
-    let _ = std::fs::remove_file(&tmp);
-
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, &tmp)?;
-        move_file_cross_device(&tmp, link_path)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = target; // suppress unused-variable warning on non-unix
-        // TODO: Windows – copy file instead of symlinking (requires elevation).
-        // For now we just error out gracefully.
-        Err(InstallError::Archive(
+    hjkl_fs::symlink_atomic(link_path, target).map_err(|e| match e.kind() {
+        // Keep the public error surface identical: non-unix platforms still
+        // report the unsupported-platform case as `Archive`, everything else is
+        // `Io`.
+        io::ErrorKind::Unsupported => InstallError::Archive(
             "symlinks not supported on this platform; TODO: implement copy fallback".to_string(),
-        ))
-    }
+        ),
+        _ => InstallError::Io(e),
+    })
 }
 
 /// Emit `chmod 0755` on Unix; no-op on other platforms.
@@ -486,9 +459,9 @@ pub fn install_github_inner(
     download: impl Fn(&str, &Path, &dyn Fn(InstallStatus)) -> Result<(), InstallError>,
     progress: &dyn Fn(InstallStatus),
 ) -> Result<PathBuf, InstallError> {
-    let InstallMethod::Github(ref gh) = spec.method else {
+    if !matches!(spec.method, InstallMethod::Github(_)) {
         return Err(InstallError::UnsupportedMethod("not a github method"));
-    };
+    }
 
     // `install_github_inner` is public and can be reached without going
     // through `install_blocking`, so re-validate the two identifiers that are
@@ -500,6 +473,39 @@ pub fn install_github_inner(
     if !is_safe_component(&spec.bin) {
         return Err(InstallError::PathEscape(spec.bin.clone()));
     }
+
+    // Two workers can be installing the same tool at once, and every step past
+    // this point is on shared state: one `staging/<name>` download dir, one
+    // extract tree, one checksum sidecar read-then-written across steps 1 and
+    // 6b, one package dir, one `bin/` symlink. Serialize the whole
+    // decide → download → verify → extract → install sequence on the package
+    // dir, which is the one path every install of this tool agrees on. The
+    // locks are re-entrant per thread, so the atomic symlink and sidecar writes
+    // inside nest safely under this one.
+    let pkg_dir = store::package_dir_in(paths, name)?;
+    if let Some(parent) = pkg_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    hjkl_fs::with_lock_exclusive(&pkg_dir, || {
+        Ok(install_github_locked(
+            name, spec, paths, &pkg_dir, download, progress,
+        ))
+    })?
+}
+
+/// The body of [`install_github_inner`], run while holding the install lock on
+/// the tool's package directory.
+fn install_github_locked(
+    name: &str,
+    spec: &ToolSpec,
+    paths: &store::AnvilPaths,
+    final_pkg: &Path,
+    download: impl Fn(&str, &Path, &dyn Fn(InstallStatus)) -> Result<(), InstallError>,
+    progress: &dyn Fn(InstallStatus),
+) -> Result<PathBuf, InstallError> {
+    let InstallMethod::Github(ref gh) = spec.method else {
+        return Err(InstallError::UnsupportedMethod("not a github method"));
+    };
 
     // 1. Detect triple → resolve expected sha (manifest pin | cached TOFU | first-time TOFU).
     let triple = host_triple()?;
@@ -581,23 +587,19 @@ pub fn install_github_inner(
     // 7. chmod 0755.
     make_executable(&bin_in_extract)?;
 
-    // 8. Two-stage rename: staging → final.
+    // 8. Two-stage rename: staging → final. `final_pkg` is the path the caller
+    // locked; its parent is already created there.
     progress(InstallStatus::Installing);
-    let final_pkg = store::package_dir_in(paths, name)?;
-    // Ensure the parent packages/ directory exists before attempting rename.
-    if let Some(parent) = final_pkg.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let bak = final_pkg.with_extension("bak");
 
     // If an old install exists, move it aside.
     if final_pkg.exists() {
         let _ = std::fs::remove_dir_all(&bak); // clean stale bak
-        move_dir_cross_device(&final_pkg, &bak)?;
+        move_dir_cross_device(final_pkg, &bak)?;
     }
 
     // Move the extracted tree into place.
-    match move_dir_cross_device(&extract_dir, &final_pkg) {
+    match move_dir_cross_device(&extract_dir, final_pkg) {
         Ok(()) => {
             // Success — remove backup.
             if bak.exists() {
@@ -607,7 +609,7 @@ pub fn install_github_inner(
         Err(e) => {
             // Rollback.
             if bak.exists() {
-                let _ = move_dir_cross_device(&bak, &final_pkg);
+                let _ = move_dir_cross_device(&bak, final_pkg);
             }
             return Err(InstallError::Io(e));
         }
@@ -801,6 +803,36 @@ fn run_subprocess(
 ///
 /// Returns the absolute path of the binary inside the package directory.
 fn finalize_install(
+    name: &str,
+    spec: &ToolSpec,
+    bin_path_in_pkg: &Path,
+    sha: &str,
+    paths: &store::AnvilPaths,
+    progress: &dyn Fn(InstallStatus),
+) -> Result<PathBuf, InstallError> {
+    // Symlink + sidecar are one publish step: a reader that sees the new
+    // `.rev` must not still be looking at the previous symlink. Two workers
+    // finishing the same tool at once would otherwise interleave them, so hold
+    // the same package-dir lock the Github path uses (re-entrant, so the
+    // symlink's own staging is safe inside it).
+    let pkg_dir = store::package_dir_in(paths, name)?;
+    if let Some(parent) = pkg_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    hjkl_fs::with_lock_exclusive(&pkg_dir, || {
+        Ok(finalize_install_locked(
+            name,
+            spec,
+            bin_path_in_pkg,
+            sha,
+            paths,
+            progress,
+        ))
+    })?
+}
+
+/// The body of [`finalize_install`], run under the package-dir install lock.
+fn finalize_install_locked(
     name: &str,
     spec: &ToolSpec,
     bin_path_in_pkg: &Path,

@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-xdg.workspace = true
+hjkl-fs.workspace = true
 hjkl-theme.workspace = true
 ropey = "1.6"
 tree-sitter = "0.26"

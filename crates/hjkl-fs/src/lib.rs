@@ -12,6 +12,9 @@
 //!   plus owner-only directory creation.
 //! - [`atomic`] — temp → fsync → rename → fsync-parent writes, with the
 //!   permission and fallback policy expressed as [`atomic::WriteOptions`].
+//!   [`atomic::copy_atomic`] and [`atomic::symlink_atomic`] put file copies and
+//!   symlink installs on the same footing, so an installer never rolls its own
+//!   staging-and-rename.
 //! - [`lock`] — cross-process (`std::fs::File::lock`) plus in-process locking, so
 //!   two hjkl instances and two threads are equally safe.
 //! - [`read`] — reads that are bounded by an explicit cap.
@@ -64,7 +67,10 @@ pub mod read;
 
 // The flat re-exports are the common vocabulary; the modules stay public for
 // callers that want the full surface (cap presets, lock guards, options).
-pub use atomic::{WriteOptions, probe_writable_nofollow, write_atomic, write_atomic_with};
+pub use atomic::{
+    WriteOptions, copy_atomic, probe_writable_nofollow, symlink_atomic, write_atomic,
+    write_atomic_with,
+};
 pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
 pub use read::{

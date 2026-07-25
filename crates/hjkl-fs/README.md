@@ -5,17 +5,17 @@ The single seam for [hjkl](https://hjkl.kryptic.sh)'s disk I/O.
 Every read and write hjkl performs goes through this crate — its own state (swap
 files, undo history, cursor index, trash, config) and the user's documents
 (`:w`, buffer loads). One seam means atomicity, locking, permissions and size
-caps are decided once, instead of being re-derived — and occasionally forgotten —
-at each call site.
+caps are decided once, instead of being re-derived — and occasionally forgotten
+— at each call site.
 
 ## Modules
 
-| Module   | Purpose                                                                                     |
-| -------- | ------------------------------------------------------------------------------------------- |
-| `dirs`   | XDG-rooted paths, threaded through `hjkl-xdg`; owner-only directory creation                 |
+| Module   | Purpose                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------- |
+| `dirs`   | XDG-rooted paths, threaded through `hjkl-xdg`; owner-only directory creation                  |
 | `atomic` | temp → fsync → rename → fsync-parent writes; permission and fallback policy in `WriteOptions` |
-| `lock`   | cross-process (`std::fs::File::lock`) **and** in-process locking                             |
-| `read`   | reads bounded by an explicit cap                                                            |
+| `lock`   | cross-process (`std::fs::File::lock`) **and** in-process locking                              |
+| `read`   | reads bounded by an explicit cap                                                              |
 
 ## Writing
 
@@ -35,6 +35,12 @@ write_atomic(Path::new("doc.txt"), b"...", &WriteOptions::document())?;
 Use `write_atomic_with` when the payload is not one contiguous buffer (a rope's
 chunks, a length-prefixed record stream) so it is never materialized just to be
 handed over.
+
+Installers get the same footing instead of rolling their own staging-and-rename:
+`copy_atomic` streams one file into another through that machinery and, like
+`fs::copy`, carries the source's mode across; `symlink_atomic` stages a symlink
+beside its destination and renames it over the old one, so replacing a link
+never leaves a window with no link at all.
 
 ## Locking
 

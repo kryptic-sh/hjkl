@@ -25,6 +25,7 @@ required-features = ["sync"]
 
 [dependencies]
 hjkl-xdg.workspace = true
+hjkl-fs.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 thiserror = "2"

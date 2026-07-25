@@ -131,6 +131,38 @@ impl GrammarLoader {
             return Ok(p);
         }
 
+        // Two hjkl instances can reach this point for the same grammar at the
+        // same moment, and everything past it is shared: one clone dir, one
+        // compile output, one set of installed files. Serialize the whole
+        // decide → clone → compile → install sequence on the parser's own
+        // destination path. The lock has to span the *decision* too, not just
+        // the writes — the loser of the race re-checks `lookup_fresh` once it
+        // gets in and returns the winner's install instead of rebuilding it.
+        //
+        // The locks are re-entrant per thread, so the atomic writes inside the
+        // install (which lock their own targets) nest safely under this one.
+        let dest = self.user_dir.join(format!("{name}{}", shared_lib_ext()));
+        std::fs::create_dir_all(&self.user_dir)
+            .with_context(|| format!("create user dir {}", self.user_dir.display()))?;
+        hjkl_fs::with_lock_exclusive(&dest, || Ok(self.build_and_install(name, spec, meta)))
+            .with_context(|| format!("lock grammar install {name}"))?
+    }
+
+    /// The fetch → compile → install tail of [`Self::load`], run while holding
+    /// the install lock on the destination parser path.
+    fn build_and_install(
+        &self,
+        name: &str,
+        spec: &LangSpec,
+        meta: &ManifestMeta,
+    ) -> Result<PathBuf> {
+        // Re-check under the lock: a concurrent installer may have finished
+        // between our first miss and our acquiring the lock, and rebuilding on
+        // top of its files buys nothing.
+        if let Some(p) = self.lookup_fresh(name, spec, meta) {
+            return Ok(p);
+        }
+
         let source_root = self
             .sources
             .acquire(name, spec)
@@ -321,48 +353,39 @@ fn install_into_user_dir(
     Ok(dest)
 }
 
-/// Write `bytes` to `to` via a sibling staging file + rename.
+/// Write `bytes` to `to` through the disk-I/O seam. The seam's staging name
+/// carries the pid and a process counter, so two installers of the same grammar
+/// never share a staging file and neither one's cleanup can delete the other's
+/// in-flight write.
 fn write_atomic(to: &Path, bytes: &[u8]) -> Result<()> {
-    let staging = staging_path(to);
-    let _ = std::fs::remove_file(&staging);
-    std::fs::write(&staging, bytes).with_context(|| format!("write {}", staging.display()))?;
-    if let Err(e) = std::fs::rename(&staging, to) {
-        let _ = std::fs::remove_file(&staging);
-        return Err(e).with_context(|| format!("rename {} -> {}", staging.display(), to.display()));
-    }
-    Ok(())
+    hjkl_fs::write_atomic(to, bytes, &hjkl_fs::WriteOptions::default())
+        .with_context(|| format!("write {}", to.display()))
 }
 
-fn staging_path(to: &Path) -> PathBuf {
-    // Unique per call (pid + counter): two threads installing the same
-    // grammar concurrently must not share a staging file, or one thread's
-    // cleanup deletes the other's in-flight copy.
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    to.with_file_name(format!(
-        "{}.tmp-{}-{n}",
-        to.file_name().and_then(|s| s.to_str()).unwrap_or("install"),
-        std::process::id(),
-    ))
-}
-
-/// Copy `from` to `to` via a sibling staging file + rename. Tolerates a
-/// concurrent install winning the race (treats existing `to` as success).
+/// Copy `from` to `to` through the disk-I/O seam ([`hjkl_fs::copy_atomic`]:
+/// temp → fsync → rename → fsync parent, with the source's mode carried over
+/// exactly as `fs::copy` did). Tolerates a concurrent install winning the race
+/// (treats existing `to` as success).
 fn copy_atomic(from: &Path, to: &Path) -> Result<()> {
-    let staging = staging_path(to);
-    let _ = std::fs::remove_file(&staging);
-    std::fs::copy(from, &staging)
-        .with_context(|| format!("copy {} -> {}", from.display(), staging.display()))?;
-    match std::fs::rename(&staging, to) {
+    match hjkl_fs::copy_atomic(from, to, &hjkl_fs::WriteOptions::default()) {
         Ok(()) => Ok(()),
-        Err(_) if to.exists() => {
-            let _ = std::fs::remove_file(&staging);
+        // A concurrent installer renamed its own copy into place first. Unix
+        // `rename` replaces the destination so this is rare there, but Windows
+        // fails the rename when the name is taken — and the file that is now at
+        // `to` is the same artifact we were installing, so this is success, not
+        // a failed install. Restricted to the error kinds a lost rename race
+        // actually produces: a mid-copy `StorageFull` or a `NotFound` source
+        // must still surface, or a stale `to` would be certified fresh by the
+        // `.rev` sidecar written afterwards.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
+            ) && to.exists() =>
+        {
             Ok(())
         }
-        Err(e) => {
-            let _ = std::fs::remove_file(&staging);
-            Err(e).with_context(|| format!("rename {} -> {}", staging.display(), to.display()))
-        }
+        Err(e) => Err(e).with_context(|| format!("copy {} -> {}", from.display(), to.display())),
     }
 }
 

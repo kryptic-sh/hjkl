@@ -255,6 +255,145 @@ pub fn write_atomic(target: &Path, bytes: &[u8], opts: &WriteOptions) -> io::Res
     write_atomic_with(target, opts, |f| f.write_all(bytes))
 }
 
+/// Copy `from` to `to` atomically: temp → fsync → rename → fsync parent.
+///
+/// The bytes are streamed with [`std::io::copy`], so a large artifact (a
+/// compiled grammar `.so`) is never materialized in memory just to be handed to
+/// [`write_atomic`]. `from` is opened *inside* the fill closure because that
+/// closure may run more than once — a temp-name collision retries it, and the
+/// non-atomic fallback re-runs it — and a reader consumed by the first attempt
+/// would hand the second attempt an empty file.
+///
+/// # Mode
+///
+/// This replaces [`std::fs::copy`], which copies the **source's** permission
+/// bits onto the destination. That behaviour is preserved: when `opts.mode` is
+/// `None` and `opts.preserve_mode` is `false`, the source file's mode is read
+/// and applied to the temp file — at creation (so the temp is never briefly
+/// more permissive than the source) and again explicitly afterwards (so the
+/// result is exact rather than umask-trimmed). An explicit `opts.mode` wins,
+/// and `opts.preserve_mode` keeps the *destination's* existing mode instead —
+/// both mean the caller has asked for something other than the source's bits.
+/// Non-Unix platforms have no mode to copy; the destination is created with
+/// whatever the platform's defaults are.
+///
+/// On any failure the temp file is removed, so a failed copy leaves neither a
+/// damaged destination nor a stray temp behind.
+pub fn copy_atomic(from: &Path, to: &Path, opts: &WriteOptions) -> io::Result<()> {
+    // Only consulted on Unix; elsewhere there is no mode to carry over.
+    #[cfg(unix)]
+    let source_mode: Option<u32> = if opts.mode.is_none() && !opts.preserve_mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(from)
+            .ok()
+            .map(|m| m.permissions().mode() & 0o7777)
+    } else {
+        None
+    };
+    #[cfg(not(unix))]
+    let source_mode: Option<u32> = None;
+
+    let effective = if source_mode.is_some() {
+        WriteOptions {
+            mode: source_mode,
+            ..opts.clone()
+        }
+    } else {
+        opts.clone()
+    };
+
+    write_atomic_with(to, &effective, |f| {
+        let mut src = File::open(from)?;
+        io::copy(&mut src, f)?;
+        // `open_temp` applies the mode through the umask, which can only clear
+        // bits; set it exactly so a 0755 source lands as 0755 the way
+        // `fs::copy` would. Also covers the non-atomic fallback path, where the
+        // file is created by `File::create` with no mode at all.
+        #[cfg(unix)]
+        if let Some(mode) = source_mode {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        }
+        Ok(())
+    })
+}
+
+/// Attempts to find an unused temp name for a symlink before giving up.
+///
+/// Matches [`WriteOptions::temp_retries`]'s default; there is no options struct
+/// here because a symlink has no contents, no mode and nothing to fsync.
+const SYMLINK_TEMP_RETRIES: u32 = 5;
+
+/// Point `link_path` at `target`, replacing any existing link atomically.
+///
+/// The symlink is created at a sibling temp path and then renamed over
+/// `link_path`, so a reader either sees the old link or the new one — never a
+/// window with no link at all, which a `remove_file` + `symlink` pair would
+/// leave. The temp shares [`write_atomic_with`]'s naming
+/// (`.<name>.hjkl-tmp.<pid>`): appended to the *whole* file name, so `foo.sh`
+/// and `foo.py` get distinct staging paths, and carrying the pid so two
+/// processes linking the same path cannot pick the same temp. A name already
+/// taken is retried rather than removed — the temp is never assumed to be ours.
+///
+/// `target` is not resolved or required to exist: a dangling symlink is a
+/// legitimate thing to create, and resolving it here would break relative
+/// targets.
+///
+/// The rename is within one directory, so it can never cross a filesystem
+/// boundary and needs no `EXDEV` fallback.
+///
+/// # Platforms
+///
+/// Unix only. On Windows, symlink creation needs elevation or Developer Mode,
+/// so this returns [`io::ErrorKind::Unsupported`] rather than failing somewhere
+/// less legible.
+pub fn symlink_atomic(link_path: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut last_err: Option<io::Error> = None;
+        for attempt in 0..SYMLINK_TEMP_RETRIES {
+            let tmp = temp_path(link_path, attempt);
+            match std::os::unix::fs::symlink(target, &tmp) {
+                Ok(()) => {}
+                // Someone holds that exact temp name; try the next one rather
+                // than deleting a link we do not own.
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+            return match std::fs::rename(&tmp, link_path) {
+                Ok(()) => {
+                    // Durability of the *name* is the whole point of a symlink,
+                    // so the parent sync is unconditional here.
+                    sync_parent(link_path);
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    Err(e)
+                }
+            };
+        }
+        Err(last_err.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "no unused temp filename after retries",
+            )
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (link_path, target);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "symlinks are not supported on this platform (Windows symlink creation requires \
+             elevation or Developer Mode)",
+        ))
+    }
+}
+
 /// Fail unless `target` is writable, without following a symlink to get there.
 ///
 /// `:w` must still fail on a file the user cannot write, which temp+rename would
@@ -379,6 +518,164 @@ mod tests {
         write_atomic(&p, b"#!/bin/sh\necho hi\n", &WriteOptions::document()).unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "executable bit lost, got {mode:o}");
+    }
+
+    /// No `.hjkl-tmp` entry may survive a call, successful or not.
+    fn temp_leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("hjkl-tmp"))
+            .collect()
+    }
+
+    #[test]
+    fn copy_atomic_copies_contents_and_leaves_no_temp() {
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("src.bin");
+        let dst = td.path().join("dst.bin");
+        std::fs::write(&src, b"payload").unwrap();
+        copy_atomic(&src, &dst, &WriteOptions::default()).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"payload");
+        assert!(temp_leftovers(td.path()).is_empty());
+    }
+
+    #[test]
+    fn copy_atomic_replaces_existing_destination() {
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("src.bin");
+        let dst = td.path().join("dst.bin");
+        std::fs::write(&dst, b"stale-and-longer").unwrap();
+        std::fs::write(&src, b"fresh").unwrap();
+        copy_atomic(&src, &dst, &WriteOptions::default()).unwrap();
+        // Not a truncating overwrite: the whole file is the new contents.
+        assert_eq!(std::fs::read(&dst).unwrap(), b"fresh");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_atomic_takes_source_mode_like_fs_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("tool.so");
+        let dst = td.path().join("installed.so");
+        std::fs::write(&src, b"\0elf").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        copy_atomic(&src, &dst, &WriteOptions::default()).unwrap();
+        let mode = std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "source mode not carried over, got {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_atomic_explicit_mode_beats_source_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("src.bin");
+        let dst = td.path().join("dst.bin");
+        std::fs::write(&src, b"secret").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o644)).unwrap();
+        copy_atomic(&src, &dst, &WriteOptions::state()).unwrap();
+        let mode = std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "explicit mode lost, got {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_atomic_preserve_mode_keeps_destination_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("src.sh");
+        let dst = td.path().join("dst.sh");
+        std::fs::write(&src, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&dst, b"old\n").unwrap();
+        std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = WriteOptions {
+            preserve_mode: true,
+            ..WriteOptions::default()
+        };
+        copy_atomic(&src, &dst, &opts).unwrap();
+        let mode = std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "destination mode not preserved, got {mode:o}");
+    }
+
+    #[test]
+    fn copy_atomic_missing_source_errors_without_temp_or_damage() {
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("does-not-exist");
+        let dst = td.path().join("dst.bin");
+        std::fs::write(&dst, b"original").unwrap();
+        assert!(copy_atomic(&src, &dst, &WriteOptions::default()).is_err());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"original");
+        assert!(
+            temp_leftovers(td.path()).is_empty(),
+            "temp left after failed copy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_atomic_creates_link_and_leaves_no_temp() {
+        let td = tempfile::tempdir().unwrap();
+        let target = td.path().join("real-bin");
+        std::fs::write(&target, b"#!/bin/sh\n").unwrap();
+        let link = td.path().join("tool");
+        symlink_atomic(&link, &target).unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        assert!(temp_leftovers(td.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_atomic_replaces_existing_symlink() {
+        let td = tempfile::tempdir().unwrap();
+        let old = td.path().join("old-bin");
+        let new = td.path().join("new-bin");
+        std::fs::write(&old, b"old").unwrap();
+        std::fs::write(&new, b"new").unwrap();
+        let link = td.path().join("tool");
+        symlink_atomic(&link, &old).unwrap();
+        symlink_atomic(&link, &new).unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), new);
+        assert!(temp_leftovers(td.path()).is_empty());
+    }
+
+    /// The staging name is appended to the whole file name, so a neighbour that
+    /// happens to be named like a temp of a *different* link is untouched — and
+    /// `foo.sh` / `foo.py` never share a staging path.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_atomic_staging_names_do_not_collide() {
+        let td = tempfile::tempdir().unwrap();
+        let target = td.path().join("bin");
+        std::fs::write(&target, b"x").unwrap();
+        let sh = td.path().join("foo.sh");
+        let py = td.path().join("foo.py");
+        symlink_atomic(&sh, &target).unwrap();
+        symlink_atomic(&py, &target).unwrap();
+        assert_eq!(std::fs::read_link(&sh).unwrap(), target);
+        assert_eq!(std::fs::read_link(&py).unwrap(), target);
+    }
+
+    /// A rename that cannot succeed (destination is a non-empty directory) must
+    /// still clean the staging link up.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_atomic_failed_rename_leaves_no_temp() {
+        let td = tempfile::tempdir().unwrap();
+        let target = td.path().join("real-bin");
+        std::fs::write(&target, b"x").unwrap();
+        let link = td.path().join("occupied");
+        std::fs::create_dir(&link).unwrap();
+        std::fs::write(link.join("child"), b"x").unwrap();
+        assert!(symlink_atomic(&link, &target).is_err());
+        assert!(link.is_dir(), "destination directory must survive");
+        assert!(
+            temp_leftovers(td.path()).is_empty(),
+            "temp left after failed rename"
+        );
     }
 
     #[test]
