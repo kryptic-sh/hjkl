@@ -790,7 +790,10 @@ pub(super) fn build_slot(
     // Retained for modeline scanning after the buffer is seeded.
     let mut file_content: Option<String> = None;
     if let Some(ref p) = path {
-        match std::fs::read_to_string(p) {
+        // Deliberately unbounded: the user named this file, and refusing to open
+        // one the previous version opened is a regression, not a safety win.
+        // Caps belong on input whose size someone else controls.
+        match hjkl_fs::read_to_string_unbounded(p) {
             Ok(content) => {
                 // Snapshot disk metadata right after a successful read.
                 if let Ok(meta) = std::fs::metadata(p) {

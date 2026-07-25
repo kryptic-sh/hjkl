@@ -1282,6 +1282,7 @@ dependencies = [
  "hjkl-engine-tui",
  "hjkl-ex",
  "hjkl-form",
+ "hjkl-fs",
  "hjkl-fs-watch",
  "hjkl-holler",
  "hjkl-holler-tui",
@@ -1394,7 +1395,6 @@ version = "0.35.0"
 dependencies = [
  "ahash",
  "anyhow",
- "dirs",
  "hjkl-theme",
  "hjkl-xdg",
  "libloading",
@@ -1480,7 +1480,8 @@ dependencies = [
 name = "hjkl-config"
 version = "0.35.0"
 dependencies = [
- "dirs",
+ "hjkl-fs",
+ "hjkl-xdg",
  "serde",
  "tempfile",
  "thiserror 2.0.19",

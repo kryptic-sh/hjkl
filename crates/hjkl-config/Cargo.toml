@@ -12,10 +12,11 @@ authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 
 [dependencies]
+hjkl-xdg.workspace = true
+hjkl-fs.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"
-dirs = "6"
 thiserror = "2"
 
 [dev-dependencies]

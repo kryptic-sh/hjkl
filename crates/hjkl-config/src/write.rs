@@ -178,60 +178,38 @@ impl Drop for LockGuard {
     }
 }
 
-/// Build the temp-file path: `.<filename>.hjkl-tmp.<pid>` in the same
-/// directory as `config_path`.
-fn temp_path_for(config_path: &Path) -> PathBuf {
-    let dir = config_path.parent().unwrap_or(Path::new("."));
-    let file_name = config_path
-        .file_name()
-        .unwrap_or(std::ffi::OsStr::new("config.toml"));
-    let temp_name = format!(
-        ".{}.hjkl-tmp.{}",
-        file_name.to_string_lossy(),
-        std::process::id()
-    );
-    dir.join(temp_name)
-}
-
-/// Write `contents` to `path` atomically: write to a same-directory temp file,
-/// fsync it, then rename over the real path.  The temp file is cleaned up on
-/// every error path.
+/// Write `contents` to `path` atomically: a same-directory temp file
+/// (`.<filename>.hjkl-tmp.<pid>`), fsync, rename over the real path, fsync the
+/// parent.  The temp file is cleaned up on every error path.
+///
+/// The whole mechanism is [`hjkl_fs::write_atomic`]; this function is now only
+/// the `io::Error` → [`ConfigError::Write`] mapping.
+///
+/// Neither stock preset fits, so the options are spelled out:
+///
+/// - **No non-atomic fallback** (as `state()`, unlike `document()`). The previous
+///   hand-rolled write was always atomic, and refusing to persist a dock width is
+///   the right outcome when the atomic path is unavailable — an in-place truncate
+///   that then failed would destroy a hand-written config, which is precisely
+///   what this module exists to protect.
+/// - **Preserve the existing mode** (as `document()`, unlike `state()`). This is
+///   the *user's* config file, not hjkl's private state: they may have chosen
+///   `0644` deliberately, or keep it group-readable in a shared dotfiles setup.
+///   Silently tightening it to `0600` on the first `:set` hjkl persists would be
+///   hjkl editing a property of the file it was never asked to change. A config
+///   hjkl creates itself still lands at `0600` via `mode`, since there is no
+///   prior mode to preserve.
 fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
-    let temp_path = temp_path_for(path);
-
-    let mut file = File::create_new(&temp_path).map_err(|e| ConfigError::Write {
-        path: temp_path.clone(),
+    let opts = hjkl_fs::WriteOptions {
+        mode: Some(0o600),
+        preserve_mode: true,
+        nonatomic_fallback: false,
+        ..hjkl_fs::WriteOptions::default()
+    };
+    hjkl_fs::write_atomic(path, contents.as_bytes(), &opts).map_err(|e| ConfigError::Write {
+        path: path.to_path_buf(),
         source: e,
-    })?;
-    file.write_all(contents.as_bytes()).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        ConfigError::Write {
-            path: temp_path.clone(),
-            source: e,
-        }
-    })?;
-    file.sync_all().map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        ConfigError::Write {
-            path: temp_path.clone(),
-            source: e,
-        }
-    })?;
-
-    std::fs::rename(&temp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        ConfigError::Write {
-            path: path.to_path_buf(),
-            source: e,
-        }
-    })?;
-    // fsync the parent directory so the rename is durable.
-    if let Some(parent) = path.parent()
-        && let Ok(pdir) = File::open(parent)
-    {
-        let _ = pdir.sync_all();
-    }
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -532,10 +532,9 @@ mod tests {
     /// hasn't installed the html grammar yet — tests using this should be
     /// marked `#[ignore]` so they are explicit opt-ins.
     fn load_html_grammar() -> Option<crate::runtime::Grammar> {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))?;
+        // Resolution goes through `hjkl-xdg`, the one resolver — re-inlining it
+        // here is how the fallback drifts out of sync with the real one.
+        let base = hjkl_xdg::data_home().ok()?;
         let so = base.join("bonsai/grammars/html.so");
         if !so.exists() {
             return None;

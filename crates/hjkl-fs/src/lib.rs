@@ -67,4 +67,7 @@ pub mod read;
 pub use atomic::{WriteOptions, probe_writable_nofollow, write_atomic, write_atomic_with};
 pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
-pub use read::{read_capped, read_capped_from, read_to_string_capped, read_to_string_capped_from};
+pub use read::{
+    read_capped, read_capped_from, read_to_string_capped, read_to_string_capped_from,
+    read_to_string_unbounded,
+};

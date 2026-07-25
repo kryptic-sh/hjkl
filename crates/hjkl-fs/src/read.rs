@@ -81,6 +81,22 @@ pub fn read_to_string_capped(path: &Path, limit: u64) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Read `path` as UTF-8 with **no size limit**.
+///
+/// For content the user explicitly asked for by name — opening a buffer. A cap
+/// here is not a safety bound, it is a refusal to do the thing the user asked
+/// for, and an editor that will not open a large file the previous version
+/// opened has regressed.
+///
+/// This exists so "unbounded" is a deliberate, greppable choice routed through
+/// the same seam, rather than a bare `std::fs::read_to_string` that silently
+/// escapes it. Use [`read_to_string_capped`] for anything a *remote* or
+/// *untrusted* party controls the size of — an LSP message, a pipe, a swap file
+/// header.
+pub fn read_to_string_unbounded(path: &Path) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

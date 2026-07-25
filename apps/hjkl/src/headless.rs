@@ -76,7 +76,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
         let mut is_new_file = false;
 
         if let Some(ref path) = maybe_path {
-            match std::fs::read_to_string(path) {
+            match hjkl_fs::read_to_string_unbounded(path) {
                 Ok(content) => {
                     let content = content.strip_suffix('\n').unwrap_or(&content);
                     BufferEdit::replace_all(&mut buffer, content);
@@ -178,7 +178,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
                 ExEffect::EditFile { path, .. } => {
                     // In headless mode, treat :e as switching the current file target.
-                    match std::fs::read_to_string(&path) {
+                    match hjkl_fs::read_to_string_unbounded(std::path::Path::new(&path)) {
                         Ok(content) => {
                             let content = content.strip_suffix('\n').unwrap_or(&content);
                             hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);

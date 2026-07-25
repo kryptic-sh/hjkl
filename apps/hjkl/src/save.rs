@@ -1,22 +1,28 @@
-use std::path::PathBuf;
-
 /// Save `body` (plus an optional trailing newline) to `path` atomically and
 /// durably: write a temp file in the target's own directory, fsync it, then
 /// `rename` it over the target (atomic on the same filesystem). A crash or
 /// ENOSPC mid-write can no longer leave the target truncated the way the old
 /// in-place `File::create` (truncate-then-write) could.
 ///
+/// The mechanism itself lives in [`hjkl_fs`] — the single seam for hjkl's disk
+/// I/O — so `:w`, swap, undo and config all share one temp→fsync→rename
+/// implementation. What stays here is the policy this call site owns: the RPC
+/// filesystem guard, symlink resolution, and the write-permission probe.
+///
 /// Behavior notes:
 /// - Symlinks are preserved: the target is canonicalized first, so the temp
 ///   file is written next to — and renamed onto — the REAL file; the symlink
 ///   itself keeps pointing where it did.
-/// - The existing file's permission mode is copied onto the new file.
+/// - The existing file's permission mode is copied onto the new file
+///   ([`hjkl_fs::WriteOptions::document`]'s `preserve_mode`).
 /// - Hardlinks ARE broken: `rename` replaces the inode, so other links keep
 ///   the old content. Accepted tradeoff (same as vim's default
 ///   `backupcopy=auto` rename strategy).
 /// - Where temp+rename can't work (unwritable parent dir, cross-device
-///   rename, exotic filesystems) this falls back to the previous in-place
-///   write so saving never regresses.
+///   rename, exotic filesystems) `document()` falls back to a non-atomic
+///   in-place write so saving never regresses. That fallback is only ever
+///   taken *before* anything has been written, so an I/O error is never
+///   compounded into data loss.
 pub(crate) fn save_file_durable(
     path: &std::path::Path,
     body: &[u8],
@@ -47,89 +53,24 @@ pub(crate) fn save_file_durable(
 
     // `:w` on a file we lack write permission for must still fail, exactly
     // like the old `File::create` did — the rename trick would otherwise
-    // bypass the file's own permission bits. Probe with a single non-truncating
-    // write-open (contents and mtime untouched). A single open (rather than a
-    // separate `exists()` check followed by an open) closes the TOCTOU gap where
-    // the target could be swapped between the two syscalls. `O_NOFOLLOW` (Unix)
-    // hardens this further: if the target was swapped with a symlink after
-    // canonicalize resolved it, the open fails rather than following the link
-    // to an unintended file. `NotFound` means a brand-new file, which is allowed.
-    #[cfg(unix)]
-    let open = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&target)
-    };
-    #[cfg(not(unix))]
-    let open = std::fs::OpenOptions::new().write(true).open(&target);
-    match open {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
+    // bypass the file's own permission bits. `probe_writable_nofollow` is a
+    // single non-truncating write-open (contents and mtime untouched). A single
+    // open (rather than a separate `exists()` check followed by an open) closes
+    // the TOCTOU gap where the target could be swapped between the two
+    // syscalls. `O_NOFOLLOW` (Unix) hardens this further: if the target was
+    // swapped with a symlink after canonicalize resolved it, the open fails
+    // rather than following the link to an unintended file (security finding
+    // M4). `NotFound` is allowed through by the probe — that's a brand-new file.
+    hjkl_fs::probe_writable_nofollow(&target)?;
 
-    // Track whether the temp file was opened so we can gate the fallback:
-    // once the temp exists a write/sync error must propagate, never fall
-    // back to in-place truncation (which would compound the I/O error with
-    // data loss).  Only pre-write failures (unwritable parent, EXDEV) may
-    // fall through to the non-atomic path.
-    let mut temp_opened = false;
-    let atomic = (|| -> std::io::Result<()> {
-        let parent = match target.parent() {
-            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        let file_name = target
-            .file_name()
-            .ok_or_else(|| std::io::Error::other("target has no file name"))?;
-        let tmp_path = parent.join(format!(
-            ".{}.hjkl-tmp.{}",
-            file_name.to_string_lossy(),
-            std::process::id()
-        ));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true) // never clobber an existing file
-            .open(&tmp_path)?;
-        temp_opened = true;
-
-        let res = (|| -> std::io::Result<()> {
-            // Preserve the existing file's permission mode.
-            if let Ok(meta) = std::fs::metadata(&target) {
-                f.set_permissions(meta.permissions())?;
-            }
-            write_body(&mut f, body, trailing_nl)?;
-            f.sync_all()?; // durable BEFORE the rename makes it visible
-            std::fs::rename(&tmp_path, &target)?;
-            // fsync the parent directory so the rename itself is durable.
-            if let Some(parent) = target.parent()
-                && let Ok(pdir) = std::fs::File::open(parent)
-            {
-                let _ = pdir.sync_all();
-            }
-            Ok(())
-        })();
-        if res.is_err() {
-            let _ = std::fs::remove_file(&tmp_path);
-        }
-        res
-    })();
-
-    match atomic {
-        Ok(()) => Ok(()),
-        Err(e) if !temp_opened || e.kind() == std::io::ErrorKind::CrossesDevices => {
-            // Fallback: the previous in-place truncate-and-write. Non-atomic,
-            // but works where temp+rename can't (e.g. cross-device rename, or
-            // unwritable parent dir that prevented temp-file creation).
-            // Only entered when the temp file was *never* opened; a write or
-            // sync failure after creation would propagate above.
-            let mut f = std::fs::File::create(path)?;
-            write_body(&mut f, body, trailing_nl)
-        }
-        Err(e) => Err(e),
-    }
+    // temp → fsync → rename → fsync-parent, with mode preservation and the
+    // pre-write-only non-atomic fallback, all expressed by `document()`.
+    // `write_atomic_with` streams the body so the trailing newline never forces
+    // a full-buffer clone; the closure is `Fn` and may run twice (temp-name
+    // collision, fallback), so it must stay a pure function of `body`.
+    hjkl_fs::write_atomic_with(&target, &hjkl_fs::WriteOptions::document(), |f| {
+        write_body(f, body, trailing_nl)
+    })
 }
 
 #[cfg(test)]
@@ -200,6 +141,29 @@ mod save_file_durable_tests {
 
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "permission mode not preserved");
+    }
+
+    /// The `O_NOFOLLOW` write probe (security finding M4) must still be in the
+    /// path after the move onto the `hjkl-fs` seam.
+    ///
+    /// A dangling symlink is the observable version of the race the flag
+    /// defends against: `canonicalize` can't resolve it, so the probe runs on
+    /// the link itself. With `O_NOFOLLOW` the open fails (`ELOOP`) and the save
+    /// errors; a plain `open` would instead report `NotFound`, be treated as a
+    /// brand-new file, and write *through* the link to whatever it names.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_target_is_refused_by_nofollow_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        assert!(
+            save_file_durable(&link, b"pwned", true).is_err(),
+            "write followed a symlink — O_NOFOLLOW probe lost"
+        );
+        assert!(!victim.exists(), "wrote through the symlink to its target");
     }
 
     /// A read-only target must still make the save fail (old `File::create`

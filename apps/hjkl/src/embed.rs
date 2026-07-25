@@ -85,7 +85,7 @@ fn build_editor(
     let mut buffer = View::new();
 
     if let Some(path) = maybe_path {
-        match std::fs::read_to_string(path) {
+        match hjkl_fs::read_to_string_unbounded(path) {
             Ok(content) => {
                 let content = content.strip_suffix('\n').unwrap_or(&content);
                 BufferEdit::replace_all(&mut buffer, content);
@@ -178,7 +178,7 @@ fn dispatch(
                     {
                         return error_resp(id, ERR_EX_COMMAND, &format!("{path}: {e}"));
                     }
-                    match std::fs::read_to_string(&path) {
+                    match hjkl_fs::read_to_string_unbounded(std::path::Path::new(&path)) {
                         Ok(content) => {
                             let content = content.strip_suffix('\n').unwrap_or(&content);
                             hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);

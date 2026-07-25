@@ -2108,7 +2108,7 @@ impl App {
                 .error("E37: No write since last change (add ! to override)");
             return;
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match hjkl_fs::read_to_string_unbounded(&path) {
             Ok(c) => c,
             Err(e) => {
                 self.bus
@@ -2252,8 +2252,8 @@ impl App {
                     }
                     false
                 } else {
-                    // Clean buffer — reload automatically.
-                    let content = match std::fs::read_to_string(&path) {
+                    // Clean buffer — reload automatically. Capped like every
+                    let content = match hjkl_fs::read_to_string_unbounded(&path) {
                         Ok(c) => c,
                         Err(_) => return false,
                     };

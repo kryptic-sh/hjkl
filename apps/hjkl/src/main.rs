@@ -667,18 +667,17 @@ fn main() -> Result<()> {
     // crossterm's Unix event source reads keystrokes from `/dev/tty`, not
     // fd 0, so draining stdin never steals input the TUI needs. When stdin
     // is a real TTY (no pipe) this blocks until EOF (Ctrl-D), same as vim.
-    const MAX_STDIN_BYTES: u64 = 256 * 1024 * 1024;
+    // The 256 MiB cap (security fix H3 — `hjkl - < /dev/zero` must not allocate
+    // until OOM) now comes from the `hjkl-fs` seam. Same limit, cleaner failure:
+    // exceeding it is a `FileTooLarge` error instead of a silent truncation that
+    // could land mid-UTF-8-character and surface as `InvalidData`.
     if read_stdin {
-        use std::io::Read;
-        let mut stdin_text = String::new();
-        if let Err(e) = std::io::stdin()
-            .lock()
-            .take(MAX_STDIN_BYTES)
-            .read_to_string(&mut stdin_text)
-        {
-            eprintln!("hjkl: reading stdin: {e}");
-        } else {
-            app.load_stdin_buffer(&stdin_text);
+        match hjkl_fs::read_to_string_capped_from(
+            std::io::stdin().lock(),
+            hjkl_fs::read::caps::STDIN,
+        ) {
+            Ok(stdin_text) => app.load_stdin_buffer(&stdin_text),
+            Err(e) => eprintln!("hjkl: reading stdin: {e}"),
         }
     }
     // Load any additional files (argv order beyond the first). By default

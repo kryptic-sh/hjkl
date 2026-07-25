@@ -1,4 +1,3 @@
-use std::env;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -40,7 +39,7 @@ pub enum ConfigSource {
     Defaults,
 }
 
-// ── XDG-everywhere resolver ────────────────────────────────────────────────
+// ── XDG-everywhere resolution (delegated to `hjkl-xdg`) ────────────────────
 //
 // Per the XDG Base Directory spec, each base var (XDG_CONFIG_HOME,
 // XDG_DATA_HOME, XDG_CACHE_HOME) is honored if set to a non-empty
@@ -52,50 +51,32 @@ pub enum ConfigSource {
 // `~/Library/Application Support/<app>` because we ship CLI tools, not
 // signed `.app` bundles. Windows users get `~/.config/<app>` instead of
 // `%APPDATA%\<app>` for the same reason.
+//
+// That policy is implemented exactly once, in `hjkl-xdg`. This crate used to
+// carry a byte-for-byte copy of it; two copies of a path resolver is how a
+// fix lands in one of them and silently misses the other.
 
-/// Pure XDG resolver — no I/O, no env access. Takes the would-be env
-/// value and home-dir lookup as inputs so tests can exercise every
-/// branch without `std::env::set_var` (which races across parallel
-/// tests and is hard to make cross-platform-correct: a Unix-style
-/// `/tmp/foo` path returns `false` from `Path::is_absolute()` on
-/// Windows, and vice versa).
-fn resolve_xdg(
-    env_value: Option<&std::ffi::OsStr>,
-    home: Option<&Path>,
-    fallback_subdir: &str,
-) -> Result<PathBuf, ConfigError> {
-    if let Some(raw) = env_value
-        && !raw.is_empty()
-    {
-        let p = PathBuf::from(raw);
-        // XDG spec: relative paths are ignored; only absolute paths count.
-        if p.is_absolute() {
-            return Ok(p);
-        }
+/// Map `hjkl-xdg`'s only failure mode onto this crate's existing variant, so
+/// callers and their tests keep seeing [`ConfigError::NoHomeDir`].
+fn map_xdg(e: hjkl_xdg::Error) -> ConfigError {
+    match e {
+        hjkl_xdg::Error::NoHomeDir => ConfigError::NoHomeDir,
     }
-    home.map(|h| h.join(fallback_subdir))
-        .ok_or(ConfigError::NoHomeDir)
-}
-
-fn xdg_base(env_var: &str, fallback_subdir: &str) -> Result<PathBuf, ConfigError> {
-    let env_value = env::var_os(env_var);
-    let home = dirs::home_dir();
-    resolve_xdg(env_value.as_deref(), home.as_deref(), fallback_subdir)
 }
 
 /// Resolve `<XDG_CONFIG_HOME>/<app>`, defaulting to `~/.config/<app>`.
 pub fn config_dir(app: &str) -> Result<PathBuf, ConfigError> {
-    Ok(xdg_base("XDG_CONFIG_HOME", ".config")?.join(app))
+    hjkl_xdg::config_dir(app).map_err(map_xdg)
 }
 
 /// Resolve `<XDG_DATA_HOME>/<app>`, defaulting to `~/.local/share/<app>`.
 pub fn data_dir(app: &str) -> Result<PathBuf, ConfigError> {
-    Ok(xdg_base("XDG_DATA_HOME", ".local/share")?.join(app))
+    hjkl_xdg::data_dir(app).map_err(map_xdg)
 }
 
 /// Resolve `<XDG_CACHE_HOME>/<app>`, defaulting to `~/.cache/<app>`.
 pub fn cache_dir(app: &str) -> Result<PathBuf, ConfigError> {
-    Ok(xdg_base("XDG_CACHE_HOME", ".cache")?.join(app))
+    hjkl_xdg::cache_dir(app).map_err(map_xdg)
 }
 
 /// Resolve the full config file path for `C` — `<config_dir>/<FILE>`.
@@ -264,61 +245,41 @@ pub fn write_default<C: AppConfig + Serialize>(path: &Path, cfg: &C) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-
     use super::*;
 
-    /// `tempfile::tempdir()` gives an absolute path that's well-formed
-    /// on every platform. We use it as the env-value input so the
-    /// `is_absolute()` branch fires consistently on Windows + Unix.
-    fn os(s: &str) -> OsString {
-        OsString::from(s)
+    // The per-branch resolver tests (env absolute wins / empty / unset /
+    // relative-ignored / no-home-errs) used to live here against a private
+    // `resolve_xdg` copy. That copy is gone; the branches are covered by
+    // `hjkl-xdg`'s own tests of the same names. What this crate still owns —
+    // and therefore still tests — is the delegation and the error mapping.
+
+    /// Every public dir here must be exactly `hjkl-xdg`'s answer plus the app
+    /// leaf. If the delegation ever drifted back into a private reimplementation
+    /// these would diverge under any non-default `XDG_*` env.
+    #[test]
+    fn dirs_delegate_to_hjkl_xdg() {
+        assert_eq!(
+            config_dir("myapp").unwrap(),
+            hjkl_xdg::config_home().unwrap().join("myapp")
+        );
+        assert_eq!(
+            data_dir("myapp").unwrap(),
+            hjkl_xdg::data_home().unwrap().join("myapp")
+        );
+        assert_eq!(
+            cache_dir("myapp").unwrap(),
+            hjkl_xdg::cache_home().unwrap().join("myapp")
+        );
     }
 
-    /// XDG var set to a valid absolute path → `<that>/<subdir-ignored>`.
-    /// Resolver returns the env value as-is (sub-dir param is the
-    /// fallback, not used when the env path wins).
+    /// `hjkl-xdg`'s only failure mode keeps surfacing as this crate's
+    /// `NoHomeDir`, which `load`/`load_layered` match on by name.
     #[test]
-    fn xdg_set_absolute_wins_over_fallback() {
-        let tmp = tempfile::tempdir().unwrap();
-        let env = os(tmp.path().to_str().unwrap());
-        let home = std::path::PathBuf::from("/some/home");
-        let r = resolve_xdg(Some(&env), Some(&home), ".config").unwrap();
-        assert_eq!(r, tmp.path());
-    }
-
-    /// XDG var set to empty → fallback to `<home>/<subdir>`.
-    #[test]
-    fn xdg_empty_falls_back_to_home() {
-        let env = os("");
-        let home = std::path::PathBuf::from("/some/home");
-        let r = resolve_xdg(Some(&env), Some(&home), ".config").unwrap();
-        assert_eq!(r, std::path::PathBuf::from("/some/home/.config"));
-    }
-
-    /// XDG var unset → fallback to `<home>/<subdir>`.
-    #[test]
-    fn xdg_unset_falls_back_to_home() {
-        let home = std::path::PathBuf::from("/some/home");
-        let r = resolve_xdg(None, Some(&home), ".local/share").unwrap();
-        assert_eq!(r, std::path::PathBuf::from("/some/home/.local/share"));
-    }
-
-    /// XDG var set to a relative path → ignored per spec, fall back.
-    #[test]
-    fn xdg_relative_ignored_per_spec() {
-        let env = os("relative/path");
-        let home = std::path::PathBuf::from("/some/home");
-        let r = resolve_xdg(Some(&env), Some(&home), ".cache").unwrap();
-        assert_eq!(r, std::path::PathBuf::from("/some/home/.cache"));
-    }
-
-    /// No XDG var, no home dir → `NoHomeDir` error. Sandboxed test
-    /// environments are the only realistic trigger.
-    #[test]
-    fn xdg_no_env_no_home_errs() {
-        let r = resolve_xdg(None, None, ".config");
-        assert!(matches!(r, Err(ConfigError::NoHomeDir)));
+    fn xdg_no_home_maps_to_no_home_dir() {
+        assert!(matches!(
+            map_xdg(hjkl_xdg::Error::NoHomeDir),
+            ConfigError::NoHomeDir
+        ));
     }
 
     /// Smoke test the public `config_dir(app)` returns *something*
