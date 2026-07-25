@@ -8,6 +8,48 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-07-26
+
+### Fixed
+
+- **Sending a file to trash across filesystems could destroy it.** When the
+  trash directory was on a different filesystem from the file being deleted, the
+  fallback copied straight into the reserved trash slot and then removed the
+  original — so a copy that failed partway left a truncated copy that looked
+  complete, with nothing to restore. The move now stages the copy, verifies it,
+  and only then removes the source; it refuses to delete when the copy's size
+  disagrees with the original. Directories, files and symlinks all take the same
+  path, and the trash slot is never briefly empty.
+- **Installing a tool across filesystems mangled symlinks.** The package-move
+  fallback decided with `is_dir()` and copied with `fs::copy`, both of which
+  follow links, so a symlink became a full copy of whatever it pointed at and a
+  link to a directory was recursed into. Links are now reproduced as links, and
+  an archive containing a fifo or device node fails cleanly instead of hanging
+  forever.
+
+### Added
+
+`hjkl-fs` grows the primitives its consumers were re-deriving. All additive:
+
+- **Owner-only handles** (#315) — `owner_only_options` and
+  `owner_only_options_no_follow` for callers that hold a long-lived handle (an
+  append stream, an incrementally written index) and need the same `0600` the
+  crate gives swap and undo files.
+- **Path confinement** (#317) — `canonicalize_nearest` and `resolve_under`. A
+  `starts_with` check is fooled by a path that still holds unresolved `..`, and
+  `canonicalize` cannot help because it fails on a path that does not exist yet,
+  which is exactly the file-about-to-be-created case. These resolve the nearest
+  existing ancestor and finish the remainder lexically, and never return an
+  unprocessed `..`.
+- **Directory operations** (#316) — `copy_dir_atomic` (staged, then swapped into
+  place, so a failure never leaves a half-populated destination that looks
+  complete), `move_atomic` (rename, falling back to copy-then-delete across
+  filesystems) and `remove_path_all` (removes a symlink rather than deleting
+  through it).
+- **Open-handle identity** (#318) — `guard_not_swapped` answers what an
+  `O_NOFOLLOW` open cannot: whether the handle you hold is still the object that
+  path names. `hardlink_count` reports how many names share an object.
+
 ## [0.36.0] - 2026-07-26
 
 ### Added
