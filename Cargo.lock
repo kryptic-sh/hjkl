@@ -1364,6 +1364,7 @@ dependencies = [
 name = "hjkl-app"
 version = "0.35.0"
 dependencies = [
+ "criterion",
  "crossbeam-channel",
  "ec4rs",
  "git2",
