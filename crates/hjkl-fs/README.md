@@ -10,15 +10,16 @@ caps are decided once, instead of being re-derived — and occasionally forgotte
 
 ## Modules
 
-| Module   | Purpose                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------- |
-| `dirs`   | XDG-rooted paths, threaded through `hjkl-xdg`; owner-only directory creation                  |
-| `atomic` | temp → fsync → rename → fsync-parent writes; permission and fallback policy in `WriteOptions` |
-| `dir`    | staged recursive copy, swap-then-delete replacement, cross-device move, type-correct removal  |
-| `lock`   | cross-process (`std::fs::File::lock`) **and** in-process locking                              |
-| `read`   | reads bounded by an explicit cap                                                              |
-| `open`   | owner-only `OpenOptions` for callers that hold a handle and append                            |
-| `path`   | normalization that cannot be fooled by an unresolved `..`, plus confinement                   |
+| Module     | Purpose                                                                                       |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| `dirs`     | XDG-rooted paths, threaded through `hjkl-xdg`; owner-only directory creation                  |
+| `atomic`   | temp → fsync → rename → fsync-parent writes; permission and fallback policy in `WriteOptions` |
+| `dir`      | staged recursive copy, swap-then-delete replacement, cross-device move, type-correct removal  |
+| `lock`     | cross-process (`std::fs::File::lock`) **and** in-process locking                              |
+| `read`     | reads bounded by an explicit cap                                                              |
+| `open`     | owner-only `OpenOptions` for callers that hold a handle and append                            |
+| `path`     | normalization that cannot be fooled by an unresolved `..`, plus confinement                   |
+| `identity` | proof that an open handle is still the object a path names; hard-link count                   |
 
 ## Writing
 
@@ -119,6 +120,37 @@ let target = resolve_under(Path::new("/srv/data"), Path::new("notes/today.md"))?
 
 Which roots are allowed and what a violation means stay with the consumer; the
 crate owns the mechanism, not the policy.
+
+## Identity
+
+Confinement and the `O_NOFOLLOW` probe both inspect a _path_. Once a handle is
+open the two drift apart: the handle stays pinned to what the path resolved to
+at open time, while any later check inspects what it resolves to now. A swap in
+between — a rename, a replacement, a substituted parent directory — leaves a
+guard that passed on one object and I/O that proceeds on another.
+`guard_not_swapped` compares the OS identity pair (`(st_dev, st_ino)` on Unix,
+volume serial plus file index on Windows) behind the handle against the one the
+path resolves to:
+
+```rust
+use hjkl_fs::{guard_not_swapped, hardlink_count};
+use std::fs::File;
+use std::path::Path;
+
+let path = Path::new("notes.md");
+let file = File::open(path)?;
+// ... policy checks on `path` ...
+guard_not_swapped(&file, path)?; // and they were about `file` after all
+
+// More than one name for this object: replacing it by rename detaches the rest.
+let names = hardlink_count(path)?;
+# Ok::<(), std::io::Error>(())
+```
+
+`hardlink_count` rides along because on Windows both come out of the same
+`GetFileInformationByHandle` call — the one place this crate needs
+`windows-sys`, since `std` gates those fields behind an unstable feature. Which
+files deserve the check, and what a failure means, stay with the consumer.
 
 ## Locking
 

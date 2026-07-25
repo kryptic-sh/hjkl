@@ -27,6 +27,9 @@
 //!   handle and append, which a whole-file atomic write cannot serve.
 //! - [`path`] — normalization that cannot be fooled by an unresolved `..`, and
 //!   the confinement check built on it.
+//! - [`identity`] — [`guard_not_swapped`] proves an open handle is still the
+//!   object a path names, and [`hardlink_count`] reports how many names share
+//!   that object.
 //!
 //! # Choosing the write
 //!
@@ -87,10 +90,32 @@
 //!
 //! Which roots are allowed, and what a violation means, stay with the caller —
 //! this crate owns the mechanism, not the policy.
+//!
+//! # Checking a path is still the file you opened
+//!
+//! Confinement and the `O_NOFOLLOW` probe both inspect a *path*. Once a handle is
+//! open the two can drift apart: the handle stays on what the path resolved to
+//! then, the check inspects what it resolves to now. [`guard_not_swapped`]
+//! compares the OS identity pair behind the handle against the one the path
+//! resolves to, so a rename, a replacement or a substituted directory is caught
+//! after the fact:
+//!
+//! ```no_run
+//! use hjkl_fs::guard_not_swapped;
+//! use std::fs::File;
+//! use std::path::Path;
+//!
+//! let path = Path::new("/srv/data/notes.md");
+//! let file = File::open(path)?;
+//! // ... policy checks on `path` ...
+//! guard_not_swapped(&file, path)?; // and they were about `file` after all
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 pub mod atomic;
 pub mod dir;
 pub mod dirs;
+pub mod identity;
 pub mod lock;
 pub mod open;
 pub mod path;
@@ -104,6 +129,7 @@ pub use atomic::{
 };
 pub use dir::{copy_dir_atomic, move_atomic, remove_path_all};
 pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
+pub use identity::{guard_not_swapped, hardlink_count};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
 pub use open::{owner_only_options, owner_only_options_no_follow};
 pub use path::{canonicalize_nearest, resolve_under};
