@@ -27,6 +27,7 @@ pub(crate) fn save_file_durable(
     path: &std::path::Path,
     body: &[u8],
     trailing_nl: bool,
+    cwd: &std::path::Path,
 ) -> std::io::Result<()> {
     use std::io::Write;
 
@@ -47,9 +48,23 @@ pub(crate) fn save_file_durable(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
 
     // Resolve symlinks so we replace the real file, not the link itself.
+    // When the FS policy is active, use `resolve_under` which also rejects
+    // symlink escapes that a purely lexical check would miss.
     // `canonicalize` fails when the file doesn't exist yet (new file) —
     // write at the given path in that case.
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = if hjkl_engine::policy::fs_restricted() {
+        match hjkl_fs::resolve_under(cwd, path) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("{path}: {e}", path = path.display()),
+                ));
+            }
+        }
+    } else {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    };
 
     // `:w` on a file we lack write permission for must still fail, exactly
     // like the old `File::create` did — the rename trick would otherwise
@@ -85,7 +100,7 @@ mod save_file_durable_tests {
         let p = dir.path().join("a.txt");
         std::fs::write(&p, "old contents\n").unwrap();
 
-        save_file_durable(&p, b"new contents", true).unwrap();
+        save_file_durable(&p, b"new contents", true, &std::env::current_dir().unwrap()).unwrap();
 
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "new contents\n");
         // No leftover `.a.txt.hjkl-tmp.*` files.
@@ -102,7 +117,7 @@ mod save_file_durable_tests {
     fn creates_new_file() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("fresh.txt");
-        save_file_durable(&p, b"hello", true).unwrap();
+        save_file_durable(&p, b"hello", true, &std::env::current_dir().unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "hello\n");
     }
 
@@ -117,7 +132,7 @@ mod save_file_durable_tests {
         std::fs::write(&real, "old\n").unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        save_file_durable(&link, b"new", true).unwrap();
+        save_file_durable(&link, b"new", true, &std::env::current_dir().unwrap()).unwrap();
 
         // The link is still a symlink pointing at the same place…
         let meta = std::fs::symlink_metadata(&link).unwrap();
@@ -137,7 +152,13 @@ mod save_file_durable_tests {
         std::fs::write(&p, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        save_file_durable(&p, b"#!/bin/sh\necho hi", true).unwrap();
+        save_file_durable(
+            &p,
+            b"#!/bin/sh\necho hi",
+            true,
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
 
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "permission mode not preserved");
@@ -160,7 +181,7 @@ mod save_file_durable_tests {
         std::os::unix::fs::symlink(&victim, &link).unwrap();
 
         assert!(
-            save_file_durable(&link, b"pwned", true).is_err(),
+            save_file_durable(&link, b"pwned", true, &std::env::current_dir().unwrap()).is_err(),
             "write followed a symlink — O_NOFOLLOW probe lost"
         );
         assert!(!victim.exists(), "wrote through the symlink to its target");
@@ -177,7 +198,7 @@ mod save_file_durable_tests {
         std::fs::write(&p, "locked\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-        assert!(save_file_durable(&p, b"nope", true).is_err());
+        assert!(save_file_durable(&p, b"nope", true, &std::env::current_dir().unwrap()).is_err());
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "locked\n");
     }
 }

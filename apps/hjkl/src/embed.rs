@@ -174,11 +174,26 @@ fn dispatch(
                 }
                 ExEffect::EditFile { path, .. } => {
                     // Single-buffer embed mode: treat :e as a reload/open.
+                    // When FS policy is active, resolve through the
+                    // symlink-safe `resolve_under` instead of reading the
+                    // path directly.
                     if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(&path))
                     {
                         return error_resp(id, ERR_EX_COMMAND, &format!("{path}: {e}"));
                     }
-                    match hjkl_fs::read_to_string_unbounded(std::path::Path::new(&path)) {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let resolved = if hjkl_engine::policy::fs_restricted() {
+                        match hjkl_fs::resolve_under(&cwd, std::path::Path::new(&path)) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return error_resp(id, ERR_EX_COMMAND, &format!("{path}: {e}"));
+                            }
+                        }
+                    } else {
+                        std::path::PathBuf::from(&path)
+                    };
+                    match hjkl_fs::read_to_string_unbounded(&resolved) {
                         Ok(content) => {
                             let content = content.strip_suffix('\n').unwrap_or(&content);
                             hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
@@ -402,7 +417,8 @@ fn write_buffer(
         Some(p) => {
             let joined = editor.buffer().content_joined();
             let trailing_nl = !joined.is_empty();
-            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl)
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl, &cwd)
                 .map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
     }

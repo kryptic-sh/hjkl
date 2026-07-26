@@ -1189,7 +1189,8 @@ impl App {
                     self.bus.error(format!("E: {}: {e}", parent.display()));
                     return false;
                 }
-                let write_result = save_file_durable(&p, body, needs_trailing_nl);
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let write_result = save_file_durable(&p, body, needs_trailing_nl, &cwd);
                 match write_result {
                     Ok(()) => {
                         self.bus.info(format!(

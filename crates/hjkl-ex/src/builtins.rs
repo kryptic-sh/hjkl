@@ -135,6 +135,11 @@ fn read_handler<H: Host>(
             Err(e) => return Some(ExEffect::Error(format!("cannot run `{cmd}`: {e}"))),
         }
     } else {
+        // Path reachable from `:r` in embed/nvim-api mode. The lexical
+        // check here is a cheap first gate; full symlink-safe confinement
+        // (hjkl_fs::resolve_under) is applied at the app layer before
+        // the ex dispatcher runs, so paths reaching this point have
+        // already been vetted when the FS policy is active.
         if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(path)) {
             return Some(ExEffect::Error(e));
         }

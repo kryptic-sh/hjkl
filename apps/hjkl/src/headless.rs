@@ -260,7 +260,8 @@ fn write_buffer(
         Some(p) => {
             let joined = editor.buffer().content_joined();
             let trailing_nl = !joined.is_empty();
-            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl)
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl, &cwd)
                 .map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
     }
