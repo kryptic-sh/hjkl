@@ -188,6 +188,13 @@ pub struct App {
     /// `BufferId` component is what makes `:e <other-file>` in the same
     /// window a miss even if the new buffer's `fold_gen` happens to match.
     last_fold_sync: Option<(window::WindowId, BufferId, u64)>,
+    /// Memo for `colorcolumn`: the raw setting string it was parsed from and
+    /// the sorted 1-based columns it parsed to. `colorcolumn` has no
+    /// generation counter, so the string itself is the key — a short `String`
+    /// comparison per window per frame instead of a re-split/parse/sort/dedup
+    /// plus a fresh `Vec`. Single-entry: windows with differing values fall
+    /// back to today's per-window parse, never worse.
+    pub(crate) colorcolumn_memo: (String, Vec<u16>),
     /// Per-window editor, keyed by `WindowId` (#151 Phase D). Each is a
     /// [`View::new_view`] of its slot's shared `Buffer`, so it owns an
     /// independent cursor / viewport / vim FSM while editing the same document.
@@ -2297,6 +2304,7 @@ impl App {
             windows: vec![Some(initial_window)],
             window_folds: std::collections::HashMap::new(),
             last_fold_sync: None,
+            colorcolumn_memo: (String::new(), Vec::new()),
             window_editors: std::collections::HashMap::new(),
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,

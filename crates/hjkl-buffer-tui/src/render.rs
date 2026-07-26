@@ -36,6 +36,12 @@ thread_local! {
     /// built on the very first frame (or after a `take` that never came back).
     static LINE_SCRATCH: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Reusable gutter-label buffer. Same deal as [`LINE_SCRATCH`]: the number
+    /// label is formatted into this instead of a fresh `String` per visible
+    /// row, so steady-state frames allocate nothing for the gutter.
+    static GUTTER_LABEL: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
 }
 
 /// Borrows the thread-local line scratch for one frame and returns it on drop,
@@ -706,9 +712,17 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             // the line into multiple visual rows that fit
             // `viewport.text_width` (falls back to `text_area.width`
             // when the host hasn't published a text width yet).
-            let segments = match wrap_mode {
-                Wrap::None => vec![(top_col, usize::MAX)],
-                _ => wrap_segments(line, seg_width, wrap_mode),
+            // `Wrap::None` is the default and its single segment is known
+            // without touching the heap — keep it on the stack and borrow,
+            // so only the wrapping modes pay for a `Vec` per visible row.
+            let none_segment = [(top_col, usize::MAX)];
+            let wrapped_segments;
+            let segments: &[(usize, usize)] = match wrap_mode {
+                Wrap::None => &none_segment,
+                _ => {
+                    wrapped_segments = wrap_segments(line, seg_width, wrap_mode);
+                    &wrapped_segments
+                }
             };
             let last_seg_idx = segments.len().saturating_sub(1);
             for (seg_idx, &(seg_start, seg_end)) in segments.iter().enumerate() {
@@ -1253,8 +1267,10 @@ impl<R: StyleResolver> BufferView<'_, R> {
         // Total gutter cells in the number column, leaving one trailing spacer.
         let number_width = gutter.width.saturating_sub(1) as usize;
 
-        // Compute the label to display based on the numbers mode.
-        let label = match gutter.numbers {
+        // Compute the number to display based on the numbers mode. All three
+        // numbered modes render it identically (right-aligned in
+        // `number_width`); only the value differs.
+        let number = match gutter.numbers {
             GutterNumbers::None => {
                 // Blank — paint all number-column cells (including spacer) as spaces.
                 for x in num_start..(num_start + gutter.width) {
@@ -1265,42 +1281,42 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 }
                 return;
             }
-            GutterNumbers::Absolute => {
-                format!(
-                    "{:>width$}",
-                    doc_row + 1 + gutter.line_offset,
-                    width = number_width
-                )
-            }
+            GutterNumbers::Absolute => doc_row + 1 + gutter.line_offset,
             GutterNumbers::Relative { cursor_row } => {
-                let n = if doc_row == cursor_row {
+                if doc_row == cursor_row {
                     0
                 } else {
                     doc_row.abs_diff(cursor_row)
-                };
-                format!("{:>width$}", n, width = number_width)
+                }
             }
             GutterNumbers::Hybrid { cursor_row } => {
-                let n = if doc_row == cursor_row {
+                if doc_row == cursor_row {
                     doc_row + 1 + gutter.line_offset
                 } else {
                     doc_row.abs_diff(cursor_row)
-                };
-                format!("{:>width$}", n, width = number_width)
+                }
             }
         };
 
-        let mut x = num_start;
-        for ch in label.chars() {
-            if x >= num_start + gutter.width.saturating_sub(1) {
-                break;
+        // Format into the reused thread-local buffer rather than a fresh
+        // `String` per row.
+        GUTTER_LABEL.with_borrow_mut(|label| {
+            use std::fmt::Write as _;
+            label.clear();
+            let _ = write!(label, "{number:>number_width$}");
+
+            let mut x = num_start;
+            for ch in label.chars() {
+                if x >= num_start + gutter.width.saturating_sub(1) {
+                    break;
+                }
+                if let Some(cell) = term_buf.cell_mut((x, y)) {
+                    cell.set_char(ch);
+                    cell.set_style(self.background.patch(gutter.style));
+                }
+                x = x.saturating_add(1);
             }
-            if let Some(cell) = term_buf.cell_mut((x, y)) {
-                cell.set_char(ch);
-                cell.set_style(self.background.patch(gutter.style));
-            }
-            x = x.saturating_add(1);
-        }
+        });
         // Spacer cell — same gutter style so the background is
         // continuous when a bg colour is set.
         let spacer_x = num_start + gutter.width.saturating_sub(1);

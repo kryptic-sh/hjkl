@@ -3788,7 +3788,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let dgen = crate::types::Query::dirty_gen(&self.buffer);
         let end = bottom.min(crate::types::Query::line_count(&self.buffer) as usize);
         for row in top..end {
-            let _ = crate::search::search_matches(&self.buffer, &mut self.search_state, dgen, row);
+            crate::search::warm_matches(&self.buffer, &mut self.search_state, dgen, row);
         }
     }
 

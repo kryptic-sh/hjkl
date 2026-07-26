@@ -73,9 +73,8 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
         if char_at_cursor == Some(ch) {
             ed.pending_closes_mut().pop();
             // For `>` skip-over in HTML/XML: also run tag autoclose.
-            let filetype = ed.settings().filetype.clone();
             let autoclose_tag = ed.settings().autoclose_tag;
-            if ch == '>' && autoclose_tag && is_html_filetype(&filetype) {
+            if ch == '>' && autoclose_tag && is_html_filetype(&ed.settings().filetype) {
                 // Skip past the `>` that was auto-inserted.
                 let new_col = cursor.col + 1;
                 buf_set_cursor_rc(ed.buffer_mut(), cursor.row, new_col);
@@ -119,27 +118,38 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
     } else if !try_dedent_close_bracket(ed, cursor, ch) {
         // Normal insert. Check autopair first.
         let autopair = ed.settings().autopair;
-        let filetype = ed.settings().filetype.clone();
         let autoclose_tag = ed.settings().autoclose_tag;
 
+        // The two chars left of the cursor, read straight off the rope: this
+        // runs for EVERY typed char, so no line `String` and no `Vec<char>`.
+        // Indices are rope CHAR indices (same space as `cursor.col`), and the
+        // `< n` bound reproduces the old `Vec::get()` → `None` past the end of
+        // the newline-stripped line.
         let (prev_char, prev2_char) = {
-            let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
-            let chars: Vec<char> = line.chars().collect();
-            let p1 = if cursor.col > 0 {
-                chars.get(cursor.col - 1).copied()
+            let rope = hjkl_engine::types::Query::rope(ed.buffer());
+            let row = cursor.row;
+            if row < rope.len_lines() {
+                let line = rope.line(row);
+                // ropey keeps the trailing '\n' on non-final lines; the old
+                // `Vec<char>` was built from the stripped line.
+                let mut n = line.len_chars();
+                if n > 0 && line.char(n - 1) == '\n' {
+                    n -= 1;
+                }
+                let at = |i: usize| (i < n).then(|| line.char(i));
+                (
+                    cursor.col.checked_sub(1).and_then(at),
+                    cursor.col.checked_sub(2).and_then(at),
+                )
             } else {
-                None
-            };
-            let p2 = if cursor.col > 1 {
-                chars.get(cursor.col - 2).copied()
-            } else {
-                None
-            };
-            (p1, p2)
+                (None, None)
+            }
         };
 
         if autopair {
-            if let Some(close) = autopair_close_for(ch, &filetype, prev_char, prev2_char) {
+            if let Some(close) =
+                autopair_close_for(ch, &ed.settings().filetype, prev_char, prev2_char)
+            {
                 // Insert open char.
                 ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
                 // Insert close char immediately after the open char.
@@ -165,7 +175,7 @@ pub(crate) fn insert_char_bridge<H: hjkl_engine::types::Host>(
             // Tag autoclose: `>` in HTML/XML family (no prior `<` pair).
             // This fires when autopair did NOT match `>` (e.g. `>` was
             // typed directly, not via a skip-over of an auto-inserted `>`).
-            if ch == '>' && autoclose_tag && is_html_filetype(&filetype) {
+            if ch == '>' && autoclose_tag && is_html_filetype(&ed.settings().filetype) {
                 ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
                 let new_col = cursor.col + 1;
                 // scan_tag_opener looks at the line up to (new_col-1), i.e.

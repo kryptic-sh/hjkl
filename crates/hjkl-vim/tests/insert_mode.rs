@@ -537,3 +537,62 @@ mod scan_tag_opener_multibyte_tests {
         );
     }
 }
+
+/// The autopair decision reads the TWO characters left of the cursor. Those
+/// indices are CHAR indices, never byte indices — on a line with multibyte
+/// characters the two spaces diverge, and a byte-indexed read would either
+/// look at the wrong character or split a codepoint.
+mod prev_chars_multibyte_tests {
+    use hjkl_buffer::View;
+    use hjkl_engine::types::Options;
+    use hjkl_engine::{DefaultHost, Editor};
+    use hjkl_vim::VimEditorExt;
+
+    fn autopair_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
+        let mut ed = hjkl_vim::vim_editor(buf, DefaultHost::new(), Options::default());
+        ed.settings_mut().autopair = true;
+        ed
+    }
+
+    fn line0(ed: &Editor<View, DefaultHost>) -> String {
+        let rope = ed.buffer().rope();
+        hjkl_buffer::rope_line_str(&rope, 0)
+    }
+
+    /// Prose guard: `'` after a letter must NOT pair ("don't"). On `"éa"` the
+    /// char left of the cursor is `a` at CHAR index 1 — byte index 1 is the
+    /// tail byte of `é`, so a byte-indexed read would miss the guard and
+    /// wrongly insert a closing `'`.
+    #[test]
+    fn apostrophe_prose_guard_uses_char_index_left_of_cursor() {
+        let mut ed = autopair_editor("éa");
+        ed.enter_insert_i(1);
+        ed.jump_cursor(0, 2); // char col 2 == end of line (byte col 3)
+        ed.insert_char('\'');
+        assert_eq!(line0(&ed), "éa'", "prose guard must suppress the pair");
+    }
+
+    /// Triple-quote guard reads TWO chars back: `'` typed after `''` inserts
+    /// bare. On `"é''"` those two quotes sit at char indices 1 and 2 (bytes 2
+    /// and 3), so this pins the second lookback in char space too.
+    #[test]
+    fn triple_quote_guard_uses_char_indices_left_of_cursor() {
+        let mut ed = autopair_editor("é''");
+        ed.enter_insert_i(1);
+        ed.jump_cursor(0, 3); // char col 3 == end of line (byte col 4)
+        ed.insert_char('\'');
+        assert_eq!(line0(&ed), "é'''", "third quote must insert bare, not pair");
+    }
+
+    /// Column 0 has no chars to the left: both lookbacks are `None`, so the
+    /// guards stay off and `'` pairs normally.
+    #[test]
+    fn column_zero_has_no_chars_to_the_left() {
+        let mut ed = autopair_editor("é");
+        ed.enter_insert_i(1);
+        ed.jump_cursor(0, 0);
+        ed.insert_char('\'');
+        assert_eq!(line0(&ed), "''é", "no lookback at col 0 → normal pairing");
+    }
+}

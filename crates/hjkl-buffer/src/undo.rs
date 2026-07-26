@@ -4,6 +4,7 @@
 //! directly, keeping per-buffer state co-located with the rope.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -323,7 +324,12 @@ pub(crate) struct UndoNode {
     /// Wall-clock time this state was created — drives `:earlier`/`:later`.
     pub timestamp: SystemTime,
     /// Marks / jumplist / changelist snapshot restored with the text.
-    pub marks: MarkSnapshot,
+    ///
+    /// Shared (`Arc`) rather than owned: a `push` writes the SAME snapshot
+    /// into the node being left and into the fresh child, and a
+    /// `MarkSnapshot` is up to five collections. Nodes never mutate it in
+    /// place — it is only ever replaced wholesale — so sharing is invisible.
+    pub marks: Arc<MarkSnapshot>,
     /// Global monotonic order across the whole tree — the change number that
     /// `g-`/`g+`, `:earlier`/`:later`, and `:undolist` traverse and display.
     pub seq: u64,
@@ -362,7 +368,7 @@ impl UndoTree {
             rope_cache: None,
             cursor: (0, 0),
             timestamp: SystemTime::now(),
-            marks: MarkSnapshot::default(),
+            marks: Arc::default(),
             seq: 0,
         };
         Self {
@@ -480,7 +486,7 @@ impl UndoTree {
             rope,
             cursor: n.cursor,
             timestamp: n.timestamp,
-            marks: n.marks.clone(),
+            marks: (*n.marks).clone(),
         }
     }
 
@@ -495,7 +501,7 @@ impl UndoTree {
         rope: ropey::Rope,
         cursor: (usize, usize),
         timestamp: SystemTime,
-        marks: MarkSnapshot,
+        marks: Arc<MarkSnapshot>,
     ) {
         let is_root = self.get(id).parent.is_none();
         let unchanged = self.get(id).rope_cache.as_ref() == Some(&rope)
@@ -586,6 +592,10 @@ impl UndoTree {
     /// just created.
     pub(crate) fn push(&mut self, entry: UndoEntry) {
         let cur = self.current;
+        // ONE snapshot serves both the node being left and the fresh child —
+        // this runs per edit, and a deep `MarkSnapshot` copy is up to five
+        // collection allocations.
+        let marks = Arc::new(entry.marks);
         // Finalize the node being left with the pre-edit live state, recomputing
         // its edge delta from its parent (or the root base).
         self.set_node_state(
@@ -593,7 +603,7 @@ impl UndoTree {
             entry.rope.clone(),
             entry.cursor,
             entry.timestamp,
-            entry.marks.clone(),
+            Arc::clone(&marks),
         );
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -610,7 +620,7 @@ impl UndoTree {
             rope_cache: Some(entry.rope),
             cursor: entry.cursor,
             timestamp: entry.timestamp,
-            marks: entry.marks,
+            marks,
             seq,
         });
         let cur_node = self.get_mut(cur);
@@ -635,7 +645,7 @@ impl UndoTree {
         let cur = self.current;
         let par = self.get(cur).parent?;
         let dest_ts = self.get(par).timestamp;
-        self.set_node_state(cur, rope, cursor, dest_ts, marks);
+        self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
         // Redo from the parent must return to the node we just left.
         self.get_mut(par).last_child = Some(cur);
         self.current = par;
@@ -667,7 +677,7 @@ impl UndoTree {
         let cur = self.current;
         let child = self.get(cur).last_child?;
         let dest_ts = self.get(child).timestamp;
-        self.set_node_state(cur, rope, cursor, dest_ts, marks);
+        self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
         self.current = child;
         // `cur` is now warm, so materializing the child is one forward apply.
         Some(self.entry_of(child))
@@ -737,7 +747,7 @@ impl UndoTree {
     ) {
         let cur = self.current;
         let ts = self.get(cur).timestamp;
-        self.set_node_state(cur, rope, cursor, ts, marks);
+        self.set_node_state(cur, rope, cursor, ts, Arc::new(marks));
         self.retarget_current(target);
     }
 
@@ -1100,7 +1110,7 @@ impl UndoTree {
                     delta: n.delta.clone(),
                     cursor: (n.cursor.0 as u32, n.cursor.1 as u32),
                     timestamp_unix_ms: system_time_to_unix_ms(n.timestamp),
-                    marks: n.marks.clone(),
+                    marks: (*n.marks).clone(),
                     seq: n.seq,
                 }
             })
@@ -1168,7 +1178,7 @@ impl UndoTree {
                     rope_cache: None,
                     cursor: (n.cursor.0 as usize, n.cursor.1 as usize),
                     timestamp: unix_ms_to_system_time(n.timestamp_unix_ms),
-                    marks: n.marks.clone(),
+                    marks: Arc::new(n.marks.clone()),
                     seq: n.seq,
                 })
             })

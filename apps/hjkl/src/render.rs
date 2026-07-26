@@ -745,10 +745,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .map(|e| (e.buffer().cursor().row, e.is_blame()))
         .unwrap_or_else(|| (app.slots()[slot_idx].buffer().cursor().row, false));
     // Scalar (Copy) settings copied out of THIS window's editor (or the slot
-    // fallback) without cloning the whole `Settings` struct (#312). The two
-    // owned fields (`colorcolumn: String`, `listchars: ListChars`) are borrowed
-    // further below — AFTER the mutable-viewport block — so their immutable
-    // `app` borrow doesn't collide with the `get_mut` there.
+    // fallback) without cloning the whole `Settings` struct (#312). The owned
+    // `listchars: ListChars` field is borrowed further below — AFTER the
+    // mutable-viewport block — so its immutable `app` borrow doesn't collide
+    // with the `get_mut` there.
     let (
         nu,
         rnu,
@@ -868,16 +868,32 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         e.populate_search_cache(populate_top, populate_bot);
     }
 
-    // Borrow the two owned `Settings` fields (`colorcolumn: String`,
-    // `listchars: ListChars`) for the rest of the draw instead of cloning the
-    // whole struct (#312). Bound AFTER the mutable-viewport block above so this
-    // immutable `app` borrow doesn't collide with the `get_mut` there.
+    // Refresh the `colorcolumn` memo while `app` is still mutable (the parsed
+    // columns are borrowed out of it further down, after the immutable
+    // `settings_ref` borrow starts). Steady state: one string compare.
+    let cc_reparse = {
+        let cc = app
+            .window_editors
+            .get(&win_id)
+            .map(|e| e.settings())
+            .unwrap_or_else(|| app.slots()[slot_idx].settings())
+            .colorcolumn
+            .as_str();
+        (app.colorcolumn_memo.0 != cc).then(|| (cc.to_string(), parse_colorcolumn(cc)))
+    };
+    if let Some(fresh) = cc_reparse {
+        app.colorcolumn_memo = fresh;
+    }
+
+    // Borrow the owned `Settings` field (`listchars: ListChars`) for the rest
+    // of the draw instead of cloning the whole struct (#312). Bound AFTER the
+    // mutable-viewport block above so this immutable `app` borrow doesn't
+    // collide with the `get_mut` there.
     let settings_ref = app
         .window_editors
         .get(&win_id)
         .map(|e| e.settings())
         .unwrap_or_else(|| app.slots()[slot_idx].settings());
-    let colorcolumn: &str = settings_ref.colorcolumn.as_str();
     let listchars_ref = &settings_ref.listchars;
 
     // Relative/hybrid line numbers count from THIS window's cursor row. The
@@ -1068,8 +1084,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         Style::default()
     };
 
-    // Colorcolumn indices (1-based) — rendered under syntax.
-    let cc_cols = parse_colorcolumn(colorcolumn);
+    // Colorcolumn indices (1-based) — rendered under syntax. Parsed above,
+    // once per distinct `colorcolumn` string rather than once per window per
+    // frame.
+    let cc_cols: &[u16] = &app.colorcolumn_memo.1;
     let cc_style = Style::default().bg(app.theme.ui.colorcolumn_bg);
 
     // Compute indent guide active column from the cursor row's leading whitespace.
@@ -1284,7 +1302,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         non_text_style: Style::default().fg(app.theme.ui.non_text),
         show_eob: app.slots()[slot_idx].features.end_of_buffer,
         diag_overlays: &diag_overlays,
-        colorcolumn_cols: &cc_cols,
+        colorcolumn_cols: cc_cols,
         colorcolumn_style: cc_style,
         listchars: if list_active {
             Some(listchars_ref)

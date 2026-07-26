@@ -597,6 +597,23 @@ pub fn search_matches<B: Query>(
         .to_vec()
 }
 
+/// Warm the per-row match cache for `row` without producing a result.
+///
+/// Same cache path as [`search_matches`] (identical miss/hit behaviour),
+/// but returns nothing — the renderer's pre-pass only wants the cache
+/// populated, and building a `Vec` per visible row just to drop it is
+/// pure allocation churn.
+pub fn warm_matches<B: Query>(buf: &B, state: &mut SearchState, dirty_gen: u64, row: usize) {
+    if state.pattern.is_none() {
+        return;
+    }
+    let line_count = buf.line_count() as usize;
+    if row >= line_count {
+        return;
+    }
+    state.matches_for(row, dirty_gen, || buf.line(row as u32));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
