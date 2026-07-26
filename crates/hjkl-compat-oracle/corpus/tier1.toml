@@ -878,3 +878,32 @@ initial_cursor = [0, 0]
 keys = "2t,"
 expected_buffer = "a,b,c\n"
 expected_cursor = [0, 2]
+
+# ─── J join no-space exceptions (audit B8) ──────────────────────────────
+
+# First line ends with space — no extra space inserted (vim :h J).
+[[cases]]
+name = "join_trailing_space"
+initial_buffer = "hello \nworld"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "hello world"
+expected_cursor = [0, 5]
+
+# First line ends with tab — no extra space inserted (vim :h J).
+[[cases]]
+name = "join_trailing_tab"
+initial_buffer = "hello\t\nworld"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "hello\tworld"
+expected_cursor = [0, 5]
+
+# Second line starts with `)` — no space inserted (vim :h J).
+[[cases]]
+name = "join_leading_paren"
+initial_buffer = "hello\n)world"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "hello)world"
+expected_cursor = [0, 5]

@@ -399,7 +399,11 @@ pub(crate) fn join_line<H: hjkl_engine::types::Host>(
     let next_chars = next_raw.chars().count();
     // `J` inserts a single space iff both sides are non-empty after
     // stripping the next line's leading whitespace.
-    let separator = if !cur_line.is_empty() && !next_trimmed.is_empty() {
+    let separator = if !cur_line.is_empty()
+        && !next_trimmed.is_empty()
+        && !cur_line.ends_with([' ', '\t'])
+        && !next_trimmed.starts_with(')')
+    {
         " "
     } else {
         ""

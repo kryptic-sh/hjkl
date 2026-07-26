@@ -558,3 +558,40 @@ fn macro_records_q_as_pending_target() {
         e.cursor()
     );
 }
+
+// ── J join no-space exceptions (audit B8) ──────────────────────────────
+
+/// `J` with a first line ending in whitespace must not insert an extra
+/// space (vim `:h J` exception #1).
+#[test]
+fn join_trailing_whitespace_no_extra_space() {
+    let mut e = editor_with("hello \nworld");
+    dispatch_keys(&mut e, "J");
+    assert_eq!(e.content(), "hello world\n", "trailing space on first line");
+}
+
+/// `J` with a first line ending in tab must not insert an extra space.
+#[test]
+fn join_trailing_tab_no_extra_space() {
+    let mut e = editor_with("hello\t\nworld");
+    dispatch_keys(&mut e, "J");
+    assert_eq!(e.content(), "hello\tworld\n", "trailing tab on first line");
+}
+
+/// `J` with a second line starting with `)` must not insert a space
+/// (vim `:h J` exception #2).
+#[test]
+fn join_leading_paren_no_space() {
+    let mut e = editor_with("hello\n)world");
+    dispatch_keys(&mut e, "J");
+    assert_eq!(e.content(), "hello)world\n", "leading ) on second line");
+}
+
+/// `J` with both lines non-empty and no exception conditions inserts a
+/// single space (the baseline behaviour must remain).
+#[test]
+fn join_plain_inserts_space() {
+    let mut e = editor_with("hello\nworld");
+    dispatch_keys(&mut e, "J");
+    assert_eq!(e.content(), "hello world\n");
+}
