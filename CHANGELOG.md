@@ -8,6 +8,31 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **`cursorline` now defaults to off, matching vim.** The `Settings` and
+  `Options` defaults contradicted each other (`false` vs `true`) and the `true`
+  side won in a fresh TUI session. Vim's default is `nocursorline`; use
+  `:set cursorline` to re-enable the highlight.
+
+### Fixed
+
+- **`current_options()` no longer resets unmapped options to defaults.**
+  `Settings::to_options` mapped only ~20 of 50 fields and backfilled the rest
+  with `Options::default()`, so any read-modify-apply through the nvim API
+  silently reset `number`, `signcolumn`, fold options and two dozen others. The
+  conversion is now exhaustive-by-construction with a round-trip identity test,
+  and `apply_options` gained the 7 fields it was missing in the other direction.
+  Two app-side option-wipe paths (config overlay, `-R` readonly flag) were fixed
+  along the way.
+
+### Internal
+
+- Deduplicated drift-prone copies found by the round-2 audit: the visual-exit
+  `'<`/`'>` mark computation (two byte-identical 35-line copies in the vim FSM),
+  the `InsertSession` setup tail (`begin_insert`/`begin_insert_noundo`), and the
+  `:map` listing's private copy of `encode_macro`.
+
 ## [0.37.1] - 2026-07-26
 
 ### Fixed
