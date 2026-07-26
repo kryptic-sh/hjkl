@@ -48,21 +48,21 @@ impl OperatorKind {
     /// shown when an operator is pending its motion.
     pub fn double_char(self) -> char {
         match self {
-            OperatorKind::Delete => 'd',
-            OperatorKind::Yank => 'y',
-            OperatorKind::Change => 'c',
-            OperatorKind::Indent => '>',
-            OperatorKind::Outdent => '<',
-            OperatorKind::Uppercase => 'U',
-            OperatorKind::Lowercase => 'u',
-            OperatorKind::ToggleCase => '~',
-            OperatorKind::Reflow => 'q',
+            Self::Delete => 'd',
+            Self::Yank => 'y',
+            Self::Change => 'c',
+            Self::Indent => '>',
+            Self::Outdent => '<',
+            Self::Uppercase => 'U',
+            Self::Lowercase => 'u',
+            Self::ToggleCase => '~',
+            Self::Reflow => 'q',
             // `gww` — doubled 'w' after `gw` enters the keep-cursor reflow.
-            OperatorKind::ReflowKeepCursor => 'w',
-            OperatorKind::AutoIndent => '=',
-            OperatorKind::Filter => '!',
+            Self::ReflowKeepCursor => 'w',
+            Self::AutoIndent => '=',
+            Self::Filter => '!',
             // `gcc` — doubled 'c' after `gc` enters the comment operator.
-            OperatorKind::Comment => 'c',
+            Self::Comment => 'c',
         }
     }
 }

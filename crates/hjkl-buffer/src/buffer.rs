@@ -186,12 +186,9 @@ impl View {
         // visible height. O(distance) instead of recomputing
         // `cursor_screen_row_from` every step (which was O(distance^2) on a
         // large soft-wrapped jump).
-        let mut screen = match self.cursor_screen_row_from(viewport, viewport.top_row) {
-            Some(s) => s,
-            None => {
-                viewport.top_col = 0;
-                return;
-            }
+        let Some(mut screen) = self.cursor_screen_row_from(viewport, viewport.top_row) else {
+            viewport.top_col = 0;
+            return;
         };
         while screen >= height {
             let c = self.content.lock().unwrap();
@@ -806,7 +803,7 @@ pub fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
 }
 
 /// Char count of logical line `row` (excluding the trailing `\n`).
-pub(crate) fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
+pub fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
     let slice = rope.line(row);
     let chars = slice.len_chars();
     // ropey includes the '\n' char for non-final lines; subtract it.
@@ -821,7 +818,7 @@ pub(crate) fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
 /// Both coordinates are clamped to the rope's bounds so a position that went
 /// stale (e.g. another view shrank the shared `Buffer` between the caller's
 /// clamp and this call) can never panic `line_to_char`.
-pub(crate) fn pos_to_char_idx(rope: &ropey::Rope, row: usize, col: usize) -> usize {
+pub fn pos_to_char_idx(rope: &ropey::Rope, row: usize, col: usize) -> usize {
     let row = row.min(rope.len_lines().saturating_sub(1));
     let line_start = rope.line_to_char(row);
     let line_char_count = rope_line_char_count(rope, row);

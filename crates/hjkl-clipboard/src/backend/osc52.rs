@@ -26,7 +26,7 @@ fn base64_encoded_len(n: usize) -> usize {
 }
 
 /// OSC 52 backend. Unit struct — no state, everything is stateless I/O.
-pub(crate) struct Osc52Backend;
+pub struct Osc52Backend;
 
 impl Osc52Backend {
     #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]

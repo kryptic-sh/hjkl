@@ -455,22 +455,16 @@ fn dispatch_message(
 
     if has_id && !has_method {
         // Response to one of our requests.
-        let jsonrpc_id = match val.get("id").and_then(Value::as_i64) {
-            Some(i) => i,
-            None => {
-                tracing::warn!(key = ?key, "LSP response with non-integer id; ignoring");
-                return;
-            }
+        let Some(jsonrpc_id) = val.get("id").and_then(Value::as_i64) else {
+            tracing::warn!(key = ?key, "LSP response with non-integer id; ignoring");
+            return;
         };
         // Map the JSON-RPC id back to the app-allocated request id.
         // If the id is not found (e.g. the internal shutdown request uses -1),
         // drop the response silently.
-        let app_id = match pending.lock().ok().and_then(|mut m| m.remove(&jsonrpc_id)) {
-            Some(id) => id,
-            None => {
-                tracing::debug!(key = ?key, jsonrpc_id, "LSP response for unknown id; ignoring");
-                return;
-            }
+        let Some(app_id) = pending.lock().ok().and_then(|mut m| m.remove(&jsonrpc_id)) else {
+            tracing::debug!(key = ?key, jsonrpc_id, "LSP response for unknown id; ignoring");
+            return;
         };
         let result = if let Some(err) = val.get("error") {
             let code = err.get("code").and_then(Value::as_i64).unwrap_or(-1);
@@ -504,8 +498,7 @@ fn dispatch_message(
                         .get("params")
                         .and_then(|p| p.get("items"))
                         .and_then(Value::as_array)
-                        .map(|a| a.len())
-                        .unwrap_or(0);
+                        .map_or(0, |a| a.len());
                     send_response(stdin_tx, id, Value::Array(vec![Value::Null; count]));
                 }
                 "client/registerCapability"

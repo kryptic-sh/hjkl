@@ -18,7 +18,7 @@ enum SlotState<T> {
 }
 
 /// A single-producer single-consumer async channel that holds one value.
-pub(crate) struct Oneshot<T> {
+pub struct Oneshot<T> {
     state: Mutex<SlotState<T>>,
 }
 

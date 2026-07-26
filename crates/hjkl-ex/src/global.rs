@@ -84,8 +84,7 @@ fn split_first_unescaped(s: &str, sep: char) -> Option<(String, String)> {
 /// keystroke-replay `normal`/`norm` (with their `!` variants). Kept beside the
 /// dispatcher so completion (`complete::complete`) can offer exactly this set
 /// and never drift from what `run` accepts. Sorted for stable completion order.
-pub(crate) const GLOBAL_SUBCOMMANDS: &[&str] =
-    &["d", "j", "norm", "norm!", "normal", "normal!", "s", "y"];
+pub const GLOBAL_SUBCOMMANDS: &[&str] = &["d", "j", "norm", "norm!", "normal", "normal!", "s", "y"];
 
 /// Execute `cmd` (the sub-command tail after the `:g/pat/` delimiter, e.g.
 /// `"d"`, `"d a"`, `"s/foo/bar/g"`, `"j"`, `"y a 2"`) at `row` (0-based).
@@ -133,16 +132,15 @@ fn dispatch_sub_command<H: Host>(
 /// ascending order, tracking a signed row-count shift so later marks stay
 /// valid as earlier invocations add/remove rows. See the module doc for the
 /// full design rationale.
-pub(crate) fn global_handler<H: Host>(
+pub fn global_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
     negate: bool,
 ) -> Option<ExEffect> {
     let mut chars = args.chars();
-    let sep = match chars.next() {
-        Some(c) => c,
-        None => return Some(ExEffect::Error("empty :g pattern".into())),
+    let Some(sep) = chars.next() else {
+        return Some(ExEffect::Error("empty :g pattern".into()));
     };
     if sep.is_alphanumeric() || sep == '\\' {
         return Some(ExEffect::Error(
@@ -265,7 +263,7 @@ pub(crate) fn global_handler<H: Host>(
 }
 
 /// `:global/pat/cmd` — matching lines (negate=false).
-pub(crate) fn global_match_handler<H: Host>(
+pub fn global_match_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -280,7 +278,7 @@ pub(crate) fn global_match_handler<H: Host>(
 }
 
 /// `:vglobal/pat/cmd` — non-matching lines (negate=true).
-pub(crate) fn vglobal_handler<H: Host>(
+pub fn vglobal_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,

@@ -168,8 +168,8 @@ impl SplitDir {
         // on `axis()` are future-proof when new variants are added.
         #[allow(unreachable_patterns)]
         match self {
-            SplitDir::Horizontal => Axis::Row,
-            SplitDir::Vertical => Axis::Col,
+            Self::Horizontal => Axis::Row,
+            Self::Vertical => Axis::Col,
             _ => Axis::Row,
         }
     }
@@ -204,9 +204,9 @@ pub enum LayoutTree {
         /// Fraction of the available space allocated to `a`. `0.0 < ratio < 1.0`.
         ratio: f32,
         /// The first (top / left) sub-tree.
-        a: Box<LayoutTree>,
+        a: Box<Self>,
         /// The second (bottom / right) sub-tree.
-        b: Box<LayoutTree>,
+        b: Box<Self>,
         /// Rect this split last occupied. Filled by the renderer each frame;
         /// read by resize commands to convert line/col deltas to ratio updates.
         /// None before the first render.
@@ -251,8 +251,8 @@ impl LayoutTree {
 
     fn collect_leaves(&self, out: &mut Vec<WindowId>) {
         match self {
-            LayoutTree::Leaf(id) => out.push(*id),
-            LayoutTree::Split { a, b, .. } => {
+            Self::Leaf(id) => out.push(*id),
+            Self::Split { a, b, .. } => {
                 a.collect_leaves(out);
                 b.collect_leaves(out);
             }
@@ -283,14 +283,14 @@ impl LayoutTree {
     /// Return `true` if `id` appears anywhere in the tree.
     pub fn contains(&self, id: WindowId) -> bool {
         match self {
-            LayoutTree::Leaf(leaf_id) => *leaf_id == id,
-            LayoutTree::Split { a, b, .. } => a.contains(id) || b.contains(id),
+            Self::Leaf(leaf_id) => *leaf_id == id,
+            Self::Split { a, b, .. } => a.contains(id) || b.contains(id),
         }
     }
 
     /// Find the leaf for `id` and replace it in-place with `f(id)`.
     /// Returns `true` if the leaf was found and replaced.
-    pub fn replace_leaf<F: FnOnce(WindowId) -> LayoutTree + 'static>(
+    pub fn replace_leaf<F: FnOnce(WindowId) -> Self + 'static>(
         &mut self,
         id: WindowId,
         f: F,
@@ -298,18 +298,14 @@ impl LayoutTree {
         self.replace_leaf_boxed(id, Box::new(f))
     }
 
-    fn replace_leaf_boxed(
-        &mut self,
-        id: WindowId,
-        f: Box<dyn FnOnce(WindowId) -> LayoutTree>,
-    ) -> bool {
+    fn replace_leaf_boxed(&mut self, id: WindowId, f: Box<dyn FnOnce(WindowId) -> Self>) -> bool {
         match self {
-            LayoutTree::Leaf(leaf_id) if *leaf_id == id => {
+            Self::Leaf(leaf_id) if *leaf_id == id => {
                 *self = f(id);
                 true
             }
-            LayoutTree::Leaf(_) => false,
-            LayoutTree::Split { a, b, .. } => {
+            Self::Leaf(_) => false,
+            Self::Split { a, b, .. } => {
                 // We need to check `a` first; if not found, check `b`.
                 // Because `Box<dyn FnOnce>` is not `Copy`, we do this by
                 // checking containment first, then calling.
@@ -362,8 +358,8 @@ impl LayoutTree {
     /// - For the "backward" direction (Above / Left), symmetric.
     fn neighbor_direction(&self, id: WindowId, dir: NavDir) -> Option<WindowId> {
         match self {
-            LayoutTree::Leaf(_) => None,
-            LayoutTree::Split {
+            Self::Leaf(_) => None,
+            Self::Split {
                 dir: split_dir,
                 a,
                 b,
@@ -431,8 +427,8 @@ impl LayoutTree {
         dir: SplitDir,
     ) -> Option<(&mut f32, Option<LayoutRect>, bool)> {
         match self {
-            LayoutTree::Leaf(_) => None,
-            LayoutTree::Split {
+            Self::Leaf(_) => None,
+            Self::Split {
                 dir: my_dir,
                 ratio,
                 a,
@@ -470,7 +466,7 @@ impl LayoutTree {
 
     /// Reset all splits in the tree to 0.5 ratio.
     pub fn equalize_all(&mut self) {
-        if let LayoutTree::Split { ratio, a, b, .. } = self {
+        if let Self::Split { ratio, a, b, .. } = self {
             *ratio = 0.5;
             a.equalize_all();
             b.equalize_all();
@@ -483,7 +479,7 @@ impl LayoutTree {
     where
         F: FnMut(SplitDir, &mut f32, bool, Option<LayoutRect>),
     {
-        if let LayoutTree::Split {
+        if let Self::Split {
             dir,
             ratio,
             a,
@@ -544,8 +540,8 @@ impl LayoutTree {
 
     fn collect_rects(&self, area: LayoutRect, out: &mut Vec<(WindowId, LayoutRect)>) {
         match self {
-            LayoutTree::Leaf(id) => out.push((*id, area)),
-            LayoutTree::Split {
+            Self::Leaf(id) => out.push((*id, area)),
+            Self::Split {
                 dir, ratio, a, b, ..
             } => {
                 let (rect_a, rect_b) = headless_split_rect(area, *dir, *ratio);
@@ -562,10 +558,10 @@ impl LayoutTree {
     /// Split — `false` when `id` is the only window).
     pub fn swap_with_sibling(&mut self, id: WindowId) -> bool {
         match self {
-            LayoutTree::Leaf(_) => false,
-            LayoutTree::Split { a, b, .. } => {
-                let a_is_focused_leaf = matches!(a.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id);
-                let b_is_focused_leaf = matches!(b.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id);
+            Self::Leaf(_) => false,
+            Self::Split { a, b, .. } => {
+                let a_is_focused_leaf = matches!(a.as_ref(), Self::Leaf(leaf) if *leaf == id);
+                let b_is_focused_leaf = matches!(b.as_ref(), Self::Leaf(leaf) if *leaf == id);
                 if a_is_focused_leaf || b_is_focused_leaf {
                     std::mem::swap(a, b);
                     return true;
@@ -595,7 +591,7 @@ impl LayoutTree {
     /// Returns `Err("E444: Cannot close last window")` when attempting to
     /// remove the only leaf in the tree.
     pub fn remove_leaf(&mut self, id: WindowId) -> Result<WindowId, &'static str> {
-        if matches!(self, LayoutTree::Leaf(_)) {
+        if matches!(self, Self::Leaf(_)) {
             return Err("E444: Cannot close last window");
         }
         match self.try_remove_leaf(id) {
@@ -609,17 +605,17 @@ impl LayoutTree {
     /// `None` when `id` was not in this subtree.
     fn try_remove_leaf(&mut self, id: WindowId) -> Option<WindowId> {
         match self {
-            LayoutTree::Leaf(_) => None, // can't remove the only leaf
-            LayoutTree::Split { a, b, .. } => {
+            Self::Leaf(_) => None, // can't remove the only leaf
+            Self::Split { a, b, .. } => {
                 // Case 1: `a` is the leaf we want to remove.
-                if matches!(a.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id) {
+                if matches!(a.as_ref(), Self::Leaf(leaf) if *leaf == id) {
                     let new_focus = first_leaf(b);
                     // Collapse: replace self with b.
                     *self = *b.clone();
                     return Some(new_focus);
                 }
                 // Case 2: `b` is the leaf we want to remove.
-                if matches!(b.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id) {
+                if matches!(b.as_ref(), Self::Leaf(leaf) if *leaf == id) {
                     let new_focus = last_leaf(a);
                     // Collapse: replace self with a.
                     *self = *a.clone();

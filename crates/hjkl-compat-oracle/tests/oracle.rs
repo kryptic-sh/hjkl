@@ -89,8 +89,10 @@ fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
         std::path::Path::new(manifest_dir)
             .parent()
             .and_then(|p| p.parent())
-            .map(|p| p.join("target/debug").join(&exe_name))
-            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name))
+            .map_or_else(
+                || std::path::PathBuf::from(&exe_name),
+                |p| p.join("target/debug").join(&exe_name),
+            )
     };
     bin_path.exists().then_some(bin_path)
 }
@@ -757,9 +759,11 @@ async fn nvim_api_tier_passes() {
         let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
         std::path::Path::new(manifest_dir)
             .parent() // crates/
-            .and_then(|p| p.parent()) // workspace root
-            .map(|p| p.join("target/debug").join(&exe_name))
-            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name))
+            .and_then(|p| p.parent())
+            .map_or_else(
+                || std::path::PathBuf::from(&exe_name),
+                |p| p.join("target/debug").join(&exe_name),
+            )
     };
 
     if !bin_path.exists() {
@@ -859,8 +863,10 @@ async fn tier2_sneak_disabled_fallback_corpus_passes() {
         std::path::Path::new(manifest_dir)
             .parent()
             .and_then(|p| p.parent())
-            .map(|p| p.join("target/debug").join(&exe_name))
-            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name))
+            .map_or_else(
+                || std::path::PathBuf::from(&exe_name),
+                |p| p.join("target/debug").join(&exe_name),
+            )
     };
 
     if !bin_path.exists() {

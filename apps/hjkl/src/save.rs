@@ -23,7 +23,7 @@
 ///   in-place write so saving never regresses. That fallback uses
 ///   `File::create` (O_TRUNC), so a mid-write failure **can** leave the
 ///   target truncated — only the atomic path guarantees no data loss.
-pub(crate) fn save_file_durable(
+pub fn save_file_durable(
     path: &std::path::Path,
     body: &[u8],
     trailing_nl: bool,

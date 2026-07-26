@@ -29,7 +29,7 @@ impl LineRange {
 // ---- address parsing -------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub(crate) enum Address {
+pub enum Address {
     Number(usize), // 1-based, as the user typed
     Current,
     Last,
@@ -48,7 +48,7 @@ pub(crate) enum Address {
 /// [`parse_offset_chain`]'s job. A leading `+`/`-` (no explicit base) is
 /// treated as an implicit `.` (current line) base and left unconsumed so the
 /// offset parser picks it up.
-pub(crate) fn parse_base_address(s: &str) -> Option<(Address, &str)> {
+pub fn parse_base_address(s: &str) -> Option<(Address, &str)> {
     let mut chars = s.char_indices();
     let (_, first) = chars.next()?;
     match first {

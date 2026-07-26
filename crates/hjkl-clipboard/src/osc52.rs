@@ -9,10 +9,10 @@ use crate::base64::base64_encode;
 
 /// Spec minimum is 8 KiB; xterm default is 1 MiB. 74 000 bytes is a widely
 /// accepted safe cap and matches most terminal implementations.
-pub(crate) const OSC52_MAX: usize = 74_000;
+pub const OSC52_MAX: usize = 74_000;
 
 /// Returns `true` when the process is running inside tmux.
-pub(crate) fn is_in_tmux() -> bool {
+pub fn is_in_tmux() -> bool {
     std::env::var_os("TMUX").is_some()
 }
 
@@ -22,7 +22,7 @@ pub(crate) fn is_in_tmux() -> bool {
 /// responsible for enforcing the [`OSC52_MAX`] cap before calling this
 /// function — `write_osc52` does **not** check size and will only fail with
 /// genuine I/O errors.
-pub(crate) fn write_osc52(out: &mut impl Write, text: &str, in_tmux: bool) -> io::Result<()> {
+pub fn write_osc52(out: &mut impl Write, text: &str, in_tmux: bool) -> io::Result<()> {
     let encoded = base64_encode(text.as_bytes());
     if in_tmux {
         // DCS passthrough: tmux strips the leading ESC from the inner

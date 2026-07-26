@@ -18,7 +18,7 @@ use crate::render;
 const HOVER_DELAY: Duration = Duration::from_millis(500);
 
 /// Outcome returned by [`App::handle_keypress`].
-pub(crate) enum KeyOutcome {
+pub enum KeyOutcome {
     /// Continue the event loop (equivalent to `continue`).
     Continue,
     /// Break out of the event loop (equivalent to `break`).
@@ -29,7 +29,7 @@ pub(crate) enum KeyOutcome {
 }
 
 /// Outcome returned by [`App::handle_mouse`].
-pub(crate) enum MouseOutcome {
+pub enum MouseOutcome {
     /// Continue the event loop.
     Continue,
     /// Fall through (no explicit `continue` needed but loop iterates).
@@ -52,7 +52,7 @@ fn replay_to_engine(app: &mut App, events: &[KmKeyEvent]) {
 /// Map a [`hjkl_vim::OperatorKind`] (reducer-side) to a
 /// [`hjkl_engine::Operator`] (engine-side). All nine reducer-side operators
 /// have a corresponding engine variant.
-pub(crate) fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
+pub fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
     match k {
         hjkl_vim::OperatorKind::Delete => hjkl_engine::Operator::Delete,
         hjkl_vim::OperatorKind::Yank => hjkl_engine::Operator::Yank,
@@ -1043,15 +1043,10 @@ impl App {
                         self.pending_recompute = true;
 
                         // Update popup prefix.
-                        let anchor_col =
-                            self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
+                        let anchor_col = self.completion.as_ref().map_or(0, |p| p.anchor_col);
                         let cur_col = self.active_editor().buffer().cursor().col;
                         let cur_row = self.active_editor().buffer().cursor().row;
-                        let anchor_row = self
-                            .completion
-                            .as_ref()
-                            .map(|p| p.anchor_row)
-                            .unwrap_or(cur_row);
+                        let anchor_row = self.completion.as_ref().map_or(cur_row, |p| p.anchor_row);
                         if cur_row != anchor_row || cur_col < anchor_col {
                             // Cursor moved out of anchor range — dismiss.
                             self.dismiss_completion();
@@ -1071,8 +1066,7 @@ impl App {
                                 let byte_of = |char_col: usize| -> usize {
                                     line.char_indices()
                                         .nth(char_col)
-                                        .map(|(b, _)| b)
-                                        .unwrap_or(line.len())
+                                        .map_or(line.len(), |(b, _)| b)
                                 };
                                 let a = byte_of(anchor_col);
                                 let c = byte_of(cur_col);
@@ -1124,15 +1118,10 @@ impl App {
                         // instead of paying per-keystroke sync cost.
                         self.pending_recompute = true;
 
-                        let anchor_col =
-                            self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
+                        let anchor_col = self.completion.as_ref().map_or(0, |p| p.anchor_col);
                         let cur_col = self.active_editor().buffer().cursor().col;
                         let cur_row = self.active_editor().buffer().cursor().row;
-                        let anchor_row = self
-                            .completion
-                            .as_ref()
-                            .map(|p| p.anchor_row)
-                            .unwrap_or(cur_row);
+                        let anchor_row = self.completion.as_ref().map_or(cur_row, |p| p.anchor_row);
                         if cur_row != anchor_row || cur_col < anchor_col {
                             self.dismiss_completion();
                         } else {
@@ -1147,8 +1136,7 @@ impl App {
                                 let byte_of = |char_col: usize| -> usize {
                                     line.char_indices()
                                         .nth(char_col)
-                                        .map(|(b, _)| b)
-                                        .unwrap_or(line.len())
+                                        .map_or(line.len(), |(b, _)| b)
                                 };
                                 let a = byte_of(anchor_col);
                                 let c = byte_of(cur_col);
@@ -2209,8 +2197,7 @@ impl App {
                 .windows
                 .get(win_id)
                 .and_then(|w| w.as_ref())
-                .map(|w| !self.slots[w.slot].features.hover)
-                .unwrap_or(false);
+                .is_some_and(|w| !self.slots[w.slot].features.hover);
             if hover_disabled {
                 self.hover_timer = None;
                 return;

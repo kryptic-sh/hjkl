@@ -40,10 +40,10 @@ pub fn trash_path(original: &Path, is_dir: bool) -> std::io::Result<PathBuf> {
     let dir = trash_dir()?;
 
     // Build a base name from the original file name (fall back to "unnamed").
-    let base_name = original
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unnamed".to_string());
+    let base_name = original.file_name().map_or_else(
+        || "unnamed".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
 
     // Atomically reserve the first free counter slot.
     const MAX_RETRIES: u64 = 1000;

@@ -312,8 +312,7 @@ impl CommentMarkerPass {
             let le = bytes[ls..]
                 .iter()
                 .position(|&b| b == b'\n')
-                .map(|p| ls + p)
-                .unwrap_or(first_comment_start);
+                .map_or(first_comment_start, |p| ls + p);
             let le = le.min(first_comment_start);
             let line_bytes = &bytes[ls..le];
             // String-scan fallback: look for comment delimiters.
@@ -430,12 +429,9 @@ impl CommentMarkerPass {
                 active = None;
             }
 
-            let win_cr_start = match to_win(comment_range.start) {
-                Some(w) => w,
-                None => {
-                    prev_end = Some(comment_range.end);
-                    continue;
-                }
+            let Some(win_cr_start) = to_win(comment_range.start) else {
+                prev_end = Some(comment_range.end);
+                continue;
             };
             let win_cr_end = to_win(comment_range.end)
                 .unwrap_or(window.len())
@@ -561,8 +557,7 @@ fn scan_markers<'m>(
                 let left_ok = i == 0 || !body[i - 1].is_ascii_alphanumeric();
                 let right_ok = body
                     .get(i + wbytes.len())
-                    .map(|b| !b.is_ascii_alphanumeric())
-                    .unwrap_or(true);
+                    .is_none_or(|b| !b.is_ascii_alphanumeric());
                 if left_ok && right_ok {
                     out.push(FoundMarker {
                         word_start: body_start + i,

@@ -32,7 +32,7 @@ impl EmbedSession {
         let stdin = BufWriter::new(child.stdin.take().expect("child stdin"));
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
 
-        EmbedSession {
+        Self {
             child,
             stdin,
             stdout,

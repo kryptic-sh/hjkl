@@ -121,7 +121,7 @@ fn enter_continues_rust_outer_doc_comment() {
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines.get(1).map(|l| l.starts_with("/// ")).unwrap_or(false),
+        lines.get(1).is_some_and(|l| l.starts_with("/// ")),
         "line 2 should start with '/// ', got: {lines:?}"
     );
 }
@@ -135,7 +135,7 @@ fn enter_continues_rust_inner_doc_comment() {
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines.get(1).map(|l| l.starts_with("//! ")).unwrap_or(false),
+        lines.get(1).is_some_and(|l| l.starts_with("//! ")),
         "line 2 should start with '//! ', got: {lines:?}"
     );
 }
@@ -149,7 +149,7 @@ fn enter_continues_python_comment() {
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines.get(1).map(|l| l.starts_with("# ")).unwrap_or(false),
+        lines.get(1).is_some_and(|l| l.starts_with("# ")),
         "line 2 should start with '# ', got: {lines:?}"
     );
 }

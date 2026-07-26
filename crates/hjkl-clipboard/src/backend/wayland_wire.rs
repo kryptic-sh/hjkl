@@ -20,7 +20,7 @@
 /// u32 that encodes opcode in the low 16 bits and total size in the high 16.
 /// We store them separated for clarity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MessageHeader {
+pub struct MessageHeader {
     /// Target object this message is addressed to.
     pub object_id: u32,
     /// Method index within the object's interface.
@@ -34,7 +34,7 @@ pub(crate) struct MessageHeader {
 // ---------------------------------------------------------------------------
 
 /// Append a u32 in little-endian byte order.
-pub(crate) fn encode_u32(out: &mut Vec<u8>, v: u32) {
+pub fn encode_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn encode_u32(out: &mut Vec<u8>, v: u32) {
 ///
 /// Format: u32 length (bytes of `s` + 1 for NUL) + raw bytes + NUL byte +
 /// zero-padding so the total is a multiple of 4.
-pub(crate) fn encode_string(out: &mut Vec<u8>, s: &str) {
+pub fn encode_string(out: &mut Vec<u8>, s: &str) {
     let len_with_nul = s.len() + 1; // includes the trailing NUL
     encode_u32(out, len_with_nul as u32);
     out.extend_from_slice(s.as_bytes());
@@ -58,7 +58,7 @@ pub(crate) fn encode_string(out: &mut Vec<u8>, s: &str) {
 /// size field equals the exact byte count, which must be a multiple of 4.
 /// Callers must ensure `args` is already 4-byte aligned (it always is when
 /// built from our encode helpers).
-pub(crate) fn encode_message(object_id: u32, opcode: u16, args: &[u8]) -> Vec<u8> {
+pub fn encode_message(object_id: u32, opcode: u16, args: &[u8]) -> Vec<u8> {
     let total: u16 = (8 + args.len()) as u16; // header (8) + args
     let size_opcode: u32 = (u32::from(total) << 16) | u32::from(opcode);
 
@@ -80,7 +80,7 @@ pub(crate) fn encode_message(object_id: u32, opcode: u16, args: &[u8]) -> Vec<u8
 /// (i.e. the args slice that follows, length = header.size - 8).
 ///
 /// Caller must check that `buf.len() >= header.size` before consuming the rest.
-pub(crate) fn parse_message_header(buf: &[u8]) -> Option<(MessageHeader, &[u8])> {
+pub fn parse_message_header(buf: &[u8]) -> Option<(MessageHeader, &[u8])> {
     if buf.len() < 8 {
         return None;
     }
@@ -101,7 +101,7 @@ pub(crate) fn parse_message_header(buf: &[u8]) -> Option<(MessageHeader, &[u8])>
 /// Consumes: u32 len-field + len bytes (including NUL) + padding to 4.
 /// Returns `(&str, remaining_args)` on success, `None` on truncation or
 /// invalid UTF-8.
-pub(crate) fn parse_string(args: &[u8]) -> Option<(&str, &[u8])> {
+pub fn parse_string(args: &[u8]) -> Option<(&str, &[u8])> {
     if args.len() < 4 {
         return None;
     }
@@ -132,7 +132,7 @@ pub(crate) fn parse_string(args: &[u8]) -> Option<(&str, &[u8])> {
 }
 
 /// Parse a u32 from `args` (little-endian).
-pub(crate) fn parse_u32(args: &[u8]) -> Option<(u32, &[u8])> {
+pub fn parse_u32(args: &[u8]) -> Option<(u32, &[u8])> {
     if args.len() < 4 {
         return None;
     }

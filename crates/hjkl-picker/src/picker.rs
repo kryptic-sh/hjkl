@@ -195,7 +195,7 @@ impl Picker {
 
     /// True once the background thread has finished (or none was started).
     pub fn scan_done(&self) -> bool {
-        self._scan.as_ref().map(|h| h.is_finished()).unwrap_or(true)
+        self._scan.as_ref().is_none_or(|h| h.is_finished())
     }
 
     /// Total candidate count (regardless of filter).

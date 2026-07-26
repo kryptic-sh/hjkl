@@ -192,9 +192,8 @@ impl crate::predicate::Predicate for ContainsPredicate {
         let Some(PredicateArg::Capture(cap_idx)) = ctx.args.first() else {
             return true; // malformed — don't filter
         };
-        let text = match ctx.capture_text(*cap_idx) {
-            Some(t) => t,
-            None => return false,
+        let Some(text) = ctx.capture_text(*cap_idx) else {
+            return false;
         };
         ctx.args[1..].iter().any(|arg| {
             if let PredicateArg::Str(s) = arg {
@@ -220,9 +219,8 @@ impl crate::predicate::Predicate for HasAncestorPredicate {
         let Some(PredicateArg::Capture(cap_idx)) = ctx.args.first() else {
             return true;
         };
-        let node = match ctx.first_capture(*cap_idx) {
-            Some(n) => n,
-            None => return false,
+        let Some(node) = ctx.first_capture(*cap_idx) else {
+            return false;
         };
         let kinds: Vec<&str> = ctx.args[1..]
             .iter()
@@ -262,9 +260,8 @@ impl crate::predicate::Predicate for HasParentPredicate {
         let Some(PredicateArg::Capture(cap_idx)) = ctx.args.first() else {
             return true;
         };
-        let node = match ctx.first_capture(*cap_idx) {
-            Some(n) => n,
-            None => return false,
+        let Some(node) = ctx.first_capture(*cap_idx) else {
+            return false;
         };
         let kinds: Vec<&str> = ctx.args[1..]
             .iter()
@@ -334,9 +331,8 @@ impl crate::predicate::Predicate for LuaMatchPredicate {
         else {
             return true; // malformed — don't filter
         };
-        let text = match ctx.capture_text(*cap_idx) {
-            Some(t) => t,
-            None => return false,
+        let Some(text) = ctx.capture_text(*cap_idx) else {
+            return false;
         };
 
         // Resolve the regex through the cache. `Regex::clone` is cheap
@@ -708,12 +704,9 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn contains_predicate_match() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not available; skipping test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not available; skipping test");
+            return;
         };
         let source = b"<a href=\"https://example.com\">link</a>";
         let tree = parse(grammar.language(), source);
@@ -721,12 +714,9 @@ mod tests {
 
         // Find the attribute_value node containing the URL.
         let url_node = find_node_by_kind(&root, "attribute_value");
-        let url_node = match url_node {
-            Some(n) => n,
-            None => {
-                eprintln!("could not find attribute_value node; skipping");
-                return;
-            }
+        let Some(url_node) = url_node else {
+            eprintln!("could not find attribute_value node; skipping");
+            return;
         };
 
         let captures = vec![(0u32, url_node)];
@@ -747,24 +737,18 @@ mod tests {
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     #[test]
     fn contains_predicate_no_match() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not available; skipping test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not available; skipping test");
+            return;
         };
         let source = b"<a href=\"https://example.com\">link</a>";
         let tree = parse(grammar.language(), source);
         let root = tree.root_node();
 
         let url_node = find_node_by_kind(&root, "attribute_value");
-        let url_node = match url_node {
-            Some(n) => n,
-            None => {
-                eprintln!("could not find attribute_value node; skipping");
-                return;
-            }
+        let Some(url_node) = url_node else {
+            eprintln!("could not find attribute_value node; skipping");
+            return;
         };
 
         let captures = vec![(0u32, url_node)];
@@ -793,12 +777,9 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn has_ancestor_predicate_true() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not available; skipping test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not available; skipping test");
+            return;
         };
         let source = b"<a href=\"https://example.com\">link</a>";
         let tree = parse(grammar.language(), source);
@@ -806,12 +787,9 @@ mod tests {
 
         // attribute_value is nested inside attribute > start_tag > element > document
         let node = find_node_by_kind(&root, "attribute_value");
-        let node = match node {
-            Some(n) => n,
-            None => {
-                eprintln!("could not find attribute_value; skipping");
-                return;
-            }
+        let Some(node) = node else {
+            eprintln!("could not find attribute_value; skipping");
+            return;
         };
 
         let captures = vec![(0u32, node)];
@@ -835,24 +813,18 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn has_ancestor_predicate_false() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not available; skipping test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not available; skipping test");
+            return;
         };
         let source = b"<a href=\"https://example.com\">link</a>";
         let tree = parse(grammar.language(), source);
         let root = tree.root_node();
 
         let node = find_node_by_kind(&root, "attribute_value");
-        let node = match node {
-            Some(n) => n,
-            None => {
-                eprintln!("could not find attribute_value; skipping");
-                return;
-            }
+        let Some(node) = node else {
+            eprintln!("could not find attribute_value; skipping");
+            return;
         };
 
         let captures = vec![(0u32, node)];
@@ -878,12 +850,9 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn has_parent_predicate_true() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not available; skipping test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not available; skipping test");
+            return;
         };
         let source = b"<a href=\"https://example.com\">link</a>";
         let tree = parse(grammar.language(), source);
@@ -891,14 +860,11 @@ mod tests {
 
         // attribute_value's direct parent should be "attribute"
         let node = find_node_by_kind(&root, "attribute_value");
-        let node = match node {
-            Some(n) => n,
-            None => {
-                eprintln!("could not find attribute_value; skipping");
-                return;
-            }
+        let Some(node) = node else {
+            eprintln!("could not find attribute_value; skipping");
+            return;
         };
-        let parent_kind = node.parent().map(|p| p.kind()).unwrap_or("");
+        let parent_kind = node.parent().map_or("", |p| p.kind());
 
         let captures = vec![(0u32, node)];
         let args = [PredicateArg::Capture(0), PredicateArg::Str(parent_kind)];

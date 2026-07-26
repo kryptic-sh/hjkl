@@ -668,7 +668,7 @@ pub struct SearchBank {
 
 impl Default for SearchBank {
     fn default() -> Self {
-        SearchBank {
+        Self {
             last: None,
             // Matches vim's default: before any search, `n` behaves as if
             // the last search were forward.
@@ -2125,7 +2125,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let len = match line_len {
                 Some(l) => l,
                 None => {
-                    let l = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
+                    let l = buf_line(&self.buffer, row).map_or(0, |s| s.len());
                     line_len = Some(l);
                     l
                 }
@@ -3614,7 +3614,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
     pub fn set_content(&mut self, text: &str) {
         let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-        while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+        while lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
         if lines.is_empty() {
@@ -3642,7 +3642,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn set_content_undoable(&mut self, text: &str) {
         self.push_undo();
         let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-        while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+        while lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
         if lines.is_empty() {
@@ -4212,9 +4212,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let max_row = new_top + height.saturating_sub(1).saturating_sub(margin);
         let target_row = cursor_row.clamp(min_row, max_row.max(min_row));
         if target_row != cursor_row {
-            let line_len = buf_line(&self.buffer, target_row)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
+            let line_len = buf_line(&self.buffer, target_row).map_or(0, |l| l.chars().count());
             let target_col = cursor_col.min(line_len.saturating_sub(1));
             buf_set_cursor_rc(&mut self.buffer, target_row, target_col);
         }
@@ -4272,9 +4270,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let r = line.saturating_sub(1);
         let max_row = buf_row_count(&self.buffer).saturating_sub(1);
         let r = r.min(max_row);
-        let line_len = buf_line(&self.buffer, r)
-            .map(|l| l.chars().count())
-            .unwrap_or(0);
+        let line_len = buf_line(&self.buffer, r).map_or(0, |l| l.chars().count());
         let c = col.saturating_sub(1).min(line_len);
         buf_set_cursor_rc(&mut self.buffer, r, c);
     }
@@ -4295,9 +4291,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn set_cursor_doc(&mut self, row: usize, col: usize) {
         let max_row = buf_row_count(&self.buffer).saturating_sub(1);
         let r = row.min(max_row);
-        let line_len = buf_line(&self.buffer, r)
-            .map(|l| l.chars().count())
-            .unwrap_or(0);
+        let line_len = buf_line(&self.buffer, r).map_or(0, |l| l.chars().count());
         let c = col.min(line_len);
         buf_set_cursor_rc(&mut self.buffer, r, c);
     }
@@ -5173,8 +5167,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                         after_space
                             .trim_end()
                             .strip_suffix(end_marker.as_str())
-                            .map(|s| s.trim_end())
-                            .unwrap_or(after_space)
+                            .map_or(after_space, |s| s.trim_end())
                     } else {
                         after_space
                     };

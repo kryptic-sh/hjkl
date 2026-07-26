@@ -171,9 +171,8 @@ pub fn rainbow_spans(
     }
 
     let cache = RAINBOW_QUERY_CACHE.read().unwrap();
-    let compiled = match cache.get(grammar.name()).and_then(|v| v.as_ref()) {
-        Some(c) => c,
-        None => return Vec::new(),
+    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
+        return Vec::new();
     };
 
     let mut cursor = QueryCursor::new();
@@ -223,9 +222,8 @@ pub fn rainbow_spans(
 /// avoid a full-document scan.
 fn count_scope_depth(node: tree_sitter::Node<'_>, grammar: &Grammar, source: &[u8]) -> usize {
     let cache = RAINBOW_QUERY_CACHE.read().unwrap();
-    let compiled = match cache.get(grammar.name()).and_then(|v| v.as_ref()) {
-        Some(c) => c,
-        None => return 0,
+    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
+        return 0;
     };
 
     let mut depth = 0usize;
@@ -315,9 +313,8 @@ pub fn rainbow_spans_rope(
     }
 
     let cache = RAINBOW_QUERY_CACHE.read().unwrap();
-    let compiled = match cache.get(grammar.name()).and_then(|v| v.as_ref()) {
-        Some(c) => c,
-        None => return Vec::new(),
+    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
+        return Vec::new();
     };
 
     let bracket_idx = compiled.bracket_idx;

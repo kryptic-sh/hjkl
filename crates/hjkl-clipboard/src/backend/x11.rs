@@ -17,7 +17,7 @@ use super::dlopen::{XcbConnection, XcbFns, xcb_fns};
 // ---------------------------------------------------------------------------
 
 /// Key fields extracted from the first screen in the XCB setup.
-pub(crate) struct ScreenInfo {
+pub struct ScreenInfo {
     /// Root window XID.
     pub root: u32,
     /// Visual ID of the root window (needed for `xcb_create_window`).
@@ -41,7 +41,7 @@ pub(crate) struct ScreenInfo {
 
 /// XCB atom IDs interned at connection time.
 #[derive(Clone, Copy)]
-pub(crate) struct Atoms {
+pub struct Atoms {
     pub clipboard: u32,
     pub primary: u32,
     pub targets: u32,
@@ -88,7 +88,7 @@ const ATOM_NAMES: &[&str] = &[
 /// Not `Sync` — XCB connections must be driven from a single thread.
 /// `Send` is implemented manually so the bg thread can take ownership after
 /// `X11Connection::open()` returns on the calling thread.
-pub(crate) struct X11Connection {
+pub struct X11Connection {
     fns: &'static XcbFns,
     conn: *mut XcbConnection,
     pub screen: ScreenInfo,

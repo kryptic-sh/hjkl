@@ -197,7 +197,7 @@ struct X11State {
 // ---------------------------------------------------------------------------
 
 /// Operations the X11 thread can handle.
-pub(crate) enum X11Op {
+pub enum X11Op {
     Set {
         sel_atom: u32,
         /// Pre-interned atom for known mime types; 0 when mime_name is used.
@@ -223,7 +223,7 @@ pub(crate) enum X11Op {
 }
 
 /// Per-op reply payload.
-pub(crate) enum X11OpResult {
+pub enum X11OpResult {
     Set(Result<(), ClipboardError>),
     Clear(Result<(), ClipboardError>),
     Get(Result<Vec<u8>, ClipboardError>),
@@ -232,7 +232,7 @@ pub(crate) enum X11OpResult {
 }
 
 /// Envelope sent to the X11 thread inbox.
-pub(crate) struct X11Request {
+pub struct X11Request {
     pub op: X11Op,
     pub reply: crate::reply::Reply<X11OpResult>,
 }
@@ -242,7 +242,7 @@ pub(crate) struct X11Request {
 // ---------------------------------------------------------------------------
 
 /// Future returned by [`X11Thread::send_async`].
-pub(crate) struct X11Future {
+pub struct X11Future {
     oneshot: Arc<crate::oneshot::Oneshot<X11OpResult>>,
 }
 
@@ -262,7 +262,7 @@ impl std::future::Future for X11Future {
 // ---------------------------------------------------------------------------
 
 /// Handle to the singleton X11 bg thread.
-pub(crate) struct X11Thread {
+pub struct X11Thread {
     tx: mpsc::Sender<X11Request>,
     /// Pre-interned atoms — stable for process lifetime.
     pub(crate) atoms: Atoms,
@@ -350,7 +350,7 @@ impl X11Thread {
 static X11_THREAD: OnceLock<Result<X11Thread, ClipboardError>> = OnceLock::new();
 
 /// Return the process-global X11 thread, or an error if X11 is unavailable.
-pub(crate) fn x11_thread() -> Result<&'static X11Thread, ClipboardError> {
+pub fn x11_thread() -> Result<&'static X11Thread, ClipboardError> {
     X11_THREAD
         .get_or_init(X11Thread::new)
         .as_ref()
@@ -1402,7 +1402,7 @@ fn do_available(state: &mut X11State, sel_atom: u32) -> Result<Vec<u32>, Clipboa
 ///
 /// Returns `None` for `Custom` (requires live intern) and for unknown future
 /// variants.
-pub(crate) fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32> {
+pub fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32> {
     match mime {
         MimeType::Text => Some(atoms.utf8_string),
         MimeType::Html => Some(atoms.text_html),
@@ -1418,7 +1418,7 @@ pub(crate) fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32>
 /// Map a MimeType to (mime_atom, mime_name):
 ///   - Known types return (atom, None).
 ///   - Custom(s) returns (0, Some(s)) so the bg thread can intern lazily.
-pub(crate) fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Option<String>) {
+pub fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Option<String>) {
     match mime_to_atom_static(atoms, mime) {
         Some(atom) => (atom, None),
         None => {
@@ -1437,7 +1437,7 @@ pub(crate) fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Opti
 /// the known pre-interned types. Unknown atoms are silently dropped from
 /// available() results (Phase 8 / v0.5 can add reverse xcb_get_atom_name
 /// lookup for full fidelity).
-pub(crate) fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
+pub fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
     if atom == atoms.utf8_string || atom == atoms.text_plain_utf8 || atom == atoms.string {
         Some(MimeType::Text)
     } else if atom == atoms.text_html {
@@ -1462,7 +1462,7 @@ pub(crate) fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
 /// `Custom(s)` mime types are interned lazily on the bg thread using
 /// `xcb_intern_atom` and cached for re-use. All other mime types use
 /// pre-interned atoms from the `Atoms` struct.
-pub(crate) fn set_clipboard(
+pub fn set_clipboard(
     thread: &X11Thread,
     sel: Selection,
     mime: &MimeType,
@@ -1484,7 +1484,7 @@ pub(crate) fn set_clipboard(
 }
 
 /// Clear a selection via the X11 thread.
-pub(crate) fn clear_clipboard(thread: &X11Thread, sel: Selection) -> Result<(), ClipboardError> {
+pub fn clear_clipboard(thread: &X11Thread, sel: Selection) -> Result<(), ClipboardError> {
     let sel_atom = sel_to_atom(&thread.atoms, sel);
     let result = thread.send_sync(X11Op::Clear { sel_atom })?;
     match result {
@@ -1497,7 +1497,7 @@ pub(crate) fn clear_clipboard(thread: &X11Thread, sel: Selection) -> Result<(), 
 ///
 /// `Custom(s)` mime types are interned lazily on the bg thread; all others
 /// use pre-interned atoms.
-pub(crate) fn get_clipboard(
+pub fn get_clipboard(
     thread: &X11Thread,
     sel: Selection,
     mime: &MimeType,
@@ -1516,7 +1516,7 @@ pub(crate) fn get_clipboard(
 }
 
 /// Return the available MIME types in a selection via the X11 thread.
-pub(crate) fn available_clipboard(
+pub fn available_clipboard(
     thread: &X11Thread,
     sel: Selection,
 ) -> Result<Vec<MimeType>, ClipboardError> {
@@ -1541,7 +1541,7 @@ pub(crate) fn available_clipboard(
     }
 }
 
-pub(crate) fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
+pub fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
     match sel {
         Selection::Clipboard => atoms.clipboard,
         Selection::Primary => atoms.primary,
@@ -1751,10 +1751,7 @@ mod tests {
     #[test]
     fn set_clear_clipboard_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let text = b"hello-x11-5b";
         set_clipboard(thread, Selection::Clipboard, &MimeType::Text, text)
@@ -1764,12 +1761,9 @@ mod tests {
         // to any queued SELECTION_REQUEST events from xclip.
         std::thread::sleep(Duration::from_millis(150));
 
-        let out = match xclip_clipboard() {
-            Some(o) => o,
-            None => {
-                eprintln!("SKIP set_clear_clipboard_text: xclip not available");
-                return;
-            }
+        let Some(out) = xclip_clipboard() else {
+            eprintln!("SKIP set_clear_clipboard_text: xclip not available");
+            return;
         };
         assert_eq!(out, text, "xclip clipboard read mismatch");
 
@@ -1788,10 +1782,7 @@ mod tests {
     #[test]
     fn set_primary_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let text = b"primary-selection-5b";
         set_clipboard(thread, Selection::Primary, &MimeType::Text, text)
@@ -1799,12 +1790,9 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(150));
 
-        let out = match xclip_primary() {
-            Some(o) => o,
-            None => {
-                eprintln!("SKIP set_primary_text: xclip not available");
-                return;
-            }
+        let Some(out) = xclip_primary() else {
+            eprintln!("SKIP set_primary_text: xclip not available");
+            return;
         };
         assert_eq!(out, text, "xclip primary read mismatch");
     }
@@ -1812,10 +1800,7 @@ mod tests {
     #[test]
     fn set_html_payload() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let html = b"<b>hello</b>";
         set_clipboard(thread, Selection::Clipboard, &MimeType::Html, html)
@@ -1823,12 +1808,9 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(150));
 
-        let out = match xclip_typed("clipboard", "text/html") {
-            Some(o) => o,
-            None => {
-                eprintln!("SKIP set_html_payload: xclip not available");
-                return;
-            }
+        let Some(out) = xclip_typed("clipboard", "text/html") else {
+            eprintln!("SKIP set_html_payload: xclip not available");
+            return;
         };
         assert_eq!(out, html, "xclip html read mismatch");
     }
@@ -1840,10 +1822,7 @@ mod tests {
     #[test]
     fn set_replaces_previous() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"hello")
             .expect("first set failed");
@@ -1853,12 +1832,9 @@ mod tests {
             .expect("second set failed");
         std::thread::sleep(Duration::from_millis(150));
 
-        let out = match xclip_clipboard() {
-            Some(o) => o,
-            None => {
-                eprintln!("SKIP set_replaces_previous: xclip not available");
-                return;
-            }
+        let Some(out) = xclip_clipboard() else {
+            eprintln!("SKIP set_replaces_previous: xclip not available");
+            return;
         };
         assert_eq!(out, b"world", "expected 'world' after replace");
     }
@@ -1870,20 +1846,14 @@ mod tests {
     #[test]
     fn get_clipboard_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let data = b"hello-get-5c\n";
 
         // Write via xclip; it stays alive as a selection owner.
-        let mut child = match xclip_write("clipboard", data) {
-            Some(c) => c,
-            None => {
-                eprintln!("SKIP get_clipboard_text: xclip not available");
-                return;
-            }
+        let Some(mut child) = xclip_write("clipboard", data) else {
+            eprintln!("SKIP get_clipboard_text: xclip not available");
+            return;
         };
 
         // Give xclip time to claim ownership.
@@ -1900,19 +1870,13 @@ mod tests {
     #[test]
     fn get_primary_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let data = b"primary-get-5c\n";
 
-        let mut child = match xclip_write("primary", data) {
-            Some(c) => c,
-            None => {
-                eprintln!("SKIP get_primary_text: xclip not available");
-                return;
-            }
+        let Some(mut child) = xclip_write("primary", data) else {
+            eprintln!("SKIP get_primary_text: xclip not available");
+            return;
         };
 
         std::thread::sleep(Duration::from_millis(150));
@@ -1930,10 +1894,7 @@ mod tests {
         // The X server sends our own window a SELECTION_REQUEST which our event
         // loop dispatches inside do_get's wait loop, so this must not deadlock.
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"loop").expect("set failed");
         std::thread::sleep(Duration::from_millis(50));
@@ -1946,17 +1907,11 @@ mod tests {
     #[test]
     fn available_lists_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
-        let mut child = match xclip_write("clipboard", b"available-test\n") {
-            Some(c) => c,
-            None => {
-                eprintln!("SKIP available_lists_text: xclip not available");
-                return;
-            }
+        let Some(mut child) = xclip_write("clipboard", b"available-test\n") else {
+            eprintln!("SKIP available_lists_text: xclip not available");
+            return;
         };
 
         std::thread::sleep(Duration::from_millis(150));
@@ -1974,10 +1929,7 @@ mod tests {
     #[test]
     fn get_unowned_returns_unsupported() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         // Clear so there is no owner.
         clear_clipboard(thread, Selection::Clipboard).expect("clear failed");
@@ -1994,10 +1946,7 @@ mod tests {
     #[test]
     fn available_no_owner_returns_empty() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         clear_clipboard(thread, Selection::Clipboard).expect("clear failed");
         std::thread::sleep(Duration::from_millis(100));
@@ -2022,10 +1971,7 @@ mod tests {
     #[test]
     fn large_payload_self_loop() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         // 1 MiB of a repeating pattern so any data corruption is obvious.
         let size = 1024 * 1024;
@@ -2117,7 +2063,7 @@ mod tests {
                 })
                 .ok()?;
 
-            Some(MockManager {
+            Some(Self {
                 handle,
                 saw_save_targets,
                 received_payloads,
@@ -2449,21 +2395,12 @@ mod tests {
     #[test]
     fn save_targets_invokes_manager() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
-        let session = match ensure_xvfb() {
-            Some(s) => s,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
+        let Some(session) = ensure_xvfb() else { return };
 
-        let mgr = match MockManager::spawn(&session.display) {
-            Some(m) => m,
-            None => {
-                eprintln!("SKIP save_targets_invokes_manager: MockManager spawn failed");
-                return;
-            }
+        let Some(mgr) = MockManager::spawn(&session.display) else {
+            eprintln!("SKIP save_targets_invokes_manager: MockManager spawn failed");
+            return;
         };
 
         // Give the manager time to claim ownership.
@@ -2508,10 +2445,7 @@ mod tests {
     #[test]
     fn save_targets_no_manager() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         // Ensure no manager is present (the singleton X11Thread doesn't own
         // CLIPBOARD_MANAGER; unless a previous test left a MockManager alive,
@@ -2547,10 +2481,7 @@ mod tests {
     #[test]
     fn x11_custom_mime_set_round_trip() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         let mime = MimeType::Custom("application/x-hjkl-test".into());
         let data = b"custom-mime-payload-7a";
@@ -2559,12 +2490,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(150));
 
         // xclip can read back with an explicit type flag.
-        let out = match xclip_typed("clipboard", "application/x-hjkl-test") {
-            Some(o) => o,
-            None => {
-                eprintln!("SKIP x11_custom_mime_set_round_trip: xclip not available");
-                return;
-            }
+        let Some(out) = xclip_typed("clipboard", "application/x-hjkl-test") else {
+            eprintln!("SKIP x11_custom_mime_set_round_trip: xclip not available");
+            return;
         };
         assert_eq!(out, data, "custom mime xclip read mismatch");
     }
@@ -2573,10 +2501,7 @@ mod tests {
     #[test]
     fn x11_custom_mime_get_round_trip() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
+        let Some(thread) = get_thread() else { return };
 
         // Use the self-loop path: set custom, then get custom.
         let mime = MimeType::Custom("application/x-hjkl-get-test".into());

@@ -83,8 +83,7 @@ fn small_edit_parse_and_walk_under_some_budget() {
         .enumerate()
         .filter(|&(_, b)| *b == b'\n')
         .nth(9)
-        .map(|(i, _)| i + 1)
-        .unwrap_or(post.len());
+        .map_or(post.len(), |(i, _)| i + 1);
     let _spans = h.highlight_range(&post, 0..viewport_end);
     let elapsed = t.elapsed();
 

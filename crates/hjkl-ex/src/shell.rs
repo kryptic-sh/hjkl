@@ -30,7 +30,7 @@ use hjkl_engine::Host;
 ///
 /// Called from `try_dispatch` via the special-case `!` prefix check
 /// (before `split_name_args`).
-pub(crate) fn shell_filter_handler<H: Host>(
+pub fn shell_filter_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     cmd: &str,
     range: Option<LineRange>,
@@ -70,8 +70,7 @@ pub(crate) fn shell_filter_handler<H: Host>(
                     "command exited {} ({label})",
                     out.status
                         .code()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "?".into())
+                        .map_or_else(|| "?".into(), |c| c.to_string())
                 ))
             }
             Err(e) => ExEffect::Error(format!("cannot run `{cmd}`: {e}")),
@@ -139,13 +138,11 @@ pub(crate) fn shell_filter_handler<H: Host>(
             output
                 .status
                 .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "?".into())
+                .map_or_else(|| "?".into(), |c| c.to_string())
         ));
     }
-    let stdout = match String::from_utf8(output.stdout) {
-        Ok(s) => s,
-        Err(_) => return ExEffect::Error("filter output was not UTF-8".into()),
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return ExEffect::Error("filter output was not UTF-8".into());
     };
     let trimmed = stdout.strip_suffix('\n').unwrap_or(&stdout);
     let new_rows: Vec<String> = trimmed.split('\n').map(String::from).collect();

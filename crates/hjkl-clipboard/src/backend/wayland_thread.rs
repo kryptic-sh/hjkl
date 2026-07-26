@@ -176,7 +176,7 @@ fn mimes_for(mime: &MimeType) -> &'static [&'static str] {
 // Op / Request types
 // ---------------------------------------------------------------------------
 
-pub(crate) enum WaylandOp {
+pub enum WaylandOp {
     Set {
         sel: Selection,
         mime: MimeType,
@@ -194,14 +194,14 @@ pub(crate) enum WaylandOp {
     },
 }
 
-pub(crate) enum WaylandOpResult {
+pub enum WaylandOpResult {
     Set(Result<(), ClipboardError>),
     Clear(Result<(), ClipboardError>),
     Get(Result<Vec<u8>, ClipboardError>),
     Available(Result<Vec<MimeType>, ClipboardError>),
 }
 
-pub(crate) struct WaylandRequest {
+pub struct WaylandRequest {
     pub op: WaylandOp,
     pub reply: crate::reply::Reply<WaylandOpResult>,
 }
@@ -211,7 +211,7 @@ pub(crate) struct WaylandRequest {
 // ---------------------------------------------------------------------------
 
 /// Future returned by [`WaylandThread::send_async`].
-pub(crate) struct WaylandFuture {
+pub struct WaylandFuture {
     oneshot: Arc<crate::oneshot::Oneshot<WaylandOpResult>>,
 }
 
@@ -230,7 +230,7 @@ impl std::future::Future for WaylandFuture {
 // WaylandThread public handle
 // ---------------------------------------------------------------------------
 
-pub(crate) struct WaylandThread {
+pub struct WaylandThread {
     tx: mpsc::Sender<WaylandRequest>,
 }
 
@@ -315,7 +315,7 @@ impl WaylandThread {
 static WAYLAND_THREAD: OnceLock<Result<WaylandThread, ClipboardError>> = OnceLock::new();
 
 /// Return the process-global Wayland thread, or an error if unavailable.
-pub(crate) fn wayland_thread() -> Result<&'static WaylandThread, ClipboardError> {
+pub fn wayland_thread() -> Result<&'static WaylandThread, ClipboardError> {
     WAYLAND_THREAD
         .get_or_init(WaylandThread::new)
         .as_ref()
@@ -619,7 +619,7 @@ impl WaylandState {
                 (0, 0)
             };
 
-        Ok(WaylandState {
+        Ok(Self {
             socket,
             next_id,
             seat_name,
@@ -1054,8 +1054,7 @@ fn handle_event(
     let is_our_clipboard_source = state
         .clipboard_source
         .as_ref()
-        .map(|s| s.id == object_id)
-        .unwrap_or(false);
+        .is_some_and(|s| s.id == object_id);
 
     if is_our_clipboard_source {
         match opcode {
@@ -1075,8 +1074,7 @@ fn handle_event(
     let is_our_primary_source = state
         .primary_source
         .as_ref()
-        .map(|s| s.id == object_id)
-        .unwrap_or(false);
+        .is_some_and(|s| s.id == object_id);
 
     if is_our_primary_source {
         match opcode {
@@ -1705,7 +1703,7 @@ fn do_available(state: &mut WaylandState, sel: Selection) -> Result<Vec<MimeType
 // Public helpers for lib.rs wiring
 // ---------------------------------------------------------------------------
 
-pub(crate) fn set_clipboard(
+pub fn set_clipboard(
     thread: &WaylandThread,
     sel: Selection,
     mime: &MimeType,
@@ -1722,10 +1720,7 @@ pub(crate) fn set_clipboard(
     }
 }
 
-pub(crate) fn clear_clipboard(
-    thread: &WaylandThread,
-    sel: Selection,
-) -> Result<(), ClipboardError> {
+pub fn clear_clipboard(thread: &WaylandThread, sel: Selection) -> Result<(), ClipboardError> {
     let result = thread.send_sync(WaylandOp::Clear { sel })?;
     match result {
         WaylandOpResult::Clear(r) => r,
@@ -1733,7 +1728,7 @@ pub(crate) fn clear_clipboard(
     }
 }
 
-pub(crate) fn get_clipboard(
+pub fn get_clipboard(
     thread: &WaylandThread,
     sel: Selection,
     mime: &MimeType,
@@ -1748,7 +1743,7 @@ pub(crate) fn get_clipboard(
     }
 }
 
-pub(crate) fn available_clipboard(
+pub fn available_clipboard(
     thread: &WaylandThread,
     sel: Selection,
 ) -> Result<Vec<MimeType>, ClipboardError> {
@@ -1796,7 +1791,7 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     /// State the mock compositor tracks (accessible from test assertions).
-    pub(crate) struct MockState {
+    pub struct MockState {
         /// bound globals: new_id -> (global_name, interface, version)
         pub bound: HashMap<u32, (u32, String, u32)>,
         /// For each created data source: offered mimes.
@@ -1842,7 +1837,7 @@ mod tests {
 
     impl Default for MockState {
         fn default() -> Self {
-            MockState {
+            Self {
                 bound: HashMap::new(),
                 source_mimes: HashMap::new(),
                 current_selection: None,
@@ -1881,7 +1876,7 @@ mod tests {
     }
 
     /// Handle for the mock Wayland compositor.
-    pub(crate) struct MockCompositor {
+    pub struct MockCompositor {
         pub socket_path: PathBuf,
         pub state: Arc<Mutex<MockState>>,
         #[allow(dead_code)]
@@ -2020,12 +2015,12 @@ mod tests {
     }
 
     /// Spawn a mock Wayland compositor on a temporary socket path.
-    pub(crate) fn spawn_mock_compositor(advertise_data_control: bool) -> Arc<MockCompositor> {
+    pub fn spawn_mock_compositor(advertise_data_control: bool) -> Arc<MockCompositor> {
         spawn_mock_compositor_with_primary(advertise_data_control, true)
     }
 
     /// Spawn with explicit primary selection support toggle.
-    pub(crate) fn spawn_mock_compositor_with_primary(
+    pub fn spawn_mock_compositor_with_primary(
         advertise_data_control: bool,
         advertise_primary: bool,
     ) -> Arc<MockCompositor> {
@@ -2736,13 +2731,9 @@ mod tests {
     #[test]
     fn mock_compositor_set_then_paste_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2773,13 +2764,9 @@ mod tests {
     #[test]
     fn mock_compositor_clear_unsets_selection() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2809,13 +2796,9 @@ mod tests {
     #[test]
     fn mock_compositor_offer_html() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2835,13 +2818,9 @@ mod tests {
     #[test]
     fn mock_compositor_replace_selection() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2869,13 +2848,9 @@ mod tests {
     #[test]
     fn mock_get_clipboard_text() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2902,13 +2877,9 @@ mod tests {
     #[test]
     fn mock_get_clipboard_html() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2931,13 +2902,9 @@ mod tests {
     #[test]
     fn mock_available_lists_mimes() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -2967,13 +2934,9 @@ mod tests {
     #[test]
     fn mock_get_unowned_returns_unsupported() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -3017,13 +2980,9 @@ mod tests {
     #[test]
     fn self_paste_after_set_does_not_deadlock() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -3044,13 +3003,9 @@ mod tests {
     #[test]
     fn mock_available_no_offer_returns_empty() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();
@@ -3084,13 +3039,9 @@ mod tests {
     #[test]
     fn mock_primary_advertise_then_get() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mock = match ensure_mock() {
-            Some(m) => m,
-            None => return,
-        };
-        let thread = match get_thread_for_test() {
-            Some(t) => t,
-            None => return,
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
         };
 
         mock.state().reset();

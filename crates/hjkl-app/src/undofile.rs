@@ -137,11 +137,7 @@ pub fn write(
     override_dir: Option<&Path>,
 ) -> std::io::Result<()> {
     let path = undofile_path_for(canonical_path, override_dir)?;
-    let current_seq = tree
-        .nodes
-        .get(tree.current as usize)
-        .map(|n| n.seq)
-        .unwrap_or(0);
+    let current_seq = tree.nodes.get(tree.current as usize).map_or(0, |n| n.seq);
     let body = postcard::to_stdvec(tree).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,

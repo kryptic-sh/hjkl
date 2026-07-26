@@ -42,14 +42,14 @@ impl Color {
                 let g = (b[1] as char).to_digit(16).map(|n| expand(n as u8));
                 let b_ = (b[2] as char).to_digit(16).map(|n| expand(n as u8));
                 match (r, g, b_) {
-                    (Some(r), Some(g), Some(b)) => Ok(Color::rgb(r, g, b)),
+                    (Some(r), Some(g), Some(b)) => Ok(Self::rgb(r, g, b)),
                     _ => Err(ThemeError::BadHex(format!("#{s}"))),
                 }
             }
             6 => {
                 let b = s.as_bytes();
                 match (hex2(&b[0..2]), hex2(&b[2..4]), hex2(&b[4..6])) {
-                    (Some(r), Some(g), Some(b)) => Ok(Color::rgb(r, g, b)),
+                    (Some(r), Some(g), Some(b)) => Ok(Self::rgb(r, g, b)),
                     _ => Err(ThemeError::BadHex(format!("#{s}"))),
                 }
             }
@@ -61,7 +61,7 @@ impl Color {
                     hex2(&b[4..6]),
                     hex2(&b[6..8]),
                 ) {
-                    (Some(r), Some(g), Some(b), Some(a)) => Ok(Color::rgba(r, g, b, a)),
+                    (Some(r), Some(g), Some(b), Some(a)) => Ok(Self::rgba(r, g, b, a)),
                     _ => Err(ThemeError::BadHex(format!("#{s}"))),
                 }
             }
@@ -72,7 +72,7 @@ impl Color {
 
 /// Raw color value in TOML: either a literal hex string or a `$palette_name` ref.
 #[derive(Clone, Debug)]
-pub(crate) enum ColorRef {
+pub enum ColorRef {
     Palette(String),
     Literal(Color),
 }
@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for ColorRef {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         if let Some(name) = s.strip_prefix('$') {
-            Ok(ColorRef::Palette(name.to_owned()))
+            Ok(Self::Palette(name.to_owned()))
         } else {
             Color::from_hex_str(&s)
                 .map(ColorRef::Literal)
@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for ColorRef {
 
 /// Newtype for a hex-literal color in the palette table (no `$` refs allowed there).
 #[derive(Clone, Debug)]
-pub(crate) struct LiteralColor(pub Color);
+pub struct LiteralColor(pub Color);
 
 impl<'de> Deserialize<'de> for LiteralColor {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -110,8 +110,8 @@ impl ColorRef {
         palette: &std::collections::HashMap<String, Color>,
     ) -> Result<Color, ThemeError> {
         match self {
-            ColorRef::Literal(c) => Ok(c),
-            ColorRef::Palette(name) => palette
+            Self::Literal(c) => Ok(c),
+            Self::Palette(name) => palette
                 .get(&name)
                 .copied()
                 .ok_or(ThemeError::UnresolvedPalette(name)),
@@ -121,4 +121,4 @@ impl ColorRef {
 
 /// Raw palette deserialization: values are hex strings only (no `$` refs in palette itself).
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct RawPalette(pub std::collections::HashMap<String, LiteralColor>);
+pub struct RawPalette(pub std::collections::HashMap<String, LiteralColor>);

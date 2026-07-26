@@ -42,7 +42,7 @@ pub enum ConfigError {
 /// multibyte text earlier in the line doesn't skew it. `line_text` is the
 /// full line containing the offset, with no trailing newline. Used to
 /// enrich `toml::de::Error` span info into human-readable parse errors.
-pub(crate) fn locate(src: &str, byte_offset: usize) -> (usize, usize, String) {
+pub fn locate(src: &str, byte_offset: usize) -> (usize, usize, String) {
     let mut clamped = byte_offset.min(src.len());
     // Defensive: snap to the previous char boundary so the column slice
     // below can't panic if a span ever lands mid-character.
@@ -62,8 +62,7 @@ pub(crate) fn locate(src: &str, byte_offset: usize) -> (usize, usize, String) {
     }
     let line_end = src[line_start..]
         .find('\n')
-        .map(|n| line_start + n)
-        .unwrap_or(src.len());
+        .map_or(src.len(), |n| line_start + n);
     let line_text = src[line_start..line_end].to_string();
     let col = src[line_start..clamped].chars().count() + 1;
     (line_no, col, line_text)

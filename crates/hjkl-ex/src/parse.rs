@@ -12,13 +12,12 @@
 ///
 /// Range parsing is out of scope for Phase 1; the caller strips ranges before
 /// handing `input` here.
-pub(crate) fn split_name_args(input: &str) -> (&str, &str) {
+pub fn split_name_args(input: &str) -> (&str, &str) {
     // Find end of alpha prefix
     let alpha_end = input
         .char_indices()
         .find(|(_, c)| !c.is_ascii_alphabetic())
-        .map(|(i, _)| i)
-        .unwrap_or(input.len());
+        .map_or(input.len(), |(i, _)| i);
 
     // Allow an optional trailing '!' immediately after the alpha prefix
     let name_end = if input.as_bytes().get(alpha_end) == Some(&b'!') {

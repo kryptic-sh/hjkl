@@ -20,7 +20,7 @@ use super::App;
 
 /// The four hop target kinds bound to the leader keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HopKind {
+pub enum HopKind {
     /// `<leader>w` — word-start targets (vim `w` semantics).
     Word,
     /// `<leader>W` — WORD-start targets (whitespace-delimited).
@@ -33,7 +33,7 @@ pub(crate) enum HopKind {
 
 /// One labeled jump target.
 #[derive(Debug, Clone)]
-pub(crate) struct HopTarget {
+pub struct HopTarget {
     /// View document row (0-based).
     pub row: usize,
     /// View document column (0-based char index).
@@ -44,7 +44,7 @@ pub(crate) struct HopTarget {
 
 /// Live hop overlay state stored on [`App`].
 #[derive(Debug, Clone)]
-pub(crate) struct HopState {
+pub struct HopState {
     /// Which window was focused when hop started (for rendering).
     pub win_id: WindowId,
     /// All labeled targets in reading order (top-to-bottom, left-to-right).
@@ -68,7 +68,7 @@ const LABEL_CHARS: &[char] = &[
 /// - If `n > 52`: all labels are 2 chars (capacity 52*52 = 2704).
 ///
 /// Pure 1-char or pure 2-char ensures prefix-freedom within each scheme.
-pub(crate) fn assign_labels(n: usize) -> Vec<String> {
+pub fn assign_labels(n: usize) -> Vec<String> {
     if n == 0 {
         return Vec::new();
     }
@@ -101,8 +101,7 @@ fn first_non_blank(line_str: &str) -> usize {
     line_str
         .char_indices()
         .find(|(_, c)| !c.is_whitespace())
-        .map(|(byte_idx, _)| line_str[..byte_idx].chars().count())
-        .unwrap_or(0)
+        .map_or(0, |(byte_idx, _)| line_str[..byte_idx].chars().count())
 }
 
 /// `CharKind` for the hop word-start scanner (mirrors motions.rs logic).

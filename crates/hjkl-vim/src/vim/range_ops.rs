@@ -11,7 +11,7 @@ use hjkl_engine::buf_helpers::{buf_line_chars, buf_set_cursor_rc};
 
 /// Delete the range `[start, end)` (interpretation determined by `kind`) and
 /// stash the deleted text in `register`. `'"'` is the unnamed register.
-pub(crate) fn delete_range_bridge<H: hjkl_engine::types::Host>(
+pub fn delete_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -23,7 +23,7 @@ pub(crate) fn delete_range_bridge<H: hjkl_engine::types::Host>(
 }
 /// Yank (copy) the range `[start, end)` into `register` without mutating the
 /// buffer. `'"'` is the unnamed register.
-pub(crate) fn yank_range_bridge<H: hjkl_engine::types::Host>(
+pub fn yank_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -37,7 +37,7 @@ pub(crate) fn yank_range_bridge<H: hjkl_engine::types::Host>(
 /// The deleted text is stashed in `register`. Mode transitions to Insert on
 /// return; the caller must not issue further normal-mode ops until the insert
 /// session ends.
-pub(crate) fn change_range_bridge<H: hjkl_engine::types::Host>(
+pub fn change_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -51,7 +51,7 @@ pub(crate) fn change_range_bridge<H: hjkl_engine::types::Host>(
 /// end.0]`. `shiftwidth` overrides the editor's `settings().shiftwidth` for
 /// this call; pass `0` to use the editor setting. The column parts of `start`
 /// / `end` are ignored — indent is always linewise.
-pub(crate) fn indent_range_bridge<H: hjkl_engine::types::Host>(
+pub fn indent_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -86,7 +86,7 @@ pub(crate) fn indent_range_bridge<H: hjkl_engine::types::Host>(
 /// Apply a case transformation (`Uppercase` / `Lowercase` / `ToggleCase`) to
 /// the range `[start, end)`. Only the three case `Operator` variants are valid;
 /// other variants are silently ignored (no-op).
-pub(crate) fn case_range_bridge<H: hjkl_engine::types::Host>(
+pub fn case_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -105,7 +105,7 @@ pub(crate) fn case_range_bridge<H: hjkl_engine::types::Host>(
 /// bounds. Short lines that don't reach `right_col` lose only the chars
 /// that exist (ragged-edge, matching engine FSM). `register` is honoured;
 /// `'"'` selects the unnamed register.
-pub(crate) fn delete_block_bridge<H: hjkl_engine::types::Host>(
+pub fn delete_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     bot_row: usize,
@@ -138,7 +138,7 @@ pub(crate) fn delete_block_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).block_vcol = saved_vcol;
 }
 /// Yank a rectangular VisualBlock selection into `register`.
-pub(crate) fn yank_block_bridge<H: hjkl_engine::types::Host>(
+pub fn yank_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     bot_row: usize,
@@ -160,7 +160,7 @@ pub(crate) fn yank_block_bridge<H: hjkl_engine::types::Host>(
 }
 /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`).
 /// The deleted text is stashed in `register`. Mode is Insert on return.
-pub(crate) fn change_block_bridge<H: hjkl_engine::types::Host>(
+pub fn change_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     bot_row: usize,
@@ -183,7 +183,7 @@ pub(crate) fn change_block_bridge<H: hjkl_engine::types::Host>(
 /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
 /// Column bounds are ignored — vim's block indent is always linewise.
 /// `count == 0` is a no-op.
-pub(crate) fn indent_block_bridge<H: hjkl_engine::types::Host>(
+pub fn indent_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     bot_row: usize,
@@ -204,7 +204,7 @@ pub(crate) fn indent_block_bridge<H: hjkl_engine::types::Host>(
 /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`. Column
 /// parts are ignored — auto-indent is always linewise. See
 /// `auto_indent_rows` for the algorithm and its v1 limitations.
-pub(crate) fn auto_indent_range_bridge<H: hjkl_engine::types::Host>(
+pub fn auto_indent_range_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -220,28 +220,28 @@ pub(crate) fn auto_indent_range_bridge<H: hjkl_engine::types::Host>(
 }
 /// Resolve the range of `iw` (inner word) at the current cursor position.
 /// Returns `None` if no word exists at the cursor.
-pub(crate) fn text_object_inner_word_bridge<H: hjkl_engine::types::Host>(
+pub fn text_object_inner_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, false, 1)
 }
 /// Resolve the range of `aw` (around word) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-pub(crate) fn text_object_around_word_bridge<H: hjkl_engine::types::Host>(
+pub fn text_object_around_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, false, 1)
 }
 /// Resolve the range of `iW` (inner WORD) at the current cursor position.
 /// A WORD is any run of non-whitespace characters (no punctuation splitting).
-pub(crate) fn text_object_inner_big_word_bridge<H: hjkl_engine::types::Host>(
+pub fn text_object_inner_big_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, true, true, 1)
 }
 /// Resolve the range of `aW` (around WORD) at the current cursor position.
 /// Includes trailing whitespace (or leading whitespace if no trailing exists).
-pub(crate) fn text_object_around_big_word_bridge<H: hjkl_engine::types::Host>(
+pub fn text_object_around_big_word_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<((usize, usize), (usize, usize))> {
     word_text_object(ed, false, true, 1)

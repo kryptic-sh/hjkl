@@ -33,9 +33,8 @@ impl App {
         };
 
         // Borrow the session state.
-        let cs = match self.confirming_substitute.as_mut() {
-            Some(s) => s,
-            None => return true,
+        let Some(cs) = self.confirming_substitute.as_mut() else {
+            return true;
         };
 
         match action {
@@ -80,9 +79,8 @@ impl App {
 
     /// Apply all accepted matches and clear the session.
     fn finish_confirm_substitute(&mut self) {
-        let cs = match self.confirming_substitute.take() {
-            Some(s) => s,
-            None => return,
+        let Some(cs) = self.confirming_substitute.take() else {
+            return;
         };
         let accepted_count = cs.accepted.iter().filter(|&&b| b).count();
         if accepted_count == 0 {

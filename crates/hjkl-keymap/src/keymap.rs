@@ -193,8 +193,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
         let removed = self
             .trees
             .get_mut(&mode)
-            .map(|t| t.remove(&chord.0))
-            .unwrap_or(false);
+            .is_some_and(|t| t.remove(&chord.0));
         Ok(removed)
     }
 
@@ -338,8 +337,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
     pub fn pending(&self, mode: M) -> &[KeyEvent] {
         self.state
             .get(&mode)
-            .map(|s| s.buffer.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[][..], |s| s.buffer.as_slice())
     }
 
     /// Reset the pending buffer for `mode` (e.g. on mode switch).

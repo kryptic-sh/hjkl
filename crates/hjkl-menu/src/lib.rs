@@ -101,7 +101,7 @@ impl MenuAction {
     /// (separator or info header).
     #[inline]
     pub fn is_inert(&self) -> bool {
-        matches!(self, MenuAction::Separator | MenuAction::Info)
+        matches!(self, Self::Separator | Self::Info)
     }
 
     /// Dispatch `self` through a caller-supplied handler using the exhaustive
@@ -136,119 +136,119 @@ impl MenuAction {
         // stays future-proof for external consumers when new variants land.
         #[allow(unreachable_patterns)]
         match self {
-            MenuAction::Copy => {
+            Self::Copy => {
                 handler(MenuActionKind::Copy);
                 true
             }
-            MenuAction::Cut => {
+            Self::Cut => {
                 handler(MenuActionKind::Cut);
                 true
             }
-            MenuAction::Paste => {
+            Self::Paste => {
                 handler(MenuActionKind::Paste);
                 true
             }
-            MenuAction::TabClose => {
+            Self::TabClose => {
                 handler(MenuActionKind::TabClose);
                 true
             }
-            MenuAction::TabCloseOthers => {
+            Self::TabCloseOthers => {
                 handler(MenuActionKind::TabCloseOthers);
                 true
             }
-            MenuAction::TabCloseRight => {
+            Self::TabCloseRight => {
                 handler(MenuActionKind::TabCloseRight);
                 true
             }
-            MenuAction::TabCloseLeft => {
+            Self::TabCloseLeft => {
                 handler(MenuActionKind::TabCloseLeft);
                 true
             }
-            MenuAction::LspGotoDefinition => {
+            Self::LspGotoDefinition => {
                 handler(MenuActionKind::LspGotoDefinition);
                 true
             }
-            MenuAction::LspGotoReferences => {
+            Self::LspGotoReferences => {
                 handler(MenuActionKind::LspGotoReferences);
                 true
             }
-            MenuAction::LspHover => {
+            Self::LspHover => {
                 handler(MenuActionKind::LspHover);
                 true
             }
-            MenuAction::LspRename => {
+            Self::LspRename => {
                 handler(MenuActionKind::LspRename);
                 true
             }
-            MenuAction::LspCodeActions => {
+            Self::LspCodeActions => {
                 handler(MenuActionKind::LspCodeActions);
                 true
             }
-            MenuAction::LspFormat => {
+            Self::LspFormat => {
                 handler(MenuActionKind::LspFormat);
                 true
             }
-            MenuAction::DiagnosticDetail => {
+            Self::DiagnosticDetail => {
                 handler(MenuActionKind::DiagnosticDetail);
                 true
             }
-            MenuAction::GitStageHunk => {
+            Self::GitStageHunk => {
                 handler(MenuActionKind::GitStageHunk);
                 true
             }
-            MenuAction::GitUnstageHunk => {
+            Self::GitUnstageHunk => {
                 handler(MenuActionKind::GitUnstageHunk);
                 true
             }
-            MenuAction::GitRevertHunk => {
+            Self::GitRevertHunk => {
                 handler(MenuActionKind::GitRevertHunk);
                 true
             }
-            MenuAction::GitShowHunk => {
+            Self::GitShowHunk => {
                 handler(MenuActionKind::GitShowHunk);
                 true
             }
-            MenuAction::LspRestart => {
+            Self::LspRestart => {
                 handler(MenuActionKind::LspRestart);
                 true
             }
-            MenuAction::OpenFilePicker => {
+            Self::OpenFilePicker => {
                 handler(MenuActionKind::OpenFilePicker);
                 true
             }
-            MenuAction::WindowEqualize => {
+            Self::WindowEqualize => {
                 handler(MenuActionKind::WindowEqualize);
                 true
             }
-            MenuAction::WindowClose => {
+            Self::WindowClose => {
                 handler(MenuActionKind::WindowClose);
                 true
             }
-            MenuAction::PickerOpen => {
+            Self::PickerOpen => {
                 handler(MenuActionKind::PickerOpen);
                 true
             }
-            MenuAction::PickerOpenSplit => {
+            Self::PickerOpenSplit => {
                 handler(MenuActionKind::PickerOpenSplit);
                 true
             }
-            MenuAction::PickerOpenVSplit => {
+            Self::PickerOpenVSplit => {
                 handler(MenuActionKind::PickerOpenVSplit);
                 true
             }
-            MenuAction::PickerOpenTab => {
+            Self::PickerOpenTab => {
                 handler(MenuActionKind::PickerOpenTab);
                 true
             }
-            MenuAction::PickerCopyPath => {
+            Self::PickerCopyPath => {
                 handler(MenuActionKind::PickerCopyPath);
                 true
             }
-            MenuAction::Separator => {
+            Self::Separator => {
                 handler(MenuActionKind::Separator);
                 true
             }
-            MenuAction::Info => {
+            Self::Info => {
                 handler(MenuActionKind::Info);
                 true
             }
@@ -523,8 +523,7 @@ impl ContextMenu {
                 let hint_len = it
                     .shortcut_hint
                     .as_deref()
-                    .map(|h| UnicodeWidthStr::width(h) + 2)
-                    .unwrap_or(0);
+                    .map_or(0, |h| UnicodeWidthStr::width(h) + 2);
                 // Display width (CJK/emoji = 2 cols), not byte length. Clamp
                 // before the u16 cast so a pathologically long label can't wrap
                 // around (and overflow on the `+ 4` below).

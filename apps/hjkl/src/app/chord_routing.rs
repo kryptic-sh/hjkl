@@ -41,7 +41,7 @@ enum ReplayItem {
 /// therefore stays O(1) in replay depth; `depth`/`fed` bound the expansion
 /// (see [`MACRO_MAX_DEPTH`] / [`MACRO_MAX_INPUTS`]).
 #[derive(Default)]
-pub(crate) struct MacroReplayState {
+pub struct MacroReplayState {
     /// Pending items, drained front-to-back.
     queue: std::collections::VecDeque<ReplayItem>,
     /// Current nested `@` expansion depth (top-level splice is depth 0).

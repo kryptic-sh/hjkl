@@ -14,7 +14,7 @@ use hjkl_engine::tag::{is_html_filetype, scan_tag_opener};
 /// Open the `/` (forward) or `?` (backward) search prompt. Clears any
 /// live search highlight until the user commits a query. `last_search`
 /// is preserved so an empty `<CR>` can re-run the previous pattern.
-pub(crate) fn enter_search<H: hjkl_engine::types::Host>(
+pub fn enter_search<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
 ) {
@@ -33,7 +33,7 @@ pub(crate) fn enter_search<H: hjkl_engine::types::Host>(
 /// `d/pat` / `c/pat` / `y/pat` (and `?` forms) — open the search prompt in
 /// operator-pending mode. On commit the operator runs over the exclusive
 /// charwise range from the current cursor to the match.
-pub(crate) fn enter_search_op<H: hjkl_engine::types::Host>(
+pub fn enter_search_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     op: Operator,
@@ -52,7 +52,7 @@ pub(crate) fn enter_search_op<H: hjkl_engine::types::Host>(
 /// Apply a pending operator-search over the exclusive charwise range from
 /// `origin` to the current (post-search) cursor. Used by the search-prompt
 /// commit path for `d/` / `c/` / `y/`.
-pub(crate) fn apply_op_search_range<H: hjkl_engine::types::Host>(
+pub fn apply_op_search_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     origin: (usize, usize),
@@ -63,7 +63,7 @@ pub(crate) fn apply_op_search_range<H: hjkl_engine::types::Host>(
 /// `g;` / `g,` body. `dir = -1` walks toward older entries (g;),
 /// `dir = 1` toward newer (g,). `count` repeats the step. Stops at
 /// the ends of the ring; off-ring positions are silently ignored.
-pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
+pub fn walk_change_list<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     dir: isize,
     count: usize,
@@ -112,7 +112,7 @@ pub(crate) fn walk_change_list<H: hjkl_engine::types::Host>(
 ///
 /// Linewise heuristic matches `"+y`'s own writer: text ending in `\n` is
 /// linewise, matching vim's "did the yank end with a newline" rule.
-pub(crate) fn sync_clipboard_register_for<H: hjkl_engine::types::Host>(
+pub fn sync_clipboard_register_for<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     selector: Option<char>,
 ) {
@@ -129,7 +129,7 @@ pub(crate) fn sync_clipboard_register_for<H: hjkl_engine::types::Host>(
 /// cursor as charwise text. Embedded newlines split lines naturally via
 /// `Edit::InsertStr`. Unknown selectors and empty slots are no-ops so
 /// stray keystrokes don't mutate the buffer.
-pub(crate) fn insert_register_text<H: hjkl_engine::types::Host>(
+pub fn insert_register_text<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     selector: char,
 ) {

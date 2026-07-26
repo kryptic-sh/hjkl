@@ -45,9 +45,9 @@ impl PromptKind {
     /// ```
     pub fn prefix_char(&self) -> char {
         match self {
-            PromptKind::Command => ':',
-            PromptKind::SearchForward => '/',
-            PromptKind::SearchBackward => '?',
+            Self::Command => ':',
+            Self::SearchForward => '/',
+            Self::SearchBackward => '?',
         }
     }
 }

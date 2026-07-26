@@ -130,9 +130,8 @@ pub fn explorer_key_for(path: &Path) -> Option<std::path::PathBuf> {
 ///
 /// The result is cheap enough to compute once and cache on [`BufferSlot`].
 pub fn path_in_repo(path: &Path) -> bool {
-    let canon = match path.canonicalize() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(canon) = path.canonicalize() else {
+        return false;
     };
     let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     Repository::discover(parent).is_ok()
@@ -537,10 +536,10 @@ pub enum HunkApplyError {
 impl std::fmt::Display for HunkApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HunkApplyError::NotInRepo => write!(f, "not in a git repository"),
-            HunkApplyError::PathResolution => write!(f, "could not resolve path within repo"),
-            HunkApplyError::ApplyFailed(e) => write!(f, "git apply failed: {e}"),
-            HunkApplyError::Spawn(e) => write!(f, "could not run git: {e}"),
+            Self::NotInRepo => write!(f, "not in a git repository"),
+            Self::PathResolution => write!(f, "could not resolve path within repo"),
+            Self::ApplyFailed(e) => write!(f, "git apply failed: {e}"),
+            Self::Spawn(e) => write!(f, "could not run git: {e}"),
         }
     }
 }
@@ -839,10 +838,7 @@ fn hunk_to_info(repo: &Repository, hunk: &git2::BlameHunk<'_>) -> BlameInfo {
         .final_signature()
         .and_then(|s| s.name().ok().map(str::to_owned))
         .unwrap_or_else(|| "unknown".into());
-    let time_unix = hunk
-        .final_signature()
-        .map(|s| s.when().seconds())
-        .unwrap_or(0);
+    let time_unix = hunk.final_signature().map_or(0, |s| s.when().seconds());
     let summary = repo
         .find_commit(oid)
         .ok()
@@ -882,9 +878,8 @@ fn try_blame_line(
     let mut opts = BlameOptions::new();
     let blame = repo.blame_file(&rel, Some(&mut opts))?;
     let blame = blame.blame_buffer(current)?;
-    let hunk = match blame.get_line(row + 1) {
-        Some(h) => h,
-        None => return Ok(None),
+    let Some(hunk) = blame.get_line(row + 1) else {
+        return Ok(None);
     };
     Ok(Some(hunk_to_info(&repo, &hunk)))
 }
@@ -1624,9 +1619,7 @@ mod tests {
         );
         let p = path.unwrap();
         assert!(
-            p.file_name()
-                .map(|n| n == "COMMIT_EDITMSG")
-                .unwrap_or(false),
+            p.file_name().is_some_and(|n| n == "COMMIT_EDITMSG"),
             "path must end with COMMIT_EDITMSG; got {p:?}"
         );
     }

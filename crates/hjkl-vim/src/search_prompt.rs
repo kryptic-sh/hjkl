@@ -179,11 +179,7 @@ fn match_len_at<H: Host>(
         return 1;
     };
     let line = hjkl_buffer::rope_line_str(&ed.buffer().rope(), row);
-    let byte_col = line
-        .char_indices()
-        .nth(col)
-        .map(|(b, _)| b)
-        .unwrap_or(line.len());
+    let byte_col = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
     if let Some(m) = re.find(&line[byte_col..])
         && m.start() == 0
     {

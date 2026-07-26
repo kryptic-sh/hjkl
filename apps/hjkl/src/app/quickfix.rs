@@ -26,7 +26,7 @@ use crate::app::types::DiagSeverity;
 /// Which list a quickfix action targets: the global quickfix list (`:c*`) or
 /// the location list (`:l*`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum QfWhich {
+pub enum QfWhich {
     Quickfix,
     Location,
 }
@@ -35,8 +35,8 @@ impl QfWhich {
     /// Human label used in toasts and the dock title.
     fn label(self) -> &'static str {
         match self {
-            QfWhich::Quickfix => "quickfix",
-            QfWhich::Location => "location",
+            Self::Quickfix => "quickfix",
+            Self::Location => "location",
         }
     }
 
@@ -44,8 +44,8 @@ impl QfWhich {
     /// shows when open (#63 Phase B).
     fn dock_kind(self) -> crate::app::dock::DockKind {
         match self {
-            QfWhich::Quickfix => crate::app::dock::DockKind::Quickfix,
-            QfWhich::Location => crate::app::dock::DockKind::Loclist,
+            Self::Quickfix => crate::app::dock::DockKind::Quickfix,
+            Self::Location => crate::app::dock::DockKind::Loclist,
         }
     }
 }

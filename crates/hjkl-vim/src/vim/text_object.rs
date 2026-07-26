@@ -12,11 +12,11 @@ use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_set_cursor_rc};
 
 /// Cursor position as `(row, col)`.
-pub(crate) type Pos = (usize, usize);
+pub type Pos = (usize, usize);
 /// Returns `(start, end, kind)` where `end` is *exclusive* (one past the
 /// last character to act on). `kind` is `Linewise` for line-oriented text
 /// objects like paragraphs and `Exclusive` otherwise.
-pub(crate) fn text_object_range<H: hjkl_engine::types::Host>(
+pub fn text_object_range<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     obj: TextObject,
     inner: bool,
@@ -63,7 +63,7 @@ fn is_sentence_closing(c: char) -> bool {
 /// punctuation — moving into or out of a run of blank lines is itself a
 /// stop. When `)` finds no next sentence, it lands on the last character
 /// of the buffer (a no-op if already there or past it).
-pub(crate) fn sentence_boundary<H: hjkl_engine::types::Host>(
+pub fn sentence_boundary<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
@@ -205,7 +205,7 @@ fn end_of_buffer_pos(lines: &[Vec<char>], n_lines: usize) -> (usize, usize) {
 /// whitespace (or end-of-line) as a boundary; runs of consecutive
 /// terminators stay attached to the same sentence. `as` extends to
 /// include trailing whitespace; `is` does not.
-pub(crate) fn sentence_text_object<H: hjkl_engine::types::Host>(
+pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
@@ -339,7 +339,7 @@ pub(crate) fn sentence_text_object<H: hjkl_engine::types::Host>(
 /// `it` / `at` — XML tag pair text object. Builds a flat char index of
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
 /// returns the innermost pair containing the cursor.
-pub(crate) fn tag_text_object<H: hjkl_engine::types::Host>(
+pub fn tag_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -450,11 +450,11 @@ pub(crate) fn tag_text_object<H: hjkl_engine::types::Host>(
         Some((idx_to_pos(open_start), idx_to_pos(close_end)))
     }
 }
-pub(crate) fn is_wordchar(c: char) -> bool {
+pub fn is_wordchar(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
-pub(crate) use hjkl_buffer::is_keyword_char;
-pub(crate) fn abbrev_kind(lhs: &str, iskeyword: &str) -> AbbrevKind {
+pub use hjkl_buffer::is_keyword_char;
+pub fn abbrev_kind(lhs: &str, iskeyword: &str) -> AbbrevKind {
     let chars: Vec<char> = lhs.chars().collect();
     if chars.is_empty() {
         return AbbrevKind::NonKw;
@@ -489,7 +489,7 @@ pub(crate) fn abbrev_kind(lhs: &str, iskeyword: &str) -> AbbrevKind {
 /// Returns `Some((lhs_char_len, rhs))` on a match, where `lhs_char_len` is the
 /// number of characters to delete before the cursor (the lhs), and `rhs` is the
 /// text to insert in their place.  Returns `None` when no abbreviation matches.
-pub(crate) fn try_abbrev_expand(
+pub fn try_abbrev_expand(
     abbrevs: &[Abbrev],
     line_before: &str,
     mincol: usize,
@@ -605,7 +605,7 @@ pub(crate) fn try_abbrev_expand(
 ///
 /// `trigger` is what the user did; the trigger char itself is NOT inserted
 /// here — the caller inserts it (or not, in the case of `C-]`).
-pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
+pub fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     trigger: AbbrevTrigger,
 ) -> bool {
@@ -667,7 +667,7 @@ pub(crate) fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
 
     true
 }
-pub(crate) fn word_text_object<H: hjkl_engine::types::Host>(
+pub fn word_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     big: bool,
@@ -791,7 +791,7 @@ pub(crate) fn word_text_object<H: hjkl_engine::types::Host>(
     }
     Some(((row, start_col), (row, end_col)))
 }
-pub(crate) fn quote_text_object<H: hjkl_engine::types::Host>(
+pub fn quote_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     q: char,
     inner: bool,
@@ -864,7 +864,7 @@ pub(crate) fn quote_text_object<H: hjkl_engine::types::Host>(
         }
     }
 }
-pub(crate) fn bracket_text_object<H: hjkl_engine::types::Host>(
+pub fn bracket_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     open: char,
     inner: bool,
@@ -1001,7 +1001,7 @@ pub(crate) fn bracket_text_object<H: hjkl_engine::types::Host>(
         ))
     }
 }
-pub(crate) fn find_open_bracket(
+pub fn find_open_bracket(
     lines: &[String],
     row: usize,
     col: usize,
@@ -1039,7 +1039,7 @@ pub(crate) fn find_open_bracket(
         c = lines[r].chars().count() as isize - 1;
     }
 }
-pub(crate) fn find_close_bracket(
+pub fn find_close_bracket(
     lines: &[String],
     row: usize,
     start_col: usize,
@@ -1074,7 +1074,7 @@ pub(crate) fn find_close_bracket(
 /// Forward scan from `(row, col)` for the next occurrence of `open`.
 /// Multi-line. Used by bracket text objects to support targets.vim-style
 /// "search forward when not currently inside a pair" behaviour.
-pub(crate) fn find_next_open(
+pub fn find_next_open(
     lines: &[String],
     row: usize,
     col: usize,
@@ -1095,7 +1095,7 @@ pub(crate) fn find_next_open(
     }
     None
 }
-pub(crate) fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usize) {
+pub fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usize) {
     let (r, c) = pos;
     let line_len = lines[r].chars().count();
     if c < line_len {
@@ -1106,7 +1106,7 @@ pub(crate) fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usiz
         pos
     }
 }
-pub(crate) fn paragraph_text_object<H: hjkl_engine::types::Host>(
+pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,

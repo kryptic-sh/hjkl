@@ -132,8 +132,7 @@ pub fn complete_command_from_names(line: &str, caret: usize, available: &[String
     let alpha_end = line
         .char_indices()
         .find(|(_, c)| !c.is_ascii_alphabetic())
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
+        .map_or(line.len(), |(i, _)| i);
     let token_end = if line.as_bytes().get(alpha_end) == Some(&b'!') {
         alpha_end + 1
     } else {
@@ -231,8 +230,7 @@ pub fn first_word_end(line: &str) -> (usize, bool) {
     let alpha_end = line
         .char_indices()
         .find(|(_, c)| !c.is_ascii_alphabetic())
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
+        .map_or(line.len(), |(i, _)| i);
     let token_end = if line.as_bytes().get(alpha_end) == Some(&b'!') {
         alpha_end + 1
     } else {
@@ -342,9 +340,8 @@ fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -
     } else {
         cwd.join(&expanded_dir)
     };
-    let rd = match std::fs::read_dir(&scan_dir) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
+    let Ok(rd) = std::fs::read_dir(&scan_dir) else {
+        return Vec::new();
     };
     let show_hidden = file_part.starts_with('.');
     let mut results: Vec<String> = rd
@@ -514,8 +511,7 @@ pub fn complete_arg(
         let slice = &line[arg_start..caret];
         let token_offset = slice
             .rfind(|c: char| c.is_whitespace())
-            .map(|i| i + 1)
-            .unwrap_or(0);
+            .map_or(0, |i| i + 1);
         arg_start + token_offset
     };
     let prefix = &line[token_start..caret];
@@ -527,9 +523,8 @@ pub fn complete_arg(
             return Completions::empty(caret);
         }
         ArgKind::Path => {
-            let cwd = match sources.cwd {
-                Some(p) => p,
-                None => return Completions::empty(caret),
+            let Some(cwd) = sources.cwd else {
+                return Completions::empty(caret);
             };
             (
                 complete_path_entries(prefix, cwd, false),
@@ -537,9 +532,8 @@ pub fn complete_arg(
             )
         }
         ArgKind::Directory => {
-            let cwd = match sources.cwd {
-                Some(p) => p,
-                None => return Completions::empty(caret),
+            let Some(cwd) = sources.cwd else {
+                return Completions::empty(caret);
             };
             (
                 complete_path_entries(prefix, cwd, true),
@@ -809,8 +803,7 @@ where
             }
             let inner_start = line[cmd_token_end..]
                 .find(|c: char| !c.is_whitespace())
-                .map(|i| cmd_token_end + i)
-                .unwrap_or(line.len());
+                .map_or(line.len(), |i| cmd_token_end + i);
             let mut names = collect_host_registry_names(host_reg);
             names.extend(collect_registry_names(editor_reg));
             names.extend(extra_names.iter().cloned());
@@ -838,8 +831,7 @@ where
         owned = *sources;
         owned.enum_choices = host_reg
             .resolve(cmd_name)
-            .map(|c| c.arg_choices())
-            .unwrap_or(&[]);
+            .map_or(&[][..], |c| c.arg_choices());
         &owned
     } else {
         sources

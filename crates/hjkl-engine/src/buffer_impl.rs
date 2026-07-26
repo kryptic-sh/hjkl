@@ -43,7 +43,7 @@ use crate::types::{BufferEdit, Cursor, FoldOp, FoldProvider, Pos, Query, Search,
 /// without combining marks == chars); future grapheme-aware backends
 /// will need to thread a real grapheme→char map through this fn.
 #[inline]
-pub(crate) fn pos_to_position(p: Pos) -> Position {
+pub fn pos_to_position(p: Pos) -> Position {
     Position {
         row: p.line as usize,
         col: p.col as usize,
@@ -52,7 +52,7 @@ pub(crate) fn pos_to_position(p: Pos) -> Position {
 
 /// View [`Position`] → engine [`Pos`].
 #[inline]
-pub(crate) fn position_to_pos(p: Position) -> Pos {
+pub fn position_to_pos(p: Position) -> Pos {
     Pos {
         line: p.row as u32,
         col: p.col as u32,
@@ -67,11 +67,11 @@ impl Sealed for RopeBuffer {}
 
 impl Cursor for RopeBuffer {
     fn cursor(&self) -> Pos {
-        position_to_pos(RopeBuffer::cursor(self))
+        position_to_pos(Self::cursor(self))
     }
 
     fn set_cursor(&mut self, pos: Pos) {
-        RopeBuffer::set_cursor(self, pos_to_position(pos));
+        Self::set_cursor(self, pos_to_position(pos));
     }
 
     fn byte_offset(&self, pos: Pos) -> usize {
@@ -142,15 +142,15 @@ impl Query for RopeBuffer {
 
     fn len_bytes(&self) -> usize {
         // Use cached byte_len — O(1), no allocation.
-        RopeBuffer::byte_len(self)
+        Self::byte_len(self)
     }
 
     fn dirty_gen(&self) -> u64 {
-        RopeBuffer::dirty_gen(self)
+        Self::dirty_gen(self)
     }
 
     fn content_joined(&self) -> std::sync::Arc<String> {
-        RopeBuffer::content_joined(self)
+        Self::content_joined(self)
     }
 
     fn line_bytes(&self, row: usize) -> usize {
@@ -161,7 +161,7 @@ impl Query for RopeBuffer {
 
     fn rope(&self) -> ropey::Rope {
         // O(1): Arc-clone of the rope root — no byte copying.
-        RopeBuffer::rope(self)
+        Self::rope(self)
     }
 
     fn slice(&self, range: core::ops::Range<Pos>) -> Cow<'_, str> {
@@ -267,7 +267,7 @@ impl BufferEdit for RopeBuffer {
     fn replace_all(&mut self, text: &str) {
         // Forward to the inherent in-tree fast path which rebuilds
         // the line vector in one pass + bumps `dirty_gen`.
-        RopeBuffer::replace_all(self, text);
+        Self::replace_all(self, text);
     }
 }
 

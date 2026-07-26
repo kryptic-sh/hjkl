@@ -18,7 +18,7 @@ use hjkl_engine::tag::is_html_filetype;
 /// - `'` → `'` unless the character immediately before the cursor is
 ///   `[A-Za-z]` (prose apostrophe guard — "don't" stays "don't"), AND the
 ///   same triple-quote guard as `"` / `` ` ``.
-pub(crate) fn autopair_close_for(
+pub fn autopair_close_for(
     ch: char,
     filetype: &str,
     prev_char: Option<char>,
@@ -63,7 +63,7 @@ pub(crate) fn autopair_close_for(
             }
             // Prose guard: skip pairing when the previous char is a letter
             // (covers "don't", "it's", etc.).
-            if prev_char.map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+            if prev_char.is_some_and(|c| c.is_ascii_alphabetic()) {
                 None
             } else {
                 Some('\'')
@@ -86,7 +86,7 @@ pub(crate) fn autopair_close_for(
 /// either an opener OR a closer, and we don't track fence parity here.
 /// Requiring a tag means we only fire when the user is clearly opening a
 /// fence (` ```rust `, ` ```ts `, etc.).
-pub(crate) fn detect_code_fence_opener(line: &str, cursor_col: usize) -> Option<String> {
+pub fn detect_code_fence_opener(line: &str, cursor_col: usize) -> Option<String> {
     if cursor_col != line.chars().count() {
         return None;
     }

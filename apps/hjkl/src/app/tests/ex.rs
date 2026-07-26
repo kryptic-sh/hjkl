@@ -2019,11 +2019,10 @@ fn colon_ls_via_host_registry() {
 fn colon_buffers_via_host_registry() {
     let mut app = setup_three_slot_app();
     app.dispatch_ex("buffers");
-    let msg = app
-        .info_popup
-        .as_ref()
-        .map(|p| p.content.clone())
-        .unwrap_or_else(|| app.bus.last_body_or_empty().to_string());
+    let msg = app.info_popup.as_ref().map_or_else(
+        || app.bus.last_body_or_empty().to_string(),
+        |p| p.content.clone(),
+    );
     assert!(!msg.is_empty(), ":buffers must produce output");
 }
 
@@ -2031,11 +2030,10 @@ fn colon_buffers_via_host_registry() {
 fn colon_clipboard_via_host_registry() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("clipboard");
-    let msg = app
-        .info_popup
-        .as_ref()
-        .map(|p| p.content.clone())
-        .unwrap_or_else(|| app.bus.last_body_or_empty().to_string());
+    let msg = app.info_popup.as_ref().map_or_else(
+        || app.bus.last_body_or_empty().to_string(),
+        |p| p.content.clone(),
+    );
     assert!(!msg.is_empty(), ":clipboard must produce output");
 }
 
@@ -2130,7 +2128,7 @@ fn leader_slash_grep_picker_populates_items() {
             p.tick(std::time::Instant::now());
             let _ = p.refresh();
         }
-        let count = app.picker.as_ref().map(|p| p.matched()).unwrap_or(0);
+        let count = app.picker.as_ref().map_or(0, |p| p.matched());
         if count > 0 {
             got_match = true;
             break;

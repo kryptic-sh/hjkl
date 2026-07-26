@@ -46,18 +46,18 @@ impl Severity {
     /// Default TTL for this severity level.
     pub fn default_ttl(self) -> Duration {
         match self {
-            Severity::Info => Duration::from_secs(2),
-            Severity::Warn => Duration::from_secs(4),
-            Severity::Error => Duration::from_secs(6),
+            Self::Info => Duration::from_secs(2),
+            Self::Warn => Duration::from_secs(4),
+            Self::Error => Duration::from_secs(6),
         }
     }
 
     /// Short uppercase label for display.
     pub fn label(self) -> &'static str {
         match self {
-            Severity::Info => "INFO",
-            Severity::Warn => "WARN",
-            Severity::Error => "ERROR",
+            Self::Info => "INFO",
+            Self::Warn => "WARN",
+            Self::Error => "ERROR",
         }
     }
 }
@@ -104,8 +104,7 @@ impl Holler {
             return true;
         }
         now.duration_since(self.ts)
-            .map(|elapsed| elapsed >= self.ttl)
-            .unwrap_or(false)
+            .is_ok_and(|elapsed| elapsed >= self.ttl)
     }
 
     /// Returns `true` when this notification is within the last 500 ms of its

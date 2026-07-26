@@ -3,9 +3,7 @@ use hjkl_engine::Host;
 // ---- registers -------------------------------------------------------------
 
 /// `:reg` / `:registers` — tabular dump of every non-empty register slot.
-pub(crate) fn format_registers<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
-) -> String {
+pub fn format_registers<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     editor.with_registers(|r| {
         let mut lines = vec!["--- Registers ---".to_string()];
         let mut push = |sel: &str, text: &str, linewise: bool| {
@@ -57,7 +55,7 @@ fn display_register(text: &str) -> String {
 
 /// `:marks` — list every set mark with `(line, col)`. Lines are 1-based to
 /// match vim; cols are 0-based. Uppercase global marks include the buffer id.
-pub(crate) fn format_marks<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
+pub fn format_marks<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
     // Lowercase (buffer-local) marks — from the unified `Editor::marks` map.
     for (c, (r, col)) in editor.marks() {
@@ -86,7 +84,7 @@ pub(crate) fn format_marks<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::Vi
 /// `:jumps` — list the jump-back and jump-forward lists.
 /// Format mirrors vim: `jump  line  col  file` columns. Newest items
 /// have the smallest `jump` number; current position is `0`.
-pub(crate) fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
+pub fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let (back, fwd) = editor.jump_list();
     if back.is_empty() && fwd.is_empty() {
         return "(no jumps recorded)".to_string();
@@ -118,9 +116,7 @@ pub(crate) fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::Vi
 
 /// `:changes` — list the change list (bounded ring of recent edit positions).
 /// Newest entries have lower index numbers, matching vim's `:changes` output.
-pub(crate) fn format_changes<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
-) -> String {
+pub fn format_changes<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let (list, cursor) = editor.change_list();
     if list.is_empty() {
         return "(no changes recorded)".to_string();
@@ -154,7 +150,7 @@ pub(crate) fn format_changes<H: Host>(
 /// (`"N seconds ago"`, `"N minutes ago"`, `"N hours ago"`, `"N days ago"`).
 /// Future/unknown timestamps clamp to `"0 seconds ago"`.
 fn format_relative_time(ts: std::time::SystemTime) -> String {
-    let secs = ts.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    let secs = ts.elapsed().map_or(0, |d| d.as_secs());
     let (n, unit) = if secs < 60 {
         (secs, "second")
     } else if secs < 3600 {
@@ -172,9 +168,7 @@ fn format_relative_time(ts: std::time::SystemTime) -> String {
 /// `number` (change/`seq`), `changes` (depth from the original state), and
 /// `when` (relative time). A trailing `>` marks the leaf the buffer is on. Like
 /// nvim, intermediate (non-leaf) branch nodes are not listed.
-pub(crate) fn format_undolist<H: Host>(
-    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
-) -> String {
+pub fn format_undolist<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>) -> String {
     let leaves = editor.undo_leaves();
     if leaves.is_empty() {
         return "Nothing to undo".to_string();

@@ -111,10 +111,7 @@ impl<Id: Clone + Eq> Tab<Id> {
     /// or `0` when the tab has no icon. The renderer paints the icon as a
     /// separate span (`"{icon} "`) so its colour is independent of the label.
     pub fn icon_width(&self) -> usize {
-        self.icon
-            .as_ref()
-            .map(|i| i.chars().count() + 1)
-            .unwrap_or(0)
+        self.icon.as_ref().map_or(0, |i| i.chars().count() + 1)
     }
 
     /// Pixel-free width of this tab's padded cell: `" {icon} {label} "` in

@@ -72,9 +72,7 @@ pub fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
                 if prev_match {
                     quality += 5;
                 }
-                let at_boundary = prev_ch
-                    .map(|p| matches!(p, '/' | '_' | '-' | '.' | ' '))
-                    .unwrap_or(true);
+                let at_boundary = prev_ch.is_none_or(|p| matches!(p, '/' | '_' | '-' | '.' | ' '));
                 if at_boundary {
                     quality += 8;
                 }

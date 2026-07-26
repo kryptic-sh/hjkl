@@ -63,14 +63,11 @@ where
     // the screen row by its own visible height. This is O(distance) rather than
     // recomputing `cursor_screen_row_from` (itself O(distance)) every step,
     // which made a big soft-wrapped jump O(distance^2).
-    let mut screen = match cursor_screen_row_from(buf, folds, viewport, viewport.top_row) {
-        Some(s) => s,
-        // Cursor above `top_row` is handled by the earlier branch; treat any
-        // surprise `None` as "leave the viewport where it is".
-        None => {
-            viewport.top_col = 0;
-            return;
-        }
+    // Cursor above `top_row` is handled by the earlier branch; treat any
+    // surprise `None` as "leave the viewport where it is".
+    let Some(mut screen) = cursor_screen_row_from(buf, folds, viewport, viewport.top_row) else {
+        viewport.top_col = 0;
+        return;
     };
     while screen >= height {
         let mut next = viewport.top_row + 1;

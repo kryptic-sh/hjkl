@@ -62,8 +62,7 @@ impl PreviewSpans {
                 let row_byte_start = row_starts[row];
                 let row_byte_end = row_starts
                     .get(row + 1)
-                    .map(|&s| s.saturating_sub(1))
-                    .unwrap_or(bytes.len());
+                    .map_or(bytes.len(), |&s| s.saturating_sub(1));
                 if row_byte_start >= span_end {
                     break;
                 }
@@ -76,7 +75,7 @@ impl PreviewSpans {
             }
         }
 
-        PreviewSpans { by_row, styles }
+        Self { by_row, styles }
     }
 }
 
@@ -127,8 +126,7 @@ where
             let row_byte_start = row_starts[row];
             let row_byte_end = row_starts
                 .get(row + 1)
-                .map(|&s| s.saturating_sub(1))
-                .unwrap_or(bytes.len());
+                .map_or(bytes.len(), |&s| s.saturating_sub(1));
             if row_byte_start >= span_end {
                 break;
             }
@@ -161,9 +159,8 @@ pub fn load_preview(abs: &Path) -> (String, String) {
     if bytes[..scan_end].contains(&0u8) {
         return (String::new(), "binary".into());
     }
-    let text = match std::str::from_utf8(&bytes) {
-        Ok(s) => s,
-        Err(_) => return (String::new(), "non-utf8".into()),
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return (String::new(), "non-utf8".into());
     };
     // No line truncation here — the byte cap above already bounds the load,
     // and the viewport only renders what fits on screen. Truncating by line

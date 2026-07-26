@@ -644,9 +644,8 @@ impl SyntaxLayer {
             Some(c) if c.has_language => c,
             _ => return,
         };
-        let h = match c.highlighter.as_mut() {
-            Some(h) => h,
-            None => return,
+        let Some(h) = c.highlighter.as_mut() else {
+            return;
         };
         for e in edits {
             h.edit(&InputEdit {
@@ -841,7 +840,7 @@ impl SyntaxLayer {
         // Effective = global flag AND current language is in the allowlist.
         let colorizer_enabled = {
             let c = self.clients.get(&id)?;
-            let lang_name = c.current_lang.as_ref().map(|g| g.name()).unwrap_or("");
+            let lang_name = c.current_lang.as_ref().map_or("", |g| g.name());
             self.colorizer
                 && (self.colorizer_filetypes.is_empty()
                     || self.colorizer_filetypes.iter().any(|ft| ft == lang_name))
@@ -1157,8 +1156,7 @@ fn build_by_row_range(
             let row_byte_start = row_starts[row];
             let row_byte_end = row_starts
                 .get(row + 1)
-                .map(|&s| s.saturating_sub(1))
-                .unwrap_or(source_len);
+                .map_or(source_len, |&s| s.saturating_sub(1));
 
             if row_byte_start >= span_end {
                 break;
@@ -1248,8 +1246,7 @@ pub fn build_by_row(
             };
             let row_byte_end = row_starts
                 .get(row + 1)
-                .map(|&s| s.saturating_sub(1))
-                .unwrap_or(bytes.len());
+                .map_or(bytes.len(), |&s| s.saturating_sub(1));
 
             if row_byte_start >= span_end {
                 break;

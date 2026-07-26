@@ -9,7 +9,7 @@ use hjkl_ex::{ArgKind, ExEffect, HostCmd};
 use super::App;
 
 /// `:tabnext` / `:tabn` — cycle to the next tab, wrapping around.
-pub(crate) struct TabNextCmd;
+pub struct TabNextCmd;
 
 impl HostCmd<App> for TabNextCmd {
     fn name(&self) -> &'static str {
@@ -38,7 +38,7 @@ impl HostCmd<App> for TabNextCmd {
 // ── Phase 4b commands ────────────────────────────────────────────────────────
 
 /// `:split` / `:sp` — open a horizontal split (optional file arg).
-pub(crate) struct SplitCmd;
+pub struct SplitCmd;
 
 impl HostCmd<App> for SplitCmd {
     fn name(&self) -> &'static str {
@@ -64,7 +64,7 @@ impl HostCmd<App> for SplitCmd {
 }
 
 /// `:vsplit` / `:vsp` — open a vertical split (optional file arg).
-pub(crate) struct VsplitCmd;
+pub struct VsplitCmd;
 
 impl HostCmd<App> for VsplitCmd {
     fn name(&self) -> &'static str {
@@ -90,7 +90,7 @@ impl HostCmd<App> for VsplitCmd {
 }
 
 /// `:close` / `:clo` — close the focused window.
-pub(crate) struct CloseCmd;
+pub struct CloseCmd;
 
 impl HostCmd<App> for CloseCmd {
     fn name(&self) -> &'static str {
@@ -116,7 +116,7 @@ impl HostCmd<App> for CloseCmd {
 }
 
 /// `:tabnew` — open a new tab (optional file arg).
-pub(crate) struct TabnewCmd;
+pub struct TabnewCmd;
 
 impl HostCmd<App> for TabnewCmd {
     fn name(&self) -> &'static str {
@@ -145,7 +145,7 @@ impl HostCmd<App> for TabnewCmd {
 /// wrapping. The canonical name MUST be the full vim word so prefix matching
 /// (`name().starts_with(typed)`) accepts the full `:tabprevious` form — not just
 /// `:tabprev` (#263).
-pub(crate) struct TabprevCmd;
+pub struct TabprevCmd;
 
 impl HostCmd<App> for TabprevCmd {
     fn name(&self) -> &'static str {
@@ -174,7 +174,7 @@ impl HostCmd<App> for TabprevCmd {
 }
 
 /// `:tabclose` / `:tabc` — close the current tab.
-pub(crate) struct TabcloseCmd;
+pub struct TabcloseCmd;
 
 impl HostCmd<App> for TabcloseCmd {
     fn name(&self) -> &'static str {
@@ -200,7 +200,7 @@ impl HostCmd<App> for TabcloseCmd {
 }
 
 /// `:tabmove` — reorder the current tab (optional N/+N/-N arg).
-pub(crate) struct TabmoveCmd;
+pub struct TabmoveCmd;
 
 impl HostCmd<App> for TabmoveCmd {
     fn name(&self) -> &'static str {
@@ -226,7 +226,7 @@ impl HostCmd<App> for TabmoveCmd {
 }
 
 /// `:only` / `:on` — close all windows except the focused one.
-pub(crate) struct OnlyCmd;
+pub struct OnlyCmd;
 
 impl HostCmd<App> for OnlyCmd {
     fn name(&self) -> &'static str {
@@ -254,7 +254,7 @@ impl HostCmd<App> for OnlyCmd {
 // ── Phase 4c commands ────────────────────────────────────────────────────────
 
 /// `:bnext` / `:bn` — advance to the next buffer slot, wrapping.
-pub(crate) struct BnextCmd;
+pub struct BnextCmd;
 
 impl HostCmd<App> for BnextCmd {
     fn name(&self) -> &'static str {
@@ -281,7 +281,7 @@ impl HostCmd<App> for BnextCmd {
 }
 
 /// `:bprevious` / `:bp` / `:bNext` — retreat to the previous buffer slot, wrapping.
-pub(crate) struct BprevCmd;
+pub struct BprevCmd;
 
 impl HostCmd<App> for BprevCmd {
     fn name(&self) -> &'static str {
@@ -308,7 +308,7 @@ impl HostCmd<App> for BprevCmd {
 }
 
 /// `:bfirst` / `:bf` — jump to the first buffer slot (index 0).
-pub(crate) struct BfirstCmd;
+pub struct BfirstCmd;
 
 impl HostCmd<App> for BfirstCmd {
     fn name(&self) -> &'static str {
@@ -335,7 +335,7 @@ impl HostCmd<App> for BfirstCmd {
 }
 
 /// `:blast` / `:bl` — jump to the last buffer slot.
-pub(crate) struct BlastCmd;
+pub struct BlastCmd;
 
 impl HostCmd<App> for BlastCmd {
     fn name(&self) -> &'static str {
@@ -363,7 +363,7 @@ impl HostCmd<App> for BlastCmd {
 }
 
 /// `:buffers` / `:ls` / `:files` — display the buffer list in the status area.
-pub(crate) struct BuffersCmd;
+pub struct BuffersCmd;
 
 impl HostCmd<App> for BuffersCmd {
     fn name(&self) -> &'static str {
@@ -391,7 +391,7 @@ impl HostCmd<App> for BuffersCmd {
 
 /// `:clipboard` — display the clipboard backend capabilities.
 /// Not in COMMAND_NAMES; matched by exact name only.
-pub(crate) struct ClipboardCmd;
+pub struct ClipboardCmd;
 
 impl HostCmd<App> for ClipboardCmd {
     fn name(&self) -> &'static str {
@@ -420,7 +420,7 @@ impl HostCmd<App> for ClipboardCmd {
 // ── Phase 4d2 commands ───────────────────────────────────────────────────────
 
 /// `:picker` — open the fuzzy file picker.
-pub(crate) struct PickerCmd;
+pub struct PickerCmd;
 
 impl HostCmd<App> for PickerCmd {
     fn name(&self) -> &'static str {
@@ -446,7 +446,7 @@ impl HostCmd<App> for PickerCmd {
 }
 
 /// `:rg [pattern]` — open the ripgrep content-search picker.
-pub(crate) struct RgCmd;
+pub struct RgCmd;
 
 impl HostCmd<App> for RgCmd {
     fn name(&self) -> &'static str {
@@ -473,7 +473,7 @@ impl HostCmd<App> for RgCmd {
 }
 
 /// `:b [num|name]` — switch to a buffer by 1-based index or filename fragment.
-pub(crate) struct BCmd;
+pub struct BCmd;
 
 impl HostCmd<App> for BCmd {
     fn name(&self) -> &'static str {
@@ -523,8 +523,7 @@ impl HostCmd<App> for BCmd {
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .and_then(|n| n.to_str())
-                        .map(|n| n.to_lowercase().contains(&arg_lower))
-                        .unwrap_or(false)
+                        .is_some_and(|n| n.to_lowercase().contains(&arg_lower))
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -549,7 +548,7 @@ impl HostCmd<App> for BCmd {
 }
 
 /// `:bpicker` — open the buffer picker.
-pub(crate) struct BpickerCmd;
+pub struct BpickerCmd;
 
 impl HostCmd<App> for BpickerCmd {
     fn name(&self) -> &'static str {
@@ -575,7 +574,7 @@ impl HostCmd<App> for BpickerCmd {
 }
 
 /// `:checktime` — reload buffers that changed on disk.
-pub(crate) struct ChecktimeCmd;
+pub struct ChecktimeCmd;
 
 impl HostCmd<App> for ChecktimeCmd {
     fn name(&self) -> &'static str {
@@ -601,7 +600,7 @@ impl HostCmd<App> for ChecktimeCmd {
 }
 
 /// `:DiffOrig` — read-only split with the unified diff of the buffer vs disk (#208).
-pub(crate) struct DiffOrigCmd;
+pub struct DiffOrigCmd;
 
 impl HostCmd<App> for DiffOrigCmd {
     fn name(&self) -> &'static str {
@@ -627,7 +626,7 @@ impl HostCmd<App> for DiffOrigCmd {
 }
 
 /// `:diffthis` — mark the focused window for diff mode (#208 Phase 2).
-pub(crate) struct DiffThisCmd;
+pub struct DiffThisCmd;
 
 impl HostCmd<App> for DiffThisCmd {
     fn name(&self) -> &'static str {
@@ -653,7 +652,7 @@ impl HostCmd<App> for DiffThisCmd {
 }
 
 /// `:diffsplit {file}` — open `{file}` in a vertical split and diff it (#208).
-pub(crate) struct DiffSplitCmd;
+pub struct DiffSplitCmd;
 
 impl HostCmd<App> for DiffSplitCmd {
     fn name(&self) -> &'static str {
@@ -679,7 +678,7 @@ impl HostCmd<App> for DiffSplitCmd {
 }
 
 /// `:diffoff` — remove the focused window from diff mode (#208 Phase 2).
-pub(crate) struct DiffOffCmd;
+pub struct DiffOffCmd;
 
 impl HostCmd<App> for DiffOffCmd {
     fn name(&self) -> &'static str {
@@ -705,7 +704,7 @@ impl HostCmd<App> for DiffOffCmd {
 }
 
 /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
-pub(crate) struct VnewCmd;
+pub struct VnewCmd;
 
 impl HostCmd<App> for VnewCmd {
     fn name(&self) -> &'static str {
@@ -731,7 +730,7 @@ impl HostCmd<App> for VnewCmd {
 }
 
 /// `:new` — open a horizontal split with a fresh empty unnamed buffer.
-pub(crate) struct NewCmd;
+pub struct NewCmd;
 
 impl HostCmd<App> for NewCmd {
     fn name(&self) -> &'static str {
@@ -757,7 +756,7 @@ impl HostCmd<App> for NewCmd {
 }
 
 /// `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
-pub(crate) struct TabfirstCmd;
+pub struct TabfirstCmd;
 
 impl HostCmd<App> for TabfirstCmd {
     fn name(&self) -> &'static str {
@@ -783,7 +782,7 @@ impl HostCmd<App> for TabfirstCmd {
 }
 
 /// `:tablast` — jump to the last tab.
-pub(crate) struct TablastCmd;
+pub struct TablastCmd;
 
 impl HostCmd<App> for TablastCmd {
     fn name(&self) -> &'static str {
@@ -826,7 +825,7 @@ fn parse_resize_arg(arg: &str) -> Option<i32> {
 }
 
 /// `:tabonly` / `:tabo` — close all tabs except the current one.
-pub(crate) struct TabonlyCmd;
+pub struct TabonlyCmd;
 
 impl HostCmd<App> for TabonlyCmd {
     fn name(&self) -> &'static str {
@@ -853,7 +852,7 @@ impl HostCmd<App> for TabonlyCmd {
 }
 
 /// `:tabs` — show an info popup listing all tabs.
-pub(crate) struct TabsCmd;
+pub struct TabsCmd;
 
 impl HostCmd<App> for TabsCmd {
     fn name(&self) -> &'static str {
@@ -880,7 +879,7 @@ impl HostCmd<App> for TabsCmd {
 }
 
 /// `:resize [+|-]N` — adjust focused window height.
-pub(crate) struct ResizeCmd;
+pub struct ResizeCmd;
 
 impl HostCmd<App> for ResizeCmd {
     fn name(&self) -> &'static str {
@@ -913,7 +912,7 @@ impl HostCmd<App> for ResizeCmd {
 ///
 /// `split_name_args` gives name=`"vertical"` (or `"vert"`), args=`"resize +5"` etc.
 /// We strip the leading `resize`/`res` sub-word and parse the delta.
-pub(crate) struct VerticalResizeCmd;
+pub struct VerticalResizeCmd;
 
 impl HostCmd<App> for VerticalResizeCmd {
     fn name(&self) -> &'static str {
@@ -948,7 +947,7 @@ impl HostCmd<App> for VerticalResizeCmd {
 }
 
 /// `:Rename <newname>` — LSP symbol rename.
-pub(crate) struct RenameCmd;
+pub struct RenameCmd;
 
 impl HostCmd<App> for RenameCmd {
     fn name(&self) -> &'static str {
@@ -981,7 +980,7 @@ impl HostCmd<App> for RenameCmd {
 }
 
 /// `:LspFormat` / `:Format` — LSP whole-file format.
-pub(crate) struct LspFormatCmd;
+pub struct LspFormatCmd;
 
 impl HostCmd<App> for LspFormatCmd {
     fn name(&self) -> &'static str {
@@ -1008,7 +1007,7 @@ impl HostCmd<App> for LspFormatCmd {
 }
 
 /// `:GitDiff` — preview the git hunk under the cursor in an info popup (#115).
-pub(crate) struct GitDiffCmd;
+pub struct GitDiffCmd;
 
 impl HostCmd<App> for GitDiffCmd {
     fn name(&self) -> &'static str {
@@ -1034,7 +1033,7 @@ impl HostCmd<App> for GitDiffCmd {
 }
 
 /// `:GitStage` — stage the git hunk under the cursor into the index (#115).
-pub(crate) struct GitStageCmd;
+pub struct GitStageCmd;
 
 impl HostCmd<App> for GitStageCmd {
     fn name(&self) -> &'static str {
@@ -1060,7 +1059,7 @@ impl HostCmd<App> for GitStageCmd {
 }
 
 /// `:GitRevert` — discard the git hunk under the cursor, restoring HEAD (#115).
-pub(crate) struct GitRevertCmd;
+pub struct GitRevertCmd;
 
 impl HostCmd<App> for GitRevertCmd {
     fn name(&self) -> &'static str {
@@ -1087,7 +1086,7 @@ impl HostCmd<App> for GitRevertCmd {
 
 /// `:GitUnstage` — unstage the staged git hunk under the cursor from the index
 /// (#115).
-pub(crate) struct GitUnstageCmd;
+pub struct GitUnstageCmd;
 
 impl HostCmd<App> for GitUnstageCmd {
     fn name(&self) -> &'static str {
@@ -1113,7 +1112,7 @@ impl HostCmd<App> for GitUnstageCmd {
 }
 
 /// `:GitBlame` — toggle the left-side git blame column for the active buffer (#202).
-pub(crate) struct GitBlameCmd;
+pub struct GitBlameCmd;
 
 impl HostCmd<App> for GitBlameCmd {
     fn name(&self) -> &'static str {
@@ -1139,7 +1138,7 @@ impl HostCmd<App> for GitBlameCmd {
 }
 
 /// `:LspCodeAction` / `:CodeAction` — LSP code actions.
-pub(crate) struct LspCodeActionCmd;
+pub struct LspCodeActionCmd;
 
 impl HostCmd<App> for LspCodeActionCmd {
     fn name(&self) -> &'static str {
@@ -1165,7 +1164,7 @@ impl HostCmd<App> for LspCodeActionCmd {
 }
 
 /// `:lopen` — open the diagnostics picker.
-pub(crate) struct LopenCmd;
+pub struct LopenCmd;
 
 impl HostCmd<App> for LopenCmd {
     fn name(&self) -> &'static str {
@@ -1191,7 +1190,7 @@ impl HostCmd<App> for LopenCmd {
 }
 
 /// `:lnext` — jump to the next diagnostic.
-pub(crate) struct LnextCmd;
+pub struct LnextCmd;
 
 impl HostCmd<App> for LnextCmd {
     fn name(&self) -> &'static str {
@@ -1217,7 +1216,7 @@ impl HostCmd<App> for LnextCmd {
 }
 
 /// `:lprev` — jump to the previous diagnostic.
-pub(crate) struct LprevCmd;
+pub struct LprevCmd;
 
 impl HostCmd<App> for LprevCmd {
     fn name(&self) -> &'static str {
@@ -1243,7 +1242,7 @@ impl HostCmd<App> for LprevCmd {
 }
 
 /// `:lfirst` — jump to the first diagnostic.
-pub(crate) struct LfirstCmd;
+pub struct LfirstCmd;
 
 impl HostCmd<App> for LfirstCmd {
     fn name(&self) -> &'static str {
@@ -1269,7 +1268,7 @@ impl HostCmd<App> for LfirstCmd {
 }
 
 /// `:llast` — jump to the last diagnostic.
-pub(crate) struct LlastCmd;
+pub struct LlastCmd;
 
 impl HostCmd<App> for LlastCmd {
     fn name(&self) -> &'static str {
@@ -1295,7 +1294,7 @@ impl HostCmd<App> for LlastCmd {
 }
 
 /// `:LspInfo` — display LSP server status.
-pub(crate) struct LspInfoCmd;
+pub struct LspInfoCmd;
 
 impl HostCmd<App> for LspInfoCmd {
     fn name(&self) -> &'static str {
@@ -1323,7 +1322,7 @@ impl HostCmd<App> for LspInfoCmd {
 /// `:Anvil [install|uninstall|update] [name]` — plugin manager.
 ///
 /// `split_name_args` gives name=`"Anvil"`, args=`"install foo"` etc.
-pub(crate) struct AnvilCmd;
+pub struct AnvilCmd;
 
 impl HostCmd<App> for AnvilCmd {
     fn name(&self) -> &'static str {
@@ -1383,7 +1382,7 @@ impl HostCmd<App> for AnvilCmd {
 /// `:notifications` / `:notif` — dump the notification ring as an info popup.
 ///
 /// Newest entry first. Format: `[-HH:MM:SS] [SEVERITY] body`.
-pub(crate) struct NotificationsCmd;
+pub struct NotificationsCmd;
 
 impl HostCmd<App> for NotificationsCmd {
     fn name(&self) -> &'static str {
@@ -1412,9 +1411,9 @@ impl HostCmd<App> for NotificationsCmd {
             .into_iter()
             .rev()
             .map(|h| {
-                let elapsed = now
-                    .duration_since(h.ts)
-                    .map(|d| {
+                let elapsed = now.duration_since(h.ts).map_or_else(
+                    |_| "?".to_string(),
+                    |d| {
                         let secs = d.as_secs();
                         format!(
                             "-{:02}:{:02}:{:02}",
@@ -1422,8 +1421,8 @@ impl HostCmd<App> for NotificationsCmd {
                             (secs % 3600) / 60,
                             secs % 60
                         )
-                    })
-                    .unwrap_or_else(|_| "?".to_string());
+                    },
+                );
                 format!(
                     "[{}] [{}] {}",
                     elapsed,
@@ -1448,7 +1447,7 @@ impl HostCmd<App> for NotificationsCmd {
 /// and short-circuits future parses. Other args (e.g. `:syntax sync`,
 /// `:syntax clear`) are accepted as no-ops for vim parity. Bare `:syntax`
 /// reports current state.
-pub(crate) struct SyntaxCmd;
+pub struct SyntaxCmd;
 
 impl HostCmd<App> for SyntaxCmd {
     fn name(&self) -> &'static str {
@@ -1501,7 +1500,7 @@ impl HostCmd<App> for SyntaxCmd {
 /// dark/light/tokyonight/catppuccin/gruvbox/nord/dracula/onedark) is accepted;
 /// unknown names → `E185`. Bare `:colorscheme` (or `?`) reports the current
 /// scheme.
-pub(crate) struct ColorschemeCmd;
+pub struct ColorschemeCmd;
 
 impl HostCmd<App> for ColorschemeCmd {
     fn name(&self) -> &'static str {
@@ -1606,6 +1605,6 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
 static HOST_REGISTRY: LazyLock<hjkl_ex::HostRegistry<App>> = LazyLock::new(build_registry);
 
 /// Return a reference to the static host registry.
-pub(crate) fn host_registry() -> &'static hjkl_ex::HostRegistry<App> {
+pub fn host_registry() -> &'static hjkl_ex::HostRegistry<App> {
     &HOST_REGISTRY
 }

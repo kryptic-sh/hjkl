@@ -104,7 +104,7 @@ impl Sel {
     /// assumes selections are disjoint, since an edit made at one selection
     /// only shifts positions strictly after it — an overlapping selection's
     /// still-queued coordinates would land mid-edit and corrupt (audit A7).
-    pub fn overlaps(&self, other: &Sel) -> bool {
+    pub fn overlaps(&self, other: &Self) -> bool {
         self.start() <= other.end() && other.start() <= self.end()
     }
 }

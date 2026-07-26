@@ -632,9 +632,8 @@ impl App {
             }
         };
         let name = grammar.name().to_string();
-        let mut guard = match self.preview_highlighters.lock() {
-            Ok(c) => c,
-            Err(_) => return PreviewSpans::default(),
+        let Ok(mut guard) = self.preview_highlighters.lock() else {
+            return PreviewSpans::default();
         };
         let cache = &mut *guard;
 
@@ -770,14 +769,13 @@ fn byte_offset_of_row(bytes: &[u8], target_row: usize) -> usize {
     }
     memchr::memchr_iter(b'\n', bytes)
         .nth(target_row - 1)
-        .map(|i| i + 1)
-        .unwrap_or(bytes.len())
+        .map_or(bytes.len(), |i| i + 1)
 }
 
 /// Preview-pane highlight state: the per-language parsers plus the parse of
 /// the preview currently on screen.
 #[derive(Default)]
-pub(crate) struct PreviewCache {
+pub struct PreviewCache {
     /// Per-language `Highlighter`s, reused for the whole session — building
     /// one compiles the grammar's queries.
     pub(crate) highlighters: std::collections::HashMap<String, Highlighter>,
@@ -787,7 +785,7 @@ pub(crate) struct PreviewCache {
 }
 
 /// The preview a retained tree (and optional span memo) belongs to.
-pub(crate) struct ParsedPreview {
+pub struct ParsedPreview {
     /// Picker preview token the tree was parsed from. Unique process-wide, so
     /// a stale entry from a closed picker can never alias a live preview.
     pub(crate) generation: u64,

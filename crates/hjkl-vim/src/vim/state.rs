@@ -14,7 +14,7 @@ use hjkl_engine::VimMode;
 /// editor. Matches `CountAccumulator::MAX_COUNT` in hjkl-vim.
 pub const MAX_COUNT: usize = 999_999_999;
 /// ROT13 a string: rotate ASCII letters by 13, leave everything else.
-pub(crate) fn rot13_str(s: &str) -> String {
+pub fn rot13_str(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
@@ -297,7 +297,7 @@ impl VimState {
 /// impl lives here alongside the struct.
 impl hjkl_engine::DisciplineState for VimState {
     fn coarse_mode(&self) -> hjkl_engine::CoarseMode {
-        VimState::coarse_mode(self)
+        Self::coarse_mode(self)
     }
     /// Vim's idle state is Normal mode with no pending chord, count or insert
     /// session — exactly what `force_normal` establishes.

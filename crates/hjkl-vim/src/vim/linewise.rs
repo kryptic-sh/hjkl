@@ -12,7 +12,7 @@ use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_
 /// Expand a linewise `[start, end]` row range so it fully covers every CLOSED
 /// fold it overlaps — vim's rule that a linewise operator on a closed fold acts
 /// on the whole fold. Loops until stable so nested closed folds are absorbed.
-pub(crate) fn expand_linewise_over_closed_folds(
+pub fn expand_linewise_over_closed_folds(
     buf: &hjkl_buffer::View,
     mut start: usize,
     mut end: usize,
@@ -45,7 +45,7 @@ pub(crate) fn expand_linewise_over_closed_folds(
     }
     (start, end)
 }
-pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
+pub fn execute_line_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
@@ -63,15 +63,12 @@ pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
     //
     // A trailing newline is stored as a phantom empty final row, so the last
     // *content* line is one above it; use that as the boundary.
-    let last_content_row = if total >= 2
-        && buf_line(ed.buffer(), total - 1)
-            .map(|s| s.is_empty())
-            .unwrap_or(false)
-    {
-        total - 2
-    } else {
-        total.saturating_sub(1)
-    };
+    let last_content_row =
+        if total >= 2 && buf_line(ed.buffer(), total - 1).is_some_and(|s| s.is_empty()) {
+            total - 2
+        } else {
+            total.saturating_sub(1)
+        };
     if count >= 2 && row >= last_content_row {
         return;
     }
@@ -120,9 +117,7 @@ pub(crate) fn execute_line_op<H: hjkl_engine::types::Host>(
             // that the trailing `\n` is a terminator, not a separator.
             let target_row = if raw_target > 0
                 && raw_target + 1 == total_after
-                && buf_line(ed.buffer(), raw_target)
-                    .map(|s| s.is_empty())
-                    .unwrap_or(false)
+                && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
             {
                 raw_target - 1
             } else {

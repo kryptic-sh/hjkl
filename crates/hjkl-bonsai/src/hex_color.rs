@@ -929,8 +929,7 @@ mod tests {
                             None
                         }
                     })
-                    .map(|bg| bg.starts_with('#') && bg.len() == 7)
-                    .unwrap_or(false)
+                    .is_some_and(|bg| bg.starts_with('#') && bg.len() == 7)
             })
             .collect();
         // None of the hex spans should be from the 8/7-digit runs.

@@ -20,7 +20,7 @@ pub struct StepBookkeeping {
     pub pre_visual_snapshot: Option<crate::vim::LastVisual>,
 }
 
-pub(crate) fn begin_step<H: hjkl_engine::Host>(
+pub fn begin_step<H: hjkl_engine::Host>(
     ed: &mut Editor<H>,
     input: hjkl_engine::Input,
 ) -> Result<StepBookkeeping, bool> {
@@ -99,7 +99,7 @@ pub(crate) fn begin_step<H: hjkl_engine::Host>(
     })
 }
 
-pub(crate) fn end_step<H: hjkl_engine::Host>(
+pub fn end_step<H: hjkl_engine::Host>(
     ed: &mut Editor<H>,
     input: hjkl_engine::Input,
     bk: StepBookkeeping,

@@ -542,9 +542,8 @@ async fn initialize_handshake_times_out() {
     let result =
         hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx).await;
 
-    let err = match result {
-        Ok(_) => panic!("handshake against a silent server must fail"),
-        Err(e) => e,
+    let Err(err) = result else {
+        panic!("handshake against a silent server must fail")
     };
     assert!(
         err.to_string().contains("timed out"),

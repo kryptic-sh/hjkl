@@ -24,7 +24,7 @@ use hjkl_fs_watch::{FsEvent, Watcher, WatcherBuilder};
 use super::{App, canon_for_match};
 
 /// Event-driven file-watch state held by [`App`].
-pub(crate) struct FsWatch {
+pub struct FsWatch {
     /// Background notify watcher + debounce worker. Drained each tick.
     watcher: Watcher,
     /// Canonicalized paths of open file buffers. Shared with the watcher's

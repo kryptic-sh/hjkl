@@ -57,7 +57,7 @@ pub(crate) struct TrieNode<A> {
     /// Action bound at this node (if this is a terminal chord).
     pub(crate) action: Option<Binding<A>>,
     /// Children keyed by next key event.
-    pub(crate) children: HashMap<KeyEvent, TrieNode<A>>,
+    pub(crate) children: HashMap<KeyEvent, Self>,
 }
 
 impl<A> Default for TrieNode<A> {

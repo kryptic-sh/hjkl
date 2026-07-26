@@ -8,7 +8,7 @@ use crate::completion::{Completion, CompletionItem, CompletionKind};
 
 /// Replace the full text of a TextFieldEditor, leaving cursor at the end in
 /// Insert mode.
-pub(crate) fn set_field_text(field: &mut TextFieldEditor, text: &str) {
+pub fn set_field_text(field: &mut TextFieldEditor, text: &str) {
     field.set_text(text);
     field.enter_insert_at_end();
 }
@@ -169,8 +169,7 @@ impl App {
         if self
             .command_field
             .as_ref()
-            .map(|f| f.coarse_mode() != hjkl_form::CoarseMode::Insert)
-            .unwrap_or(false)
+            .is_some_and(|f| f.coarse_mode() != hjkl_form::CoarseMode::Insert)
         {
             self.completion = None;
             self.command_completion_range = None;
@@ -181,11 +180,7 @@ impl App {
         let (_, col) = self.command_field.as_ref().unwrap().cursor();
         // Convert char-indexed col to a byte index (safe for ASCII command
         // lines, UTF-8-correct via char_indices for non-ASCII).
-        let caret = line
-            .char_indices()
-            .nth(col)
-            .map(|(b, _)| b)
-            .unwrap_or(line.len());
+        let caret = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
 
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
@@ -284,8 +279,8 @@ impl App {
         let field = self.command_field.as_ref()?;
         let line = field.text();
         let range = self.command_completion_range.as_ref();
-        let start = range.map(|r| r.start).unwrap_or(0);
-        let end = range.map(|r| r.end).unwrap_or(line.len());
+        let start = range.map_or(0, |r| r.start);
+        let end = range.map_or(line.len(), |r| r.end);
 
         // Determine if this command takes an argument (add trailing space).
         // We check by trying to resolve the accepted label as a command name.
@@ -384,11 +379,7 @@ impl App {
                 // the column in chars; translate it to a byte offset so the
                 // token slice / splice below index correctly on multi-byte lines.
                 let (_, col) = field.cursor();
-                let caret = line
-                    .char_indices()
-                    .nth(col)
-                    .map(|(b, _)| b)
-                    .unwrap_or(line.len());
+                let caret = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
                 let token_start = find_token_start(&line, caret);
                 let token = &line[token_start..caret];
                 if token.starts_with('%')
@@ -495,9 +486,8 @@ impl App {
             // prompt's mode, matching the buffer/LSP popup behavior.
             self.completion = None;
             self.command_completion_range = None;
-            let field = match self.command_field.as_mut() {
-                Some(f) => f,
-                None => return,
+            let Some(field) = self.command_field.as_mut() else {
+                return;
             };
             // Esc semantics:
             //   empty field   → close the prompt outright (a single Esc on a
@@ -535,9 +525,8 @@ impl App {
             && self.command_accept_would_change_line()
             && (user_navigated || !self.command_line_is_runnable());
 
-        let field = match self.command_field.as_mut() {
-            Some(f) => f,
-            None => return,
+        let Some(field) = self.command_field.as_mut() else {
+            return;
         };
 
         // ── Enter ────────────────────────────────────────────────────────────
@@ -681,9 +670,8 @@ impl App {
         }
 
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
-        let field = match self.search_field.as_mut() {
-            Some(f) => f,
-            None => return,
+        let Some(field) = self.search_field.as_mut() else {
+            return;
         };
 
         if input.key == EngineKey::Enter {
@@ -810,9 +798,8 @@ impl App {
     /// Handle a key event while the `!` filter prompt is active.
     pub(crate) fn handle_filter_field_key(&mut self, key: crossterm::event::KeyEvent) {
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
-        let field = match self.filter_field.as_mut() {
-            Some(f) => f,
-            None => return,
+        let Some(field) = self.filter_field.as_mut() else {
+            return;
         };
 
         if input.key == EngineKey::Enter {
@@ -880,7 +867,7 @@ impl App {
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
 /// `search_field`). Insert mode → Bar; anything else → Block.
-pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
+pub fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
     match field.coarse_mode() {
         hjkl_form::CoarseMode::Insert => CursorShape::Bar,
         _ => CursorShape::Block,
@@ -964,8 +951,7 @@ impl App {
         self.seed_window_editor(new_win_id, win_cursor_row, win_cursor_col, 0, 0);
 
         let total_h = crossterm::terminal::size()
-            .map(|(_, h)| h as usize)
-            .unwrap_or(24)
+            .map_or(24, |(_, h)| h as usize)
             .saturating_sub(1);
         let ratio_b = (win_rows as f32 / total_h as f32).clamp(0.05, 0.45);
         let ratio_a = 1.0 - ratio_b;
@@ -997,9 +983,8 @@ impl App {
         let Some(cw) = self.cmdline_win.take() else {
             return;
         };
-        let new_focus = match self.layout_mut().remove_leaf(cw.win_id) {
-            Ok(f) => f,
-            Err(_) => return,
+        let Ok(new_focus) = self.layout_mut().remove_leaf(cw.win_id) else {
+            return;
         };
         self.windows[cw.win_id] = None;
         let slot_idx = cw.slot_idx;

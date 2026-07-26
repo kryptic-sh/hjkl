@@ -96,12 +96,9 @@ impl App {
 
     /// Open the git file-history picker for the current buffer's path.
     pub(crate) fn open_git_file_history_picker(&mut self) {
-        let filename = match self.active().filename.clone() {
-            Some(p) => p,
-            None => {
-                self.bus.error("git: current buffer has no path");
-                return;
-            }
+        let Some(filename) = self.active().filename.clone() else {
+            self.bus.error("git: current buffer has no path");
+            return;
         };
 
         // Resolve relative path inside the repo workdir.
@@ -113,12 +110,9 @@ impl App {
         };
 
         // Discover repo to obtain workdir.
-        let repo = match git2::Repository::discover(&abs) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a git repo");
-                return;
-            }
+        let Ok(repo) = git2::Repository::discover(&abs) else {
+            self.bus.error("git: not in a git repo");
+            return;
         };
 
         let workdir = match repo.workdir() {
@@ -200,16 +194,13 @@ impl App {
     /// Gets the path from the focused row, dismisses the picker, then runs
     /// `:split <path>`.
     pub(crate) fn picker_open_in_split(&mut self) {
-        let path = match self
+        let Some(path) = self
             .picker
             .as_ref()
             .and_then(|p| p.path_for_visible_row(p.selected))
-        {
-            Some(p) => p,
-            None => {
-                self.bus.warn("picker: no path for selected item");
-                return;
-            }
+        else {
+            self.bus.warn("picker: no path for selected item");
+            return;
         };
         self.close_picker();
         // Split a regular window, not a special pane (explorer/cmdline).
@@ -221,16 +212,13 @@ impl App {
 
     /// Open the currently focused picker row in a vertical split.
     pub(crate) fn picker_open_in_vsplit(&mut self) {
-        let path = match self
+        let Some(path) = self
             .picker
             .as_ref()
             .and_then(|p| p.path_for_visible_row(p.selected))
-        {
-            Some(p) => p,
-            None => {
-                self.bus.warn("picker: no path for selected item");
-                return;
-            }
+        else {
+            self.bus.warn("picker: no path for selected item");
+            return;
         };
         self.close_picker();
         // Split a regular window, not a special pane (explorer/cmdline).
@@ -242,16 +230,13 @@ impl App {
 
     /// Open the currently focused picker row in a new tab.
     pub(crate) fn picker_open_in_tab(&mut self) {
-        let path = match self
+        let Some(path) = self
             .picker
             .as_ref()
             .and_then(|p| p.path_for_visible_row(p.selected))
-        {
-            Some(p) => p,
-            None => {
-                self.bus.warn("picker: no path for selected item");
-                return;
-            }
+        else {
+            self.bus.warn("picker: no path for selected item");
+            return;
         };
         self.close_picker();
         // `tabnew` creates its own fresh window, but leave the CURRENT
@@ -265,16 +250,13 @@ impl App {
 
     /// Copy the path of the currently focused picker row to the system clipboard.
     pub(crate) fn picker_copy_path(&mut self) {
-        let path = match self
+        let Some(path) = self
             .picker
             .as_ref()
             .and_then(|p| p.path_for_visible_row(p.selected))
-        {
-            Some(p) => p,
-            None => {
-                self.bus.warn("picker: no path for selected item");
-                return;
-            }
+        else {
+            self.bus.warn("picker: no path for selected item");
+            return;
         };
         let s = path.to_string_lossy().to_string();
         self.active_editor_mut()
@@ -370,12 +352,9 @@ impl App {
 
     /// Open the anvil tool picker.
     pub(crate) fn open_anvil_picker(&mut self) {
-        let registry = match self.anvil_registry.as_ref() {
-            Some(r) => r,
-            None => {
-                self.bus.error("anvil: registry not available");
-                return;
-            }
+        let Some(registry) = self.anvil_registry.as_ref() else {
+            self.bus.error("anvil: registry not available");
+            return;
         };
         let source = Box::new(crate::picker_sources::AnvilPickerSource::from_registry(
             registry,
@@ -385,12 +364,9 @@ impl App {
 
     pub(crate) fn do_checkout_branch(&mut self, name: &str) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
 
         // Try local first, then remote.
@@ -514,21 +490,15 @@ impl App {
 
     pub(crate) fn do_checkout_tag(&mut self, name: &str) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
 
         let refname = format!("refs/tags/{name}");
-        let tag_ref = match repo.find_reference(&refname) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error(format!("git: tag '{name}' not found"));
-                return;
-            }
+        let Ok(tag_ref) = repo.find_reference(&refname) else {
+            self.bus.error(format!("git: tag '{name}' not found"));
+            return;
         };
 
         let target_obj = match tag_ref.peel(ObjectType::Commit) {
@@ -622,20 +592,14 @@ impl App {
 
     pub(crate) fn do_fetch_remote(&mut self, name: &str) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
 
-        let mut remote = match repo.find_remote(name) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error(format!("git: remote '{name}' not found"));
-                return;
-            }
+        let Ok(mut remote) = repo.find_remote(name) else {
+            self.bus.error(format!("git: remote '{name}' not found"));
+            return;
         };
 
         match remote.fetch(&[] as &[&str], None, None) {
@@ -650,12 +614,9 @@ impl App {
 
     pub(crate) fn do_stash_apply(&mut self, idx: usize) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(mut repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
         let mut opts = git2::StashApplyOptions::new();
         match repo.stash_apply(idx, Some(&mut opts)) {
@@ -671,12 +632,9 @@ impl App {
 
     pub(crate) fn do_stash_pop(&mut self, idx: usize) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(mut repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
         let mut opts = git2::StashApplyOptions::new();
         match repo.stash_pop(idx, Some(&mut opts)) {
@@ -692,12 +650,9 @@ impl App {
 
     pub(crate) fn do_stash_drop(&mut self, idx: usize) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut repo = match git2::Repository::discover(&cwd) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        let Ok(mut repo) = git2::Repository::discover(&cwd) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
         match repo.stash_drop(idx) {
             Ok(()) => {
@@ -710,14 +665,11 @@ impl App {
     }
 
     pub(crate) fn do_show_commit(&mut self, sha: &str) {
-        let repo = match git2::Repository::discover(
+        let Ok(repo) = git2::Repository::discover(
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        ) {
-            Ok(r) => r,
-            Err(_) => {
-                self.bus.error("git: not in a repo");
-                return;
-            }
+        ) else {
+            self.bus.error("git: not in a repo");
+            return;
         };
         let oid = match git2::Oid::from_str(sha) {
             Ok(o) => o,

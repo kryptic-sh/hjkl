@@ -577,9 +577,8 @@ impl App {
         if !self.nvim_window_is_valid(win) {
             return false;
         }
-        let slot = match self.nvim_slot_index_for_buffer(buffer_id) {
-            Some(s) => s,
-            None => return false,
+        let Some(slot) = self.nvim_slot_index_for_buffer(buffer_id) else {
+            return false;
         };
         if let Some(Some(w)) = self.windows.get_mut(win as usize) {
             w.slot = slot;

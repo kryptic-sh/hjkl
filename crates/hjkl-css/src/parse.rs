@@ -163,13 +163,10 @@ fn parse_simple_selector<'i, 't>(
             }
             Ok(Token::Colon) => {
                 let ident = parser.expect_ident_cloned()?;
-                let pseudo = match PseudoClass::from_ident(&ident) {
-                    Some(p) => p,
-                    None => {
-                        return Err(parser.new_custom_error(ParseErrorOwned(format!(
-                            "unknown pseudo-class :{ident}"
-                        ))));
-                    }
+                let Some(pseudo) = PseudoClass::from_ident(&ident) else {
+                    return Err(parser.new_custom_error(ParseErrorOwned(format!(
+                        "unknown pseudo-class :{ident}"
+                    ))));
                 };
                 if sel.pseudo.is_some() {
                     return Err(parser.new_custom_error(ParseErrorOwned(

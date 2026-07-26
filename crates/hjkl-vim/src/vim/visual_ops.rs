@@ -13,7 +13,7 @@ use hjkl_engine::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
 
-pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
+pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
@@ -63,9 +63,7 @@ pub(crate) fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     // byte-for-byte unchanged.
                     let target_row = if raw_target > 0
                         && raw_target + 1 == total_after
-                        && buf_line(ed.buffer(), raw_target)
-                            .map(|s| s.is_empty())
-                            .unwrap_or(false)
+                        && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
                     {
                         raw_target - 1
                     } else {
@@ -315,7 +313,7 @@ fn block_extent(top: usize, bot: usize, left: usize, right: usize, to_eol: bool)
 /// VisualBlock selection. Columns are inclusive on both ends. Uses the
 /// tracked virtual column (updated by h/l, preserved across j/k) so
 /// ragged / empty rows don't collapse the block's width.
-pub(crate) fn block_bounds<H: hjkl_engine::types::Host>(
+pub fn block_bounds<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> (usize, usize, usize, usize) {
     let (ar, ac) = vim(ed).block_anchor;
@@ -337,7 +335,7 @@ pub(crate) fn block_bounds<H: hjkl_engine::types::Host>(
 /// resolves its own right edge to its own EOL until a DIFFERENT
 /// horizontal motion re-establishes a fixed column, at which point the
 /// flag clears. Vertical motions (the `_` arm) preserve it, matching vim.
-pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
+pub fn update_block_vcol<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
 ) {
@@ -378,7 +376,7 @@ pub(crate) fn update_block_vcol<H: hjkl_engine::types::Host>(
 /// than spilling each row onto its own new line (see the `blockwise` slot
 /// flag and `do_block_paste`). The joined-`\n` string is also what the RPC
 /// / charwise-fallback paths read.
-pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
+pub fn apply_block_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
@@ -511,7 +509,7 @@ pub(crate) fn apply_block_operator<H: hjkl_engine::types::Host>(
 /// untouched — vim behaves the same way (ragged blocks). When `to_eol` is
 /// set (`:h v_b_$`), each row's right edge is ITS OWN EOL instead of the
 /// fixed `right`.
-pub(crate) fn transform_block_case<H: hjkl_engine::types::Host>(
+pub fn transform_block_case<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     top: usize,
@@ -549,7 +547,7 @@ pub(crate) fn transform_block_case<H: hjkl_engine::types::Host>(
 /// Yank the rectangular block `(top..=bot, left..=right)`. When `to_eol`
 /// is set (`:h v_b_$`), each row's right edge is ITS OWN EOL instead of
 /// the fixed `right`.
-pub(crate) fn block_yank<H: hjkl_engine::types::Host>(
+pub fn block_yank<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
@@ -590,7 +588,7 @@ pub(crate) fn block_yank<H: hjkl_engine::types::Host>(
 /// every row), so ragged deletes loop one single-row `DeleteRange` per
 /// row instead. Both paths land in the caller's undo group (no
 /// `push_undo` here).
-pub(crate) fn delete_block_contents<H: hjkl_engine::types::Host>(
+pub fn delete_block_contents<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
@@ -623,10 +621,7 @@ pub(crate) fn delete_block_contents<H: hjkl_engine::types::Host>(
 }
 /// Replace each character cell in the block with `ch`. Ragged (`:h
 /// v_b_$`) per row when `vim(ed).block_to_eol` is set.
-pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-    ch: char,
-) {
+pub fn block_replace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>, ch: char) {
     let (top, bot, left, right) = block_bounds(ed);
     let to_eol = vim(ed).block_to_eol;
     // `r` isn't an `Operator`, so record via its own dot-repeat variant.
@@ -643,7 +638,7 @@ pub(crate) fn block_replace<H: hjkl_engine::types::Host>(
 /// Core of block `r`: replace every cell in `(top..=bot, left..=right)`
 /// with `ch`. Split out so dot-repeat can drive it with a rectangle
 /// reconstructed at the cursor rather than the live block selection.
-pub(crate) fn block_replace_bounds<H: hjkl_engine::types::Host>(
+pub fn block_replace_bounds<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     top: usize,
@@ -682,7 +677,7 @@ pub(crate) fn block_replace_bounds<H: hjkl_engine::types::Host>(
 ///
 /// Shared by the live `I`/`A`/`c` finish path (`finish_insert_session`) and
 /// their dot-repeat replays.
-pub(crate) fn replicate_block_text<H: hjkl_engine::types::Host>(
+pub fn replicate_block_text<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     inserted: &str,
     top: usize,
@@ -717,7 +712,7 @@ pub(crate) fn replicate_block_text<H: hjkl_engine::types::Host>(
 /// Reconstructs a `rows` × `cols` rectangle with its TOP-LEFT corner at the
 /// current cursor (restoring the `$`-ragged `to_eol` flag) and re-runs `op`.
 /// `inserted` carries the retyped `c` text (`None` for `d` / case ops).
-pub(crate) fn replay_block_visual_op<H: hjkl_engine::types::Host>(
+pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     rows: usize,
@@ -792,7 +787,7 @@ pub(crate) fn replay_block_visual_op<H: hjkl_engine::types::Host>(
 }
 /// Dot-repeat replay of block `r{ch}` — reconstruct the rectangle at the
 /// cursor and re-replace.
-pub(crate) fn replay_block_replace<H: hjkl_engine::types::Host>(
+pub fn replay_block_replace<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     rows: usize,
@@ -809,7 +804,7 @@ pub(crate) fn replay_block_replace<H: hjkl_engine::types::Host>(
 /// rectangle reconstructed at the cursor. Ragged `A` (`to_eol`) appends at
 /// each row's own EOL. Cursor lands on the block's LEFT edge, matching the
 /// live finish path.
-pub(crate) fn replay_block_insert<H: hjkl_engine::types::Host>(
+pub fn replay_block_insert<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     text: &str,
     rows: usize,
@@ -858,7 +853,7 @@ pub(crate) fn replay_block_insert<H: hjkl_engine::types::Host>(
 /// the selection — verified against real nvim: charwise `llvjrX` on
 /// `"aaaa\nbbbb\n..."` lands on `(0, 2)` (the selection's top), linewise
 /// `VjrZ` lands on `(top, 0)`.
-pub(crate) fn visual_replace_char<H: hjkl_engine::types::Host>(
+pub fn visual_replace_char<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
 ) {
@@ -932,7 +927,7 @@ fn replace_range_with_char<H: hjkl_engine::types::Host>(
 /// the `VisualExtent::Char`/`Line` shape the visual operators replay, `:h
 /// v_.`), then re-replace. `VisualExtent::Block` never reaches here (block `r`
 /// rides `VisualBlockReplace`).
-pub(crate) fn replay_visual_replace<H: hjkl_engine::types::Host>(
+pub fn replay_visual_replace<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     extent: VisualExtent,
@@ -963,7 +958,7 @@ pub(crate) fn replay_visual_replace<H: hjkl_engine::types::Host>(
 /// Replace buffer content with `lines` while preserving the cursor.
 /// Used by indent / outdent / block_replace to wholesale rewrite
 /// rows without going through the per-edit funnel.
-pub(crate) fn reset_textarea_lines<H: hjkl_engine::types::Host>(
+pub fn reset_textarea_lines<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     lines: Vec<String>,
 ) {

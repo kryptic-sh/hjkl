@@ -95,7 +95,7 @@ fn app_status_theme(app: &App) -> StatusTheme {
 ///
 /// Populates left/right segments from app state. The caller converts
 /// to ratatui via `hjkl_statusline_tui::to_line`.
-pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
+pub fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     let theme = app_status_theme(app);
     let ui = &app.theme.ui;
     let mode = app.mode_label();
@@ -147,8 +147,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         .filename
         .as_ref()
         .and_then(|p| p.to_str())
-        .map(Cow::Borrowed)
-        .unwrap_or(Cow::Borrowed("[No Name]"));
+        .map_or(Cow::Borrowed("[No Name]"), Cow::Borrowed);
     let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
 
     // Reserve space for all right-side blocks + filename padding + suffix
@@ -169,7 +168,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
             .lsp_pending
             .values()
             .next()
-            .map(|p| match p {
+            .map_or("request", |p| match p {
                 crate::app::LspPendingRequest::GotoDefinition { .. } => "definition",
                 crate::app::LspPendingRequest::GotoDeclaration { .. } => "declaration",
                 crate::app::LspPendingRequest::GotoTypeDefinition { .. } => "type definition",
@@ -180,8 +179,7 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
                 crate::app::LspPendingRequest::CodeAction { .. } => "code action",
                 crate::app::LspPendingRequest::Rename { .. } => "rename",
                 _ => "request",
-            })
-            .unwrap_or("request");
+            });
         format!("{} LSP:{label}", hjkl_editor_tui::spinner::frame())
     } else {
         let names = app.directory.in_flight_names();
@@ -423,7 +421,7 @@ fn build_diag_overlays(
 /// Widest line-number gutter across all open (non-explorer) buffers, so the
 /// number column can be sized to the biggest file and the text column stays put
 /// when switching buffers. Buffers with line numbers off contribute 0.
-pub(crate) fn max_lnum_width(app: &App) -> u16 {
+pub fn max_lnum_width(app: &App) -> u16 {
     app.slots()
         .iter()
         .filter(|s| !s.is_explorer)
@@ -440,7 +438,7 @@ pub(crate) fn max_lnum_width(app: &App) -> u16 {
 ///
 /// The sign decision uses whether a buffer has ANY signs (not just ones in the
 /// current viewport), so scrolling within a buffer doesn't jiggle either.
-pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
+pub fn stable_gutter_extra(app: &App) -> (u16, u16) {
     use hjkl_engine::types::SignColumnMode;
     let mut sign_w = 0u16;
     let mut fold_w = 0u16;
@@ -480,7 +478,7 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
 /// widths. The explorer pane is gutterless (0). This is the single source of
 /// truth shared with the mouse hit-test so clicks map to the right column even
 /// when the gutter is widened beyond the buffer's own line-count width.
-pub(crate) fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 {
+pub fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 {
     let Some(Some(win)) = app.windows.get(win_id) else {
         return 0;
     };
@@ -497,8 +495,7 @@ pub(crate) fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 
     let own_lnum = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.lnum_width())
-        .unwrap_or_else(|| slot.lnum_width());
+        .map_or_else(|| slot.lnum_width(), |e| e.lnum_width());
     let num_gw = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     sign_w + num_gw + fold_w
 }
@@ -533,7 +530,7 @@ fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
 /// otherwise a `bg`-only style using the theme's editor background. Threaded
 /// into [`hjkl_buffer_tui::BufferView::background`], which layers it under
 /// syntax / cursorline / selection styling.
-pub(crate) fn buffer_background_style(app: &App) -> Style {
+pub fn buffer_background_style(app: &App) -> Style {
     if app.theme_transparent {
         Style::default()
     } else {
@@ -718,9 +715,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     // Extract window metadata (then drop the borrow so we can access slots).
     let (slot_idx, is_focused) = {
-        let win = match app.windows[win_id].as_ref() {
-            Some(w) => w,
-            None => return, // closed window — skip
+        // Closed window — skip.
+        let Some(win) = app.windows[win_id].as_ref() else {
+            return;
         };
         (win.slot, win_id == app.focused_window())
     };
@@ -739,11 +736,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // `is_blame` has no slot-level counterpart (#151 Stage 2b — it's
     // transient per-window UI state, never meant to persist beyond a
     // window's life); default it off in the (should-not-happen) fallback.
-    let (w_cursor_row, w_is_blame) = app
-        .window_editors
-        .get(&win_id)
-        .map(|e| (e.buffer().cursor().row, e.is_blame()))
-        .unwrap_or_else(|| (app.slots()[slot_idx].buffer().cursor().row, false));
+    let (w_cursor_row, w_is_blame) = app.window_editors.get(&win_id).map_or_else(
+        || (app.slots()[slot_idx].buffer().cursor().row, false),
+        |e| (e.buffer().cursor().row, e.is_blame()),
+    );
     // Scalar (Copy) settings copied out of THIS window's editor (or the slot
     // fallback) without cloning the whole `Settings` struct (#312). The owned
     // `listchars: ListChars` field is borrowed further below — AFTER the
@@ -765,8 +761,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let st = app
             .window_editors
             .get(&win_id)
-            .map(|e| e.settings())
-            .unwrap_or_else(|| app.slots()[slot_idx].settings());
+            .map_or_else(|| app.slots()[slot_idx].settings(), |e| e.settings());
         (
             st.number,
             st.relativenumber,
@@ -798,8 +793,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let own_lnum = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.lnum_width())
-        .unwrap_or_else(|| app.slots()[slot_idx].lnum_width());
+        .map_or_else(|| app.slots()[slot_idx].lnum_width(), |e| e.lnum_width());
     let num_gw_for_text = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
     // Extra padding added to the number column beyond the buffer's own width —
     // folded into the cursor's gutter offset below so the caret stays aligned.
@@ -875,8 +869,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let cc = app
             .window_editors
             .get(&win_id)
-            .map(|e| e.settings())
-            .unwrap_or_else(|| app.slots()[slot_idx].settings())
+            .map_or_else(|| app.slots()[slot_idx].settings(), |e| e.settings())
             .colorcolumn
             .as_str();
         (app.colorcolumn_memo.0 != cc).then(|| (cc.to_string(), parse_colorcolumn(cc)))
@@ -892,8 +885,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let settings_ref = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.settings())
-        .unwrap_or_else(|| app.slots()[slot_idx].settings());
+        .map_or_else(|| app.slots()[slot_idx].settings(), |e| e.settings());
     let listchars_ref = &settings_ref.listchars;
 
     // Relative/hybrid line numbers count from THIS window's cursor row. The
@@ -1020,8 +1012,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let buffer_spans: &[Vec<hjkl_buffer::Span>] = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.buffer_spans())
-        .unwrap_or(&[]);
+        .map_or(&[][..], |e| e.buffer_spans());
     let search_pattern_owned = app
         .window_editors
         .get(&win_id)
@@ -1057,8 +1048,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let style_table = app
         .window_editors
         .get(&win_id)
-        .map(|e| e.style_table())
-        .unwrap_or(&[]);
+        .map_or(&[][..], |e| e.style_table());
     let resolver = |id: u32| {
         hjkl_engine_tui::style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
     };
@@ -1223,8 +1213,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let line_count = s.buffer().line_count() as usize;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         let buf = s.buffer();
         crate::app::git_hunks::build_blame_box_plan(
             &s.blame,
@@ -1248,8 +1237,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Built (with the rest of the explorer render data) above.
     let explorer_conceals: &[hjkl_buffer_tui::Conceal] = explorer_render
         .as_ref()
-        .map(|d| d.conceals.as_slice())
-        .unwrap_or(&[]);
+        .map_or(&[][..], |d| d.conceals.as_slice());
 
     // Diff-mode filler plan (#250): blank rows that keep the two diff windows
     // aligned. Built once and reused by the renderer, the cursor placement, and
@@ -1454,8 +1442,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let is_expanded = app
                 .explorer
                 .as_ref()
-                .map(|ep| ep.tree.is_expanded(node.path.as_path()))
-                .unwrap_or(false);
+                .is_some_and(|ep| ep.tree.is_expanded(node.path.as_path()));
 
             // Icon character for this node.
             let icon_ch = if node.is_dir {
@@ -1581,15 +1568,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // leaving the rest mis-colored. The trailing `/` on a dir name is
             // part of the line text, so it's counted naturally.
             let indent_chars = name_col.saturating_sub(text_x) as usize;
-            let name_len = ex_render
-                .line(buf_row)
-                .map(|line| {
-                    line.chars()
-                        .skip(indent_chars)
-                        .take_while(|&c| c != '\u{1F}')
-                        .count() as u16
-                })
-                .unwrap_or(0);
+            let name_len = ex_render.line(buf_row).map_or(0, |line| {
+                line.chars()
+                    .skip(indent_chars)
+                    .take_while(|&c| c != '\u{1F}')
+                    .count() as u16
+            });
             let name_end = name_col.saturating_add(name_len).min(right);
 
             // Repaint name cells.
@@ -1974,9 +1958,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 ///
 /// Only called when `app.completion.is_some()`.
 fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
-    let completion = match app.completion.as_ref() {
-        Some(p) => p,
-        None => return,
+    let Some(completion) = app.completion.as_ref() else {
+        return;
     };
 
     // Convert buffer coordinates to screen coordinates. Anchor relative to the
@@ -1984,9 +1967,7 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     // the window is offset — e.g. the editor sits right of the explorer sidebar.
     let fw = app.focused_window();
     let win_rect = app.windows[fw].as_ref().and_then(|w| w.last_rect);
-    let (base_x, base_y) = win_rect
-        .map(|r| (r.x, r.y))
-        .unwrap_or((buf_area.x, buf_area.y));
+    let (base_x, base_y) = win_rect.map_or((buf_area.x, buf_area.y), |r| (r.x, r.y));
     // Per-window viewport lives on the window's own editor (#151 Phase D) —
     // per-window editors own scroll, but the SLOT bridge editor's viewport
     // stays pinned at its creation top_row. Reading the slot viewport here
@@ -2323,8 +2304,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
         for (i, layout_tab) in app.tabs.iter().enumerate() {
             let slot_idx = app.windows[layout_tab.focused_window]
                 .as_ref()
-                .map(|w| w.slot)
-                .unwrap_or(0);
+                .map_or(0, |w| w.slot);
             let slot = &app.slots()[slot_idx];
             let base_name = slot
                 .filename
@@ -2337,8 +2317,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
             let tab_dirty = layout_tab.layout.leaves().iter().any(|&wid| {
                 app.windows[wid]
                     .as_ref()
-                    .map(|w| app.slots()[w.slot].dirty)
-                    .unwrap_or(false)
+                    .is_some_and(|w| app.slots()[w.slot].dirty)
             });
             if let Some(t) = tab_bar.tabs.last_mut() {
                 t.dirty = tab_dirty;
@@ -2483,9 +2462,8 @@ fn prompt_theme(ui: &crate::theme::UiTheme) -> PromptTheme {
 /// Called when both `app.command_field` and `app.completion` are `Some`.
 /// The anchor rect is placed at `status_area.y` so the popup flips above it.
 fn command_completion_popup(frame: &mut Frame, app: &App, status_area: Rect, viewport: Rect) {
-    let completion = match app.completion.as_ref() {
-        Some(p) => p,
-        None => return,
+    let Some(completion) = app.completion.as_ref() else {
+        return;
     };
     // Anchor at the cursor column in the status line. The cursor column is
     // 1 (for the `:` prefix) + field cursor col.
@@ -2548,7 +2526,7 @@ const MATCH_CAP: usize = 10_000;
 /// Per frame all that remains is mapping the cursor to a global byte
 /// offset (O(log N) rope lookups) and a `partition_point` over the cached
 /// offsets (O(log matches)).
-pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
+pub fn search_count(app: &App) -> Option<(usize, usize)> {
     let st = app.active_editor().search_state();
     let pat = st.pattern.as_ref()?;
     let pattern_str = pat.as_str();
@@ -2699,11 +2677,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // While pending_disk_change is Some, offer keep / reload / diff in place of
     // the normal status bar (mirrors the recovery-prompt pattern).
     if let Some(pdc) = app.pending_disk_change.as_ref() {
-        let name = pdc
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| pdc.path.to_string_lossy().into_owned());
+        let name = pdc.path.file_name().map_or_else(
+            || pdc.path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         let content =
             format!("W12: \"{name}\" changed on disk since editing — [k]eep / [r]eload / [d]iff");
         let padded = format!("{content:<width$}", width = width as usize);
@@ -2721,10 +2698,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
 
     // ── Explorer git-discard confirm ────────────────────────────────────────
     if let Some(ref path) = app.explorer_git_discard_confirm {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let name = path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         let content = format!("Discard changes to {name}? (y/n)");
         let padded = format!("{content:<width$}", width = width as usize);
         return (
@@ -2852,8 +2829,7 @@ pub fn format_status_line_full(
             .char_indices()
             .rev()
             .nth(keep.saturating_sub(1))
-            .map(|(byte_idx, _)| byte_idx)
-            .unwrap_or(0);
+            .map_or(0, |(byte_idx, _)| byte_idx);
         format!("\u{2026}{}", &filename[start_byte..])
     };
     let left = format!("{left_prefix}{truncated}{suffix}");
@@ -2873,7 +2849,7 @@ pub fn format_write_message(path: &str, lines: usize, bytes: usize) -> String {
 /// the concatenated plaintext string. Used in unit tests to assert which
 /// branch (full-line banner vs normal bar) fires.
 #[cfg(test)]
-pub(crate) fn status_line_text(app: &App, width: u16) -> String {
+pub fn status_line_text(app: &App, width: u16) -> String {
     let (line, _cursor_col) = build_status_line(app, width);
     line.spans
         .iter()
@@ -2889,10 +2865,7 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
 
-    let p = match app.picker.as_mut() {
-        Some(p) => p,
-        None => return,
-    };
+    let Some(p) = app.picker.as_mut() else { return };
 
     // Tick debounce for Spawn sources.
     p.tick(std::time::Instant::now());
@@ -2987,7 +2960,7 @@ fn render_picker_input_and_list(
         .iter()
         .enumerate()
         .map(|(row_idx, (label, matches))| {
-            let styles = row_styles.get(row_idx).map(Vec::as_slice).unwrap_or(&[]);
+            let styles = row_styles.get(row_idx).map_or(&[][..], Vec::as_slice);
             if matches.is_empty() && styles.is_empty() {
                 return ListItem::new(label.clone());
             }
@@ -3035,9 +3008,8 @@ fn render_picker_input_and_list(
 /// output and the K-key LSP hover info path. Delegates to
 /// `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
 fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
-    let popup = match app.info_popup.as_ref() {
-        Some(p) => p,
-        None => return,
+    let Some(popup) = app.info_popup.as_ref() else {
+        return;
     };
     let theme = hjkl_info_popup_tui::InfoPopupTheme::new(app.theme.ui.border_active);
     hjkl_info_popup_tui::render(frame, popup, &theme, buf_area);

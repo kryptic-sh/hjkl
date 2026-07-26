@@ -31,7 +31,7 @@ fn dec_pos_one_char<H: Host>(
     }
     if p.row > 0 {
         let prev = p.row - 1;
-        let len = ed.line(prev).map(|l| l.chars().count()).unwrap_or(0);
+        let len = ed.line(prev).map_or(0, |l| l.chars().count());
         return Position::new(prev, len);
     }
     Position::new(0, 0)
@@ -1235,7 +1235,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 } else {
                     (head_row, anchor_row)
                 };
-                let last_col = self.line(bot).map(|l| l.len()).unwrap_or(0);
+                let last_col = self.line(bot).map_or(0, |l| l.len());
                 ((top, 0), (bot, last_col))
             }
             hjkl_buffer::Selection::Block { anchor, head } => {

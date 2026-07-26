@@ -10,9 +10,8 @@ use hjkl_engine::types::Options;
 /// upward from `path`. Falls back silently on parse / IO errors — the
 /// caller already has sensible defaults.
 pub fn overlay_for_path(opts: &mut Options, path: &Path) {
-    let mut props = match ec4rs::properties_of(path) {
-        Ok(p) => p,
-        Err(_) => return,
+    let Ok(mut props) = ec4rs::properties_of(path) else {
+        return;
     };
     props.use_fallbacks();
 

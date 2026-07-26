@@ -90,11 +90,7 @@ fn list_user_maps_excludes_builtin_chords() {
     app.dispatch_ex("imap c d");
     // `:nmap` (no rhs) lists Normal-mode user maps only.
     app.dispatch_ex("nmap");
-    let popup_content = app
-        .info_popup
-        .as_ref()
-        .map(|p| p.content.as_str())
-        .unwrap_or("");
+    let popup_content = app.info_popup.as_ref().map_or("", |p| p.content.as_str());
     assert!(
         popup_content.contains('a'),
         "should list `a` Normal mapping"
@@ -112,11 +108,7 @@ fn list_user_maps_excludes_builtin_chords() {
 
     // Now list imap separately.
     app.dispatch_ex("imap");
-    let popup = app
-        .info_popup
-        .as_ref()
-        .map(|p| p.content.as_str())
-        .unwrap_or("");
+    let popup = app.info_popup.as_ref().map_or("", |p| p.content.as_str());
     assert!(popup.contains('c'), "imap listing should contain `c`");
 }
 
@@ -295,11 +287,7 @@ fn colon_map_list_via_extracted_handler() {
         app.info_popup.is_some(),
         "info_popup should be set after bare `map` via extracted handler"
     );
-    let popup = app
-        .info_popup
-        .as_ref()
-        .map(|p| p.content.as_str())
-        .unwrap_or("");
+    let popup = app.info_popup.as_ref().map_or("", |p| p.content.as_str());
     assert!(popup.contains('p'), "popup should list the `p` binding");
 }
 
@@ -3971,7 +3959,7 @@ fn p64_big_j_with_count_10_joins_10_lines() {
     // whichever the engine produces — what matters is:
     //   (a) the first line merges multiple lines
     //   (b) subsequent lines are unmerged originals
-    let first = lines.first().map(String::as_str).unwrap_or("");
+    let first = lines.first().map_or("", String::as_str);
     assert!(
         first.contains("line1") && (first.contains("line10") || first.contains("line11")),
         "10J must join at least 10 lines into first line; got first: {first:?}"

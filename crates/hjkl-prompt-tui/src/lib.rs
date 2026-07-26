@@ -242,9 +242,8 @@ fn prompt_line_spans(
 /// highlighted.  Candidates that don't fit are replaced with `+N more`.
 /// Does nothing when `prompt.completion` is `None`.
 pub fn render_wildmenu(frame: &mut Frame, prompt: &PromptState, theme: &PromptTheme, area: Rect) {
-    let comp = match &prompt.completion {
-        Some(c) => c,
-        None => return,
+    let Some(comp) = &prompt.completion else {
+        return;
     };
 
     let normal_style = Style::default().bg(theme.wildmenu_bg).fg(theme.wildmenu_fg);

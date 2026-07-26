@@ -8,7 +8,7 @@ use hjkl_engine::Host;
 /// Each row whose successor is more deeply indented becomes a fold opener;
 /// the fold extends to the row before indent drops back to or below the
 /// opener's level. Ported verbatim from `hjkl_editor::ex::apply_fold_indent`.
-pub(crate) fn apply_fold_indent<H: Host>(
+pub fn apply_fold_indent<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,
@@ -79,7 +79,7 @@ pub(crate) fn apply_fold_indent<H: Host>(
 /// No-op when the host hasn't pushed any ranges yet.
 ///
 /// Ported verbatim from `hjkl_editor::ex::apply_fold_syntax`.
-pub(crate) fn apply_fold_syntax<H: Host>(
+pub fn apply_fold_syntax<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     _args: &str,
     _range: Option<LineRange>,

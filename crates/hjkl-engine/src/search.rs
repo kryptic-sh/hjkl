@@ -64,11 +64,11 @@ impl CaseMode {
     /// | `true`  | `true`  | `Smart`       |
     pub fn from_options(ignorecase: bool, smartcase: bool) -> Self {
         if !ignorecase {
-            CaseMode::Sensitive
+            Self::Sensitive
         } else if smartcase {
-            CaseMode::Smart
+            Self::Smart
         } else {
-            CaseMode::Insensitive
+            Self::Insensitive
         }
     }
 }

@@ -164,8 +164,7 @@ pub fn step_normal<H: Host>(
                 let total = hjkl_engine::buf_helpers::buf_row_count(ed.buffer());
                 let last_content_row = if total >= 2
                     && hjkl_engine::buf_helpers::buf_line(ed.buffer(), total - 1)
-                        .map(|s| s.is_empty())
-                        .unwrap_or(false)
+                        .is_some_and(|s| s.is_empty())
                 {
                     total - 2
                 } else {

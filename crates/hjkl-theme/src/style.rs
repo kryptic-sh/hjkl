@@ -30,7 +30,7 @@ pub struct UiStyles {
 
 /// Raw UI section from TOML before palette resolution.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct RawUiStyles {
+pub struct RawUiStyles {
     pub background: Option<ColorRef>,
     pub foreground: Option<ColorRef>,
     pub cursor: Option<ColorRef>,
@@ -94,7 +94,7 @@ pub struct StyleSpec {
 
 /// Raw `modifiers` array from TOML — strings like `"bold"`, `"italic"`.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct RawModifiers(pub Vec<String>);
+pub struct RawModifiers(pub Vec<String>);
 
 impl RawModifiers {
     pub(crate) fn resolve(self) -> Result<Modifiers, ThemeError> {
@@ -115,7 +115,7 @@ impl RawModifiers {
 
 /// Full table form: `{ fg = "...", bg = "...", modifiers = [...] }`.
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct RawStyleFull {
+pub struct RawStyleFull {
     pub fg: Option<ColorRef>,
     pub bg: Option<ColorRef>,
     #[serde(default)]
@@ -125,7 +125,7 @@ pub(crate) struct RawStyleFull {
 /// Raw `StyleSpec` before palette resolution.
 /// TOML shorthand `"#abc123"` or `"$name"` maps to `Shorthand`; table form maps to `Full`.
 #[derive(Clone, Debug)]
-pub(crate) enum RawStyleSpec {
+pub enum RawStyleSpec {
     Full(RawStyleFull),
     Shorthand(ColorRef),
 }
@@ -137,11 +137,11 @@ impl<'de> Deserialize<'de> for RawStyleSpec {
         match v {
             toml::Value::String(_) => {
                 let cr = ColorRef::deserialize(v).map_err(serde::de::Error::custom)?;
-                Ok(RawStyleSpec::Shorthand(cr))
+                Ok(Self::Shorthand(cr))
             }
             toml::Value::Table(_) => {
                 let full = RawStyleFull::deserialize(v).map_err(serde::de::Error::custom)?;
-                Ok(RawStyleSpec::Full(full))
+                Ok(Self::Full(full))
             }
             other => Err(serde::de::Error::custom(format!(
                 "expected string or table for style, got {}",
@@ -154,11 +154,11 @@ impl<'de> Deserialize<'de> for RawStyleSpec {
 impl RawStyleSpec {
     pub(crate) fn resolve(self, palette: &HashMap<String, Color>) -> Result<StyleSpec, ThemeError> {
         match self {
-            RawStyleSpec::Shorthand(cr) => Ok(StyleSpec {
+            Self::Shorthand(cr) => Ok(StyleSpec {
                 fg: Some(cr.resolve(palette)?),
                 ..Default::default()
             }),
-            RawStyleSpec::Full(f) => {
+            Self::Full(f) => {
                 let fg = f.fg.map(|cr| cr.resolve(palette)).transpose()?;
                 let bg = f.bg.map(|cr| cr.resolve(palette)).transpose()?;
                 let modifiers = f.modifiers.resolve()?;

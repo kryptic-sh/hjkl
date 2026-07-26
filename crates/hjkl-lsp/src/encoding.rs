@@ -35,8 +35,8 @@ impl PositionEncoding {
             .get("positionEncoding")
             .and_then(|v| v.as_str())
         {
-            Some("utf-8") => PositionEncoding::Utf8,
-            _ => PositionEncoding::Utf16,
+            Some("utf-8") => Self::Utf8,
+            _ => Self::Utf16,
         }
     }
 }

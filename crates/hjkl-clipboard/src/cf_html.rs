@@ -71,7 +71,7 @@ const BODY_CLOSE: &str = "<!--EndFragment-->\r\n</body>\r\n</html>";
 /// ```
 ///
 /// Returns the bytes to be passed to `SetClipboardData(CF_HTML, …)`.
-pub(crate) fn wrap(html: &str) -> Vec<u8> {
+pub fn wrap(html: &str) -> Vec<u8> {
     // Header length is fixed: HDR_PREFIX contains placeholder zeros that are
     // always exactly 10 digits, so its byte length never varies.
     let hdr_len = HDR_PREFIX.len();
@@ -132,7 +132,7 @@ pub(crate) fn wrap(html: &str) -> Vec<u8> {
 /// - An offset is out of bounds (> payload length).
 /// - `StartFragment > EndFragment`.
 /// - The sliced fragment is not valid UTF-8.
-pub(crate) fn unwrap(payload: &[u8]) -> Result<String, ClipboardError> {
+pub fn unwrap(payload: &[u8]) -> Result<String, ClipboardError> {
     let bad = || ClipboardError::io_other("malformed CF_HTML header");
 
     // Parse the header: scan lines until we find all required fields or hit
@@ -140,8 +140,7 @@ pub(crate) fn unwrap(payload: &[u8]) -> Result<String, ClipboardError> {
     let header_text = payload
         .iter()
         .position(|&b| b == b'<')
-        .map(|pos| &payload[..pos])
-        .unwrap_or(payload);
+        .map_or(payload, |pos| &payload[..pos]);
 
     let header_str = std::str::from_utf8(header_text).map_err(|_| bad())?;
 

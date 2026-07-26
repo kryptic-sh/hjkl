@@ -324,15 +324,12 @@ fn dispatch(
                 Err(msg) => return error_resp(id, ERR_INVALID_PARAMS, &msg),
             };
             let mut chars = reg_str.chars();
-            let c = match chars.next() {
-                Some(ch) => ch,
-                None => {
-                    return error_resp(
-                        id,
-                        ERR_INVALID_PARAMS,
-                        "hjkl_get_register: reg must be a single character",
-                    );
-                }
+            let Some(c) = chars.next() else {
+                return error_resp(
+                    id,
+                    ERR_INVALID_PARAMS,
+                    "hjkl_get_register: reg must be a single character",
+                );
             };
             if chars.next().is_some() {
                 return error_resp(

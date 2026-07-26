@@ -18,7 +18,7 @@ use hjkl_app::diff::DiffRowKind;
 use hjkl_engine::{Host, Query};
 
 /// Per-line diff classification for one window, consumed by the renderer.
-pub(crate) enum DiffBand {
+pub enum DiffBand {
     /// Line exists only in this buffer (vim `DiffAdd`).
     Add,
     /// Line exists on both sides but differs (vim `DiffChange`); `text_ranges`
@@ -27,7 +27,7 @@ pub(crate) enum DiffBand {
 }
 
 /// One changed/added line's render classification.
-pub(crate) struct DiffLineClass {
+pub struct DiffLineClass {
     /// Whole-line band color class.
     pub band: DiffBand,
     /// Byte ranges within the line that differ (for `Change` rows only).
@@ -97,7 +97,7 @@ impl App {
             .diff_windows
             .iter()
             .copied()
-            .filter(|&w| self.windows.get(w).map(|o| o.is_some()).unwrap_or(false))
+            .filter(|&w| self.windows.get(w).is_some_and(|o| o.is_some()))
             .collect();
         if open.len() < 2 {
             return None;

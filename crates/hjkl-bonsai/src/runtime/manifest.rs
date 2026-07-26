@@ -18,8 +18,8 @@ impl QuerySource {
     /// Sub-path prefix inside the source repo that holds `<lang>/highlights.scm`.
     pub fn query_prefix(self) -> &'static str {
         match self {
-            QuerySource::Helix => "runtime/queries",
-            QuerySource::NvimTreesitter => "queries",
+            Self::Helix => "runtime/queries",
+            Self::NvimTreesitter => "queries",
         }
     }
 }

@@ -25,7 +25,7 @@ struct AttachedBuffer {
 
 /// Main async dispatch loop. Runs inside `runtime.block_on(...)` on the
 /// dedicated "hjkl-lsp" std::thread.
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     mut cmd_rx: UnboundedReceiver<LspCommand>,
     evt_tx: Sender<LspEvent>,
     config: LspConfig,
@@ -120,15 +120,12 @@ async fn handle_attach(
     }
 
     // Look up server config for this language.
-    let server_cfg = match config.servers.get(&language_id) {
-        Some(c) => c,
-        None => {
-            tracing::debug!(
-                language_id,
-                "AttachBuffer: no server configured for language"
-            );
-            return;
-        }
+    let Some(server_cfg) = config.servers.get(&language_id) else {
+        tracing::debug!(
+            language_id,
+            "AttachBuffer: no server configured for language"
+        );
+        return;
     };
 
     // Resolve workspace root.
@@ -142,12 +139,9 @@ async fn handle_attach(
     };
 
     // Build file URI.
-    let uri = match crate::uri::from_path(&path) {
-        Ok(u) => u,
-        Err(_) => {
-            tracing::warn!(path = ?path, "AttachBuffer: cannot convert path to URI");
-            return;
-        }
+    let Ok(uri) = crate::uri::from_path(&path) else {
+        tracing::warn!(path = ?path, "AttachBuffer: cannot convert path to URI");
+        return;
     };
 
     // Ensure server is running.
@@ -193,12 +187,9 @@ async fn handle_detach(
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
-    let buf = match buffers.remove(&id) {
-        Some(b) => b,
-        None => {
-            tracing::debug!(id, "DetachBuffer: buffer not attached");
-            return;
-        }
+    let Some(buf) = buffers.remove(&id) else {
+        tracing::debug!(id, "DetachBuffer: buffer not attached");
+        return;
     };
 
     if let Some(server) = servers.get_mut(&buf.server_key) {
@@ -234,12 +225,9 @@ fn handle_request(
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &HashMap<BufferId, AttachedBuffer>,
 ) {
-    let buf = match buffers.get(&buffer_id) {
-        Some(b) => b,
-        None => {
-            tracing::debug!(buffer_id, method, "Request: buffer not attached");
-            return;
-        }
+    let Some(buf) = buffers.get(&buffer_id) else {
+        tracing::debug!(buffer_id, method, "Request: buffer not attached");
+        return;
     };
     if let Some(server) = servers.get_mut(&buf.server_key) {
         server.send_request(request_id, method, params);
@@ -254,12 +242,9 @@ fn handle_notify_change(
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
-    let buf = match buffers.get_mut(&id) {
-        Some(b) => b,
-        None => {
-            tracing::debug!(id, "NotifyChange: buffer not attached");
-            return;
-        }
+    let Some(buf) = buffers.get_mut(&id) else {
+        tracing::debug!(id, "NotifyChange: buffer not attached");
+        return;
     };
     buf.version += 1;
     let version = buf.version;
@@ -281,12 +266,9 @@ fn handle_notify_save(
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
-    let buf = match buffers.get(&id) {
-        Some(b) => b,
-        None => {
-            tracing::debug!(id, "NotifySave: buffer not attached");
-            return;
-        }
+    let Some(buf) = buffers.get(&id) else {
+        tracing::debug!(id, "NotifySave: buffer not attached");
+        return;
     };
     let uri = buf.uri.as_str().to_string();
     if let Some(server) = servers.get_mut(&buf.server_key) {
@@ -306,12 +288,9 @@ fn handle_notify_change_incremental(
     if changes.is_empty() {
         return;
     }
-    let buf = match buffers.get_mut(&id) {
-        Some(b) => b,
-        None => {
-            tracing::debug!(id, "NotifyChangeIncremental: buffer not attached");
-            return;
-        }
+    let Some(buf) = buffers.get_mut(&id) else {
+        tracing::debug!(id, "NotifyChangeIncremental: buffer not attached");
+        return;
     };
     buf.version += 1;
     let version = buf.version;

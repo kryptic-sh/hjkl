@@ -14,7 +14,7 @@ use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_set_cursor_rc};
 /// Return the ordered (longest-first) list of line-comment prefixes for
 /// `lang`. Each prefix includes one trailing space (e.g. `"// "`).
 /// The same table lives in `hjkl-lang::comment` for the `gc` toggle (#187).
-pub(crate) fn comment_prefixes_for_lang(lang: &str) -> &'static [&'static str] {
+pub fn comment_prefixes_for_lang(lang: &str) -> &'static [&'static str] {
     match lang {
         "rust" => &["/// ", "//! ", "// "],
         "c" | "cpp" => &["// "],
@@ -30,12 +30,11 @@ pub(crate) fn comment_prefixes_for_lang(lang: &str) -> &'static [&'static str] {
 /// Returns `Some((indent, prefix))` where `indent` is the leading whitespace
 /// of the line and `prefix` is the canonical (with trailing space) comment
 /// marker. Returns `None` when the line is not a recognised comment.
-pub(crate) fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, &'static str)> {
+pub fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, &'static str)> {
     let indent_end = line
         .char_indices()
         .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
+        .map_or(line.len(), |(i, _)| i);
     let indent = line[..indent_end].to_string();
     let rest = &line[indent_end..];
     for &prefix in comment_prefixes_for_lang(lang) {
@@ -57,7 +56,7 @@ pub(crate) fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, 
 /// Returns `Some("<indent><prefix>")` when the row is a comment line and
 /// continuation is appropriate, `None` otherwise. The caller appends the
 /// string after the `\n` they are about to insert.
-pub(crate) fn continue_comment(
+pub fn continue_comment(
     buffer: &hjkl_buffer::View,
     settings: &hjkl_engine::Settings,
     row: usize,
@@ -78,7 +77,7 @@ pub(crate) fn continue_comment(
 ///   - `ch` is `}` / `)` / `]`
 ///   - all bytes BEFORE the cursor on the current line are whitespace
 ///   - there is at least one full indent unit of leading whitespace
-pub(crate) fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
+pub fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     cursor: hjkl_buffer::Position,
     ch: char,
@@ -152,9 +151,7 @@ pub(crate) fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
     });
     true
 }
-pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-) {
+pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
     };
@@ -355,7 +352,7 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
 /// [`begin_insert`] adds the entry guards plus the undo push and delegates
 /// here. Insert-session state feeds undo grouping and dot-repeat, so it must
 /// not be spelled out twice.
-pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
+pub fn begin_insert_noundo<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
     reason: InsertReason,
@@ -383,7 +380,7 @@ pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
 /// Enter Insert from Normal (`i`/`a`/`I`/`A`/`R`, `gi`, …): check the
 /// entry guards, push the undo snapshot, then hand session setup to
 /// [`begin_insert_noundo`].
-pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
+pub fn begin_insert<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
     reason: InsertReason,
@@ -417,7 +414,7 @@ pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
 ///
 /// During replay we skip the break — replay shouldn't pollute the
 /// undo stack with intra-replay snapshots.
-pub(crate) fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
+pub fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if !ed.settings().undo_break_on_motion {
@@ -461,7 +458,7 @@ pub(crate) fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
 ///
 /// When `undo_granularity == InsertSession` this function returns
 /// immediately, adding zero calls to the hot path.
-pub(crate) fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
+pub fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     next: char,
 ) {
@@ -476,9 +473,8 @@ pub(crate) fn maybe_word_undo_break<H: hjkl_engine::types::Host>(
     if vim(ed).replaying {
         return;
     }
-    let session = match vim(ed).insert_session.as_ref() {
-        Some(s) => s,
-        None => return,
+    let Some(session) = vim(ed).insert_session.as_ref() else {
+        return;
     };
 
     let cursor = buf_cursor_pos(ed.buffer());

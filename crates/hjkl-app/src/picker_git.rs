@@ -45,8 +45,7 @@ fn author_initials(name: &str) -> String {
         let a = chars.next().unwrap_or(' ').to_uppercase().to_string();
         let b = chars
             .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| " ".to_string());
+            .map_or_else(|| " ".to_string(), |c| c.to_uppercase().to_string());
         return format!("{a}{b}");
     }
     format!("{}{}", take_first(words[0]), take_first(words[1]))
@@ -313,14 +312,11 @@ fn git_diff_for_path(repo: &Repository, root: &std::path::Path, path: &std::path
 
     let diff = match repo.head() {
         Ok(head) => {
-            let tree = match head.peel_to_tree() {
-                Ok(t) => t,
-                Err(_) => {
-                    return match repo.diff_index_to_workdir(None, Some(&mut opts)) {
-                        Ok(d) => collect_diff(d),
-                        Err(_) => String::new(),
-                    };
-                }
+            let Ok(tree) = head.peel_to_tree() else {
+                return match repo.diff_index_to_workdir(None, Some(&mut opts)) {
+                    Ok(d) => collect_diff(d),
+                    Err(_) => String::new(),
+                };
             };
             match repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts)) {
                 Ok(d) => d,
@@ -360,39 +356,33 @@ fn scan_git_status(
     sentinel: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(GitStatusItem {
-                    status: *b"??",
-                    path: PathBuf::new(),
-                    is_untracked: true,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitStatusItem {
+                status: *b"??",
+                path: PathBuf::new(),
+                is_untracked: true,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true);
 
-    let statuses = match repo.statuses(Some(&mut opts)) {
-        Ok(s) => s,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(GitStatusItem {
-                    status: *b"??",
-                    path: PathBuf::new(),
-                    is_untracked: true,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(statuses) = repo.statuses(Some(&mut opts)) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitStatusItem {
+                status: *b"??",
+                path: PathBuf::new(),
+                is_untracked: true,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
     if cancel.load(Ordering::Acquire) {
@@ -402,10 +392,7 @@ fn scan_git_status(
 
     let mut parsed: Vec<GitStatusItem> = Vec::new();
     for entry in statuses.iter() {
-        let path_str = match entry.path() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
+        let Ok(path_str) = entry.path() else { continue };
         let path = PathBuf::from(path_str);
         let st = entry.status();
         let xy = status_flags_to_xy(st);
@@ -432,7 +419,7 @@ impl PickerLogic for GitStatusPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -463,14 +450,13 @@ impl PickerLogic for GitStatusPicker {
             return (View::new(), String::new());
         }
 
-        let item = match self
+        let Some(item) = self
             .items
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|i| (i.path.clone(), i.is_untracked)))
-        {
-            Some(v) => v,
-            None => return (View::new(), String::new()),
+        else {
+            return (View::new(), String::new());
         };
         let (path, is_untracked) = item;
         let abs = self.root.join(&path);
@@ -586,30 +572,24 @@ fn scan_git_log(
     sentinel: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(GitLogItem {
-                    sha: String::new(),
-                    short_sha: String::new(),
-                    author: String::new(),
-                    subject: String::new(),
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitLogItem {
+                sha: String::new(),
+                short_sha: String::new(),
+                author: String::new(),
+                subject: String::new(),
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
-    let mut revwalk = match repo.revwalk() {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            done.store(true, Ordering::Release);
-            return;
-        }
+    let Ok(mut revwalk) = repo.revwalk() else {
+        sentinel.store(true, Ordering::Release);
+        done.store(true, Ordering::Release);
+        return;
     };
 
     if revwalk.push_head().is_err() || revwalk.set_sorting(Sort::TIME).is_err() {
@@ -625,13 +605,9 @@ fn scan_git_log(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let oid = match oid_result {
-            Ok(o) => o,
-            Err(_) => continue,
-        };
-        let commit = match repo.find_commit(oid) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(oid) = oid_result else { continue };
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
         };
         let sha = commit.id().to_string();
         let short_sha = sha[..7.min(sha.len())].to_string();
@@ -670,7 +646,7 @@ impl PickerLogic for GitLogPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -747,14 +723,13 @@ impl PickerLogic for GitLogPicker {
             return (View::new(), String::new());
         }
 
-        let sha = match self
+        let Some(sha) = self
             .items
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
-        {
-            Some(s) => s,
-            None => return (View::new(), String::new()),
+        else {
+            return (View::new(), String::new());
         };
 
         let repo = match Repository::discover(&self.root) {
@@ -855,30 +830,24 @@ fn scan_git_file_history(
     sentinel: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(GitLogItem {
-                    sha: String::new(),
-                    short_sha: String::new(),
-                    author: String::new(),
-                    subject: String::new(),
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitLogItem {
+                sha: String::new(),
+                short_sha: String::new(),
+                author: String::new(),
+                subject: String::new(),
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
-    let mut revwalk = match repo.revwalk() {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            done.store(true, Ordering::Release);
-            return;
-        }
+    let Ok(mut revwalk) = repo.revwalk() else {
+        sentinel.store(true, Ordering::Release);
+        done.store(true, Ordering::Release);
+        return;
     };
 
     if revwalk.push_head().is_err() || revwalk.set_sorting(Sort::TIME).is_err() {
@@ -894,28 +863,22 @@ fn scan_git_file_history(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let oid = match oid_result {
-            Ok(o) => o,
-            Err(_) => continue,
-        };
-        let commit = match repo.find_commit(oid) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(oid) = oid_result else { continue };
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
         };
 
         // Check whether this commit touched rel_path by comparing the blob
         // OID in this commit's tree vs its first parent's tree (or vs
         // "absent" for root commits / file additions).
-        let this_tree = match commit.tree() {
-            Ok(t) => t,
-            Err(_) => continue,
+        let Ok(this_tree) = commit.tree() else {
+            continue;
         };
         let this_entry = this_tree.get_path(&rel_path).ok();
 
         let touched = if let Ok(parent) = commit.parent(0) {
-            let parent_tree = match parent.tree() {
-                Ok(t) => t,
-                Err(_) => continue,
+            let Ok(parent_tree) = parent.tree() else {
+                continue;
             };
             let parent_entry = parent_tree.get_path(&rel_path).ok();
             match (this_entry.as_ref(), parent_entry.as_ref()) {
@@ -984,7 +947,7 @@ impl PickerLogic for GitFileHistoryPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -1189,30 +1152,24 @@ fn scan_git_branches(
     sentinel: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(GitBranchItem {
-                    name: String::new(),
-                    kind: BranchKind::Local,
-                    is_head: false,
-                    target_sha: None,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitBranchItem {
+                name: String::new(),
+                kind: BranchKind::Local,
+                is_head: false,
+                target_sha: None,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
-    let branches_iter = match repo.branches(None) {
-        Ok(b) => b,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            done.store(true, Ordering::Release);
-            return;
-        }
+    let Ok(branches_iter) = repo.branches(None) else {
+        sentinel.store(true, Ordering::Release);
+        done.store(true, Ordering::Release);
+        return;
     };
 
     struct RawBranch {
@@ -1230,9 +1187,8 @@ fn scan_git_branches(
             done.store(true, Ordering::Release);
             return;
         }
-        let (branch, branch_type) = match result {
-            Ok(b) => b,
-            Err(_) => continue,
+        let Ok((branch, branch_type)) = result else {
+            continue;
         };
         let name = match branch.name() {
             Ok(Some(n)) => n.to_owned(),
@@ -1318,7 +1274,7 @@ impl PickerLogic for GitBranchPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -1395,16 +1351,13 @@ impl PickerLogic for GitBranchPicker {
             return (hjkl_buffer::View::new(), String::new());
         }
 
-        let target_sha = match self
+        let Some(target_sha) = self
             .items
             .lock()
             .ok()
             .and_then(|g| g.get(idx).and_then(|i| i.target_sha.clone()))
-        {
-            Some(s) => s,
-            None => {
-                return (hjkl_buffer::View::new(), String::new());
-            }
+        else {
+            return (hjkl_buffer::View::new(), String::new());
         };
 
         let repo = match Repository::discover(&self.root) {
@@ -1435,13 +1388,9 @@ impl PickerLogic for GitBranchPicker {
         let mut text = String::new();
         let mut count = 0usize;
         for oid_result in revwalk {
-            let oid = match oid_result {
-                Ok(o) => o,
-                Err(_) => continue,
-            };
-            let commit = match repo.find_commit(oid) {
-                Ok(c) => c,
-                Err(_) => continue,
+            let Ok(oid) = oid_result else { continue };
+            let Ok(commit) = repo.find_commit(oid) else {
+                continue;
             };
             let sha = commit.id().to_string();
             let short_sha = &sha[..7.min(sha.len())];
@@ -1545,21 +1494,18 @@ fn scan_git_stashes(
     sentinel: Arc<AtomicBool>,
     _cancel: Arc<AtomicBool>,
 ) {
-    let mut repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(StashItem {
-                    index: 0,
-                    oid: git2::Oid::ZERO_SHA1,
-                    message: String::new(),
-                    branch_hint: String::new(),
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(mut repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(StashItem {
+                index: 0,
+                oid: git2::Oid::ZERO_SHA1,
+                message: String::new(),
+                branch_hint: String::new(),
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
     let mut collected: Vec<StashItem> = Vec::new();
@@ -1601,7 +1547,7 @@ impl PickerLogic for GitStashPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -1836,21 +1782,18 @@ fn scan_git_tags(
     sentinel: Arc<AtomicBool>,
     _cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(TagItem {
-                    name: "no tags".to_string(),
-                    target_oid: git2::Oid::ZERO_SHA1,
-                    message: String::new(),
-                    tagger: None,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(TagItem {
+                name: "no tags".to_string(),
+                target_oid: git2::Oid::ZERO_SHA1,
+                message: String::new(),
+                tagger: None,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
     let mut tags: Vec<TagItem> = Vec::new();
@@ -1902,8 +1845,8 @@ fn scan_git_tags(
     }
 
     tags.sort_by(|a, b| {
-        let ta = a.tagger.as_ref().map(|(_, t)| *t).unwrap_or(0);
-        let tb = b.tagger.as_ref().map(|(_, t)| *t).unwrap_or(0);
+        let ta = a.tagger.as_ref().map_or(0, |(_, t)| *t);
+        let tb = b.tagger.as_ref().map_or(0, |(_, t)| *t);
         tb.cmp(&ta).then(b.name.cmp(&a.name))
     });
 
@@ -1924,7 +1867,7 @@ impl PickerLogic for GitTagsPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -1987,8 +1930,8 @@ impl PickerLogic for GitTagsPicker {
             return (hjkl_buffer::View::new(), String::new());
         }
 
-        let (target_oid, tag_name, tag_message, tag_tagger) =
-            match self.items.lock().ok().and_then(|g| {
+        let Some((target_oid, tag_name, tag_message, tag_tagger)) =
+            self.items.lock().ok().and_then(|g| {
                 g.get(idx).map(|i| {
                     (
                         i.target_oid,
@@ -1997,12 +1940,10 @@ impl PickerLogic for GitTagsPicker {
                         i.tagger.clone(),
                     )
                 })
-            }) {
-                Some(v) => v,
-                None => {
-                    return (hjkl_buffer::View::new(), String::new());
-                }
-            };
+            })
+        else {
+            return (hjkl_buffer::View::new(), String::new());
+        };
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
@@ -2121,36 +2062,30 @@ fn scan_git_remotes(
     sentinel: Arc<AtomicBool>,
     _cancel: Arc<AtomicBool>,
 ) {
-    let repo = match Repository::discover(&root) {
-        Ok(r) => r,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(RemoteItem {
-                    name: "no remotes".to_string(),
-                    url: String::new(),
-                    branch_count: 0,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(repo) = Repository::discover(&root) else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(RemoteItem {
+                name: "no remotes".to_string(),
+                url: String::new(),
+                branch_count: 0,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
-    let names = match repo.remotes() {
-        Ok(n) => n,
-        Err(_) => {
-            sentinel.store(true, Ordering::Release);
-            if let Ok(mut g) = items.lock() {
-                g.push(RemoteItem {
-                    name: "no remotes".to_string(),
-                    url: String::new(),
-                    branch_count: 0,
-                });
-            }
-            done.store(true, Ordering::Release);
-            return;
+    let Ok(names) = repo.remotes() else {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(RemoteItem {
+                name: "no remotes".to_string(),
+                url: String::new(),
+                branch_count: 0,
+            });
         }
+        done.store(true, Ordering::Release);
+        return;
     };
 
     let mut remotes: Vec<RemoteItem> = Vec::new();
@@ -2160,8 +2095,7 @@ fn scan_git_remotes(
             let prefix = format!("refs/remotes/{name}/");
             let branch_count = repo
                 .references_glob(&format!("{prefix}*"))
-                .map(|iter| iter.count())
-                .unwrap_or(0);
+                .map_or(0, |iter| iter.count());
             remotes.push(RemoteItem {
                 name: name.to_string(),
                 url,
@@ -2202,7 +2136,7 @@ impl PickerLogic for GitRemotesPicker {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -2274,16 +2208,13 @@ impl PickerLogic for GitRemotesPicker {
             return (hjkl_buffer::View::new(), String::new());
         }
 
-        let (name, url) = match self
+        let Some((name, url)) = self
             .items
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|i| (i.name.clone(), i.url.clone())))
-        {
-            Some(v) => v,
-            None => {
-                return (hjkl_buffer::View::new(), String::new());
-            }
+        else {
+            return (hjkl_buffer::View::new(), String::new());
         };
 
         let repo = match Repository::discover(&self.root) {
@@ -2300,8 +2231,7 @@ impl PickerLogic for GitRemotesPicker {
             for r in iter.flatten() {
                 let short = r
                     .shorthand()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_| r.name().unwrap_or("").to_string());
+                    .map_or_else(|_| r.name().unwrap_or("").to_string(), |s| s.to_string());
                 if short.ends_with("/HEAD") {
                     continue;
                 }

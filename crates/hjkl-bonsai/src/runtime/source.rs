@@ -180,12 +180,12 @@ impl SourceCache {
 /// free of path separators or a root/prefix. Grammar names and `; inherits:`
 /// targets are joined into cache and query-repo paths, so a value like
 /// `../../etc` or `foo/bar` must be rejected before it can escape those dirs.
-pub(crate) fn is_safe_component(s: &str) -> bool {
+pub fn is_safe_component(s: &str) -> bool {
     let mut comps = Path::new(s).components();
     matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
 }
 
-pub(crate) fn is_safe_relative_path(s: &str) -> bool {
+pub fn is_safe_relative_path(s: &str) -> bool {
     !s.is_empty()
         && !Path::new(s).components().any(|component| {
             matches!(
@@ -198,7 +198,7 @@ pub(crate) fn is_safe_relative_path(s: &str) -> bool {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn short_rev(rev: &str) -> &str {
+pub fn short_rev(rev: &str) -> &str {
     let mut take = rev.len().min(12);
     // Revs are normally ASCII hex, but the manifest is parsed input — back
     // off to a char boundary rather than panicking on a multi-byte rev.

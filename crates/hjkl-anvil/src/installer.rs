@@ -1363,10 +1363,8 @@ mod tests {
 
     #[test]
     fn install_github_inner_rejects_unsafe_tool_name() {
-        let triple = match host_triple() {
-            Ok(t) => t,
-            Err(_) => return, // skip on unsupported platform
-        };
+        // Skip on unsupported platform.
+        let Ok(triple) = host_triple() else { return };
         let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
         let (_tmp, paths) = temp_paths();
         let err = install_github_inner(
@@ -1530,10 +1528,8 @@ mod tests {
 
     #[test]
     fn bin_not_found_in_archive_returns_bin_not_found() {
-        let triple = match host_triple() {
-            Ok(t) => t,
-            Err(_) => return, // skip on unsupported platform
-        };
+        // Skip on unsupported platform.
+        let Ok(triple) = host_triple() else { return };
 
         // Explicit per-test paths (audit-r2 fix 4) — this test used to touch
         // the REAL XDG store (no env override, no lock).

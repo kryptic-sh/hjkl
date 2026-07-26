@@ -33,9 +33,9 @@ impl Selection {
     /// [`Selection::extend_to`] this is the freshly-set value.
     pub fn head(self) -> Position {
         match self {
-            Selection::Char { head, .. } => head,
-            Selection::Line { head_row, .. } => Position::new(head_row, 0),
-            Selection::Block { head, .. } => head,
+            Self::Char { head, .. } => head,
+            Self::Line { head_row, .. } => Position::new(head_row, 0),
+            Self::Block { head, .. } => head,
         }
     }
 
@@ -43,9 +43,9 @@ impl Selection {
     /// entered visual mode.
     pub fn anchor(self) -> Position {
         match self {
-            Selection::Char { anchor, .. } => anchor,
-            Selection::Line { anchor_row, .. } => Position::new(anchor_row, 0),
-            Selection::Block { anchor, .. } => anchor,
+            Self::Char { anchor, .. } => anchor,
+            Self::Line { anchor_row, .. } => Position::new(anchor_row, 0),
+            Self::Block { anchor, .. } => anchor,
         }
     }
 
@@ -54,9 +54,9 @@ impl Selection {
     /// matter.
     pub fn extend_to(&mut self, pos: Position) {
         match self {
-            Selection::Char { head, .. } => *head = pos,
-            Selection::Line { head_row, .. } => *head_row = pos.row,
-            Selection::Block { head, .. } => *head = pos,
+            Self::Char { head, .. } => *head = pos,
+            Self::Line { head_row, .. } => *head_row = pos.row,
+            Self::Block { head, .. } => *head = pos,
         }
     }
 
@@ -72,7 +72,7 @@ impl Selection {
     /// - `Block`: `[min_col, max_col]` regardless of which row.
     pub fn row_span(self, row: usize) -> RowSpan {
         match self {
-            Selection::Char { anchor, head } => {
+            Self::Char { anchor, head } => {
                 let (start, end) = order(anchor, head);
                 if row < start.row || row > end.row {
                     return None;
@@ -81,7 +81,7 @@ impl Selection {
                 let hi = if row == end.row { end.col } else { usize::MAX };
                 Some((lo, hi))
             }
-            Selection::Line {
+            Self::Line {
                 anchor_row,
                 head_row,
             } => {
@@ -96,7 +96,7 @@ impl Selection {
                     Some((0, usize::MAX))
                 }
             }
-            Selection::Block { anchor, head } => {
+            Self::Block { anchor, head } => {
                 let (top, bot) = (anchor.row.min(head.row), anchor.row.max(head.row));
                 if row < top || row > bot {
                     return None;
@@ -110,17 +110,15 @@ impl Selection {
     /// Inclusive `(top_row, bottom_row)` covered by the selection.
     pub fn row_bounds(self) -> (usize, usize) {
         match self {
-            Selection::Char { anchor, head } => {
+            Self::Char { anchor, head } => {
                 let (s, e) = order(anchor, head);
                 (s.row, e.row)
             }
-            Selection::Line {
+            Self::Line {
                 anchor_row,
                 head_row,
             } => (anchor_row.min(head_row), anchor_row.max(head_row)),
-            Selection::Block { anchor, head } => {
-                (anchor.row.min(head.row), anchor.row.max(head.row))
-            }
+            Self::Block { anchor, head } => (anchor.row.min(head.row), anchor.row.max(head.row)),
         }
     }
 }

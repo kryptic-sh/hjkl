@@ -50,8 +50,7 @@ fn probe_grep_backend() -> GrepBackend {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
     {
         return GrepBackend::Rg;
     }
@@ -60,8 +59,7 @@ fn probe_grep_backend() -> GrepBackend {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
     {
         return GrepBackend::Grep;
     }
@@ -70,8 +68,7 @@ fn probe_grep_backend() -> GrepBackend {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
     {
         return GrepBackend::Findstr;
     }
@@ -172,10 +169,12 @@ pub fn parse_grep_line(raw: &str, root: &Path) -> Option<RgMatch> {
     let line: u32 = line_str.parse().ok()?;
 
     let abs_path = PathBuf::from(path_str);
-    let rel_path = abs_path
-        .strip_prefix(root)
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|_| abs_path);
+    // `map_or_else` would keep the `strip_prefix` borrow alive across the
+    // fallback move, so keep the match form here.
+    let rel_path = match abs_path.strip_prefix(root) {
+        Ok(p) => p.to_path_buf(),
+        Err(_) => abs_path,
+    };
 
     Some(RgMatch {
         path: rel_path,
@@ -213,7 +212,7 @@ impl PickerLogic for RgSource {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -246,14 +245,13 @@ impl PickerLogic for RgSource {
     }
 
     fn preview(&self, idx: usize) -> (View, String) {
-        let (path, line) = match self
+        let Some((path, line)) = self
             .items
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
-        {
-            Some(v) => v,
-            None => return (View::new(), String::new()),
+        else {
+            return (View::new(), String::new());
         };
         // Sentinel: no path means rg wasn't found.
         if path.as_os_str().is_empty() {
@@ -414,25 +412,19 @@ impl PickerLogic for RgSource {
                             .stderr(Stdio::null())
                             .spawn();
 
-                        let mut child = match child {
-                            Ok(c) => c,
-                            Err(_) => {
-                                // Spawn failed — clear stale results.
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Ok(mut child) = child else {
+                            // Spawn failed — clear stale results.
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
-                        let stdout = match child.stdout.take() {
-                            Some(s) => s,
-                            None => {
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Some(stdout) = child.stdout.take() else {
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
                         let reader = BufReader::new(stdout);
@@ -452,10 +444,7 @@ impl PickerLogic for RgSource {
                                 let _ = child.wait();
                                 return;
                             }
-                            let line = match line_result {
-                                Ok(l) => l,
-                                Err(_) => continue,
-                            };
+                            let Ok(line) = line_result else { continue };
                             if let Some(rg_match) = parse_rg_json_line(&line, &root) {
                                 batch.push(rg_match);
                                 total += 1;
@@ -509,24 +498,18 @@ impl PickerLogic for RgSource {
                             .stderr(Stdio::null())
                             .spawn();
 
-                        let mut child = match child {
-                            Ok(c) => c,
-                            Err(_) => {
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Ok(mut child) = child else {
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
-                        let stdout = match child.stdout.take() {
-                            Some(s) => s,
-                            None => {
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Some(stdout) = child.stdout.take() else {
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
                         let reader = BufReader::new(stdout);
@@ -541,10 +524,7 @@ impl PickerLogic for RgSource {
                                 let _ = child.wait();
                                 return;
                             }
-                            let raw = match line_result {
-                                Ok(l) => l,
-                                Err(_) => continue,
-                            };
+                            let Ok(raw) = line_result else { continue };
                             if raw.is_empty() {
                                 continue;
                             }
@@ -605,24 +585,18 @@ impl PickerLogic for RgSource {
                             .stderr(Stdio::null())
                             .spawn();
 
-                        let mut child = match child {
-                            Ok(c) => c,
-                            Err(_) => {
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Ok(mut child) = child else {
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
-                        let stdout = match child.stdout.take() {
-                            Some(s) => s,
-                            None => {
-                                if let Ok(mut g) = items.lock() {
-                                    g.clear();
-                                }
-                                return;
+                        let Some(stdout) = child.stdout.take() else {
+                            if let Ok(mut g) = items.lock() {
+                                g.clear();
                             }
+                            return;
                         };
 
                         let reader = BufReader::new(stdout);
@@ -637,10 +611,7 @@ impl PickerLogic for RgSource {
                                 let _ = child.wait();
                                 return;
                             }
-                            let raw = match line_result {
-                                Ok(l) => l,
-                                Err(_) => continue,
-                            };
+                            let Ok(raw) = line_result else { continue };
                             if raw.is_empty() {
                                 continue;
                             }

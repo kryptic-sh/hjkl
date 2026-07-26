@@ -43,8 +43,7 @@ impl App {
 
         let label = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".to_string());
+            .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
         let diff = hjkl_app::git::unified_diff(
             &disk,
             &buf_bytes,

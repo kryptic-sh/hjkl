@@ -49,7 +49,7 @@ const HEADER_LEN: usize = 20;
 /// - Empty.
 /// - Contains an interior null character (would collide with the UTF-16 null
 ///   terminator and corrupt the list).
-pub(crate) fn build(paths: &[&Path]) -> Result<Vec<u8>, ClipboardError> {
+pub fn build(paths: &[&Path]) -> Result<Vec<u8>, ClipboardError> {
     // Collect all the UTF-16 path strings up-front so we can size the buffer.
     let mut encoded: Vec<Vec<u16>> = Vec::with_capacity(paths.len());
     for &path in paths {
@@ -110,7 +110,7 @@ pub(crate) fn build(paths: &[&Path]) -> Result<Vec<u8>, ClipboardError> {
 /// - The `pFiles` offset is out of bounds.
 /// - `fWide == 0` (ANSI CF_HDROP — modern Windows always uses wide).
 /// - The UTF-16 sequence is invalid or the terminating double-null is missing.
-pub(crate) fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, ClipboardError> {
+pub fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, ClipboardError> {
     let bad = || ClipboardError::io_other("malformed CF_HDROP");
 
     if bytes.len() < HEADER_LEN {

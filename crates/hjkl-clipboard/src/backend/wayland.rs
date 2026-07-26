@@ -42,7 +42,7 @@ const WL_CALLBACK_DONE: u16 = 0;
 
 /// A single global advertised by `wl_registry.global`.
 #[derive(Debug, Clone)]
-pub(crate) struct Global {
+pub struct Global {
     /// The numeric name (used with `wl_registry.bind`).
     pub name: u32,
     /// The interface name string (e.g. `"wl_seat"`, `"ext_data_control_manager_v1"`).
@@ -61,7 +61,7 @@ pub(crate) struct Global {
 /// advertised during the registry probe. `into_parts()` hands the socket and
 /// id allocator to the bg thread in `wayland_thread.rs`, which drives all
 /// clipboard operations from that point forward.
-pub(crate) struct WaylandConnection {
+pub struct WaylandConnection {
     socket: WaylandSocket,
     globals: Vec<Global>,
     /// Next unused new_id to allocate when binding globals.
@@ -152,7 +152,7 @@ impl WaylandConnection {
         }
 
         // Next allocatable id: wl_display=1, registry=2, callback=3 → start at 4.
-        Ok(WaylandConnection {
+        Ok(Self {
             socket,
             globals,
             next_id: 4,

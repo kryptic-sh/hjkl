@@ -294,7 +294,7 @@ fn apply_inverse(child: &ropey::Rope, d: &Delta) -> ropey::Rope {
 
 /// Index into [`UndoTree::nodes`]. Slots are reused via a free list, so an id is
 /// only valid while the node it names is live — the tree never hands ids out.
-pub(crate) type NodeId = usize;
+pub type NodeId = usize;
 
 /// How many recently-materialized node ropes to keep warm (besides the root
 /// base and `current`, which are always available). A cold jump beyond this
@@ -305,7 +305,7 @@ const WARM_CAP: usize = 16;
 /// its links and the reversible edge to its parent. A node with `> 1` child is a
 /// branch point (Phase 2b); `last_child` records which child `<C-r>` follows.
 #[derive(Debug, Clone)]
-pub(crate) struct UndoNode {
+pub struct UndoNode {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub last_child: Option<NodeId>,
@@ -340,7 +340,7 @@ pub(crate) struct UndoNode {
 /// `u`/`<C-r>` (branch-local) and `g-`/`g+` (seq-ordered) map onto it, and how
 /// Phase 3a stores edges as deltas behind a materialization cache.
 #[derive(Debug)]
-pub(crate) struct UndoTree {
+pub struct UndoTree {
     /// Slab; `None` slots are free and recorded in `free`.
     nodes: Vec<Option<UndoNode>>,
     /// Reusable slot indices (frees push here, allocs pop here first).
@@ -1047,8 +1047,7 @@ pub struct SerTree {
 /// [`SystemTime`] → ms since the UNIX epoch (saturating, pre-epoch ⇒ 0).
 fn system_time_to_unix_ms(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// ms since the UNIX epoch → [`SystemTime`].
@@ -1528,7 +1527,7 @@ mod delta_tests {
     impl Rng {
         fn new(seed: u64) -> Self {
             // xorshift needs a non-zero state.
-            Rng(if seed == 0 {
+            Self(if seed == 0 {
                 0x9E37_79B9_7F4A_7C15
             } else {
                 seed
@@ -1813,7 +1812,7 @@ mod delta_tests {
                 let mut t = sa.clone();
                 if !t.is_empty() {
                     let cut = rng.below(t.chars().count() + 1);
-                    let byte = t.char_indices().nth(cut).map(|(i, _)| i).unwrap_or(t.len());
+                    let byte = t.char_indices().nth(cut).map_or(t.len(), |(i, _)| i);
                     t.insert_str(byte, "🎊zz");
                 }
                 t
@@ -2022,7 +2021,7 @@ mod delta_tests {
     }
     impl Driver {
         fn new(s: &str) -> Self {
-            Driver {
+            Self {
                 t: UndoTree::new(ropey::Rope::from_str(s)),
                 live: s.to_string(),
             }
@@ -2075,7 +2074,7 @@ mod delta_tests {
                 content: s.to_string(),
                 seq: 0,
             };
-            RefTree {
+            Self {
                 nodes: vec![Some(root)],
                 current: 0,
                 next_seq: 1,

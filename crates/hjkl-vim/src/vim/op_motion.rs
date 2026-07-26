@@ -9,7 +9,7 @@ use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
-pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
+pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     motion: &Motion,
@@ -60,7 +60,7 @@ pub(crate) fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 /// landing row itself (before `end.1`), so that row is scanned too — only
 /// columns `[.., end.1)` there — which is what keeps `d2w` ending mid-line
 /// (last word not at EOL, `word_end.0 == end.0`) from being clamped.
-pub(crate) fn last_word_end_before<H: hjkl_engine::types::Host>(
+pub fn last_word_end_before<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -85,7 +85,7 @@ pub(crate) fn last_word_end_before<H: hjkl_engine::types::Host>(
     }
     None
 }
-pub(crate) fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
+pub fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     obj: TextObject,
@@ -131,7 +131,7 @@ pub(crate) fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     ed.jump_cursor(start.0, start.1);
     run_operator_over_range(ed, op, start, end, kind);
 }
-pub(crate) fn motion_kind(motion: &Motion) -> RangeKind {
+pub fn motion_kind(motion: &Motion) -> RangeKind {
     match motion {
         Motion::Up | Motion::Down | Motion::ScreenUp | Motion::ScreenDown => RangeKind::Linewise,
         Motion::FileTop | Motion::FileBottom => RangeKind::Linewise,
@@ -168,7 +168,7 @@ pub(crate) fn motion_kind(motion: &Motion) -> RangeKind {
 /// to the yank + delete registers and sets `change_mark_start` for the
 /// `[`/`]` deferral. Calls `push_undo` internally — callers must NOT also
 /// call it.
-pub(crate) fn change_linewise_rows<H: hjkl_engine::types::Host>(
+pub fn change_linewise_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     end_row: usize,
@@ -213,7 +213,7 @@ pub(crate) fn change_linewise_rows<H: hjkl_engine::types::Host>(
     buf_set_cursor_rc(ed.buffer_mut(), top_row, indent_chars);
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
-pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
+pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     start: (usize, usize),
@@ -293,9 +293,7 @@ pub(crate) fn run_operator_over_range<H: hjkl_engine::types::Host>(
                 // same rule as linewise.rs's `dd` path.
                 let target_row = if raw_target > 0
                     && raw_target + 1 == total_after
-                    && buf_line(ed.buffer(), raw_target)
-                        .map(|s| s.is_empty())
-                        .unwrap_or(false)
+                    && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
                 {
                     raw_target - 1
                 } else {

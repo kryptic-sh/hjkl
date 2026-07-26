@@ -273,7 +273,7 @@ fn format_blame_reltime(t: i64, now: i64) -> String {
 /// first row and a bottom border after its last row, capped to `height` screen
 /// rows. `is_hidden(row)` reports fold-hidden rows (skipped). The title is
 /// `<hash> <author> · <reltime> · <summary>`.
-pub(crate) fn build_blame_box_plan(
+pub fn build_blame_box_plan(
     blame: &[Option<git::BlameInfo>],
     line_count: usize,
     is_hidden: impl Fn(usize) -> bool,

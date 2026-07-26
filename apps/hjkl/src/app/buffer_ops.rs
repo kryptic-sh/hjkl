@@ -103,8 +103,7 @@ impl App {
         let file_mtime_unix_ms = self.slots[idx]
             .disk_mtime
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis() as u64);
         let (tree, _current_seq) = self.slots[idx].buffer().undo_to_serializable();
         let override_dir = self
             .config
@@ -336,8 +335,7 @@ impl App {
         let name = removed
             .filename
             .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "[No Name]".into());
+            .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
         self.bus.info(format!("buffer closed: \"{name}\""));
     }
 
@@ -427,8 +425,7 @@ impl App {
         let name = removed
             .filename
             .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "[No Name]".into());
+            .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
         self.bus.info(format!("buffer wiped: \"{name}\""));
     }
 
@@ -461,8 +458,7 @@ impl App {
             let name = slot
                 .filename
                 .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "[No Name]".into());
+                .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
             parts.push(format!("{}:{active}{modf} \"{name}\"", i + 1));
         }
         parts.join(" | ")
@@ -503,9 +499,7 @@ impl App {
                         if p.is_absolute() {
                             p.clone()
                         } else {
-                            std::env::current_dir()
-                                .map(|cwd| cwd.join(p))
-                                .unwrap_or_else(|_| p.clone())
+                            std::env::current_dir().map_or_else(|_| p.clone(), |cwd| cwd.join(p))
                         }
                     })
                     .display()

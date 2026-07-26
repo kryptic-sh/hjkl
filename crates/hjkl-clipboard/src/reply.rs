@@ -12,7 +12,7 @@ use crate::oneshot::Oneshot;
 /// The bg thread calls `resolve` regardless of whether the caller is sync or
 /// async. The front-door wrapper (`block_on` for sync, `Future` for async)
 /// extracts the result via the appropriate mechanism.
-pub(crate) enum Reply<T> {
+pub enum Reply<T> {
     /// Sync caller: wakes via condvar.
     Sync(Arc<(Mutex<Option<T>>, Condvar)>),
     /// Async caller: wakes the executor via `Waker`.

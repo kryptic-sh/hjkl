@@ -114,7 +114,7 @@ pub fn parse_errorformat(text: &str, efm: &str, root: &Path) -> Vec<QfEntry> {
                     if idx == 0 {
                         ""
                     } else {
-                        caps.get(idx).map(|m| m.as_str()).unwrap_or("")
+                        caps.get(idx).map_or("", |m| m.as_str())
                     }
                 };
                 let path_str = cap(map.file);

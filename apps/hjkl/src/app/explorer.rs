@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 /// One visible row in the flattened tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ExplorerNode {
+pub struct ExplorerNode {
     pub path: PathBuf,
     /// Nesting depth: root is depth 0, its children depth 1, …
     pub depth: usize,
@@ -32,7 +32,7 @@ pub(crate) struct ExplorerNode {
 
 /// Pure tree model. Owned by `ExplorerPane` on `App`.
 #[derive(Debug, Clone)]
-pub(crate) struct ExplorerTree {
+pub struct ExplorerTree {
     /// Root of the tree (cwd when the explorer was opened).
     pub(crate) root: PathBuf,
     /// Directories whose fold is OPEN (absolute paths).
@@ -108,7 +108,7 @@ impl ExplorerTree {
                     {
                         return None;
                     }
-                    let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
                     Some((p, is_dir))
                 })
                 .collect(),
@@ -378,10 +378,10 @@ impl ExplorerTree {
             }
             let name_col = node.depth * 2 + 2;
             let name = if node.depth == 0 {
-                node.path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| node.path.to_string_lossy().into_owned())
+                node.path.file_name().map_or_else(
+                    || node.path.to_string_lossy().into_owned(),
+                    |n| n.to_string_lossy().into_owned(),
+                )
             } else {
                 let base = node
                     .path
@@ -410,7 +410,7 @@ impl ExplorerTree {
 
 /// Tracks the open explorer window + slot so `toggle_explorer` can close it.
 #[derive(Debug, Clone)]
-pub(crate) struct ExplorerPane {
+pub struct ExplorerPane {
     /// WindowId of the explorer window in the active tab's layout.
     pub win_id: super::window::WindowId,
     /// The tree model.
@@ -447,7 +447,7 @@ pub(crate) struct ExplorerPane {
 /// frame is O(1). Rebuilt only when the explorer buffer's `dirty_gen` (or the
 /// tree root) changes — see [`ExplorerRenderCache`].
 #[derive(Debug, Clone)]
-pub(crate) struct ExplorerRenderData {
+pub struct ExplorerRenderData {
     /// Whole-buffer text (the buffer's own `dirty_gen`-cached `Arc<String>`).
     pub text: std::sync::Arc<String>,
     /// Byte range `[start, end)` of every buffer row, with `split('\n')`
@@ -491,7 +491,7 @@ impl ExplorerRenderData {
 /// per-frame in `render.rs`): git status colors, the `expanded` set that drives
 /// the dir icon, folds, cursor/selection.
 #[derive(Debug, Default)]
-pub(crate) struct ExplorerRenderCache {
+pub struct ExplorerRenderCache {
     /// `(buffer id, dirty_gen, tree root)` the cached data was built from.
     key: Option<(hjkl_lsp::BufferId, u64, Option<PathBuf>)>,
     data: Option<ExplorerRenderData>,
@@ -585,7 +585,7 @@ impl ExplorerRenderCache {
 /// most-recent earlier node at depth `a`. I.e. draw a vertical bar at an
 /// ancestor column iff that ancestor still has a following sibling.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
+pub fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
     overlay_nodes_from_buffer(text, root)
         .into_iter()
         .flatten()
@@ -606,7 +606,7 @@ pub(crate) fn nodes_from_buffer(text: &str, root: &Path) -> Vec<ExplorerNode> {
 /// `git` is left `None` on every node — the overlay resolves git status by
 /// path against the reconciled tree's status map (so a row's color follows its
 /// path, not its row index). See `render.rs`.
-pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<ExplorerNode>> {
+pub fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<ExplorerNode>> {
     // ── Pass 1: parse path / depth / is_dir, one slot per buffer line ────────
     struct RawNode {
         path: PathBuf,
@@ -658,14 +658,13 @@ pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<E
             continue;
         }
         // Pop dir_stack entries at depth >= current.
-        while dir_stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
+        while dir_stack.last().is_some_and(|(d, _)| *d >= depth) {
             dir_stack.pop();
         }
         let parent = dir_stack
             .last()
             .filter(|(d, _)| *d == depth - 1)
-            .map(|(_, p)| p.as_path())
-            .unwrap_or(root);
+            .map_or(root, |(_, p)| p.as_path());
         let path = parent.join(name);
         if is_dir {
             dir_stack.push((depth, path.clone()));
@@ -725,8 +724,7 @@ pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<E
                     ancestor_is_last
                         .get(a)
                         .and_then(|v| *v)
-                        .map(|last| !last)
-                        .unwrap_or(false)
+                        .is_some_and(|last| !last)
                 })
                 .collect()
         };
@@ -747,7 +745,7 @@ pub(crate) fn overlay_nodes_from_buffer(text: &str, root: &Path) -> Vec<Option<E
 // ── Git status rollup ─────────────────────────────────────────────────────────
 
 /// Precedence order for directory rollup: higher index = higher priority.
-pub(crate) fn git_status_priority(s: hjkl_app::git::ExplorerGit) -> u8 {
+pub fn git_status_priority(s: hjkl_app::git::ExplorerGit) -> u8 {
     use hjkl_app::git::ExplorerGit::*;
     match s {
         Deleted => 1,
@@ -806,8 +804,7 @@ impl super::App {
         self.windows
             .get(fw)
             .and_then(|w| w.as_ref())
-            .map(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer))
-            .unwrap_or(false)
+            .is_some_and(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer))
     }
 
     /// `<leader>e` toggle: closed → open + focus; open → close. Persists the
@@ -916,8 +913,7 @@ impl super::App {
             .iter()
             .rev()
             .find(|s| s.is_explorer)
-            .map(|s| s.buffer().dirty_gen())
-            .unwrap_or(0);
+            .map_or(0, |s| s.buffer().dirty_gen());
 
         self.explorer = Some(ExplorerPane {
             win_id: new_win_id,
@@ -1038,8 +1034,7 @@ impl super::App {
         let clamped = new_row.min(
             self.explorer
                 .as_ref()
-                .map(|ep| ep.tree.nodes.len().saturating_sub(1))
-                .unwrap_or(0),
+                .map_or(0, |ep| ep.tree.nodes.len().saturating_sub(1)),
         );
         let _ = win_id;
         self.set_explorer_window_cursor(clamped, 0, None);
@@ -1080,8 +1075,7 @@ impl super::App {
             .explorer
             .as_ref()
             .and_then(|e| self.window_editors.get(&e.win_id))
-            .map(|ed| ed.vim_mode())
-            .unwrap_or(VimMode::Normal);
+            .map_or(VimMode::Normal, |ed| ed.vim_mode());
         if vim_mode != VimMode::Normal {
             return;
         }
@@ -1090,11 +1084,7 @@ impl super::App {
         let cur_gen = self.slots[slot_idx].buffer().dirty_gen();
 
         // Guard: nothing changed since last reconcile.
-        let last_gen = self
-            .explorer
-            .as_ref()
-            .map(|ep| ep.last_reconcile_gen)
-            .unwrap_or(0);
+        let last_gen = self.explorer.as_ref().map_or(0, |ep| ep.last_reconcile_gen);
         if cur_gen == last_gen {
             return;
         }
@@ -1383,9 +1373,8 @@ impl super::App {
     pub(crate) fn explorer_undo(&mut self) -> bool {
         // Pop the top transaction from the undo stack.
         let txn = {
-            let ep = match self.explorer.as_mut() {
-                Some(ep) => ep,
-                None => return false,
+            let Some(ep) = self.explorer.as_mut() else {
+                return false;
             };
             match ep.undo_stack.pop() {
                 Some(t) => t,
@@ -1430,9 +1419,8 @@ impl super::App {
     pub(crate) fn explorer_redo(&mut self) {
         // Pop the top transaction from the redo stack.
         let redo_txn = {
-            let ep = match self.explorer.as_mut() {
-                Some(ep) => ep,
-                None => return,
+            let Some(ep) = self.explorer.as_mut() else {
+                return;
             };
             match ep.redo_stack.pop() {
                 Some(t) => t,
@@ -1610,8 +1598,7 @@ impl super::App {
             .get(win_id)
             .and_then(|w| w.as_ref())
             .and_then(|w| w.last_rect)
-            .map(|rc| rc.h as usize)
-            .unwrap_or(0);
+            .map_or(0, |rc| rc.h as usize);
         let new_top = if height == 0 {
             cur_top
         } else if row < cur_top {
@@ -1957,20 +1944,17 @@ impl super::App {
     /// recomputed and the buffer is rebuilt so the gutter colours update
     /// immediately.
     pub(crate) fn explorer_git_stage_toggle(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
+        let Some(node) = self.explorer_cursor_node() else {
+            return;
         };
-        let ep = match self.explorer.as_ref() {
-            Some(ep) => ep,
-            None => return,
+        let Some(ep) = self.explorer.as_ref() else {
+            return;
         };
         if !ep.tree.repo_present {
             return;
         }
-        let root = match hjkl_app::git::repo_root(&node.path) {
-            Some(r) => r,
-            None => return,
+        let Some(root) = hjkl_app::git::repo_root(&node.path) else {
+            return;
         };
         let result = if node.git == Some(hjkl_app::git::ExplorerGit::Staged) {
             hjkl_app::git::unstage_path(&root, &node.path)
@@ -1997,13 +1981,11 @@ impl super::App {
     /// does not affect them and it would be a surprising no-op. The confirm
     /// prompt reads "Discard changes to <name>? (y/n)".
     pub(crate) fn explorer_git_discard(&mut self) {
-        let node = match self.explorer_cursor_node() {
-            Some(n) => n,
-            None => return,
+        let Some(node) = self.explorer_cursor_node() else {
+            return;
         };
-        let ep = match self.explorer.as_ref() {
-            Some(ep) => ep,
-            None => return,
+        let Some(ep) = self.explorer.as_ref() else {
+            return;
         };
         if !ep.tree.repo_present {
             return;
@@ -2027,16 +2009,12 @@ impl super::App {
 
     /// Called when the user confirms a git-discard with `y`.
     pub(crate) fn explorer_commit_git_discard(&mut self) {
-        let path = match self.explorer_git_discard_confirm.take() {
-            Some(p) => p,
-            None => return,
+        let Some(path) = self.explorer_git_discard_confirm.take() else {
+            return;
         };
-        let root = match hjkl_app::git::repo_root(&path) {
-            Some(r) => r,
-            None => {
-                self.bus.error("Git discard failed: path not in a repo");
-                return;
-            }
+        let Some(root) = hjkl_app::git::repo_root(&path) else {
+            self.bus.error("Git discard failed: path not in a repo");
+            return;
         };
         match hjkl_app::git::discard_path(&root, &path) {
             Ok(()) => {
@@ -2078,12 +2056,9 @@ impl super::App {
             }
         };
 
-        let msg_file = match hjkl_app::git::commit_edit_path(&root) {
-            Some(p) => p,
-            None => {
-                self.bus.error("could not resolve COMMIT_EDITMSG path");
-                return;
-            }
+        let Some(msg_file) = hjkl_app::git::commit_edit_path(&root) else {
+            self.bus.error("could not resolve COMMIT_EDITMSG path");
+            return;
         };
 
         let template = hjkl_app::git::commit_template(&root);
@@ -2313,7 +2288,7 @@ mod tests {
                 .tree
                 .nodes
                 .iter()
-                .any(|n| n.path.file_name().map(|f| f == "deep.txt").unwrap_or(false))
+                .any(|n| n.path.file_name().is_some_and(|f| f == "deep.txt"))
         };
         // Lazy: deep.txt is under collapsed dirs → absent.
         assert!(!has_deep(&app), "deep.txt must be absent before reveal");
@@ -2483,7 +2458,7 @@ mod tests {
             .tree
             .nodes
             .iter()
-            .any(|n| n.path.file_name().map(|f| f == "test.txt").unwrap_or(false));
+            .any(|n| n.path.file_name().is_some_and(|f| f == "test.txt"));
 
         assert!(dir_exists, "somedir/ must be created on disk");
         assert!(file_exists, "somedir/test.txt must be created on disk");
@@ -2561,12 +2536,7 @@ mod tests {
         let file_slot = app
             .slots
             .iter()
-            .position(|s| {
-                s.filename
-                    .as_deref()
-                    .map(|p| p.ends_with("a.txt"))
-                    .unwrap_or(false)
-            })
+            .position(|s| s.filename.as_deref().is_some_and(|p| p.ends_with("a.txt")))
             .expect("a.txt must be open in a slot");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2631,19 +2601,13 @@ mod tests {
             .position(|s| {
                 s.filename
                     .as_deref()
-                    .map(|p| p.ends_with("d/inner.txt"))
-                    .unwrap_or(false)
+                    .is_some_and(|p| p.ends_with("d/inner.txt"))
             })
             .expect("d/inner.txt open");
         let decoy_slot = app
             .slots
             .iter()
-            .position(|s| {
-                s.filename
-                    .as_deref()
-                    .map(|p| p.ends_with("dx.txt"))
-                    .unwrap_or(false)
-            })
+            .position(|s| s.filename.as_deref().is_some_and(|p| p.ends_with("dx.txt")))
             .expect("dx.txt open");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2689,12 +2653,7 @@ mod tests {
         let file_slot = app
             .slots
             .iter()
-            .position(|s| {
-                s.filename
-                    .as_deref()
-                    .map(|p| p.ends_with("a.txt"))
-                    .unwrap_or(false)
-            })
+            .position(|s| s.filename.as_deref().is_some_and(|p| p.ends_with("a.txt")))
             .expect("a.txt open");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2724,8 +2683,7 @@ mod tests {
             app.slots[file_slot]
                 .filename
                 .as_deref()
-                .map(|p| p.ends_with("a.txt"))
-                .unwrap_or(false),
+                .is_some_and(|p| p.ends_with("a.txt")),
             "filename kept so an explicit :w can bring the file back"
         );
         assert_eq!(
@@ -3833,15 +3791,12 @@ mod tests {
     /// the given filename. Use this instead of `buf.contains(name)` to avoid
     /// false positives from nested paths (e.g. trash/ subdir containing the name).
     fn has_root_child(app: &super::super::App, name: &str) -> bool {
-        app.explorer
-            .as_ref()
-            .map(|ep| {
-                ep.tree
-                    .nodes
-                    .iter()
-                    .any(|n| n.depth == 1 && n.path.file_name().map(|f| f == name).unwrap_or(false))
-            })
-            .unwrap_or(false)
+        app.explorer.as_ref().is_some_and(|ep| {
+            ep.tree
+                .nodes
+                .iter()
+                .any(|n| n.depth == 1 && n.path.file_name().is_some_and(|f| f == name))
+        })
     }
 
     /// Press a key through the full event loop path (same as existing tests).
@@ -4024,12 +3979,10 @@ mod tests {
             .explorer
             .as_ref()
             .and_then(|ep| {
-                ep.tree.nodes.iter().find(|n| {
-                    n.path
-                        .file_name()
-                        .map(|f| f == "tracked.txt")
-                        .unwrap_or(false)
-                })
+                ep.tree
+                    .nodes
+                    .iter()
+                    .find(|n| n.path.file_name().is_some_and(|f| f == "tracked.txt"))
             })
             .map(|n| n.git);
 
@@ -4098,11 +4051,7 @@ mod tests {
             "must be trashed after dd"
         );
         // undo_stack has 1 entry after dd.
-        let undo_len = app
-            .explorer
-            .as_ref()
-            .map(|ep| ep.undo_stack.len())
-            .unwrap_or(0);
+        let undo_len = app.explorer.as_ref().map_or(0, |ep| ep.undo_stack.len());
         assert_eq!(undo_len, 1, "undo_stack must have 1 entry after dd");
 
         // u → journal undo
@@ -4110,16 +4059,8 @@ mod tests {
         let on_disk = tmp.path().join("recover.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].buffer().as_string();
-        let undo_len2 = app
-            .explorer
-            .as_ref()
-            .map(|ep| ep.undo_stack.len())
-            .unwrap_or(1);
-        let redo_len = app
-            .explorer
-            .as_ref()
-            .map(|ep| ep.redo_stack.len())
-            .unwrap_or(0);
+        let undo_len2 = app.explorer.as_ref().map_or(1, |ep| ep.undo_stack.len());
+        let redo_len = app.explorer.as_ref().map_or(0, |ep| ep.redo_stack.len());
 
         assert!(on_disk, "u must restore recover.txt to disk");
         assert!(
@@ -4278,12 +4219,9 @@ mod tests {
         let a_dir_path = tree.nodes[1].path.clone();
         assert!(!tree.is_expanded(&a_dir_path), "a_dir must start collapsed");
         let has_inner = |t: &ExplorerTree| {
-            t.nodes.iter().any(|n| {
-                n.path
-                    .file_name()
-                    .map(|f| f == "inner.txt")
-                    .unwrap_or(false)
-            })
+            t.nodes
+                .iter()
+                .any(|n| n.path.file_name().is_some_and(|f| f == "inner.txt"))
         };
         assert!(
             !has_inner(&tree),
@@ -4340,12 +4278,14 @@ mod tests {
             nodes_open > nodes_before,
             "activate on a collapsed dir must add its children"
         );
-        let has_child = app.explorer.as_ref().unwrap().tree.nodes.iter().any(|n| {
-            n.path
-                .file_name()
-                .map(|f| f == "child.txt")
-                .unwrap_or(false)
-        });
+        let has_child = app
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .iter()
+            .any(|n| n.path.file_name().is_some_and(|f| f == "child.txt"));
         assert!(
             has_child,
             "child.txt must be in the tree after expanding subdir"

@@ -1181,7 +1181,7 @@ impl Highlighter {
                 let Some(child_grammar) = resolve(lang_name) else {
                     continue;
                 };
-                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                let Ok(mut new_hl) = Self::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
@@ -1380,7 +1380,7 @@ impl Highlighter {
                 let Some(child_grammar) = resolve(lang_name) else {
                     continue;
                 };
-                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                let Ok(mut new_hl) = Self::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
@@ -1808,7 +1808,7 @@ impl Highlighter {
                 let Some(child_grammar) = resolve(lang_name) else {
                     continue;
                 };
-                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                let Ok(mut new_hl) = Self::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(&slice);
@@ -1986,8 +1986,7 @@ fn collect_parse_errors(
             let line_end = source[n_start..raw_end]
                 .iter()
                 .position(|&b| b == b'\n')
-                .map(|off| n_start + off)
-                .unwrap_or(raw_end);
+                .map_or(raw_end, |off| n_start + off);
 
             let snippet = std::str::from_utf8(&source[n_start..line_end])
                 .unwrap_or("")
@@ -2264,12 +2263,9 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn html_set_directive_metadata_applied() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not in cache; skipping html e2e test");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not in cache; skipping html e2e test");
+            return;
         };
 
         // The html highlights.scm (from nvim-treesitter html_tags) includes:
@@ -2343,12 +2339,9 @@ mod tests {
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     #[test]
     fn unknown_predicate_does_not_drop_match() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not in cache; skipping");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not in cache; skipping");
+            return;
         };
         // Build a query with an unknown predicate attached to a simple pattern.
         let query_text = "((tag_name) @tag\n  (#bogus? @tag))";
@@ -2437,12 +2430,9 @@ mod tests {
     #[test]
     #[ignore = "needs cached html grammar — run after hjkl installs html"]
     fn custom_predicate_always_false_drops_matches() {
-        let grammar = match load_html_grammar() {
-            Some(g) => g,
-            None => {
-                eprintln!("html grammar not in cache; skipping");
-                return;
-            }
+        let Some(grammar) = load_html_grammar() else {
+            eprintln!("html grammar not in cache; skipping");
+            return;
         };
         let query_text = "((tag_name) @tag\n  (#my-false? @tag))";
         let language = grammar.language();

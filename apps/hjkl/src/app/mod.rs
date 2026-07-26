@@ -21,31 +21,31 @@ use hjkl_app::git_worker::{BlameWorker, GitSignsWorker};
 use std::collections::HashSet;
 
 mod buffer_ops;
-pub(crate) mod chord_routing;
+pub mod chord_routing;
 mod confirm_substitute;
-pub(crate) mod count_prefix;
+pub mod count_prefix;
 mod diff;
-pub(crate) mod diff_mode;
+pub mod diff_mode;
 mod dispatch;
-pub(crate) mod dock;
+pub mod dock;
 mod engine_actions;
-pub(crate) mod event_loop;
+pub mod event_loop;
 mod ex_dispatch;
-pub(crate) mod ex_host_cmds;
-pub(crate) mod explorer;
-pub(crate) mod explorer_reconcile;
+pub mod ex_host_cmds;
+pub mod explorer;
+pub mod explorer_reconcile;
 mod fs_watch;
-pub(crate) mod git_hunks;
-pub(crate) mod hop;
-pub(crate) mod keymap;
-pub(crate) mod keymap_build;
+pub mod git_hunks;
+pub mod hop;
+pub mod keymap;
+pub mod keymap_build;
 pub mod lsp_glue;
-pub(crate) mod mappings_dispatch;
+pub mod mappings_dispatch;
 pub mod mouse;
 mod pending_actions;
 mod picker_glue;
 mod prompt;
-pub(crate) mod quickfix;
+pub mod quickfix;
 mod syntax_glue;
 #[cfg(test)]
 mod tests;
@@ -56,7 +56,7 @@ pub mod window;
 use crate::completion::Completion;
 use hjkl_info_popup::InfoPopup;
 
-pub(crate) use types::BufferFeatures;
+pub use types::BufferFeatures;
 pub use types::{
     BufferSlot, DiagSeverity, DiskState, LspDiag, LspPendingRequest, LspServerInfo, MouseFlags,
     mouse_enabled_for,
@@ -105,7 +105,7 @@ pub const TOP_BAR_HEIGHT: u16 = 1;
 
 /// Close glyph appended to every tab and buffer-line entry. 1 display column,
 /// 3 UTF-8 bytes — all width math must use `.chars().count()`.
-pub(crate) const TAB_CLOSE_GLYPH: char = '✕';
+pub const TAB_CLOSE_GLYPH: char = '✕';
 
 /// Resolve a path for buffer-list matching. Two paths that point to
 /// the same file should compare equal here even when one is relative
@@ -148,7 +148,7 @@ fn rebase_row_for_edit(row: usize, start: usize, old_end: usize, new_end: usize)
 /// Active smooth-scroll animation (#195). Render-only: the window editor's
 /// real viewport top is already at `target_top`; this interpolates the
 /// RENDERED top from `start_top` over `duration`.
-pub(crate) struct ScrollAnim {
+pub struct ScrollAnim {
     pub win_id: window::WindowId,
     pub start_top: usize,
     pub target_top: usize,
@@ -660,7 +660,7 @@ pub struct App {
 /// Set when a file is opened that has a swap file newer than the on-disk
 /// content.  Key presses route to [`App::handle_recovery_key`] while this
 /// is `Some`.
-pub(crate) struct PendingRecovery {
+pub struct PendingRecovery {
     /// The loaded swap header.
     pub header: hjkl_app::swap::SwapHeader,
     /// The swap body text.
@@ -681,7 +681,7 @@ pub(crate) struct PendingRecovery {
 /// Key presses route to [`App::handle_disk_change_key`] while this is `Some`:
 /// `k` keeps the buffer, `r` reloads from disk (discarding edits), `d` opens a
 /// `:DiffOrig` split of buffer vs disk.
-pub(crate) struct PendingDiskChange {
+pub struct PendingDiskChange {
     /// Index of the slot whose file changed (always the focused slot).
     pub slot_idx: usize,
     /// Path of the file that changed on disk.
@@ -693,7 +693,7 @@ pub(crate) struct PendingDiskChange {
 /// `a_win` / `b_win` are the two participating windows (insertion order); the
 /// alignment's `a` columns map to `a_win`'s buffer, `b` columns to `b_win`'s.
 /// Invalidated when either window changes or either buffer's `dirty_gen` moves.
-pub(crate) struct DiffCacheEntry {
+pub struct DiffCacheEntry {
     pub a_win: window::WindowId,
     pub b_win: window::WindowId,
     pub a_gen: u64,
@@ -705,7 +705,7 @@ pub(crate) struct DiffCacheEntry {
 ///
 /// The event loop routes `y`/`n`/`a`/`q`/`l`/`Esc` to
 /// [`App::handle_confirm_substitute_key`] while this is `Some`.
-pub(crate) struct ConfirmingSubstitute {
+pub struct ConfirmingSubstitute {
     /// All candidate matches in document order.
     pub matches: Vec<hjkl_engine::SubstituteMatch>,
     /// Which matches the user has accepted so far. Parallel to `matches`.
@@ -723,7 +723,7 @@ pub(crate) struct ConfirmingSubstitute {
 /// it. The `[idx/total]` index is derived per frame from `match_starts`
 /// with a binary search.
 #[derive(Debug, Clone)]
-pub(crate) struct SearchCountCache {
+pub struct SearchCountCache {
     pub buffer_id: crate::syntax::BufferId,
     pub dirty_gen: u64,
     pub pattern: String,
@@ -734,7 +734,7 @@ pub(crate) struct SearchCountCache {
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.
 /// Used to fire the LSP `textDocument/hover` request after [`HOVER_DELAY`].
-pub(crate) struct HoverTimer {
+pub struct HoverTimer {
     /// Terminal cell (col, row) the mouse is resting on.
     pub cell: (u16, u16),
     /// When the mouse first arrived at this cell.
@@ -745,12 +745,12 @@ pub(crate) struct HoverTimer {
 
 /// Auto-indent flash duration — single brief on-pulse, no fade, no
 /// repeat. 75 ms keeps it snappy and out of the way of further input.
-pub(crate) const INDENT_FLASH_DURATION: Duration = Duration::from_millis(75);
+pub const INDENT_FLASH_DURATION: Duration = Duration::from_millis(75);
 
 /// Visual flash state set immediately after an `=` / `==` / `=G` / Visual-`=`
 /// auto-indent operation. The renderer paints a highlight bg over rows
 /// `[top, bot]` (inclusive) while `started_at.elapsed() < INDENT_FLASH_DURATION`.
-pub(crate) struct IndentFlash {
+pub struct IndentFlash {
     pub top: usize,
     pub bot: usize,
     pub started_at: Instant,
@@ -759,13 +759,13 @@ pub(crate) struct IndentFlash {
 /// Minimum cell size for each side of a split when drag-resizing (Phase 9).
 /// VSplit: each pane must be at least this many columns wide.
 /// HSplit: each pane must be at least this many rows tall.
-pub(crate) const SPLIT_MIN_SIZE_COLS: u16 = 10;
-pub(crate) const SPLIT_MIN_SIZE_ROWS: u16 = 3;
+pub const SPLIT_MIN_SIZE_COLS: u16 = 10;
+pub const SPLIT_MIN_SIZE_ROWS: u16 = 3;
 
 /// Active split-border drag state (Phase 9). Populated on `Down(Left)` when
 /// the click lands on a border; cleared on `Up(Left)`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BorderDrag {
+pub struct BorderDrag {
     /// Orientation of the split being resized.
     pub orientation: mouse::SplitOrientation,
     /// Origin of the split's rect (x for VSplit, y for HSplit).
@@ -781,7 +781,7 @@ pub(crate) struct BorderDrag {
     pub dock: bool,
 }
 
-pub(crate) use prompt::prompt_cursor_shape;
+pub use prompt::prompt_cursor_shape;
 
 /// Build a [`BufferSlot`] from disk content.
 ///
@@ -808,7 +808,7 @@ fn is_path_writable(path: &std::path::Path) -> bool {
     }
 }
 
-pub(super) fn build_slot(
+pub fn build_slot(
     syntax: &mut SyntaxLayer,
     buffer_id: BufferId,
     path: Option<PathBuf>,
@@ -1032,9 +1032,8 @@ impl App {
             return;
         }
         let zone = mouse::hit_test_zone(self, col, row);
-        let win_id = match mouse::hit_test_window(self, col, row) {
-            Some(w) => w,
-            None => return,
+        let Some(win_id) = mouse::hit_test_window(self, col, row) else {
+            return;
         };
         let current_focus = self.focused_window();
         if win_id != current_focus {
@@ -1400,13 +1399,10 @@ impl App {
     }
 
     pub(crate) fn window_cursor(&self, win_id: window::WindowId) -> (usize, usize) {
-        self.window_editors
-            .get(&win_id)
-            .map(|e| {
-                let c = e.buffer().cursor();
-                (c.row, c.col)
-            })
-            .unwrap_or((0, 0))
+        self.window_editors.get(&win_id).map_or((0, 0), |e| {
+            let c = e.buffer().cursor();
+            (c.row, c.col)
+        })
     }
 
     /// Interpolated RENDER top for `win_id` if a scroll animation is mid-flight,
@@ -1437,13 +1433,10 @@ impl App {
     /// Scroll origin `(top_row, top_col)` of window `win_id`, read from its own
     /// editor's viewport (#151 Phase D — the single source of truth).
     pub(crate) fn window_scroll(&self, win_id: window::WindowId) -> (usize, usize) {
-        self.window_editors
-            .get(&win_id)
-            .map(|e| {
-                let vp = e.host().viewport();
-                (vp.top_row, vp.top_col)
-            })
-            .unwrap_or((0, 0))
+        self.window_editors.get(&win_id).map_or((0, 0), |e| {
+            let vp = e.host().viewport();
+            (vp.top_row, vp.top_col)
+        })
     }
 
     /// Seed a freshly-created window's editor with an inherited cursor + scroll
@@ -2991,6 +2984,6 @@ impl App {
 /// Return the current `Mode` based on the active editor's vim mode.
 /// Returns `None` for modes with no keymap equivalent (currently none, but
 /// Terminal mode would be `None` if ever added here).
-pub(crate) fn current_km_mode(app: &App) -> Option<hjkl_vim::Mode> {
+pub fn current_km_mode(app: &App) -> Option<hjkl_vim::Mode> {
     keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active_editor().vim_mode())?)
 }

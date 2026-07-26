@@ -40,8 +40,7 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
     } else {
         std::env::current_dir()
             .ok()
-            .map(|cwd| cwd.join(p))
-            .unwrap_or_else(|| p.to_path_buf())
+            .map_or_else(|| p.to_path_buf(), |cwd| cwd.join(p))
     }
 }
 
@@ -91,11 +90,7 @@ fn capability_pointer_for_method(method: &str) -> Option<&'static str> {
 /// stops early, so the full line's wire length is returned (defensive
 /// clamping — callers should never construct such a column, but a stale
 /// cursor snapshot racing a concurrent edit is cheap insurance).
-pub(crate) fn col_to_wire(
-    line: &str,
-    col_chars: usize,
-    encoding: hjkl_lsp::PositionEncoding,
-) -> u32 {
+pub fn col_to_wire(line: &str, col_chars: usize, encoding: hjkl_lsp::PositionEncoding) -> u32 {
     line.chars()
         .take(col_chars)
         .map(|c| match encoding {
@@ -116,11 +111,7 @@ pub(crate) fn col_to_wire(
 /// the byte side. A `wire_col` at or past the line's total encoded length
 /// (server overshoot) clamps to the line's char count — one past the last
 /// char, same "insert mode lives there" convention `Position` uses.
-pub(crate) fn wire_to_col(
-    line: &str,
-    wire_col: u32,
-    encoding: hjkl_lsp::PositionEncoding,
-) -> usize {
+pub fn wire_to_col(line: &str, wire_col: u32, encoding: hjkl_lsp::PositionEncoding) -> usize {
     let target = wire_col as usize;
     let mut consumed = 0usize;
     for (idx, c) in line.chars().enumerate() {
@@ -456,35 +447,26 @@ impl App {
                 return;
             }
         };
-        let uri_path = match hjkl_lsp::uri::to_path(&uri_url) {
-            Some(p) => p,
-            None => {
-                tracing::debug!("publishDiagnostics: non-file URI, skipping");
-                return;
-            }
+        let Some(uri_path) = hjkl_lsp::uri::to_path(&uri_url) else {
+            tracing::debug!("publishDiagnostics: non-file URI, skipping");
+            return;
         };
 
         // Find the slot whose filename matches the URI path.
         let slot_idx = self.slots.iter().position(|s| {
-            s.filename
-                .as_ref()
-                .map(|p| {
-                    let abs = if p.is_absolute() {
-                        p.clone()
-                    } else {
-                        std::env::current_dir().unwrap_or_default().join(p)
-                    };
-                    abs == uri_path
-                })
-                .unwrap_or(false)
+            s.filename.as_ref().is_some_and(|p| {
+                let abs = if p.is_absolute() {
+                    p.clone()
+                } else {
+                    std::env::current_dir().unwrap_or_default().join(p)
+                };
+                abs == uri_path
+            })
         });
 
-        let slot_idx = match slot_idx {
-            Some(i) => i,
-            None => {
-                tracing::debug!("publishDiagnostics: no matching slot for {:?}", uri_path);
-                return;
-            }
+        let Some(slot_idx) = slot_idx else {
+            tracing::debug!("publishDiagnostics: no matching slot for {:?}", uri_path);
+            return;
         };
 
         // Convert LSP diagnostics to our internal format.
@@ -819,8 +801,7 @@ impl App {
             .and_then(|e| e.to_str())
             .and_then(|e| language_id_for_ext(&self.directory, e))
             .and_then(|lang| hjkl_lang::comment::commentstring_for_lang(&lang))
-            .map(|(start, _)| start)
-            .unwrap_or("//")
+            .map_or("//", |(start, _)| start)
     }
 
     /// LSP server name for the active buffer, if one is attached.
@@ -902,10 +883,7 @@ impl App {
         if !self.slots[slot_idx].features.lsp {
             return;
         }
-        let mgr = match self.lsp.as_ref() {
-            Some(m) => m,
-            None => return,
-        };
+        let Some(mgr) = self.lsp.as_ref() else { return };
 
         let slot = &self.slots[slot_idx];
         let path = match slot.filename.as_ref() {
@@ -914,9 +892,8 @@ impl App {
         };
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let language_id = match language_id_for_ext(&self.directory, ext) {
-            Some(id) => id,
-            None => return,
+        let Some(language_id) = language_id_for_ext(&self.directory, ext) else {
+            return;
         };
 
         // Only attach if there's a configured server for this language.
@@ -935,10 +912,7 @@ impl App {
 
     /// Close the LSP document for `slot_idx`.
     pub(crate) fn lsp_detach_buffer(&mut self, slot_idx: usize) {
-        let mgr = match self.lsp.as_ref() {
-            Some(m) => m,
-            None => return,
-        };
+        let Some(mgr) = self.lsp.as_ref() else { return };
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
         mgr.detach_buffer(buffer_id);
     }
@@ -1014,14 +988,10 @@ impl App {
                 .error(format!("LSP: server does not support {method}"));
             return;
         }
-        let (mut params, buffer_id, origin, encoding) = match self.lsp_position_params() {
-            Some(v) => v,
-            None => {
-                self.bus.error(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
-                );
-                return;
-            }
+        let Some((mut params, buffer_id, origin, encoding)) = self.lsp_position_params() else {
+            self.bus
+                .error("LSP: no file open in this buffer (use :e <file> or open from the picker)");
+            return;
         };
         if let (Some(extra), Some(obj)) = (extras, params.as_object_mut())
             && let Some(extra_obj) = extra.as_object()
@@ -1151,9 +1121,8 @@ impl App {
             Some(p) => absolutize(p),
             None => return,
         };
-        let uri = match hjkl_lsp::uri::from_path(&path) {
-            Ok(u) => u,
-            Err(_) => return,
+        let Ok(uri) = hjkl_lsp::uri::from_path(&path) else {
+            return;
         };
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
         let encoding = self.active_position_encoding();
@@ -1309,17 +1278,14 @@ impl App {
     /// vanished between the response and this call is already an edge case.
     fn line_text_for_path(&self, path: &std::path::Path, row: usize) -> Option<String> {
         if let Some(slot) = self.slots.iter().find(|s| {
-            s.filename
-                .as_ref()
-                .map(|p| {
-                    let abs = if p.is_absolute() {
-                        p.clone()
-                    } else {
-                        std::env::current_dir().unwrap_or_default().join(p)
-                    };
-                    abs == path
-                })
-                .unwrap_or(false)
+            s.filename.as_ref().is_some_and(|p| {
+                let abs = if p.is_absolute() {
+                    p.clone()
+                } else {
+                    std::env::current_dir().unwrap_or_default().join(p)
+                };
+                abs == path
+            })
         }) {
             let rope = slot.buffer().rope();
             return if row < rope.len_lines() {
@@ -1377,17 +1343,14 @@ impl App {
         // Determine if target matches an already-open slot.
         let slot_idx = if let Some(ref tp) = target_path {
             self.slots.iter().position(|s| {
-                s.filename
-                    .as_ref()
-                    .map(|p| {
-                        let abs_p = if p.is_absolute() {
-                            p.clone()
-                        } else {
-                            std::env::current_dir().unwrap_or_default().join(p)
-                        };
-                        &abs_p == tp
-                    })
-                    .unwrap_or(false)
+                s.filename.as_ref().is_some_and(|p| {
+                    let abs_p = if p.is_absolute() {
+                        p.clone()
+                    } else {
+                        std::env::current_dir().unwrap_or_default().join(p)
+                    };
+                    &abs_p == tp
+                })
             })
         } else {
             None
@@ -1524,8 +1487,7 @@ impl App {
                 let display_path = cwd
                     .as_ref()
                     .and_then(|c| path.strip_prefix(c).ok())
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| path.display().to_string());
+                    .map_or_else(|| path.display().to_string(), |p| p.display().to_string());
                 let label = format!("{display_path}:{}: col {}", row + 1, col + 1);
                 // Use OpenPathAtLine for the action — goto_line is 1-based.
                 Some((label, AppAction::OpenPathAtLine(path, row as u32 + 1)))
@@ -1794,16 +1756,13 @@ impl App {
             }
             return;
         }
-        let (params, buffer_id, (row, col), _encoding) = match self.lsp_position_params() {
-            Some(v) => v,
-            None => {
-                if !auto {
-                    self.bus.error(
-                        "LSP: no file open in this buffer (use :e <file> or open from the picker)",
-                    );
-                }
-                return;
+        let Some((params, buffer_id, (row, col), _encoding)) = self.lsp_position_params() else {
+            if !auto {
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
+                );
             }
+            return;
         };
         let anchor_col = self.identifier_start_col(row, col);
         let request_id = self.lsp_alloc_request_id();
@@ -1877,12 +1836,9 @@ impl App {
                 return;
             }
         };
-        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
-            Some(u) => u,
-            None => {
-                self.bus.error("LSP: cannot build URI");
-                return;
-            }
+        let Some(uri) = hjkl_lsp::uri::from_path(&path).ok() else {
+            self.bus.error("LSP: cannot build URI");
+            return;
         };
         let cursor = self.active_editor().buffer().cursor();
         let encoding = self.active_position_encoding();
@@ -2184,17 +2140,14 @@ impl App {
             let slot_idx = if let Some(ref tp) = target_path {
                 // Try to find an existing slot.
                 let existing = self.slots.iter().position(|s| {
-                    s.filename
-                        .as_ref()
-                        .map(|p| {
-                            let abs = if p.is_absolute() {
-                                p.clone()
-                            } else {
-                                std::env::current_dir().unwrap_or_default().join(p)
-                            };
-                            &abs == tp
-                        })
-                        .unwrap_or(false)
+                    s.filename.as_ref().is_some_and(|p| {
+                        let abs = if p.is_absolute() {
+                            p.clone()
+                        } else {
+                            std::env::current_dir().unwrap_or_default().join(p)
+                        };
+                        &abs == tp
+                    })
                 });
                 match existing {
                     Some(idx) => idx,
@@ -2303,12 +2256,9 @@ impl App {
                 return;
             }
         };
-        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
-            Some(u) => u,
-            None => {
-                self.bus.error("LSP: cannot build URI");
-                return;
-            }
+        let Some(uri) = hjkl_lsp::uri::from_path(&path).ok() else {
+            self.bus.error("LSP: cannot build URI");
+            return;
         };
         let cursor = self.active_editor().buffer().cursor();
         let encoding = self.active_position_encoding();
@@ -2402,12 +2352,9 @@ impl App {
                 return;
             }
         };
-        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
-            Some(u) => u,
-            None => {
-                self.bus.error("LSP: cannot build URI");
-                return;
-            }
+        let Some(uri) = hjkl_lsp::uri::from_path(&path).ok() else {
+            self.bus.error("LSP: cannot build URI");
+            return;
         };
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
         let tab_size = self.active_editor().settings().tabstop as u32;
@@ -2475,12 +2422,9 @@ impl App {
             .slots
             .iter()
             .position(|s| s.buffer_id as hjkl_lsp::BufferId == buffer_id);
-        let slot_idx = match slot_idx {
-            Some(i) => i,
-            None => {
-                self.bus.error("LSP format: buffer no longer open");
-                return;
-            }
+        let Some(slot_idx) = slot_idx else {
+            self.bus.error("LSP format: buffer no longer open");
+            return;
         };
 
         // Sort edits by range END descending.
@@ -2602,9 +2546,8 @@ impl App {
     /// on the same row, then insert `insert_text` at that position.
     /// TODO: honour `text_edit` with non-prefix ranges (filed for follow-up).
     pub(crate) fn accept_completion(&mut self) {
-        let popup = match self.completion.take() {
-            Some(p) => p,
-            None => return,
+        let Some(popup) = self.completion.take() else {
+            return;
         };
         let item = match popup.selected_item() {
             Some(i) => i.clone(),
@@ -2734,10 +2677,8 @@ impl App {
             _ => return, // user moved before the response arrived
         };
 
-        let val = match result {
-            Ok(v) => v,
-            Err(_) => return, // silently drop errors for mouse hover
-        };
+        // Silently drop errors for mouse hover.
+        let Ok(val) = result else { return };
         if val.is_null() {
             return; // no hover info — don't show an empty popup
         }

@@ -279,8 +279,7 @@ impl DiffFiller {
     fn count_before(&self, doc_row: usize) -> usize {
         self.before
             .binary_search_by_key(&doc_row, |&(b, _)| b)
-            .map(|i| self.before[i].1)
-            .unwrap_or(0)
+            .map_or(0, |i| self.before[i].1)
     }
 
     /// Screen-row offset (relative to the viewport top) of real line `doc_row`
@@ -508,8 +507,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         let spans = self.spans;
         let folds = self
             .folds_override
-            .map(<[hjkl_buffer::Fold]>::to_vec)
-            .unwrap_or_else(|| self.buffer.folds());
+            .map_or_else(|| self.buffer.folds(), <[hjkl_buffer::Fold]>::to_vec);
         let top_row = viewport.top_row;
         let top_col = viewport.top_col;
         // Fetch only the viewport-bounded row slice. The render loop walks
@@ -561,8 +559,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
 
         let gutter_total = self
             .gutter
-            .map(|g| g.sign_column_width + g.width + g.fold_column_width)
-            .unwrap_or(0);
+            .map_or(0, |g| g.sign_column_width + g.width + g.fold_column_width);
         let text_area = Rect {
             x: area.x.saturating_add(gutter_total),
             y: area.y,
@@ -624,7 +621,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 .copied();
             let line_owned = line_at(doc_row);
             let line: &str = &line_owned;
-            let row_spans = spans.get(doc_row).map(Vec::as_slice).unwrap_or(&[]);
+            let row_spans = spans.get(doc_row).map_or(&[][..], Vec::as_slice);
             let sel_range = self.selection.and_then(|s| s.row_span(doc_row));
             let is_cursor_row = doc_row == cursor_line_row;
             if let Some(fold) = folded_at_start {
@@ -1007,8 +1004,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let cursor = self.buffer.cursor();
         let folds = self
             .folds_override
-            .map(<[hjkl_buffer::Fold]>::to_vec)
-            .unwrap_or_else(|| self.buffer.folds());
+            .map_or_else(|| self.buffer.folds(), <[hjkl_buffer::Fold]>::to_vec);
         let rope = self.buffer.rope();
 
         let frame_x = area.x;
@@ -1022,8 +1018,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         };
         let gutter_total = self
             .gutter
-            .map(|g| g.sign_column_width + g.width + g.fold_column_width)
-            .unwrap_or(0);
+            .map_or(0, |g| g.sign_column_width + g.width + g.fold_column_width);
         let text_area = Rect {
             x: inner.x.saturating_add(gutter_total),
             y: inner.y,
@@ -1049,7 +1044,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     }
                     let line_owned = hjkl_buffer::rope_line_str(&rope, dr);
                     let line: &str = line_owned.as_str();
-                    let row_spans = self.spans.get(dr).map(Vec::as_slice).unwrap_or(&[]);
+                    let row_spans = self.spans.get(dr).map_or(&[][..], Vec::as_slice);
                     let sel_range = self.selection.and_then(|s| s.row_span(dr));
                     let is_cursor_row = dr == cursor.row;
                     if let Some(gutter) = self.gutter {
@@ -4382,8 +4377,7 @@ mod tests {
         let row_text: String = (0..30u16)
             .map(|x| {
                 term.cell((x, 0))
-                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
-                    .unwrap_or(' ')
+                    .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
             })
             .collect();
         assert!(

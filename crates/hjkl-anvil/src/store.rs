@@ -281,7 +281,7 @@ impl ChecksumSidecar {
         // Format:
         //   [versions."<ver>".sha256]
         //   "<triple>" = "<hash>"
-        let mut sidecar = ChecksumSidecar::default();
+        let mut sidecar = Self::default();
         let mut current_version: Option<String> = None;
 
         for line in s.lines() {

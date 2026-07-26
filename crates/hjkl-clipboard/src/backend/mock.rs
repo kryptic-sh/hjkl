@@ -178,8 +178,7 @@ impl Backend for MockBackend {
             .gets
             .iter()
             .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.clone())
-            .unwrap_or(Err(ClipboardError::UnsupportedMime))
+            .map_or(Err(ClipboardError::UnsupportedMime), |(_, v)| v.clone())
     }
 
     fn clear(&self, sel: Selection) -> Result<(), ClipboardError> {
@@ -194,8 +193,7 @@ impl Backend for MockBackend {
             .availables
             .iter()
             .find(|(k, _)| *k == sel)
-            .map(|(_, v)| v.clone())
-            .unwrap_or(Ok(Vec::new()))
+            .map_or(Ok(Vec::new()), |(_, v)| v.clone())
     }
 
     async fn set_async(

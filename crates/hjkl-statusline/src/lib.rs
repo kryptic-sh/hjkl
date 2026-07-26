@@ -119,7 +119,7 @@ impl Segment {
     /// actually paints, so layout math stays aligned for multibyte content.
     pub fn len(&self) -> usize {
         match self {
-            Segment::Text { content, .. } => UnicodeWidthStr::width(content.as_ref()),
+            Self::Text { content, .. } => UnicodeWidthStr::width(content.as_ref()),
         }
     }
 
@@ -302,14 +302,14 @@ impl ModeKind {
     /// Derive from a mode label string (as returned by the engine).
     pub fn from_label(label: &str) -> Self {
         match label {
-            "INSERT" => ModeKind::Insert,
-            "REPLACE" => ModeKind::Replace,
-            "VISUAL" => ModeKind::Visual,
-            "VISUAL LINE" => ModeKind::VisualLine,
-            "VISUAL BLOCK" => ModeKind::VisualBlock,
-            "SELECT" => ModeKind::Select,
-            "TERMINAL" => ModeKind::Terminal,
-            _ => ModeKind::Normal,
+            "INSERT" => Self::Insert,
+            "REPLACE" => Self::Replace,
+            "VISUAL" => Self::Visual,
+            "VISUAL LINE" => Self::VisualLine,
+            "VISUAL BLOCK" => Self::VisualBlock,
+            "SELECT" => Self::Select,
+            "TERMINAL" => Self::Terminal,
+            _ => Self::Normal,
         }
     }
 }

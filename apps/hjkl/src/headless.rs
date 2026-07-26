@@ -68,8 +68,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
     for maybe_path in targets {
         let display_name = maybe_path
             .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<scratch>".to_string());
+            .map_or_else(|| "<scratch>".to_string(), |p| p.display().to_string());
 
         // --- load buffer ---
         let mut buffer = View::new();

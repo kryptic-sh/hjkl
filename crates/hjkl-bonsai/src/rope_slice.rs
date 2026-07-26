@@ -15,13 +15,13 @@
 use std::ops::Range;
 
 /// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
-pub(crate) fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+pub fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
     let byte_idx = byte_idx.min(rope.len_bytes());
     rope.char_to_byte(rope.byte_to_char(byte_idx))
 }
 
 /// Smallest char-boundary byte index `>= byte_idx` (clamped to rope length).
-pub(crate) fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+pub fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
     let byte_idx = byte_idx.min(rope.len_bytes());
     let char_idx = rope.byte_to_char(byte_idx);
     let floored = rope.char_to_byte(char_idx);
@@ -37,7 +37,7 @@ pub(crate) fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
 /// superset of whole chars, never a mid-char split. Returns an empty range
 /// (`start..start`) when the inputs cross after clamping. For an already
 /// char-aligned, in-bounds range this is the identity.
-pub(crate) fn safe_char_range(rope: &ropey::Rope, start: usize, end: usize) -> Range<usize> {
+pub fn safe_char_range(rope: &ropey::Rope, start: usize, end: usize) -> Range<usize> {
     let len = rope.len_bytes();
     let start = floor_char_boundary(rope, start.min(len));
     let end = ceil_char_boundary(rope, end.min(len));

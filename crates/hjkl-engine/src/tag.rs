@@ -230,17 +230,14 @@ pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffe
         return;
     }
     let (row, col) = ed.cursor();
-    let line = match buf_line(ed.buffer(), row) {
-        Some(l) => l,
-        None => return,
+    let Some(line) = buf_line(ed.buffer(), row) else {
+        return;
     };
-    let anchor = match detect_tag_at_cursor(&line, row, col) {
-        Some(t) => t,
-        None => return,
+    let Some(anchor) = detect_tag_at_cursor(&line, row, col) else {
+        return;
     };
-    let partner = match find_matching_tag(ed.buffer(), &anchor) {
-        Some(t) => t,
-        None => return,
+    let Some(partner) = find_matching_tag(ed.buffer(), &anchor) else {
+        return;
     };
     if partner.name == anchor.name {
         return;
@@ -336,12 +333,7 @@ pub fn scan_tag_opener(line: &str, col: usize) -> Option<String> {
         return None;
     }
     // First char must be a letter.
-    if !tag
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_alphabetic())
-        .unwrap_or(false)
-    {
+    if !tag.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return None;
     }
     if is_void_element(&tag) {

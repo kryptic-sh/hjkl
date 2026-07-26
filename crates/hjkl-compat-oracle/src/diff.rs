@@ -31,8 +31,8 @@ pub enum CaseStatus {
 impl std::fmt::Debug for CaseStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CaseStatus::Pass => write!(f, "Pass"),
-            CaseStatus::Mismatch {
+            Self::Pass => write!(f, "Pass"),
+            Self::Mismatch {
                 field,
                 expected,
                 got_hjkl,
@@ -44,9 +44,9 @@ impl std::fmt::Debug for CaseStatus {
                 .field("got_hjkl", got_hjkl)
                 .field("got_nvim", got_nvim)
                 .finish(),
-            CaseStatus::HjklError(e) => write!(f, "HjklError({e})"),
-            CaseStatus::NvimError(e) => write!(f, "NvimError({e})"),
-            CaseStatus::Skipped(r) => write!(f, "Skipped({r})"),
+            Self::HjklError(e) => write!(f, "HjklError({e})"),
+            Self::NvimError(e) => write!(f, "NvimError({e})"),
+            Self::Skipped(r) => write!(f, "Skipped({r})"),
         }
     }
 }

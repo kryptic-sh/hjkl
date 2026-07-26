@@ -15,7 +15,7 @@ use crate::keymap_actions::AppAction;
 /// Every app-handled chord binding is registered here. The resulting
 /// `Keymap<AppAction, hjkl_vim::Mode>` is stored on [`App`] and consulted by the event loop
 /// before forwarding keys to the editor engine.
-pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
+pub fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
     use hjkl_vim::Mode;
     let mut km = Keymap::new(leader);
     // Timeout matches the which-key delay default; overridden by `with_config`.
@@ -764,7 +764,7 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode
 /// binds):
 ///   - `k` / `<Up>` at the top row → focus the search box.
 ///   - `<Esc>` with an active filter → clear the filter.
-pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
+pub fn build_explorer_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
     use crate::keymap_actions::AppAction;
     use hjkl_vim::Mode;
     let mut km = Keymap::new(leader);
@@ -819,7 +819,7 @@ pub(crate) fn build_explorer_keymap(leader: char) -> Keymap<AppAction, hjkl_vim:
 /// Modifier flags (ctrl, alt, shift) are preserved. Keys that have no
 /// crossterm equivalent (e.g. `Key::Null`, `Key::PageUp` without a standard
 /// mapping) produce a `KeyCode::Null` sentinel that the replay loop skips.
-pub(crate) fn engine_input_to_key_event(input: hjkl_engine::Input) -> crossterm::event::KeyEvent {
+pub fn engine_input_to_key_event(input: hjkl_engine::Input) -> crossterm::event::KeyEvent {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_engine::Key;
 

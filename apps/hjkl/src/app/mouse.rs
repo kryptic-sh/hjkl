@@ -237,7 +237,7 @@ fn rect_contains(rect: window::LayoutRect, col: u16, row: u16) -> bool {
 /// the inverse of the renderer's fold-collapsing walk and the screen→doc
 /// counterpart of `viewport_math::cursor_screen_row_from`. Without this,
 /// clicks below a closed fold land on the wrong line.
-pub(crate) fn doc_row_at_screen_offset(
+pub fn doc_row_at_screen_offset(
     buffer: &hjkl_buffer::View,
     top_row: usize,
     screen_offset: usize,
@@ -267,7 +267,7 @@ pub(crate) fn doc_row_at_screen_offset(
 /// Resolve the document row shown at screen offset `rel_y` (rows from the
 /// window top) in the boxed-blame view, via the render plan. Returns `None`
 /// when that screen row is a box border (no doc row) or past the plan.
-pub(crate) fn box_plan_doc_row(
+pub fn box_plan_doc_row(
     slot: &crate::app::BufferSlot,
     top_row: usize,
     height: usize,
@@ -295,7 +295,7 @@ pub(crate) fn box_plan_doc_row(
 /// its last, so hovering the header shows that commit's message popup. Outside
 /// box mode it falls back to the plain content row under the cell. Returns
 /// `None` outside any window or past the plan / buffer.
-pub(crate) fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize> {
+pub fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize> {
     use hjkl_buffer_tui::render::BlameRow;
     let win_id = hit_test_window(app, col, row)?;
     let win = app.windows.get(win_id)?.as_ref()?;
@@ -760,8 +760,7 @@ pub fn word_bounds(line: &str, col: usize) -> (usize, usize) {
     let start = (0..=col)
         .rev()
         .find(|&i| !is_word_char(chars[i]))
-        .map(|i| i + 1)
-        .unwrap_or(0);
+        .map_or(0, |i| i + 1);
     // Expand right.
     let end = (col..len).find(|&i| !is_word_char(chars[i])).unwrap_or(len);
     (start, end)
@@ -826,8 +825,7 @@ pub fn tabs_total_width(app: &App) -> usize {
     for (i, tab) in app.tabs.iter().enumerate() {
         let slot_idx = app.windows[tab.focused_window]
             .as_ref()
-            .map(|w| w.slot)
-            .unwrap_or(0);
+            .map_or(0, |w| w.slot);
         let slot = &app.slots()[slot_idx];
         let base_name = slot
             .filename
@@ -838,8 +836,7 @@ pub fn tabs_total_width(app: &App) -> usize {
         let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
             app.windows[wid]
                 .as_ref()
-                .map(|w| app.slots()[w.slot].dirty)
-                .unwrap_or(false)
+                .is_some_and(|w| app.slots()[w.slot].dirty)
         });
         // Replicate the crate's rendered text exactly:
         // ` ● {n}: {name} ✕ ` (dirty) or ` {n}: {name} ✕ ` (clean).
@@ -876,8 +873,7 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
     for (i, tab) in app.tabs.iter().enumerate() {
         let slot_idx = app.windows[tab.focused_window]
             .as_ref()
-            .map(|w| w.slot)
-            .unwrap_or(0);
+            .map_or(0, |w| w.slot);
         let slot = &app.slots()[slot_idx];
         let base_name = slot
             .filename
@@ -888,8 +884,7 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
         let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
             app.windows[wid]
                 .as_ref()
-                .map(|w| app.slots()[w.slot].dirty)
-                .unwrap_or(false)
+                .is_some_and(|w| app.slots()[w.slot].dirty)
         });
         // Replicate the crate's rendered text exactly (same as tabs_total_width).
         let label = if tab_dirty {

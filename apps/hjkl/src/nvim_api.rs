@@ -497,9 +497,7 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
                     if path.is_absolute() {
                         path.clone()
                     } else {
-                        std::env::current_dir()
-                            .map(|d| d.join(&path))
-                            .unwrap_or_else(|_| path.clone())
+                        std::env::current_dir().map_or_else(|_| path.clone(), |d| d.join(&path))
                     }
                 })
                 .to_string_lossy()
@@ -509,17 +507,17 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        "%:h" => path
-            .parent()
-            .map(|p| {
+        "%:h" => path.parent().map_or_else(
+            || ".".to_owned(),
+            |p| {
                 let s = p.to_string_lossy();
                 if s.is_empty() {
                     ".".to_owned()
                 } else {
                     s.into_owned()
                 }
-            })
-            .unwrap_or_else(|| ".".to_owned()),
+            },
+        ),
         "%:e" => path
             .extension()
             .map(|s| s.to_string_lossy().into_owned())
@@ -530,7 +528,7 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
             // has no extension). A dot inside a directory name, e.g.
             // `foo.bar/baz`, must be left untouched.
             let s = path.to_string_lossy();
-            let file_start = s.rfind('/').map(|i| i + 1).unwrap_or(0);
+            let file_start = s.rfind('/').map_or(0, |i| i + 1);
             match s[file_start..].rfind('.') {
                 // Dot strictly after the component start (relative index > 0).
                 Some(rel) if rel > 0 => s[..file_start + rel].to_owned(),
@@ -1680,7 +1678,7 @@ fn dispatch(
 
             let abs_start = {
                 let ls = line_start_byte(start_row);
-                let line_bytes = lines.get(start_row).map(|l| l.len()).unwrap_or(0);
+                let line_bytes = lines.get(start_row).map_or(0, |l| l.len());
                 let col = start_col.min(line_bytes);
                 // Snap to valid UTF-8 boundary.
                 let s = ls + col;
@@ -1691,7 +1689,7 @@ fn dispatch(
             };
             let abs_end = {
                 let ls = line_start_byte(end_row);
-                let line_bytes = lines.get(end_row).map(|l| l.len()).unwrap_or(0);
+                let line_bytes = lines.get(end_row).map_or(0, |l| l.len());
                 let col = end_col.min(line_bytes);
                 let s = ls + col;
                 let s = s.min(full_len);
@@ -1878,11 +1876,8 @@ fn dispatch(
             if !hjkl_ex::all_setting_names().contains(&name) {
                 return err(stdout, msgid, &format!("unknown option: {name}"));
             }
-            let display = match hjkl_ex::query_option_value(app.active_editor(), &name) {
-                Some(s) => s,
-                None => {
-                    return err(stdout, msgid, &format!("unknown option: {name}"));
-                }
+            let Some(display) = hjkl_ex::query_option_value(app.active_editor(), &name) else {
+                return err(stdout, msgid, &format!("unknown option: {name}"));
             };
             // Coerce the display string to the native nvim type:
             //   "on"  → Boolean(true)

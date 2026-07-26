@@ -46,7 +46,7 @@ pub struct Selection {
 impl Selection {
     /// Caret at `pos` with no extent.
     pub const fn caret(pos: Pos) -> Self {
-        Selection {
+        Self {
             anchor: pos,
             head: pos,
             kind: SelectionKind::Char,
@@ -55,7 +55,7 @@ impl Selection {
 
     /// Inclusive range `[anchor, head]` (or reversed) as a `Char` selection.
     pub const fn char_range(anchor: Pos, head: Pos) -> Self {
-        Selection {
+        Self {
             anchor,
             head,
             kind: SelectionKind::Char,
@@ -79,7 +79,7 @@ pub struct SelectionSet {
 impl SelectionSet {
     /// Single caret at `pos`.
     pub fn caret(pos: Pos) -> Self {
-        SelectionSet {
+        Self {
             items: vec![Selection::caret(pos)],
             primary: 0,
         }
@@ -97,7 +97,7 @@ impl SelectionSet {
 
 impl Default for SelectionSet {
     fn default() -> Self {
-        SelectionSet::caret(Pos::ORIGIN)
+        Self::caret(Pos::ORIGIN)
     }
 }
 
@@ -439,7 +439,7 @@ pub enum OptionValue {
 
 impl Default for Options {
     fn default() -> Self {
-        Options {
+        Self {
             tabstop: 4,
             shiftwidth: 4,
             expandtab: true,
@@ -780,13 +780,10 @@ impl Options {
                     }
                 };
                 let mut chars = s.chars();
-                let ch = match (chars.next(), chars.next()) {
-                    (Some(c), None) => c,
-                    _ => {
-                        return Err(EngineError::Ex(format!(
-                            "option `{name}` expects exactly one character, got {s:?}"
-                        )));
-                    }
+                let (Some(ch), None) = (chars.next(), chars.next()) else {
+                    return Err(EngineError::Ex(format!(
+                        "option `{name}` expects exactly one character, got {s:?}"
+                    )));
                 };
                 self.indent_guide_char = ch;
                 Ok(())

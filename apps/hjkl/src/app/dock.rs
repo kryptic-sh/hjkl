@@ -26,7 +26,7 @@ use super::window::{self, WindowId};
 /// Phase A; the other two are reserved for the bottom dock landing in a
 /// later phase (kryptic-sh/hjkl#63 Phase B) so the type is stable now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DockKind {
+pub enum DockKind {
     /// Left dock: the file-explorer tree.
     Explorer,
     /// Bottom dock: `:copen` quickfix list (#63 Phase B).
@@ -37,7 +37,7 @@ pub(crate) enum DockKind {
 
 /// A window pinned outside the per-tab `LayoutTree`.
 #[derive(Debug, Clone)]
-pub(crate) struct Dock {
+pub struct Dock {
     /// The dock's real `WindowId` — has a normal `windows[..]` entry and a
     /// normal `window_editors` entry, exactly like a tree window.
     pub win_id: WindowId,
@@ -55,23 +55,23 @@ pub(crate) struct Dock {
 /// (`explorer.width` ∈ 12..=400). The dynamic per-frame clamp additionally
 /// caps at half the terminal width so the dock can never crowd out the main
 /// area entirely.
-pub(crate) const DOCK_MIN_WIDTH: u16 = 12;
+pub const DOCK_MIN_WIDTH: u16 = 12;
 
 /// Clamp a candidate left-dock width against both the static sane bounds and
 /// the live terminal width, per the approved design ("12..=terminal_width/2").
-pub(crate) fn clamp_dock_width(width: u16, terminal_width: u16) -> u16 {
+pub fn clamp_dock_width(width: u16, terminal_width: u16) -> u16 {
     let max = (terminal_width / 2).max(DOCK_MIN_WIDTH);
     width.clamp(DOCK_MIN_WIDTH, max)
 }
 
 /// Minimum sane height for the bottom dock — mirrors `panel.height`'s static
 /// validation bound (3..=200, see `hjkl_app::config::Config::validate`).
-pub(crate) const DOCK_MIN_HEIGHT: u16 = 3;
+pub const DOCK_MIN_HEIGHT: u16 = 3;
 
 /// Clamp a candidate bottom-dock height against both the static sane bounds
 /// and the live terminal height, mirroring [`clamp_dock_width`]'s
 /// "12..=terminal_width/2" shape ("3..=terminal_height/2" here).
-pub(crate) fn clamp_dock_height(height: u16, terminal_height: u16) -> u16 {
+pub fn clamp_dock_height(height: u16, terminal_height: u16) -> u16 {
     let max = (terminal_height / 2).max(DOCK_MIN_HEIGHT);
     height.clamp(DOCK_MIN_HEIGHT, max)
 }
@@ -113,8 +113,7 @@ impl super::App {
             .windows
             .get(dock.win_id)
             .and_then(|w| w.as_ref())
-            .map(|w| w.slot)
-            .unwrap_or(dock.slot_idx);
+            .map_or(dock.slot_idx, |w| w.slot);
 
         self.windows[dock.win_id] = None;
         self.window_folds.remove(&dock.win_id);
@@ -162,8 +161,7 @@ impl super::App {
             .windows
             .get(dock.win_id)
             .and_then(|w| w.as_ref())
-            .map(|w| w.slot)
-            .unwrap_or(dock.slot_idx);
+            .map_or(dock.slot_idx, |w| w.slot);
 
         self.windows[dock.win_id] = None;
         self.window_folds.remove(&dock.win_id);
@@ -393,7 +391,7 @@ impl super::App {
     /// persist (`<C-w><`/`<C-w>>` persists immediately after this; a mouse
     /// drag persists once on release via [`App::persist_dock_width`]).
     pub(crate) fn resize_dock_width_by(&mut self, delta: i32) {
-        let terminal_w = self.last_frame_rect.map(|r| r.width).unwrap_or(80);
+        let terminal_w = self.last_frame_rect.map_or(80, |r| r.width);
         let current = self.config.explorer.width as i32;
         let candidate = (current + delta).clamp(0, u16::MAX as i32) as u16;
         self.config.explorer.width = clamp_dock_width(candidate, terminal_w);
@@ -417,7 +415,7 @@ impl super::App {
     /// Adjust the bottom dock's configured height by `delta` rows in memory
     /// only (clamped) — twin of [`Self::resize_dock_width_by`].
     pub(crate) fn resize_dock_height_by(&mut self, delta: i32) {
-        let terminal_h = self.last_frame_rect.map(|r| r.height).unwrap_or(24);
+        let terminal_h = self.last_frame_rect.map_or(24, |r| r.height);
         let current = self.config.panel.height as i32;
         let candidate = (current + delta).clamp(0, u16::MAX as i32) as u16;
         self.config.panel.height = clamp_dock_height(candidate, terminal_h);

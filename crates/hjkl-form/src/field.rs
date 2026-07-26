@@ -327,31 +327,31 @@ impl Field {
     /// Borrow the field's metadata.
     pub fn meta(&self) -> &FieldMeta {
         match self {
-            Field::SingleLineText(f) | Field::MultiLineText(f) => &f.meta,
-            Field::Select(f) => &f.meta,
-            Field::Checkbox(f) => &f.meta,
-            Field::Submit(f) => &f.meta,
+            Self::SingleLineText(f) | Self::MultiLineText(f) => &f.meta,
+            Self::Select(f) => &f.meta,
+            Self::Checkbox(f) => &f.meta,
+            Self::Submit(f) => &f.meta,
         }
     }
 
     /// Mutably borrow the field's metadata.
     pub fn meta_mut(&mut self) -> &mut FieldMeta {
         match self {
-            Field::SingleLineText(f) | Field::MultiLineText(f) => &mut f.meta,
-            Field::Select(f) => &mut f.meta,
-            Field::Checkbox(f) => &mut f.meta,
-            Field::Submit(f) => &mut f.meta,
+            Self::SingleLineText(f) | Self::MultiLineText(f) => &mut f.meta,
+            Self::Select(f) => &mut f.meta,
+            Self::Checkbox(f) => &mut f.meta,
+            Self::Submit(f) => &mut f.meta,
         }
     }
 
     /// True for text fields (single- or multi-line).
     pub fn is_text(&self) -> bool {
-        matches!(self, Field::SingleLineText(_) | Field::MultiLineText(_))
+        matches!(self, Self::SingleLineText(_) | Self::MultiLineText(_))
     }
 
     /// True for single-line text fields specifically.
     pub fn is_single_line_text(&self) -> bool {
-        matches!(self, Field::SingleLineText(_))
+        matches!(self, Self::SingleLineText(_))
     }
 
     /// True if the field can take focus. All variants are focusable in

@@ -17,7 +17,7 @@ use super::wayland_wire::{MessageHeader, parse_message_header};
 // ---------------------------------------------------------------------------
 
 /// A connected Wayland Unix socket with SCM_RIGHTS fd-passing support.
-pub(crate) struct WaylandSocket {
+pub struct WaylandSocket {
     fd: c_int,
     /// Accumulated received bytes (may contain many partial or complete messages).
     rx_buf: VecDeque<u8>,
@@ -111,7 +111,7 @@ impl WaylandSocket {
     /// `WaylandSocket` `Drop` impl will close it.
     #[cfg(test)]
     pub(crate) unsafe fn from_raw_fd(fd: c_int) -> Self {
-        WaylandSocket {
+        Self {
             fd,
             rx_buf: std::collections::VecDeque::new(),
             rx_fds: std::collections::VecDeque::new(),

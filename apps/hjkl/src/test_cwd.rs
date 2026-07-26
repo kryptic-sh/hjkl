@@ -30,7 +30,7 @@ fn lock() -> MutexGuard<'static, ()> {
 
 /// Serializes cwd-mutating tests and restores the prior working directory when
 /// dropped. Hold it for the whole scope in which the cwd is changed.
-pub(crate) struct CwdGuard {
+pub struct CwdGuard {
     _lock: MutexGuard<'static, ()>,
     prev: PathBuf,
 }
@@ -42,7 +42,7 @@ impl CwdGuard {
         let lock = lock();
         let prev = std::env::current_dir().expect("read current dir");
         std::env::set_current_dir(dir).expect("set current dir");
-        CwdGuard { _lock: lock, prev }
+        Self { _lock: lock, prev }
     }
 }
 
@@ -54,7 +54,7 @@ impl Drop for CwdGuard {
 
 /// Serializes env-var-mutating tests and restores the variable's prior value
 /// when dropped. Hold it for the whole scope in which the variable is set.
-pub(crate) struct EnvVarGuard {
+pub struct EnvVarGuard {
     _lock: MutexGuard<'static, ()>,
     key: OsString,
     prev: Option<OsString>,
@@ -70,7 +70,7 @@ impl EnvVarGuard {
         // SAFETY: the SERIAL_LOCK guarantees no other test thread is reading or
         // writing the environment for the guard's lifetime.
         unsafe { std::env::set_var(&key, value) };
-        EnvVarGuard {
+        Self {
             _lock: lock,
             key,
             prev,

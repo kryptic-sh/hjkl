@@ -56,8 +56,7 @@ pub fn detect_comment_prefix<'a>(lang: &str, line: &'a str) -> Option<(&'a str, 
     let indent_end = line
         .char_indices()
         .find(|(_, c)| *c != ' ' && *c != '\t')
-        .map(|(i, _)| i)
-        .unwrap_or(line.len());
+        .map_or(line.len(), |(i, _)| i);
     let indent = &line[..indent_end];
     let rest = &line[indent_end..];
     for &prefix in comment_prefixes(lang) {

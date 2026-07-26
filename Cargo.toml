@@ -19,6 +19,10 @@ or_fun_call = "deny"
 unused_peekable = "deny"
 assigning_clones = "warn"
 format_push_string = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+use_self = "warn"
+redundant_pub_crate = "warn"
 
 [workspace.dependencies]
 hjkl-anvil = { path = "crates/hjkl-anvil", version = "0.37" }

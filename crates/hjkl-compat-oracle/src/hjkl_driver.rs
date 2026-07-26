@@ -146,9 +146,11 @@ pub async fn run_case_via_nvim_api(case: &OracleCase) -> anyhow::Result<HjklOutc
         let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
         let workspace_root = std::path::Path::new(manifest)
             .parent() // crates/
-            .and_then(|p| p.parent()) // workspace root
-            .map(|p| p.join("target/debug").join(&exe_name))
-            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name));
+            .and_then(|p| p.parent())
+            .map_or_else(
+                || std::path::PathBuf::from(&exe_name),
+                |p| p.join("target/debug").join(&exe_name),
+            );
         workspace_root.to_string_lossy().into_owned()
     });
 

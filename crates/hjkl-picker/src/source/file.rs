@@ -39,7 +39,7 @@ impl PickerLogic for FileSource {
     }
 
     fn item_count(&self) -> usize {
-        self.items.lock().map(|g| g.len()).unwrap_or(0)
+        self.items.lock().map_or(0, |g| g.len())
     }
 
     fn label(&self, idx: usize) -> String {
@@ -57,9 +57,8 @@ impl PickerLogic for FileSource {
     }
 
     fn preview(&self, idx: usize) -> (View, String) {
-        let path = match self.items.lock().ok().and_then(|g| g.get(idx).cloned()) {
-            Some(p) => p,
-            None => return (View::new(), String::new()),
+        let Some(path) = self.items.lock().ok().and_then(|g| g.get(idx).cloned()) else {
+            return (View::new(), String::new());
         };
         let abs = self.root.join(&path);
         let (content, status) = load_preview(&abs);
@@ -122,10 +121,7 @@ fn scan_walk(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+        let Ok(entry) = entry else { continue };
         let Some(ft) = entry.file_type() else {
             continue;
         };

@@ -83,7 +83,7 @@ pub fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
 /// one call.
 #[inline]
 pub fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
-    buf_line(b, row).map(|l| l.chars().count()).unwrap_or(0)
+    buf_line(b, row).map_or(0, |l| l.chars().count())
 }
 
 /// Length (bytes) of `row`. Returns 0 for out-of-bounds rows. The

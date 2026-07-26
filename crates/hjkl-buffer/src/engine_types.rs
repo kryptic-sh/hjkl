@@ -21,10 +21,10 @@ pub struct Pos {
 }
 
 impl Pos {
-    pub const ORIGIN: Pos = Pos { line: 0, col: 0 };
+    pub const ORIGIN: Self = Self { line: 0, col: 0 };
 
     pub const fn new(line: u32, col: u32) -> Self {
-        Pos { line, col }
+        Self { line, col }
     }
 }
 
@@ -45,21 +45,21 @@ pub struct EngineEdit {
 
 impl EngineEdit {
     pub fn insert(at: Pos, text: impl Into<String>) -> Self {
-        EngineEdit {
+        Self {
             range: at..at,
             replacement: text.into(),
         }
     }
 
     pub fn delete(range: Range<Pos>) -> Self {
-        EngineEdit {
+        Self {
             range,
             replacement: String::new(),
         }
     }
 
     pub fn replace(range: Range<Pos>, text: impl Into<String>) -> Self {
-        EngineEdit {
+        Self {
             range,
             replacement: text.into(),
         }

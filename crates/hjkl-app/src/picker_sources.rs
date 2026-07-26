@@ -294,8 +294,7 @@ impl PickerLogic for BufferSource {
     fn preview_top_row(&self, idx: usize) -> usize {
         self.entries
             .get(idx)
-            .map(|e| e.cursor_row.saturating_sub(2))
-            .unwrap_or(0)
+            .map_or(0, |e| e.cursor_row.saturating_sub(2))
     }
 
     fn preview_match_row(&self, idx: usize) -> Option<usize> {
@@ -303,7 +302,7 @@ impl PickerLogic for BufferSource {
     }
 
     fn preview_line_offset(&self, idx: usize) -> usize {
-        self.entries.get(idx).map(|e| e.window_start).unwrap_or(0)
+        self.entries.get(idx).map_or(0, |e| e.window_start)
     }
 
     fn select(&self, idx: usize) -> PickerAction {

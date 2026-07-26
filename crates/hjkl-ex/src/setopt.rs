@@ -190,7 +190,7 @@ pub fn setting_value_candidates(name: &str) -> Vec<&'static str> {
 
 /// `:set [opt ...]` body. Splits on whitespace and applies each token.
 /// Bare `:set` reports the current values for the supported options.
-pub(crate) fn apply_set<H: Host>(
+pub fn apply_set<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     body: &str,
 ) -> ExEffect {
@@ -488,13 +488,10 @@ pub fn apply_set_token<H: Host>(
         }
         if matches!(name, "indent_guide_char" | "igc") {
             let mut chars = value.chars();
-            let ch = match (chars.next(), chars.next()) {
-                (Some(c), None) => c,
-                _ => {
-                    return Err(format!(
-                        "indent_guide_char expects exactly one character, got {value:?}"
-                    ));
-                }
+            let (Some(ch), None) = (chars.next(), chars.next()) else {
+                return Err(format!(
+                    "indent_guide_char expects exactly one character, got {value:?}"
+                ));
             };
             editor.settings_mut().indent_guide_char = ch;
             return Ok(());

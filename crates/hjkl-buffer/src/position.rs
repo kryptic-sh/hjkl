@@ -46,8 +46,7 @@ impl Position {
     pub fn byte_offset(self, line: &str) -> usize {
         line.char_indices()
             .nth(self.col)
-            .map(|(b, _)| b)
-            .unwrap_or(line.len())
+            .map_or(line.len(), |(b, _)| b)
     }
 }
 

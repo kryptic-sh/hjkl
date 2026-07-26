@@ -63,7 +63,7 @@ fn trimmed_trailing_whitespace(slot: &super::BufferSlot) -> Option<String> {
 /// are intentionally excluded — completion already lists them. `:set mouse`
 /// is an arg-level intercept of the registered `:set` command, not a distinct
 /// command name, so it contributes nothing here.
-pub(crate) fn extra_ex_command_names() -> Vec<String> {
+pub fn extra_ex_command_names() -> Vec<String> {
     [
         // ── `:map` family — see keymap::parse_mode_groups ──
         "map",
@@ -122,7 +122,7 @@ impl App {
         self.last_ex_command = Some(raw.to_string());
         // Phase 1 (#37): push to ex history ring.
         let raw_owned = raw.to_string();
-        App::push_history(&mut self.ex_history, &raw_owned);
+        Self::push_history(&mut self.ex_history, &raw_owned);
 
         // Phase 7: expand `%`, `#`, `<cword>`, `<cWORD>` tokens in the command
         // line BEFORE dispatch so file-argument commands see literal paths.
@@ -179,7 +179,7 @@ impl App {
         let cmd: &str = {
             let reg = hjkl_ex::default_registry::<TuiHost>();
             let first_space = cmd.find(' ');
-            let first_word = first_space.map(|i| &cmd[..i]).unwrap_or(cmd);
+            let first_word = first_space.map_or(cmd, |i| &cmd[..i]);
             if let Some(resolved) = reg.resolve(first_word) {
                 if resolved.name != first_word {
                     canon_buf = match first_space {
@@ -1538,8 +1538,7 @@ impl App {
                         .active()
                         .filename
                         .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "[No Name]".into());
+                        .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
                     self.bus.info(format!("No swap file found for {name}"));
                     return;
                 }
@@ -1549,8 +1548,7 @@ impl App {
                     .active()
                     .filename
                     .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "[No Name]".into());
+                    .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
                 self.bus.info(format!("No swap file found for {name}"));
                 return;
             }
@@ -1562,8 +1560,7 @@ impl App {
                     .active()
                     .filename
                     .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "[No Name]".into());
+                    .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
                 self.bus.info(format!("No swap file found for {name}"));
                 return;
             }
@@ -1577,8 +1574,7 @@ impl App {
                     .active()
                     .filename
                     .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "[No Name]".into());
+                    .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
                 self.bus.info(format!("No swap file found for {name}"));
             }
         } else {
@@ -1590,8 +1586,7 @@ impl App {
             let swap_path_exists = self.slots[slot_idx]
                 .swap_path
                 .as_ref()
-                .map(|p| p.exists())
-                .unwrap_or(false);
+                .is_some_and(|p| p.exists());
             if !swap_path_exists {
                 self.bus.info(format!("No swap file found for {path}"));
                 return;
@@ -1824,9 +1819,8 @@ impl App {
     /// - `q` → clear the slot content entirely (abort open).
     pub(crate) fn handle_recovery_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
-        let pr = match self.pending_recovery.as_ref() {
-            Some(p) => p,
-            None => return false,
+        let Some(pr) = self.pending_recovery.as_ref() else {
+            return false;
         };
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -1946,8 +1940,7 @@ impl App {
             let name = self.slots[idx]
                 .filename
                 .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "[No Name]".into());
+                .map_or_else(|| "[No Name]".into(), |p| p.display().to_string());
             self.bus.error(format!(
                 "E37: No write since last change for buffer \"{name}\" (add ! to override)"
             ));
@@ -2089,12 +2082,9 @@ impl App {
 
     /// Reload the active slot from disk (`:e` no-arg / `:e %`).
     pub(crate) fn reload_current(&mut self, force: bool) {
-        let path = match self.active().filename.clone() {
-            Some(p) => p,
-            None => {
-                self.bus.error("E32: No file name");
-                return;
-            }
+        let Some(path) = self.active().filename.clone() else {
+            self.bus.error("E32: No file name");
+            return;
         };
         if !force && self.active().dirty {
             self.bus
@@ -2173,9 +2163,8 @@ impl App {
     /// Shared by the poll path ([`checktime_all`] on focus-regain / `:checktime`)
     /// and the event-driven fs-watch path (`drain_fs_watch_events`).
     pub(crate) fn checktime_slot(&mut self, idx: usize, messages: &mut Vec<String>) -> bool {
-        let path = match self.slots[idx].filename.clone() {
-            Some(p) => p,
-            None => return false,
+        let Some(path) = self.slots[idx].filename.clone() else {
+            return false;
         };
         match std::fs::metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -2245,9 +2234,8 @@ impl App {
                     false
                 } else {
                     // Clean buffer — reload automatically. Capped like every
-                    let content = match hjkl_fs::read_to_string_unbounded(&path) {
-                        Ok(c) => c,
-                        Err(_) => return false,
+                    let Ok(content) = hjkl_fs::read_to_string_unbounded(&path) else {
+                        return false;
                     };
                     let trimmed = content.strip_suffix('\n').unwrap_or(&content);
                     // Preserve cursor row + column, clamped to the new
@@ -2458,8 +2446,7 @@ impl App {
                     .as_ref()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "[No Name]".to_string())
+                    .map_or_else(|| "[No Name]".to_string(), |s| s.to_string())
             } else {
                 "[No Name]".to_string()
             };
@@ -2946,7 +2933,7 @@ impl App {
         };
         let spec_version = spec.version.clone();
         let installed = hjkl_anvil::store::read_rev(name).ok().flatten();
-        let needs_update = installed.map(|r| r.version != spec_version).unwrap_or(true);
+        let needs_update = installed.is_none_or(|r| r.version != spec_version);
         if !needs_update {
             self.bus.info(format!("anvil: {name} already up to date"));
             return;
@@ -2985,7 +2972,7 @@ fn sev_label(s: super::DiagSeverity) -> &'static str {
 /// whitespace (or off the relevant char class), matching vim's empty
 /// expansion. The cursor column is a **char** index; the primitives index the
 /// line string by chars, so no byte/char conversion is needed here.
-pub(crate) fn cursor_word_tokens(app: &App) -> (Option<String>, Option<String>, Option<String>) {
+pub fn cursor_word_tokens(app: &App) -> (Option<String>, Option<String>, Option<String>) {
     let (row, col) = app.active_editor().cursor();
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), row);
     (
@@ -3024,7 +3011,7 @@ fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
 /// current / alternate filename by `hjkl_ex::expand_args`, silently opening
 /// the wrong file for names like `100%.txt`. Backslash-escaping makes
 /// `expand_args` emit them verbatim.
-pub(crate) fn escape_ex_path(s: &str) -> String {
+pub fn escape_ex_path(s: &str) -> String {
     s.replace('%', "\\%").replace('#', "\\#")
 }
 
@@ -3060,8 +3047,7 @@ fn format_swap_age(write_time_unix_ms: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(write_time_unix_ms);
+        .map_or(write_time_unix_ms, |d| d.as_millis() as u64);
     let delta_secs = now_ms.saturating_sub(write_time_unix_ms) / 1000;
     if delta_secs < 60 {
         format!("{delta_secs}s ago")

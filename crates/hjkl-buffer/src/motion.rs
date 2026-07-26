@@ -32,21 +32,21 @@ impl Token {
     /// unrecognized tokens (which the matcher ignores). Precedence
     /// mirrors the original inline parser: `@`, then `N-M` range,
     /// then bare code, then single-char literal.
-    fn parse(token: &str) -> Option<Token> {
+    fn parse(token: &str) -> Option<Self> {
         if token == "@" {
-            return Some(Token::Alpha);
+            return Some(Self::Alpha);
         }
         if let Some((lo, hi)) = token.split_once('-')
             && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
         {
-            return Some(Token::Range(lo, hi));
+            return Some(Self::Range(lo, hi));
         }
         if let Ok(n) = token.parse::<u32>() {
-            return Some(Token::Code(n));
+            return Some(Self::Code(n));
         }
         let mut chars = token.chars();
         if let (Some(only), None) = (chars.next(), chars.next()) {
-            return Some(Token::Literal(only));
+            return Some(Self::Literal(only));
         }
         None
     }
@@ -54,10 +54,10 @@ impl Token {
     #[inline]
     fn matches(self, c: char) -> bool {
         match self {
-            Token::Alpha => c.is_alphabetic(),
-            Token::Range(lo, hi) => (lo..=hi).contains(&(c as u32)),
-            Token::Code(n) => c as u32 == n,
-            Token::Literal(only) => c == only,
+            Self::Alpha => c.is_alphabetic(),
+            Self::Range(lo, hi) => (lo..=hi).contains(&(c as u32)),
+            Self::Code(n) => c as u32 == n,
+            Self::Literal(only) => c == only,
         }
     }
 }

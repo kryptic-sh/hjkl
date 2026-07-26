@@ -52,7 +52,7 @@ impl Theme {
             flat.insert(key, raw.resolve(&palette.0)?);
         }
 
-        Ok(Theme {
+        Ok(Self {
             palette: palette.0,
             ui,
             captures: CaptureMap::from_map(flat),

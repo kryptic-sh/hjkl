@@ -150,9 +150,8 @@ pub fn extract_fold_ranges(
     }
 
     let cache = FOLD_QUERY_CACHE.read().unwrap();
-    let compiled = match cache.get(grammar.name()).and_then(|v| v.as_ref()) {
-        Some(c) => c,
-        None => return Vec::new(),
+    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
+        return Vec::new();
     };
 
     let mut cursor = QueryCursor::new();
@@ -204,9 +203,8 @@ pub fn extract_fold_ranges_rope(
     }
 
     let cache = FOLD_QUERY_CACHE.read().unwrap();
-    let compiled = match cache.get(grammar.name()).and_then(|v| v.as_ref()) {
-        Some(c) => c,
-        None => return Vec::new(),
+    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
+        return Vec::new();
     };
 
     let total_bytes = rope.len_bytes();

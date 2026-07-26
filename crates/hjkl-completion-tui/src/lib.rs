@@ -128,8 +128,7 @@ pub fn popup(
             let detail_len = item
                 .detail
                 .as_deref()
-                .map(|d| d.chars().count().min(MAX_DETAIL_COLS) + 2)
-                .unwrap_or(0);
+                .map_or(0, |d| d.chars().count().min(MAX_DETAIL_COLS) + 2);
             // icon(1) + space(1) + label + space(2) + detail
             1 + 1 + item.label.chars().count() + 2 + detail_len
         })

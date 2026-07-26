@@ -133,9 +133,8 @@ impl LanguageDirectory {
             return GrammarRequest::Cached(g);
         }
 
-        let spec = match self.registry.by_name(name) {
-            Some(s) => s,
-            None => return GrammarRequest::Unknown,
+        let Some(spec) = self.registry.by_name(name) else {
+            return GrammarRequest::Unknown;
         };
         let meta = self.registry.meta();
 

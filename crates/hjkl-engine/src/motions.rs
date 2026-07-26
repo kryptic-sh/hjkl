@@ -239,8 +239,7 @@ pub fn move_last_non_blank<B: Cursor + Query>(buf: &mut B) {
         .char_indices()
         .rev()
         .find(|(_, c)| !c.is_whitespace())
-        .map(|(byte, _)| line[..byte].chars().count())
-        .unwrap_or(0);
+        .map_or(0, |(byte, _)| line[..byte].chars().count());
     write_cursor(buf, Position::new(row, col));
 }
 
@@ -690,9 +689,8 @@ pub fn find_char_on_line<B: Cursor + Query>(
     skip_adjacent: bool,
 ) -> bool {
     let cursor = read_cursor(buf);
-    let line = match read_line_opt(buf, cursor.row) {
-        Some(l) => l,
-        None => return false,
+    let Some(line) = read_line_opt(buf, cursor.row) else {
+        return false;
     };
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
@@ -1155,8 +1153,7 @@ fn char_kind_or_space<B: Query + ?Sized>(
 ) -> CharKind {
     cache
         .char_at(buf, pos)
-        .map(|c| char_kind(c, big, iskeyword))
-        .unwrap_or(CharKind::Space)
+        .map_or(CharKind::Space, |c| char_kind(c, big, iskeyword))
 }
 
 /// Kind of the next char on the same row as `pos`. End-of-line

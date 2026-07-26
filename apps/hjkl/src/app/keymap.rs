@@ -3,7 +3,7 @@ use hjkl_engine::{Input, Key, VimMode};
 use hjkl_keymap::{Chord, KeyCode as KmKeyCode, KeyModifiers, key::KeyEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum MapMode {
+pub enum MapMode {
     Normal,
     Visual,
     Insert,
@@ -17,7 +17,7 @@ pub(crate) enum MapMode {
 /// was registered so `:map` (list) can enumerate user maps without leaking
 /// built-in bindings.
 #[derive(Debug, Clone)]
-pub(crate) struct UserKeymapRecord {
+pub struct UserKeymapRecord {
     pub mode: MapMode,
     pub lhs: Vec<Input>,
     pub rhs: Vec<Input>,
@@ -25,7 +25,7 @@ pub(crate) struct UserKeymapRecord {
 }
 
 /// Render a list of user maps filtered to `modes` as a displayable string.
-pub(crate) fn format_user_map_list(records: &[UserKeymapRecord], modes: &[MapMode]) -> String {
+pub fn format_user_map_list(records: &[UserKeymapRecord], modes: &[MapMode]) -> String {
     let mut lines = Vec::new();
     for &mode in modes {
         let label = match mode {
@@ -65,7 +65,7 @@ pub(crate) fn format_user_map_list(records: &[UserKeymapRecord], modes: &[MapMod
 ///
 /// `Key::Null` has no clean equivalent; it maps to `KeyCode::Char('\0')` so
 /// dispatch is consistent and nothing special happens for it.
-pub(crate) fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
+pub fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
     let code = match input.key {
         Key::Char(c) => KmCode::Char(c),
@@ -102,7 +102,7 @@ pub(crate) fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
 /// Returns `None` for [`MapMode::Terminal`] — there's no Terminal variant.
 /// Terminal-mode runtime maps are silently skipped with a status message at
 /// the call site.
-pub(crate) fn map_mode_to_km_mode(mode: MapMode) -> Option<hjkl_vim::Mode> {
+pub fn map_mode_to_km_mode(mode: MapMode) -> Option<hjkl_vim::Mode> {
     match mode {
         MapMode::Normal => Some(hjkl_vim::Mode::Normal),
         MapMode::Visual => Some(hjkl_vim::Mode::Visual),
@@ -113,7 +113,7 @@ pub(crate) fn map_mode_to_km_mode(mode: MapMode) -> Option<hjkl_vim::Mode> {
     }
 }
 
-pub(crate) fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
+pub fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
     match mode {
         VimMode::Normal => Some(MapMode::Normal),
         VimMode::Insert => Some(MapMode::Insert),
@@ -121,7 +121,7 @@ pub(crate) fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
     }
 }
 
-pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Result<Vec<Input>, String> {
+pub fn parse_key_sequence(text: &str, leader: char) -> Result<Vec<Input>, String> {
     let mut result = Vec::new();
     let mut chars = text.chars();
     while let Some(ch) = chars.next() {
@@ -216,7 +216,7 @@ fn chord_event_to_input(ev: &KeyEvent) -> Option<Input> {
     })
 }
 
-pub(crate) fn parse_mode_groups(cmd: &str) -> Option<Vec<MapMode>> {
+pub fn parse_mode_groups(cmd: &str) -> Option<Vec<MapMode>> {
     match cmd {
         "map" | "noremap" | "nm" => Some(vec![
             MapMode::Normal,
@@ -242,7 +242,7 @@ pub(crate) fn parse_mode_groups(cmd: &str) -> Option<Vec<MapMode>> {
     }
 }
 
-pub(crate) enum RuntimeMapCommand {
+pub enum RuntimeMapCommand {
     Add {
         modes: Vec<MapMode>,
         recursive: bool,
@@ -270,7 +270,7 @@ pub(crate) enum RuntimeMapCommand {
 /// * `Some(Err(msg))` — `cmd` *is* a map verb but the lhs/rhs key notation
 ///   is invalid; the caller reports `msg` and stops.
 /// * `Some(Ok(cmd))` — parsed successfully.
-pub(crate) fn parse_runtime_map_command(
+pub fn parse_runtime_map_command(
     cmd: &str,
     leader: char,
 ) -> Option<Result<RuntimeMapCommand, String>> {
@@ -278,8 +278,7 @@ pub(crate) fn parse_runtime_map_command(
     let split = cmd
         .char_indices()
         .find(|(_, c)| c.is_whitespace())
-        .map(|(i, _)| i)
-        .unwrap_or(cmd.len());
+        .map_or(cmd.len(), |(i, _)| i);
     let (name, rest) = cmd.split_at(split);
     let rest = rest.trim();
     let modes = parse_mode_groups(name)?;
@@ -296,8 +295,7 @@ pub(crate) fn parse_runtime_map_command(
     let split = rest
         .char_indices()
         .find(|(_, c)| c.is_whitespace())
-        .map(|(i, _)| i)
-        .unwrap_or(rest.len());
+        .map_or(rest.len(), |(i, _)| i);
     let (lhs_text, rhs_text) = rest.split_at(split);
     let lhs_text = lhs_text.trim();
     let rhs_text = rhs_text.trim();

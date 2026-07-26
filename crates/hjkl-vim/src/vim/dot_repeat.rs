@@ -13,7 +13,7 @@ use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_set_cursor_rc
 /// edit funnel, then leave insert mode (the original change ended
 /// with Esc, so the dot-repeat must end the same way — including
 /// the cursor step-back vim does on Esc-from-insert).
-pub(crate) fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
+pub fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     text: &str,
 ) {
@@ -30,7 +30,7 @@ pub(crate) fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
         vim_mut(ed).mode = Mode::Normal;
     }
 }
-pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
+pub fn replay_last_change<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     outer_count: usize,
 ) {
@@ -295,7 +295,7 @@ pub(crate) fn replay_last_change<H: hjkl_engine::types::Host>(
 /// The substring of `after` that differs from `before` (first-diff to
 /// last-diff). Unlike [`extract_inserted`] this works for equal-length or
 /// shorter results, so it captures `R` overstrike text for dot-repeat.
-pub(crate) fn changed_run(before: &str, after: &str) -> String {
+pub fn changed_run(before: &str, after: &str) -> String {
     let a: Vec<char> = before.chars().collect();
     let b: Vec<char> = after.chars().collect();
     let prefix = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
@@ -309,7 +309,7 @@ pub(crate) fn changed_run(before: &str, after: &str) -> String {
         .count();
     b[prefix..b.len() - suffix].iter().collect()
 }
-pub(crate) fn extract_inserted(before: &str, after: &str) -> String {
+pub fn extract_inserted(before: &str, after: &str) -> String {
     let before_chars: Vec<char> = before.chars().collect();
     let after_chars: Vec<char> = after.chars().collect();
     if after_chars.len() <= before_chars.len() {

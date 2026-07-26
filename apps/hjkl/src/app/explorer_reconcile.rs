@@ -23,13 +23,13 @@ use std::path::{Path, PathBuf};
 /// Unit-separator character used to delimit the name from the id in each
 /// non-root explorer buffer line.  Defined here and re-exported so `explorer.rs`
 /// can import it without duplication.
-pub(crate) const ID_SEP: char = '\u{1F}';
+pub const ID_SEP: char = '\u{1F}';
 
 // ── Op model ──────────────────────────────────────────────────────────────────
 
 /// A single filesystem operation produced by [`reconcile`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FsOp {
+pub enum FsOp {
     /// Create a directory (and any intermediate parents — the wiring phase uses
     /// `create_dir_all`).
     CreateDir(PathBuf),
@@ -124,7 +124,7 @@ fn parse_buffer(buffer: &str, root: &Path) -> Vec<BufEntry> {
         }
 
         // Pop stack entries that are at depth ≥ current depth.
-        while stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
+        while stack.last().is_some_and(|(d, _)| *d >= depth) {
             stack.pop();
         }
 
@@ -194,7 +194,7 @@ fn component_count(p: &Path) -> usize {
 ///    children before parents).
 /// 3. Creates, sorted by path component count **ascending** (parents before
 ///    children).
-pub(crate) fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &Path) -> Vec<FsOp> {
+pub fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &Path) -> Vec<FsOp> {
     let current = parse_buffer(buffer, root);
 
     // Build an id-keyed index of baseline[1..] (skip root at index 0).
@@ -292,7 +292,7 @@ pub(crate) fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &
 /// undo side, to re-apply it (redo).  The undo / redo path is implemented by
 /// [`revert_ops`].
 #[derive(Debug, Clone)]
-pub(crate) enum AppliedOp {
+pub enum AppliedOp {
     /// A new file or directory was created at `path`.
     /// Reverse: trash it.
     Created(PathBuf),
@@ -409,8 +409,7 @@ fn temp_sibling_path(from: &Path) -> PathBuf {
     let parent = from.parent().unwrap_or_else(|| Path::new("."));
     let base = from
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".to_string());
+        .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
     let pid = std::process::id();
     (0u64..)
         .map(|n| parent.join(format!(".hjkl-rename-{pid}-{n}-{base}")))
@@ -438,7 +437,7 @@ fn temp_sibling_path(from: &Path) -> PathBuf {
 /// - `trashed`: mutable registry of `(original_file_name, trash_dest)` pairs
 ///   built up by this call and carried across reconcile cycles so that a
 ///   `Trash` on tick N and a `CreateFile` on tick N+1 correctly restores.
-pub(crate) fn apply_ops(
+pub fn apply_ops(
     ops: &[FsOp],
     trashed: &mut Vec<(String, PathBuf)>,
 ) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
@@ -714,7 +713,7 @@ pub(crate) fn apply_ops(
 ///
 /// `trashed` is the pane's trash registry; it is updated as new trash
 /// destinations are created during the reversal.
-pub(crate) fn revert_ops(
+pub fn revert_ops(
     applied: &[AppliedOp],
     trashed: &mut Vec<(String, PathBuf)>,
 ) -> (Vec<AppliedOp>, Vec<String>) {
@@ -859,7 +858,7 @@ pub(crate) fn revert_ops(
 /// "redo" journal. This is the forward direction of redo.
 ///
 /// Returns the newly-created file paths (for opening) and any errors.
-pub(crate) fn apply_applied(
+pub fn apply_applied(
     ops: &[AppliedOp],
     trashed: &mut Vec<(String, PathBuf)>,
 ) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
@@ -954,9 +953,7 @@ pub(crate) fn apply_applied(
                     errors.push(format!("redo restored: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let is_dir = std::fs::symlink_metadata(from_trash)
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false);
+                let is_dir = std::fs::symlink_metadata(from_trash).is_ok_and(|m| m.is_dir());
                 let result = if is_dir {
                     move_dir(from_trash, to)
                 } else {
@@ -1032,9 +1029,10 @@ mod tests {
             };
             let indent = depth * 2 + 2;
             let name = if depth == 0 {
-                path.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                path.file_name().map_or_else(
+                    || path.to_string_lossy().into_owned(),
+                    |n| n.to_string_lossy().into_owned(),
+                )
             } else {
                 path.file_name()
                     .map(|n| n.to_string_lossy().into_owned())

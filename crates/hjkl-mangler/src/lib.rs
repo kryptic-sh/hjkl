@@ -78,8 +78,7 @@ pub fn row_range_to_byte_range(source: &str, range: RangeSpec) -> (usize, usize)
         let row_end = bytes[byte_pos..]
             .iter()
             .position(|&b| b == b'\n')
-            .map(|nl| byte_pos + nl + 1) // include the '\n'
-            .unwrap_or(bytes.len());
+            .map_or(bytes.len(), |nl| byte_pos + nl + 1);
 
         if row == range.start_row {
             start_byte = byte_pos;
@@ -185,10 +184,10 @@ pub enum FormatError {
 impl std::fmt::Display for FormatError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FormatError::NotInstalled(name) => write!(f, "{name}: not installed"),
-            FormatError::Timeout => write!(f, "formatter timed out (>30 s)"),
-            FormatError::SyntaxError(msg) => write!(f, "formatter error: {msg}"),
-            FormatError::Io(e) => write!(f, "I/O error: {e}"),
+            Self::NotInstalled(name) => write!(f, "{name}: not installed"),
+            Self::Timeout => write!(f, "formatter timed out (>30 s)"),
+            Self::SyntaxError(msg) => write!(f, "formatter error: {msg}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
         }
     }
 }
@@ -196,7 +195,7 @@ impl std::fmt::Display for FormatError {
 impl std::error::Error for FormatError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            FormatError::Io(e) => Some(e),
+            Self::Io(e) => Some(e),
             _ => None,
         }
     }
@@ -282,10 +281,7 @@ pub fn probe_tool(tool: &str) -> Result<(), String> {
         Ok(Some(status)) if status.success() => Ok(()),
         Ok(Some(status)) => Err(format!(
             "spawned but exited {}",
-            status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "?".into())
+            status.code().map_or_else(|| "?".into(), |c| c.to_string())
         )),
         Ok(None) => Err(format!("timed out after {}s", PROBE_TIMEOUT.as_secs())),
         Err(e) => Err(format!("spawn failed: {} ({:?})", e, e.kind())),

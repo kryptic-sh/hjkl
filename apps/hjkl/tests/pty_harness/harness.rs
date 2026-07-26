@@ -784,7 +784,7 @@ impl TerminalSession {
         let mut s = String::new();
         for col in 0..self.cols {
             let cell = screen.cell(row, col);
-            let ch = cell.map(|c| c.contents()).unwrap_or("");
+            let ch = cell.map_or("", |c| c.contents());
             if ch.is_empty() {
                 s.push(' ');
             } else {

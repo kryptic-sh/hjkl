@@ -89,9 +89,9 @@ pub enum WatchError {
 impl fmt::Display for WatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WatchError::Notify(e) => write!(f, "notify error: {e}"),
-            WatchError::Io(e) => write!(f, "io error: {e}"),
-            WatchError::MissingRoot => write!(f, "no root directory configured"),
+            Self::Notify(e) => write!(f, "notify error: {e}"),
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::MissingRoot => write!(f, "no root directory configured"),
         }
     }
 }
@@ -99,22 +99,22 @@ impl fmt::Display for WatchError {
 impl std::error::Error for WatchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            WatchError::Notify(e) => Some(e),
-            WatchError::Io(e) => Some(e),
-            WatchError::MissingRoot => None,
+            Self::Notify(e) => Some(e),
+            Self::Io(e) => Some(e),
+            Self::MissingRoot => None,
         }
     }
 }
 
 impl From<notify::Error> for WatchError {
     fn from(e: notify::Error) -> Self {
-        WatchError::Notify(e)
+        Self::Notify(e)
     }
 }
 
 impl From<io::Error> for WatchError {
     fn from(e: io::Error) -> Self {
-        WatchError::Io(e)
+        Self::Io(e)
     }
 }
 
@@ -576,7 +576,7 @@ fn pending_to_event(path: PathBuf, p: Pending) -> FsEvent {
 
 #[inline]
 fn passes_filter(filter: Option<&FilterFn>, path: &Path) -> bool {
-    filter.map(|f| f(path)).unwrap_or(true)
+    filter.is_none_or(|f| f(path))
 }
 
 #[inline]
@@ -1096,7 +1096,7 @@ mod tests {
         let mut watcher = WatcherBuilder::new()
             .root(dir.path().to_path_buf())
             .debounce(Duration::from_millis(50))
-            .filter(|p| p.extension().map(|e| e == "rs").unwrap_or(false))
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
             .build()
             .unwrap();
         settle_watcher(&mut watcher);
@@ -1120,7 +1120,7 @@ mod tests {
         let mut watcher = WatcherBuilder::new()
             .root(root.clone())
             .debounce(Duration::from_millis(50))
-            .filter(|p| p.extension().map(|e| e == "rs").unwrap_or(false))
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
             .build()
             .unwrap();
         settle_watcher(&mut watcher);

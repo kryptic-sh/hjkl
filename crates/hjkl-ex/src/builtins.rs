@@ -128,8 +128,7 @@ fn read_handler<H: Host>(
                     "command exited {} ({label})",
                     out.status
                         .code()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "?".into())
+                        .map_or_else(|| "?".into(), |c| c.to_string())
                 )));
             }
             Err(e) => return Some(ExEffect::Error(format!("cannot run `{cmd}`: {e}"))),
@@ -500,8 +499,7 @@ fn cd_handler<H: Host>(
     match std::env::set_current_dir(&target) {
         Ok(()) => {
             let new_cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| target.clone());
+                .map_or_else(|_| target.clone(), |p| p.display().to_string());
             Some(ExEffect::Cwd(new_cwd))
         }
         Err(e) => Some(ExEffect::Error(format!("{target}: {e}"))),
@@ -514,9 +512,7 @@ fn pwd_handler<H: Host>(
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "?".to_string());
+    let cwd = std::env::current_dir().map_or_else(|_| "?".to_string(), |p| p.display().to_string());
     Some(ExEffect::Info(cwd))
 }
 
@@ -694,7 +690,7 @@ fn resolve_range_with_count<H: Host>(
 
 /// `:[range]y[ank] [{register}] [count]` — yank lines into a register
 /// (linewise), without mutating the buffer or moving the cursor.
-pub(crate) fn yank_handler<H: Host>(
+pub fn yank_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -738,7 +734,7 @@ pub(crate) fn yank_handler<H: Host>(
 /// no count joins every line in the range; an explicit trailing `[count]`
 /// OVERRIDES the join to start at the range's LAST line and join `count`
 /// total lines from there.
-pub(crate) fn join_handler<H: Host>(
+pub fn join_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -747,7 +743,7 @@ pub(crate) fn join_handler<H: Host>(
 }
 
 /// `:[range]j[oin]! [count]` — see [`join_handler`]; `raw = true` (gJ).
-pub(crate) fn join_bang_handler<H: Host>(
+pub fn join_bang_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -838,7 +834,7 @@ fn join_handler_inner<H: Host>(
 /// instead. A trailing `[count]` OVERRIDES the range to delete `count`
 /// lines starting at the range's LAST line (same start-from-range-end rule
 /// as `:y [count]` / `:j [count]` — verified against nvim v0.12.4).
-pub(crate) fn delete_handler<H: Host>(
+pub fn delete_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -940,7 +936,7 @@ fn replay_normal_keys<H: Host>(
 /// base checkpoint and every per-command checkpoint the FSM records during
 /// replay into one undo entry; a no-op `:normal` (pure motion) mutates nothing
 /// so the guard drops its armed snapshot, recording none — exactly as nvim.
-pub(crate) fn normal_handler<H: Host>(
+pub fn normal_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -1204,7 +1200,7 @@ fn extract_leading_number(line: &str) -> i64 {
 /// only `last_search()`'s pattern). Flags are NOT reused — `:s` alone always
 /// runs with default (no) flags; `:s g` / `:s 3` parse `args` as a bare
 /// flags+count tail via `parse_flags` (verified against nvim v0.12.4).
-pub(crate) fn substitute_handler<H: Host>(
+pub fn substitute_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     args: &str,
     range: Option<LineRange>,
@@ -1353,14 +1349,13 @@ fn format_print_line(line: &str, row: usize, num: bool, list: bool) -> String {
 /// (vim `:[range]> {count}` semantics). With no range the current line is used.
 ///
 /// Cursor lands on the first non-blank of the last shifted line, matching vim.
-pub(crate) fn shift_handler<H: Host>(
+pub fn shift_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     cmd_str: &str,
     range: Option<LineRange>,
 ) -> ExEffect {
-    let shift_char = match cmd_str.chars().next() {
-        Some(c @ ('>' | '<')) => c,
-        _ => return ExEffect::Error("not a shift command".into()),
+    let Some(shift_char @ ('>' | '<')) = cmd_str.chars().next() else {
+        return ExEffect::Error("not a shift command".into());
     };
     let levels = cmd_str.chars().take_while(|c| *c == shift_char).count();
     let rest = cmd_str[levels..].trim();
@@ -1413,16 +1408,15 @@ pub(crate) fn shift_handler<H: Host>(
 /// `:&&` — repeat with original flags preserved.
 ///
 /// `keep_flags` is `true` for `&&`, `false` for `&`.
-pub(crate) fn repeat_substitute_handler<H: Host>(
+pub fn repeat_substitute_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     keep_flags: bool,
     range: Option<LineRange>,
 ) -> ExEffect {
     use hjkl_engine::substitute::{SubstFlags, apply_substitute};
 
-    let cmd = match editor.last_substitute() {
-        Some(c) => c,
-        None => return ExEffect::Error("no previous substitute".into()),
+    let Some(cmd) = editor.last_substitute() else {
+        return ExEffect::Error("no previous substitute".into());
     };
 
     // `:&` drops flags; `:&&` keeps them (vim semantics).
@@ -1475,7 +1469,7 @@ fn set_handler<H: Host>(
 // ---- registration ----------------------------------------------------------
 
 /// Register all Phase 1 + Phase 2a built-in commands.
-pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
+pub fn register_builtins<H: Host>(reg: &mut Registry<H>) {
     // `:quit` / `:q`
     reg.add(ExCommand {
         name: "quit",
@@ -3112,8 +3106,7 @@ fn uncomment_handler<H: Host>(
                 after_space
                     .trim_end()
                     .strip_suffix(end_marker.as_str())
-                    .map(|s| s.trim_end())
-                    .unwrap_or(after_space)
+                    .map_or(after_space, |s| s.trim_end())
             } else {
                 after_space
             };
@@ -4760,7 +4753,7 @@ mod tests {
         // (`:s` correctly resolves to `substitute` instead.)
         let sy = reg.resolve("sy");
         assert!(
-            sy.map(|c| c.name != "syntax").unwrap_or(true),
+            sy.is_none_or(|c| c.name != "syntax"),
             "`:sy` must not resolve to syntax (min_prefix=3)"
         );
     }

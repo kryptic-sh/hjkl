@@ -112,8 +112,7 @@ fn next_temp_seq() -> u64 {
 pub(crate) fn temp_path(target: &Path, attempt: u32) -> PathBuf {
     let name = target
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "hjkl".to_string());
+        .map_or_else(|| "hjkl".to_string(), |n| n.to_string_lossy().into_owned());
     let pid = std::process::id();
     let leaf = if attempt == 0 {
         format!(".{name}.hjkl-tmp.{pid}")

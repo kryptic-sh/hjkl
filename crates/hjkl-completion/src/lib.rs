@@ -41,17 +41,17 @@ impl CompletionKind {
     /// in a narrow gutter column.
     pub fn icon(self) -> char {
         match self {
-            CompletionKind::Function | CompletionKind::Method => '\u{0192}', // ƒ
-            CompletionKind::Variable => 'v',
-            CompletionKind::Field | CompletionKind::Property => '\u{00B7}', // ·
-            CompletionKind::Class | CompletionKind::Interface => 'C',
-            CompletionKind::Module => 'M',
-            CompletionKind::Enum => 'E',
-            CompletionKind::Constant => 'k',
-            CompletionKind::Snippet => '\u{25C6}', // ◆
-            CompletionKind::Keyword => 'K',
-            CompletionKind::File | CompletionKind::Folder => '\u{25F0}', // ◰
-            CompletionKind::Other => '\u{00B7}',                         // ·
+            Self::Function | Self::Method => '\u{0192}', // ƒ
+            Self::Variable => 'v',
+            Self::Field | Self::Property => '\u{00B7}', // ·
+            Self::Class | Self::Interface => 'C',
+            Self::Module => 'M',
+            Self::Enum => 'E',
+            Self::Constant => 'k',
+            Self::Snippet => '\u{25C6}', // ◆
+            Self::Keyword => 'K',
+            Self::File | Self::Folder => '\u{25F0}', // ◰
+            Self::Other => '\u{00B7}',               // ·
         }
     }
 }

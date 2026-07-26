@@ -11,9 +11,7 @@ use hjkl_engine::buf_helpers::{buf_line_chars, buf_row_count};
 /// `Ctrl-o` — jump back to the most recent pre-jump position. Saves
 /// the current cursor onto the forward stack so `Ctrl-i` can return.
 /// Returns `false` when the back stack is empty so counted loops stop.
-pub(crate) fn jump_back<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-) -> bool {
+pub fn jump_back<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
     let Some(target) = ed.jump_back_list_mut().pop() else {
         return false;
     };
@@ -27,9 +25,7 @@ pub(crate) fn jump_back<H: hjkl_engine::types::Host>(
 /// `Ctrl-i` / `Tab` — redo the last `Ctrl-o`. Saves the current cursor
 /// onto the back stack.
 /// Returns `false` when the forward stack is empty so counted loops stop.
-pub(crate) fn jump_forward<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-) -> bool {
+pub fn jump_forward<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
     let Some(target) = ed.jump_fwd_list_mut().pop() else {
         return false;
     };
@@ -45,7 +41,7 @@ pub(crate) fn jump_forward<H: hjkl_engine::types::Host>(
 }
 /// Clamp a stored `(row, col)` to the live buffer in case edits
 /// shrunk the document between push and pop.
-pub(crate) fn clamp_pos<H: hjkl_engine::types::Host>(
+pub fn clamp_pos<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {
@@ -56,7 +52,7 @@ pub(crate) fn clamp_pos<H: hjkl_engine::types::Host>(
     (r, c)
 }
 /// True for motions that vim treats as jumps (pushed onto the jumplist).
-pub(crate) fn is_big_jump(motion: &Motion) -> bool {
+pub fn is_big_jump(motion: &Motion) -> bool {
     matches!(
         motion,
         Motion::FileTop

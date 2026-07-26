@@ -145,7 +145,7 @@ pub fn parse_substitute(s: &str) -> Result<SubstituteCmd, SubstError> {
 
     let raw_pattern = &parts[0];
     let raw_replacement = &parts[1];
-    let raw_flags = parts.get(2).map(String::as_str).unwrap_or("");
+    let raw_flags = parts.get(2).map_or("", String::as_str);
 
     // Empty pattern → reuse last_search.
     let pattern = if raw_pattern.is_empty() {
@@ -732,7 +732,7 @@ fn expand_into(out: &mut String, raw: &str, caps: &regex::Captures, prev: &str, 
     while let Some(c) = chars.next() {
         match c {
             '&' => {
-                let g = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+                let g = caps.get(0).map_or("", |m| m.as_str());
                 for ch in g.chars() {
                     push_cased(out, &mut case, ch);
                 }
@@ -756,7 +756,7 @@ fn expand_into(out: &mut String, raw: &str, caps: &regex::Captures, prev: &str, 
                 Some('n') => out.push('\0'),
                 Some(d @ '0'..='9') => {
                     let idx = d as usize - '0' as usize;
-                    let g = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
+                    let g = caps.get(idx).map_or("", |m| m.as_str());
                     for ch in g.chars() {
                         push_cased(out, &mut case, ch);
                     }

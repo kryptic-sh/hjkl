@@ -18,7 +18,7 @@ use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_
 /// When a match is found the cursor jumps to the first char of the digraph.
 /// `last_sneak` and `last_horizontal_motion` are updated so `;`/`,` repeat.
 /// No-op (cursor unchanged) when no match exists.
-pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
+pub fn apply_sneak<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     c1: char,
     c2: char,
@@ -45,7 +45,7 @@ pub(crate) fn apply_sneak<H: hjkl_engine::types::Host>(
 }
 /// Scan forward from `(start_row, start_col)` (exclusive — start right after
 /// cursor) for the `count`-th occurrence of `c1+c2`.
-pub(crate) fn sneak_scan_forward<H: hjkl_engine::types::Host>(
+pub fn sneak_scan_forward<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     start_row: usize,
     start_col: usize,
@@ -76,7 +76,7 @@ pub(crate) fn sneak_scan_forward<H: hjkl_engine::types::Host>(
 }
 /// Scan backward from `(start_row, start_col)` (exclusive — start left of
 /// cursor) for the `count`-th occurrence of `c1+c2`.
-pub(crate) fn sneak_scan_backward<H: hjkl_engine::types::Host>(
+pub fn sneak_scan_backward<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     start_row: usize,
     start_col: usize,
@@ -120,7 +120,7 @@ pub(crate) fn sneak_scan_backward<H: hjkl_engine::types::Host>(
 ///
 /// Example: buffer `"foo ab bar\n"`, cursor col 0, `dsab` → deletes `"foo "`
 /// leaving `"ab bar\n"`.
-pub(crate) fn apply_op_sneak<H: hjkl_engine::types::Host>(
+pub fn apply_op_sneak<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     c1: char,
@@ -156,7 +156,7 @@ pub(crate) fn apply_op_sneak<H: hjkl_engine::types::Host>(
 /// hjkl-vim `PendingState::OpFind` reducer can dispatch `ApplyOpFind` without
 /// re-entering the FSM. `handle_op_find_target` now delegates here to avoid
 /// logic duplication.
-pub(crate) fn apply_op_find_motion<H: hjkl_engine::types::Host>(
+pub fn apply_op_find_motion<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     ch: char,
@@ -184,7 +184,7 @@ pub(crate) fn apply_op_find_motion<H: hjkl_engine::types::Host>(
 /// `_total_count` is accepted for API symmetry with `apply_op_find_motion` /
 /// `apply_op_motion_key` but is currently unused — text objects don't repeat
 /// in vim's current grammar. Kept for future-proofing.
-pub(crate) fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
+pub fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     ch: char,
@@ -218,7 +218,7 @@ pub(crate) fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
     true
 }
 /// Move `pos` back by one character, clamped to (0, 0).
-pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
+pub fn retreat_one<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     pos: (usize, usize),
 ) -> (usize, usize) {

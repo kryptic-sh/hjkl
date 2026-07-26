@@ -158,9 +158,8 @@ pub struct OrphanScratch {
 /// active hjkl instance. Unreadable or non-scratch files are silently ignored.
 /// Accepts a `dir` parameter for testability without real XDG I/O.
 pub fn scan_orphan_scratch_swaps_in(dir: &Path) -> Vec<OrphanScratch> {
-    let rd = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
     };
     let mut out = Vec::new();
     for entry in rd.flatten() {
@@ -436,8 +435,7 @@ pub fn remove_swap(path: &Path) -> std::io::Result<()> {
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 // ── PID liveness ──────────────────────────────────────────────────────────────

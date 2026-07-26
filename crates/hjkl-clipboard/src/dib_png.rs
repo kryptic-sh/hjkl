@@ -282,7 +282,7 @@ fn row_stride(width: u32, bpp: u16) -> u32 {
 /// The output is a `BITMAPV5HEADER` (124 bytes) followed by pixel data (no
 /// `BITMAPFILEHEADER`). Only colour types 2 (RGB) and 6 (RGBA) at bit depth 8
 /// are supported.
-pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
+pub fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
     let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
     // --- Verify PNG signature ---
@@ -375,7 +375,7 @@ pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         let src = &raw[r * (1 + row_bytes)..];
         let filter = src[0];
         let mut row = src[1..1 + row_bytes].to_vec();
-        let prev: &[u8] = rows.last().map(Vec::as_slice).unwrap_or(&zero_row);
+        let prev: &[u8] = rows.last().map_or(&zero_row, Vec::as_slice);
         unfilter_row(filter, &mut row, prev, channels)?;
         rows.push(row);
     }
@@ -428,7 +428,7 @@ pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 /// The input must begin with a `BITMAPV5HEADER` (124 bytes) — no
 /// `BITMAPFILEHEADER`. Both bottom-up (positive height) and top-down (negative
 /// height) DIBs are accepted. Only 24 bpp and 32 bpp are supported.
-pub(crate) fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
+pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
     let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
     if dib.len() < DIB_HEADER_SIZE as usize {
@@ -649,7 +649,7 @@ mod tests {
             let filter = raw[r * (1 + row_bytes)];
             let mut row =
                 raw[r * (1 + row_bytes) + 1..r * (1 + row_bytes) + 1 + row_bytes].to_vec();
-            let prev = rows.last().map(Vec::as_slice).unwrap_or(&zero);
+            let prev = rows.last().map_or(&zero[..], Vec::as_slice);
             unfilter_row(filter, &mut row, prev, channels).unwrap();
             rows.push(row);
         }

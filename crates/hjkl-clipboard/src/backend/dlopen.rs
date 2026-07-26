@@ -322,7 +322,7 @@ static XCB_FNS: OnceLock<Option<XcbFns>> = OnceLock::new();
 
 /// Return a reference to the loaded XCB function-pointer table, or
 /// `ClipboardError::LibNotFound` if libxcb is not available.
-pub(crate) fn xcb_fns() -> Result<&'static XcbFns, ClipboardError> {
+pub fn xcb_fns() -> Result<&'static XcbFns, ClipboardError> {
     XCB_FNS
         .get_or_init(try_load_xcb)
         .as_ref()

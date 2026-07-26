@@ -128,8 +128,7 @@ pub fn to_lines(events: &[Event], theme: &MdTheme, width: u16) -> Vec<Line<'stat
     while r
         .lines
         .last()
-        .map(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
-        .unwrap_or(false)
+        .is_some_and(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
     {
         r.lines.pop();
     }
@@ -432,7 +431,7 @@ impl Renderer<'_> {
     ) -> Vec<Span<'static>> {
         let mut spans = vec![Span::styled("│", border)];
         for (i, w) in col_w.iter().enumerate() {
-            let cell = cells.get(i).map(String::as_str).unwrap_or("");
+            let cell = cells.get(i).map_or("", String::as_str);
             let align = aligns.get(i).copied().unwrap_or_default();
             spans.push(Span::styled(
                 format!(" {} ", pad(cell, *w, align)),

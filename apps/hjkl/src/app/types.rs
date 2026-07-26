@@ -278,7 +278,7 @@ fn buffer_signature(view: &View) -> (u64, usize) {
 /// Per-buffer feature switches. Lets special buffers (e.g. the file explorer
 /// scratch buffer) opt out of editor features they don't want. All on by default.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BufferFeatures {
+pub struct BufferFeatures {
     /// Tree-sitter syntax highlighting.
     pub syntax: bool,
     /// LSP attach + hover/diagnostics for this buffer.
@@ -304,7 +304,7 @@ impl Default for BufferFeatures {
 /// When the buffer's window is closed, the app reads this context to run
 /// `git commit --cleanup=strip -F <msg_file>` and refresh the explorer.
 #[derive(Debug, Clone)]
-pub(crate) struct CommitCtx {
+pub struct CommitCtx {
     /// The git workdir root (`repo_root` output), passed as `-C` to git.
     pub root: PathBuf,
     /// Absolute path to `COMMIT_EDITMSG` that was opened for editing.
@@ -442,7 +442,7 @@ pub struct BufferSlot {
 /// Markers: `.git`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`,
 /// `setup.py`, `composer.json`, `.hg`.  Returns the first directory that
 /// contains one of these files, or `start` itself as a fallback.
-pub(crate) fn find_project_root(start: &std::path::Path) -> PathBuf {
+pub fn find_project_root(start: &std::path::Path) -> PathBuf {
     const MARKERS: &[&str] = &[
         ".git",
         "Cargo.toml",

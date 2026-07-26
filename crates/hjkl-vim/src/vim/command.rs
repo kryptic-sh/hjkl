@@ -16,7 +16,7 @@ use hjkl_engine::buf_helpers::{
 /// Read the text in a vim-shaped range without mutating. Used by
 /// `Operator::Yank` so we can pipe the same range translation as
 /// [`cut_vim_range`] but skip the delete + inverse extraction.
-pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
+pub fn read_vim_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -70,7 +70,7 @@ pub(crate) fn read_vim_range<H: hjkl_engine::types::Host>(
 /// cell. Pushes the cut text into the clipboard via `record_yank_to_host`
 /// and the textarea yank buffer (still observed by `p`/`P` until the paste
 /// path is ported), and updates `yank_linewise` for linewise cuts.
-pub(crate) fn cut_vim_range<H: hjkl_engine::types::Host>(
+pub fn cut_vim_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     start: (usize, usize),
     end: (usize, usize),
@@ -126,7 +126,7 @@ pub(crate) fn cut_vim_range<H: hjkl_engine::types::Host>(
 /// and the textarea's yank buffer (still observed by `p`/`P` until the paste
 /// path is ported). Cursor lands at the deletion start so the caller
 /// can decide whether to step it left (`D`) or open insert mode (`C`).
-pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+pub fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(ed.buffer());
@@ -148,7 +148,7 @@ pub(crate) fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_bu
     }
     buf_set_cursor_pos(ed.buffer_mut(), cursor);
 }
-pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
+pub fn do_char_delete<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     count: usize,
@@ -214,7 +214,7 @@ pub(crate) fn do_char_delete<H: hjkl_engine::types::Host>(
 /// current line, add `delta`, leave the cursor on the last digit of the result.
 /// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
 /// well as signed decimals. No-op if the line has no number to the right.
-pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
+pub fn adjust_number<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     delta: i64,
 ) -> bool {
@@ -321,7 +321,7 @@ pub(crate) fn adjust_number<H: hjkl_engine::types::Host>(
     buf_set_cursor_rc(ed.buffer_mut(), row, span_start + new_len.saturating_sub(1));
     true
 }
-pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
+pub fn replace_char<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
     count: usize,
@@ -356,7 +356,7 @@ pub(crate) fn replace_char<H: hjkl_engine::types::Host>(
 /// Returns `false` when there is no char under the cursor to toggle
 /// (end of line / empty line) so counted loops can stop instead of
 /// spinning through a saturated count prefix.
-pub(crate) fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
+pub fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
@@ -383,9 +383,7 @@ pub(crate) fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
 }
 /// Returns `false` when the cursor is on the last line (nothing to
 /// join) so counted loops can stop instead of spinning.
-pub(crate) fn join_line<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-) -> bool {
+pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
@@ -423,9 +421,7 @@ pub(crate) fn join_line<H: hjkl_engine::types::Host>(
 /// `gJ` — join the next line onto the current one without inserting a
 /// separating space or stripping leading whitespace.
 /// Returns `false` when the cursor is on the last line. See [`join_line`].
-pub(crate) fn join_line_raw<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-) -> bool {
+pub fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
@@ -445,7 +441,7 @@ pub(crate) fn join_line_raw<H: hjkl_engine::types::Host>(
 /// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
 /// every line spanned by the selection into one. A single-line selection joins
 /// the current line with the one below (matching normal-mode `J`).
-pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
+pub fn visual_join<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     with_space: bool,
 ) {
@@ -493,7 +489,7 @@ pub(crate) fn visual_join<H: hjkl_engine::types::Host>(
 }
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
-pub(crate) fn goto_percent<H: hjkl_engine::types::Host>(
+pub fn goto_percent<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
@@ -503,11 +499,7 @@ pub(crate) fn goto_percent<H: hjkl_engine::types::Host>(
     }
     // Exclude the phantom trailing empty line (a file ending in `\n` is N lines
     // in vim, not N+1) so the percentage matches nvim.
-    let total = if rows >= 2
-        && buf_line(ed.buffer(), rows - 1)
-            .map(|s| s.is_empty())
-            .unwrap_or(false)
-    {
+    let total = if rows >= 2 && buf_line(ed.buffer(), rows - 1).is_some_and(|s| s.is_empty()) {
         rows - 1
     } else {
         rows
@@ -526,7 +518,7 @@ pub(crate) fn goto_percent<H: hjkl_engine::types::Host>(
 }
 /// Indent width of a leading-whitespace prefix, counting a `\t` as advancing
 /// to the next `tabstop` boundary and a space as one column.
-pub(crate) fn indent_width(s: &str, tabstop: usize) -> usize {
+pub fn indent_width(s: &str, tabstop: usize) -> usize {
     let ts = tabstop.max(1);
     let mut w = 0usize;
     for c in s.chars() {
@@ -540,7 +532,7 @@ pub(crate) fn indent_width(s: &str, tabstop: usize) -> usize {
 }
 /// Build a leading-whitespace string of `width` columns honoring `expandtab`
 /// (spaces) vs `noexpandtab` (tabs for full `tabstop` runs, spaces remainder).
-pub(crate) fn build_indent(width: usize, settings: &hjkl_engine::Settings) -> String {
+pub fn build_indent(width: usize, settings: &hjkl_engine::Settings) -> String {
     if settings.expandtab {
         return " ".repeat(width);
     }
@@ -551,14 +543,10 @@ pub(crate) fn build_indent(width: usize, settings: &hjkl_engine::Settings) -> St
 }
 /// `]p` / `[p` reindent: shift every line of `text` so the FIRST line's indent
 /// matches `target_width` columns; later lines keep their relative offset.
-pub(crate) fn reindent_block(
-    text: &str,
-    target_width: usize,
-    settings: &hjkl_engine::Settings,
-) -> String {
+pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::Settings) -> String {
     let ts = settings.tabstop.max(1);
     let lines: Vec<&str> = text.split('\n').collect();
-    let first_width = lines.first().map(|l| indent_width(l, ts)).unwrap_or(0);
+    let first_width = lines.first().map_or(0, |l| indent_width(l, ts));
     let delta = target_width as isize - first_width as isize;
     lines
         .iter()
@@ -575,7 +563,7 @@ pub(crate) fn reindent_block(
         .collect::<Vec<_>>()
         .join("\n")
 }
-pub(crate) fn do_paste<H: hjkl_engine::types::Host>(
+pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
     count: usize,
@@ -792,7 +780,7 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
     let start_row = cursor.row;
     // Insert column (char index). `P` inserts at the cursor; `p` after it.
     // On an empty line `p` has no char to sit after, so it inserts at col 0.
-    let cur_len = lines.get(start_row).map(|l| l.chars().count()).unwrap_or(0);
+    let cur_len = lines.get(start_row).map_or(0, |l| l.chars().count());
     let insert_col = if before {
         cursor.col
     } else if cur_len == 0 {
@@ -846,7 +834,7 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
 /// With `p` the deleted selection lands in the unnamed register (vim's swap);
 /// with `P` (`before = true`) the source register is preserved so it can be
 /// pasted over multiple selections in turn.
-pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
+pub fn visual_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
 ) {
@@ -1024,7 +1012,7 @@ pub(crate) fn visual_paste<H: hjkl_engine::types::Host>(
 /// first number on each selected line. When `sequential` is true the increment
 /// grows by `delta` for each successive number found (vim's `g<C-a>`): the
 /// first gets `delta`, the second `2*delta`, and so on.
-pub(crate) fn adjust_number_visual<H: hjkl_engine::types::Host>(
+pub fn adjust_number_visual<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     delta: i64,
     sequential: bool,

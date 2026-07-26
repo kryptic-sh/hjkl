@@ -130,10 +130,8 @@ fn worker_loop(job_rx: Receiver<GitJob>, res_tx: Sender<GitResult>) {
 
     loop {
         // Block until at least one job arrives (or channel closes).
-        let first = match job_rx.recv() {
-            Ok(j) => j,
-            Err(_) => return, // sender dropped → exit
-        };
+        // Sender dropped → exit.
+        let Ok(first) = job_rx.recv() else { return };
 
         // Drain all immediately-available additional jobs without blocking.
         let mut batch = vec![first];
@@ -155,9 +153,9 @@ fn worker_loop(job_rx: Receiver<GitJob>, res_tx: Sender<GitResult>) {
         // Each processes the most recent job for that buffer.
         let ids: Vec<BufferId> = std::mem::take(&mut queue);
         for id in ids {
-            let job = match pending.remove(&id) {
-                Some(j) => j,
-                None => continue, // already consumed by a duplicate entry
+            // Already consumed by a duplicate entry.
+            let Some(job) = pending.remove(&id) else {
+                continue;
             };
 
             // Materialize the byte buffer here on the worker thread so
@@ -301,10 +299,8 @@ fn blame_worker_loop(job_rx: Receiver<BlameJob>, res_tx: Sender<BlameResult>) {
 
     loop {
         // Block until at least one job arrives (or channel closes).
-        let first = match job_rx.recv() {
-            Ok(j) => j,
-            Err(_) => return, // sender dropped → exit
-        };
+        // Sender dropped → exit.
+        let Ok(first) = job_rx.recv() else { return };
 
         // Drain all immediately-available additional jobs without blocking.
         let mut batch = vec![first];
@@ -326,9 +322,9 @@ fn blame_worker_loop(job_rx: Receiver<BlameJob>, res_tx: Sender<BlameResult>) {
         // Each processes the most recent job for that buffer.
         let ids: Vec<BufferId> = std::mem::take(&mut queue);
         for id in ids {
-            let job = match pending.remove(&id) {
-                Some(j) => j,
-                None => continue, // already consumed by a duplicate entry
+            // Already consumed by a duplicate entry.
+            let Some(job) = pending.remove(&id) else {
+                continue;
             };
 
             // Materialise the byte buffer here on the worker thread so

@@ -207,7 +207,7 @@ fn parse_defaults_only<C: AppConfig>(defaults_toml: &str) -> Result<C, ConfigErr
 
 /// Recursively merge `from` into `into`. Nested tables merge field-by-field;
 /// scalars and arrays in `from` overwrite their counterparts in `into`.
-pub(crate) fn deep_merge(into: &mut toml::Table, from: toml::Table) {
+pub fn deep_merge(into: &mut toml::Table, from: toml::Table) {
     for (k, v) in from {
         match (into.get_mut(&k), v) {
             (Some(toml::Value::Table(into_t)), toml::Value::Table(from_t)) => {
