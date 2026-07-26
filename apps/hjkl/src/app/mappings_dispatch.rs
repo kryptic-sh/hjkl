@@ -19,10 +19,20 @@ impl App {
     /// caller must `return` immediately).  Returns `false` if
     /// `parse_runtime_map_command` returned `None` — i.e. `raw` is not a map
     /// verb — and the caller should continue with normal dispatch.
+    ///
+    /// A map verb whose key notation fails to parse also returns `true`: the
+    /// parse error is reported and dispatch stops, rather than falling through
+    /// to the generic "not an editor command" path.
     pub(crate) fn try_handle_runtime_map(&mut self, raw: &str) -> bool {
-        let Some(map_cmd) = keymap::parse_runtime_map_command(raw, self.config.editor.leader)
-        else {
+        let Some(parsed) = keymap::parse_runtime_map_command(raw, self.config.editor.leader) else {
             return false;
+        };
+        let map_cmd = match parsed {
+            Ok(cmd) => cmd,
+            Err(msg) => {
+                self.bus.error(format!("E: {msg}"));
+                return true;
+            }
         };
 
         match map_cmd {

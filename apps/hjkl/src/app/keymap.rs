@@ -260,7 +260,19 @@ pub(crate) enum RuntimeMapCommand {
     },
 }
 
-pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<RuntimeMapCommand> {
+/// Parse a `:map`-family ex command.
+///
+/// Three outcomes, kept distinct so the caller can tell "not mine" from
+/// "mine but broken":
+/// * `None` — `cmd` is not a map verb at all; the caller continues with
+///   normal ex dispatch.
+/// * `Some(Err(msg))` — `cmd` *is* a map verb but the lhs/rhs key notation
+///   is invalid; the caller reports `msg` and stops.
+/// * `Some(Ok(cmd))` — parsed successfully.
+pub(crate) fn parse_runtime_map_command(
+    cmd: &str,
+    leader: char,
+) -> Option<Result<RuntimeMapCommand, String>> {
     let cmd = cmd.trim();
     let split = cmd
         .char_indices()
@@ -272,12 +284,12 @@ pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<Runti
     let modes = parse_mode_groups(name)?;
 
     if name.ends_with("clear") {
-        return Some(RuntimeMapCommand::Clear { modes });
+        return Some(Ok(RuntimeMapCommand::Clear { modes }));
     }
 
     let is_remove = name.ends_with("unmap");
     if rest.is_empty() {
-        return Some(RuntimeMapCommand::List { modes });
+        return Some(Ok(RuntimeMapCommand::List { modes }));
     }
 
     let split = rest
@@ -285,12 +297,15 @@ pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<Runti
         .find(|(_, c)| c.is_whitespace())
         .map(|(i, _)| i)
         .unwrap_or(rest.len());
-    let (lhs, rhs) = rest.split_at(split);
-    let lhs = lhs.trim();
-    let rhs = rhs.trim();
-    let lhs = parse_key_sequence(lhs, leader).ok()?;
+    let (lhs_text, rhs_text) = rest.split_at(split);
+    let lhs_text = lhs_text.trim();
+    let rhs_text = rhs_text.trim();
+    let lhs = match parse_key_sequence(lhs_text, leader) {
+        Ok(keys) => keys,
+        Err(reason) => return Some(Err(format!("{name}: invalid lhs `{lhs_text}`: {reason}"))),
+    };
     if is_remove {
-        return Some(RuntimeMapCommand::Remove { modes, lhs });
+        return Some(Ok(RuntimeMapCommand::Remove { modes, lhs }));
     }
     let recursive = !matches!(
         name,
@@ -304,13 +319,16 @@ pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<Runti
             | "tnoremap"
             | "nm"
     );
-    let rhs = parse_key_sequence(rhs, leader).ok()?;
-    Some(RuntimeMapCommand::Add {
+    let rhs = match parse_key_sequence(rhs_text, leader) {
+        Ok(keys) => keys,
+        Err(reason) => return Some(Err(format!("{name}: invalid rhs `{rhs_text}`: {reason}"))),
+    };
+    Some(Ok(RuntimeMapCommand::Add {
         modes,
         recursive,
         lhs,
         rhs,
-    })
+    }))
 }
 
 fn display_keys(keys: &[Input]) -> String {
@@ -399,5 +417,67 @@ mod tests {
     #[test]
     fn map_mode_to_km_mode_terminal_is_none() {
         assert!(map_mode_to_km_mode(MapMode::Terminal).is_none());
+    }
+
+    #[test]
+    fn runtime_map_bad_lhs_notation_is_some_err() {
+        let out = parse_runtime_map_command("nmap <NoSuchKey> x", '\\');
+        let Some(Err(msg)) = out else {
+            panic!("bad lhs notation must be Some(Err(_))");
+        };
+        assert!(
+            msg.contains("NoSuchKey"),
+            "message must name the offending tag, got {msg:?}"
+        );
+        assert!(
+            msg.contains("nmap"),
+            "message must name the map verb, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_map_unrepresentable_lhs_is_some_err() {
+        // <F5> parses as a chord but has no engine Input equivalent.
+        let out = parse_runtime_map_command("nmap <F5> x", '\\');
+        let Some(Err(msg)) = out else {
+            panic!("unrepresentable lhs must be Some(Err(_))");
+        };
+        assert!(
+            msg.contains("F5"),
+            "message must name the offending tag, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_map_bad_rhs_notation_is_some_err() {
+        let out = parse_runtime_map_command("nmap x <F5>", '\\');
+        let Some(Err(msg)) = out else {
+            panic!("bad rhs notation must be Some(Err(_))");
+        };
+        assert!(
+            msg.contains("rhs") && msg.contains("F5"),
+            "message must flag the rhs and the tag, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn non_map_command_is_none() {
+        assert!(parse_runtime_map_command("nonsense stuff", '\\').is_none());
+    }
+
+    #[test]
+    fn valid_runtime_map_is_some_ok() {
+        let out = parse_runtime_map_command("nmap <CR> x", '\\');
+        let Some(Ok(RuntimeMapCommand::Add { lhs, rhs, .. })) = out else {
+            panic!("valid nmap must be Some(Ok(Add {{ .. }}))");
+        };
+        assert_eq!(
+            lhs,
+            vec![Input {
+                key: Key::Enter,
+                ..Input::default()
+            }]
+        );
+        assert_eq!(rhs, vec![ch('x')]);
     }
 }

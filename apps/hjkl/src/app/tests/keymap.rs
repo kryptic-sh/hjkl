@@ -211,6 +211,61 @@ fn colon_unmap_via_extracted_handler() {
 }
 
 #[test]
+fn colon_nmap_bad_key_notation_reports_error() {
+    // `:nmap <F5> x` — F5 has no engine Input, so the map cannot be created.
+    // The user must be told what's wrong instead of getting the generic
+    // "not an editor command" fallthrough (or silence).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap <F5> x");
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(
+        msg.contains("F5"),
+        "error should name the offending key notation, got: {msg:?}"
+    );
+    assert!(
+        !msg.contains("E492"),
+        "must not fall through to unknown-command handling, got: {msg:?}"
+    );
+    assert!(
+        app.user_keymap_records.is_empty(),
+        "no mapping should be created from an unparsable lhs"
+    );
+}
+
+#[test]
+fn colon_nmap_unknown_tag_reports_error() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap <NoSuchKey> x");
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(
+        msg.contains("NoSuchKey"),
+        "error should name the unknown tag, got: {msg:?}"
+    );
+    assert!(
+        app.user_keymap_records.is_empty(),
+        "no mapping should be created from an unknown tag"
+    );
+}
+
+#[test]
+fn colon_nmap_valid_still_works_after_error_path() {
+    // A valid mapping must still register (the error path must not poison it).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap <F5> x");
+    app.dispatch_ex("nmap <CR> x");
+    assert_eq!(
+        app.user_keymap_records.len(),
+        1,
+        "only the valid mapping should be recorded"
+    );
+    let msg = app.bus.last_body_or_empty().to_string();
+    assert!(
+        msg.contains("mapping added"),
+        "valid mapping should confirm, got: {msg:?}"
+    );
+}
+
+#[test]
 fn colon_mapclear_via_extracted_handler() {
     // Register two Normal-mode bindings, then mapclear; both must be gone.
     let mut app = App::new(None, false, None, None).unwrap();
