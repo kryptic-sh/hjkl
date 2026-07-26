@@ -808,7 +808,7 @@ fn handle_play_macro_target<H: Host>(
     // Read the macro text from the named register and decode back to
     // an Input stream. Empty / unset registers replay nothing.
     let text = match ed.with_registers(|r| r.read(reg).cloned()) {
-        Some(slot) if !slot.text.is_empty() => slot.text.clone(),
+        Some(slot) if !slot.text.is_empty() => slot.text,
         _ => return true,
     };
     let keys = hjkl_engine::decode_macro(&text);

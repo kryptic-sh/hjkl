@@ -253,7 +253,7 @@ pub fn sync_paired_tag_on_exit<H: crate::types::Host>(ed: &mut Editor<hjkl_buffe
     });
     ed.mutate_edit(Edit::InsertStr {
         at: start,
-        text: anchor.name.clone(),
+        text: anchor.name,
     });
     // Restore the user's cursor — mutate_edit may have moved it during the
     // partner-side rewrite when the partner is on a row before the cursor.

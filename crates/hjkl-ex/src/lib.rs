@@ -153,7 +153,7 @@ fn handle_search_address<H: hjkl_engine::Host>(
     let body = &input[1..];
     let pat_str: String = match body.strip_suffix(delim).unwrap_or(body) {
         "" => match editor.last_search() {
-            Some(p) if !p.is_empty() => p.to_string(),
+            Some(p) if !p.is_empty() => p,
             _ => return ExEffect::Error("no previous search pattern".into()),
         },
         s => s.to_string(),

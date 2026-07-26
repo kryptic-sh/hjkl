@@ -538,7 +538,7 @@ pub fn transform_block_case<H: hjkl_engine::types::Host>(
         };
         lines[r] = format!("{head}{transformed}{tail}");
     }
-    let saved_yank = ed.yank().to_string();
+    let saved_yank = ed.yank();
     let saved_linewise = ed.yank_linewise();
     ed.restore(&lines, (top, left));
     ed.set_yank(saved_yank);

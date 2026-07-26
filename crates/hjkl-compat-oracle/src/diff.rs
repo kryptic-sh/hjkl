@@ -112,7 +112,7 @@ async fn run_single(case: &OracleCase, nvim_ok: bool) -> CaseResult {
                 field: "expected_buffer (corpus author error?)",
                 expected: case.expected_buffer.clone(),
                 got_hjkl: hjkl.buffer.clone(),
-                got_nvim: nvim.buffer.clone(),
+                got_nvim: nvim.buffer,
             },
         };
     }

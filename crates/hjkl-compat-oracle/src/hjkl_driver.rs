@@ -104,7 +104,7 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     }
     .to_string();
 
-    let default_register = editor.yank().to_string();
+    let default_register = editor.yank();
 
     Ok(HjklOutcome {
         buffer: buffer_str,

@@ -1289,7 +1289,7 @@ impl App {
         }) {
             let rope = slot.buffer().rope();
             return if row < rope.len_lines() {
-                Some(hjkl_buffer::rope_line_str(&rope, row).to_string())
+                Some(hjkl_buffer::rope_line_str(&rope, row))
             } else {
                 None
             };

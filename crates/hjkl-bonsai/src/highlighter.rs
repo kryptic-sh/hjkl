@@ -1462,7 +1462,7 @@ impl Highlighter {
         let source_len = rope.len_bytes();
         let total_bytes = source_len;
         let mut cursor = QueryCursor::new();
-        cursor.set_byte_range(byte_range.clone());
+        cursor.set_byte_range(byte_range);
 
         // Rope-backed text-provider: tree-sitter calls the closure with each
         // matched node to extract its text for predicate evaluation.

@@ -91,9 +91,8 @@ pub fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
         return false;
     }
 
-    let line = match buf_line(ed.buffer(), cursor.row) {
-        Some(l) => l.to_string(),
-        None => return false,
+    let Some(line) = buf_line(ed.buffer(), cursor.row) else {
+        return false;
     };
 
     // All chars before cursor must be whitespace.

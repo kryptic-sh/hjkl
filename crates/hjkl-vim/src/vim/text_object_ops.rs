@@ -281,7 +281,7 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_buffer::Edit;
     ed.push_undo();
-    let saved_yank = ed.yank().to_string();
+    let saved_yank = ed.yank();
     let saved_yank_linewise = ed.yank_linewise();
     let selection = cut_vim_range(ed, top, bot, kind);
     let transformed = match op {

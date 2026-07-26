@@ -1214,7 +1214,7 @@ pub fn substitute_handler<H: Host>(
         // args already starts with `/` (the delimiter); pass straight to engine.
         match parse_substitute(args) {
             Ok(c) => c,
-            Err(e) => return Some(ExEffect::Error(e.to_string())),
+            Err(e) => return Some(ExEffect::Error(e)),
         }
     } else {
         // Bare `:s [flags] [count]` — repeat the last substitute's pattern
@@ -1228,7 +1228,7 @@ pub fn substitute_handler<H: Host>(
         };
         let (flags, count) = match parse_flags(trimmed) {
             Ok(fc) => fc,
-            Err(e) => return Some(ExEffect::Error(e.to_string())),
+            Err(e) => return Some(ExEffect::Error(e)),
         };
         SubstituteCmd {
             pattern: prev.pattern,
@@ -1286,7 +1286,7 @@ pub fn substitute_handler<H: Host>(
         editor.set_last_substitute(cmd.clone());
         return match collect_substitute_matches(editor, &cmd, r) {
             Ok(matches) => Some(ExEffect::SubstituteConfirm { matches }),
-            Err(e) => Some(ExEffect::Error(e.to_string())),
+            Err(e) => Some(ExEffect::Error(e)),
         };
     }
 
@@ -1308,7 +1308,7 @@ pub fn substitute_handler<H: Host>(
                 lines_changed: out.lines_changed,
             })
         }
-        Err(e) => Some(ExEffect::Error(e.to_string())),
+        Err(e) => Some(ExEffect::Error(e)),
     }
 }
 
@@ -1451,7 +1451,7 @@ pub fn repeat_substitute_handler<H: Host>(
                 lines_changed: out.lines_changed,
             }
         }
-        Err(e) => ExEffect::Error(e.to_string()),
+        Err(e) => ExEffect::Error(e),
     }
 }
 

@@ -176,7 +176,7 @@ pub fn rainbow_spans(
     };
 
     let mut cursor = QueryCursor::new();
-    cursor.set_byte_range(range.clone());
+    cursor.set_byte_range(range);
     let root = tree.root_node();
     let mut matches = cursor.matches(&compiled.query, root, source);
 

@@ -234,9 +234,7 @@ pub fn insert_newline_bridge<H: hjkl_engine::types::Host>(
     maybe_word_undo_break(ed, '\n');
 
     let cursor = buf_cursor_pos(ed.buffer());
-    let prev_line = buf_line(ed.buffer(), cursor.row)
-        .unwrap_or_default()
-        .to_string();
+    let prev_line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
 
     // Open-pair-newline: if autopair is on and the cursor is between a
     // matching open/close bracket pair, split into two newlines so the

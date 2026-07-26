@@ -520,9 +520,7 @@ impl AnvilPickerSource {
                     None => AnvilState::Available,
                     Some(r) => {
                         if r.version == spec.version {
-                            AnvilState::Installed {
-                                version: r.version.clone(),
-                            }
+                            AnvilState::Installed { version: r.version }
                         } else {
                             AnvilState::Outdated {
                                 available_version: spec.version.clone(),

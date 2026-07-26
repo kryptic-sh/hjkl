@@ -88,7 +88,7 @@ pub fn draw_prompt_line_into(
         .saturating_sub(prefix_w as usize + UnicodeWidthStr::width(display.as_str()));
     let line = Line::from(vec![
         Span::raw(prefix.to_owned()),
-        Span::styled(display.clone(), style),
+        Span::styled(display, style),
         Span::styled(" ".repeat(pad), style),
     ]);
     Paragraph::new(line).style(style).render(area, buf);
