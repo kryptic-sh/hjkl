@@ -540,7 +540,7 @@ pub fn transform_block_case<H: hjkl_engine::types::Host>(
     }
     let saved_yank = ed.yank().to_string();
     let saved_linewise = ed.yank_linewise();
-    ed.restore(lines, (top, left));
+    ed.restore(&lines, (top, left));
     ed.set_yank(saved_yank);
     ed.set_yank_linewise(saved_linewise);
 }
@@ -662,7 +662,7 @@ pub fn block_replace_bounds<H: hjkl_engine::types::Host>(
         let after: String = chars[end..].iter().collect();
         lines[r] = format!("{before}{middle}{after}");
     }
-    reset_textarea_lines(ed, lines);
+    reset_textarea_lines(ed, &lines);
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top, left);
 }
@@ -918,7 +918,7 @@ fn replace_range_with_char<H: hjkl_engine::types::Host>(
         let after: String = chars[hi..].iter().collect();
         *line = format!("{before}{middle}{after}");
     }
-    reset_textarea_lines(ed, lines);
+    reset_textarea_lines(ed, &lines);
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top.0, if linewise { 0 } else { top.1 });
 }
@@ -960,7 +960,7 @@ pub fn replay_visual_replace<H: hjkl_engine::types::Host>(
 /// rows without going through the per-edit funnel.
 pub fn reset_textarea_lines<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
-    lines: Vec<String>,
+    lines: &[String],
 ) {
     let cursor = ed.cursor();
     hjkl_engine::types::BufferEdit::replace_all(ed.buffer_mut(), &lines.join("\n"));

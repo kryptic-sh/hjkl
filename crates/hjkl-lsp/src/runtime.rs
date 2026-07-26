@@ -8,8 +8,6 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
-use std::sync::Arc;
-
 use crate::BufferId;
 use crate::config::LspConfig;
 use crate::event::{LspCommand, LspEvent, ServerKey, TextChange};
@@ -57,7 +55,7 @@ pub async fn dispatch(
                 handle_detach(id, &mut servers, &mut buffers).await;
             }
             LspCommand::NotifyChange { id, full_text } => {
-                handle_notify_change(id, full_text, &mut servers, &mut buffers);
+                handle_notify_change(id, &full_text, &mut servers, &mut buffers);
             }
             LspCommand::NotifyChangeIncremental { id, changes } => {
                 handle_notify_change_incremental(id, changes, &mut servers, &mut buffers);
@@ -238,7 +236,7 @@ fn handle_request(
 
 fn handle_notify_change(
     id: BufferId,
-    full_text: Arc<String>,
+    full_text: &str,
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
@@ -255,7 +253,7 @@ fn handle_notify_change(
             "textDocument/didChange",
             json!({
                 "textDocument": { "uri": uri, "version": version },
-                "contentChanges": [{ "text": full_text.as_str() }],
+                "contentChanges": [{ "text": full_text }],
             }),
         );
     }

@@ -153,21 +153,21 @@ impl AsyncGrammarLoader {
     /// job — no duplicate clone+compile. If `lookup_fresh` would succeed (grammar
     /// already cached), the job is still enqueued but will complete almost
     /// immediately since `GrammarLoader::load` short-circuits.
-    pub fn load_async(&self, name: String, spec: LangSpec, meta: ManifestMeta) -> LoadHandle {
+    pub fn load_async(&self, name: &str, spec: LangSpec, meta: ManifestMeta) -> LoadHandle {
         let (tx, rx) = mpsc::channel();
 
         let mut map = self.in_flight.lock().expect("in_flight mutex poisoned");
-        if let Some(senders) = map.get_mut(&name) {
+        if let Some(senders) = map.get_mut(name) {
             // Already in-flight — subscribe.
             senders.push(tx);
         } else {
             // First caller — insert and enqueue.
-            map.insert(name.clone(), vec![tx]);
+            map.insert(name.to_string(), vec![tx]);
             drop(map); // Release lock before sending to avoid potential deadlock.
             if self
                 .job_tx
                 .send(Job {
-                    name: name.clone(),
+                    name: name.to_string(),
                     spec,
                     meta,
                 })
@@ -177,7 +177,7 @@ impl AsyncGrammarLoader {
                     .in_flight
                     .lock()
                     .expect("in_flight mutex poisoned")
-                    .remove(&name)
+                    .remove(name)
                     .unwrap_or_default();
                 for sender in senders {
                     let _ = sender.send(Err(LoadError::DispatchFailed));

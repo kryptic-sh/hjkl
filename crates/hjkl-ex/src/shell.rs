@@ -152,7 +152,7 @@ pub fn shell_filter_handler<H: Host>(
     all_lines.truncate(start);
     all_lines.extend(new_rows);
     all_lines.extend(after);
-    editor.restore(all_lines, (start, 0));
+    editor.restore(&all_lines, (start, 0));
     editor.mark_content_dirty();
     ExEffect::Ok
 }

@@ -149,8 +149,13 @@ impl View {
     ///   be invalid. Re-derive from row / col deltas; do not cache.
     pub fn apply_edit(&mut self, edit: Edit) -> Edit {
         match edit {
-            Edit::InsertChar { at, ch } => self.do_insert_str(at, ch.to_string()),
-            Edit::InsertStr { at, text } => self.do_insert_str(at, text),
+            Edit::InsertChar { at, ch } => {
+                // Encode in place — a per-keystroke `String` allocation for a
+                // single char is pure overhead on the insert-mode hot path.
+                let mut buf = [0u8; 4];
+                self.do_insert_str(at, ch.encode_utf8(&mut buf))
+            }
+            Edit::InsertStr { at, text } => self.do_insert_str(at, &text),
             Edit::DeleteRange { start, end, kind } => self.do_delete_range(start, end, kind),
             Edit::JoinLines {
                 row,
@@ -161,11 +166,11 @@ impl View {
                 row,
                 cols,
                 inserted_spaces,
-            } => self.do_split_lines(row, cols, inserted_spaces),
-            Edit::Replace { start, end, with } => self.do_replace(start, end, with),
+            } => self.do_split_lines(row, &cols, &inserted_spaces),
+            Edit::Replace { start, end, with } => self.do_replace(start, end, &with),
             Edit::InsertBlock { at, chunks } => self.do_insert_block(at, chunks),
             Edit::DeleteBlockChunks { at, widths, pads } => {
-                self.do_delete_block_chunks(at, widths, pads)
+                self.do_delete_block_chunks(at, &widths, &pads)
             }
         }
     }
@@ -211,14 +216,9 @@ impl View {
         Edit::DeleteBlockChunks { at, widths, pads }
     }
 
-    fn do_delete_block_chunks(
-        &mut self,
-        at: Position,
-        widths: Vec<usize>,
-        pads: Vec<usize>,
-    ) -> Edit {
+    fn do_delete_block_chunks(&mut self, at: Position, widths: &[usize], pads: &[usize]) -> Edit {
         let mut chunks: Vec<String> = Vec::with_capacity(widths.len());
-        for (i, w) in widths.into_iter().enumerate() {
+        for (i, &w) in widths.iter().enumerate() {
             let pad = pads.get(i).copied().unwrap_or(0);
             let row = at.row + i;
             let removed = {
@@ -256,7 +256,7 @@ impl View {
         Edit::InsertBlock { at, chunks }
     }
 
-    fn do_insert_str(&mut self, at: Position, text: String) -> Edit {
+    fn do_insert_str(&mut self, at: Position, text: &str) -> Edit {
         let normalised = self.clamp_position(at);
         let inserted_chars = text.chars().count();
         let inserted_lines = text.split('\n').count();
@@ -269,7 +269,7 @@ impl View {
         {
             let mut c = self.content.lock().unwrap();
             let char_idx = pos_to_char_idx(&c.text, normalised.row, normalised.col);
-            c.text.insert(char_idx, &text);
+            c.text.insert(char_idx, text);
         }
         self.dirty_gen_bump();
         self.set_cursor(end);
@@ -481,7 +481,7 @@ impl View {
         }
     }
 
-    fn do_split_lines(&mut self, row: usize, cols: Vec<usize>, inserted_spaces: Vec<bool>) -> Edit {
+    fn do_split_lines(&mut self, row: usize, cols: &[usize], inserted_spaces: &[bool]) -> Edit {
         let actual_row = {
             let mut c = self.content.lock().unwrap();
             let n = c.text.len_lines();
@@ -535,7 +535,7 @@ impl View {
         }
     }
 
-    fn do_replace(&mut self, start: Position, end: Position, with: String) -> Edit {
+    fn do_replace(&mut self, start: Position, end: Position, with: &str) -> Edit {
         let (start, end) = order(start, end);
         let removed = {
             let mut c = self.content.lock().unwrap();
@@ -553,7 +553,7 @@ impl View {
         {
             let mut c = self.content.lock().unwrap();
             let char_idx = pos_to_char_idx(&c.text, normalised.row, normalised.col);
-            c.text.insert(char_idx, &with);
+            c.text.insert(char_idx, with);
         }
         self.dirty_gen_bump();
         self.set_cursor(new_end);

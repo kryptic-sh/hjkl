@@ -588,7 +588,7 @@ impl SyntaxLayer {
                     let name = self.pending_loads[i].name.clone();
                     let bid = self.pending_loads[i].id;
                     self.pending_loads.swap_remove(i);
-                    match self.directory.complete_load(&name, lib_path) {
+                    match self.directory.complete_load(&name, &lib_path) {
                         Ok(grammar) => {
                             self.attach_grammar(bid, grammar.clone());
                             let c = self.client_mut(bid);

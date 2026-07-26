@@ -36,7 +36,7 @@
 pub mod comment;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -155,7 +155,7 @@ impl LanguageDirectory {
         // Slow path: kick off (or subscribe to) a background clone+compile.
         let handle = self
             .async_loader
-            .load_async(name.to_string(), spec.clone(), meta.clone());
+            .load_async(name, spec.clone(), meta.clone());
         GrammarRequest::Loading {
             name: name.to_string(),
             handle,
@@ -173,8 +173,8 @@ impl LanguageDirectory {
     /// Called by the consumer when a `Loading` handle resolves with
     /// `Some(Ok(lib_path))`. Constructs the `Grammar`, caches it, returns
     /// the `Arc`.
-    pub fn complete_load(&self, name: &str, lib_path: PathBuf) -> Result<Arc<Grammar>> {
-        let grammar = Grammar::load_from_path(name, &lib_path)?;
+    pub fn complete_load(&self, name: &str, lib_path: &Path) -> Result<Arc<Grammar>> {
+        let grammar = Grammar::load_from_path(name, lib_path)?;
         Ok(self.cache_insert(name, grammar))
     }
 
@@ -218,6 +218,8 @@ impl LanguageDirectory {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]

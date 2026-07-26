@@ -1052,7 +1052,7 @@ fn sort_handler<H: Host>(
     all_lines.extend(after);
 
     editor.push_undo();
-    editor.restore(all_lines, (start_row, 0));
+    editor.restore(&all_lines, (start_row, 0));
     editor.mark_content_dirty();
     Some(ExEffect::Ok)
 }
@@ -1150,7 +1150,7 @@ fn line_relocate_handler<H: Host>(
     };
 
     editor.push_undo();
-    editor.restore(all_lines, (cursor_row, 0));
+    editor.restore(&all_lines, (cursor_row, 0));
     editor.mark_content_dirty();
     Some(ExEffect::Ok)
 }
@@ -3128,7 +3128,7 @@ fn uncomment_handler<H: Host>(
     let mut all: Vec<String> = all_before;
     all.extend(new_lines);
     all.extend(all_after);
-    editor.restore(all, (top_c, 0));
+    editor.restore(&all, (top_c, 0));
 
     Some(ExEffect::Ok)
 }
@@ -3422,7 +3422,7 @@ fn retab_impl<H: Host>(
     }
 
     editor.push_undo();
-    editor.restore(new_lines, (start_row, 0));
+    editor.restore(&new_lines, (start_row, 0));
     editor.mark_content_dirty();
     Some(ExEffect::Ok)
 }

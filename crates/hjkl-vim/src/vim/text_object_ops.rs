@@ -169,7 +169,7 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     lines.truncate(top);
     lines.extend(wrapped);
     lines.extend(after);
-    ed.restore(lines, (last_row, 0));
+    ed.restore(&lines, (last_row, 0));
     move_first_non_whitespace(ed);
     ed.mark_content_dirty();
 }
@@ -194,7 +194,7 @@ pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     lines.truncate(top);
     lines.extend(wrapped.clone());
     lines.extend(after);
-    ed.restore(lines, (top, 0));
+    ed.restore(&lines, (top, 0));
     ed.mark_content_dirty();
     (original, wrapped)
 }
@@ -335,7 +335,7 @@ pub fn indent_rows<H: hjkl_engine::types::Host>(
     }
     // Restore cursor to first non-blank of the top row so the next
     // vertical motion aims sensibly — matches vim's `>>` convention.
-    ed.restore(lines, (top, 0));
+    ed.restore(&lines, (top, 0));
     move_first_non_whitespace(ed);
 }
 /// Remove up to `count * shiftwidth` leading spaces (or tabs) from
@@ -362,7 +362,7 @@ pub fn outdent_rows<H: hjkl_engine::types::Host>(
             line.drain(..byte_len);
         }
     }
-    ed.restore(lines, (top, 0));
+    ed.restore(&lines, (top, 0));
     move_first_non_whitespace(ed);
 }
 /// Count the number of open/close bracket pairs on a single line for the
@@ -534,7 +534,7 @@ pub fn auto_indent_rows<H: hjkl_engine::types::Host>(
     }
 
     // Restore cursor to the first non-blank of `top` (vim parity for `==`).
-    ed.restore(lines, (top, 0));
+    ed.restore(&lines, (top, 0));
     move_first_non_whitespace(ed);
     // Record the touched row range so the host can display a visual flash.
     ed.set_last_indent_range(Some((top, bot)));

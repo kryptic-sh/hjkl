@@ -128,7 +128,7 @@ impl Server {
 
     /// Send a JSON-RPC notification (no response expected).
     pub fn send_notification(&mut self, method: &str, params: Value) {
-        self.enqueue(rpc_envelope(None, method, params));
+        self.enqueue(&rpc_envelope(None, method, params));
     }
 
     /// Send a JSON-RPC request, mapping the server's internal id back to
@@ -144,7 +144,7 @@ impl Server {
         if let Ok(mut map) = self.pending.lock() {
             map.insert(id, app_id);
         }
-        self.enqueue(rpc_envelope(Some(id), method, params));
+        self.enqueue(&rpc_envelope(Some(id), method, params));
     }
 
     /// Gracefully shut down: send `shutdown` request, then `exit` notification,
@@ -179,8 +179,8 @@ impl Server {
         }
     }
 
-    fn enqueue(&self, msg: Value) {
-        match serde_json::to_vec(&msg) {
+    fn enqueue(&self, msg: &Value) {
+        match serde_json::to_vec(msg) {
             Ok(bytes) => {
                 let _ = self.stdin_tx.send(bytes);
             }
@@ -437,7 +437,7 @@ async fn stdout_task<R: AsyncRead + Unpin>(
             }
         };
 
-        dispatch_message(&key, val, &evt_tx, &pending, &stdin_tx);
+        dispatch_message(&key, &val, &evt_tx, &pending, &stdin_tx);
     }
 }
 
@@ -445,7 +445,7 @@ async fn stdout_task<R: AsyncRead + Unpin>(
 /// request (auto-answered via `stdin_tx`), or a notification.
 fn dispatch_message(
     key: &ServerKey,
-    val: Value,
+    val: &Value,
     evt_tx: &Sender<LspEvent>,
     pending: &PendingMap,
     stdin_tx: &mpsc::UnboundedSender<Vec<u8>>,

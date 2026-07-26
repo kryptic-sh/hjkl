@@ -2018,17 +2018,17 @@ impl App {
                     }
                 }
                 if let Some(cmd) = ca.command {
-                    self.lsp_execute_command(&cmd.command, cmd.arguments.unwrap_or_default());
+                    self.lsp_execute_command(&cmd.command, &cmd.arguments.unwrap_or_default());
                 }
             }
             lsp_types::CodeActionOrCommand::Command(cmd) => {
-                self.lsp_execute_command(&cmd.command, cmd.arguments.unwrap_or_default());
+                self.lsp_execute_command(&cmd.command, &cmd.arguments.unwrap_or_default());
             }
         }
     }
 
     /// Fire-and-forget `workspace/executeCommand`. Phase 5: no response handling.
-    fn lsp_execute_command(&mut self, command: &str, args: Vec<serde_json::Value>) {
+    fn lsp_execute_command(&mut self, command: &str, args: &[serde_json::Value]) {
         let buffer_id = self.active().buffer_id as hjkl_lsp::BufferId;
         let request_id = self.lsp_alloc_request_id();
         let params = json!({

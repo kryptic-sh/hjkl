@@ -4430,7 +4430,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let (cur_rope, cur_cursor) = self.snapshot();
             let cur_marks = self.snapshot_marks();
             if let Some(entry) = self.buffer.undo_step(cur_rope, cur_cursor, cur_marks) {
-                self.restore_rope(entry.rope, entry.cursor);
+                self.restore_rope(&entry.rope, entry.cursor);
                 self.restore_marks(&entry.marks);
             }
         }
@@ -4445,7 +4445,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let before = cur_rope.clone();
             if let Some(entry) = self.buffer.redo_step(cur_rope, cur_cursor, cur_marks) {
                 self.cap_undo();
-                self.restore_rope(entry.rope, entry.cursor);
+                self.restore_rope(&entry.rope, entry.cursor);
                 self.restore_marks(&entry.marks);
                 // Park the cursor at the START of the reapplied change rather
                 // than the end-of-insert position stored in the redo snapshot
@@ -4595,7 +4595,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .buffer
             .seq_earlier_step(cur_rope, cur_cursor, cur_marks)
         {
-            self.restore_rope(entry.rope, entry.cursor);
+            self.restore_rope(&entry.rope, entry.cursor);
             self.restore_marks(&entry.marks);
             self.settle_after_history_jump();
             true
@@ -4614,7 +4614,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let before = cur_rope.clone();
         if let Some(entry) = self.buffer.seq_later_step(cur_rope, cur_cursor, cur_marks) {
             self.cap_undo();
-            self.restore_rope(entry.rope, entry.cursor);
+            self.restore_rope(&entry.rope, entry.cursor);
             self.restore_marks(&entry.marks);
             let after = crate::types::Query::rope(&self.buffer);
             if let Some((row, col)) = first_diff_pos(&before, &after) {
@@ -4790,7 +4790,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// only the changed rows instead of the full viewport. Big undos
     /// that revert a large paste now refresh in ~1ms per affected
     /// row instead of a ~30ms full-viewport sync walk.
-    pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
+    pub fn restore(&mut self, lines: &[String], cursor: (usize, usize)) {
         let text = lines.join("\n");
         self.restore_text(&text, cursor);
     }
@@ -4805,7 +4805,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// — paying the cost on the restore side instead of the snapshot
     /// side trades one ~3 MB build per undo for none-per-snapshot. Undo
     /// is user-initiated and rare; snapshots fire on every `i` / `o`.
-    pub fn restore_rope(&mut self, rope: ropey::Rope, cursor: (usize, usize)) {
+    pub fn restore_rope(&mut self, rope: &ropey::Rope, cursor: (usize, usize)) {
         let text = rope.to_string();
         self.restore_text(&text, cursor);
     }
