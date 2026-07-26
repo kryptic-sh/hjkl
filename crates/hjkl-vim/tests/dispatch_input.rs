@@ -541,7 +541,10 @@ fn macro_records_literal_q_in_insert_mode() {
 /// desynchronising by reusing the next recorded key.
 #[test]
 fn macro_records_q_as_pending_target() {
-    let mut e = editor_with("qx\n");
+    // `q` must sit off col 0 so `fq` has somewhere to move to — with the
+    // cursor already on the `q`, a no-op `fq` would satisfy the cursor
+    // assertion below vacuously.
+    let mut e = editor_with("xq\n");
     dispatch_keys(&mut e, "qb0fqq");
     let text = e
         .with_registers(|r| r.read('b').map(|slot| slot.text.clone()))
@@ -553,8 +556,8 @@ fn macro_records_q_as_pending_target() {
     // The cursor should have landed on 'q' during recording.
     assert_eq!(
         e.cursor(),
-        (0, 0),
-        "fq must move cursor to col 0 (the q char); got {:?}",
+        (0, 1),
+        "fq must land on the q at col 1 while recording; got {:?}",
         e.cursor()
     );
 }

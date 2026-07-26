@@ -184,3 +184,60 @@ where
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use hjkl_buffer::{Position, View, Wrap};
+
+    use super::*;
+    use crate::types::NoopFoldProvider;
+
+    fn vp_wrap(width: u16, height: u16) -> Viewport {
+        Viewport {
+            top_row: 0,
+            top_col: 0,
+            width,
+            height,
+            wrap: Wrap::Char,
+            text_width: width,
+            tab_width: 0,
+        }
+    }
+
+    /// Regression (commit 5b99fbdb, engine port of the buffer-side
+    /// `cursor_screen_row_survives_shrink_from_other_view`): a per-window
+    /// cursor goes stale when *another* view shrinks the shared `Buffer`.
+    /// `Query::line` panics past the last line by spec, so
+    /// `cursor_screen_row_from` must clamp the cursor row to the live
+    /// document instead of indexing off the end.
+    #[test]
+    fn cursor_row_past_eof_is_clamped_not_panicking() {
+        let seed = View::from_str("a\nb\nc\nd\ne");
+        let arc = seed.content_arc();
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
+        view_b.set_cursor(Position::new(4, 0));
+        // view_a truncates the shared document to a single row. view_b never
+        // moved, so its cursor row 4 is now past EOF.
+        view_a.replace_all("a");
+        assert_eq!(Query::line_count(&view_b), 1, "shared buffer must shrink");
+        assert_eq!(
+            Cursor::cursor(&view_b).line,
+            4,
+            "view_b's cursor must still be the stale row (test precondition)"
+        );
+
+        let vp = vp_wrap(4, 3);
+        let folds = NoopFoldProvider;
+        // Unclamped this panics inside `Query::line(buf, 4)`; clamped it
+        // reports the only remaining row's screen row.
+        assert_eq!(cursor_screen_row_from(&view_b, &folds, &vp, 0), Some(0));
+
+        // Same stale shape through the scroll path, which feeds candidate
+        // tops into `cursor_screen_row_from`.
+        let mut vp2 = vp_wrap(4, 3);
+        ensure_cursor_visible(&view_b, &folds, &mut vp2); // must not panic
+    }
+}
