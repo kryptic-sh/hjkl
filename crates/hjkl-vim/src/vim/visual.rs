@@ -64,6 +64,51 @@ pub(crate) fn enter_visual_block_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).block_to_eol = false;
     set_vim_mode_bridge(ed, Mode::VisualBlock);
 }
+/// Compute the `'<` / `'>` mark positions implied by a visual-mode exit.
+///
+/// Returns `(lo, hi)` — the low and high mark, always position-ordered, never
+/// selection-ordered. Per flavour:
+///
+/// - `Visual` — the snapshot's anchor/cursor sorted by `(row, col)`.
+/// - `VisualLine` — `(top_row, 0)` and `(bot_row, last_col)`, where `last_col`
+///   is the **char** count of the bottom row minus one (char columns, not
+///   bytes and not graphemes — matches the rest of the FSM's column math).
+/// - `VisualBlock` — the block's top-left / bottom-right corners, which are
+///   *not* the tuple-ordered anchor/cursor.
+///
+/// Single source of truth for both visual-exit sites: the FSM epilogue in
+/// [`crate::step::end_step`] and the out-of-FSM [`exit_visual_to_normal_bridge`].
+pub(crate) fn visual_marks_range<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    snap: &LastVisual,
+) -> ((usize, usize), (usize, usize)) {
+    match snap.mode {
+        Mode::VisualLine => {
+            let r_lo = snap.anchor.0.min(snap.cursor.0);
+            let r_hi = snap.anchor.0.max(snap.cursor.0);
+            let vl_rope = ed.buffer().rope();
+            let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
+            let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
+                .chars()
+                .count()
+                .saturating_sub(1);
+            ((r_lo, 0), (r_hi, last_col))
+        }
+        Mode::VisualBlock => {
+            let (r1, c1) = snap.anchor;
+            let (r2, c2) = snap.cursor;
+            ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
+        }
+        // `Visual` and every non-visual mode share the plain sorted-pair rule.
+        _ => {
+            if snap.anchor <= snap.cursor {
+                (snap.anchor, snap.cursor)
+            } else {
+                (snap.cursor, snap.anchor)
+            }
+        }
+    }
+}
 /// Esc from any visual mode — set `<` / `>` marks (per `:h v_:`), stash the
 /// selection for `gv` re-entry, and return to Normal. Replicates the
 /// `pre_visual_snapshot` logic in `step()` so callers outside the FSM get
@@ -98,42 +143,11 @@ pub(crate) fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).count = 0;
     vim_mut(ed).insert_session = None;
     set_vim_mode_bridge(ed, Mode::Normal);
-    // Set `<` / `>` marks and stash `last_visual` — mirrors the post-step
-    // logic in `step()` that fires when a visual → non-visual transition
-    // is detected.
+    // Set `<` / `>` marks and stash `last_visual` — the same epilogue the FSM
+    // runs when it detects a visual → non-visual transition, sharing the mark
+    // math via `visual_marks_range`.
     if let Some(snap) = snap {
-        let (lo, hi) = match snap.mode {
-            Mode::Visual => {
-                if snap.anchor <= snap.cursor {
-                    (snap.anchor, snap.cursor)
-                } else {
-                    (snap.cursor, snap.anchor)
-                }
-            }
-            Mode::VisualLine => {
-                let r_lo = snap.anchor.0.min(snap.cursor.0);
-                let r_hi = snap.anchor.0.max(snap.cursor.0);
-                let vl_rope = ed.buffer().rope();
-                let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
-                let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
-                    .chars()
-                    .count()
-                    .saturating_sub(1);
-                ((r_lo, 0), (r_hi, last_col))
-            }
-            Mode::VisualBlock => {
-                let (r1, c1) = snap.anchor;
-                let (r2, c2) = snap.cursor;
-                ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
-            }
-            _ => {
-                if snap.anchor <= snap.cursor {
-                    (snap.anchor, snap.cursor)
-                } else {
-                    (snap.cursor, snap.anchor)
-                }
-            }
-        };
+        let (lo, hi) = visual_marks_range(ed, &snap);
         ed.set_mark('<', lo);
         ed.set_mark('>', hi);
         vim_mut(ed).last_visual = Some(snap);

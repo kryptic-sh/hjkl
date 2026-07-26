@@ -118,38 +118,7 @@ pub(crate) fn end_step<H: hjkl_engine::Host>(
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         )
     {
-        let (lo, hi) = match snap.mode {
-            Mode::Visual => {
-                if snap.anchor <= snap.cursor {
-                    (snap.anchor, snap.cursor)
-                } else {
-                    (snap.cursor, snap.anchor)
-                }
-            }
-            Mode::VisualLine => {
-                let r_lo = snap.anchor.0.min(snap.cursor.0);
-                let r_hi = snap.anchor.0.max(snap.cursor.0);
-                let vl_rope = ed.buffer().rope();
-                let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
-                let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
-                    .chars()
-                    .count()
-                    .saturating_sub(1);
-                ((r_lo, 0), (r_hi, last_col))
-            }
-            Mode::VisualBlock => {
-                let (r1, c1) = snap.anchor;
-                let (r2, c2) = snap.cursor;
-                ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
-            }
-            _ => {
-                if snap.anchor <= snap.cursor {
-                    (snap.anchor, snap.cursor)
-                } else {
-                    (snap.cursor, snap.anchor)
-                }
-            }
-        };
+        let (lo, hi) = crate::vim::visual::visual_marks_range(ed, &snap);
         ed.set_mark('<', lo);
         ed.set_mark('>', hi);
         crate::vim_state::vim_mut(ed).last_visual = Some(snap);
