@@ -346,24 +346,20 @@ pub(crate) fn finish_insert_session<H: hjkl_engine::types::Host>(
         }
     }
 }
-pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
+/// Open an [`InsertSession`] and switch to Insert WITHOUT pushing an undo
+/// snapshot — for callers that already pushed one before mutating the buffer
+/// (`o`/`O`, `c{motion}`, `C`, visual change: push_undo → edit → enter insert),
+/// so the whole operation collapses into a single undo stop.
+///
+/// This is the one place insert-session bookkeeping is set up;
+/// [`begin_insert`] adds the entry guards plus the undo push and delegates
+/// here. Insert-session state feeds undo grouping and dot-repeat, so it must
+/// not be spelled out twice.
+pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
     reason: InsertReason,
 ) {
-    // `nomodifiable`: silently refuse to enter insert/replace; stay in current mode.
-    if !ed.settings().modifiable {
-        return;
-    }
-    // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
-    if ed.view_mode() == hjkl_engine::ViewMode::Blame {
-        ed.set_view_mode(hjkl_engine::ViewMode::Normal);
-        return;
-    }
-    let record = !matches!(reason, InsertReason::ReplayOnly);
-    if record {
-        ed.push_undo();
-    }
     let reason = if vim(ed).replaying {
         InsertReason::ReplayOnly
     } else {
@@ -383,6 +379,29 @@ pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
     vim_mut(ed).current_mode = hjkl_engine::VimMode::Insert;
     drop_blame_if_left_normal(ed);
+}
+/// Enter Insert from Normal (`i`/`a`/`I`/`A`/`R`, `gi`, …): check the
+/// entry guards, push the undo snapshot, then hand session setup to
+/// [`begin_insert_noundo`].
+pub(crate) fn begin_insert<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+    reason: InsertReason,
+) {
+    // `nomodifiable`: silently refuse to enter insert/replace; stay in current mode.
+    if !ed.settings().modifiable {
+        return;
+    }
+    // BLAME view: pressing `i` exits blame (drops the overlay) but stays Normal.
+    if ed.view_mode() == hjkl_engine::ViewMode::Blame {
+        ed.set_view_mode(hjkl_engine::ViewMode::Normal);
+        return;
+    }
+    let record = !matches!(reason, InsertReason::ReplayOnly);
+    if record {
+        ed.push_undo();
+    }
+    begin_insert_noundo(ed, count, reason);
 }
 /// `:set undobreak` semantics for insert-mode motions. When the
 /// toggle is on, a non-character keystroke that moves the cursor

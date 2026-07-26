@@ -4140,6 +4140,58 @@ fn undobreak_round_trips_through_options() {
     assert!(!e2.current_options().undo_break_on_motion);
 }
 
+/// `c{motion}` enters insert through the no-push_undo path: the operator
+/// already snapshotted before cutting the text. Cut + typed replacement
+/// must therefore collapse into exactly ONE undo stop — a single `u`
+/// restores the pre-operation line, and a second `u` finds nothing left.
+#[test]
+fn change_word_is_one_undo_stop() {
+    let mut e = editor_with("foo bar");
+    run_keys(&mut e, "cwbaz<Esc>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "baz bar");
+    run_keys(&mut e, "u");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo bar",
+        "one `u` must revert the whole change operation"
+    );
+    run_keys(&mut e, "u");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo bar",
+        "the change must have left exactly one undo stop"
+    );
+}
+
+/// `C` (delete-to-EOL then insert) shares the same no-push_undo entry —
+/// one `u` restores the deleted tail together with the typed text.
+#[test]
+fn change_to_eol_is_one_undo_stop() {
+    let mut e = editor_with("foo bar");
+    run_keys(&mut e, "Cx<Esc>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x");
+    run_keys(&mut e, "u");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo bar");
+}
+
+/// `o` opens the line before entering insert (undo already pushed), so the
+/// new line plus everything typed on it is a single undo unit.
+#[test]
+fn open_below_is_one_undo_stop() {
+    let mut e = editor_with("one\ntwo");
+    run_keys(&mut e, "onew<Esc>");
+    assert_eq!(e.buffer().row_count(), 3);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "new");
+    run_keys(&mut e, "u");
+    assert_eq!(
+        e.buffer().row_count(),
+        2,
+        "one `u` must drop the opened line"
+    );
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "one");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "two");
+}
+
 #[test]
 fn undo_levels_cap_drops_oldest() {
     let mut e = editor_with("abcde");

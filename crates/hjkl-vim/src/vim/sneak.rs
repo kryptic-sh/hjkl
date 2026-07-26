@@ -2,10 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{
-    InsertReason, InsertSession, LastChange, LastHorizontalMotion, Mode, Motion, Operator,
-    RangeKind, TextObject,
-};
+use hjkl_vim_types::{LastChange, LastHorizontalMotion, Motion, Operator, RangeKind, TextObject};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -253,32 +250,6 @@ pub(crate) fn retreat_one<H: hjkl_engine::types::Host>(
     } else {
         (0, 0)
     }
-}
-/// Variant of begin_insert that doesn't push_undo (caller already did).
-pub(crate) fn begin_insert_noundo<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-    count: usize,
-    reason: InsertReason,
-) {
-    let reason = if vim(ed).replaying {
-        InsertReason::ReplayOnly
-    } else {
-        reason
-    };
-    let (row, col) = ed.cursor();
-    vim_mut(ed).insert_session = Some(InsertSession {
-        count,
-        row_min: row,
-        row_max: row,
-        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
-        reason,
-        start_row: row,
-        start_col: col,
-    });
-    vim_mut(ed).mode = Mode::Insert;
-    // Phase 6.3: keep current_mode in sync for callers that bypass step().
-    vim_mut(ed).current_mode = hjkl_engine::VimMode::Insert;
-    drop_blame_if_left_normal(ed);
 }
 #[cfg(test)]
 mod sneak_tests {
