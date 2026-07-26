@@ -386,7 +386,7 @@ fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     let target = std::fs::read_link(src)?;
     // Windows distinguishes file and directory symlinks; probe the (followed)
     // metadata to pick, defaulting to a file symlink for dangling links.
-    if std::fs::metadata(src).map(|m| m.is_dir()).unwrap_or(false) {
+    if std::fs::metadata(src).is_ok_and(|m| m.is_dir()) {
         std::os::windows::fs::symlink_dir(target, dst)
     } else {
         std::os::windows::fs::symlink_file(target, dst)

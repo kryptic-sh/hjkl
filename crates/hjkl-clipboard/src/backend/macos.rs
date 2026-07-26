@@ -353,7 +353,8 @@ fn uti_to_mime(name: &str) -> Option<MimeType> {
 // Backend impl.
 // ---------------------------------------------------------------------------
 
-pub(crate) struct MacosBackend;
+/// macOS pasteboard backend. Unit struct — all state lives in NSPasteboard.
+pub struct MacosBackend;
 
 impl MacosBackend {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

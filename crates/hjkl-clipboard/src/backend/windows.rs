@@ -663,7 +663,9 @@ fn get_png() -> Result<Vec<u8>, ClipboardError> {
 // Backend impl.
 // ---------------------------------------------------------------------------
 
-pub(crate) struct WindowsBackend;
+/// Windows clipboard backend. Unit struct — all state lives in the Win32
+/// clipboard.
+pub struct WindowsBackend;
 
 impl WindowsBackend {
     #[allow(dead_code)]
