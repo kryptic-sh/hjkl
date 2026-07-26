@@ -143,7 +143,7 @@ fn parse_offset_chain(mut s: &str) -> (i64, &str) {
                 Err(_) => break,
             }
         };
-        total += sign * magnitude;
+        total = total.saturating_add(sign * magnitude);
         s = &after_sign[end..];
     }
     (total, s)
@@ -191,7 +191,7 @@ fn resolve_address<H: hjkl_engine::Host>(
             resolve_search_address(&pattern, forward, editor, from_row)?
         }
     };
-    Ok((base + offset).clamp(1, last as i64) as usize)
+    Ok((base.saturating_add(offset)).clamp(1, last as i64) as usize)
 }
 
 /// B4: resolve `/pat/` (`forward = true`) / `?pat?` (`forward = false`) to a

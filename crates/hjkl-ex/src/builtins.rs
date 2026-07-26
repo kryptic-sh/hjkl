@@ -657,7 +657,9 @@ fn resolve_range_with_count<H: Host>(
     Some(match count {
         Some(n) => {
             let s = end_row;
-            let e = (s + n - 1).min(total.saturating_sub(1));
+            let e = s
+                .saturating_add(n.saturating_sub(1))
+                .min(total.saturating_sub(1));
             (s, e)
         }
         None => (start_row, end_row),
@@ -1254,7 +1256,7 @@ pub(crate) fn substitute_handler<H: Host>(
     // to the buffer, so a huge count is harmless.
     if let Some(n) = cmd.count {
         let start = *r.end();
-        let end = start.saturating_add(n as u32 - 1);
+        let end = start.saturating_add((n as u32).saturating_sub(1));
         r = start..=end;
     }
 
