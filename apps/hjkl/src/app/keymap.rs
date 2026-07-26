@@ -1,3 +1,4 @@
+use hjkl_engine::input::encode_macro;
 use hjkl_engine::{Input, Key, VimMode};
 use hjkl_keymap::{Chord, KeyCode as KmKeyCode, KeyModifiers, key::KeyEvent};
 
@@ -52,8 +53,8 @@ pub(crate) fn format_user_map_list(records: &[UserKeymapRecord], modes: &[MapMod
             lines.push(format!(
                 "  {} {} {}",
                 if r.recursive { "map" } else { "noremap" },
-                display_keys(&r.lhs),
-                display_keys(&r.rhs)
+                encode_macro(&r.lhs),
+                encode_macro(&r.rhs)
             ));
         }
     }
@@ -331,41 +332,6 @@ pub(crate) fn parse_runtime_map_command(
     }))
 }
 
-fn display_keys(keys: &[Input]) -> String {
-    let mut out = String::new();
-    for input in keys {
-        match input.key {
-            Key::Char(c) if input.ctrl => {
-                out.push_str("<C-");
-                out.push(c);
-                out.push('>');
-            }
-            Key::Char(c) if input.alt => {
-                out.push_str("<M-");
-                out.push(c);
-                out.push('>');
-            }
-            Key::Char('<') => out.push_str("<lt>"),
-            Key::Char(c) => out.push(c),
-            Key::Esc => out.push_str("<Esc>"),
-            Key::Enter => out.push_str("<CR>"),
-            Key::Backspace => out.push_str("<BS>"),
-            Key::Tab => out.push_str("<Tab>"),
-            Key::Up => out.push_str("<Up>"),
-            Key::Down => out.push_str("<Down>"),
-            Key::Left => out.push_str("<Left>"),
-            Key::Right => out.push_str("<Right>"),
-            Key::Delete => out.push_str("<Del>"),
-            Key::Home => out.push_str("<Home>"),
-            Key::End => out.push_str("<End>"),
-            Key::PageUp => out.push_str("<PageUp>"),
-            Key::PageDown => out.push_str("<PageDown>"),
-            Key::Null => {}
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +341,45 @@ mod tests {
             key: Key::Char(c),
             ..Input::default()
         }
+    }
+
+    /// Pins the `:map` listing rendering, including the two notation cases
+    /// most likely to drift if the key-spelling table is ever duplicated
+    /// again: `<lt>` for a literal `<` and `<CR>` for Enter.
+    #[test]
+    fn user_map_list_renders_lt_and_cr_notation() {
+        let records = vec![
+            UserKeymapRecord {
+                mode: MapMode::Normal,
+                lhs: vec![ch('<'), ch('x')],
+                rhs: vec![
+                    ch('a'),
+                    Input {
+                        key: Key::Enter,
+                        ..Input::default()
+                    },
+                ],
+                recursive: true,
+            },
+            UserKeymapRecord {
+                mode: MapMode::Insert,
+                lhs: vec![Input {
+                    key: Key::Char('d'),
+                    ctrl: true,
+                    ..Input::default()
+                }],
+                rhs: vec![Input {
+                    key: Key::Esc,
+                    ..Input::default()
+                }],
+                recursive: false,
+            },
+        ];
+        let out = format_user_map_list(&records, &[MapMode::Normal, MapMode::Insert]);
+        assert_eq!(
+            out,
+            "[normal]\n  map <lt>x a<CR>\n[insert]\n  noremap <C-d> <Esc>"
+        );
     }
 
     #[test]
