@@ -46,6 +46,23 @@ patch bumps.
   steady-state frames drop from 5–42 ms (100 KB–1 MB files) to ~2–17 µs, and the
   per-frame content copy is gone.
 
+- **Diff mode classifies only the visible rows.** The per-frame row
+  classification is clipped to the viewport with one rope snapshot per side (7.3
+  ms → 41 µs per frame on a 10k-line/2k-change diff); `]c`/`[c` navigation is
+  unaffected.
+- **Fold queries stop cloning the fold list.** New borrow-style
+  `with_folds`/`has_folds`/`fold_gen` accessors; `j`/`k` over folded regions
+  take one lock per motion instead of one lock+clone per row (−55%), and the
+  per-keystroke window fold sync is gated on a fold generation counter.
+- **Explorer render data is cached against the buffer generation.** Text, line
+  offsets, conceals and overlay nodes rebuild only on reconcile (steady-state
+  derivation 144 µs → 0.3 µs on a 2000-entry tree); git-status coloring stays
+  per-frame.
+- The viewport span table is no longer triple-copied per recompute, and ~100
+  small per-event allocations were removed across the render and edit paths
+  (undo mark snapshots via `Arc`, insert-mode lookback without line
+  materialization, gutter/wrap scratch reuse, warm-only search cache priming).
+
 ### Internal
 
 - Deduplicated drift-prone copies found by the round-2 audit: the visual-exit
