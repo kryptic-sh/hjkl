@@ -14,7 +14,7 @@ fn syntax_off_clears_installed_spans_and_disables_recompute() {
     // Seed buffer content so row 0 exists, then install spans we can clear.
     seed_buffer(&mut app, "fn main() {}\n");
     app.active_editor_mut()
-        .install_ratatui_syntax_spans(vec![vec![(0, 1, ratatui::style::Style::default())]]);
+        .install_ratatui_syntax_spans(&[vec![(0, 1, ratatui::style::Style::default())]]);
     let has_spans_before = app
         .active_editor()
         .buffer_spans()

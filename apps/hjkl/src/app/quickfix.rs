@@ -294,7 +294,7 @@ impl crate::app::App {
         // focused dock short-circuits there before it would install
         // anything. See the module doc for the full argument.
         if let Some(editor) = self.window_editors.get_mut(&win_id) {
-            editor.install_ratatui_syntax_spans(spans);
+            editor.install_ratatui_syntax_spans(&spans);
         }
 
         let cursor_row = self.qf_list(w).cursor();

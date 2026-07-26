@@ -1293,11 +1293,14 @@ impl App {
     pub(crate) fn install_syntax_spans_for_slot(
         &mut self,
         idx: usize,
-        spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
+        spans: &[Vec<(usize, usize, ratatui::style::Style)>],
     ) {
         for wid in self.windows_for_slot(idx) {
             if let Some(ed) = self.window_editors.get_mut(&wid) {
-                ed.install_ratatui_syntax_spans(spans.clone());
+                // Borrowed install — each editor interns its own copy of the
+                // spans, but the ratatui-typed table is never cloned per
+                // window.
+                ed.install_ratatui_syntax_spans(spans);
             }
         }
     }
@@ -1854,7 +1857,7 @@ impl App {
         };
         if self.slots[slot_idx].take_content_reset() {
             self.syntax.reset(buffer_id);
-            self.install_syntax_spans_for_slot(slot_idx, Vec::new());
+            self.install_syntax_spans_for_slot(slot_idx, &[]);
         }
         let edits = self.slots[slot_idx].take_content_edits();
         if !edits.is_empty() {

@@ -21,7 +21,7 @@
 //! ```
 
 use hjkl_buffer_tui::Sign;
-use hjkl_syntax::{DiagSign, RenderOutput, StyleSpec};
+use hjkl_syntax::{DiagSign, RenderOutput, RenderOutputRef, StyleSpec};
 use hjkl_theme_tui::ToRatatui;
 use ratatui::style::{Color, Style};
 
@@ -142,6 +142,40 @@ pub fn diag_signs_to_buffer_signs(signs: &[DiagSign]) -> Vec<Sign> {
 #[allow(clippy::type_complexity)]
 pub fn render_output_to_tui(out: &RenderOutput) -> (Vec<Vec<(usize, usize, Style)>>, Vec<Sign>) {
     let spans = to_ratatui_spans(&out.spans);
+    let signs = diag_signs_to_buffer_signs(&out.signs);
+    (spans, signs)
+}
+
+/// Convert a borrowed [`RenderOutputRef`] into the ratatui-typed pair
+/// `(spans, signs)`.
+///
+/// Same result as [`render_output_to_tui`], but reads the span table straight
+/// out of the syntax layer's viewport cache — the hot path builds one
+/// ratatui-typed table per recompute instead of copying the cache first.
+///
+/// # Examples
+///
+/// ```rust
+/// use hjkl_syntax::{PerfBreakdown, RenderOutputRef};
+/// use hjkl_syntax_tui::render_output_ref_to_tui;
+///
+/// let rows = vec![vec![]];
+/// let out = RenderOutputRef {
+///     buffer_id: 0,
+///     spans: &rows,
+///     signs: vec![],
+///     key: (1, 0, 30),
+///     perf: PerfBreakdown::new(),
+/// };
+/// let (spans, signs) = render_output_ref_to_tui(&out);
+/// assert_eq!(spans.len(), 1);
+/// assert!(signs.is_empty());
+/// ```
+#[allow(clippy::type_complexity)]
+pub fn render_output_ref_to_tui(
+    out: &RenderOutputRef<'_>,
+) -> (Vec<Vec<(usize, usize, Style)>>, Vec<Sign>) {
+    let spans = to_ratatui_spans(out.spans);
     let signs = diag_signs_to_buffer_signs(&out.signs);
     (spans, signs)
 }

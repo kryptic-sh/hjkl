@@ -382,7 +382,7 @@ impl App {
     pub(crate) fn handle_active_content_reset(&mut self, buffer_id: crate::syntax::BufferId) {
         self.syntax.reset(buffer_id);
         let active_idx = self.focused_slot_idx();
-        self.install_syntax_spans_for_slot(active_idx, Vec::new());
+        self.install_syntax_spans_for_slot(active_idx, &[]);
     }
 
     /// Run `render_viewport` for the active buffer and install the result.
@@ -492,7 +492,7 @@ impl App {
         } else {
             // No spans available (no language or grammar still loading).
             // Clear stale spans and let the renderer draw plain text.
-            self.install_syntax_spans_for_slot(active_idx, Vec::new());
+            self.install_syntax_spans_for_slot(active_idx, &[]);
         }
 
         self.refresh_git_signs();
@@ -738,7 +738,7 @@ impl App {
             // styled_spans live on the window editors, not the slot (#151
             // Stage 2b) — clear those.
             for ed in self.window_editors.values_mut() {
-                ed.install_ratatui_syntax_spans(Vec::new());
+                ed.install_ratatui_syntax_spans(&[]);
             }
         } else {
             for i in 0..self.slots.len() {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use hjkl_bonsai::{DotFallbackTheme, Theme};
 use hjkl_buffer_tui::Sign;
 use hjkl_engine::Query;
-use hjkl_syntax_tui::render_output_to_tui;
+use hjkl_syntax_tui::render_output_ref_to_tui;
 
 use hjkl_lang::LanguageDirectory;
 
@@ -46,9 +46,14 @@ impl PartialEq for RenderOutput {
     }
 }
 
-/// Convert a [`hjkl_syntax::RenderOutput`] to the TUI-typed [`RenderOutput`].
-fn convert_output(raw: hjkl_syntax::RenderOutput) -> RenderOutput {
-    let (spans, signs) = render_output_to_tui(&raw);
+/// Convert a borrowed [`hjkl_syntax::RenderOutputRef`] to the TUI-typed
+/// [`RenderOutput`].
+///
+/// Takes the borrowed form so the ratatui-typed table is built directly from
+/// the syntax layer's viewport cache — one span-table allocation per
+/// recompute instead of two (cache copy, then conversion copy).
+fn convert_output(raw: &hjkl_syntax::RenderOutputRef<'_>) -> RenderOutput {
+    let (spans, signs) = render_output_ref_to_tui(raw);
     RenderOutput {
         spans,
         signs,
@@ -151,8 +156,8 @@ impl SyntaxLayer {
     ) -> Option<RenderOutput> {
         let raw = self
             .inner
-            .render_viewport(id, buffer, viewport_top, viewport_height)?;
-        Some(convert_output(raw))
+            .render_viewport_ref(id, buffer, viewport_top, viewport_height)?;
+        Some(convert_output(&raw))
     }
 }
 

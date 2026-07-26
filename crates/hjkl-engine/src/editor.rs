@@ -2071,40 +2071,73 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Renamed from `install_engine_syntax_spans` in 0.0.32 — at the
     /// 0.1.0 freeze the unprefixed name is the universally-available
     /// engine-native variant.
-    pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, crate::types::Style)>>) {
-        // Note: do NOT pre-collect `line_byte_lens` here. `buf_line` clones
-        // the row string under a content-mutex lock; pre-collecting for
-        // every row turns a 10k-row file's install into 10k mutex-locked
-        // String clones (visible as j/k cursor lag). The typical install
-        // has spans on at most a few hundred rows (the parsed viewport
-        // window); lazy lookup keeps the cost proportional to populated
-        // rows, not file size.
-        let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
+    ///
+    /// `spans` is any iterator of per-row iterators, so renderer adapters can
+    /// hand over a lazily converted view of their own span table instead of
+    /// materialising a whole engine-typed copy first.
+    pub fn install_syntax_spans<I, R>(&mut self, spans: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: IntoIterator<Item = (usize, usize, crate::types::Style)>,
+    {
+        let rows = spans.into_iter();
+        let cap = rows.size_hint().0;
+        let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(cap);
         let mut engine_spans: Vec<Vec<(usize, usize, crate::types::Style)>> =
-            Vec::with_capacity(spans.len());
-        for (row, row_spans) in spans.iter().enumerate() {
-            if row_spans.is_empty() {
-                by_row.push(Vec::new());
-                engine_spans.push(Vec::new());
-                continue;
-            }
-            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
-            let mut translated = Vec::with_capacity(row_spans.len());
-            let mut translated_e = Vec::with_capacity(row_spans.len());
-            for (start, end, style) in row_spans {
-                let end_clamped = (*end).min(line_len);
-                if end_clamped <= *start {
-                    continue;
-                }
-                let id = self.intern_style(*style);
-                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
-                translated_e.push((*start, end_clamped, *style));
-            }
+            Vec::with_capacity(cap);
+        for (row, row_spans) in rows.enumerate() {
+            let (translated, translated_e) = self.translate_row_spans(row, row_spans);
             by_row.push(translated);
             engine_spans.push(translated_e);
         }
         self.buffer_spans = by_row;
         self.styled_spans = engine_spans;
+    }
+
+    /// Clamp + intern one row's spans into the `(buffer_spans, styled_spans)`
+    /// pair stored for that row. Shared by
+    /// [`Self::install_syntax_spans`] and [`Self::patch_syntax_spans_range`].
+    ///
+    /// Note: do NOT pre-collect line lengths for the whole buffer. `buf_line`
+    /// clones the row string under a content-mutex lock; pre-collecting for
+    /// every row turns a 10k-row file's install into 10k mutex-locked String
+    /// clones (visible as j/k cursor lag). The lookup here is lazy — a row
+    /// with no spans never touches the buffer — so the cost stays
+    /// proportional to populated rows, not file size.
+    fn translate_row_spans<R>(
+        &mut self,
+        row: usize,
+        row_spans: R,
+    ) -> (
+        Vec<hjkl_buffer::Span>,
+        Vec<(usize, usize, crate::types::Style)>,
+    )
+    where
+        R: IntoIterator<Item = (usize, usize, crate::types::Style)>,
+    {
+        let it = row_spans.into_iter();
+        let cap = it.size_hint().0;
+        let mut translated = Vec::with_capacity(cap);
+        let mut translated_e = Vec::with_capacity(cap);
+        let mut line_len: Option<usize> = None;
+        for (start, end, style) in it {
+            let len = match line_len {
+                Some(l) => l,
+                None => {
+                    let l = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
+                    line_len = Some(l);
+                    l
+                }
+            };
+            let end_clamped = end.min(len);
+            if end_clamped <= start {
+                continue;
+            }
+            let id = self.intern_style(style);
+            translated.push(hjkl_buffer::Span::new(start, end_clamped, id));
+            translated_e.push((start, end_clamped, style));
+        }
+        (translated, translated_e)
     }
 
     /// Patch only `rows` of the installed `buffer_spans` / `styled_spans`,
@@ -2121,11 +2154,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     ///
     /// Ensures `buffer_spans` / `styled_spans` are sized to the buffer's
     /// current `line_count` (resizes if a row-count edit shifted them).
-    pub fn patch_syntax_spans_range(
-        &mut self,
-        rows: std::ops::Range<usize>,
-        spans: &[Vec<(usize, usize, crate::types::Style)>],
-    ) {
+    ///
+    /// `spans` is any iterator of per-row iterators, so renderer adapters can
+    /// hand over a lazily converted view of their own span table instead of
+    /// materialising a whole engine-typed copy first.
+    pub fn patch_syntax_spans_range<I, R>(&mut self, rows: std::ops::Range<usize>, spans: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: IntoIterator<Item = (usize, usize, crate::types::Style)>,
+    {
         let line_count = buf_row_count(&self.buffer);
         if self.buffer_spans.len() != line_count {
             self.buffer_spans.resize_with(line_count, Vec::new);
@@ -2133,28 +2170,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if self.styled_spans.len() != line_count {
             self.styled_spans.resize_with(line_count, Vec::new);
         }
-        for (i, row_spans) in spans.iter().enumerate() {
+        for (i, row_spans) in spans.into_iter().enumerate() {
             let row = rows.start + i;
             if row >= line_count {
                 break;
             }
-            if row_spans.is_empty() {
-                self.buffer_spans[row] = Vec::new();
-                self.styled_spans[row] = Vec::new();
-                continue;
-            }
-            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
-            let mut translated = Vec::with_capacity(row_spans.len());
-            let mut translated_e = Vec::with_capacity(row_spans.len());
-            for (start, end, style) in row_spans {
-                let end_clamped = (*end).min(line_len);
-                if end_clamped <= *start {
-                    continue;
-                }
-                let id = self.intern_style(*style);
-                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
-                translated_e.push((*start, end_clamped, *style));
-            }
+            let (translated, translated_e) = self.translate_row_spans(row, row_spans);
             self.buffer_spans[row] = translated;
             self.styled_spans[row] = translated_e;
         }

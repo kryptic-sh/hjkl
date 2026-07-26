@@ -30,7 +30,7 @@ let mut editor = Editor::new(
 );
 
 // Install ratatui-flavoured syntax spans.
-editor.install_ratatui_syntax_spans(vec![vec![
+editor.install_ratatui_syntax_spans(&[vec![
     (0, 6, Style::default().fg(Color::Red)),
 ]]);
 

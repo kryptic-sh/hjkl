@@ -2225,8 +2225,7 @@ impl App {
         let _ = outcome.is_known(); // Suppresses unused-result warning.
         self.syntax.reset(buffer_id);
 
-        self.active_editor_mut()
-            .install_ratatui_syntax_spans(Vec::new());
+        self.active_editor_mut().install_ratatui_syntax_spans(&[]);
         // recompute_and_install runs render_viewport sync — no preview warm-up needed.
         self.recompute_and_install();
         self.active_mut().snapshot_saved();
@@ -2384,7 +2383,7 @@ impl App {
                     self.syntax.reset(buffer_id);
 
                     if idx == self.focused_slot_idx() {
-                        self.install_syntax_spans_for_slot(idx, Vec::new());
+                        self.install_syntax_spans_for_slot(idx, &[]);
                         // recompute_and_install runs render_viewport sync — no
                         // preview warm-up needed.
                         self.recompute_and_install();

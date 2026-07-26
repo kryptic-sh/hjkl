@@ -156,7 +156,11 @@ pub trait EditorRatatuiExt {
     /// `ratatui::style::Style` to engine-native via [`style_from_ratatui`]
     /// then delegates to `Editor::install_syntax_spans`. Drops zero-width
     /// runs and clamps `end` to the line's char length.
-    fn install_ratatui_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, RStyle)>>);
+    ///
+    /// Borrows the table so a host can install the same spans into several
+    /// editors (one per window showing the buffer) without cloning it per
+    /// editor; the conversion streams lazily into the engine.
+    fn install_ratatui_syntax_spans(&mut self, spans: &[Vec<(usize, usize, RStyle)>]);
 
     /// Patch only `rows` of the installed spans (ratatui-typed input).
     /// Mirrors [`hjkl_engine::Editor::patch_syntax_spans_range`] for
@@ -178,17 +182,14 @@ impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::View, H> {
         self.intern_style(style_from_ratatui(style))
     }
 
-    fn install_ratatui_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, RStyle)>>) {
-        let engine_spans: Vec<Vec<(usize, usize, Style)>> = spans
-            .into_iter()
-            .map(|row_spans| {
-                row_spans
-                    .into_iter()
-                    .map(|(start, end, style)| (start, end, style_from_ratatui(style)))
-                    .collect()
-            })
-            .collect();
-        self.install_syntax_spans(engine_spans);
+    fn install_ratatui_syntax_spans(&mut self, spans: &[Vec<(usize, usize, RStyle)>]) {
+        // Lazy per-row conversion: the engine consumes the iterator directly,
+        // so no intermediate engine-typed table is allocated per install.
+        self.install_syntax_spans(spans.iter().map(|row_spans| {
+            row_spans
+                .iter()
+                .map(|(start, end, style)| (*start, *end, style_from_ratatui(*style)))
+        }));
     }
 
     fn patch_ratatui_syntax_spans_range(
@@ -196,16 +197,14 @@ impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::View, H> {
         rows: std::ops::Range<usize>,
         spans: &[Vec<(usize, usize, RStyle)>],
     ) {
-        let engine_spans: Vec<Vec<(usize, usize, Style)>> = spans
-            .iter()
-            .map(|row_spans| {
+        self.patch_syntax_spans_range(
+            rows,
+            spans.iter().map(|row_spans| {
                 row_spans
                     .iter()
                     .map(|(start, end, style)| (*start, *end, style_from_ratatui(*style)))
-                    .collect()
-            })
-            .collect();
-        self.patch_syntax_spans_range(rows, &engine_spans);
+            }),
+        );
     }
 
     fn ratatui_style_table(&self) -> Vec<RStyle> {
@@ -251,7 +250,7 @@ mod tests {
         use hjkl_engine::types::Color as EColor;
         use ratatui::style::{Color, Style};
         let mut e = fresh_editor("SELECT foo");
-        e.install_ratatui_syntax_spans(vec![vec![(0, 6, Style::default().fg(Color::Red))]]);
+        e.install_ratatui_syntax_spans(&[vec![(0, 6, Style::default().fg(Color::Red))]]);
         let by_row = e.buffer_spans();
         assert_eq!(by_row.len(), 1);
         assert_eq!(by_row[0].len(), 1);
@@ -267,11 +266,7 @@ mod tests {
     fn install_ratatui_syntax_spans_clamps_sentinel_end() {
         use ratatui::style::{Color, Style};
         let mut e = fresh_editor("hello");
-        e.install_ratatui_syntax_spans(vec![vec![(
-            0,
-            usize::MAX,
-            Style::default().fg(Color::Blue),
-        )]]);
+        e.install_ratatui_syntax_spans(&[vec![(0, usize::MAX, Style::default().fg(Color::Blue))]]);
         let by_row = e.buffer_spans();
         assert_eq!(by_row[0][0].end_byte, 5);
     }
@@ -280,7 +275,7 @@ mod tests {
     fn install_ratatui_syntax_spans_drops_zero_width() {
         use ratatui::style::{Color, Style};
         let mut e = fresh_editor("abc");
-        e.install_ratatui_syntax_spans(vec![vec![(2, 2, Style::default().fg(Color::Red))]]);
+        e.install_ratatui_syntax_spans(&[vec![(2, 2, Style::default().fg(Color::Red))]]);
         assert!(e.buffer_spans()[0].is_empty());
     }
 }

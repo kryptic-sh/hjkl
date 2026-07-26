@@ -179,6 +179,76 @@ impl RenderOutput {
     }
 }
 
+/// Borrowed view of a viewport render result.
+///
+/// Identical to [`RenderOutput`] except that `spans` borrows the layer's
+/// internal row cache instead of deep-copying it. Renderer adapters convert
+/// the span table into their own style type anyway, so borrowing lets them
+/// build exactly one table per recompute instead of two (the cache copy plus
+/// the converted copy).
+///
+/// The borrow keeps the [`SyntaxLayer`] locked for the lifetime of the value —
+/// convert or copy out of it, then drop it. Use
+/// [`RenderOutputRef::into_owned`] (or [`SyntaxLayer::render_viewport`]) when
+/// an owned table is required.
+///
+/// # Examples
+///
+/// ```
+/// use hjkl_syntax::{PerfBreakdown, RenderOutputRef};
+/// let rows = Vec::new();
+/// let out = RenderOutputRef {
+///     buffer_id: 0,
+///     spans: &rows,
+///     signs: Vec::new(),
+///     key: (0, 0, 0),
+///     perf: PerfBreakdown::default(),
+/// };
+/// assert_eq!(out.into_owned().buffer_id, 0);
+/// ```
+#[derive(Debug)]
+pub struct RenderOutputRef<'a> {
+    /// Routes spans/signs back to the matching buffer slot.
+    pub buffer_id: BufferId,
+    /// Per-row span table, borrowed from the layer's viewport cache.
+    pub spans: &'a [Vec<(usize, usize, StyleSpec)>],
+    /// Diagnostic signs for the gutter.
+    pub signs: Vec<DiagSign>,
+    /// `(dirty_gen, viewport_top, viewport_height)` cache key.
+    pub key: (u64, usize, usize),
+    /// Sub-step timing breakdown (zeroed in fully-sync path).
+    pub perf: PerfBreakdown,
+}
+
+impl RenderOutputRef<'_> {
+    /// Deep-copy the borrowed span table into an owned [`RenderOutput`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hjkl_syntax::{PerfBreakdown, RenderOutputRef};
+    /// let rows = vec![Vec::new()];
+    /// let out = RenderOutputRef {
+    ///     buffer_id: 3,
+    ///     spans: &rows,
+    ///     signs: Vec::new(),
+    ///     key: (1, 0, 30),
+    ///     perf: PerfBreakdown::default(),
+    /// }
+    /// .into_owned();
+    /// assert_eq!(out.spans.len(), 1);
+    /// ```
+    pub fn into_owned(self) -> RenderOutput {
+        RenderOutput {
+            buffer_id: self.buffer_id,
+            spans: self.spans.to_vec(),
+            signs: self.signs,
+            key: self.key,
+            perf: self.perf,
+        }
+    }
+}
+
 impl PartialEq for RenderOutput {
     fn eq(&self, other: &Self) -> bool {
         self.spans == other.spans
@@ -655,13 +725,12 @@ impl SyntaxLayer {
         Some(extract_fold_ranges_rope(tree, grammar, &rope))
     }
 
-    /// Render spans for the visible viewport. Fully synchronous.
+    /// Render spans for the visible viewport, returning an owned span table.
     ///
-    /// 1. Returns `None` when no grammar is attached.
-    /// 2. Clears the cache when `buffer.dirty_gen()` has advanced.
-    /// 3. Returns cached rows when the request is fully inside the cached range.
-    /// 4. Walks only rows outside the cache (extend prefix/suffix), splices into
-    ///    `cache_spans`, extends `cache_rows`.
+    /// Thin wrapper over [`Self::render_viewport_ref`] that deep-copies the
+    /// cached rows. Callers that immediately convert the table into their own
+    /// style type (every renderer adapter) should use `render_viewport_ref`
+    /// instead and skip the copy.
     pub fn render_viewport(
         &mut self,
         id: BufferId,
@@ -669,6 +738,29 @@ impl SyntaxLayer {
         viewport_top: usize,
         viewport_height: usize,
     ) -> Option<RenderOutput> {
+        Some(
+            self.render_viewport_ref(id, buffer, viewport_top, viewport_height)?
+                .into_owned(),
+        )
+    }
+
+    /// Render spans for the visible viewport. Fully synchronous.
+    ///
+    /// 1. Returns `None` when no grammar is attached.
+    /// 2. Clears the cache when `buffer.dirty_gen()` has advanced.
+    /// 3. Returns cached rows when the request is fully inside the cached range.
+    /// 4. Walks only rows outside the cache (extend prefix/suffix), splices into
+    ///    `cache_spans`, extends `cache_rows`.
+    ///
+    /// The returned [`RenderOutputRef`] borrows the viewport slice of
+    /// `cache_spans` — no per-call copy of the span table.
+    pub fn render_viewport_ref(
+        &mut self,
+        id: BufferId,
+        buffer: &impl Query,
+        viewport_top: usize,
+        viewport_height: usize,
+    ) -> Option<RenderOutputRef<'_>> {
         let client = self.clients.get_mut(&id)?;
         if !client.has_language {
             return None;
@@ -842,13 +934,13 @@ impl SyntaxLayer {
             client.cache_dirty_gen = Some(dg);
         }
 
-        // Slice the requested viewport from the cache.
+        // Bounds of the requested viewport inside the cache.
         let offset = vp_top - client.cache_rows.start;
         let len = vp_end - vp_top;
-        let spans: Vec<Vec<(usize, usize, StyleSpec)>> =
-            client.cache_spans[offset..offset + len].to_vec();
 
         // Get or build signs, cached per (dirty_gen, vp_top, vp_end).
+        // Done before borrowing `cache_spans` so the mutable client borrow
+        // (needed for `highlighter` and the sign-cache write) has ended.
         let signs = if client
             .cache_signs
             .as_ref()
@@ -861,7 +953,10 @@ impl SyntaxLayer {
             s
         };
 
-        Some(RenderOutput {
+        // Borrow the viewport slice out of the cache — no copy.
+        let spans = &self.clients.get(&id)?.cache_spans[offset..offset + len];
+
+        Some(RenderOutputRef {
             buffer_id: id,
             spans,
             signs,
