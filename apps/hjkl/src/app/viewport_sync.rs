@@ -21,7 +21,7 @@
 
 use hjkl_engine::Host;
 
-use super::App;
+use super::{App, BufferId, window};
 
 impl App {
     /// Install the focused window's fold snapshot into the shared buffer so
@@ -44,6 +44,20 @@ impl App {
                 self.window_folds.insert(fw, folds);
             }
         }
+        // Both arms leave `window_folds[fw]` equal to the buffer's fold
+        // set, which is exactly the invariant the snapshot cache key
+        // records — see `sync_viewport_from_editor`.
+        self.last_fold_sync = Some(self.fold_sync_key(fw));
+    }
+
+    /// `(focused window, active buffer, fold generation)` — the identity of
+    /// "the fold set `window_folds[window]` was last made to agree with".
+    fn fold_sync_key(&self, window: window::WindowId) -> (window::WindowId, BufferId, u64) {
+        (
+            window,
+            self.active().buffer_id,
+            self.active_editor().buffer().fold_gen(),
+        )
     }
 
     /// Snapshot the focused window's fold state into `window_folds` (captures
@@ -57,9 +71,18 @@ impl App {
         // height the engine doesn't know about; nudge the scroll so the cursor
         // stays visible. Render-level only — the engine still owns cursor row/col.
         self.adjust_blame_box_viewport();
-        let folds = self.active_editor().buffer().folds();
         let fw = self.focused_window();
+        // Gate the clone on an actual fold mutation. `fold_gen` bumps only
+        // when a fold mutator changed the set (text edits bump `dirty_gen`,
+        // not this), so an unchanged key proves `window_folds[fw]` already
+        // holds this buffer's folds — the common case for every keystroke.
+        let key = self.fold_sync_key(fw);
+        if self.last_fold_sync == Some(key) {
+            return;
+        }
+        let folds = self.active_editor().buffer().folds();
         self.window_folds.insert(fw, folds);
+        self.last_fold_sync = Some(key);
     }
 
     /// Keep the cursor visible in the boxed-blame view by nudging `top_row` to

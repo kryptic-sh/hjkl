@@ -316,6 +316,16 @@ impl View {
 
     // ── Crate-internal accessors (used by folds.rs) ───────────────
 
+    /// Bump the fold-mutation generation. Crate-internal — every fold
+    /// mutator in [`crate::folds`] calls it (via `folds_changed`) after it
+    /// actually changes the fold set. Deliberately separate from
+    /// [`Self::dirty_gen_bump`]: text edits bump `dirty_gen` on every
+    /// keystroke, and a fold-snapshot cache keyed off that would never hit.
+    pub(crate) fn fold_gen_bump(&mut self) {
+        let mut c = self.content.lock().unwrap();
+        c.fold_gen = c.fold_gen.wrapping_add(1);
+    }
+
     /// Bump the render-cache generation. Crate-internal.
     pub(crate) fn dirty_gen_bump(&mut self) {
         let mut c = self.content.lock().unwrap();

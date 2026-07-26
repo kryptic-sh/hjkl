@@ -175,6 +175,19 @@ pub struct App {
     /// `WindowId`s are monotonic and never reused, so stale entries can't
     /// collide; closed windows are pruned on the main close paths.
     pub window_folds: std::collections::HashMap<window::WindowId, Vec<hjkl_buffer::Fold>>,
+    /// Cache key for the last `window_folds` snapshot taken by
+    /// [`Self::sync_viewport_from_editor`]: `(window, buffer, fold_gen)` at
+    /// the moment `window_folds[window]` was made to agree with that
+    /// buffer's fold set. While the key still matches, the post-dispatch
+    /// snapshot is provably redundant and is skipped — otherwise every
+    /// keystroke paid a content lock plus a `Vec<Fold>` clone.
+    ///
+    /// Only ever holds the *focused* window's key, so no pruning is needed
+    /// on window close: `WindowId`s are monotonic and never reused, so a
+    /// key for a dead window can only ever miss, never falsely hit. The
+    /// `BufferId` component is what makes `:e <other-file>` in the same
+    /// window a miss even if the new buffer's `fold_gen` happens to match.
+    last_fold_sync: Option<(window::WindowId, BufferId, u64)>,
     /// Per-window editor, keyed by `WindowId` (#151 Phase D). Each is a
     /// [`View::new_view`] of its slot's shared `Buffer`, so it owns an
     /// independent cursor / viewport / vim FSM while editing the same document.
@@ -2275,6 +2288,7 @@ impl App {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
             window_folds: std::collections::HashMap::new(),
+            last_fold_sync: None,
             window_editors: std::collections::HashMap::new(),
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,

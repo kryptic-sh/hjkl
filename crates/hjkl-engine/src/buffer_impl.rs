@@ -565,18 +565,18 @@ impl SnapshotFoldProvider {
     /// [`hjkl_buffer::View::next_visible_row`] directly) could step
     /// the cursor onto that phantom row. Mirrors
     /// `hjkl_engine::motions::move_bottom`'s clamp (`G`).
+    ///
+    /// The clamp defers to [`hjkl_buffer::View::last_content_row`] — the
+    /// same helper `next_visible_row` / `prev_visible_row` use — instead
+    /// of re-deriving it by materializing the last line as a `String`
+    /// just to ask whether it is empty (this runs per `j`/`k` and per
+    /// `cursor_screen_pos`, i.e. per frame).
     pub fn from_buffer(buffer: &RopeBuffer) -> Self {
-        let raw_count = buffer.row_count();
-        let raw_last = raw_count.saturating_sub(1);
-        let row_count =
-            if raw_last > 0 && hjkl_buffer::rope_line_str(&buffer.rope(), raw_last).is_empty() {
-                raw_last
-            } else {
-                raw_count
-            };
         Self {
-            folds: buffer.folds().to_vec(),
-            row_count,
+            // One clone, not two: `folds()` already hands back an owned
+            // `Vec` — the old `.to_vec()` cloned it a second time.
+            folds: buffer.folds(),
+            row_count: buffer.last_content_row() + 1,
         }
     }
 

@@ -446,12 +446,17 @@ impl App {
         // `top + height` would miss syntax spans.  Expand the requested
         // doc-row range by counting hidden rows inside it so the syntax
         // layer covers the full visible doc range.
-        let effective_height = {
-            let row_count = buf.row_count();
+        //
+        // One fold snapshot for the whole walk (`with_folds` holds the
+        // content lock once) instead of `is_row_hidden` per row, which
+        // re-locked and deep-cloned the fold `Vec` O(height) times per
+        // syntax recompute. `row_count()` locks too, so it is read first.
+        let row_count = buf.row_count();
+        let effective_height = buf.with_folds(|folds| {
             let mut screen = 0usize;
             let mut doc = top;
             while screen < height && doc < row_count {
-                if buf.is_row_hidden(doc) {
+                if folds.iter().any(|f| f.hides(doc)) {
                     // Hidden rows cost no screen rows but advance doc.
                     doc += 1;
                 } else {
@@ -462,7 +467,7 @@ impl App {
             // `doc` is now the first doc row beyond the visible window.
             // The span range must cover `top..doc`, i.e. `doc - top` rows.
             doc.saturating_sub(top).max(height)
-        };
+        });
 
         let out = self
             .syntax

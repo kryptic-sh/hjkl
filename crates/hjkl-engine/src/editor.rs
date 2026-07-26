@@ -2397,19 +2397,21 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // by the row count; `max_iters` is just a defensive backstop.
         let mut cursor_row = buf_cursor_row(&self.buffer);
         let mut snapped = false;
-        let max_iters = self.buffer.folds().len() + 1;
-        for _ in 0..max_iters {
-            let folds = self.buffer.folds();
-            let Some(fold) = folds
-                .iter()
-                .filter(|f| f.hides(cursor_row))
-                .min_by_key(|f| f.start_row)
-            else {
-                break;
-            };
-            cursor_row = fold.start_row;
-            snapped = true;
-        }
+        // One lock, no clone, for the whole snap loop — this used to clone
+        // the fold `Vec` once per iteration (O(folds²) clones).
+        self.buffer.with_folds(|folds| {
+            for _ in 0..(folds.len() + 1) {
+                let Some(fold) = folds
+                    .iter()
+                    .filter(|f| f.hides(cursor_row))
+                    .min_by_key(|f| f.start_row)
+                else {
+                    break;
+                };
+                cursor_row = fold.start_row;
+                snapped = true;
+            }
+        });
         if snapped {
             buf_set_cursor_rc(&mut self.buffer, cursor_row, 0);
             self.sticky_col = Some(0);
@@ -3978,7 +3980,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             self.ensure_scrolloff_vertical(height, margin);
             return;
         }
-        if !self.buffer.folds().is_empty() {
+        if self.buffer.has_folds() {
             self.ensure_scrolloff_folds_nowrap(height, margin);
             // Column-side (horizontal) scroll only — keep the fold-aware
             // top_row by snapshotting it across `ensure_visible`.
@@ -4473,7 +4475,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // `reveal_row`'s semantics) keeps getting opened rather than
         // silently left stranded.
         let row = buf_cursor_row(&self.buffer);
-        let max_iters = self.buffer.folds().len() + 1;
+        let max_iters = self.buffer.with_folds(<[hjkl_buffer::Fold]>::len) + 1;
         for _ in 0..max_iters {
             if !self.buffer.is_row_hidden(row) {
                 break;

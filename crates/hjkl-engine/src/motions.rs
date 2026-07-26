@@ -88,10 +88,16 @@ fn read_row_count<B: Query + ?Sized>(buf: &B) -> usize {
 /// empty (e.g. `"foo\n\n"`) is untouched — only a single trailing phantom
 /// row is ever skipped, and single-row buffers (`""`, `"\n"`) are left
 /// alone entirely (their one row is real, not phantom).
+///
+/// The emptiness test reads the row's byte length instead of cloning the row
+/// into a `String` — `Query::line_bytes(row) == 0` iff `line(row).is_empty()`
+/// for every backend (the canonical `View` override reads the rope slice's
+/// length under one lock with no allocation), and this runs on every `j`/`k`.
 fn content_row_count<B: Query + ?Sized>(buf: &B) -> usize {
     let raw_count = read_row_count(buf);
     let raw_last = raw_count.saturating_sub(1);
-    if raw_last > 0 && read_line(buf, raw_last).is_empty() {
+    // `raw_last < raw_count` here, so the row is always in bounds.
+    if raw_last > 0 && buf.line_bytes(raw_last) == 0 {
         raw_last
     } else {
         raw_count

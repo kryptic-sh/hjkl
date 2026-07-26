@@ -73,6 +73,47 @@ impl crate::View {
         self.content_lock().folds.clone()
     }
 
+    /// Run `f` against the fold list under a **single** content lock, with
+    /// no clone. The borrow-style twin of [`Self::folds`] — prefer it for
+    /// every read-only query (`hides` scans, `is_empty`, per-row loops);
+    /// keep [`Self::folds`] only where an owned snapshot must outlive the
+    /// lock (e.g. it is stored, or the buffer is re-borrowed mutably).
+    ///
+    /// The closure runs with the content mutex held: it must not call back
+    /// into any `&self` method of this `View` (they all re-lock, and the
+    /// mutex is not re-entrant). Hoist such reads — `row_count()`,
+    /// `cursor()`, … — above the call.
+    pub fn with_folds<T>(&self, f: impl FnOnce(&[Fold]) -> T) -> T {
+        f(&self.content_lock().folds)
+    }
+
+    /// True when at least one fold is defined (open or closed). One lock,
+    /// no clone — the cheap form of `!folds().is_empty()`.
+    pub fn has_folds(&self) -> bool {
+        !self.content_lock().folds.is_empty()
+    }
+
+    /// Monotonic fold-mutation generation. Bumps only when a fold mutator
+    /// actually changes the fold set; read-only queries and plain text
+    /// edits leave it alone. Hosts caching a fold snapshot (`hjkl`'s
+    /// per-window `window_folds`) compare this instead of re-cloning the
+    /// fold `Vec` every keystroke.
+    ///
+    /// Conservative in the same sense as [`Self::dirty_gen`]: "if it
+    /// changed, the folds **may** have changed" (a `rebase_folds` whose
+    /// row-shift happens to move nothing still bumps).
+    pub fn fold_gen(&self) -> u64 {
+        self.content_lock().fold_gen
+    }
+
+    /// Record a fold-set mutation: bump the fold generation *and* the
+    /// render-cache generation (a fold change repaints). Every mutator in
+    /// this module funnels through here.
+    fn folds_changed(&mut self) {
+        self.fold_gen_bump();
+        self.dirty_gen_bump();
+    }
+
     /// Register a new fold. If an existing fold has the same
     /// `start_row`, it's replaced; otherwise the new one is inserted
     /// in start-row order. Empty / inverted ranges are rejected.
@@ -104,7 +145,7 @@ impl crate::View {
                 c.folds.insert(pos, fold);
             }
         }
-        self.dirty_gen_bump();
+        self.folds_changed();
     }
 
     /// Replace all auto-generated folds with a new set derived from
@@ -177,7 +218,7 @@ impl crate::View {
             }
         }
 
-        self.dirty_gen_bump();
+        self.folds_changed();
     }
 
     /// Drop the fold whose range covers `row`. Returns `true` when a
@@ -197,7 +238,7 @@ impl crate::View {
             return false;
         };
         self.content_lock_mut().folds.remove(idx);
-        self.dirty_gen_bump();
+        self.folds_changed();
         true
     }
 
@@ -220,7 +261,7 @@ impl crate::View {
             true
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
         changed
     }
@@ -244,7 +285,7 @@ impl crate::View {
             true
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
         changed
     }
@@ -265,7 +306,7 @@ impl crate::View {
             true
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
         changed
     }
@@ -284,7 +325,7 @@ impl crate::View {
             any
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
     }
 
@@ -293,7 +334,7 @@ impl crate::View {
         let was_nonempty = !self.content_lock().folds.is_empty();
         if was_nonempty {
             self.content_lock_mut().folds.clear();
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
     }
 
@@ -311,7 +352,7 @@ impl crate::View {
             any
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
     }
 
@@ -332,7 +373,7 @@ impl crate::View {
 
     /// True iff `row` is hidden by a closed fold (any fold).
     pub fn is_row_hidden(&self, row: usize) -> bool {
-        self.folds().iter().any(|f| f.hides(row))
+        self.with_folds(|folds| folds.iter().any(|f| f.hides(row)))
     }
 
     /// Open every closed fold whose body hides `row`, so the row becomes
@@ -355,7 +396,7 @@ impl crate::View {
             any
         };
         if changed {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
         changed
     }
@@ -369,11 +410,17 @@ impl crate::View {
     /// "ends". A buffer whose *real* last line happens to be empty
     /// (e.g. `"foo\n\n"`, row 1) is untouched — only a single trailing
     /// phantom row is ever skipped.
-    fn last_content_row(&self) -> usize {
+    ///
+    /// The emptiness test reads the last row's byte length rather than
+    /// materializing the row as a `String`: for the final rope line the two
+    /// agree exactly (ropey never gives the last line a trailing `\n`, so
+    /// `rope_line_str` has nothing to strip and
+    /// `rope_line_bytes(last) == 0` iff `rope_line_str(last).is_empty()`).
+    pub fn last_content_row(&self) -> usize {
         let raw_last = self.row_count().saturating_sub(1);
         if raw_last > 0 {
             let c = self.content_lock();
-            if crate::buffer::rope_line_str(&c.text, raw_last).is_empty() {
+            if crate::buffer::rope_line_bytes(&c.text, raw_last) == 0 {
                 return raw_last - 1;
             }
         }
@@ -382,25 +429,36 @@ impl crate::View {
 
     /// First visible row strictly after `row`, skipping any rows hidden
     /// by closed folds. Returns `None` past the end of the buffer.
+    ///
+    /// Takes the content lock **once** for the whole walk (via
+    /// [`Self::with_folds`]) instead of once per skipped row — `j` over a
+    /// long closed fold used to pay a lock + full `Vec<Fold>` clone per row.
+    /// `last_content_row()` locks too, so it is resolved before the scan.
     pub fn next_visible_row(&self, row: usize) -> Option<usize> {
         let last = self.last_content_row();
         if last == 0 && row == 0 {
             return None;
         }
         let mut r = row.checked_add(1)?;
-        while r <= last && self.is_row_hidden(r) {
-            r += 1;
-        }
-        (r <= last).then_some(r)
+        self.with_folds(|folds| {
+            while r <= last && folds.iter().any(|f| f.hides(r)) {
+                r += 1;
+            }
+            (r <= last).then_some(r)
+        })
     }
 
     /// First visible row strictly before `row`, skipping hidden rows.
+    ///
+    /// One lock for the whole walk, same as [`Self::next_visible_row`].
     pub fn prev_visible_row(&self, row: usize) -> Option<usize> {
         let mut r = row.checked_sub(1)?;
-        while self.is_row_hidden(r) {
-            r = r.checked_sub(1)?;
-        }
-        Some(r)
+        self.with_folds(|folds| {
+            while folds.iter().any(|f| f.hides(r)) {
+                r = r.checked_sub(1)?;
+            }
+            Some(r)
+        })
     }
 
     /// Drop every fold that touches `[start_row, end_row]`.
@@ -408,7 +466,7 @@ impl crate::View {
         let before = self.content_lock().folds.len();
         invalidate_folds(&mut self.content_lock_mut().folds, start_row, end_row);
         if self.content_lock().folds.len() != before {
-            self.dirty_gen_bump();
+            self.folds_changed();
         }
     }
 
@@ -425,8 +483,21 @@ impl crate::View {
         if delta == 0 {
             return;
         }
-        let mut c = self.content_lock_mut();
-        shift_folds_after_edit(&mut c.folds, edit_start, drop_end, shift_threshold, delta);
+        let touched = {
+            let mut c = self.content_lock_mut();
+            if c.folds.is_empty() {
+                false
+            } else {
+                shift_folds_after_edit(&mut c.folds, edit_start, drop_end, shift_threshold, delta);
+                true
+            }
+        };
+        if touched {
+            // Conservative: a shift that happened to move nothing (every
+            // fold entirely below the edit) still bumps. Matches the
+            // `dirty_gen` contract — "may have changed".
+            self.fold_gen_bump();
+        }
     }
 
     /// Replace the entire fold set wholesale. Used to install a per-window fold
@@ -441,7 +512,7 @@ impl crate::View {
             }
             c.folds = folds.to_vec();
         }
-        self.dirty_gen_bump();
+        self.folds_changed();
     }
 }
 
@@ -880,6 +951,124 @@ mod tests {
         let mut folds = vec![fold(4, 6)];
         super::shift_folds_after_edit(&mut folds, 4, 7, 7, -3);
         assert!(folds.is_empty());
+    }
+
+    // ── Borrow-style accessors + fold generation (round-2 perf item 10) ───
+
+    #[test]
+    fn with_folds_sees_the_same_data_as_folds() {
+        let mut buf = b();
+        // Empty case.
+        assert_eq!(buf.with_folds(<[super::Fold]>::to_vec), buf.folds());
+        assert!(!buf.has_folds());
+
+        buf.add_fold(0, 1, false);
+        buf.add_fold(2, 3, true);
+        assert_eq!(buf.with_folds(<[super::Fold]>::to_vec), buf.folds());
+        assert!(buf.has_folds());
+        // And the borrow-style scan agrees with the owning one row by row.
+        for row in 0..buf.row_count() {
+            assert_eq!(
+                buf.with_folds(|f| f.iter().any(|f| f.hides(row))),
+                buf.folds().iter().any(|f| f.hides(row)),
+                "row {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn fold_gen_bumps_on_every_mutator() {
+        fn none(_: &mut View) {}
+        fn open_fold(b: &mut View) {
+            b.add_fold(1, 3, false);
+        }
+        fn closed_fold(b: &mut View) {
+            b.add_fold(1, 3, true);
+        }
+        /// (name, setup, mutation-that-must-bump)
+        type Case = (&'static str, fn(&mut View), fn(&mut View));
+        let cases: [Case; 13] = [
+            ("add_fold", none, |b| b.add_fold(1, 3, false)),
+            ("set_auto_folds", none, |b| {
+                b.set_auto_folds(&[(1, 3)], false)
+            }),
+            ("remove_fold_at", open_fold, |b| {
+                assert!(b.remove_fold_at(2));
+            }),
+            ("open_fold_at", closed_fold, |b| {
+                assert!(b.open_fold_at(2));
+            }),
+            ("close_fold_at", open_fold, |b| {
+                assert!(b.close_fold_at(2));
+            }),
+            ("toggle_fold_at", open_fold, |b| {
+                assert!(b.toggle_fold_at(2));
+            }),
+            ("open_all_folds", closed_fold, View::open_all_folds),
+            ("close_all_folds", open_fold, View::close_all_folds),
+            ("clear_all_folds", open_fold, View::clear_all_folds),
+            ("reveal_row", closed_fold, |b| {
+                assert!(b.reveal_row(2));
+            }),
+            ("invalidate_folds_in_range", closed_fold, |b| {
+                b.invalidate_folds_in_range(2, 2);
+            }),
+            ("rebase_folds", closed_fold, |b| b.rebase_folds(0, 0, 1, 1)),
+            ("set_folds", none, |b| {
+                b.set_folds(&[super::Fold {
+                    start_row: 1,
+                    end_row: 3,
+                    closed: true,
+                    auto_generated: false,
+                }]);
+            }),
+        ];
+        for (name, setup, mutate) in cases {
+            let mut buf = b();
+            setup(&mut buf);
+            let before = buf.fold_gen();
+            mutate(&mut buf);
+            assert!(
+                buf.fold_gen() > before,
+                "{name} mutated the fold set and must bump fold_gen"
+            );
+        }
+    }
+
+    #[test]
+    fn fold_gen_is_stable_across_reads_and_plain_text_edits() {
+        let mut buf = b();
+        buf.add_fold(1, 3, true);
+        let fg = buf.fold_gen();
+        assert!(fg > 0);
+
+        // Pure reads.
+        let _ = buf.folds();
+        let _ = buf.with_folds(<[super::Fold]>::to_vec);
+        let _ = buf.has_folds();
+        let _ = buf.is_row_hidden(2);
+        let _ = buf.fold_at_row(2);
+        let _ = buf.next_visible_row(1);
+        let _ = buf.prev_visible_row(4);
+        assert_eq!(buf.fold_gen(), fg, "read-only queries must not bump");
+
+        // No-op mutators (nothing actually changes).
+        buf.close_all_folds(); // already closed
+        buf.add_fold(9, 9, true); // out of bounds → rejected
+        buf.rebase_folds(0, 0, 1, 0); // delta == 0 → early return
+        let same = buf.folds();
+        buf.set_folds(&same); // identical set
+        assert_eq!(buf.fold_gen(), fg, "no-op mutators must not bump");
+
+        // A plain text edit must not masquerade as a fold change — that is
+        // the whole reason `fold_gen` is separate from `dirty_gen`.
+        let dg = buf.dirty_gen();
+        buf.apply_edit(crate::Edit::InsertChar {
+            at: crate::Position { row: 0, col: 0 },
+            ch: 'x',
+        });
+        assert_ne!(buf.dirty_gen(), dg, "text edit must bump dirty_gen");
+        assert_eq!(buf.fold_gen(), fg, "text edit must not bump fold_gen");
     }
 
     #[test]

@@ -54,6 +54,16 @@ pub struct Buffer {
     /// `pub(crate)` so the [`crate::folds`] module can read/write
     /// directly (same visibility as before the split).
     pub(crate) folds: Vec<Fold>,
+    /// Bumps whenever the fold set is mutated (add / remove / toggle /
+    /// open-all / close-all / invalidate / rebase / wholesale set). Text
+    /// edits that leave folds untouched do NOT bump it — that is the whole
+    /// point: hosts that keep a per-window fold snapshot (`hjkl`'s
+    /// `window_folds`) compare this counter instead of cloning the fold
+    /// `Vec` on every keystroke.
+    ///
+    /// Same contract as [`Self::dirty_gen`]: monotonic (wrapping) and
+    /// conservative — "if it changed, the folds **may** have changed".
+    pub(crate) fold_gen: u64,
     /// Cached `rope.to_string()` keyed by the `dirty_gen` at build time.
     /// Multiple per-tick consumers (syntax submit, LSP notify, git
     /// signature, dirty hash) all need the joined document; rebuilding
@@ -134,6 +144,7 @@ impl Buffer {
             text,
             dirty_gen: 0,
             folds: Vec::new(),
+            fold_gen: 0,
             cached_joined: None,
             cached_byte_len: None,
             undo,
@@ -162,6 +173,7 @@ impl Buffer {
             text,
             dirty_gen: 0,
             folds: Vec::new(),
+            fold_gen: 0,
             cached_joined: None,
             cached_byte_len: None,
             undo,

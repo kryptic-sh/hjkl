@@ -461,7 +461,7 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
             }
         };
         sign_w = sign_w.max(sw);
-        let has_folds = !slot.buffer().folds().is_empty();
+        let has_folds = slot.buffer().has_folds();
         let fw = (st.foldcolumn.min(12) as u16).max(if has_folds { 1 } else { 0 });
         fold_w = fold_w.max(fw);
     }
