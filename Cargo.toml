@@ -24,7 +24,7 @@ hjkl-completion-tui = { path = "crates/hjkl-completion-tui", version = "0.37" }
 hjkl-config = { path = "crates/hjkl-config", version = "0.37" }
 hjkl-css = { path = "crates/hjkl-css", version = "0.37" }
 hjkl-editor = { path = "crates/hjkl-editor", version = "0.37", default-features = false }
-hjkl-editor-tui = { path = "crates/hjkl-editor-tui", version = "0.37", default-features = false }
+hjkl-editor-tui = { path = "crates/hjkl-editor-tui", version = "0.37" }
 hjkl-engine = { path = "crates/hjkl-engine", version = "0.37", default-features = false }
 hjkl-engine-tui = { path = "crates/hjkl-engine-tui", version = "0.37" }
 hjkl-ex = { path = "crates/hjkl-ex", version = "0.37" }

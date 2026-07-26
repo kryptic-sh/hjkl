@@ -1,7 +1,7 @@
 //! Chord routing — converts raw crossterm key events into app actions or
 //! engine key events, driving the pending-state FSM and keymap trie.
 //!
-//! Owns: [`App::km_to_crossterm`], [`App::replay_to_engine`],
+//! Owns: [`hjkl_keymap_tui::to_crossterm`], [`App::replay_to_engine`],
 //! [`App::route_chord_key`], [`App::route_chord_key_inner`].
 
 use super::App;
@@ -53,45 +53,6 @@ pub(crate) struct MacroReplayState {
 }
 
 impl App {
-    /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
-    /// for replaying unbound sequences to the engine.
-    ///
-    /// Moved here from `event_loop.rs` (option A) so that both the event loop
-    /// and tests can replay keymap events without touching file-local functions.
-    pub(crate) fn km_to_crossterm(ev: &hjkl_keymap::KeyEvent) -> crossterm::event::KeyEvent {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use hjkl_keymap::{KeyCode as KmKeyCode, KeyModifiers as KmKeyMods};
-        let code = match ev.code {
-            KmKeyCode::Char(c) => KeyCode::Char(c),
-            KmKeyCode::Enter => KeyCode::Enter,
-            KmKeyCode::Esc => KeyCode::Esc,
-            KmKeyCode::Tab => KeyCode::Tab,
-            KmKeyCode::Backspace => KeyCode::Backspace,
-            KmKeyCode::Delete => KeyCode::Delete,
-            KmKeyCode::Insert => KeyCode::Insert,
-            KmKeyCode::Up => KeyCode::Up,
-            KmKeyCode::Down => KeyCode::Down,
-            KmKeyCode::Left => KeyCode::Left,
-            KmKeyCode::Right => KeyCode::Right,
-            KmKeyCode::Home => KeyCode::Home,
-            KmKeyCode::End => KeyCode::End,
-            KmKeyCode::PageUp => KeyCode::PageUp,
-            KmKeyCode::PageDown => KeyCode::PageDown,
-            KmKeyCode::F(n) => KeyCode::F(n),
-        };
-        let mut mods = KeyModifiers::NONE;
-        if ev.modifiers.contains(KmKeyMods::CTRL) {
-            mods |= KeyModifiers::CONTROL;
-        }
-        if ev.modifiers.contains(KmKeyMods::SHIFT) {
-            mods |= KeyModifiers::SHIFT;
-        }
-        if ev.modifiers.contains(KmKeyMods::ALT) {
-            mods |= KeyModifiers::ALT;
-        }
-        KeyEvent::new(code, mods)
-    }
-
     /// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
     /// `KeyEvent`s. Each keymap event is converted back to a crossterm event
     /// and forwarded to `editor.handle_key`.
@@ -99,7 +60,7 @@ impl App {
     /// Moved here from `event_loop.rs` (option A) for testability.
     pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
-            let ct_ev = Self::km_to_crossterm(km_ev);
+            let ct_ev = hjkl_keymap_tui::to_crossterm(km_ev);
             hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
         }
     }
@@ -125,7 +86,7 @@ impl App {
                 // Step 2b is gated on `pending_state.is_none()` so it is
                 // skipped automatically, preventing re-entry into the explorer
                 // keymap.
-                let ct_ev = Self::km_to_crossterm(&ev);
+                let ct_ev = hjkl_keymap_tui::to_crossterm(&ev);
                 if !self.route_chord_key(ct_ev) {
                     hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
                 }

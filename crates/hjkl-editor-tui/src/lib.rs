@@ -184,51 +184,6 @@ pub fn ratatui_to_engine_attrs(m: RMod) -> Attrs {
     a
 }
 
-// ── Crossterm KeyEvent → engine SPEC Input ──
-
-#[cfg(feature = "crossterm")]
-pub use crossterm_bridge::crossterm_key_event_to_input;
-
-#[cfg(feature = "crossterm")]
-mod crossterm_bridge {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use hjkl_engine::{Modifiers, PlannedInput, SpecialKey};
-
-    /// Bridge a [`crossterm::event::KeyEvent`] into the SPEC
-    /// [`hjkl_engine::PlannedInput`]. Returns `None` for keycodes the engine
-    /// doesn't model (KeyPad, Media, CapsLock, modifier-only, etc.) so callers
-    /// can skip them — mapping them to `Esc` (as this used to) would make a
-    /// stray CapsLock press exit Insert mode.
-    pub fn crossterm_key_event_to_input(ev: KeyEvent) -> Option<PlannedInput> {
-        let mods = Modifiers {
-            ctrl: ev.modifiers.contains(KeyModifiers::CONTROL),
-            shift: ev.modifiers.contains(KeyModifiers::SHIFT),
-            alt: ev.modifiers.contains(KeyModifiers::ALT),
-            super_: ev.modifiers.contains(KeyModifiers::SUPER),
-        };
-        Some(match ev.code {
-            KeyCode::Char(c) => PlannedInput::Char(c, mods),
-            KeyCode::Esc => PlannedInput::Key(SpecialKey::Esc, mods),
-            KeyCode::Enter => PlannedInput::Key(SpecialKey::Enter, mods),
-            KeyCode::Backspace => PlannedInput::Key(SpecialKey::Backspace, mods),
-            KeyCode::Tab => PlannedInput::Key(SpecialKey::Tab, mods),
-            KeyCode::BackTab => PlannedInput::Key(SpecialKey::BackTab, mods),
-            KeyCode::Up => PlannedInput::Key(SpecialKey::Up, mods),
-            KeyCode::Down => PlannedInput::Key(SpecialKey::Down, mods),
-            KeyCode::Left => PlannedInput::Key(SpecialKey::Left, mods),
-            KeyCode::Right => PlannedInput::Key(SpecialKey::Right, mods),
-            KeyCode::Home => PlannedInput::Key(SpecialKey::Home, mods),
-            KeyCode::End => PlannedInput::Key(SpecialKey::End, mods),
-            KeyCode::PageUp => PlannedInput::Key(SpecialKey::PageUp, mods),
-            KeyCode::PageDown => PlannedInput::Key(SpecialKey::PageDown, mods),
-            KeyCode::Insert => PlannedInput::Key(SpecialKey::Insert, mods),
-            KeyCode::Delete => PlannedInput::Key(SpecialKey::Delete, mods),
-            KeyCode::F(n) => PlannedInput::Key(SpecialKey::F(n), mods),
-            _ => return None,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,34 +221,5 @@ mod tests {
         let m = engine_to_ratatui_attrs(a);
         let back = ratatui_to_engine_attrs(m);
         assert_eq!(a, back);
-    }
-
-    #[cfg(feature = "crossterm")]
-    #[test]
-    fn crossterm_keyevent_into_input() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use hjkl_engine::{PlannedInput, SpecialKey};
-
-        let ev = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
-        match crossterm_key_event_to_input(ev) {
-            Some(PlannedInput::Char('a', mods)) => assert!(mods.ctrl),
-            other => panic!("expected Char('a', ctrl), got {other:?}"),
-        }
-
-        let ev = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        match crossterm_key_event_to_input(ev) {
-            Some(PlannedInput::Key(SpecialKey::Esc, _)) => {}
-            other => panic!("expected Esc, got {other:?}"),
-        }
-    }
-
-    #[cfg(feature = "crossterm")]
-    #[test]
-    fn crossterm_unrecognized_key_is_dropped_not_esc() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        // A key the engine doesn't model (e.g. CapsLock) must yield None, not
-        // Esc — otherwise a stray press would drop the user out of Insert mode.
-        let ev = KeyEvent::new(KeyCode::CapsLock, KeyModifiers::NONE);
-        assert!(crossterm_key_event_to_input(ev).is_none());
     }
 }

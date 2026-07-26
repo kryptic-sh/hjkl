@@ -2937,7 +2937,7 @@ fn j_motion_via_keymap_updates_window_cursor() {
 
     // Dispatch `j` through the canonical chord routing path.
     let km_ev = km_char('j');
-    app.route_chord_key(App::km_to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -2960,7 +2960,7 @@ fn k_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('k');
-    app.route_chord_key(App::km_to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -2984,7 +2984,7 @@ fn line_start_zero_motion_via_keymap_updates_window_cursor() {
 
     // `0` with empty pending_count routes through the keymap as LineStart.
     let km_ev = km_char('0');
-    app.route_chord_key(App::km_to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_col(&app),
@@ -3007,7 +3007,7 @@ fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('$');
-    app.route_chord_key(App::km_to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
 
     // "hello" has 5 chars; `$` lands on the last char (index 4).
     assert_eq!(
@@ -3048,7 +3048,7 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     // Drive `j` 20 times — well past the viewport bottom + scrolloff margin.
     let km_ev = km_char('j');
     for _ in 0..20 {
-        app.route_chord_key(App::km_to_crossterm(&km_ev));
+        app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
     }
 
     let fw = app.focused_window();
@@ -3105,7 +3105,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
 
     // Press g — enters AfterG pending state via keymap.
     let km_g = km_char('g');
-    app.route_chord_key(App::km_to_crossterm(&km_g));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_g));
     assert!(
         app.pending_state.is_some(),
         "after first g, pending_state must be Some(AfterG)"
@@ -3149,7 +3149,7 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('j');
-    app.route_chord_key(App::km_to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -3264,7 +3264,7 @@ fn visual_block_h_l_extend_selection() {
     // Dispatch `l` via the canonical chord routing path 3 times.
     let km_l = km_char('l');
     for _ in 0..3 {
-        app.route_chord_key(App::km_to_crossterm(&km_l));
+        app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_l));
     }
 
     // Cursor should be at col 5 after 3 l's.
