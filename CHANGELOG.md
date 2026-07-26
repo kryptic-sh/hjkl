@@ -74,6 +74,18 @@ patch bumps.
 
 ### Internal
 
+- **Workspace-level clippy lints** now enforce `or_fun_call` and
+  `unused_peekable` (deny) plus `assigning_clones`, `format_push_string`,
+  `manual_let_else`, `map_unwrap_or`, `use_self` and `redundant_pub_crate`
+  (warn) via `[workspace.lints]` across all 60 members; ~1200 sites were
+  modernized to match (let-else, `map_or`, `Self`, true visibility). A real bug
+  fell out: `:later <time>` sampled two different clock instants on overflow.
+- Read-only `Vec`/`String`/`Value` parameters became borrows on the edit,
+  restore, LSP and grammar-load paths (removes a per-keystroke allocation in
+  insert mode), 20 verified-redundant clones were dropped (one on the
+  `smartindent` keypress path), and mode-invariant `unwrap()`s in the
+  cmdline/diff/swap paths now name their invariant in an `expect`.
+
 - Deduplicated drift-prone copies found by the round-2 audit: the visual-exit
   `'<`/`'>` mark computation (two byte-identical 35-line copies in the vim FSM),
   the `InsertSession` setup tail (`begin_insert`/`begin_insert_noundo`), and the
