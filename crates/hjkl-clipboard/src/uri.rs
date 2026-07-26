@@ -113,7 +113,7 @@ pub(crate) fn path_to_file_uri(path: &Path) -> Result<String, ClipboardError> {
             let without_prefix = path_str
                 .strip_prefix("\\\\")
                 .or_else(|| path_str.strip_prefix("//"))
-                .unwrap_or(&path_str[2..]);
+                .unwrap_or_else(|| &path_str[2..]);
             let normalised = without_prefix.replace('\\', "/");
             // Percent-encode each segment but keep the separating '/' bare.
             let encoded = encode_path_segments(&normalised);

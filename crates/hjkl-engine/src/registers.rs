@@ -209,7 +209,7 @@ impl Registers {
     /// Host hook: set the `"%` register to the given filename. Call this
     /// whenever the active buffer changes.
     pub fn set_filename(&mut self, name: Option<String>) {
-        self.filename = name.clone();
+        self.filename.clone_from(&name);
         self.filename_slot = name.map(|n| Slot::new(n, false));
     }
 

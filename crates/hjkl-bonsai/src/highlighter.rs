@@ -195,8 +195,11 @@ impl ChildCache {
         self.map.get_mut(lang)
     }
 
-    fn get_spans(&self, lang: &str, content_hash: u64) -> Option<&Vec<HighlightSpan>> {
-        self.spans_by_hash.get(lang)?.get(&content_hash)
+    fn get_spans(&self, lang: &str, content_hash: u64) -> Option<&[HighlightSpan]> {
+        self.spans_by_hash
+            .get(lang)?
+            .get(&content_hash)
+            .map(Vec::as_slice)
     }
 
     fn insert_spans(&mut self, lang: &str, content_hash: u64, spans: Vec<HighlightSpan>) {
@@ -1360,8 +1363,10 @@ impl Highlighter {
             let offset = content_range.start;
             cache_hashes.insert(content_hash);
 
-            let cached_spans_opt: Option<Vec<HighlightSpan>> =
-                self.child_cache.get_spans(lang_name, content_hash).cloned();
+            let cached_spans_opt: Option<Vec<HighlightSpan>> = self
+                .child_cache
+                .get_spans(lang_name, content_hash)
+                .map(<[HighlightSpan]>::to_vec);
             let spans = if let Some(s) = cached_spans_opt {
                 s
             } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
@@ -1786,8 +1791,10 @@ impl Highlighter {
             let offset = content_range.start;
             cache_hashes.insert(content_hash);
 
-            let cached_spans_opt: Option<Vec<HighlightSpan>> =
-                self.child_cache.get_spans(lang_name, content_hash).cloned();
+            let cached_spans_opt: Option<Vec<HighlightSpan>> = self
+                .child_cache
+                .get_spans(lang_name, content_hash)
+                .map(<[HighlightSpan]>::to_vec);
             let spans = if let Some(s) = cached_spans_opt {
                 s
             } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
@@ -2113,12 +2120,12 @@ mod tests {
 
         assert_eq!(
             cache.get_spans("javascript", content_hash),
-            Some(&js_spans),
+            Some(js_spans.as_slice()),
             "javascript entry must survive the python insert with the same content hash"
         );
         assert_eq!(
             cache.get_spans("python", content_hash),
-            Some(&py_spans),
+            Some(py_spans.as_slice()),
             "python entry must be its own cache slot, not reuse javascript's spans"
         );
     }

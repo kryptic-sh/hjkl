@@ -1059,6 +1059,7 @@ fn format_worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::path::PathBuf;
 
     #[test]
@@ -1213,7 +1214,7 @@ mod tests {
         // Source: 12 lines; verify byte offsets for rows 5..=10.
         let mut source = String::new();
         for i in 0..12 {
-            source.push_str(&format!("line{i}\n"));
+            let _ = writeln!(source, "line{i}");
         }
 
         let range = RangeSpec {

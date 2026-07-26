@@ -1347,6 +1347,7 @@ pub fn default_layer() -> SyntaxLayer {
 mod tests {
     use super::*;
     use hjkl_buffer::View;
+    use std::fmt::Write as _;
     use std::path::Path;
 
     const TID: BufferId = 0;
@@ -1654,7 +1655,7 @@ mod tests {
         // at row 45.
         let mut src = String::new();
         for i in 0..50 {
-            src.push_str(&format!("fn f{i}() {{}}\n"));
+            let _ = writeln!(src, "fn f{i}() {{}}");
         }
         src.push_str("fn broken() {\nlet x = ;\n}\n");
         let buf = View::from_str(&src);

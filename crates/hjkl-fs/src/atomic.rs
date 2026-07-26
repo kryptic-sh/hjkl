@@ -140,7 +140,7 @@ fn open_temp(path: &Path, mode: Option<u32>) -> io::Result<File> {
 /// Best-effort: some filesystems reject `fsync` on a directory handle, and a
 /// failure costs durability of the *name*, not integrity of the data.
 pub(crate) fn sync_parent(path: &Path) {
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let dir = if parent.as_os_str().is_empty() {
         Path::new(".")
     } else {

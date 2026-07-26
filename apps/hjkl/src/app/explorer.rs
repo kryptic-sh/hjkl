@@ -210,7 +210,7 @@ impl ExplorerTree {
         // repo — no git2 calls are made inside push_children in that case.
         let status = hjkl_app::git::explorer_status_map(&self.root);
         self.repo_present = git2::Repository::discover(&self.root).is_ok();
-        self.git_base = status.clone();
+        self.git_base.clone_from(&status);
 
         let mut out = Vec::new();
         let root = self.root.clone();
@@ -299,7 +299,7 @@ impl ExplorerTree {
     /// Re-root the tree at `new_root`, preserving the existing `expanded` set.
     /// The new root is automatically added to `expanded`.
     pub(crate) fn set_root(&mut self, new_root: PathBuf) {
-        self.root = new_root.clone();
+        self.root.clone_from(&new_root);
         self.expanded.insert(new_root);
         self.rebuild();
     }

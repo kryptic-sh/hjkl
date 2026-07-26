@@ -1408,7 +1408,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         // Reused across every cell in this row so `resolve_span_style` refills
         // and sorts the SAME allocation instead of allocating a Vec per cell.
         let mut span_scratch: Vec<&hjkl_buffer::Span> = Vec::new();
-        let mut chars_iter = line.chars().enumerate().peekable();
+        let mut chars_iter = line.chars().enumerate();
         while let Some((col_idx, ch)) = chars_iter.next() {
             let ch_byte_len = ch.len_utf8();
             if col_idx >= seg_end {

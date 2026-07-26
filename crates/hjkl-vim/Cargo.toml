@@ -26,3 +26,6 @@ hjkl-keymap.workspace = true
 hjkl-vim-types.workspace = true
 regex = "1"
 tracing = "0.1"
+
+[lints]
+workspace = true

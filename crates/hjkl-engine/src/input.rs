@@ -82,7 +82,7 @@ pub fn encode_macro(inputs: &[Input]) -> String {
 /// silently dropping user content.
 pub fn decode_macro(s: &str) -> Vec<Input> {
     let mut out = Vec::new();
-    let mut chars = s.chars().peekable();
+    let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c != '<' {
             out.push(Input {

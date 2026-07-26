@@ -461,7 +461,7 @@ pub(crate) fn find_project_root(start: &std::path::Path) -> PathBuf {
             }
         }
         match dir.parent() {
-            Some(p) => dir = p.to_owned(),
+            Some(p) => dir = p.to_path_buf(),
             None => return start.to_owned(),
         }
     }

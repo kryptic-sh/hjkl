@@ -46,7 +46,7 @@ impl Chord {
     /// - Bare characters → `Char(c)` with no modifiers
     pub fn parse(s: &str, leader: char) -> Result<Self, ChordParseError> {
         let mut events = Vec::new();
-        let mut chars = s.chars().peekable();
+        let mut chars = s.chars();
 
         while let Some(ch) = chars.next() {
             if ch == '<' {

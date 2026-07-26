@@ -12,6 +12,8 @@
 //! for a scrolled buffer, but the ruler is exactly the cursor position and is
 //! always painted.
 
+use std::fmt::Write as _;
+
 use super::harness::TerminalSession;
 
 /// Build a 120-line file (`line1`..`line120`) in a fresh tempdir so the test
@@ -19,7 +21,7 @@ use super::harness::TerminalSession;
 fn make_lines_file(td: &std::path::Path) -> std::path::PathBuf {
     let mut content = String::new();
     for i in 1..=120 {
-        content.push_str(&format!("line{i}\n"));
+        let _ = writeln!(content, "line{i}");
     }
     let p = td.join("cursor_restore_target.txt");
     std::fs::write(&p, content).unwrap();

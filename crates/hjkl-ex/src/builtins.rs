@@ -433,9 +433,8 @@ fn later_handler<H: Host>(
             // "later by duration" = advance from now toward the future.
             // The redo stack holds entries timestamped at their original edit
             // time; restore all entries whose timestamp ≤ (now + duration).
-            let target = std::time::SystemTime::now()
-                .checked_add(duration)
-                .unwrap_or(std::time::SystemTime::now());
+            let now = std::time::SystemTime::now();
+            let target = now.checked_add(duration).unwrap_or(now);
             let applied = editor.later_by_time(target);
             let s = if applied == 1 { "" } else { "s" };
             Some(ExEffect::Info(format!("{applied} change{s} later")))
@@ -502,7 +501,7 @@ fn cd_handler<H: Host>(
         Ok(()) => {
             let new_cwd = std::env::current_dir()
                 .map(|p| p.display().to_string())
-                .unwrap_or(target.clone());
+                .unwrap_or_else(|_| target.clone());
             Some(ExEffect::Cwd(new_cwd))
         }
         Err(e) => Some(ExEffect::Error(format!("{target}: {e}"))),
@@ -3384,7 +3383,7 @@ fn retab_impl<H: Host>(
         }
     };
 
-    let tabstop = explicit_tabstop.unwrap_or(editor.settings().tabstop);
+    let tabstop = explicit_tabstop.unwrap_or_else(|| editor.settings().tabstop);
     let expandtab = editor.settings().expandtab;
 
     let rope = editor.buffer().rope();

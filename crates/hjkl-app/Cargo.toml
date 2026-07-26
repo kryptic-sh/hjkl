@@ -48,3 +48,6 @@ tempfile = "3"
 [[bench]]
 name = "swap"
 harness = false
+
+[lints]
+workspace = true

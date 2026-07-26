@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1445,7 +1446,7 @@ impl PickerLogic for GitBranchPicker {
             let sha = commit.id().to_string();
             let short_sha = &sha[..7.min(sha.len())];
             let subject = commit.summary().ok().flatten().unwrap_or("").to_owned();
-            text.push_str(&format!("{short_sha}  {subject}\n"));
+            let _ = writeln!(text, "{short_sha}  {subject}");
             count += 1;
             if count >= 30 {
                 break;
@@ -2025,8 +2026,8 @@ impl PickerLogic for GitTagsPicker {
         let body = if !tag_message.is_empty() || tag_tagger.is_some() {
             let mut header = format!("Tag: {tag_name}\n");
             if let Some((tagger_name, tagger_secs)) = tag_tagger {
-                header.push_str(&format!("Tagger: {tagger_name}\n"));
-                header.push_str(&format!("Date:   {}\n", format_tag_time(tagger_secs)));
+                let _ = writeln!(header, "Tagger: {tagger_name}");
+                let _ = writeln!(header, "Date:   {}", format_tag_time(tagger_secs));
             }
             if !tag_message.is_empty() {
                 header.push('\n');
@@ -2304,7 +2305,7 @@ impl PickerLogic for GitRemotesPicker {
                 if short.ends_with("/HEAD") {
                     continue;
                 }
-                body.push_str(&format!("  {short}\n"));
+                let _ = writeln!(body, "  {short}");
                 count += 1;
                 if count >= 50 {
                     body.push_str("  ...\n");

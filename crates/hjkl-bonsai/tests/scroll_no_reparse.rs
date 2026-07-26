@@ -8,6 +8,7 @@
 //! cargo test -p hjkl-bonsai --test scroll_no_reparse -- --ignored
 //! ```
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use hjkl_bonsai::Highlighter;
@@ -46,7 +47,7 @@ fn row_starts(source: &[u8]) -> Vec<usize> {
 fn make_source() -> Vec<u8> {
     let mut s = String::new();
     for i in 0..30 {
-        s.push_str(&format!("fn f{i}() {{ let x = {i}; }}\n"));
+        let _ = writeln!(s, "fn f{i}() {{ let x = {i}; }}");
     }
     s.into_bytes()
 }

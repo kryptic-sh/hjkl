@@ -178,7 +178,7 @@ fn resolve_address<H: hjkl_engine::Host>(
     let last = line_count.max(1);
     // 1-based current line: the `;`-separator override when present, else the
     // real (0-based) editor cursor.
-    let current = from_row.unwrap_or(editor.cursor().0 + 1);
+    let current = from_row.unwrap_or_else(|| editor.cursor().0 + 1);
     let base: i64 = match addr {
         Address::Number(n) => n as i64,
         Address::Current => current as i64,

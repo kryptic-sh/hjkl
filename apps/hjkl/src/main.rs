@@ -38,6 +38,7 @@ use crossterm::{
     execute, terminal,
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use std::fmt::Write as _;
 use std::io::{self, stdout};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -455,13 +456,14 @@ fn format_swap_listing(entries: &[(PathBuf, hjkl_app::swap::SwapHeader, bool)]) 
         } else {
             "process gone"
         };
-        out.push_str(&format!("  {}\n", swap_path.display()));
-        out.push_str(&format!("    file:  {file}\n"));
-        out.push_str(&format!("    pid:   {} ({status})\n", header.writer_pid));
-        out.push_str(&format!(
-            "    saved: {} ms since epoch\n",
+        let _ = writeln!(out, "  {}", swap_path.display());
+        let _ = writeln!(out, "    file:  {file}");
+        let _ = writeln!(out, "    pid:   {} ({status})", header.writer_pid);
+        let _ = writeln!(
+            out,
+            "    saved: {} ms since epoch",
             header.write_time_unix_ms
-        ));
+        );
     }
     out
 }

@@ -595,7 +595,7 @@ fn coerce_option_display(display: &str) -> Value {
 /// the full nvim termcode table (function keys, mouse, <M-x>, <A-x>, etc.).
 fn replace_termcodes(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
+    let mut chars = src.chars();
     while let Some(ch) = chars.next() {
         if ch != '<' {
             out.push(ch);
@@ -2299,7 +2299,8 @@ fn dispatch(
             };
             // Execute each line.
             for line in src.split('\n') {
-                let line = line.trim().strip_prefix(':').unwrap_or(line.trim());
+                let line = line.trim();
+                let line = line.strip_prefix(':').unwrap_or(line);
                 if !line.is_empty() {
                     app.dispatch_ex(line);
                 }

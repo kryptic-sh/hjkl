@@ -134,7 +134,7 @@ pub fn path_in_repo(path: &Path) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    let parent = canon.parent().unwrap_or(Path::new("."));
+    let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     Repository::discover(parent).is_ok()
 }
 
@@ -177,7 +177,7 @@ fn open_repo_for(path: &Path) -> Result<(Repository, std::path::PathBuf), git2::
     let canon_path = path
         .canonicalize()
         .map_err(|e| git2::Error::from_str(&e.to_string()))?;
-    let parent = canon_path.parent().unwrap_or(Path::new("."));
+    let parent = canon_path.parent().unwrap_or_else(|| Path::new("."));
     let repo = Repository::discover(parent)?;
     let rel = {
         let workdir = repo
@@ -380,7 +380,7 @@ fn try_hunks_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Hunk>, git2::
     let canon_path = path
         .canonicalize()
         .map_err(|e| git2::Error::from_str(&e.to_string()))?;
-    let parent = canon_path.parent().unwrap_or(Path::new("."));
+    let parent = canon_path.parent().unwrap_or_else(|| Path::new("."));
     let repo = Repository::discover(parent)?;
     let workdir = repo
         .workdir()
@@ -565,7 +565,7 @@ fn resolve_in_repo(
     path: &Path,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), HunkApplyError> {
     let canon = path.canonicalize().map_err(|_| HunkApplyError::NotInRepo)?;
-    let parent = canon.parent().unwrap_or(Path::new("."));
+    let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     let repo = Repository::discover(parent).map_err(|_| HunkApplyError::NotInRepo)?;
     let workdir = repo
         .workdir()
@@ -955,7 +955,7 @@ fn try_is_untracked(path: &Path) -> Result<bool, git2::Error> {
     let canon_path = path
         .canonicalize()
         .map_err(|e| git2::Error::from_str(&e.to_string()))?;
-    let parent = canon_path.parent().unwrap_or(Path::new("."));
+    let parent = canon_path.parent().unwrap_or_else(|| Path::new("."));
     let repo = Repository::discover(parent)?;
     let workdir = repo
         .workdir()

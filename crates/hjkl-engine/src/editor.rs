@@ -1465,7 +1465,7 @@ impl Settings {
         self.smartindent = opts.smartindent;
         self.undo_levels = opts.undo_levels;
         self.undo_break_on_motion = opts.undo_break_on_motion;
-        self.iskeyword = opts.iskeyword.clone();
+        self.iskeyword.clone_from(&opts.iskeyword);
         self.timeout_len = opts.timeout_len;
         self.number = opts.number;
         self.relativenumber = opts.relativenumber;
@@ -1477,10 +1477,10 @@ impl Settings {
         self.foldmethod = opts.foldmethod;
         self.foldenable = opts.foldenable;
         self.foldlevelstart = opts.foldlevelstart;
-        self.foldmarker = opts.foldmarker.clone();
-        self.colorcolumn = opts.colorcolumn.clone();
-        self.formatoptions = opts.formatoptions.clone();
-        self.filetype = opts.filetype.clone();
+        self.foldmarker.clone_from(&opts.foldmarker);
+        self.colorcolumn.clone_from(&opts.colorcolumn);
+        self.formatoptions.clone_from(&opts.formatoptions);
+        self.filetype.clone_from(&opts.filetype);
         self.scrolloff = opts.scrolloff;
         self.sidescrolloff = opts.sidescrolloff;
         self.autoreload = opts.autoreload;
@@ -1490,7 +1490,8 @@ impl Settings {
         self.indent_guides = opts.indent_guides;
         self.indent_guide_char = opts.indent_guide_char;
         self.colorizer = opts.colorizer;
-        self.colorizer_filetypes = opts.colorizer_filetypes.clone();
+        self.colorizer_filetypes
+            .clone_from(&opts.colorizer_filetypes);
         self.format_on_save = opts.format_on_save;
         self.trim_trailing_whitespace = opts.trim_trailing_whitespace;
         self.rainbow_brackets = opts.rainbow_brackets;
@@ -4400,12 +4401,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// here is visible to every window on this buffer, matching vim.
     pub(super) fn restore_marks(&mut self, snap: &hjkl_buffer::MarkSnapshot) {
         self.buffer.set_marks(snap.local_marks.clone());
-        self.jump_back = snap.jump_back.clone();
-        self.jump_fwd = snap.jump_fwd.clone();
+        self.jump_back.clone_from(&snap.jump_back);
+        self.jump_fwd.clone_from(&snap.jump_fwd);
         {
             let mut bank = self.change_bank.lock().unwrap();
             bank.last_edit = snap.change_last_edit;
-            bank.list = snap.change_list.clone();
+            bank.list.clone_from(&snap.change_list);
             bank.cursor = snap.change_cursor;
         }
         let cur_bid = self.current_buffer_id;
@@ -5355,7 +5356,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         };
         if let Some(prompt) = self.search_prompt.as_mut() {
             prompt.cursor = text.chars().count();
-            prompt.text = text.clone();
+            prompt.text.clone_from(&text);
         }
         self.push_search_pattern(&text);
     }

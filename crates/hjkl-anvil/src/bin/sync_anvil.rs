@@ -11,6 +11,7 @@
 // maintainers, not in CI.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Cursor, Read as _};
 use std::path::PathBuf;
 
@@ -331,34 +332,34 @@ fn emit_toml(tools: &BTreeMap<String, TranslatedTool>, pin: &str) -> String {
 
     out.push_str("[meta]\n");
     out.push_str("schema_version = 1\n");
-    out.push_str(&format!("upstream_rev = \"{pin}\"\n"));
+    let _ = writeln!(out, "upstream_rev = \"{pin}\"");
 
     for (name, tool) in tools {
         out.push('\n');
-        out.push_str(&format!("[tool.{name}]\n"));
-        out.push_str(&format!("category = \"{}\"\n", tool.category));
+        let _ = writeln!(out, "[tool.{name}]");
+        let _ = writeln!(out, "category = \"{}\"", tool.category);
         // Escape description: replace `\` and `"` in the string value.
         let desc_escaped = tool.description.replace('\\', "\\\\").replace('"', "\\\"");
-        out.push_str(&format!("description = \"{desc_escaped}\"\n"));
-        out.push_str(&format!("version = \"{}\"\n", tool.version));
-        out.push_str(&format!("bin = \"{}\"\n", tool.bin));
+        let _ = writeln!(out, "description = \"{desc_escaped}\"");
+        let _ = writeln!(out, "version = \"{}\"", tool.version);
+        let _ = writeln!(out, "bin = \"{}\"", tool.bin);
 
         match &tool.method {
             TranslatedMethod::Cargo { crate_name } => {
                 out.push_str("method = \"cargo\"\n");
-                out.push_str(&format!("crate_name = \"{crate_name}\"\n"));
+                let _ = writeln!(out, "crate_name = \"{crate_name}\"");
             }
             TranslatedMethod::Npm { package } => {
                 out.push_str("method = \"npm\"\n");
-                out.push_str(&format!("package = \"{package}\"\n"));
+                let _ = writeln!(out, "package = \"{package}\"");
             }
             TranslatedMethod::Pip { package } => {
                 out.push_str("method = \"pip\"\n");
-                out.push_str(&format!("package = \"{package}\"\n"));
+                let _ = writeln!(out, "package = \"{package}\"");
             }
             TranslatedMethod::GoInstall { module } => {
                 out.push_str("method = \"goinstall\"\n");
-                out.push_str(&format!("module = \"{module}\"\n"));
+                let _ = writeln!(out, "module = \"{module}\"");
             }
             TranslatedMethod::Github {
                 repo,
@@ -366,11 +367,11 @@ fn emit_toml(tools: &BTreeMap<String, TranslatedTool>, pin: &str) -> String {
                 sha256,
             } => {
                 out.push_str("method = \"github\"\n");
-                out.push_str(&format!("repo = \"{repo}\"\n"));
-                out.push_str(&format!("asset_pattern = \"{asset_pattern}\"\n"));
-                out.push_str(&format!("[tool.{name}.sha256]\n"));
+                let _ = writeln!(out, "repo = \"{repo}\"");
+                let _ = writeln!(out, "asset_pattern = \"{asset_pattern}\"");
+                let _ = writeln!(out, "[tool.{name}.sha256]");
                 for (triple, hash) in sha256 {
-                    out.push_str(&format!("\"{triple}\" = \"{hash}\"\n"));
+                    let _ = writeln!(out, "\"{triple}\" = \"{hash}\"");
                 }
             }
         }

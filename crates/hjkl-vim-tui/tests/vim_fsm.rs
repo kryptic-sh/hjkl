@@ -10,7 +10,7 @@ fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::View, H>, k
     // Minimal notation:
     //   <Esc> <CR> <BS> <Left/Right/Up/Down> <C-x>
     //   anything else = single char
-    let mut iter = keys.chars().peekable();
+    let mut iter = keys.chars();
     while let Some(c) = iter.next() {
         if c == '<' {
             let mut tag = String::new();

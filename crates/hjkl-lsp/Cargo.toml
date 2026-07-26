@@ -22,3 +22,6 @@ url = "2"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "io-util", "sync", "time", "test-util"] }
 tempfile = "3"
+
+[lints]
+workspace = true

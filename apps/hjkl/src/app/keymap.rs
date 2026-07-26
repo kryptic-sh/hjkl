@@ -123,7 +123,7 @@ pub(crate) fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
 
 pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Result<Vec<Input>, String> {
     let mut result = Vec::new();
-    let mut chars = text.chars().peekable();
+    let mut chars = text.chars();
     while let Some(ch) = chars.next() {
         if ch != '<' {
             result.push(Input {

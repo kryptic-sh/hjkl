@@ -929,7 +929,7 @@ fn split_after_bare_esc(bytes: &[u8]) -> Vec<&[u8]> {
 /// - `<Up>` / `<Down>` / `<Left>` / `<Right>` → ANSI escape sequences
 fn vim_notation_to_bytes(seq: &str) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut chars = seq.chars().peekable();
+    let mut chars = seq.chars();
 
     while let Some(ch) = chars.next() {
         if ch == '<' {

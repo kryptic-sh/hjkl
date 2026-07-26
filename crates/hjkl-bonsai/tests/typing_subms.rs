@@ -5,6 +5,7 @@
 //! cargo test -p hjkl-bonsai --test typing_subms -- --ignored
 //! ```
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -51,7 +52,7 @@ fn small_edit_parse_and_walk_under_some_budget() {
     // Build a ~5KB Rust source.
     let mut src = String::new();
     for i in 0..100 {
-        src.push_str(&format!("fn function_{i}(x: u32) -> u32 {{ x + {i} }}\n"));
+        let _ = writeln!(src, "fn function_{i}(x: u32) -> u32 {{ x + {i} }}");
     }
     let pre: Vec<u8> = src.as_bytes().to_vec();
 

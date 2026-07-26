@@ -16,3 +16,6 @@ readme = "README.md"
 [dependencies]
 crossterm = "0.29"
 hjkl-keymap.workspace = true
+
+[lints]
+workspace = true

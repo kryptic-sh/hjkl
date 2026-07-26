@@ -10,6 +10,7 @@
 //! cargo test -p hjkl-bonsai --test edit_size_dispatch -- --ignored
 //! ```
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use hjkl_bonsai::Highlighter;
@@ -122,7 +123,7 @@ fn large_edit_incremental_parse_still_produces_spans() {
     // Build a large replacement (≥1024 bytes inserted).
     let mut large_insert = String::from("fn main() {\n");
     for i in 0..40 {
-        large_insert.push_str(&format!("    let var_{i} = {i} * 2;\n"));
+        let _ = writeln!(large_insert, "    let var_{i} = {i} * 2;");
     }
     large_insert.push('}');
     let post = large_insert.as_bytes();

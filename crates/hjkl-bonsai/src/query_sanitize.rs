@@ -674,7 +674,7 @@ mod tests {
     /// Count open-parens minus close-parens, ignoring characters inside `"..."`.
     fn paren_balance(s: &str) -> i64 {
         let mut balance = 0i64;
-        let mut chars = s.chars().peekable();
+        let mut chars = s.chars();
         while let Some(c) = chars.next() {
             match c {
                 '"' => {

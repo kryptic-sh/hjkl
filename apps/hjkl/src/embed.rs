@@ -5,7 +5,7 @@
 //! See `docs/embed-rpc.md` for the method catalogue.
 
 use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use hjkl_buffer::View;
@@ -79,9 +79,7 @@ fn drain_to_newline<R: BufRead>(r: &mut R) -> std::io::Result<()> {
 // Editor construction (mirrors headless.rs)
 // ---------------------------------------------------------------------------
 
-fn build_editor(
-    maybe_path: Option<&PathBuf>,
-) -> Result<(Editor<View, DefaultHost>, Option<PathBuf>)> {
+fn build_editor(maybe_path: Option<&Path>) -> Result<(Editor<View, DefaultHost>, Option<PathBuf>)> {
     let mut buffer = View::new();
 
     if let Some(path) = maybe_path {
@@ -101,7 +99,7 @@ fn build_editor(
 
     let host = DefaultHost::new();
     let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
-    Ok((editor, maybe_path.cloned()))
+    Ok((editor, maybe_path.map(Path::to_path_buf)))
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +435,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     // fallback can't write escapes into the protocol stream (#264).
     crate::host::disable_clipboard_for_rpc();
     let first_file = files.into_iter().next();
-    let (mut editor, mut current_filename) = build_editor(first_file.as_ref())?;
+    let (mut editor, mut current_filename) = build_editor(first_file.as_deref())?;
     let mut should_quit = false;
 
     let stdin = std::io::stdin();

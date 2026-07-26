@@ -1718,7 +1718,7 @@ fn colon_e_path_opens_file_via_hjkl_ex() {
         .active()
         .filename
         .as_deref()
-        .unwrap_or(std::path::Path::new(""));
+        .unwrap_or_else(|| std::path::Path::new(""));
     assert_eq!(
         active_path,
         path.as_path(),
@@ -1776,7 +1776,7 @@ fn colon_e_percent_expands_to_current_file() {
         .active()
         .filename
         .as_deref()
-        .unwrap_or(std::path::Path::new(""))
+        .unwrap_or_else(|| std::path::Path::new(""))
         .to_path_buf();
 
     // Now dispatch `e %` — should expand to the same path and re-open.
@@ -1786,7 +1786,7 @@ fn colon_e_percent_expands_to_current_file() {
         .active()
         .filename
         .as_deref()
-        .unwrap_or(std::path::Path::new(""))
+        .unwrap_or_else(|| std::path::Path::new(""))
         .to_path_buf();
 
     assert_eq!(

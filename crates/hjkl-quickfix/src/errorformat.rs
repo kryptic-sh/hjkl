@@ -41,7 +41,7 @@ fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
     let mut re_src = String::from("^");
     let mut map = EfmGroupMap::default();
     let mut group = 0usize;
-    let mut chars = efm.chars().peekable();
+    let mut chars = efm.chars();
     while let Some(ch) = chars.next() {
         if ch == '%' {
             match chars.next() {

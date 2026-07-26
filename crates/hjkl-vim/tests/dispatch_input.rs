@@ -36,7 +36,7 @@ fn ctrl(key: Key) -> Input {
 /// Run a string of keys through `dispatch_input` (not the deprecated shim).
 /// Supports the same `<tag>` notation the engine tests use.
 fn dispatch_keys(e: &mut Editor, keys: &str) {
-    let mut iter = keys.chars().peekable();
+    let mut iter = keys.chars();
     while let Some(c) = iter.next() {
         if c == '<' {
             let mut tag = String::new();

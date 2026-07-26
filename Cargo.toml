@@ -12,6 +12,14 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
+# Idiom lints kept fixed workspace-wide (round 2, item 20). Every member
+# manifest opts in with `[lints] workspace = true`.
+[workspace.lints.clippy]
+or_fun_call = "deny"
+unused_peekable = "deny"
+assigning_clones = "warn"
+format_push_string = "warn"
+
 [workspace.dependencies]
 hjkl-anvil = { path = "crates/hjkl-anvil", version = "0.37" }
 hjkl-app = { path = "crates/hjkl-app", version = "0.37" }
