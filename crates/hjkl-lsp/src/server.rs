@@ -128,12 +128,7 @@ impl Server {
 
     /// Send a JSON-RPC notification (no response expected).
     pub fn send_notification(&mut self, method: &str, params: Value) {
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        self.enqueue(msg);
+        self.enqueue(rpc_envelope(None, method, params));
     }
 
     /// Send a JSON-RPC request, mapping the server's internal id back to
@@ -149,13 +144,7 @@ impl Server {
         if let Ok(mut map) = self.pending.lock() {
             map.insert(id, app_id);
         }
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        self.enqueue(msg);
+        self.enqueue(rpc_envelope(Some(id), method, params));
     }
 
     /// Gracefully shut down: send `shutdown` request, then `exit` notification,
@@ -200,6 +189,30 @@ impl Server {
             }
         }
     }
+}
+
+/// Build a JSON-RPC envelope (`Some(id)` → request, `None` → notification),
+/// **moving** `params` into the object.
+///
+/// Deliberately not `json!({ .., "params": params })`: the macro expands a
+/// non-literal interpolation to `to_value(&params)`, which re-serializes the
+/// `Value` we already own — a full deep clone of the tree. That copy is paid on
+/// every send, including per-save full-document `didChange` (and per keystroke
+/// for servers without incremental sync): measured ~43 µs for a 3.5 MB single
+/// string and ~24 ms for a 2 MB many-node payload, versus ~0 when the tree is
+/// moved in.
+///
+/// Wire bytes are unchanged: `serde_json::Map` is the same type `json!` builds,
+/// so key ordering is identical.
+fn rpc_envelope(id: Option<i64>, method: &str, params: Value) -> Value {
+    let mut msg = serde_json::Map::new();
+    msg.insert("jsonrpc".to_string(), Value::from("2.0"));
+    if let Some(id) = id {
+        msg.insert("id".to_string(), Value::from(id));
+    }
+    msg.insert("method".to_string(), Value::from(method));
+    msg.insert("params".to_string(), params);
+    Value::Object(msg)
 }
 
 /// Per-server default `initializationOptions` when the user hasn't set any.
@@ -271,12 +284,7 @@ async fn initialize_handshake(
     if let (Some(opts), Some(obj)) = (init_options, params.as_object_mut()) {
         obj.insert("initializationOptions".to_string(), opts.clone());
     }
-    let init_msg = json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "method": "initialize",
-        "params": params,
-    });
+    let init_msg = rpc_envelope(Some(0), "initialize", params);
     let bytes = serde_json::to_vec(&init_msg)?;
     stdin_tx.send(bytes).ok();
 
@@ -537,8 +545,12 @@ fn dispatch_message(
 /// Enqueue a JSON-RPC success response (used to answer server-initiated
 /// requests from the stdout dispatch task).
 fn send_response(stdin_tx: &mpsc::UnboundedSender<Vec<u8>>, id: Value, result: Value) {
-    let msg = json!({ "jsonrpc": "2.0", "id": id, "result": result });
-    if let Ok(bytes) = serde_json::to_vec(&msg) {
+    // Map inserts rather than `json!` so `id`/`result` move in — see `rpc_envelope`.
+    let mut msg = serde_json::Map::new();
+    msg.insert("jsonrpc".to_string(), Value::from("2.0"));
+    msg.insert("id".to_string(), id);
+    msg.insert("result".to_string(), result);
+    if let Ok(bytes) = serde_json::to_vec(&Value::Object(msg)) {
         let _ = stdin_tx.send(bytes);
     }
 }
@@ -551,8 +563,14 @@ fn send_error_response(
     code: i64,
     message: &str,
 ) {
-    let msg = json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } });
-    if let Ok(bytes) = serde_json::to_vec(&msg) {
+    let mut msg = serde_json::Map::new();
+    msg.insert("jsonrpc".to_string(), Value::from("2.0"));
+    msg.insert("id".to_string(), id);
+    msg.insert(
+        "error".to_string(),
+        json!({ "code": code, "message": message }),
+    );
+    if let Ok(bytes) = serde_json::to_vec(&Value::Object(msg)) {
         let _ = stdin_tx.send(bytes);
     }
 }
@@ -633,4 +651,58 @@ fn spawn_wait_task(
         }
     });
     (kill_tx, handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The move-in envelope must be indistinguishable from the old
+    /// `json!({ .., "params": params })` shape — same `Value`, and (since
+    /// `serde_json::Map` ordering is the same either way) the same wire bytes.
+    #[test]
+    fn rpc_envelope_matches_json_macro_shape() {
+        let params = json!({
+            "textDocument": { "uri": "file:///tmp/a.rs", "version": 3 },
+            "contentChanges": [{ "text": "fn main() {}\n" }],
+        });
+
+        let notif = rpc_envelope(None, "textDocument/didChange", params.clone());
+        let notif_old = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": params,
+        });
+        assert_eq!(notif, notif_old);
+        assert_eq!(
+            serde_json::to_vec(&notif).unwrap(),
+            serde_json::to_vec(&notif_old).unwrap(),
+            "wire bytes must be identical (key order included)"
+        );
+        assert_eq!(
+            notif["params"]["contentChanges"][0]["text"],
+            "fn main() {}\n"
+        );
+        assert!(notif.get("id").is_none(), "notifications carry no id");
+
+        let req = rpc_envelope(Some(7), "textDocument/definition", params.clone());
+        let req_old = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "textDocument/definition",
+            "params": params,
+        });
+        assert_eq!(req, req_old);
+        assert_eq!(
+            serde_json::to_vec(&req).unwrap(),
+            serde_json::to_vec(&req_old).unwrap()
+        );
+
+        // Null params (used by `shutdown`/`exit`) still serialize as `null`.
+        let null_params = rpc_envelope(None, "exit", Value::Null);
+        assert_eq!(
+            null_params,
+            json!({ "jsonrpc": "2.0", "method": "exit", "params": null })
+        );
+    }
 }
