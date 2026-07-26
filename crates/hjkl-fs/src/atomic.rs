@@ -35,8 +35,9 @@ pub struct WriteOptions {
     /// Fall back to a **non-atomic** in-place truncate-and-write when the
     /// atomic path cannot run at all — a cross-device rename, or a parent
     /// directory that permits writing the file but not creating a temp
-    /// alongside it. Only ever taken when nothing has been renamed into place,
-    /// so a mid-write failure is never compounded into data loss.
+    /// alongside it. This path uses `File::create` (O_TRUNC), so a mid-write
+    /// failure (e.g. ENOSPC) **can** leave the target truncated — the atomic
+    /// path's guarantee does not extend here.
     pub nonatomic_fallback: bool,
     /// Attempts to find an unused temp filename before giving up.
     pub temp_retries: u32,
@@ -493,14 +494,39 @@ mod tests {
     }
 
     #[test]
-    fn nonatomic_fallback_writes_when_temp_cannot_be_created() {
-        // A parent that does not exist defeats both paths, so use the documented
-        // fallback trigger shape instead: `document()` opts on a normal file
-        // still take the atomic path, which must succeed and preserve content.
+    fn document_write_succeeds_on_normal_file() {
         let td = tempfile::tempdir().unwrap();
         let p = td.path().join("doc.txt");
         write_atomic(&p, b"hello", &WriteOptions::document()).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"hello");
+    }
+
+    /// Genuinely reach `write_in_place`: a directory that permits writing
+    /// the existing target file but NOT creating a temp file beside it
+    /// (parent chmod 0555). The atomic path fails to create the temp, the
+    /// fallback opens the existing target for write, and the write lands.
+    #[cfg(unix)]
+    #[test]
+    fn nonatomic_fallback_writes_into_unwritable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("inside.txt");
+        std::fs::write(&p, b"old").unwrap();
+
+        // Make the parent non-writable so temp-file creation fails.
+        let mut perms = std::fs::metadata(td.path()).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(td.path(), perms).unwrap();
+
+        let result = write_atomic(&p, b"new", &WriteOptions::document());
+        // Restore writability so tempdir deletion works.
+        let mut perms = std::fs::metadata(td.path()).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(td.path(), perms).unwrap();
+
+        result.unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
     }
 
     #[cfg(unix)]
