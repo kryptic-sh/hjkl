@@ -1,4 +1,5 @@
 use hjkl_engine::{Input, Key, VimMode};
+use hjkl_keymap::{Chord, KeyCode as KmKeyCode, KeyModifiers, key::KeyEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum MapMode {
@@ -119,12 +120,15 @@ pub(crate) fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
     }
 }
 
-pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Vec<Input> {
-    let mut normalized = String::new();
+pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Result<Vec<Input>, String> {
+    let mut result = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '<' {
-            normalized.push(ch);
+            result.push(Input {
+                key: Key::Char(ch),
+                ..Input::default()
+            });
             continue;
         }
 
@@ -139,37 +143,69 @@ pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Vec<Input> {
         }
 
         if !closed {
-            normalized.push('<');
-            normalized.push_str(&tag);
+            result.push(Input {
+                key: Key::Char('<'),
+                ..Input::default()
+            });
+            for c in tag.chars() {
+                result.push(Input {
+                    key: Key::Char(c),
+                    ..Input::default()
+                });
+            }
             break;
         }
 
-        match tag.to_ascii_lowercase().as_str() {
-            "leader" => normalized.push(leader),
-            "space" => normalized.push(' '),
-            "cr" => normalized.push_str("<CR>"),
-            "esc" => normalized.push_str("<Esc>"),
-            "tab" => normalized.push_str("<Tab>"),
-            "bs" => normalized.push_str("<BS>"),
-            "lt" => normalized.push_str("<lt>"),
-            "del" => normalized.push_str("<Del>"),
-            "home" => normalized.push_str("<Home>"),
-            "end" => normalized.push_str("<End>"),
-            "pageup" => normalized.push_str("<PageUp>"),
-            "pagedown" => normalized.push_str("<PageDown>"),
-            "up" => normalized.push_str("<Up>"),
-            "down" => normalized.push_str("<Down>"),
-            "left" => normalized.push_str("<Left>"),
-            "right" => normalized.push_str("<Right>"),
-            _ => {
-                normalized.push('<');
-                normalized.push_str(&tag);
-                normalized.push('>');
+        let chord = Chord::parse(&format!("<{tag}>"), leader).map_err(|e| e.to_string())?;
+        for ev in &chord.0 {
+            match chord_event_to_input(ev) {
+                Some(input) => result.push(input),
+                None => return Err(format!("cannot map <{tag}> to an engine input")),
             }
         }
     }
+    Ok(result)
+}
 
-    hjkl_engine::decode_macro(&normalized)
+/// Map an [`hjkl_keymap::KeyEvent`] to an [`hjkl_engine::Input`].
+///
+/// Returns `None` for key codes the engine cannot represent (`Insert`, `F(n)`).
+fn chord_event_to_input(ev: &KeyEvent) -> Option<Input> {
+    let ctrl = ev.modifiers.contains(KeyModifiers::CTRL);
+    let alt = ev.modifiers.contains(KeyModifiers::ALT);
+    let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
+
+    let key = match ev.code {
+        KmKeyCode::Char(c) => {
+            // SHIFT on letters folds into uppercase; on non-letters ignored.
+            if c.is_ascii_alphabetic() && shift {
+                Key::Char(c.to_ascii_uppercase())
+            } else {
+                Key::Char(c)
+            }
+        }
+        KmKeyCode::Enter => Key::Enter,
+        KmKeyCode::Esc => Key::Esc,
+        KmKeyCode::Tab => Key::Tab,
+        KmKeyCode::Backspace => Key::Backspace,
+        KmKeyCode::Delete => Key::Delete,
+        KmKeyCode::Insert => return None,
+        KmKeyCode::Up => Key::Up,
+        KmKeyCode::Down => Key::Down,
+        KmKeyCode::Left => Key::Left,
+        KmKeyCode::Right => Key::Right,
+        KmKeyCode::Home => Key::Home,
+        KmKeyCode::End => Key::End,
+        KmKeyCode::PageUp => Key::PageUp,
+        KmKeyCode::PageDown => Key::PageDown,
+        KmKeyCode::F(_) => return None,
+    };
+    Some(Input {
+        key,
+        ctrl,
+        alt,
+        shift: false,
+    })
 }
 
 pub(crate) fn parse_mode_groups(cmd: &str) -> Option<Vec<MapMode>> {
@@ -245,7 +281,7 @@ pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<Runti
     let (lhs, rhs) = rest.split_at(split);
     let lhs = lhs.trim();
     let rhs = rhs.trim();
-    let lhs = parse_key_sequence(lhs, leader);
+    let lhs = parse_key_sequence(lhs, leader).ok()?;
     if is_remove {
         return Some(RuntimeMapCommand::Remove { modes, lhs });
     }
@@ -261,7 +297,7 @@ pub(crate) fn parse_runtime_map_command(cmd: &str, leader: char) -> Option<Runti
             | "tnoremap"
             | "nm"
     );
-    let rhs = parse_key_sequence(rhs, leader);
+    let rhs = parse_key_sequence(rhs, leader).ok()?;
     Some(RuntimeMapCommand::Add {
         modes,
         recursive,
@@ -318,7 +354,7 @@ mod tests {
 
     #[test]
     fn parse_leader_and_cr_tags() {
-        let keys = parse_key_sequence("<leader>w<CR>", '\\');
+        let keys = parse_key_sequence("<leader>w<CR>", '\\').unwrap();
         assert_eq!(
             keys,
             vec![

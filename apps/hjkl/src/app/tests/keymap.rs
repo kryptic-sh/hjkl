@@ -5555,3 +5555,85 @@ fn esc_after_blame_exit_still_normal() {
     assert!(!app.active_editor().is_blame());
     assert_eq!(app.active_editor().vim_mode(), VimMode::Normal);
 }
+
+// ── parse_key_sequence via Chord::parse (Phase N) ─────────────────────────
+
+/// `<Enter>` and `<Return>` both produce Enter key.
+#[test]
+fn parse_enter_and_return_produce_enter() {
+    use super::super::keymap::parse_key_sequence;
+    use hjkl_engine::input::Key;
+
+    let keys = parse_key_sequence("<Enter>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Enter);
+    assert_eq!(keys[1].key, Key::Char('x'));
+
+    let keys = parse_key_sequence("<Return>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Enter);
+    assert_eq!(keys[1].key, Key::Char('x'));
+}
+
+/// `<Escape>` == `<Esc>`; `<Insert>` errors (engine doesn't model Insert).
+#[test]
+fn parse_escape_and_insert() {
+    use super::super::keymap::parse_key_sequence;
+    use hjkl_engine::input::Key;
+
+    let keys = parse_key_sequence("<Esc>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Esc);
+    assert_eq!(keys[1].key, Key::Char('x'));
+
+    let keys = parse_key_sequence("<Escape>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Esc);
+    assert_eq!(keys[1].key, Key::Char('x'));
+
+    // <Insert> is not representable in the engine.
+    let err = parse_key_sequence("<Insert>x", '\\');
+    assert!(err.is_err(), "<Insert> must fail to parse");
+}
+
+/// `<F5>` → parse error (engine doesn't model F-keys).
+#[test]
+fn parse_f5_errors() {
+    use super::super::keymap::parse_key_sequence;
+
+    let err = parse_key_sequence("<F5>x", '\\');
+    assert!(err.is_err(), "<F5> must fail to parse");
+}
+
+/// `<S-Tab>` produces Tab key (SHIFT on non-letter ignored).
+#[test]
+fn parse_shift_tab_produces_tab() {
+    use super::super::keymap::parse_key_sequence;
+    use hjkl_engine::input::Key;
+
+    let keys = parse_key_sequence("<S-Tab>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Tab);
+    assert!(!keys[0].ctrl);
+    assert!(!keys[0].alt);
+    assert!(!keys[0].shift);
+    assert_eq!(keys[1].key, Key::Char('x'));
+}
+
+/// `<C-S-x>` produces Ctrl+Shift with uppercase X (not Ctrl+S).
+#[test]
+fn parse_ctrl_shift_x_produces_uppercase_x() {
+    use super::super::keymap::parse_key_sequence;
+    use hjkl_engine::input::Key;
+
+    let keys = parse_key_sequence("<C-S-x>x", '\\').unwrap();
+    assert_eq!(keys[0].key, Key::Char('X'));
+    assert!(keys[0].ctrl);
+    assert!(!keys[0].alt);
+    assert!(!keys[0].shift, "SHIFT folded into uppercase X, not a flag");
+    assert_eq!(keys[1].key, Key::Char('x'));
+}
+
+/// Unknown tag `<NoSuchKey>` is a mapping error, not a literal binding.
+#[test]
+fn parse_unknown_tag_errors() {
+    use super::super::keymap::parse_key_sequence;
+
+    let err = parse_key_sequence("<NoSuchKey>x", '\\');
+    assert!(err.is_err(), "unknown tag must fail to parse");
+}
