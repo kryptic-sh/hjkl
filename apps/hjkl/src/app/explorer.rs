@@ -2121,17 +2121,6 @@ impl super::App {
             _ => {} // consume but do nothing
         }
     }
-
-    /// Text shown in the confirm bar when a git-discard confirmation is pending.
-    #[allow(dead_code)]
-    pub(crate) fn explorer_git_discard_confirm_prompt(&self) -> Option<String> {
-        let path = self.explorer_git_discard_confirm.as_ref()?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        Some(format!("Discard changes to {name}? (y/n)"))
-    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

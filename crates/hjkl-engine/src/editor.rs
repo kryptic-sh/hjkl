@@ -2264,9 +2264,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Read-only view of the style table in engine-native form —
     /// id `i` → `style_table[i]`. Always available, no cfg gate.
     ///
-    /// Ratatui hosts that need a `ratatui::style::Style` slice should
-    /// use `hjkl_engine_tui::EditorRatatuiExt::ratatui_style_table` or
-    /// convert individual entries via `hjkl_engine_tui::style_to_ratatui`.
+    /// Ratatui hosts that need `ratatui::style::Style` values convert
+    /// entries via `hjkl_engine_tui::style_to_ratatui`.
     pub fn style_table(&self) -> &[crate::types::Style] {
         &self.style_table
     }
@@ -2286,9 +2285,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Intern a SPEC [`crate::types::Style`] and return its opaque id.
     /// Engine-native — the unified `style_table` is always engine-native.
     /// Linear-scan dedup — the table grows only as new tree-sitter token
-    /// kinds appear, so it stays tiny. Ratatui callers use
-    /// `hjkl_engine_tui::EditorRatatuiExt::intern_ratatui_style` which
-    /// converts at the boundary and delegates here.
+    /// kinds appear, so it stays tiny. Ratatui callers convert at the
+    /// boundary with `hjkl_engine_tui::style_from_ratatui` and pass the
+    /// engine-native style here.
     ///
     /// Renamed from `intern_engine_style` in 0.0.32 — at 0.1.0 freeze
     /// the unprefixed name is the universally-available engine-native

@@ -333,34 +333,6 @@ pub enum AppAction {
     },
 
     // ── Phase 6.4: scroll ops ─────────────────────────────────────────────
-    /// `<C-f>` / `<C-b>` — scroll cursor by one full viewport height.
-    /// `dir = Down` for `<C-f>`, `Up` for `<C-b>`.
-    ///
-    /// These variants are the keymap-driven scroll bindings dispatched from
-    /// `dispatch_action`. The FSM fallthrough was removed in Phase 6.8;
-    /// hjkl-vim now handles all inputs, and these variants are the sole
-    /// scroll path. The dispatch arm in `dispatch_action` exists but no
-    /// keymap binding currently constructs this variant — reserved for a
-    /// future binding that routes `<C-f>`/`<C-b>` here instead of as Motion.
-    #[allow(dead_code)]
-    ScrollFullPage {
-        dir: hjkl_engine::ScrollDir,
-        count: u32,
-    },
-    /// `<C-d>` / `<C-u>` — scroll cursor by half the viewport height.
-    /// `dir = Down` for `<C-d>`, `Up` for `<C-u>`.
-    ///
-    /// These variants are the keymap-driven scroll bindings dispatched from
-    /// `dispatch_action`. The FSM fallthrough was removed in Phase 6.8;
-    /// hjkl-vim now handles all inputs, and these variants are the sole
-    /// scroll path. The dispatch arm in `dispatch_action` exists but no
-    /// keymap binding currently constructs this variant — reserved for a
-    /// future binding that routes `<C-d>`/`<C-u>` here instead of as Motion.
-    #[allow(dead_code)]
-    ScrollHalfPage {
-        dir: hjkl_engine::ScrollDir,
-        count: u32,
-    },
     /// `<C-e>` / `<C-y>` — scroll viewport `count` lines without moving cursor.
     /// `dir = Down` for `<C-e>`, `Up` for `<C-y>`.
     ScrollLine {

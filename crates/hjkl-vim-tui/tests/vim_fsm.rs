@@ -4286,7 +4286,7 @@ fn readonly_allows_insert_mutation() {
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xhello");
 }
 
-// Tests for `intern_ratatui_style` and `install_ratatui_syntax_spans` moved to
+// Tests for `install_ratatui_syntax_spans` moved to
 // `hjkl-engine/src/editor.rs` (`mod tests`) — they exercise engine APIs, not
 // the vim FSM. Relocation followed the drop of vim's dead `ratatui` feature
 // passthrough.

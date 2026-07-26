@@ -3,9 +3,9 @@
 Ratatui adapters for [`hjkl-engine`](https://crates.io/crates/hjkl-engine).
 
 Provides free conversion functions and an extension trait for
-[`hjkl_engine::Editor`] that expose ratatui-flavoured style interning and
-syntax-span installation. Extracted from `hjkl-engine` as part of #162
-(Host-trait phase 2) so the agnostic engine crate carries no ratatui dependency.
+[`hjkl_engine::Editor`] that expose ratatui-flavoured syntax-span installation
+and patching. Extracted from `hjkl-engine` as part of #162 (Host-trait phase 2)
+so the agnostic engine crate carries no ratatui dependency.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-engine-tui.svg)](https://crates.io/crates/hjkl-engine-tui)

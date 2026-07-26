@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- `EditorRatatuiExt::intern_ratatui_style` and
+  `EditorRatatuiExt::ratatui_style_table` — both had zero callers. Intern an
+  engine-native style with `Editor::intern_style` after converting via
+  `style_from_ratatui`; convert table entries with `style_to_ratatui`.
+
 ### Added
 
 - Added the crossterm adapter (`KeyEvent` re-export + `crossterm_to_input` free

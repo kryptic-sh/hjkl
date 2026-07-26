@@ -12,7 +12,7 @@
 //!   - JoinLine / ToggleCase / PasteAfter / PasteBefore
 //!   - Undo / Redo
 //!   - JumpBack / JumpForward
-//!   - ScrollFullPage / ScrollHalfPage / ScrollLine
+//!   - ScrollLine
 //!   - SearchRepeat / WordSearch
 //!   - EnterVisualChar / EnterVisualLine / EnterVisualBlock
 //!   - ReenterLastVisual / VisualToggleAnchor
@@ -508,22 +508,6 @@ impl App {
             }
 
             // ── Phase 6.4: scroll ops ──────────────────────────────────────
-            AppAction::ScrollFullPage {
-                dir,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_editor_mut().scroll_full_page(dir, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::ScrollHalfPage {
-                dir,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_editor_mut().scroll_half_page(dir, n.max(1));
-                self.sync_after_engine_mutation();
-            }
             AppAction::ScrollLine {
                 dir,
                 count: action_count,

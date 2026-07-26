@@ -10,8 +10,7 @@
 //! Architecture: purely app-level overlay — the engine never sees the hop keys.
 
 use hjkl_buffer::is_keyword_char;
-use hjkl_engine::{Host, VimMode};
-use hjkl_vim::VimEditorExt;
+use hjkl_engine::Host;
 
 use crate::app::window::WindowId;
 
@@ -52,12 +51,6 @@ pub(crate) struct HopState {
     pub targets: Vec<HopTarget>,
     /// Characters the user has typed so far while matching a label.
     pub typed: String,
-    /// Whether the editor was in a Visual mode when hop started.
-    /// When `true`, `jump_cursor` extends the active visual selection (the engine
-    /// remains in visual mode so the anchor is preserved). Stored for future use
-    /// (e.g. showing a "VISUAL HOP" mode label, restricting target set).
-    #[allow(dead_code)]
-    pub visual: bool,
 }
 
 // ── Label generation ────────────────────────────────────────────────────────
@@ -241,18 +234,12 @@ impl App {
 
     /// Start the hop overlay for the given kind.
     ///
-    /// Captures visual-mode state, computes targets in the visible viewport,
-    /// assigns labels, and activates the overlay. No-op when there are no
-    /// targets. (Operator-pending hop is intentionally not supported: `d<Space>`
-    /// is vim's delete-char, owned by the engine, not a hop trigger.)
+    /// Computes targets in the visible viewport, assigns labels, and activates
+    /// the overlay. No-op when there are no targets. (Operator-pending hop is
+    /// intentionally not supported: `d<Space>` is vim's delete-char, owned by
+    /// the engine, not a hop trigger.)
     pub(crate) fn start_hop(&mut self, kind: HopKind) {
         let win = self.focused_window();
-
-        // Capture visual state before any mutable borrows.
-        let visual = matches!(
-            self.active_editor().vim_mode(),
-            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
-        );
 
         // Compute raw positions.
         let raw = self.hop_targets(win, kind);
@@ -273,7 +260,6 @@ impl App {
             win_id: win,
             targets,
             typed: String::new(),
-            visual,
         });
         self.pending_recompute = true;
     }

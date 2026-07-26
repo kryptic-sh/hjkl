@@ -11,9 +11,9 @@
 //!   `hjkl-editor-tui`'s `engine_to_ratatui_*` / `ratatui_to_engine_*` names
 //!   are thin delegations to these.
 //! - [`EditorRatatuiExt`] — extension trait on [`hjkl_engine::Editor`] that
-//!   exposes `intern_ratatui_style`, `install_ratatui_syntax_spans`, and
-//!   `ratatui_style_table`. Extracted from `hjkl-engine`'s `ratatui` feature
-//!   gate as part of #162 phase 2.
+//!   exposes `install_ratatui_syntax_spans` and
+//!   `patch_ratatui_syntax_spans_range`. Extracted from `hjkl-engine`'s
+//!   `ratatui` feature gate as part of #162 phase 2.
 //! - [`KeyEvent`] — re-export of [`crossterm::event::KeyEvent`] for
 //!   downstream convenience.
 //! - [`crossterm_to_input`] — convert a crossterm `KeyEvent` to the
@@ -219,11 +219,6 @@ pub fn attrs_from_ratatui(m: RMod) -> Attrs {
 /// Bring into scope with `use hjkl_engine_tui::EditorRatatuiExt;` then call
 /// the methods directly on any `Editor<B, H>` value.
 pub trait EditorRatatuiExt {
-    /// Intern a [`ratatui::style::Style`] and return the opaque id used in
-    /// `hjkl_buffer::Span::style`. Converts via [`style_from_ratatui`] then
-    /// delegates to `Editor::intern_style`.
-    fn intern_ratatui_style(&mut self, style: RStyle) -> u32;
-
     /// Install styled syntax spans given as ratatui styles. Converts each
     /// `ratatui::style::Style` to engine-native via [`style_from_ratatui`]
     /// then delegates to `Editor::install_syntax_spans`. Drops zero-width
@@ -242,18 +237,9 @@ pub trait EditorRatatuiExt {
         rows: std::ops::Range<usize>,
         spans: &[Vec<(usize, usize, RStyle)>],
     );
-
-    /// Allocate and return the style table converted to ratatui styles.
-    /// Convenience for render paths that need a `Vec<ratatui::style::Style>`.
-    /// Allocates on every call — prefer a per-draw local binding.
-    fn ratatui_style_table(&self) -> Vec<RStyle>;
 }
 
 impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::View, H> {
-    fn intern_ratatui_style(&mut self, style: RStyle) -> u32 {
-        self.intern_style(style_from_ratatui(style))
-    }
-
     fn install_ratatui_syntax_spans(&mut self, spans: &[Vec<(usize, usize, RStyle)>]) {
         // Lazy per-row conversion: the engine consumes the iterator directly,
         // so no intermediate engine-typed table is allocated per install.
@@ -278,14 +264,6 @@ impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::View, H> {
             }),
         );
     }
-
-    fn ratatui_style_table(&self) -> Vec<RStyle> {
-        self.style_table()
-            .iter()
-            .copied()
-            .map(style_to_ratatui)
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -301,20 +279,6 @@ mod tests {
         );
         e.set_content(content);
         e
-    }
-
-    #[test]
-    fn intern_ratatui_style_dedups_repeated_styles() {
-        use ratatui::style::{Color, Style};
-        let mut e = fresh_editor("");
-        let red = Style::default().fg(Color::Red);
-        let blue = Style::default().fg(Color::Blue);
-        let id_r1 = e.intern_ratatui_style(red);
-        let id_r2 = e.intern_ratatui_style(red);
-        let id_b = e.intern_ratatui_style(blue);
-        assert_eq!(id_r1, id_r2);
-        assert_ne!(id_r1, id_b);
-        assert_eq!(e.style_table().len(), 2);
     }
 
     #[test]
