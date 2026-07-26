@@ -34,6 +34,14 @@ pub(crate) struct DiffLineClass {
     pub text_ranges: Vec<Range<usize>>,
 }
 
+/// A single line's text (newline stripped) from an already-taken rope
+/// snapshot — no content lock, no re-clone per call.
+fn rope_line_text(rope: &ropey::Rope, idx: usize) -> String {
+    hjkl_buffer::rope_line_str(rope, idx)
+        .trim_end_matches('\n')
+        .to_string()
+}
+
 impl App {
     /// `:diffthis` — mark the focused window as part of the diff group.
     pub(crate) fn diff_this(&mut self) {
@@ -114,14 +122,6 @@ impl App {
         self.slots[slot].buffer().rope().to_string()
     }
 
-    /// A single line's text (newline stripped) from a slot's buffer.
-    fn line_text(&self, slot: usize, idx: usize) -> String {
-        let rope = self.slots[slot].buffer().rope();
-        hjkl_buffer::rope_line_str(&rope, idx)
-            .trim_end_matches('\n')
-            .to_string()
-    }
-
     /// Per-line diff classification for `win` (a diff-pair member), keyed by
     /// buffer line index. Equal lines are omitted. For `Change` rows the
     /// character-level differing byte ranges are computed for this side.
@@ -129,8 +129,22 @@ impl App {
     /// This is the no-filler classification (band + DiffText); filler rows for
     /// lines that exist only in the *other* buffer are a separate render
     /// concern.
-    pub(crate) fn diff_line_classes(&self, win: WindowId) -> HashMap<usize, DiffLineClass> {
+    ///
+    /// `lines` clips the classification to a this-side line range — the
+    /// renderer passes its viewport, since every row outside it is discarded.
+    /// Without the clip a 10k-line/2k-change diff paid ~4k rope snapshots,
+    /// ~8k `String` allocations and 2k char-level diffs *per frame*. Hunk
+    /// navigation (`]c` / `[c`) walks `diff_change_starts` over the raw
+    /// aligned rows instead and is unaffected by the clip.
+    pub(crate) fn diff_line_classes(
+        &self,
+        win: WindowId,
+        lines: Range<usize>,
+    ) -> HashMap<usize, DiffLineClass> {
         let mut out = HashMap::new();
+        if lines.is_empty() {
+            return out;
+        }
         let Some(cache) = self.diff_cache.as_ref() else {
             return out;
         };
@@ -145,6 +159,11 @@ impl App {
         ) else {
             return out;
         };
+        // One O(1) rope snapshot per side, hoisted out of the row walk: the
+        // per-row `rope()` used to take the content mutex and Arc-clone again
+        // for every changed line.
+        let a_rope = self.slots[a_slot].buffer().rope();
+        let b_rope = self.slots[b_slot].buffer().rope();
         for row in &cache.diff.rows {
             match row.kind {
                 DiffRowKind::Equal => {}
@@ -152,10 +171,14 @@ impl App {
                     let (Some(ai), Some(bi)) = (row.a, row.b) else {
                         continue;
                     };
-                    let a_line = self.line_text(a_slot, ai);
-                    let b_line = self.line_text(b_slot, bi);
+                    let line = if is_a { ai } else { bi };
+                    if !lines.contains(&line) {
+                        continue;
+                    }
+                    let a_line = rope_line_text(&a_rope, ai);
+                    let b_line = rope_line_text(&b_rope, bi);
                     let (ar, br) = hjkl_app::diff::char_ranges(&a_line, &b_line);
-                    let (line, text_ranges) = if is_a { (ai, ar) } else { (bi, br) };
+                    let text_ranges = if is_a { ar } else { br };
                     out.insert(
                         line,
                         DiffLineClass {
@@ -166,7 +189,10 @@ impl App {
                 }
                 DiffRowKind::Delete => {
                     // Exists only on the `a` side → DiffAdd in the `a` window.
-                    if is_a && let Some(ai) = row.a {
+                    if is_a
+                        && let Some(ai) = row.a
+                        && lines.contains(&ai)
+                    {
                         out.insert(
                             ai,
                             DiffLineClass {
@@ -178,7 +204,10 @@ impl App {
                 }
                 DiffRowKind::Insert => {
                     // Exists only on the `b` side → DiffAdd in the `b` window.
-                    if is_b && let Some(bi) = row.b {
+                    if is_b
+                        && let Some(bi) = row.b
+                        && lines.contains(&bi)
+                    {
                         out.insert(
                             bi,
                             DiffLineClass {

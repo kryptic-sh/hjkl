@@ -1,6 +1,7 @@
 //! Diff mode (#208 Phase 2) — state, ex commands, and alignment cache.
 
 use super::*;
+use crate::app::diff_mode::DiffBand;
 use crate::app::event_loop::KeyOutcome;
 use crate::keymap_actions::AppAction;
 use hjkl_app::diff::DiffRowKind;
@@ -224,7 +225,7 @@ fn fallthrough_key_edit_refreshes_diff_alignment_and_avoids_stale_row_panic() {
 
     // The actual panic repro: rendering calls this every frame. Must not
     // panic even though the buffer shrank past the old cache's row count.
-    let _ = app.diff_line_classes(b_win);
+    let _ = app.diff_line_classes(b_win, 0..usize::MAX);
 
     let _ = std::fs::remove_file(&a);
     let _ = std::fs::remove_file(&b);
@@ -251,6 +252,81 @@ fn editing_refreshes_alignment_cache() {
         !cache.diff.is_empty_diff(),
         "edit must invalidate + recompute the alignment"
     );
+
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+}
+
+/// Viewport clipping (perf item 9): classifying only `[vp_top, vp_top+height)`
+/// must yield byte-identical classes for the visible rows, and nothing else.
+/// The fixture puts changes above, inside, and below the viewport. The expected
+/// values are pinned against the pre-clip (full-walk) implementation.
+#[test]
+fn diff_line_classes_clip_matches_full_walk_for_visible_rows() {
+    let a = std::env::temp_dir().join("hjkl_diffvp_a.txt");
+    let b = std::env::temp_dir().join("hjkl_diffvp_b.txt");
+    let a_text: String = (0..30).map(|i| format!("line {i}\n")).collect();
+    // Changes at 2 (above the viewport), 12 (inside), 25 (below).
+    let b_text: String = (0..30)
+        .map(|i| match i {
+            2 | 12 | 25 => format!("LINE {i}\n"),
+            _ => format!("line {i}\n"),
+        })
+        .collect();
+    std::fs::write(&a, &a_text).unwrap();
+    std::fs::write(&b, &b_text).unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("diffsplit {}", b.display()));
+    let (_, b_win) = app.diff_pair().expect("diffsplit must form a pair");
+
+    // Unclipped walk — the pre-fix behavior, pinned.
+    let full = app.diff_line_classes(b_win, 0..usize::MAX);
+    let mut full_keys: Vec<usize> = full.keys().copied().collect();
+    full_keys.sort_unstable();
+    assert_eq!(full_keys, vec![2, 12, 25], "three changed lines total");
+    assert_eq!(
+        full[&12].text_ranges,
+        vec![0..4],
+        "DiffText range pinned against the pre-clip implementation"
+    );
+
+    // Scrolled viewport [10, 20): only line 12 is paintable.
+    let clipped = app.diff_line_classes(b_win, 10..20);
+    let mut clip_keys: Vec<usize> = clipped.keys().copied().collect();
+    clip_keys.sort_unstable();
+    assert_eq!(clip_keys, vec![12], "rows outside the viewport are dropped");
+    assert!(matches!(clipped[&12].band, DiffBand::Change));
+    assert_eq!(
+        clipped[&12].text_ranges, full[&12].text_ranges,
+        "visible row's classification must be identical to the full walk"
+    );
+
+    // Every scroll position agrees with the full walk restricted to it.
+    for top in 0..30usize {
+        let win = top..(top + 8).min(30);
+        let got = app.diff_line_classes(b_win, win.clone());
+        let mut got_keys: Vec<usize> = got.keys().copied().collect();
+        got_keys.sort_unstable();
+        let want: Vec<usize> = full_keys
+            .iter()
+            .copied()
+            .filter(|l| win.contains(l))
+            .collect();
+        assert_eq!(got_keys, want, "viewport {win:?}");
+        for l in &want {
+            assert_eq!(got[l].text_ranges, full[l].text_ranges, "line {l}");
+        }
+    }
+
+    // `]c` / `[c` navigation walks the aligned rows, not the clipped classes —
+    // it must still see every hunk, including the ones off-screen.
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.dispatch_action(AppAction::DiffNextChange, 1);
+    assert_eq!(app.active_editor().cursor().0, 2);
+    app.dispatch_action(AppAction::DiffNextChange, 1);
+    assert_eq!(app.active_editor().cursor().0, 12);
+    app.dispatch_action(AppAction::DiffNextChange, 1);
+    assert_eq!(app.active_editor().cursor().0, 25);
 
     let _ = std::fs::remove_file(&a);
     let _ = std::fs::remove_file(&b);

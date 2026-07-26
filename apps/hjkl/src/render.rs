@@ -1635,7 +1635,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // active diff pair. Colors are hardcoded (vim-like dark palette) pending a
     // theme promotion. Filler-line alignment is a separate concern.
     if app.is_diff_window(win_id) {
-        let classes = app.diff_line_classes(win_id);
+        // Classify only the lines this frame can actually paint. Filler rows
+        // only ever push a line *down* the screen (`screen_offset` adds the
+        // filler count above it), so a line at or past `vp_top + height` can
+        // never land on-screen — clipping here drops exactly the rows the loop
+        // below used to `continue` past, after paying for their rope reads and
+        // char-level diff.
+        let classes = app.diff_line_classes(win_id, vp_top..vp_top + area.height as usize);
         if !classes.is_empty() {
             // Vim-like dark diff palette (bg only; syntax fg is preserved).
             let add_bg = Color::Rgb(32, 51, 32); // DiffAdd
@@ -1645,6 +1651,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let text_right = area.x + area.width;
             let screen_top = area.y;
             let screen_height = area.height as usize;
+            // One O(1) rope snapshot for the whole DiffText pass instead of a
+            // fresh lock + Arc-clone per changed row.
+            let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].buffer());
             let buf = frame.buffer_mut();
             for (&line, class) in &classes {
                 if line < vp_top {
@@ -1671,7 +1680,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 }
                 // Char-level DiffText over the changed byte ranges.
                 if !class.text_ranges.is_empty() {
-                    let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].buffer());
                     let lt = hjkl_buffer::rope_line_str(&rope, line);
                     let lt = lt.trim_end_matches('\n');
                     let len = lt.len();
