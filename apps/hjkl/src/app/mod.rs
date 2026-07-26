@@ -2243,15 +2243,15 @@ impl App {
             shared_registers.lock().unwrap().set_filename(fname);
         }
 
-        // Apply readonly after the slot is built — build_slot always uses
-        // Options::default(); override here when requested. Writes the
-        // settings TEMPLATE directly (no editor exists yet); `reconcile_window_editors`
-        // (below) copies it into the initial window's editor.
+        // Apply readonly after the slot is built — override the single field
+        // here when requested. Writes the settings TEMPLATE directly (no
+        // editor exists yet); `reconcile_window_editors` (below) copies it
+        // into the initial window's editor. Must NOT go through
+        // `apply_options(&Options { readonly: true, ..default() })`: that
+        // resets every other option (editorconfig/modeline overlays, the
+        // detected `filetype`) back to the SPEC default.
         if readonly {
-            slot.settings.apply_options(&Options {
-                readonly: true,
-                ..Options::default()
-            });
+            slot.settings.readonly = true;
         }
 
         let start_screen = if no_file {
@@ -2548,14 +2548,17 @@ impl App {
         for idx in 0..self.slots.len() {
             let slot = &mut self.slots[idx];
             let was_readonly = slot.is_readonly();
-            let mut opts = Options {
-                expandtab: self.config.editor.expandtab,
-                tabstop: self.config.editor.tab_width as u32,
-                shiftwidth: self.config.editor.tab_width as u32,
-                softtabstop: self.config.editor.tab_width as u32,
-                readonly: was_readonly,
-                ..Options::default()
-            };
+            // Read-modify-apply off the slot's LIVE settings, not
+            // `Options::default()`: this runs after `build_slot` has already
+            // folded in the editorconfig + modeline overlays and the detected
+            // `filetype`, and `Settings::apply_options` writes every field it
+            // is handed. Seeding from the default would reset all of that.
+            let mut opts = slot.settings().to_options();
+            opts.expandtab = self.config.editor.expandtab;
+            opts.tabstop = self.config.editor.tab_width as u32;
+            opts.shiftwidth = self.config.editor.tab_width as u32;
+            opts.softtabstop = self.config.editor.tab_width as u32;
+            opts.readonly = was_readonly;
             if let Some(p) = slot.filename.as_ref() {
                 hjkl_app::editorconfig::overlay_for_path(&mut opts, p);
             }

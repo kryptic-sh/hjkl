@@ -1254,6 +1254,29 @@ pub enum UndoGranularity {
     Word,
 }
 
+/// Translate the engine-internal soft-wrap mode into the SPEC one.
+///
+/// The two enums are 1:1; this exists so the mapping lives in exactly one
+/// place instead of being copy-pasted at every `Settings` ↔ `Options`
+/// boundary. Inverse of [`wrap_from_mode`].
+fn wrap_to_mode(wrap: hjkl_buffer::Wrap) -> crate::types::WrapMode {
+    match wrap {
+        hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
+        hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
+        hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
+    }
+}
+
+/// Translate a SPEC soft-wrap mode into the engine-internal one.
+/// Inverse of [`wrap_to_mode`].
+fn wrap_from_mode(mode: crate::types::WrapMode) -> hjkl_buffer::Wrap {
+    match mode {
+        crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
+        crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
+        crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1335,36 +1358,97 @@ impl Settings {
     /// Pure [`Settings`] surface — usable without an [`Editor`] (#151 Phase
     /// D / Stage 2b: `BufferSlot` holds a bare `Settings` template for
     /// windowless slots). [`Editor::current_options`] delegates here.
+    ///
+    /// **Exhaustive by construction** — every [`crate::types::Options`] field
+    /// is listed explicitly, with no `..Options::default()` backfill. That
+    /// matters because callers do read-modify-apply through this seam
+    /// (`current_options()` → tweak one field → `apply_options()`); a
+    /// default-filled field would silently reset every option the caller
+    /// didn't touch. [`Settings::apply_options`] is the exact inverse: adding
+    /// a field to one without the other breaks the round trip pinned by
+    /// `settings_options_round_trip_is_identity`.
+    ///
+    /// Four `Options` fields (`hlsearch`, `incsearch`, `modeline`,
+    /// `modelines`) have no `Settings` counterpart — see the comment at their
+    /// site below.
     pub fn to_options(&self) -> crate::types::Options {
         crate::types::Options {
-            shiftwidth: self.shiftwidth as u32,
             tabstop: self.tabstop as u32,
-            softtabstop: self.softtabstop as u32,
-            textwidth: self.textwidth as u32,
+            shiftwidth: self.shiftwidth as u32,
             expandtab: self.expandtab,
+            softtabstop: self.softtabstop as u32,
+            iskeyword: self.iskeyword.clone(),
             ignorecase: self.ignore_case,
             smartcase: self.smartcase,
+            // ---- Options-only: no live `Settings` storage ----------------
+            // `hlsearch` / `incsearch` are not engine state: search
+            // highlighting is driven by the buffer's armed pattern (cleared
+            // by `:nohlsearch`) and the live `search_prompt`, not by a flag.
+            // `modeline` / `modelines` are host-side knobs — `hjkl_app`
+            // reads them off its own `Options` value before the buffer even
+            // reaches the engine. None of the four has a `:set` entry in
+            // `hjkl_ex::setopt`, so nothing can move them off the SPEC
+            // default at runtime. Echoed as the SPEC default (pinned against
+            // drift by `to_options_options_only_fields_match_spec_default`)
+            // until the 0.1.0 Settings/Options collapse gives them storage.
+            hlsearch: true,
+            incsearch: true,
+            // --------------------------------------------------------------
             wrapscan: self.wrapscan,
-            wrap: match self.wrap {
-                hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
-                hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
-                hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
-            },
-            readonly: self.readonly,
-            modifiable: self.modifiable,
             autoindent: self.autoindent,
             smartindent: self.smartindent,
+            timeout_len: self.timeout_len,
             undo_levels: self.undo_levels,
             undo_break_on_motion: self.undo_break_on_motion,
-            iskeyword: self.iskeyword.clone(),
-            timeout_len: self.timeout_len,
-            ..crate::types::Options::default()
+            readonly: self.readonly,
+            modifiable: self.modifiable,
+            wrap: wrap_to_mode(self.wrap),
+            textwidth: self.textwidth as u32,
+            number: self.number,
+            relativenumber: self.relativenumber,
+            numberwidth: self.numberwidth,
+            cursorline: self.cursorline,
+            cursorcolumn: self.cursorcolumn,
+            signcolumn: self.signcolumn,
+            foldcolumn: self.foldcolumn,
+            foldmethod: self.foldmethod,
+            foldenable: self.foldenable,
+            foldlevelstart: self.foldlevelstart,
+            foldmarker: self.foldmarker.clone(),
+            colorcolumn: self.colorcolumn.clone(),
+            formatoptions: self.formatoptions.clone(),
+            filetype: self.filetype.clone(),
+            scrolloff: self.scrolloff,
+            sidescrolloff: self.sidescrolloff,
+            // Options-only — see the `hlsearch` comment above.
+            modeline: true,
+            modelines: 5,
+            autoreload: self.autoreload,
+            motion_sneak: self.motion_sneak,
+            list: self.list,
+            listchars: self.listchars.clone(),
+            indent_guides: self.indent_guides,
+            indent_guide_char: self.indent_guide_char,
+            colorizer: self.colorizer,
+            colorizer_filetypes: self.colorizer_filetypes.clone(),
+            format_on_save: self.format_on_save,
+            trim_trailing_whitespace: self.trim_trailing_whitespace,
+            rainbow_brackets: self.rainbow_brackets,
+            updatetime: self.updatetime,
+            matchparen: self.matchparen,
         }
     }
 
     /// Apply a SPEC [`crate::types::Options`] overlay onto these settings.
     /// Pure [`Settings`] surface — see [`Settings::to_options`].
     /// [`Editor::apply_options`] delegates here.
+    ///
+    /// Writes every `Options` field that has a `Settings` counterpart, so it
+    /// is the exact inverse of [`Settings::to_options`]. `Settings`-only
+    /// fields (`commentstring`, `makeprg`, `errorformat`, `autopair`,
+    /// `autoclose_tag`, `tabline_icons`, `blame_inline`,
+    /// `diagnostics_inline`, `scroll_duration_ms`, `selection_exclusive`,
+    /// `undo_granularity`) are host-set and deliberately left untouched.
     pub fn apply_options(&mut self, opts: &crate::types::Options) {
         self.shiftwidth = opts.shiftwidth as usize;
         self.tabstop = opts.tabstop as usize;
@@ -1374,11 +1458,7 @@ impl Settings {
         self.ignore_case = opts.ignorecase;
         self.smartcase = opts.smartcase;
         self.wrapscan = opts.wrapscan;
-        self.wrap = match opts.wrap {
-            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
-            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
-            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
-        };
+        self.wrap = wrap_from_mode(opts.wrap);
         self.readonly = opts.readonly;
         self.modifiable = opts.modifiable;
         self.autoindent = opts.autoindent;
@@ -1397,17 +1477,24 @@ impl Settings {
         self.foldmethod = opts.foldmethod;
         self.foldenable = opts.foldenable;
         self.foldlevelstart = opts.foldlevelstart;
+        self.foldmarker = opts.foldmarker.clone();
         self.colorcolumn = opts.colorcolumn.clone();
+        self.formatoptions = opts.formatoptions.clone();
+        self.filetype = opts.filetype.clone();
         self.scrolloff = opts.scrolloff;
         self.sidescrolloff = opts.sidescrolloff;
         self.autoreload = opts.autoreload;
+        self.motion_sneak = opts.motion_sneak;
         self.list = opts.list;
         self.listchars = opts.listchars.clone();
+        self.indent_guides = opts.indent_guides;
+        self.indent_guide_char = opts.indent_guide_char;
         self.colorizer = opts.colorizer;
         self.colorizer_filetypes = opts.colorizer_filetypes.clone();
         self.format_on_save = opts.format_on_save;
         self.trim_trailing_whitespace = opts.trim_trailing_whitespace;
         self.rainbow_brackets = opts.rainbow_brackets;
+        self.updatetime = opts.updatetime;
         self.matchparen = opts.matchparen;
     }
 }
@@ -1429,11 +1516,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         wrapscan: o.wrapscan,
         textwidth: o.textwidth as usize,
         expandtab: o.expandtab,
-        wrap: match o.wrap {
-            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
-            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
-            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
-        },
+        wrap: wrap_from_mode(o.wrap),
         readonly: o.readonly,
         modifiable: o.modifiable,
         autoindent: o.autoindent,
@@ -6815,5 +6898,235 @@ mod undo_group_tests {
         );
         ed.undo();
         assert_eq!(line0(&ed), "hello");
+    }
+}
+
+// ---- Settings ↔ Options conversion tests ----------------------------------
+//
+// `Settings::to_options` used to map ~20 fields and backfill the rest with
+// `..Options::default()`, while `Settings::apply_options` wrote (nearly) all of
+// them. Read-modify-apply callers (`Editor::current_options()` → tweak one
+// field → `Editor::apply_options()`, e.g. the nvim-API `set_lines` modeline
+// overlay) therefore silently reset every unmapped option to its SPEC default.
+// These tests pin the seam shut.
+
+#[cfg(test)]
+mod options_conversion_tests {
+    use super::*;
+    use crate::types::{
+        DefaultHost, DiagInlineMode, FoldMethod, ListChars, Options, SignColumnMode, WrapMode,
+    };
+    use hjkl_buffer::View;
+
+    /// An `Options` value in which EVERY field differs from
+    /// `Options::default()`, so a lossy conversion cannot hide behind a
+    /// coincidentally-matching default.
+    fn all_non_default_options() -> Options {
+        let o = Options {
+            tabstop: 7,
+            shiftwidth: 3,
+            expandtab: false,
+            softtabstop: 2,
+            iskeyword: "@,_,45".to_string(),
+            ignorecase: false,
+            smartcase: false,
+            hlsearch: false,
+            incsearch: false,
+            wrapscan: false,
+            autoindent: false,
+            smartindent: false,
+            timeout_len: core::time::Duration::from_millis(250),
+            undo_levels: 42,
+            undo_break_on_motion: false,
+            readonly: true,
+            modifiable: false,
+            wrap: WrapMode::Word,
+            textwidth: 100,
+            number: false,
+            relativenumber: true,
+            numberwidth: 9,
+            cursorline: true,
+            cursorcolumn: true,
+            signcolumn: SignColumnMode::Yes,
+            foldcolumn: 3,
+            foldmethod: FoldMethod::Marker,
+            foldenable: false,
+            foldlevelstart: 0,
+            foldmarker: "<<<,>>>".to_string(),
+            colorcolumn: "80,120".to_string(),
+            formatoptions: "r".to_string(),
+            filetype: "rust".to_string(),
+            scrolloff: 11,
+            sidescrolloff: 13,
+            modeline: false,
+            modelines: 8,
+            autoreload: false,
+            motion_sneak: false,
+            list: true,
+            listchars: ListChars {
+                tab_lead: '»',
+                tab_fill: None,
+                space: Some('␣'),
+                trail: Some('·'),
+                eol: Some('¬'),
+                nbsp: Some('⍽'),
+                extends: Some('>'),
+                precedes: Some('<'),
+            },
+            indent_guides: false,
+            indent_guide_char: '|',
+            colorizer: false,
+            colorizer_filetypes: vec!["zig".to_string()],
+            format_on_save: false,
+            trim_trailing_whitespace: true,
+            rainbow_brackets: false,
+            updatetime: 250,
+            matchparen: false,
+        };
+        // Guard the guard: if a future field lands with a value that happens to
+        // equal the default, this literal stops proving anything for it.
+        let d = Options::default();
+        assert_ne!(o, d, "fixture must differ from Options::default()");
+        o
+    }
+
+    /// The four `Options` fields with no `Settings` storage. `to_options`
+    /// echoes the SPEC default for these; the round-trip test excludes them.
+    fn clear_options_only_fields(o: &mut Options) {
+        let d = Options::default();
+        o.hlsearch = d.hlsearch;
+        o.incsearch = d.incsearch;
+        o.modeline = d.modeline;
+        o.modelines = d.modelines;
+    }
+
+    /// `apply_options` then `current_options` must be the IDENTITY on every
+    /// field the engine stores. Fails today for `number`, `cursorline`,
+    /// `signcolumn`, the fold options, `listchars`, `colorizer*`, … — the
+    /// whole set `to_options` used to backfill from the default.
+    #[test]
+    fn settings_options_round_trip_is_identity() {
+        let mut ed = Editor::new(View::new(), DefaultHost::new(), Options::default());
+        let want = all_non_default_options();
+        ed.apply_options(&want);
+
+        let mut got = ed.current_options();
+        // `hlsearch`/`incsearch`/`modeline`/`modelines` have no live storage:
+        // normalize both sides to the SPEC default before comparing so the
+        // assertion covers exactly the fields the engine actually backs.
+        let mut want_norm = want.clone();
+        clear_options_only_fields(&mut got);
+        clear_options_only_fields(&mut want_norm);
+        assert_eq!(
+            got, want_norm,
+            "current_options() must echo apply_options() field-for-field"
+        );
+    }
+
+    /// A second pass must not drift: `apply(current())` is a fixed point.
+    #[test]
+    fn round_trip_is_idempotent() {
+        let mut ed = Editor::new(View::new(), DefaultHost::new(), Options::default());
+        ed.apply_options(&all_non_default_options());
+        let first = ed.current_options();
+        ed.apply_options(&first);
+        assert_eq!(ed.current_options(), first);
+    }
+
+    /// The four host-side fields are echoed as the SPEC default, not as
+    /// whatever a caller last passed. Pins the documented carve-out so it
+    /// can't rot into a silent lie.
+    #[test]
+    fn to_options_options_only_fields_match_spec_default() {
+        let mut ed = Editor::new(View::new(), DefaultHost::new(), Options::default());
+        ed.apply_options(&all_non_default_options());
+        let got = ed.current_options();
+        let d = Options::default();
+        assert_eq!(got.hlsearch, d.hlsearch);
+        assert_eq!(got.incsearch, d.incsearch);
+        assert_eq!(got.modeline, d.modeline);
+        assert_eq!(got.modelines, d.modelines);
+    }
+
+    /// `Settings::default()` and `Options::default()` must agree on every
+    /// shared field. They used to disagree on `cursorline` (`Settings` said
+    /// `false`, `Options` said `true`), so which default a session saw
+    /// depended on whether it was built via `Editor::new(.., Options)` or via
+    /// `Settings::default()` + `apply_options`.
+    #[test]
+    fn settings_default_matches_options_default() {
+        let mut from_settings = Settings::default().to_options();
+        let mut spec = Options::default();
+        clear_options_only_fields(&mut from_settings);
+        clear_options_only_fields(&mut spec);
+        assert_eq!(
+            from_settings, spec,
+            "Settings::default() and Options::default() must not diverge"
+        );
+    }
+
+    /// vim's default is `nocursorline`; the nvim oracle is the contract.
+    #[test]
+    fn cursorline_defaults_off_on_both_sides() {
+        assert!(!Settings::default().cursorline);
+        assert!(!Options::default().cursorline);
+    }
+
+    /// `settings_from_options` (the `Editor::new` path) must agree with
+    /// `apply_options` (the overlay path) for every field they share — the
+    /// third hand-written conversion of the same shape.
+    #[test]
+    fn settings_from_options_agrees_with_apply_options() {
+        let opts = all_non_default_options();
+        let ctor = settings_from_options(&opts);
+        let mut overlay = Settings::default();
+        overlay.apply_options(&opts);
+        assert_eq!(ctor.to_options(), overlay.to_options());
+    }
+
+    /// The `WrapMode` ↔ `hjkl_buffer::Wrap` helpers are mutual inverses.
+    #[test]
+    fn wrap_helpers_round_trip() {
+        for m in [WrapMode::None, WrapMode::Char, WrapMode::Word] {
+            assert_eq!(wrap_to_mode(wrap_from_mode(m)), m);
+        }
+        for w in [
+            hjkl_buffer::Wrap::None,
+            hjkl_buffer::Wrap::Char,
+            hjkl_buffer::Wrap::Word,
+        ] {
+            assert_eq!(wrap_from_mode(wrap_to_mode(w)), w);
+        }
+    }
+
+    /// Regression for the nvim-API seam (`nvim_api.rs` `set_lines`): a
+    /// read-modify-apply cycle that touches ONE option must leave every other
+    /// live option alone. Reproduced against the engine directly — the
+    /// nvim-API path has no in-process harness.
+    #[test]
+    fn read_modify_apply_preserves_unrelated_options() {
+        let mut ed = Editor::new(View::new(), DefaultHost::new(), Options::default());
+        // A session that has diverged from the defaults (`:set` writes
+        // `Settings` directly, so mirror that).
+        ed.settings_mut().cursorline = true;
+        ed.settings_mut().number = false;
+        ed.settings_mut().filetype = "rust".to_string();
+        ed.settings_mut().foldenable = false;
+        ed.settings_mut().signcolumn = SignColumnMode::No;
+        ed.settings_mut().diagnostics_inline = DiagInlineMode::Off;
+
+        // The seam: read, change one field, write back.
+        let mut opts = ed.current_options();
+        opts.tabstop = 2;
+        ed.apply_options(&opts);
+
+        assert_eq!(ed.settings().tabstop, 2, "the edited field must land");
+        assert!(ed.settings().cursorline, "cursorline must survive");
+        assert!(!ed.settings().number, "number must survive");
+        assert_eq!(ed.settings().filetype, "rust", "filetype must survive");
+        assert!(!ed.settings().foldenable, "foldenable must survive");
+        assert_eq!(ed.settings().signcolumn, SignColumnMode::No);
+        // `Settings`-only field: not in `Options` at all, so untouched.
+        assert_eq!(ed.settings().diagnostics_inline, DiagInlineMode::Off);
     }
 }

@@ -373,19 +373,25 @@ fn config_load_from_disk_validation_failure_surfaces() {
 #[test]
 fn set_cursorline_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert!(
-        app.active_editor().settings().cursorline,
-        "cursorline must default to true"
-    );
-    app.dispatch_ex("set nocursorline");
+    // vim parity: `nocursorline`. Until the Options/Settings default
+    // reconciliation this read `true` — `build_slot` seeds the slot with
+    // `Settings::default()` (`cursorline: false`) and then immediately
+    // `apply_options(&ec_opts)` where `ec_opts` was `Options::default()`
+    // (`cursorline: true`), so the Options side silently won for every
+    // shipped TUI session.
     assert!(
         !app.active_editor().settings().cursorline,
-        ":set nocursorline must disable cursorline"
+        "cursorline must default to false (vim nocursorline)"
     );
     app.dispatch_ex("set cursorline");
     assert!(
         app.active_editor().settings().cursorline,
         ":set cursorline must enable cursorline"
+    );
+    app.dispatch_ex("set nocursorline");
+    assert!(
+        !app.active_editor().settings().cursorline,
+        ":set nocursorline must disable cursorline"
     );
 }
 
