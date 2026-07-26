@@ -5601,9 +5601,10 @@ fn parse_f5_errors() {
     assert!(err.is_err(), "<F5> must fail to parse");
 }
 
-/// `<S-Tab>` produces Tab key (SHIFT on non-letter ignored).
+/// `<S-Tab>` produces Tab key with the SHIFT flag preserved — on non-char key
+/// codes SHIFT is distinguishing (it is what crossterm `BackTab` arrives as).
 #[test]
-fn parse_shift_tab_produces_tab() {
+fn parse_shift_tab_produces_shifted_tab() {
     use super::super::keymap::parse_key_sequence;
     use hjkl_engine::input::Key;
 
@@ -5611,8 +5612,40 @@ fn parse_shift_tab_produces_tab() {
     assert_eq!(keys[0].key, Key::Tab);
     assert!(!keys[0].ctrl);
     assert!(!keys[0].alt);
-    assert!(!keys[0].shift);
+    assert!(
+        keys[0].shift,
+        "SHIFT must be preserved on Tab so <S-Tab> != <Tab>"
+    );
     assert_eq!(keys[1].key, Key::Char('x'));
+}
+
+/// Regression: `<S-Tab>` and `<Tab>` must not parse to the same `Input`.
+/// They used to be identical, so an `<S-Tab>` mapping hijacked plain Tab and
+/// could never match a real Shift-Tab (crossterm `BackTab` → Tab + SHIFT).
+#[test]
+fn parse_shift_tab_differs_from_plain_tab() {
+    use super::super::keymap::{input_to_km_event, parse_key_sequence};
+    use hjkl_keymap::KeyModifiers as KmMods;
+
+    let shifted = parse_key_sequence("<S-Tab>", '\\').unwrap();
+    let plain = parse_key_sequence("<Tab>", '\\').unwrap();
+    assert_ne!(
+        shifted, plain,
+        "<S-Tab> must not parse to the same Input as <Tab>"
+    );
+
+    // The stored lhs must round-trip to the same km event the runtime produces
+    // for crossterm BackTab (hjkl_keymap_tui::from_crossterm → Tab + SHIFT).
+    let ev = input_to_km_event(shifted[0]);
+    assert_eq!(ev.code, hjkl_keymap::KeyCode::Tab);
+    assert!(
+        ev.modifiers.contains(KmMods::SHIFT),
+        "<S-Tab> lhs must dispatch as Tab+SHIFT"
+    );
+    // ...and plain <Tab> must stay modifier-free so it is not hijacked.
+    let plain_ev = input_to_km_event(plain[0]);
+    assert_eq!(plain_ev.code, hjkl_keymap::KeyCode::Tab);
+    assert!(!plain_ev.modifiers.contains(KmMods::SHIFT));
 }
 
 /// `<C-S-x>` produces Ctrl+Shift with uppercase X (not Ctrl+S).
