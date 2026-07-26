@@ -103,12 +103,18 @@ impl App {
             return None;
         }
         let a = open[0];
-        let a_slot = self.windows[a].as_ref().unwrap().slot;
+        let a_slot = self.windows[a]
+            .as_ref()
+            .expect("`open` holds only still-open windows")
+            .slot;
         // First subsequent window pointing at a different slot.
-        let b = open[1..]
-            .iter()
-            .copied()
-            .find(|&w| self.windows[w].as_ref().unwrap().slot != a_slot)?;
+        let b = open[1..].iter().copied().find(|&w| {
+            self.windows[w]
+                .as_ref()
+                .expect("`open` holds only still-open windows")
+                .slot
+                != a_slot
+        })?;
         Some((a, b))
     }
 
@@ -395,8 +401,14 @@ impl App {
             self.diff_cache = None;
             return;
         };
-        let a_slot = self.windows[a_win].as_ref().unwrap().slot;
-        let b_slot = self.windows[b_win].as_ref().unwrap().slot;
+        let a_slot = self.windows[a_win]
+            .as_ref()
+            .expect("diff_pair returns only still-open windows")
+            .slot;
+        let b_slot = self.windows[b_win]
+            .as_ref()
+            .expect("diff_pair returns only still-open windows")
+            .slot;
         let a_gen = self.slots[a_slot].buffer().dirty_gen();
         let b_gen = self.slots[b_slot].buffer().dirty_gen();
         if let Some(c) = &self.diff_cache

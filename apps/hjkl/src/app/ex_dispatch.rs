@@ -1265,7 +1265,11 @@ impl App {
             }
         }
 
-        let swap_path = self.slots[idx].swap_path.as_ref().unwrap().clone();
+        let swap_path = self.slots[idx]
+            .swap_path
+            .as_ref()
+            .expect("swap_path assigned above, or both branches returned")
+            .clone();
         let current_gen = self.slots[idx].buffer().dirty_gen();
         if self.slots[idx].last_swap_dirty_gen == Some(current_gen) {
             return; // Nothing changed since last swap.
@@ -1278,7 +1282,11 @@ impl App {
             // Scratch swap: empty canonical_path marks it as scratch.
             (String::new(), 0u64)
         } else {
-            let filename = self.slots[idx].filename.as_ref().unwrap().clone();
+            let filename = self.slots[idx]
+                .filename
+                .as_ref()
+                .expect("!is_scratch implies filename is Some")
+                .clone();
             let mtime = self.slots[idx]
                 .disk_mtime
                 .and_then(|t| {

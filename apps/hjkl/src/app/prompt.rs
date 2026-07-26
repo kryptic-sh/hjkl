@@ -176,8 +176,12 @@ impl App {
             return;
         }
 
-        let line = self.command_field.as_ref().unwrap().text();
-        let (_, col) = self.command_field.as_ref().unwrap().cursor();
+        let field = self
+            .command_field
+            .as_ref()
+            .expect("cmdline mode implies command_field (is_none guard above)");
+        let line = field.text();
+        let (_, col) = field.cursor();
         // Convert char-indexed col to a byte index (safe for ASCII command
         // lines, UTF-8-correct via char_indices for non-ASCII).
         let caret = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
@@ -373,7 +377,10 @@ impl App {
         if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
             // Tab-time inline expansion (%, #, <cword>) takes priority.
             if self.command_field.is_some() {
-                let field = self.command_field.as_ref().unwrap();
+                let field = self
+                    .command_field
+                    .as_ref()
+                    .expect("guarded by command_field.is_some() above");
                 let line = field.text();
                 // Expand at the REAL caret, not end-of-line. `cursor()` reports
                 // the column in chars; translate it to a byte offset so the
@@ -392,7 +399,10 @@ impl App {
                     if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {
                         let new_text =
                             format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
-                        let field = self.command_field.as_mut().unwrap();
+                        let field = self
+                            .command_field
+                            .as_mut()
+                            .expect("guarded by command_field.is_some() above");
                         set_field_text(field, &new_text);
                         self.refresh_command_completion();
                         return;
@@ -566,7 +576,11 @@ impl App {
             self.prompt_user_input = None;
         }
 
-        let field = self.command_field.as_mut().unwrap();
+        // Still Some here: every path above that clears the field returns. Match
+        // the earlier Esc/Enter guards and ignore the key rather than panic.
+        let Some(field) = self.command_field.as_mut() else {
+            return;
+        };
         let text_changed = field.handle_input(input);
         // Recompute popup live when text actually changed.
         if text_changed {
