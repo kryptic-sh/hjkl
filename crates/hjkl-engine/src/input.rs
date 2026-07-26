@@ -77,9 +77,9 @@ pub fn encode_macro(inputs: &[Input]) -> String {
 }
 
 /// Reverse of [`encode_macro`] — parse the textual form back into
-/// `Input` events for replay. Unknown `<…>` tags are dropped silently
-/// so the caller can roundtrip text the user pasted into a register
-/// without erroring out on partial matches.
+/// `Input` events for replay. Unknown `<…>` tags are emitted as their
+/// literal characters so pasted register text round-trips without
+/// silently dropping user content.
 pub fn decode_macro(s: &str) -> Vec<Input> {
     let mut out = Vec::new();
     let mut chars = s.chars().peekable();

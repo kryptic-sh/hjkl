@@ -1025,14 +1025,16 @@ fn do_set(
         ));
     }
 
-    // Store the payload in our in-memory table.
+    // Replace any previously-owned data for this selection so that only the
+    // most-recent format is advertised — mirrors Wayland (destroy source),
+    // Windows (EmptyClipboard), and macOS (clearContents) behaviour.
     let data = state.owned.entry(sel_atom).or_insert_with(|| OwnedData {
         payloads: HashMap::new(),
         targets: Vec::new(),
     });
-    if !data.targets.contains(&mime_atom) {
-        data.targets.push(mime_atom);
-    }
+    data.targets.clear();
+    data.payloads.clear();
+    data.targets.push(mime_atom);
     data.payloads.insert(mime_atom, bytes);
 
     // Auto-SAVE_TARGETS: notify any clipboard manager so our data persists
