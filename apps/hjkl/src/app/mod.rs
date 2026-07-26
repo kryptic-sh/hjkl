@@ -321,11 +321,11 @@ pub struct App {
     /// the language for every slot's path and triggers a fresh recompute.
     /// Default `true` — vim parity.
     pub syntax_enabled: bool,
-    /// Cache for `render::search_count` — keyed by buffer id, dirty_gen,
-    /// cursor, and pattern text so the same result is returned on every
-    /// frame between input/edits. Without this the status line scans the
-    /// whole document on every render — 50 %+ of CPU on big files with an
-    /// active `/` pattern (per samply).
+    /// Cache for `render::search_count` — keyed by buffer id, dirty_gen and
+    /// pattern text (NOT the cursor), so the document scan re-runs only on
+    /// an edit, a buffer switch or a pattern change. Without this the status
+    /// line scans the whole document on every render — 50 %+ of CPU on big
+    /// files with an active `/` pattern (per samply).
     pub(crate) search_count_cache: std::cell::RefCell<Option<SearchCountCache>>,
     /// Set when an event handler decided a `recompute_and_install` is
     /// needed but deferred it to coalesce. The main event loop runs the
@@ -689,16 +689,22 @@ pub(crate) struct ConfirmingSubstitute {
     pub idx: usize,
 }
 
-/// Memoised result of [`crate::render::search_count`]. Stored in a
+/// Memoised match set for [`crate::render::search_count`]. Stored in a
 /// `RefCell` on `App` so the render path (taking `&App`) can refresh
 /// it without restructuring callers.
+///
+/// The key deliberately excludes the cursor: the scan result depends only
+/// on the buffer contents and the pattern, so a cursor move must not evict
+/// it. The `[idx/total]` index is derived per frame from `match_starts`
+/// with a binary search.
 #[derive(Debug, Clone)]
 pub(crate) struct SearchCountCache {
     pub buffer_id: crate::syntax::BufferId,
     pub dirty_gen: u64,
-    pub cursor: (usize, usize),
     pub pattern: String,
-    pub result: Option<(usize, usize)>,
+    /// Ascending byte offsets of each match start within
+    /// `Buffer::content_joined`, truncated at `render::MATCH_CAP`.
+    pub match_starts: Vec<usize>,
 }
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.

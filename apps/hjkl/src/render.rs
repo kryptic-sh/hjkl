@@ -2499,21 +2499,27 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 }
 
+/// Upper bound on matches tracked by [`search_count`] — keeps the scan and
+/// the cached offset vector bounded on huge files. Both `idx` and `total`
+/// saturate here; the status line renders the capped numbers verbatim.
+const MATCH_CAP: usize = 10_000;
+
 /// Count search matches in the buffer and return `(current_idx, total)`.
 /// `current_idx` is 1-based (the match the cursor is on or just passed).
 /// Returns `None` when no pattern is active or there are no matches.
-/// Caps at 10 000 matches to avoid stalling on huge files.
+/// Caps at [`MATCH_CAP`] matches to avoid stalling on huge files.
 ///
-/// Result is memoised on `App::search_count_cache` keyed by
-/// `(buffer_id, dirty_gen, cursor, pattern_text)` — the status line
-/// re-runs this every render, but the scan only re-runs when one of
-/// those changes. On a cache miss the scan walks
-/// `View::content_joined` (cached `Arc<String>`) once with regex's
-/// SIMD-fast `find_iter`, translating each match position back to its
-/// row via the cumulative newline count instead of cloning per-line
-/// `Vec<String>`s.
+/// The *match set* is memoised on `App::search_count_cache` keyed by
+/// `(buffer_id, dirty_gen, pattern_text)` — deliberately NOT the cursor,
+/// which used to evict the entry on every motion and re-scan the whole
+/// document each frame while a pattern was armed. On a miss the scan walks
+/// `Buffer::content_joined` (cached `Arc<String>`) once with regex's
+/// SIMD-fast `find_iter` and keeps only the match start offsets.
+///
+/// Per frame all that remains is mapping the cursor to a global byte
+/// offset (O(log N) rope lookups) and a `partition_point` over the cached
+/// offsets (O(log matches)).
 pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
-    const MATCH_CAP: usize = 10_000;
     let st = app.active_editor().search_state();
     let pat = st.pattern.as_ref()?;
     let pattern_str = pat.as_str();
@@ -2521,73 +2527,65 @@ pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     let buf = app.active_editor().buffer();
     let buffer_id = app.active().buffer_id;
     let dirty_gen = buf.dirty_gen();
-    let cursor = app.active_editor().cursor();
+    let (cursor_row, cursor_col) = app.active_editor().cursor();
 
-    // Cache hit — return immediately.
-    if let Some(cached) = app.search_count_cache.borrow().as_ref()
-        && cached.buffer_id == buffer_id
-        && cached.dirty_gen == dirty_gen
-        && cached.cursor == cursor
-        && cached.pattern == pattern_str
-    {
-        return cached.result;
-    }
-
-    let (cursor_row, cursor_col) = cursor;
-
-    // `cursor_col` is a char index; regex match offsets are bytes.
-    // Convert cursor's column to a byte offset within its own line.
-    let cursor_byte_in_row = {
-        let rope = buf.rope();
-        if cursor_row < rope.len_lines() {
-            let line = hjkl_buffer::rope_line_str(&rope, cursor_row);
-            line.char_indices()
-                .nth(cursor_col)
-                .map(|(b, _)| b)
-                .unwrap_or(line.len())
+    // `cursor_col` is a char index; regex match offsets are bytes. Map the
+    // cursor to a global byte offset with rope lookups only — no full scan,
+    // and no per-line `String` materialisation.
+    let rope = buf.rope();
+    let len_lines = rope.len_lines();
+    let cursor_global_byte = {
+        let row = cursor_row.min(len_lines);
+        let byte_in_row = if cursor_row < len_lines {
+            let line = rope.line(cursor_row);
+            // Exclude the line's trailing newline: a cursor column can never
+            // sit on it, and the old code measured against a `\n`-stripped
+            // line.
+            let chars = line.len_chars();
+            let chars_excl_nl = if chars > 0 && line.char(chars - 1) == '\n' {
+                chars - 1
+            } else {
+                chars
+            };
+            line.char_to_byte(cursor_col.min(chars_excl_nl))
         } else {
             0
-        }
+        };
+        rope.line_to_byte(row) + byte_in_row
     };
 
-    // Single shared `Arc<String>` of the whole document — cached against
-    // `dirty_gen`, so calling content_joined here costs an `Arc::clone`.
-    let content = buf.content_joined();
-
-    // O(log N) rope lookup beats the prior linear newline scan that ran
-    // up to ~3 MB per keystroke on huge files when search was active.
-    let cursor_global_byte = {
-        let rope = buf.rope();
-        let row = cursor_row.min(rope.len_lines());
-        rope.line_to_byte(row) + cursor_byte_in_row
-    };
-
-    let mut total = 0usize;
-    let mut current_idx = 0usize;
-    for m in pat.find_iter(&content) {
-        total += 1;
-        if m.start() <= cursor_global_byte {
-            current_idx = total;
-        }
-        if total >= MATCH_CAP {
-            break;
-        }
-    }
-    let result = if total == 0 {
-        None
-    } else {
-        Some((current_idx, total))
-    };
-
-    *app.search_count_cache.borrow_mut() = Some(crate::app::SearchCountCache {
-        buffer_id,
-        dirty_gen,
-        cursor,
-        pattern: pattern_str.to_string(),
-        result,
+    let mut cache = app.search_count_cache.borrow_mut();
+    let hit = cache.as_ref().is_some_and(|c| {
+        c.buffer_id == buffer_id && c.dirty_gen == dirty_gen && c.pattern == pattern_str
     });
+    if !hit {
+        // Single shared `Arc<String>` of the whole document — cached against
+        // `dirty_gen`, so calling content_joined here costs an `Arc::clone`.
+        let content = buf.content_joined();
+        let mut match_starts = Vec::new();
+        for m in pat.find_iter(&content) {
+            match_starts.push(m.start());
+            if match_starts.len() >= MATCH_CAP {
+                break;
+            }
+        }
+        *cache = Some(crate::app::SearchCountCache {
+            buffer_id,
+            dirty_gen,
+            pattern: pattern_str.to_string(),
+            match_starts,
+        });
+    }
 
-    result
+    let starts = &cache.as_ref()?.match_starts;
+    if starts.is_empty() {
+        return None;
+    }
+    // `find_iter` yields non-overlapping matches in ascending order, so the
+    // count of starts at-or-before the cursor IS the 1-based index of the
+    // last such match (0 when the cursor precedes them all).
+    let current_idx = starts.partition_point(|&s| s <= cursor_global_byte);
+    Some((current_idx, starts.len()))
 }
 
 /// Build the status line text as a ratatui [`Line`].

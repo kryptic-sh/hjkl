@@ -656,6 +656,144 @@ fn search_count_after_commit_lands_on_first_match() {
     );
 }
 
+/// Place the cursor at `(row, col)` and read the status-line search counter.
+fn count_at(app: &mut App, row: usize, col: usize) -> Option<(usize, usize)> {
+    use hjkl_buffer::Position;
+    app.active_editor_mut()
+        .buffer_mut()
+        .set_cursor(Position::new(row, col));
+    crate::render::search_count(app)
+}
+
+#[test]
+fn search_count_idx_at_every_cursor_edge_single_line() {
+    // Pins the exact `[idx/total]` semantics: idx is the 1-based index of
+    // the last match whose START is at-or-before the cursor byte, 0 when
+    // the cursor precedes every match.
+    //           0123456789012
+    // content:  X foo Y foo Z
+    // matches:    ^2      ^8
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo Y foo Z");
+    app.commit_search("foo");
+
+    assert_eq!(count_at(&mut app, 0, 0), Some((0, 2)), "before first match");
+    assert_eq!(count_at(&mut app, 0, 2), Some((1, 2)), "on match 1 start");
+    assert_eq!(count_at(&mut app, 0, 3), Some((1, 2)), "inside match 1");
+    assert_eq!(
+        count_at(&mut app, 0, 4),
+        Some((1, 2)),
+        "last char of match 1"
+    );
+    assert_eq!(count_at(&mut app, 0, 5), Some((1, 2)), "between matches");
+    assert_eq!(count_at(&mut app, 0, 8), Some((2, 2)), "on match 2 start");
+    assert_eq!(count_at(&mut app, 0, 10), Some((2, 2)), "inside match 2");
+    assert_eq!(count_at(&mut app, 0, 12), Some((2, 2)), "after last match");
+    assert_eq!(
+        count_at(&mut app, 0, 99),
+        Some((2, 2)),
+        "col past end of line clamps to line end"
+    );
+}
+
+#[test]
+fn search_count_idx_at_every_cursor_edge_multi_line() {
+    // Same semantics across rows, including a row with no match and a
+    // cursor row past the end of the document.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "alpha\nfoo one\nbeta\nfoo two\ngamma");
+    app.commit_search("foo");
+
+    assert_eq!(count_at(&mut app, 0, 0), Some((0, 2)), "row above match 1");
+    assert_eq!(count_at(&mut app, 0, 4), Some((0, 2)), "end of row 0");
+    assert_eq!(count_at(&mut app, 1, 0), Some((1, 2)), "on match 1 start");
+    assert_eq!(count_at(&mut app, 1, 2), Some((1, 2)), "inside match 1");
+    assert_eq!(
+        count_at(&mut app, 2, 0),
+        Some((1, 2)),
+        "row between matches"
+    );
+    assert_eq!(count_at(&mut app, 3, 0), Some((2, 2)), "on match 2 start");
+    assert_eq!(
+        count_at(&mut app, 4, 4),
+        Some((2, 2)),
+        "last row, past both"
+    );
+    assert_eq!(count_at(&mut app, 99, 0), Some((2, 2)), "row past EOF");
+}
+
+#[test]
+fn search_count_idx_multibyte_cursor_column() {
+    // Cursor columns are CHAR indices, match offsets are BYTES. A cursor
+    // sitting just before a match on a line full of multi-byte chars must
+    // not be mis-mapped past it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // "— — — foo" : each em-dash is 3 bytes, so char col 6 == byte 12.
+    seed_buffer(&mut app, "— — — foo bar\nfoo");
+    app.commit_search("foo");
+
+    assert_eq!(
+        count_at(&mut app, 0, 5),
+        Some((0, 2)),
+        "char before match 1"
+    );
+    assert_eq!(count_at(&mut app, 0, 6), Some((1, 2)), "on match 1 start");
+    assert_eq!(count_at(&mut app, 0, 7), Some((1, 2)), "inside match 1");
+    assert_eq!(count_at(&mut app, 1, 0), Some((2, 2)), "match 2 on row 1");
+}
+
+#[test]
+fn search_count_caps_total_at_match_cap() {
+    // MATCH_CAP = 10_000: total saturates there and idx never exceeds it.
+    // Every line is `foo\n` (4 bytes), so match k starts at byte 4k.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let content = "foo\n".repeat(10_050);
+    seed_buffer(&mut app, &content);
+    app.commit_search("foo");
+
+    assert_eq!(
+        count_at(&mut app, 0, 0),
+        Some((1, 10_000)),
+        "cursor on match 1: total capped at 10000, no `+` suffix"
+    );
+    assert_eq!(
+        count_at(&mut app, 5_000, 0),
+        Some((5_001, 10_000)),
+        "idx counts matches at-or-before the cursor within the cap"
+    );
+    assert_eq!(
+        count_at(&mut app, 10_049, 0),
+        Some((10_000, 10_000)),
+        "cursor past the cap clamps idx to the cap"
+    );
+}
+
+#[test]
+fn search_count_none_when_pattern_has_no_matches() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "alpha\nbeta\ngamma");
+    app.commit_search("zzz");
+    assert_eq!(count_at(&mut app, 0, 0), None, "no matches => no segment");
+    assert_eq!(count_at(&mut app, 2, 2), None, "still none after moving");
+}
+
+#[test]
+fn search_count_tracks_edits_under_a_live_pattern() {
+    // The match cache must be invalidated by buffer edits, not just by
+    // cursor movement.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo\nfoo");
+    app.commit_search("foo");
+    assert_eq!(count_at(&mut app, 1, 0), Some((2, 2)));
+
+    seed_buffer(&mut app, "foo\nfoo\nfoo");
+    assert_eq!(
+        count_at(&mut app, 2, 0),
+        Some((3, 3)),
+        "edit under a live pattern must refresh the counter"
+    );
+}
+
 #[test]
 fn lsp_jump_reveals_cursor_in_viewport() {
     // Regression: jump_cursor only sets cursor; without ensure_cursor_in_
