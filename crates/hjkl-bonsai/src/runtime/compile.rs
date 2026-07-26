@@ -81,7 +81,7 @@ impl GrammarCompiler {
             }
         }
 
-        super::publish::publish_dir(&staging, &dest)
+        super::publish::publish_path(&staging, &dest)
             .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
         Ok(dest)
     }

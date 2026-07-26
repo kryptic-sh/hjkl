@@ -170,7 +170,7 @@ impl SourceCache {
             }
         }
 
-        super::publish::publish_dir(&staging, &dest)
+        super::publish::publish_path(&staging, &dest)
             .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
         Ok(grammar_root(&dest, spec))
     }
@@ -294,7 +294,7 @@ impl QuerySourceCache {
             }
         }
 
-        super::publish::publish_dir(&staging, &dest)
+        super::publish::publish_path(&staging, &dest)
             .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
         Ok(dest)
     }
@@ -353,7 +353,7 @@ impl QuerySourceCache {
             f.write_all(content.as_bytes())
                 .with_context(|| format!("write resolved scm {}", staging.display()))?;
         }
-        super::publish::publish_dir(&staging, &resolved_path).with_context(|| {
+        super::publish::publish_path(&staging, &resolved_path).with_context(|| {
             format!(
                 "rename {} -> {}",
                 staging.display(),
