@@ -53,6 +53,23 @@ fn stylespec_fg_only() {
     assert_eq!(got.bg, None);
 }
 
+// 3b. StyleSpec with both fg and bg set.
+#[test]
+fn stylespec_fg_and_bg() {
+    let spec = StyleSpec {
+        fg: Some(Color::rgb(0xFF, 0x00, 0x00)),
+        bg: Some(Color::rgb(0x00, 0x11, 0x22)),
+        modifiers: Modifiers {
+            reverse: true,
+            ..Default::default()
+        },
+    };
+    let got = spec.to_ratatui();
+    assert_eq!(got.fg, Some(RColor::Rgb(0xFF, 0x00, 0x00)));
+    assert_eq!(got.bg, Some(RColor::Rgb(0x00, 0x11, 0x22)));
+    assert!(got.add_modifier.contains(RMod::REVERSED));
+}
+
 // 4. All five modifier flags map to the right ratatui constant.
 #[test]
 fn modifier_bold() {

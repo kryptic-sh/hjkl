@@ -20,11 +20,12 @@
 #![forbid(unsafe_code)]
 
 use hjkl_theme::Color;
+use hjkl_theme_tui::ToRatatui;
 use hjkl_which_key::PopupLayout;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color as RColor, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -60,14 +61,6 @@ impl PopupTheme {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Convert a [`hjkl_theme::Color`] to a ratatui [`RColor`].
-#[inline]
-fn to_rcolor(c: Color) -> RColor {
-    RColor::Rgb(c.r, c.g, c.b)
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Render the which-key popup anchored at the bottom of `buf_area`.
@@ -97,7 +90,7 @@ pub fn render(
 
     frame.render_widget(Clear, area);
 
-    let border_color = to_rcolor(theme.border);
+    let border_color = theme.border.to_ratatui();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
@@ -108,7 +101,7 @@ pub fn render(
     let key_style = Style::default()
         .fg(border_color)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(to_rcolor(theme.desc));
+    let desc_style = Style::default().fg(theme.desc.to_ratatui());
 
     let col_width = layout.col_width as usize;
     let mut lines: Vec<Line> = Vec::with_capacity(layout.rows);
@@ -150,9 +143,11 @@ mod tests {
 
     #[test]
     fn smoke_to_rcolor_roundtrip() {
+        // Pins the conversion this crate used to implement locally; it now
+        // routes through `hjkl-theme-tui` and must be unchanged.
+        use ratatui::style::Color as RColor;
         let c = Color::rgb(0x12, 0x34, 0x56);
-        let rc = to_rcolor(c);
-        assert_eq!(rc, RColor::Rgb(0x12, 0x34, 0x56));
+        assert_eq!(c.to_ratatui(), RColor::Rgb(0x12, 0x34, 0x56));
     }
 
     #[test]

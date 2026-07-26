@@ -25,10 +25,11 @@
 
 use hjkl_completion::Completion;
 use hjkl_theme::Color;
+use hjkl_theme_tui::ToRatatui;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color as RColor, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
@@ -74,14 +75,6 @@ impl CompletionTheme {
             detail_fg,
         }
     }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Convert a [`hjkl_theme::Color`] to a ratatui [`RColor`].
-#[inline]
-fn to_rcolor(c: Color) -> RColor {
-    RColor::Rgb(c.r, c.g, c.b)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -172,7 +165,7 @@ pub fn popup(
 
     frame.render_widget(Clear, area);
 
-    let border_color = to_rcolor(theme.border);
+    let border_color = theme.border.to_ratatui();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
@@ -180,10 +173,10 @@ pub fn popup(
     frame.render_widget(block, area);
 
     let selected_style = Style::default()
-        .bg(to_rcolor(theme.selected_bg))
+        .bg(theme.selected_bg.to_ratatui())
         .add_modifier(Modifier::BOLD);
-    let normal_style = Style::default().fg(to_rcolor(theme.normal_fg));
-    let detail_style = Style::default().fg(to_rcolor(theme.detail_fg));
+    let normal_style = Style::default().fg(theme.normal_fg.to_ratatui());
+    let detail_style = Style::default().fg(theme.detail_fg.to_ratatui());
 
     // Window the visible list to just the rows that will actually be shown, so
     // we build at most `visible_count` (≤ MAX_HEIGHT) ListItems per frame —
@@ -332,9 +325,11 @@ mod tests {
 
     #[test]
     fn smoke_to_rcolor_roundtrip() {
+        // Pins the conversion this crate used to implement locally; it now
+        // routes through `hjkl-theme-tui` and must be unchanged.
+        use ratatui::style::Color as RColor;
         let c = Color::rgb(0x12, 0x34, 0x56);
-        let rc = to_rcolor(c);
-        assert_eq!(rc, RColor::Rgb(0x12, 0x34, 0x56));
+        assert_eq!(c.to_ratatui(), RColor::Rgb(0x12, 0x34, 0x56));
     }
 
     #[test]

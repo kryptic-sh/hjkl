@@ -1,4 +1,13 @@
 //! Ratatui adapters for hjkl-theme.
+//!
+//! This crate is the single owner of the **theme**→ratatui conversions
+//! (`hjkl_theme::Color` / `Modifiers` / `StyleSpec`). Adapter crates that paint
+//! theme-styled widgets — statusline, completion, which-key, syntax — must
+//! depend on it rather than reimplement the mapping, so a new `Modifiers` flag
+//! lands everywhere at once.
+//!
+//! The **engine**→ratatui family (`hjkl_engine::Color` / `Style`) is a distinct
+//! type family owned by `hjkl-engine-tui`; the two are deliberately not merged.
 
 use hjkl_theme::{Color, Modifiers, StyleSpec};
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};

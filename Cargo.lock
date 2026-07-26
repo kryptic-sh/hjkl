@@ -1475,6 +1475,7 @@ version = "0.37.1"
 dependencies = [
  "hjkl-completion",
  "hjkl-theme",
+ "hjkl-theme-tui",
  "ratatui",
 ]
 
@@ -1804,6 +1805,7 @@ name = "hjkl-statusline-tui"
 version = "0.37.1"
 dependencies = [
  "hjkl-statusline",
+ "hjkl-theme-tui",
  "ratatui",
 ]
 
@@ -1909,6 +1911,7 @@ name = "hjkl-which-key-tui"
 version = "0.37.1"
 dependencies = [
  "hjkl-theme",
+ "hjkl-theme-tui",
  "hjkl-which-key",
  "ratatui",
 ]

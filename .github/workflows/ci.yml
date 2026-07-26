@@ -766,11 +766,11 @@ jobs:
           #
           # Original in-tree crates (28):
           #  22.  hjkl-statusline       — statusline model (#3).
-          #  23.  hjkl-statusline-tui   — ratatui adapter (#22).
+          #  23.  hjkl-statusline-tui   — ratatui adapter (#21, #22).
           #  24.  hjkl-keymap-tui       — ratatui/crossterm key adapter (#10).
           #  25.  hjkl-which-key        — which-key data (#10, #11).
-          #  26.  hjkl-which-key-tui    — ratatui adapter (#3, #25).
-          #  27.  hjkl-completion-tui   — ratatui completion popup (#5a).
+          #  26.  hjkl-which-key-tui    — ratatui adapter (#3, #21, #25).
+          #  27.  hjkl-completion-tui   — ratatui completion popup (#3, #5a, #21).
           #  28.  hjkl-markdown         — markdown event stream.
           #  29.  hjkl-markdown-tui     — ratatui markdown adapter (#28, #3).
           #  30.  hjkl-hover            — hover popup state.

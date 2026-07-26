@@ -3,6 +3,10 @@
 //! Converts a [`Bar`] to a `ratatui::text::Line` and paints it via
 //! `Paragraph` into the supplied `Rect`.
 //!
+//! Style conversion is not implemented here: `hjkl-statusline` re-exports the
+//! `hjkl-theme` style types verbatim, so `hjkl_theme_tui::ToRatatui` owns the
+//! theme→ratatui mapping.
+//!
 //! # Usage
 //!
 //! ```no_run
@@ -12,62 +16,20 @@
 
 #![forbid(unsafe_code)]
 
-use hjkl_statusline::{Bar, Color, Modifiers, Segment, Style};
+use hjkl_statusline::{Bar, Segment};
+use hjkl_theme_tui::ToRatatui;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color as RColor, Modifier as RMod, Style as RStyle},
     text::{Line, Span},
     widgets::Paragraph,
 };
-
-/// Convert an agnostic [`Color`] to a ratatui [`RColor`].
-#[inline]
-pub fn to_ratatui_color(c: Color) -> RColor {
-    RColor::Rgb(c.r, c.g, c.b)
-}
-
-/// Convert agnostic [`Modifiers`] to ratatui [`RMod`].
-#[inline]
-pub fn to_ratatui_modifier(m: Modifiers) -> RMod {
-    let mut out = RMod::empty();
-    if m.bold {
-        out |= RMod::BOLD;
-    }
-    if m.italic {
-        out |= RMod::ITALIC;
-    }
-    if m.underline {
-        out |= RMod::UNDERLINED;
-    }
-    if m.reverse {
-        out |= RMod::REVERSED;
-    }
-    if m.strikethrough {
-        out |= RMod::CROSSED_OUT;
-    }
-    out
-}
-
-/// Convert an agnostic [`Style`] to a ratatui [`RStyle`].
-#[inline]
-pub fn to_ratatui_style(s: Style) -> RStyle {
-    let mut out = RStyle::default();
-    if let Some(fg) = s.fg {
-        out = out.fg(to_ratatui_color(fg));
-    }
-    if let Some(bg) = s.bg {
-        out = out.bg(to_ratatui_color(bg));
-    }
-    out = out.add_modifier(to_ratatui_modifier(s.modifiers));
-    out
-}
 
 /// Convert a [`Segment`] to a ratatui [`Span`].
 fn segment_to_span(seg: &Segment) -> Span<'static> {
     match seg {
         Segment::Text { content, style } => {
-            Span::styled(content.clone().into_owned(), to_ratatui_style(*style))
+            Span::styled(content.clone().into_owned(), style.to_ratatui())
         }
         // Future variants (Icon, Separator, PowerlineChevron, …) fall back to empty.
         _ => Span::raw(String::new()),
@@ -102,7 +64,11 @@ mod tests {
     use hjkl_statusline::{
         Bar, Color, Segment, StatusTheme, Style, StyleExt, cursor_segment, mode_segment,
     };
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Color as RColor, Modifier as RMod},
+    };
 
     /// Build a test theme via mutation — `StatusTheme` is `#[non_exhaustive]`
     /// so struct literals are not permitted outside the defining crate.
@@ -189,11 +155,14 @@ mod tests {
         assert_eq!(total, width as usize, "line width must equal bar width");
     }
 
+    // The three tests below pin the conversions the crate used to implement
+    // locally; they now exercise the shared `hjkl-theme-tui` `ToRatatui` impls
+    // and must produce identical results.
+
     #[test]
     fn to_ratatui_color_roundtrip() {
         let c = Color::rgb(0x5e, 0x81, 0xac);
-        let rc = to_ratatui_color(c);
-        assert_eq!(rc, RColor::Rgb(0x5e, 0x81, 0xac));
+        assert_eq!(c.to_ratatui(), RColor::Rgb(0x5e, 0x81, 0xac));
     }
 
     #[test]
@@ -202,7 +171,7 @@ mod tests {
             .fg(Color::rgb(0xff, 0x00, 0x00))
             .bold()
             .italic();
-        let rs = to_ratatui_style(s);
+        let rs = s.to_ratatui();
         assert!(rs.add_modifier.contains(RMod::BOLD));
         assert!(rs.add_modifier.contains(RMod::ITALIC));
         assert_eq!(rs.fg, Some(RColor::Rgb(0xff, 0x00, 0x00)));
@@ -218,7 +187,7 @@ mod tests {
             reverse: true,
             strikethrough: true,
         };
-        let rm = to_ratatui_modifier(m);
+        let rm = m.to_ratatui();
         assert!(rm.contains(RMod::BOLD));
         assert!(rm.contains(RMod::ITALIC));
         assert!(rm.contains(RMod::UNDERLINED));
