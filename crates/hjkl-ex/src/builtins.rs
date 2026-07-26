@@ -3615,33 +3615,8 @@ fn cabclear_handler<H: Host>(
 mod tests {
     use super::*;
     use crate::range::LineRange;
+    use crate::test_util::{buf_line, buf_lines, make_editor, make_editor_with_lines};
     use hjkl_engine::{DefaultHost, Editor, Options};
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
-    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
-        let buf = hjkl_buffer::View::new();
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
-
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
-        let content = lines.join("\n");
-        let buf = hjkl_buffer::View::from_str(&content);
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
-
-    fn buf_line(editor: &Editor<hjkl_buffer::View, DefaultHost>, row: usize) -> String {
-        hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
-    }
-
-    fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
-        let rope = editor.buffer().rope();
-        (0..rope.len_lines())
-            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
-            .collect()
-    }
 
     // ── :> / :< shift commands ────────────────────────────────────────────────
 

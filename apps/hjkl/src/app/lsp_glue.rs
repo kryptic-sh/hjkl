@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use hjkl_buffer::floor_char_boundary;
 use hjkl_buffer_tui::Sign;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::json;
@@ -63,20 +64,6 @@ fn capability_pointer_for_method(method: &str) -> Option<&'static str> {
     })
 }
 
-/// Snap `byte` down to the nearest char boundary in `rope`.
-///
-/// LSP byte offsets that are clamped to `len_bytes` can land in the middle of
-/// a multi-byte char (e.g. a 4-byte emoji whose last byte is at position N-1
-/// while `len_bytes` clamps to N-3). `ropey::Rope::byte_slice` panics on a
-/// non-aligned range; this helper floors the byte index to the start of the
-/// char that contains it using ropey's own conversion, which is safe on any
-/// byte value ≤ len_bytes (the docs guarantee `byte_to_char` returns the char
-/// index of the char *containing* that byte when it is a non-boundary byte).
-fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
-    let b = byte.min(rope.len_bytes());
-    rope.char_to_byte(rope.byte_to_char(b))
-}
-
 // ── Position-encoding conversion (audit R2, UTF-16 fix) ────────────────────
 //
 // hjkl's internal `Position`/`Pos` columns (cursor, diagnostics, goto
@@ -125,7 +112,7 @@ pub(crate) fn col_to_wire(
 /// `wire_col`, returning that char's index. A `wire_col` that lands in the
 /// middle of a multi-unit char (shouldn't happen for a spec-compliant
 /// server, but nothing stops a buggy one) resolves to the START of that
-/// char, matching how `snap_to_char_boundary` handles the same situation on
+/// char, matching how `floor_char_boundary` handles the same situation on
 /// the byte side. A `wire_col` at or past the line's total encoded length
 /// (server overshoot) clamps to the line's char count — one past the last
 /// char, same "insert mode lives there" convention `Position` uses.
@@ -146,7 +133,7 @@ pub(crate) fn wire_to_col(
         };
         // `target` lands strictly inside this char (e.g. between the two
         // UTF-16 units of a surrogate pair) — floor to this char's start,
-        // matching `snap_to_char_boundary`'s floor convention on the byte
+        // matching `floor_char_boundary`'s floor convention on the byte
         // side rather than overshooting into the next char.
         if consumed + width > target {
             return idx;
@@ -244,10 +231,10 @@ fn build_text_changes(
             .map(|e| {
                 // Clamp then snap to char boundaries: `.min(len_bytes)` can land
                 // in the middle of a multi-byte char (e.g. on emoji/CJK content),
-                // causing `byte_slice` to panic. `snap_to_char_boundary` floors
+                // causing `byte_slice` to panic. `floor_char_boundary` floors
                 // each bound to the start of the char that contains it.
-                let start = snap_to_char_boundary(rope, e.start_byte.min(len_bytes));
-                let end = snap_to_char_boundary(rope, e.new_end_byte.min(len_bytes)).max(start);
+                let start = floor_char_boundary(rope, e.start_byte.min(len_bytes));
+                let end = floor_char_boundary(rope, e.new_end_byte.min(len_bytes)).max(start);
                 let text = rope.byte_slice(start..end).to_string();
                 hjkl_lsp::TextChange {
                     start_line: e.start_position.0,
@@ -3012,7 +2999,7 @@ mod position_encoding_tests {
 
 #[cfg(test)]
 mod lsp_glue_tests {
-    use super::{build_text_changes, snap_to_char_boundary};
+    use super::{build_text_changes, floor_char_boundary};
 
     /// Apply a single-row `TextChange` (row 0 only — sufficient for these
     /// single-line fixtures) to `doc`, replacing the byte range
@@ -3030,7 +3017,7 @@ mod lsp_glue_tests {
         out
     }
 
-    /// `snap_to_char_boundary` must floor a byte index that falls inside a
+    /// `floor_char_boundary` must floor a byte index that falls inside a
     /// multi-byte char (here a 4-byte emoji U+1F600) to the char's first byte.
     #[test]
     fn snap_floors_interior_emoji_byte() {
@@ -3039,7 +3026,7 @@ mod lsp_glue_tests {
         // Char starts at byte 2; bytes 3, 4, 5 are interior continuation bytes.
         let emoji_start = 2usize;
         for interior in emoji_start..emoji_start + 4 {
-            let snapped = snap_to_char_boundary(&rope, interior);
+            let snapped = floor_char_boundary(&rope, interior);
             assert_eq!(
                 snapped, emoji_start,
                 "byte {interior} inside emoji should snap to byte {emoji_start}, got {snapped}"
@@ -3047,7 +3034,7 @@ mod lsp_glue_tests {
         }
         // Byte past the emoji should snap to itself (it's already aligned).
         let past = emoji_start + 4;
-        assert_eq!(snap_to_char_boundary(&rope, past), past);
+        assert_eq!(floor_char_boundary(&rope, past), past);
     }
 
     /// `build_text_changes` must not panic when `new_end_byte` is clamped

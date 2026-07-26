@@ -191,14 +191,8 @@ pub(crate) fn format_undolist<H: Host>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_engine::{DefaultHost, Editor, Options};
+    use crate::test_util::make_editor;
     use hjkl_vim::VimEditorExt;
-
-    fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
-        let buf = hjkl_buffer::View::new();
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
 
     // ---- registers ---------------------------------------------------------
 

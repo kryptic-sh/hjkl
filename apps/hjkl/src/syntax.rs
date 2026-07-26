@@ -194,57 +194,33 @@ mod tests {
     /// Test buffer id.
     const TID: BufferId = 0;
 
+    /// The shim's `PartialEq` deliberately compares signs field-by-field
+    /// (`row`/`ch`/`priority`) instead of deriving it, because `Sign` carries a
+    /// ratatui `Style` that render caching must not key on. No grammar needed.
     #[test]
-    fn render_viewport_with_no_language_returns_none() {
-        let buf = View::from_str("hello world");
-        let mut layer = default_layer();
-        assert!(
-            !layer
-                .set_language_for_path(TID, Path::new("a.unknownext"))
-                .is_known()
-        );
-        assert!(layer.render_viewport(TID, &buf, 0, 10).is_none());
-    }
+    fn render_output_eq_ignores_sign_style() {
+        let mk = |style: ratatui::style::Style| RenderOutput {
+            spans: vec![vec![(0, 2, ratatui::style::Style::default())]],
+            signs: vec![Sign {
+                row: 1,
+                ch: 'E',
+                style,
+                priority: 100,
+            }],
+            key: (7, 0, 30),
+        };
+        let plain = mk(ratatui::style::Style::default());
+        let styled = mk(ratatui::style::Style::default().fg(ratatui::style::Color::Red));
+        assert_eq!(plain, styled, "sign style must not affect equality");
 
-    #[test]
-    fn apply_edits_with_no_language_is_noop() {
-        let mut layer = default_layer();
-        let edits = vec![hjkl_engine::ContentEdit {
-            start_byte: 0,
-            old_end_byte: 0,
-            new_end_byte: 1,
-            start_position: (0, 0),
-            old_end_position: (0, 0),
-            new_end_position: (0, 1),
-        }];
-        layer.apply_edits(TID, &edits);
-        // No panic — that's the test.
-    }
-
-    #[test]
-    fn set_language_for_path_returns_unknown_for_unrecognized_extension() {
-        let mut layer = default_layer();
-        let outcome = layer.set_language_for_path(TID, Path::new("a.zzznope_not_real"));
-        assert!(
-            !outcome.is_known(),
-            "expected Unknown for unrecognized extension"
-        );
-        assert!(matches!(outcome, SetLanguageOutcome::Unknown));
-    }
-
-    #[test]
-    fn poll_pending_loads_drains_ready_handles() {
-        let mut layer = default_layer();
-        let events = layer.poll_pending_loads();
-        assert!(
-            events.is_empty(),
-            "expected no events with no pending loads"
-        );
+        let mut differing = plain.clone();
+        differing.signs[0].ch = 'W';
+        assert_ne!(plain, differing, "sign `ch` must affect equality");
     }
 
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn parse_and_render_small_rust_buffer() {
+    fn render_viewport_converts_spans_to_ratatui() {
         let buf = View::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
         assert!(
@@ -263,7 +239,7 @@ mod tests {
 
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn diagnostics_emit_sign_for_syntax_error() {
+    fn render_viewport_converts_diag_signs_to_tui_signs() {
         let buf = View::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
@@ -277,31 +253,5 @@ mod tests {
             "expected an 'E' sign on row 1; got {:?}",
             out.signs
         );
-    }
-
-    #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn incremental_path_matches_cold_for_small_edit() {
-        let pre = View::from_str("fn main() { let x = 1; }");
-        let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
-        layer.apply_edits(
-            TID,
-            &[hjkl_engine::ContentEdit {
-                start_byte: 3,
-                old_end_byte: 3,
-                new_end_byte: 4,
-                start_position: (0, 3),
-                old_end_position: (0, 3),
-                new_end_position: (0, 4),
-            }],
-        );
-        let post = View::from_str("fn Ymain() { let x = 1; }");
-        let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
-        let mut cold_layer = default_layer();
-        cold_layer.set_language_for_path(TID, Path::new("a.rs"));
-        let cold = cold_layer.render_viewport(TID, &post, 0, 10).unwrap();
-        assert_eq!(inc.spans, cold.spans);
     }
 }

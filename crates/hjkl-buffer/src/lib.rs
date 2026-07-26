@@ -58,7 +58,7 @@ mod viewport;
 pub mod wrap;
 
 pub use buffer::View;
-pub use buffer::{rope_line_bytes, rope_line_str};
+pub use buffer::{floor_char_boundary, rope_line_bytes, rope_line_str};
 pub use content::Buffer;
 pub use edit::{Edit, MotionKind};
 pub use engine_types::{ContentEdit, EngineEdit, FoldOp, Pos};

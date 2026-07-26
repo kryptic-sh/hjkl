@@ -291,14 +291,7 @@ pub(crate) fn vglobal_handler<H: Host>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_engine::{DefaultHost, Editor, Options};
-
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
-        let content = lines.join("\n");
-        let buf = hjkl_buffer::View::from_str(&content);
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
+    use crate::test_util::{buf_lines, make_editor_with_lines};
 
     #[test]
     fn global_d_deletes_matching_lines() {
@@ -515,12 +508,5 @@ mod tests {
             0,
             "a no-op :g must not pollute the undo stack"
         );
-    }
-
-    fn buf_lines(editor: &Editor<hjkl_buffer::View, DefaultHost>) -> Vec<String> {
-        let rope = editor.buffer().rope();
-        (0..rope.len_lines())
-            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
-            .collect()
     }
 }

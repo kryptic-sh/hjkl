@@ -767,6 +767,21 @@ impl View {
 
 // ── Rope line helpers (free functions over &ropey::Rope) ─────────────
 
+/// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
+///
+/// Byte offsets that arrive from outside the rope — LSP positions clamped to
+/// `len_bytes`, a stale tree-sitter node range — can land in the middle of a
+/// multi-byte char (e.g. a 4-byte emoji whose last byte sits at `N-1` while
+/// the clamp produced `N-3`). `ropey::Rope::byte_slice` panics on a
+/// non-aligned index, so callers must floor first. Uses ropey's own
+/// conversion, which is safe for any byte value `<= len_bytes`:
+/// `byte_to_char` returns the index of the char *containing* a non-boundary
+/// byte. For an already char-aligned, in-bounds index this is the identity.
+pub fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    rope.char_to_byte(rope.byte_to_char(byte_idx))
+}
+
 /// Return logical line `row` as a `String`, stripping the trailing `\n`
 /// that ropey includes for non-final lines.
 pub fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {

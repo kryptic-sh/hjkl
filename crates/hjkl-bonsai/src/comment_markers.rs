@@ -24,6 +24,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::highlighter::HighlightSpan;
+use crate::rope_slice::{ceil_char_boundary, floor_char_boundary};
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -613,24 +614,6 @@ fn find_comment_delimiter(line_bytes: &[u8]) -> Option<usize> {
         return line_bytes.iter().position(|&b| b == b'#');
     }
     None
-}
-
-/// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
-fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
-    let byte_idx = byte_idx.min(rope.len_bytes());
-    rope.char_to_byte(rope.byte_to_char(byte_idx))
-}
-
-/// Smallest char-boundary byte index `>= byte_idx` (clamped to rope length).
-fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
-    let byte_idx = byte_idx.min(rope.len_bytes());
-    let char_idx = rope.byte_to_char(byte_idx);
-    let floored = rope.char_to_byte(char_idx);
-    if floored == byte_idx {
-        byte_idx
-    } else {
-        rope.char_to_byte(char_idx + 1)
-    }
 }
 
 /// Return `true` when the two comment spans are on directly adjacent lines:

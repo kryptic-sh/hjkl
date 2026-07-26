@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use crate::HighlightSpan;
 use crate::predicate::MetaValue;
+use crate::rope_slice::{ceil_char_boundary, floor_char_boundary};
 
 /// Capture name used for hex color preview spans. Renderers that
 /// understand inline color overlays match on this exact string.
@@ -690,24 +691,6 @@ fn hex_nibble(b: u8) -> Option<u8> {
 
 fn expand_nibble(n: u8) -> u8 {
     (n << 4) | n
-}
-
-/// Largest char-boundary byte index `<= byte_idx` (clamped to rope length).
-fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
-    let byte_idx = byte_idx.min(rope.len_bytes());
-    rope.char_to_byte(rope.byte_to_char(byte_idx))
-}
-
-/// Smallest char-boundary byte index `>= byte_idx` (clamped to rope length).
-fn ceil_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
-    let byte_idx = byte_idx.min(rope.len_bytes());
-    let char_idx = rope.byte_to_char(byte_idx);
-    let floored = rope.char_to_byte(char_idx);
-    if floored == byte_idx {
-        byte_idx
-    } else {
-        rope.char_to_byte(char_idx + 1)
-    }
 }
 
 fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {

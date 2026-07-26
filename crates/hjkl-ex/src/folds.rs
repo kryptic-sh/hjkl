@@ -102,14 +102,7 @@ pub(crate) fn apply_fold_syntax<H: Host>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_engine::{DefaultHost, Editor, Options};
-
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
-        let content = lines.join("\n");
-        let buf = hjkl_buffer::View::from_str(&content);
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
+    use crate::test_util::make_editor_with_lines;
 
     #[test]
     fn foldindent_on_indented_buffer_creates_folds() {

@@ -382,16 +382,11 @@ pub fn parse_dest_address<H: hjkl_engine::Host>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_engine::{DefaultHost, Editor, Options};
+    use crate::test_util::make_editor_with_lines;
+    use hjkl_engine::{DefaultHost, Editor};
 
-    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::View, DefaultHost> {
-        use hjkl_buffer::View;
-        let content = lines.join("\n");
-        let buf = View::from_str(&content);
-        let host = DefaultHost::new();
-        hjkl_vim::vim_editor(buf, host, Options::default())
-    }
-
+    /// Five-line fixture — `range.rs`'s own default, not the crate-wide
+    /// empty-buffer `test_util::make_editor`.
     fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
         make_editor_with_lines(&["line1", "line2", "line3", "line4", "line5"])
     }
