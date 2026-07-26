@@ -164,7 +164,6 @@ impl crate::app::App {
     ) -> crate::app::window::WindowId {
         use hjkl_buffer::View;
         use hjkl_engine::Settings;
-        use std::time::Instant;
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -197,41 +196,13 @@ impl crate::app::App {
         };
 
         let slot = super::BufferSlot {
-            buffer_id,
-            is_explorer: false,
             features: super::BufferFeatures {
                 syntax: false,
                 lsp: false,
                 hover: false,
                 end_of_buffer: false,
             },
-            view: View::new(),
-            settings,
-            filename: None,
-            dirty: false,
-            is_new_file: false,
-            is_untracked: false,
-            diag_signs: Vec::new(),
-            diag_signs_lsp: Vec::new(),
-            lsp_diags: Vec::new(),
-            last_lsp_dirty_gen: None,
-            git_signs: Vec::new(),
-            last_git_dirty_gen: None,
-            last_git_refresh_at: Instant::now(),
-            blame: Vec::new(),
-            last_blame_dirty_gen: None,
-            last_blame_refresh_at: Instant::now(),
-            saved_hash: 0,
-            saved_len: 0,
-            signature_cache: None,
-            disk_mtime: None,
-            disk_len: None,
-            disk_state: super::DiskState::Synced,
-            swap_path: None,
-            last_swap_dirty_gen: None,
-            last_fold_dirty_gen: None,
-            git_repo_present: None,
-            commit_ctx: None,
+            ..super::BufferSlot::new(buffer_id, View::new(), settings)
         };
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;

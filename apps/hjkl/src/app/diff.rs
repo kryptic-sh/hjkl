@@ -75,38 +75,7 @@ impl App {
                 modifiable: false,
                 ..Settings::default()
             };
-            let mut slot = super::BufferSlot {
-                buffer_id,
-                is_explorer: false,
-                features: super::BufferFeatures::default(),
-                view,
-                settings,
-                filename: None,
-                dirty: false,
-                is_new_file: false,
-                is_untracked: false,
-                diag_signs: Vec::new(),
-                diag_signs_lsp: Vec::new(),
-                lsp_diags: Vec::new(),
-                last_lsp_dirty_gen: None,
-                git_signs: Vec::new(),
-                last_git_dirty_gen: None,
-                last_git_refresh_at: std::time::Instant::now(),
-                blame: Vec::new(),
-                last_blame_dirty_gen: None,
-                last_blame_refresh_at: std::time::Instant::now(),
-                saved_hash: 0,
-                saved_len: 0,
-                signature_cache: None,
-                disk_mtime: None,
-                disk_len: None,
-                disk_state: super::DiskState::Synced,
-                swap_path: None,
-                last_swap_dirty_gen: None,
-                last_fold_dirty_gen: None,
-                git_repo_present: None,
-                commit_ctx: None,
-            };
+            let mut slot = super::BufferSlot::new(buffer_id, view, settings);
             // Mark clean so `:q` doesn't trip the unsaved-changes guard and no
             // swap is written for this transient view.
             slot.snapshot_saved();

@@ -873,38 +873,8 @@ impl App {
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let mut slot = super::BufferSlot {
-                buffer_id,
-                is_explorer: false,
-                features: super::BufferFeatures::default(),
-                view: View::new(),
-                settings: hjkl_engine::Settings::default(),
-                filename: None,
-                dirty: false,
-                is_new_file: false,
-                is_untracked: false,
-                diag_signs: Vec::new(),
-                diag_signs_lsp: Vec::new(),
-                lsp_diags: Vec::new(),
-                last_lsp_dirty_gen: None,
-                git_signs: Vec::new(),
-                last_git_dirty_gen: None,
-                last_git_refresh_at: std::time::Instant::now(),
-                blame: Vec::new(),
-                last_blame_dirty_gen: None,
-                last_blame_refresh_at: std::time::Instant::now(),
-                saved_hash: 0,
-                saved_len: 0,
-                signature_cache: None,
-                disk_mtime: None,
-                disk_len: None,
-                disk_state: super::DiskState::Synced,
-                swap_path: None,
-                last_swap_dirty_gen: None,
-                last_fold_dirty_gen: None,
-                git_repo_present: None,
-                commit_ctx: None,
-            };
+            let mut slot =
+                super::BufferSlot::new(buffer_id, View::new(), hjkl_engine::Settings::default());
             slot.snapshot_saved();
             self.slots.push(slot);
             self.slots.len() - 1
@@ -946,38 +916,8 @@ impl App {
         let new_slot_idx = {
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let mut slot = super::BufferSlot {
-                buffer_id,
-                is_explorer: false,
-                features: super::BufferFeatures::default(),
-                view: View::new(),
-                settings: hjkl_engine::Settings::default(),
-                filename: None,
-                dirty: false,
-                is_new_file: false,
-                is_untracked: false,
-                diag_signs: Vec::new(),
-                diag_signs_lsp: Vec::new(),
-                lsp_diags: Vec::new(),
-                last_lsp_dirty_gen: None,
-                git_signs: Vec::new(),
-                last_git_dirty_gen: None,
-                last_git_refresh_at: std::time::Instant::now(),
-                blame: Vec::new(),
-                last_blame_dirty_gen: None,
-                last_blame_refresh_at: std::time::Instant::now(),
-                saved_hash: 0,
-                saved_len: 0,
-                signature_cache: None,
-                disk_mtime: None,
-                disk_len: None,
-                disk_state: super::DiskState::Synced,
-                swap_path: None,
-                last_swap_dirty_gen: None,
-                last_fold_dirty_gen: None,
-                git_repo_present: None,
-                commit_ctx: None,
-            };
+            let mut slot =
+                super::BufferSlot::new(buffer_id, View::new(), hjkl_engine::Settings::default());
             slot.snapshot_saved();
             self.slots.push(slot);
             self.slots.len() - 1
@@ -1546,39 +1486,12 @@ impl App {
                 view.clamp_position(hjkl_buffer::Position::new(row as usize, col as usize));
             view.set_cursor(clamped);
 
+            // `swap_path` stays at its `None` default: the idle writer will
+            // assign a fresh scratch path for this session on the next edit
+            // if needed.
             let mut slot = super::BufferSlot {
-                buffer_id,
-                is_explorer: false,
-                features: super::BufferFeatures::default(),
-                view,
-                settings: hjkl_engine::Settings::default(),
-                filename: None,
                 dirty: true, // nudge user to :w as <name>
-                is_new_file: false,
-                is_untracked: false,
-                diag_signs: Vec::new(),
-                diag_signs_lsp: Vec::new(),
-                lsp_diags: Vec::new(),
-                last_lsp_dirty_gen: None,
-                git_signs: Vec::new(),
-                last_git_dirty_gen: None,
-                last_git_refresh_at: std::time::Instant::now(),
-                blame: Vec::new(),
-                last_blame_dirty_gen: None,
-                last_blame_refresh_at: std::time::Instant::now(),
-                saved_hash: 0,
-                saved_len: 0,
-                signature_cache: None,
-                disk_mtime: None,
-                disk_len: None,
-                disk_state: super::DiskState::Synced,
-                // Leave swap_path None: the idle writer will assign a fresh
-                // scratch path for this session on the next edit if needed.
-                swap_path: None,
-                last_swap_dirty_gen: None,
-                last_fold_dirty_gen: None,
-                git_repo_present: None,
-                commit_ctx: None,
+                ..super::BufferSlot::new(buffer_id, view, hjkl_engine::Settings::default())
             };
             slot.snapshot_saved();
             // Re-mark dirty after snapshot (snapshot_saved clears dirty).
@@ -2576,38 +2489,8 @@ impl App {
             // see `do_vnew` / `build_slot`'s doc).
             let buffer_id = self.next_buffer_id;
             self.next_buffer_id += 1;
-            let mut slot = super::BufferSlot {
-                buffer_id,
-                is_explorer: false,
-                features: super::BufferFeatures::default(),
-                view: View::new(),
-                settings: hjkl_engine::Settings::default(),
-                filename: None,
-                dirty: false,
-                is_new_file: false,
-                is_untracked: false,
-                diag_signs: Vec::new(),
-                diag_signs_lsp: Vec::new(),
-                lsp_diags: Vec::new(),
-                last_lsp_dirty_gen: None,
-                git_signs: Vec::new(),
-                last_git_dirty_gen: None,
-                last_git_refresh_at: std::time::Instant::now(),
-                blame: Vec::new(),
-                last_blame_dirty_gen: None,
-                last_blame_refresh_at: std::time::Instant::now(),
-                saved_hash: 0,
-                saved_len: 0,
-                signature_cache: None,
-                disk_mtime: None,
-                disk_len: None,
-                disk_state: super::DiskState::Synced,
-                swap_path: None,
-                last_swap_dirty_gen: None,
-                last_fold_dirty_gen: None,
-                git_repo_present: None,
-                commit_ctx: None,
-            };
+            let mut slot =
+                super::BufferSlot::new(buffer_id, View::new(), hjkl_engine::Settings::default());
             slot.snapshot_saved();
             self.slots.push(slot);
             self.slots.len() - 1

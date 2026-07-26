@@ -468,6 +468,57 @@ pub(crate) fn find_project_root(start: &std::path::Path) -> PathBuf {
 }
 
 impl BufferSlot {
+    /// Build a slot around a document handle + settings template, with every
+    /// other field at its "freshly created, nothing observed yet" default:
+    /// not the explorer, all features on, no filename, clean, tracked,
+    /// no signs/diagnostics/blame, no cached disk metadata, disk in sync,
+    /// no swap file, no commit context.
+    ///
+    /// The ~11 slot-creation sites across the app differ in only a handful of
+    /// fields; they all go through here and override their distinct fields
+    /// with struct-update syntax (`..BufferSlot::new(..)`) or a follow-up
+    /// assignment. Keeping the defaults in one place means a new field is a
+    /// one-line change here instead of ~11 easy-to-desync literals.
+    ///
+    /// Note the `Instant::now()` timestamps: they mark the git-sign / blame
+    /// throttles as "just refreshed", which combined with the `None`
+    /// dirty-gens (= stale) means the first refresh happens on the next
+    /// render tick rather than immediately.
+    pub(super) fn new(buffer_id: BufferId, view: View, settings: Settings) -> Self {
+        Self {
+            buffer_id,
+            is_explorer: false,
+            features: BufferFeatures::default(),
+            view,
+            settings,
+            filename: None,
+            dirty: false,
+            is_new_file: false,
+            is_untracked: false,
+            diag_signs: Vec::new(),
+            diag_signs_lsp: Vec::new(),
+            lsp_diags: Vec::new(),
+            last_lsp_dirty_gen: None,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            blame: Vec::new(),
+            last_blame_dirty_gen: None,
+            last_blame_refresh_at: Instant::now(),
+            saved_hash: 0,
+            saved_len: 0,
+            signature_cache: None,
+            disk_mtime: None,
+            disk_len: None,
+            disk_state: DiskState::Synced,
+            swap_path: None,
+            last_swap_dirty_gen: None,
+            last_fold_dirty_gen: None,
+            git_repo_present: None,
+            commit_ctx: None,
+        }
+    }
+
     /// Snapshot the loaded content so undo-to-saved clears dirty.
     pub(super) fn snapshot_saved(&mut self) {
         let (h, l) = self.cached_signature();
@@ -630,5 +681,77 @@ impl BufferSlot {
         } else {
             0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin every default `BufferSlot::new` installs. The ~11 slot-creation
+    /// sites rely on these; a silent change here would flip behaviour at all
+    /// of them at once (e.g. a slot born `dirty`, or `disk_state` other than
+    /// `Synced` tripping the file-changed prompt on a scratch buffer).
+    #[test]
+    fn new_slot_defaults_are_pinned() {
+        let before = Instant::now();
+        let slot = BufferSlot::new(7, View::new(), Settings::default());
+        let after = Instant::now();
+
+        assert_eq!(slot.buffer_id, 7);
+        assert!(!slot.is_explorer);
+        let feat = BufferFeatures::default();
+        assert_eq!(slot.features.syntax, feat.syntax);
+        assert_eq!(slot.features.lsp, feat.lsp);
+        assert_eq!(slot.features.hover, feat.hover);
+        assert_eq!(slot.features.end_of_buffer, feat.end_of_buffer);
+        assert_eq!(slot.view.row_count(), View::new().row_count());
+        let defaults = Settings::default();
+        assert_eq!(slot.settings.filetype, defaults.filetype);
+        assert_eq!(slot.settings.modifiable, defaults.modifiable);
+        assert_eq!(slot.settings.readonly, defaults.readonly);
+        assert_eq!(slot.filename, None);
+        assert!(!slot.dirty);
+        assert!(!slot.is_new_file);
+        assert!(!slot.is_untracked);
+        assert!(slot.diag_signs.is_empty());
+        assert!(slot.diag_signs_lsp.is_empty());
+        assert!(slot.lsp_diags.is_empty());
+        assert_eq!(slot.last_lsp_dirty_gen, None);
+        assert!(slot.git_signs.is_empty());
+        assert_eq!(slot.last_git_dirty_gen, None);
+        assert!(slot.last_git_refresh_at >= before && slot.last_git_refresh_at <= after);
+        assert!(slot.blame.is_empty());
+        assert_eq!(slot.last_blame_dirty_gen, None);
+        assert!(slot.last_blame_refresh_at >= before && slot.last_blame_refresh_at <= after);
+        assert_eq!(slot.saved_hash, 0);
+        assert_eq!(slot.saved_len, 0);
+        assert_eq!(slot.signature_cache, None);
+        assert_eq!(slot.disk_mtime, None);
+        assert_eq!(slot.disk_len, None);
+        assert_eq!(slot.disk_state, DiskState::Synced);
+        assert_eq!(slot.swap_path, None);
+        assert_eq!(slot.last_swap_dirty_gen, None);
+        assert_eq!(slot.last_fold_dirty_gen, None);
+        assert_eq!(slot.git_repo_present, None);
+        assert!(slot.commit_ctx.is_none());
+    }
+
+    /// Struct-update over the constructor is how sites express their distinct
+    /// fields; the overrides must win and everything else stay at default.
+    #[test]
+    fn struct_update_overrides_only_named_fields() {
+        let slot = BufferSlot {
+            is_explorer: true,
+            dirty: true,
+            filename: Some(PathBuf::from("/tmp/x.rs")),
+            ..BufferSlot::new(1, View::new(), Settings::default())
+        };
+        assert!(slot.is_explorer);
+        assert!(slot.dirty);
+        assert_eq!(slot.filename, Some(PathBuf::from("/tmp/x.rs")));
+        assert!(!slot.is_new_file);
+        assert_eq!(slot.disk_state, DiskState::Synced);
+        assert_eq!(slot.swap_path, None);
     }
 }

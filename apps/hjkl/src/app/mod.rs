@@ -944,36 +944,12 @@ pub(super) fn build_slot(
     }
 
     let mut slot = BufferSlot {
-        buffer_id,
-        is_explorer: false,
-        features: BufferFeatures::default(),
-        view: buffer,
-        settings,
         filename: path,
-        dirty: false,
         is_new_file,
-        is_untracked: false,
-        diag_signs: Vec::new(),
-        diag_signs_lsp: Vec::new(),
-        lsp_diags: Vec::new(),
-        last_lsp_dirty_gen: None,
-        git_signs: Vec::new(),
-        last_git_dirty_gen: None,
-        last_git_refresh_at: Instant::now(),
-        blame: Vec::new(),
-        last_blame_dirty_gen: None,
-        last_blame_refresh_at: Instant::now(),
-        saved_hash: 0,
-        saved_len: 0,
-        signature_cache: None,
         disk_mtime,
         disk_len,
-        disk_state: DiskState::Synced,
         swap_path,
-        last_swap_dirty_gen: None,
-        last_fold_dirty_gen: None,
-        git_repo_present: None,
-        commit_ctx: None,
+        ..BufferSlot::new(buffer_id, buffer, settings)
     };
     slot.snapshot_saved();
     // Auto-readonly for files that exist but aren't writable by the current user.

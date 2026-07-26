@@ -569,9 +569,8 @@ impl App {
     /// Allocate a fresh empty unnamed buffer slot (nvim_create_buf).
     /// The slot is appended but NOT switched to; returns the new buffer id.
     pub(crate) fn nvim_create_buffer(&mut self) -> u64 {
-        use super::{BufferFeatures, BufferSlot, DiskState};
+        use super::BufferSlot;
         use hjkl_buffer::View;
-        use std::time::Instant;
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -579,38 +578,7 @@ impl App {
         // search/change-bank Arcs and the viewport are wired onto the
         // window editor whenever this slot is first shown in a window
         // (`reconcile_window_editors` / `make_view_editor`), not here.
-        let mut slot = BufferSlot {
-            buffer_id,
-            is_explorer: false,
-            features: BufferFeatures::default(),
-            view: View::new(),
-            settings: Settings::default(),
-            filename: None,
-            dirty: false,
-            is_new_file: false,
-            is_untracked: false,
-            diag_signs: Vec::new(),
-            diag_signs_lsp: Vec::new(),
-            lsp_diags: Vec::new(),
-            last_lsp_dirty_gen: None,
-            git_signs: Vec::new(),
-            last_git_dirty_gen: None,
-            last_git_refresh_at: Instant::now(),
-            blame: Vec::new(),
-            last_blame_dirty_gen: None,
-            last_blame_refresh_at: Instant::now(),
-            saved_hash: 0,
-            saved_len: 0,
-            signature_cache: None,
-            disk_mtime: None,
-            disk_len: None,
-            disk_state: DiskState::Synced,
-            swap_path: None,
-            last_swap_dirty_gen: None,
-            last_fold_dirty_gen: None,
-            git_repo_present: None,
-            commit_ctx: None,
-        };
+        let mut slot = BufferSlot::new(buffer_id, View::new(), Settings::default());
         slot.snapshot_saved();
         self.slots.push(slot);
         buffer_id
