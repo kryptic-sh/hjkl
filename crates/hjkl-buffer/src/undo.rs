@@ -90,45 +90,155 @@ pub struct Delta {
     pub new: String,
 }
 
+/// Is `byte_idx` a char boundary of `r`? (`str::is_char_boundary` for ropes.)
+///
+/// Ropey always splits chunks ON char boundaries, so the question is answerable
+/// inside the one chunk containing the byte — O(log N), no materialization.
+fn is_char_boundary(r: &ropey::Rope, byte_idx: usize) -> bool {
+    if byte_idx == 0 || byte_idx == r.len_bytes() {
+        return true;
+    }
+    let (chunk, chunk_start, _, _) = r.chunk_at_byte(byte_idx);
+    chunk.is_char_boundary(byte_idx - chunk_start)
+}
+
+/// Length of the longest common byte PREFIX of `a` and `b`, capped at `max`.
+///
+/// Walks both ropes' chunks in lockstep — never materializes either rope. Two
+/// fast paths keep the common editor case near-free: identical chunk pointers
+/// (ropey leaves are `Arc`-shared, so a clone-then-edit child shares every leaf
+/// outside the edit) are accepted without reading bytes, and otherwise whole
+/// overlapping runs are compared with one slice `==` (memcmp).
+fn common_prefix_bytes(a: &ropey::Rope, b: &ropey::Rope, max: usize) -> usize {
+    let mut a_chunks = a.chunks();
+    let mut b_chunks = b.chunks();
+    let mut at: &[u8] = &[];
+    let mut bt: &[u8] = &[];
+    let mut n = 0;
+    while n < max {
+        if at.is_empty() {
+            match a_chunks.next() {
+                Some(c) => at = c.as_bytes(),
+                None => break,
+            }
+            continue;
+        }
+        if bt.is_empty() {
+            match b_chunks.next() {
+                Some(c) => bt = c.as_bytes(),
+                None => break,
+            }
+            continue;
+        }
+        // Same shared leaf, wholly within the cap: equal without looking.
+        if at.as_ptr() == bt.as_ptr() && at.len() == bt.len() && at.len() <= max - n {
+            n += at.len();
+            at = &[];
+            bt = &[];
+            continue;
+        }
+        let m = at.len().min(bt.len()).min(max - n);
+        if at[..m] == bt[..m] {
+            n += m;
+            at = &at[m..];
+            bt = &bt[m..];
+        } else {
+            let mut i = 0;
+            while at[i] == bt[i] {
+                i += 1;
+            }
+            n += i;
+            break;
+        }
+    }
+    n
+}
+
+/// Length of the longest common byte SUFFIX of `a` and `b`, capped at `max`.
+///
+/// The mirror of [`common_prefix_bytes`], walking both ropes' chunk cursors
+/// backwards from the end via [`ropey::iter::Chunks::prev`].
+fn common_suffix_bytes(a: &ropey::Rope, b: &ropey::Rope, max: usize) -> usize {
+    let mut a_chunks = a.chunks_at_byte(a.len_bytes()).0;
+    let mut b_chunks = b.chunks_at_byte(b.len_bytes()).0;
+    let mut at: &[u8] = &[];
+    let mut bt: &[u8] = &[];
+    let mut n = 0;
+    while n < max {
+        if at.is_empty() {
+            match a_chunks.prev() {
+                Some(c) => at = c.as_bytes(),
+                None => break,
+            }
+            continue;
+        }
+        if bt.is_empty() {
+            match b_chunks.prev() {
+                Some(c) => bt = c.as_bytes(),
+                None => break,
+            }
+            continue;
+        }
+        if at.as_ptr() == bt.as_ptr() && at.len() == bt.len() && at.len() <= max - n {
+            n += at.len();
+            at = &[];
+            bt = &[];
+            continue;
+        }
+        let m = at.len().min(bt.len()).min(max - n);
+        let (a_tail, b_tail) = (&at[at.len() - m..], &bt[bt.len() - m..]);
+        if a_tail == b_tail {
+            n += m;
+            at = &at[..at.len() - m];
+            bt = &bt[..bt.len() - m];
+        } else {
+            let mut i = 0;
+            while a_tail[m - 1 - i] == b_tail[m - 1 - i] {
+                i += 1;
+            }
+            n += i;
+            break;
+        }
+    }
+    n
+}
+
 /// Common-prefix / common-suffix diff of two ropes → the minimal single spanning
 /// [`Delta`]. Guarantees `apply_forward(a, diff(a, b)) == b` and
 /// `apply_inverse(b, diff(a, b)) == a` for ALL `a`, `b` (see the property
 /// tests). Boundaries are found on bytes (fast) then snapped to char boundaries
 /// so `old`/`new` are always valid UTF-8 and `start` is a true char offset.
+///
+/// The scans walk the ropes' chunks directly and only the differing MIDDLE is
+/// materialized — a full `to_string()` of both sides used to dominate every edit
+/// on a multi-MB buffer (measured 1.55 ms + ~6.4 MB of allocation per push at
+/// 3.2 MB). `diff_reference` in the tests below is the old materializing
+/// implementation, kept as the differential-test oracle.
 fn diff(parent: &ropey::Rope, child: &ropey::Rope) -> Delta {
-    let a = parent.to_string();
-    let b = child.to_string();
-    let ab = a.as_bytes();
-    let bb = b.as_bytes();
+    let a_len = parent.len_bytes();
+    let b_len = child.len_bytes();
 
     // Longest common byte prefix, snapped DOWN to a char boundary.
-    let max_pre = ab.len().min(bb.len());
-    let mut pre = 0;
-    while pre < max_pre && ab[pre] == bb[pre] {
-        pre += 1;
-    }
-    while pre > 0 && !a.is_char_boundary(pre) {
+    let max_pre = a_len.min(b_len);
+    let mut pre = common_prefix_bytes(parent, child, max_pre);
+    while pre > 0 && !is_char_boundary(parent, pre) {
         pre -= 1;
     }
 
     // Longest common byte suffix not overlapping the prefix. The cut points
     // `a_end`/`b_end` sit at identical trailing bytes, so snapping `a_end` UP to
     // a char boundary snaps `b_end` by the same byte delta simultaneously.
-    let max_suf = max_pre - pre;
-    let mut suf = 0;
-    while suf < max_suf && ab[ab.len() - 1 - suf] == bb[bb.len() - 1 - suf] {
-        suf += 1;
-    }
-    let mut a_end = ab.len() - suf;
-    while a_end < ab.len() && !a.is_char_boundary(a_end) {
+    let suf = common_suffix_bytes(parent, child, max_pre - pre);
+    let mut a_end = a_len - suf;
+    while a_end < a_len && !is_char_boundary(parent, a_end) {
         a_end += 1;
     }
-    let b_end = bb.len() - (ab.len() - a_end);
+    let b_end = b_len - (a_len - a_end);
 
     Delta {
-        start: a[..pre].chars().count(),
-        old: a[pre..a_end].to_string(),
-        new: b[pre..b_end].to_string(),
+        start: parent.byte_to_char(pre),
+        old: parent.byte_slice(pre..a_end).to_string(),
+        new: child.byte_slice(pre..b_end).to_string(),
     }
 }
 
@@ -1467,6 +1577,241 @@ mod delta_tests {
             cursor: (0, 0),
             timestamp: SystemTime::now(),
             marks: MarkSnapshot::default(),
+        }
+    }
+
+    // ── (0) differential oracle: the pre-chunk-walk `diff` ────────────────────
+    //
+    // The original implementation, verbatim, materializing BOTH ropes with
+    // `to_string()` before scanning bytes. `diff` was rewritten to walk chunks
+    // instead (no full materialization); this is the semantic pin — the two must
+    // agree on the EXACT `Delta` for every input, not merely round-trip.
+
+    fn diff_reference(parent: &ropey::Rope, child: &ropey::Rope) -> Delta {
+        let a = parent.to_string();
+        let b = child.to_string();
+        let ab = a.as_bytes();
+        let bb = b.as_bytes();
+
+        let max_pre = ab.len().min(bb.len());
+        let mut pre = 0;
+        while pre < max_pre && ab[pre] == bb[pre] {
+            pre += 1;
+        }
+        while pre > 0 && !a.is_char_boundary(pre) {
+            pre -= 1;
+        }
+
+        let max_suf = max_pre - pre;
+        let mut suf = 0;
+        while suf < max_suf && ab[ab.len() - 1 - suf] == bb[bb.len() - 1 - suf] {
+            suf += 1;
+        }
+        let mut a_end = ab.len() - suf;
+        while a_end < ab.len() && !a.is_char_boundary(a_end) {
+            a_end += 1;
+        }
+        let b_end = bb.len() - (ab.len() - a_end);
+
+        Delta {
+            start: a[..pre].chars().count(),
+            old: a[pre..a_end].to_string(),
+            new: b[pre..b_end].to_string(),
+        }
+    }
+
+    /// Assert the chunk-walking `diff` is byte-identical to `diff_reference`,
+    /// over BOTH single-chunk ropes and multi-chunk ones (ropey only splits past
+    /// its ~1 KiB leaf size, so short fixtures alone would never exercise the
+    /// cross-chunk cursor logic).
+    #[track_caller]
+    fn assert_diff_matches_reference(sa: &str, sb: &str) {
+        let a = ropey::Rope::from_str(sa);
+        let b = ropey::Rope::from_str(sb);
+        assert_eq!(
+            diff(&a, &b),
+            diff_reference(&a, &b),
+            "diff != reference for {sa:?} -> {sb:?}"
+        );
+        // Same content, but built by insertion so the two ropes have DIFFERENT,
+        // misaligned chunk layouts — the reference sees only bytes, the walker
+        // sees chunk seams, and they must still agree.
+        let mut a2 = ropey::Rope::new();
+        a2.insert(0, sa);
+        let mut b2 = ropey::Rope::new();
+        for (i, c) in sb.chars().enumerate() {
+            b2.insert_char(i, c);
+        }
+        assert_eq!(
+            diff(&a2, &b2),
+            diff_reference(&a2, &b2),
+            "diff != reference (misaligned chunks) for {sa:?} -> {sb:?}"
+        );
+    }
+
+    #[test]
+    fn diff_matches_reference_on_edge_cases() {
+        let cases: &[(&str, &str)] = &[
+            // equal / empty
+            ("", ""),
+            ("", "a"),
+            ("a", ""),
+            ("abc", "abc"),
+            ("café🎉", "café🎉"),
+            // prefix-only / suffix-only change
+            ("abcdef", "abcdefXY"),
+            ("abcdefXY", "abcdef"),
+            ("Xabcdef", "abcdef"),
+            ("abcdef", "Xabcdef"),
+            // change at position 0 and at the very end
+            ("abcdef", "Zbcdef"),
+            ("abcdef", "abcdeZ"),
+            // overlapping repeats — prefix and suffix scans would collide
+            ("abcabc", "abc"),
+            ("abc", "abcabc"),
+            ("aaaa", "aa"),
+            ("aa", "aaaa"),
+            ("abab", "ababab"),
+            ("xyxyxy", "xyxy"),
+            // multi-byte chars sitting exactly on the cut points
+            ("café", "cafés"),
+            ("cafés", "café"),
+            ("café", "cafè"),
+            ("日本語", "日語"),
+            ("日本語", "日本本語"),
+            ("🎉🎉🎉", "🎉🎉"),
+            ("🎉🎉", "🎉🎉🎉"),
+            ("🎉x🎉", "🎉y🎉"),
+            ("a🎉b", "a🎊b"),
+            ("é", "e"),
+            ("e", "é"),
+            ("🎉", ""),
+            ("", "🎉"),
+            // byte-level suffix match that is NOT a char boundary: the tails of
+            // 'é' (0xC3 0xA9) and 'é' share no byte, but 日 (E6 97 A5) vs 旦
+            // (E6 97 A6) share a two-byte prefix mid-codepoint.
+            ("日", "旦"),
+            ("x日y", "x旦y"),
+            ("語", "誤"),
+            // long enough to be multi-chunk in both ropes
+            (
+                &"the quick brown fox ".repeat(400),
+                &"the quick brown fox ".repeat(400),
+            ),
+        ];
+        for (sa, sb) in cases {
+            assert_diff_matches_reference(sa, sb);
+        }
+
+        // Multi-chunk with an edit in the middle / at each end.
+        let big: String = "the quick brown fox jumps over the lazy dog\n".repeat(200);
+        let mid = big.len() / 2;
+        let mut edited = big.clone();
+        edited.insert(mid, 'Z');
+        assert_diff_matches_reference(&big, &edited);
+        assert_diff_matches_reference(&edited, &big);
+        assert_diff_matches_reference(&big, &format!("Z{big}"));
+        assert_diff_matches_reference(&big, &format!("{big}Z"));
+        assert_diff_matches_reference(&big, &big.repeat(2));
+
+        // Multi-chunk with multi-byte chars straddling likely leaf seams.
+        let uni: String = "café 日本語 🎉 αβγ\n".repeat(200);
+        let umid = uni.len() / 2;
+        let umid = (0..=umid).rev().find(|i| uni.is_char_boundary(*i)).unwrap();
+        let mut uedited = uni.clone();
+        uedited.insert(umid, '🎊');
+        assert_diff_matches_reference(&uni, &uedited);
+        assert_diff_matches_reference(&uedited, &uni);
+    }
+
+    #[test]
+    fn diff_matches_reference_over_random_evolving_content() {
+        let mut rng = Rng::new(0x0BAD_F00D_1234_5678);
+        let mut s = String::from("seed café 日本語\n🎉");
+        for _ in 0..4000 {
+            let t = mutate(&s, &mut rng);
+            let a = ropey::Rope::from_str(&s);
+            let b = ropey::Rope::from_str(&t);
+            assert_eq!(diff(&a, &b), diff_reference(&a, &b), "{s:?} -> {t:?}");
+            assert_eq!(diff(&b, &a), diff_reference(&b, &a), "{t:?} -> {s:?}");
+            s = t;
+        }
+    }
+
+    #[test]
+    fn diff_matches_reference_on_shared_leaf_clones() {
+        // The `Arc`-shared-leaf fast path: `child` is a CLONE of `parent` plus
+        // one edit, so most chunks are pointer-identical. Exercised at several
+        // edit positions across a multi-chunk rope, plus deletes and the
+        // degenerate no-op clone.
+        let base: String = "the quick brown fox jumps over the lazy dog\n".repeat(300);
+        let parent = ropey::Rope::from_str(&base);
+        assert_eq!(
+            diff(&parent, &parent.clone()),
+            diff_reference(&parent, &parent.clone())
+        );
+        let n = parent.len_chars();
+        for at in [0, 1, n / 4, n / 2, n - 1, n] {
+            let mut child = parent.clone();
+            child.insert_char(at, '𝄞');
+            assert_eq!(
+                diff(&parent, &child),
+                diff_reference(&parent, &child),
+                "@{at}"
+            );
+            assert_eq!(
+                diff(&child, &parent),
+                diff_reference(&child, &parent),
+                "@{at}"
+            );
+        }
+        for at in [0, n / 3, n - 10] {
+            let mut child = parent.clone();
+            child.remove(at..at + 5);
+            assert_eq!(
+                diff(&parent, &child),
+                diff_reference(&parent, &child),
+                "-{at}"
+            );
+            assert_eq!(
+                diff(&child, &parent),
+                diff_reference(&child, &parent),
+                "-{at}"
+            );
+        }
+    }
+
+    #[test]
+    fn diff_matches_reference_over_random_multi_chunk_pairs() {
+        // Random pairs built from a multi-chunk corpus, so chunk seams land in
+        // arbitrary places relative to the common prefix/suffix.
+        let mut rng = Rng::new(0xF00D_BEEF_0BAD_C0DE);
+        let units = ["ab", "café ", "日本語", "🎉", "\n", "x", "語日", "é"];
+        let build = |rng: &mut Rng| -> String {
+            let mut s = String::new();
+            for _ in 0..rng.below(400) {
+                s.push_str(units[rng.below(units.len())]);
+            }
+            s
+        };
+        for _ in 0..300 {
+            let sa = build(&mut rng);
+            // Half the pairs share a long common prefix/suffix with `sa`.
+            let sb = if rng.below(2) == 0 {
+                build(&mut rng)
+            } else {
+                let mut t = sa.clone();
+                if !t.is_empty() {
+                    let cut = rng.below(t.chars().count() + 1);
+                    let byte = t.char_indices().nth(cut).map(|(i, _)| i).unwrap_or(t.len());
+                    t.insert_str(byte, "🎊zz");
+                }
+                t
+            };
+            let a = ropey::Rope::from_str(&sa);
+            let b = ropey::Rope::from_str(&sb);
+            assert_eq!(diff(&a, &b), diff_reference(&a, &b));
+            assert_eq!(diff(&b, &a), diff_reference(&b, &a));
         }
     }
 
