@@ -35,6 +35,9 @@ use std::sync::{Condvar, Mutex, OnceLock};
 struct Holder {
     thread: std::thread::ThreadId,
     depth: usize,
+    /// True when the outermost acquisition was exclusive. Used to
+    /// debug-assert that a shared→exclusive upgrade is never attempted.
+    exclusive: bool,
 }
 
 /// In-process claims: paths currently locked by *this* process.
@@ -61,7 +64,7 @@ fn wait_set() -> &'static (Mutex<HashMap<PathBuf, Holder>>, Condvar) {
 /// taking a shared lock inside an exclusive one stays exclusive, which is safe.
 /// Taking an *exclusive* lock inside a *shared* one would be an upgrade and is
 /// not supported — hold the exclusive lock from the start.
-fn acquire_in_process(key: &Path) -> bool {
+fn acquire_in_process(key: &Path, exclusive: bool) -> bool {
     let (mutex, cv) = wait_set();
     // A poisoned wait set means some thread panicked mid-critical-section. The
     // map is still structurally sound, so recover rather than propagating the
@@ -71,6 +74,14 @@ fn acquire_in_process(key: &Path) -> bool {
     loop {
         match held.get_mut(key) {
             Some(h) if h.thread == me => {
+                // Shared→exclusive upgrade is not supported: the outer
+                // shared lock carries no OS-level exclusion, so an
+                // "exclusive" guard obtained here would provide false
+                // cross-process safety.
+                debug_assert!(
+                    h.exclusive || !exclusive,
+                    "shared→exclusive lock upgrade for {key:?} — hold the exclusive lock from the start"
+                );
                 h.depth += 1;
                 return true;
             }
@@ -83,6 +94,7 @@ fn acquire_in_process(key: &Path) -> bool {
                     Holder {
                         thread: me,
                         depth: 1,
+                        exclusive,
                     },
                 );
                 return false;
@@ -182,7 +194,7 @@ pub fn lock_exclusive(lock_path: &Path) -> io::Result<FileLock> {
     let key = normalize(lock_path);
     // Re-entrant: this thread already holds the path, so the outer guard's OS
     // lock still covers us and taking another would deadlock against it.
-    if acquire_in_process(&key) {
+    if acquire_in_process(&key, true) {
         return Ok(FileLock { file: None, key });
     }
     // From here every early return must release the in-process claim.
@@ -213,7 +225,7 @@ pub fn lock_shared(lock_path: &Path) -> io::Result<FileLock> {
     let key = normalize(lock_path);
     // Re-entrant: satisfied by the outer guard, whatever its mode. A shared
     // request nested inside an exclusive lock stays exclusive, which is safe.
-    if acquire_in_process(&key) {
+    if acquire_in_process(&key, false) {
         return Ok(FileLock { file: None, key });
     }
     let file = match open_lock_file(lock_path) {
@@ -407,5 +419,16 @@ mod tests {
         let _outer = lock_exclusive(&lock_path_for(&a)).unwrap();
         // Would deadlock if the wait set were keyed globally instead of by path.
         let _inner = lock_exclusive(&lock_path_for(&b)).unwrap();
+    }
+
+    /// A shared→exclusive lock upgrade must panic in debug builds.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "shared→exclusive lock upgrade")]
+    fn shared_to_exclusive_upgrade_panics() {
+        let td = tempfile::tempdir().unwrap();
+        let p = lock_path_for(&td.path().join("f.bin"));
+        let _shared = lock_shared(&p).unwrap();
+        let _exclusive = lock_exclusive(&p).unwrap();
     }
 }
