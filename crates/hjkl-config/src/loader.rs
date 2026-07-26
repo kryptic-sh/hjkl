@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{ConfigError, locate};
@@ -219,28 +218,6 @@ pub(crate) fn deep_merge(into: &mut toml::Table, from: toml::Table) {
             }
         }
     }
-}
-
-/// Serialize `cfg` and write it to `path`, creating parent directories.
-///
-/// Opt-in helper for apps that want to scaffold a starter config on user
-/// request. **Not** called automatically by [`load`] — callers must invoke
-/// it explicitly (e.g. behind a `--init` flag).
-pub fn write_default<C: AppConfig + Serialize>(path: &Path, cfg: &C) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| ConfigError::Write {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let body = toml::to_string_pretty(cfg).map_err(|e| ConfigError::Write {
-        path: path.to_path_buf(),
-        source: std::io::Error::other(e.to_string()),
-    })?;
-    std::fs::write(path, body).map_err(|e| ConfigError::Write {
-        path: path.to_path_buf(),
-        source: e,
-    })
 }
 
 #[cfg(test)]

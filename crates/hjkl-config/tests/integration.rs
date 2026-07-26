@@ -1,10 +1,8 @@
 use std::io::Write as _;
 
-use hjkl_config::{
-    AppConfig, ConfigError, ConfigSource, Validate, load_from, load_layered_from, write_default,
-};
+use hjkl_config::{AppConfig, ConfigError, ConfigSource, Validate, load_from, load_layered_from};
 use serde::{Deserialize, Serialize};
-use tempfile::{NamedTempFile, tempdir};
+use tempfile::NamedTempFile;
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 struct Fixture {
@@ -81,20 +79,6 @@ fn validate_hook_reports_consumer_errors() {
         count: 1,
     };
     assert!(cfg.validate().is_ok());
-}
-
-#[test]
-fn write_default_creates_parent_dirs() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("nested/sub/config.toml");
-    let cfg = Fixture {
-        name: "carol".into(),
-        count: 3,
-    };
-    write_default(&path, &cfg).unwrap();
-    assert!(path.exists());
-    let roundtrip: Fixture = load_from(&path).unwrap();
-    assert_eq!(roundtrip, cfg);
 }
 
 #[test]
