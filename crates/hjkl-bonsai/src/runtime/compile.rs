@@ -81,18 +81,9 @@ impl GrammarCompiler {
             }
         }
 
-        match std::fs::rename(&staging, &dest) {
-            Ok(()) => Ok(dest),
-            Err(_) if dest.exists() => {
-                let _ = std::fs::remove_file(&staging);
-                Ok(dest)
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&staging);
-                Err(e)
-                    .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))
-            }
-        }
+        super::publish::publish_dir(&staging, &dest)
+            .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+        Ok(dest)
     }
 }
 

@@ -12,6 +12,7 @@ mod compile;
 mod grammar;
 mod loader;
 mod manifest;
+mod publish;
 mod registry;
 mod source;
 mod xdg;

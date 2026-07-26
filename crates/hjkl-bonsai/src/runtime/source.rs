@@ -170,18 +170,9 @@ impl SourceCache {
             }
         }
 
-        match std::fs::rename(&staging, &dest) {
-            Ok(()) => Ok(grammar_root(&dest, spec)),
-            Err(_) if dest.exists() => {
-                let _ = std::fs::remove_dir_all(&staging);
-                Ok(grammar_root(&dest, spec))
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&staging);
-                Err(e)
-                    .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))
-            }
-        }
+        super::publish::publish_dir(&staging, &dest)
+            .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+        Ok(grammar_root(&dest, spec))
     }
 }
 
@@ -303,18 +294,9 @@ impl QuerySourceCache {
             }
         }
 
-        match std::fs::rename(&staging, &dest) {
-            Ok(()) => Ok(dest),
-            Err(_) if dest.exists() => {
-                let _ = std::fs::remove_dir_all(&staging);
-                Ok(dest)
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&staging);
-                Err(e)
-                    .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))
-            }
-        }
+        super::publish::publish_dir(&staging, &dest)
+            .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+        Ok(dest)
     }
 
     /// Resolve a fully-expanded `highlights.scm` for `lang_name` from
@@ -371,23 +353,13 @@ impl QuerySourceCache {
             f.write_all(content.as_bytes())
                 .with_context(|| format!("write resolved scm {}", staging.display()))?;
         }
-        match std::fs::rename(&staging, &resolved_path) {
-            Ok(()) => {}
-            // Concurrent resolver won the race — its content is identical.
-            Err(_) if resolved_path.exists() => {
-                let _ = std::fs::remove_file(&staging);
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&staging);
-                return Err(e).with_context(|| {
-                    format!(
-                        "rename {} -> {}",
-                        staging.display(),
-                        resolved_path.display()
-                    )
-                });
-            }
-        }
+        super::publish::publish_dir(&staging, &resolved_path).with_context(|| {
+            format!(
+                "rename {} -> {}",
+                staging.display(),
+                resolved_path.display()
+            )
+        })?;
         Ok(resolved_path)
     }
 }
