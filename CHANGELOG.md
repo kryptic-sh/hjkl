@@ -63,6 +63,15 @@ patch bumps.
   (undo mark snapshots via `Arc`, insert-mode lookback without line
   materialization, gutter/wrap scratch reuse, warm-only search cache priming).
 
+- **New languages now attach LSP servers.** The LSP language-id lookup routes
+  through the hjkl-lang registry (with a 3-entry override for `tsx`/`jsx`/`.h`)
+  instead of a frozen 11-extension inline map, so any manifest-known language
+  resolves — comment leads and filetype labels gain the same coverage.
+- **Indexed terminal colors resolve through the real xterm-256 palette
+  everywhere.** `hjkl-engine-tui` flattened `Indexed` to black while
+  `hjkl-editor-tui` used the true palette; the conversion now exists once
+  (engine-tui) with a cross-crate consistency test.
+
 ### Internal
 
 - Deduplicated drift-prone copies found by the round-2 audit: the visual-exit
