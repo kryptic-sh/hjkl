@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-07-26
+
 ### Fixed
 
 - **Macro recorder dropped every literal `q` key.** Insert-mode text containing
@@ -25,6 +27,62 @@ patch bumps.
   returned EACCES. The file-copy arm now copies bytes through owned read/write
   handles, flushes while the destination is still writable, and only then
   applies the final mode.
+- **Linewise-delete inverses did not round-trip for last-row and whole-buffer
+  deletes.** The recorded inverse `Edit` used a trailing-newline form aimed at a
+  row that no longer existed (last-row case) or fabricated an extra trailing
+  newline (whole-buffer case), violating the `apply_edit` inverse contract. Both
+  branches now record the exact removed span; the round-trip property test
+  covers `MotionKind::Line` including whole-buffer deletes.
+- **`:map`/`:nmap` key notation is now parsed by the hjkl-keymap chord parser.**
+  `<Enter>`/`<Return>`/`<Escape>`/`<Insert>`/`<F5>`/`<S-Tab>` no longer bind as
+  literal `<`,`E`,`n`,… character sequences, and `<C-S-x>` no longer silently
+  binds Ctrl+S. SHIFT is preserved on non-letter keys, so `:nmap <S-Tab> x`
+  matches Shift-Tab instead of hijacking plain Tab. Invalid or unrepresentable
+  notation now reports an `E:` error instead of silently falling through to "not
+  an editor command".
+- **RPC filesystem confinement now resolves symlinks.** In `--embed` /
+  `--nvim-api` mode, `:w`, `:e` and `:r` paths are resolved through
+  `hjkl_fs::resolve_under`, so a lexically-innocent relative path traversing a
+  symlink out of the working directory is refused instead of followed.
+- **`J`/`:join` implements vim's no-space exceptions.** No space is inserted
+  when the first line ends in whitespace or the next line starts with `)`;
+  covered by new nvim-oracle corpus cases.
+- **`viewport_math` regained the stale-cursor clamp** its relocation from
+  hjkl-buffer dropped: a per-window cursor left beyond EOF by another view
+  shrinking the shared buffer no longer walks `Query::line` out of bounds.
+- **X11 clipboard no longer accumulates mime formats across copies.** Each
+  `set()` replaces the owned formats wholesale, matching the Wayland, Windows
+  and macOS backends, so an image-preferring paste target can't receive a stale
+  image after a later text copy.
+- **Ex count arithmetic saturates.** `:s`-count, range-count and address-offset
+  paths use `saturating_add`/`saturating_sub` instead of unchecked `+`/`-`.
+- **anvil `.rev` and checksum sidecars are written through
+  `hjkl_fs::write_atomic`** instead of a hand-rolled fixed-name temp+rename
+  (which raced concurrent writers, skipped fsync, and leaked staging files on
+  failure).
+- **bonsai staging cleanup handles file payloads.** The publish helper's
+  lost-race/error cleanup used `remove_dir_all`, which fails on the compiled
+  grammar `.so` staging _file_; cleanup now dispatches on the staged path's file
+  type.
+- **Shared→exclusive lock upgrades are rejected in debug builds.** The
+  in-process lock layer records the outermost acquisition's mode and
+  `debug_assert!`s on an upgrade attempt, which would otherwise silently drop
+  cross-process exclusion.
+
+### Changed
+
+- **The non-atomic `:w` fallback's data-loss window is documented honestly.**
+  The fallback (`File::create`, taken only when no temp file can be created
+  beside the target) truncates before writing; doc comments claiming it could
+  never lose data are corrected, and the path now has real test coverage.
+
+### Removed
+
+- Dead code swept by the 0.37.0 audit: `hjkl_config::write_default` (unused,
+  bypassed the I/O seam), the unused `serde` feature plumbing in `hjkl-engine` /
+  `hjkl-editor`, `hjkl-editor-tui`'s `crossterm` feature and its dead key-event
+  bridge twin, and the drifted `km_to_crossterm` copy in the app (callers now
+  use `hjkl_keymap_tui::to_crossterm`).
 
 ## [0.37.0] - 2026-07-26
 
@@ -4744,7 +4802,17 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.33.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.37.1...HEAD
+[0.37.1]: https://github.com/kryptic-sh/hjkl/compare/v0.37.0...v0.37.1
+[0.37.0]: https://github.com/kryptic-sh/hjkl/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/kryptic-sh/hjkl/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/kryptic-sh/hjkl/compare/v0.34.2...v0.35.0
+[0.34.2]: https://github.com/kryptic-sh/hjkl/compare/v0.34.1...v0.34.2
+[0.34.1]: https://github.com/kryptic-sh/hjkl/compare/v0.34.0...v0.34.1
+[0.34.0]: https://github.com/kryptic-sh/hjkl/compare/v0.33.6...v0.34.0
+[0.33.6]: https://github.com/kryptic-sh/hjkl/compare/v0.33.5...v0.33.6
+[0.33.5]: https://github.com/kryptic-sh/hjkl/compare/v0.33.4...v0.33.5
+[0.33.4]: https://github.com/kryptic-sh/hjkl/compare/v0.33.3...v0.33.4
 [0.33.3]: https://github.com/kryptic-sh/hjkl/compare/v0.33.2...v0.33.3
 [0.33.2]: https://github.com/kryptic-sh/hjkl/compare/v0.33.0...v0.33.2
 [0.33.0]: https://github.com/kryptic-sh/hjkl/compare/v0.32.0...v0.33.0
