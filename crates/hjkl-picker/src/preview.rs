@@ -12,7 +12,7 @@ pub const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 /// `BufferView` consumer takes `Vec<Vec<Span>>` plus a resolver
 /// closure mapping `style: u32` → engine `Style`; both live here so
 /// the renderer can wire them together cheaply.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PreviewSpans {
     /// One vec per buffer row, each entry covering a half-open byte
     /// range with an opaque style id.

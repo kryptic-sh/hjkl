@@ -125,17 +125,13 @@ pub fn preview_pane(
 
     let preview_spans: PreviewSpans = match picker.preview_path() {
         Some(path) => {
-            // Preview is cold path; content_joined is cached by dirty_gen
-            // so we get the shared Arc<String> if anything else fetched it.
-            let joined = buf.content_joined();
-            let mut bytes = Vec::with_capacity(joined.len() + 1);
-            bytes.extend_from_slice(joined.as_bytes());
-            if !bytes.is_empty() {
-                bytes.push(b'\n');
-            }
+            // Bytes are flattened once per preview load, not per frame; the
+            // generation lets the highlighter reuse its parse across the
+            // frames that redraw the same preview.
             highlighter.spans_for_viewport(
                 path,
-                &bytes,
+                picker.preview_bytes(),
+                picker.preview_generation(),
                 picker.preview_top_row(),
                 inner.height as usize,
             )

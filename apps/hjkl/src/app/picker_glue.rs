@@ -173,6 +173,15 @@ impl App {
         self.picker = Some(crate::picker::Picker::new(source));
     }
 
+    /// Dismiss the picker and release the preview-pane parse it kept warm.
+    ///
+    /// Every picker teardown goes through here so the retained tree never
+    /// outlives the picker that produced it.
+    pub(crate) fn close_picker(&mut self) {
+        self.picker = None;
+        self.clear_preview_cache();
+    }
+
     /// Accept the currently highlighted picker item — same as pressing Enter.
     ///
     /// Dismisses the picker and dispatches the item's action.
@@ -181,7 +190,7 @@ impl App {
             Some(p) => p.accept(),
             None => return,
         };
-        self.picker = None;
+        self.close_picker();
         if let crate::picker::PickerEvent::Select(action) = event {
             self.dispatch_picker_action(action);
         }
@@ -203,7 +212,7 @@ impl App {
                 return;
             }
         };
-        self.picker = None;
+        self.close_picker();
         // Split a regular window, not a special pane (explorer/cmdline).
         self.focus_editor_window_for_open();
         // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
@@ -224,7 +233,7 @@ impl App {
                 return;
             }
         };
-        self.picker = None;
+        self.close_picker();
         // Split a regular window, not a special pane (explorer/cmdline).
         self.focus_editor_window_for_open();
         // Escape `%`/`#` so dispatch_ex doesn't expand them to other filenames.
@@ -245,7 +254,7 @@ impl App {
                 return;
             }
         };
-        self.picker = None;
+        self.close_picker();
         // `tabnew` creates its own fresh window, but leave the CURRENT
         // tab's focus on a regular window too so returning to this tab
         // doesn't strand focus on a hijack-prone special pane.
@@ -283,10 +292,10 @@ impl App {
         match event {
             crate::picker::PickerEvent::None => {}
             crate::picker::PickerEvent::Cancel => {
-                self.picker = None;
+                self.close_picker();
             }
             crate::picker::PickerEvent::Select(action) => {
-                self.picker = None;
+                self.close_picker();
                 self.dispatch_picker_action(action);
             }
         }

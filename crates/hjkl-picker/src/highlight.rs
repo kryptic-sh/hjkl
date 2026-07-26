@@ -33,18 +33,27 @@ pub trait PreviewHighlighter {
     /// preview pane's current top row and visible height so consumers can
     /// clip the underlying highlighter's byte range to what's on screen.
     ///
+    /// `generation` is an opaque token identifying the previewed content: it
+    /// changes whenever the picker swaps in a different preview (different
+    /// file, or the same file reloaded) and stays stable across the frames
+    /// that redraw the same preview. Implementations may use it as a cache
+    /// key — for the same `generation` the `path`/`bytes` pair is guaranteed
+    /// unchanged. Tokens are unique process-wide, so a token from a previous
+    /// picker session never collides with a live one.
+    ///
     /// The default implementation delegates to [`Self::spans_for`], so
-    /// existing implementations remain source-compatible. Consumers with
-    /// expensive highlighters (tree-sitter with injections, etc.) should
-    /// override this and clip their work to the visible window.
+    /// implementations that don't care about the viewport stay trivial.
+    /// Consumers with expensive highlighters (tree-sitter with injections,
+    /// etc.) should override this and clip their work to the visible window.
     fn spans_for_viewport(
         &self,
         path: &Path,
         bytes: &[u8],
+        generation: u64,
         top_row: usize,
         height: usize,
     ) -> PreviewSpans {
-        let _ = (top_row, height);
+        let _ = (generation, top_row, height);
         self.spans_for(path, bytes)
     }
 }

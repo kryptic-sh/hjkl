@@ -587,12 +587,38 @@ impl App {
         self.preview_spans_for_range(path, bytes, 0..bytes.len())
     }
 
-    /// Viewport-clipped variant of [`Self::preview_spans_for`].
+    /// Viewport-clipped variant of [`Self::preview_spans_for`]. Uncached: the
+    /// content is unidentified, so the tree is always parsed from scratch.
     pub fn preview_spans_for_range(
         &self,
         path: &Path,
         bytes: &[u8],
         byte_range: std::ops::Range<usize>,
+    ) -> PreviewSpans {
+        self.preview_spans_cached(path, bytes, byte_range, None)
+    }
+
+    /// Preview spans, optionally memoised on `generation`.
+    ///
+    /// `generation` is the picker's preview token (see
+    /// [`hjkl_picker::Picker::preview_generation`]): while it holds, `path`
+    /// and `bytes` are guaranteed unchanged, so both the tree-sitter parse and
+    /// the resulting span table can be reused. Two levels of reuse:
+    ///
+    /// - same `(generation, grammar)` → skip `reset()` + `parse_initial()`,
+    ///   the retained tree still describes `bytes` (this is the 4 ms @100 KB /
+    ///   43 ms @1 MB cost that used to be paid on every frame);
+    /// - same `(generation, grammar, byte_range)` → return the memoised span
+    ///   table, skipping the range query and theme mapping too.
+    ///
+    /// `None` disables both levels *and* drops the memo, since the parse the
+    /// highlighter now retains no longer belongs to the memoised generation.
+    fn preview_spans_cached(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        byte_range: std::ops::Range<usize>,
+        generation: Option<u64>,
     ) -> PreviewSpans {
         let grammar = match self.directory.request_for_path(path) {
             GrammarRequest::Cached(g) => g,
@@ -601,26 +627,42 @@ impl App {
             }
         };
         let name = grammar.name().to_string();
-        let mut cache = match self.preview_highlighters.lock() {
+        let mut guard = match self.preview_highlighters.lock() {
             Ok(c) => c,
             Err(_) => return PreviewSpans::default(),
         };
-        let h = match cache.entry(name) {
+        let cache = &mut *guard;
+
+        // Does the retained tree already describe `bytes`?
+        let parse_valid = match (generation, &cache.parsed) {
+            (Some(g), Some(parsed)) => parsed.generation == g && parsed.grammar == name,
+            _ => false,
+        };
+        if parse_valid
+            && let Some(parsed) = &cache.parsed
+            && let Some((range, spans)) = &parsed.spans
+            && *range == byte_range
+        {
+            return spans.clone();
+        }
+
+        let h = match cache.highlighters.entry(name.clone()) {
             std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
                 Ok(h) => v.insert(h),
                 Err(_) => return PreviewSpans::default(),
             },
         };
-        h.reset();
-        h.parse_initial(bytes);
+        if !parse_valid {
+            h.reset();
+            h.parse_initial(bytes);
+        }
         let directory = std::sync::Arc::clone(&self.directory);
         let resolve = move |name: &str| match directory.request_by_name(name) {
             GrammarRequest::Cached(g) => Some(g),
             GrammarRequest::Loading { .. } | GrammarRequest::Unknown | _ => None,
         };
-        let mut flat = h.highlight_range_with_injections(bytes, byte_range, resolve);
-        drop(cache);
+        let mut flat = h.highlight_range_with_injections(bytes, byte_range.clone(), resolve);
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = self.theme.syntax.clone();
         let ranges: Vec<(std::ops::Range<usize>, EngineStyle)> = flat
@@ -649,7 +691,33 @@ impl App {
                 })
             })
             .collect();
-        PreviewSpans::from_byte_ranges(&ranges, bytes)
+        let spans = PreviewSpans::from_byte_ranges(&ranges, bytes);
+        // Record what the retained tree now describes. With no generation the
+        // parse is unidentified, so any previous memo is dropped rather than
+        // left pointing at a tree that has been re-parsed underneath it.
+        cache.parsed = generation.map(|generation| ParsedPreview {
+            generation,
+            grammar: name,
+            spans: Some((byte_range, spans.clone())),
+        });
+        spans
+    }
+
+    /// Drop the retained picker-preview parse (called when the picker closes).
+    ///
+    /// Keeps the per-language `Highlighter` instances — their compiled queries
+    /// are the expensive part and are reused by the next picker — but frees the
+    /// tree and injection caches of the preview that was on screen, so a closed
+    /// picker holds no preview-sized memory.
+    pub(crate) fn clear_preview_cache(&self) {
+        let Ok(mut cache) = self.preview_highlighters.lock() else {
+            return;
+        };
+        if let Some(parsed) = cache.parsed.take()
+            && let Some(h) = cache.highlighters.get_mut(&parsed.grammar)
+        {
+            h.reset();
+        }
     }
 
     /// `:syntax on` / `:syntax off` — toggle bonsai highlighting app-wide.
@@ -701,6 +769,30 @@ fn byte_offset_of_row(bytes: &[u8], target_row: usize) -> usize {
         .unwrap_or(bytes.len())
 }
 
+/// Preview-pane highlight state: the per-language parsers plus the parse of
+/// the preview currently on screen.
+#[derive(Default)]
+pub(crate) struct PreviewCache {
+    /// Per-language `Highlighter`s, reused for the whole session — building
+    /// one compiles the grammar's queries.
+    pub(crate) highlighters: std::collections::HashMap<String, Highlighter>,
+    /// Which preview `highlighters[grammar]`'s retained tree describes, if
+    /// any. At most one entry: only the on-screen preview is kept.
+    pub(crate) parsed: Option<ParsedPreview>,
+}
+
+/// The preview a retained tree (and optional span memo) belongs to.
+pub(crate) struct ParsedPreview {
+    /// Picker preview token the tree was parsed from. Unique process-wide, so
+    /// a stale entry from a closed picker can never alias a live preview.
+    pub(crate) generation: u64,
+    /// Grammar name — the `PreviewCache::highlighters` key holding the tree.
+    pub(crate) grammar: String,
+    /// Memoised spans for the byte range they were computed over. Scrolling
+    /// (a different range over the same preview) re-runs only the range query.
+    pub(crate) spans: Option<(std::ops::Range<usize>, PreviewSpans)>,
+}
+
 /// Bridge: route `hjkl-picker`'s preview-pane highlighter through the
 /// editor's bonsai pipeline.
 impl hjkl_picker::PreviewHighlighter for App {
@@ -712,6 +804,7 @@ impl hjkl_picker::PreviewHighlighter for App {
         &self,
         path: &Path,
         bytes: &[u8],
+        generation: u64,
         top_row: usize,
         height: usize,
     ) -> PreviewSpans {
@@ -721,7 +814,7 @@ impl hjkl_picker::PreviewHighlighter for App {
             .saturating_add(VIEWPORT_SLACK_ROWS);
         let start = byte_offset_of_row(bytes, start_row);
         let end = byte_offset_of_row(bytes, end_row);
-        self.preview_spans_for_range(path, bytes, start..end)
+        self.preview_spans_cached(path, bytes, start..end, Some(generation))
     }
 }
 
@@ -755,6 +848,156 @@ fn format_anvil_status(status: &hjkl_anvil::InstallStatus) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Rendered form of a span table: byte ranges with their *resolved* style,
+    /// so two tables compare equal even if the style-id numbering differs.
+    fn fingerprint(spans: &PreviewSpans) -> Vec<Vec<(usize, usize, EngineStyle)>> {
+        spans
+            .by_row
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|s| (s.start_byte, s.end_byte, spans.styles[s.style as usize]))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Build an App with the rust grammar resolved, or `None` when it can't be
+    /// loaded (no network / no compiler in this environment).
+    fn app_with_rust() -> Option<App> {
+        let app = App::new(None, false, None, None).ok()?;
+        app.directory.by_name("rust")?;
+        Some(app)
+    }
+
+    const SRC_A: &str = concat!(
+        "fn alpha() -> u32 {\n",
+        "    let x = 1; // comment\n",
+        "    x + 2\n",
+        "}\n",
+        "struct Beta { field: String }\n",
+        "impl Beta {\n",
+        "    fn gamma(&self) -> &str { &self.field }\n",
+        "}\n",
+    );
+
+    const SRC_B: &str = concat!(
+        "const DELTA: &str = \"replaced\";\n",
+        "enum Epsilon { One, Two }\n",
+        "fn zeta<T: Clone>(t: T) -> T { t.clone() }\n",
+    );
+
+    /// Two consecutive requests for the same preview + range return identical
+    /// spans, and the second one does not re-parse.
+    #[test]
+    #[ignore = "network + compiler: fetches rust grammar"]
+    fn preview_cache_hit_skips_reparse_and_returns_identical_spans() {
+        let Some(app) = app_with_rust() else {
+            return;
+        };
+        let path = PathBuf::from("cache_probe.rs");
+        let bytes = SRC_A.as_bytes();
+        let range = 0..bytes.len();
+
+        hjkl_bonsai::parse_counter::reset();
+        let cold = app.preview_spans_cached(&path, bytes, range.clone(), Some(7001));
+        let parses_after_cold = hjkl_bonsai::parse_counter::get();
+        assert!(parses_after_cold >= 1, "cold path must parse");
+        assert!(!cold.by_row.is_empty(), "expected spans for rust source");
+
+        let warm = app.preview_spans_cached(&path, bytes, range, Some(7001));
+        assert_eq!(
+            hjkl_bonsai::parse_counter::get(),
+            parses_after_cold,
+            "same generation + same range must not re-parse"
+        );
+        assert_eq!(fingerprint(&cold), fingerprint(&warm));
+    }
+
+    /// A different range over the same preview (preview pane resized / a
+    /// windowed source scrolled) re-runs only the range query, and matches a
+    /// cold computation of that range.
+    #[test]
+    #[ignore = "network + compiler: fetches rust grammar"]
+    fn preview_cache_scroll_matches_cold_computation_for_the_new_range() {
+        let Some(app) = app_with_rust() else {
+            return;
+        };
+        let path = PathBuf::from("cache_probe.rs");
+        let bytes = SRC_A.as_bytes();
+        let head = 0..bytes.len() / 2;
+        let tail = bytes.len() / 2..bytes.len();
+
+        let _ = app.preview_spans_cached(&path, bytes, head, Some(7002));
+        hjkl_bonsai::parse_counter::reset();
+        let warm_tail = app.preview_spans_cached(&path, bytes, tail.clone(), Some(7002));
+        assert_eq!(
+            hjkl_bonsai::parse_counter::get(),
+            0,
+            "a range change must reuse the retained tree"
+        );
+
+        // Uncached path = a cold parse of the same range.
+        let cold_tail = app.preview_spans_for_range(&path, bytes, tail);
+        assert_eq!(
+            fingerprint(&warm_tail),
+            fingerprint(&cold_tail),
+            "reused parse must yield the same spans as a fresh one"
+        );
+    }
+
+    /// Replacing the preview content (new generation) yields the NEW file's
+    /// spans, never the previous preview's.
+    #[test]
+    #[ignore = "network + compiler: fetches rust grammar"]
+    fn preview_cache_invalidates_when_the_preview_is_replaced() {
+        let Some(app) = app_with_rust() else {
+            return;
+        };
+        let path_a = PathBuf::from("first.rs");
+        let path_b = PathBuf::from("second.rs");
+        let bytes_a = SRC_A.as_bytes();
+        let bytes_b = SRC_B.as_bytes();
+
+        let a = app.preview_spans_cached(&path_a, bytes_a, 0..bytes_a.len(), Some(7003));
+        let b = app.preview_spans_cached(&path_b, bytes_b, 0..bytes_b.len(), Some(7004));
+        let fresh_b = app.preview_spans_for_range(&path_b, bytes_b, 0..bytes_b.len());
+
+        assert_eq!(
+            fingerprint(&b),
+            fingerprint(&fresh_b),
+            "replaced preview must be highlighted from its own content"
+        );
+        assert_ne!(
+            fingerprint(&a),
+            fingerprint(&b),
+            "different content must not produce the previous preview's spans"
+        );
+    }
+
+    /// Closing the picker drops the retained parse: the next request re-parses
+    /// even for the generation that was cached.
+    #[test]
+    #[ignore = "network + compiler: fetches rust grammar"]
+    fn clear_preview_cache_drops_the_retained_parse() {
+        let Some(app) = app_with_rust() else {
+            return;
+        };
+        let path = PathBuf::from("cache_probe.rs");
+        let bytes = SRC_A.as_bytes();
+        let range = 0..bytes.len();
+
+        let before = app.preview_spans_cached(&path, bytes, range.clone(), Some(7005));
+        app.clear_preview_cache();
+        hjkl_bonsai::parse_counter::reset();
+        let after = app.preview_spans_cached(&path, bytes, range, Some(7005));
+        assert!(
+            hjkl_bonsai::parse_counter::get() >= 1,
+            "cleared cache must re-parse"
+        );
+        assert_eq!(fingerprint(&before), fingerprint(&after));
+    }
 
     /// Regression: install_render_result no longer exists; the equivalent is
     /// recompute_and_install. This test verifies the picker preview injection

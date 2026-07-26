@@ -10,7 +10,7 @@
 //! source spawns one) to stream candidates in.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -23,6 +23,20 @@ use hjkl_fuzzy::score;
 
 /// Debounce delay for `RequeryMode::Spawn` sources (milliseconds).
 const REQUERY_DEBOUNCE_MS: u64 = 150;
+
+/// Process-wide counter behind [`Picker::preview_generation`].
+///
+/// Global rather than per-picker so a token can never repeat across picker
+/// sessions: a host caching parse state keyed by generation would otherwise
+/// serve the previous session's tree for a new picker whose counter restarted
+/// at the same value.
+static PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Allocate the next preview generation token. Always non-zero, so `0` stays
+/// available to hosts as an "impossible" sentinel.
+fn next_preview_generation() -> u64 {
+    PREVIEW_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
 
 /// Case-fold `s`, returning the folded string plus a map from each folded
 /// char index back to the source char index.
@@ -41,6 +55,18 @@ fn lower_with_map(s: &str) -> (String, Vec<usize>) {
         }
     }
     (lowered, map)
+}
+
+/// Flatten a preview buffer to the byte image highlighters parse: the joined
+/// rows plus a trailing newline so the last row terminates like every other.
+fn flatten_preview(buf: &View) -> Vec<u8> {
+    let joined = buf.content_joined();
+    let mut bytes = Vec::with_capacity(joined.len() + 1);
+    bytes.extend_from_slice(joined.as_bytes());
+    if !bytes.is_empty() {
+        bytes.push(b'\n');
+    }
+    bytes
 }
 
 /// Non-generic picker state. Lives in `App::picker` while open.
@@ -69,6 +95,13 @@ pub struct Picker {
     preview_idx: Option<usize>,
     /// Cached preview content. Empty when nothing is selected.
     preview_buffer: View,
+    /// `preview_buffer` flattened to raw bytes (trailing newline appended),
+    /// built once per preview load rather than once per frame — the preview
+    /// pane re-renders on every keystroke and every async redraw.
+    preview_bytes: Vec<u8>,
+    /// Token identifying the current preview content, bumped on every
+    /// replacement. Hosts key highlight caches on it.
+    preview_generation: u64,
     /// Status tag for the preview pane title.
     preview_status: String,
     /// Cached label for the preview header.
@@ -110,6 +143,8 @@ impl Picker {
             requery_at: None,
             preview_idx: None,
             preview_buffer: View::new(),
+            preview_bytes: Vec::new(),
+            preview_generation: next_preview_generation(),
             preview_status: String::new(),
             preview_label: None,
             preview_path: None,
@@ -307,8 +342,10 @@ impl Picker {
             return;
         }
         self.preview_idx = target_idx;
+        self.preview_generation = next_preview_generation();
         let Some(idx) = target_idx else {
             self.preview_buffer = View::new();
+            self.preview_bytes.clear();
             self.preview_status.clear();
             self.preview_label = None;
             self.preview_path = None;
@@ -320,6 +357,7 @@ impl Picker {
         let label = self.source.label(idx);
         let (buf, status) = self.source.preview(idx);
         self.preview_buffer = buf;
+        self.preview_bytes = flatten_preview(&self.preview_buffer);
         self.preview_status = status;
         self.preview_label = Some(label);
         self.preview_path = self.source.preview_path(idx);
@@ -355,6 +393,23 @@ impl Picker {
     /// Borrow the preview buffer for `BufferView` rendering.
     pub fn preview_buffer(&self) -> &View {
         &self.preview_buffer
+    }
+
+    /// Raw bytes of the preview buffer (rows joined by `\n`, trailing `\n`
+    /// appended when non-empty) — what highlighters parse. Built once per
+    /// preview load; borrowing is free.
+    pub fn preview_bytes(&self) -> &[u8] {
+        &self.preview_bytes
+    }
+
+    /// Token identifying the currently previewed content.
+    ///
+    /// Changes whenever the preview is replaced and is unique process-wide, so
+    /// hosts can key expensive per-preview state (parse trees, span tables) on
+    /// it and know the `(preview_path, preview_bytes)` pair is unchanged while
+    /// it holds.
+    pub fn preview_generation(&self) -> u64 {
+        self.preview_generation
     }
 
     /// Status tag. Empty when the preview is normal content.
@@ -549,6 +604,88 @@ mod filter_tests {
             positions.contains(&1),
             "positions {positions:?} miss index 1"
         );
+    }
+}
+
+#[cfg(test)]
+mod preview_generation_tests {
+    use super::*;
+    use crate::logic::{PickerAction, PickerLogic};
+
+    /// Two items with distinct preview content, both previewable.
+    struct TwoFiles;
+
+    impl PickerLogic for TwoFiles {
+        fn title(&self) -> &str {
+            "two"
+        }
+        fn item_count(&self) -> usize {
+            2
+        }
+        fn label(&self, idx: usize) -> String {
+            format!("f{idx}.rs")
+        }
+        fn match_text(&self, idx: usize) -> String {
+            self.label(idx)
+        }
+        fn preview(&self, idx: usize) -> (View, String) {
+            (View::from_str(&format!("fn f{idx}() {{}}")), String::new())
+        }
+        fn preview_path(&self, idx: usize) -> Option<std::path::PathBuf> {
+            Some(std::path::PathBuf::from(self.label(idx)))
+        }
+        fn preserve_source_order(&self) -> bool {
+            true
+        }
+        fn select(&self, _idx: usize) -> PickerAction {
+            PickerAction::None
+        }
+        fn enumerate(
+            &mut self,
+            _query: Option<&str>,
+            _cancel: Arc<AtomicBool>,
+        ) -> Option<JoinHandle<()>> {
+            None
+        }
+    }
+
+    #[test]
+    fn preview_bytes_are_flattened_once_and_newline_terminated() {
+        let p = Picker::new(Box::new(TwoFiles));
+        assert_eq!(p.preview_bytes(), b"fn f0() {}\n");
+    }
+
+    #[test]
+    fn generation_is_stable_while_the_preview_is_unchanged() {
+        let mut p = Picker::new(Box::new(TwoFiles));
+        let g = p.preview_generation();
+        // A redraw tick re-runs refresh_preview; the selection is unchanged so
+        // the preview (and its token) must not move.
+        p.refresh_preview();
+        p.refresh_preview();
+        assert_eq!(p.preview_generation(), g);
+        assert_eq!(p.preview_bytes(), b"fn f0() {}\n");
+    }
+
+    #[test]
+    fn generation_and_bytes_change_when_the_preview_is_replaced() {
+        let mut p = Picker::new(Box::new(TwoFiles));
+        let g = p.preview_generation();
+        p.selected = 1;
+        p.refresh_preview();
+        assert_ne!(p.preview_generation(), g, "token must move with content");
+        assert_eq!(p.preview_bytes(), b"fn f1() {}\n");
+    }
+
+    #[test]
+    fn generations_never_repeat_across_picker_sessions() {
+        let first = Picker::new(Box::new(TwoFiles)).preview_generation();
+        let second = Picker::new(Box::new(TwoFiles)).preview_generation();
+        assert_ne!(
+            first, second,
+            "a host caching on the token would serve the closed session's parse"
+        );
+        assert_ne!(first, 0, "0 stays reserved as a host sentinel");
     }
 }
 

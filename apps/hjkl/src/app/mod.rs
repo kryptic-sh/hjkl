@@ -308,13 +308,13 @@ pub struct App {
     /// [`Self::with_config`]; default `false`.
     pub theme_transparent: bool,
     /// Per-language `Highlighter` cache used by the picker preview pane
-    /// (computed via [`Self::preview_spans_for`]). Centralised here so
-    /// every preview source — files, rg results, open buffers, git diff
-    /// rows — shares one parser per language for the session. The
-    /// editor's own syntax pipeline lives on `syntax`; this is for the
-    /// preview-only highlight path.
-    pub(crate) preview_highlighters:
-        std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
+    /// (computed via [`Self::preview_spans_for`]), plus the retained parse
+    /// for the preview currently on screen. Centralised here so every
+    /// preview source — files, rg results, open buffers, git diff rows —
+    /// shares one parser per language for the session. The editor's own
+    /// syntax pipeline lives on `syntax`; this is for the preview-only
+    /// highlight path.
+    pub(crate) preview_highlighters: std::sync::Mutex<syntax_glue::PreviewCache>,
     /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
     /// is bypassed: spans stay empty, no render_viewport fires, and
     /// `recompute_and_install` returns immediately. Re-enabling re-attaches
@@ -2311,7 +2311,7 @@ impl App {
             format_pending: HashSet::new(),
             directory,
             theme,
-            preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
+            preview_highlighters: std::sync::Mutex::new(syntax_glue::PreviewCache::default()),
             syntax_enabled: true,
             search_count_cache: std::cell::RefCell::new(None),
             // Seed the first-frame recompute via the event-loop's drain
