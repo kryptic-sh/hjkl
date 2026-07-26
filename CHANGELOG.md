@@ -26,6 +26,26 @@ patch bumps.
   Two app-side option-wipe paths (config overlay, `-R` readonly flag) were fixed
   along the way.
 
+### Performance
+
+- **LSP sends no longer deep-clone the params tree.** The JSON-RPC envelope
+  moves `params` in instead of re-serializing it via `json!` (~40 µs → ~0.3 µs
+  per full-document sync at 3.5 MB; O(1) instead of O(tree)). Wire bytes
+  unchanged.
+- **Undo records cost O(edit) instead of O(document).** The undo diff walks the
+  two ropes' chunks (with a shared-leaf pointer fast path) instead of
+  materializing both as strings: 1.55 ms → ~30 µs per edit keystroke on a 3.2 MB
+  file, with a differential test suite pinning exact equality against the old
+  implementation.
+- **Statusline search count is O(log matches) per frame.** Match offsets are
+  cached against `(buffer, generation, pattern)` and the cursor index derived by
+  binary search; previously every cursor move rescanned the whole document
+  (0.3–1 ms/frame on large files, now ~0.6 µs).
+- **Picker preview no longer reparses every frame.** The preview's tree-sitter
+  parse and span table are cached against a preview generation token;
+  steady-state frames drop from 5–42 ms (100 KB–1 MB files) to ~2–17 µs, and the
+  per-frame content copy is gone.
+
 ### Internal
 
 - Deduplicated drift-prone copies found by the round-2 audit: the visual-exit
