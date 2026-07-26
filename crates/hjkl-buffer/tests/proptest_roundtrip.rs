@@ -95,9 +95,7 @@ proptest! {
 
     /// Round-trip: applying a linewise delete and then its inverse must
     /// restore line-by-line content — including last-row deletes with
-    /// rows above them (audit B4). The whole-buffer delete case
-    /// (`lo == 0` and `hi == last`) is excluded: it has a known
-    /// trailing-newline issue in the inverse that the plan defers.
+    /// rows above them (audit B4) and whole-buffer deletes.
     #[test]
     fn delete_range_linewise_roundtrip(
         text in prop::collection::vec("[a-zA-Z0-9 ]{1,20}", 1..=5)
@@ -114,11 +112,6 @@ proptest! {
         let lo = ((a_row_f.clamp(0.0, 1.0)) * (n as f64 - 1.0)).round() as usize;
         let hi = ((b_row_f.clamp(0.0, 1.0)) * (n as f64 - 1.0)).round() as usize;
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
-        // Skip the whole-buffer delete: the inverse has a trailing-newline
-        // issue in the `lo == 0 && hi == last` branch that is deferred.
-        if lo == 0 && hi + 1 >= n {
-            return Ok(());
-        }
         let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::DeleteRange {
             start: Position::new(lo, 0),
@@ -160,4 +153,26 @@ fn linewise_delete_last_row_roundtrips() {
     // Applying the inverse must restore the original.
     buf.apply_edit(inv);
     assert_eq!(buf_lines(&buf), lines_before);
+}
+
+/// Regression: a WHOLE-buffer linewise delete must round-trip for ropes
+/// both with and without a trailing newline. The inverse used to append a
+/// '\n' unconditionally (the register-facing linewise form), so undoing a
+/// whole-buffer delete of "a\nb\nc" produced a phantom fourth row.
+#[test]
+fn whole_buffer_linewise_delete_roundtrips() {
+    for text in ["a\nb\nc", "a\nb\nc\n"] {
+        let mut buf = View::from_str(text);
+        let lines_before = buf_lines(&buf);
+        let last = buf.rope().len_lines() - 1;
+        let inv = buf.apply_edit(Edit::DeleteRange {
+            start: Position::new(0, 0),
+            end: Position::new(last, 0),
+            kind: MotionKind::Line,
+        });
+        // Buffer is cleared to the single empty row ropey always keeps.
+        assert_eq!(buf_lines(&buf), &["".to_string()], "text = {text:?}");
+        buf.apply_edit(inv);
+        assert_eq!(buf_lines(&buf), lines_before, "text = {text:?}");
+    }
 }
