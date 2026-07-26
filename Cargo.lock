@@ -1515,7 +1515,6 @@ dependencies = [
 name = "hjkl-editor-tui"
 version = "0.37.0"
 dependencies = [
- "crossterm",
  "hjkl-engine",
  "hjkl-form",
  "ratatui",
@@ -1534,8 +1533,6 @@ dependencies = [
  "proptest",
  "regex",
  "ropey",
- "serde",
- "serde_json",
  "thiserror 2.0.19",
  "tracing",
 ]

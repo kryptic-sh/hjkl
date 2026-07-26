@@ -12,10 +12,6 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
-[features]
-default = ["serde"]
-serde = ["dep:serde"]
-
 [dev-dependencies]
 # Dev-only: tests/ integration tests exercise vim accessors that now live on
 # hjkl_vim::VimEditorExt (#267). Safe here (unlike inline unit tests) because a
@@ -27,8 +23,6 @@ serde = ["dep:serde"]
 # `hjkl-vim ^X.Y` has nothing to resolve against on crates.io yet.
 hjkl-vim = { path = "../hjkl-vim" }
 proptest = "1"
-serde_json = "1"
-
 [dependencies]
 # Ratatui + crossterm adapter surface lives in `hjkl-engine-tui` (#162 phase 3).
 # `serde` is optional; wasm / no_std hosts opt out via `default-features = false`.
@@ -38,7 +32,6 @@ hjkl-vim-types.workspace = true
 ropey = "1.6"
 bitflags = "2"
 regex = "1"
-serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tracing = "0.1"
 

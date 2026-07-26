@@ -360,7 +360,7 @@ pub use hjkl_buffer::ListChars;
 /// Fold method. Controls how folds are automatically generated.
 /// Matches vim's `:set foldmethod`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub enum FoldMethod {
     /// No automatic folds; only manual `zf` folds. Matches vim's `manual`.
     Manual,
@@ -378,7 +378,7 @@ pub enum FoldMethod {
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
 /// for diagnostic and git signs. Matches vim's `:set signcolumn`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub enum SignColumnMode {
     /// Never reserve a sign column.
     No,
@@ -393,7 +393,7 @@ pub enum SignColumnMode {
 /// diagnostic message is shown (Error-Lens style). Matches
 /// `:set diagnostics_inline=off|current|all`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub enum DiagInlineMode {
     /// Never show inline diagnostic ghost text.
     Off,
@@ -408,7 +408,7 @@ pub enum DiagInlineMode {
 /// Engine-native equivalent of [`hjkl_buffer::Wrap`]; the engine
 /// converts at the boundary to the buffer's runtime wrap setting.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub enum WrapMode {
     /// Long lines extend past the right edge; `top_col` clips the
     /// left side. Matches vim's `:set nowrap`.
@@ -1204,7 +1204,7 @@ pub struct RenderFrame {
 ///   `VERSION++` bump and is gated behind a major version bump of the
 ///   crate.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub struct EditorSnapshot {
     /// Format version. See [`Self::VERSION`] for the lock policy.
     /// Hosts use this to detect mismatched persisted state.
@@ -1238,7 +1238,7 @@ pub struct EditorSnapshot {
 /// [`crate::VimMode`] without leaking the full FSM type into the
 /// snapshot wire format.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub enum SnapshotMode {
     #[default]
     Normal,
@@ -1778,31 +1778,6 @@ mod tests {
         };
         assert_eq!(s.cursor, (0, 0));
         assert_eq!(s.lines.len(), 1);
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn editor_snapshot_roundtrip() {
-        let mut marks = std::collections::BTreeMap::new();
-        marks.insert('a', (1u32, 0u32));
-        let mut global_marks = std::collections::BTreeMap::new();
-        global_marks.insert('A', (42u64, 5u32, 2u32));
-        let s = EditorSnapshot {
-            version: EditorSnapshot::VERSION,
-            mode: SnapshotMode::Insert,
-            cursor: (3, 7),
-            lines: vec!["alpha".into(), "beta".into()],
-            viewport_top: 2,
-            registers: crate::Registers::default(),
-            marks,
-            global_marks,
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: EditorSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(s.cursor, back.cursor);
-        assert_eq!(s.lines, back.lines);
-        assert_eq!(s.viewport_top, back.viewport_top);
-        assert_eq!(s.global_marks, back.global_marks);
     }
 
     #[test]

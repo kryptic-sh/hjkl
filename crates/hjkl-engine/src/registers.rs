@@ -16,7 +16,7 @@
 //!   the matching lowercase slot, matching vim semantics.
 
 #[derive(Default, Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub struct Slot {
     pub text: String,
     pub linewise: bool,
@@ -26,15 +26,10 @@ pub struct Slot {
     /// re-insert it as COLUMNS at the cursor rather than spilling onto new
     /// lines. Mutually exclusive with `linewise` in practice.
     ///
-    /// Additive field: `#[serde(default)]` keeps old serialized register
-    /// banks deserializable, and the embed `hjkl_get_register` handler
-    /// serialises only `text` + `linewise`, so the wire shape is unchanged.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub blockwise: bool,
     /// Column width of a blockwise register — the number of cells each row
     /// segment is padded to (with trailing spaces) when pasted. Zero for
     /// charwise/linewise slots. See [`Slot::blockwise`].
-    #[cfg_attr(feature = "serde", serde(default))]
     pub block_width: usize,
 }
 
@@ -61,7 +56,7 @@ impl Slot {
 }
 
 #[derive(Default, Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub struct Registers {
     /// `"` — written by every yank / delete / change.
     pub unnamed: Slot,
@@ -85,8 +80,6 @@ pub struct Registers {
     pub filename: Option<String>,
     /// Pre-built `Slot` for the `%` register. Kept in sync with `filename`
     /// by [`Registers::set_filename`] so `read('%')` can return `&Slot`.
-    /// Derived from `filename` — not serialised independently.
-    #[cfg_attr(feature = "serde", serde(skip))]
     filename_slot: Option<Slot>,
 }
 
