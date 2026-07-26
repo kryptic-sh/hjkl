@@ -261,22 +261,42 @@ fn build_text_changes(
     )
 }
 
-/// Small inline map: file extension → LSP language id.
-pub(super) fn language_id_for_ext(ext: &str) -> Option<&'static str> {
-    match ext {
-        "rs" => Some("rust"),
-        "ts" | "tsx" => Some("typescript"),
-        "js" | "jsx" => Some("javascript"),
-        "py" => Some("python"),
-        "go" => Some("go"),
-        "c" | "h" => Some("c"),
-        "cpp" | "cc" | "cxx" | "hpp" => Some("cpp"),
-        "lua" => Some("lua"),
-        "toml" => Some("toml"),
-        "json" => Some("json"),
-        "md" => Some("markdown"),
-        _ => None,
+/// Extensions whose LSP language id differs from the tree-sitter grammar name
+/// the bonsai manifest resolves them to. Everything else goes through the
+/// registry ([`language_id_for_ext`]) — the two vocabularies agree for the
+/// overwhelming majority of languages.
+///
+/// - `tsx` / `jsx`: tree-sitter ships separate `tsx` / `jsx` grammars, but
+///   tsserver speaks `typescript` / `javascript` (and that's the key users
+///   write in `[lsp.servers.*]`).
+/// - `h`: the manifest routes `.h` to the `cpp` grammar (the superset parses
+///   both), but a C header should attach to the `c` server.
+fn language_id_override(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "tsx" => "typescript",
+        "jsx" => "javascript",
+        "h" => "c",
+        _ => return None,
+    })
+}
+
+/// File extension → LSP language id, resolved through the hjkl-lang registry
+/// (the bonsai manifest) with a small override table layered on top.
+///
+/// Using the registry — the same source of truth that drives syntax
+/// highlighting and commentstrings — means a language added to the manifest
+/// can attach an LSP server as soon as one is configured for it, instead of
+/// silently getting highlighting only because a hand-maintained table in this
+/// file never heard of it.
+pub(super) fn language_id_for_ext(
+    directory: &hjkl_lang::LanguageDirectory,
+    ext: &str,
+) -> Option<String> {
+    let lower = ext.to_ascii_lowercase();
+    if let Some(id) = language_id_override(&lower) {
+        return Some(id.to_string());
     }
+    directory.name_for_ext(&lower)
 }
 
 /// Convert a `lsp_types::DiagnosticSeverity` to our `DiagSeverity`.
@@ -723,7 +743,7 @@ impl App {
             .and_then(|s| s.filename.as_ref())
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)?;
+            .and_then(|e| language_id_for_ext(&self.directory, e))?;
         self.lsp_state
             .iter()
             .find(|(k, _)| k.language == lang)
@@ -766,7 +786,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)
+            .and_then(|e| language_id_for_ext(&self.directory, e))
         else {
             return false;
         };
@@ -796,10 +816,7 @@ impl App {
         if ext.is_empty() {
             return "(none)".to_string();
         }
-        match language_id_for_ext(ext) {
-            Some(lang) => lang.to_string(),
-            None => ext.to_string(),
-        }
+        language_id_for_ext(&self.directory, ext).unwrap_or_else(|| ext.to_string())
     }
 
     /// Single-line comment lead for the active buffer's language (e.g. `"//"`
@@ -813,8 +830,8 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)
-            .and_then(hjkl_lang::comment::commentstring_for_lang)
+            .and_then(|e| language_id_for_ext(&self.directory, e))
+            .and_then(|lang| hjkl_lang::comment::commentstring_for_lang(&lang))
             .map(|(start, _)| start)
             .unwrap_or("//")
     }
@@ -832,7 +849,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)?;
+            .and_then(|e| language_id_for_ext(&self.directory, e))?;
         self.lsp_state
             .keys()
             .find(|k| k.language == lang)
@@ -886,7 +903,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext);
+            .and_then(|e| language_id_for_ext(&self.directory, e));
         let Some(lang) = lang else {
             return false;
         };
@@ -910,13 +927,13 @@ impl App {
         };
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let language_id = match language_id_for_ext(ext) {
+        let language_id = match language_id_for_ext(&self.directory, ext) {
             Some(id) => id,
             None => return,
         };
 
         // Only attach if there's a configured server for this language.
-        if !self.config.lsp.servers.contains_key(language_id) {
+        if !self.config.lsp.servers.contains_key(language_id.as_str()) {
             return;
         }
 
@@ -926,7 +943,7 @@ impl App {
         let text = self.slots[slot_idx].buffer().content_joined();
 
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
-        mgr.attach_buffer(buffer_id, &path, language_id, &text);
+        mgr.attach_buffer(buffer_id, &path, &language_id, &text);
     }
 
     /// Close the LSP document for `slot_idx`.
@@ -1552,7 +1569,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext)?;
+            .and_then(|e| language_id_for_ext(&self.directory, e))?;
         self.lsp_state.iter().find_map(|(key, info)| {
             (key.language == lang)
                 .then(|| info.capabilities.pointer("/completionProvider"))
@@ -1575,7 +1592,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(language_id_for_ext);
+            .and_then(|e| language_id_for_ext(&self.directory, e));
         match lang {
             Some(l) => self.lsp_state.keys().any(|k| k.language == l),
             None => false,

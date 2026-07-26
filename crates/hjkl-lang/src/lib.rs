@@ -109,6 +109,13 @@ impl LanguageDirectory {
         self.registry.name_for_path(path).map(|s| s.to_string())
     }
 
+    /// [`Self::name_for_path`] for callers that already hold a bare file
+    /// extension (no leading dot, any case) instead of a path — e.g. the LSP
+    /// glue resolving a language id for `:LspInfo` / attach.
+    pub fn name_for_ext(&self, ext: &str) -> Option<String> {
+        self.registry.name_for_ext(ext).map(|s| s.to_string())
+    }
+
     /// Async-friendly resolution by path. Returns immediately; never blocks
     /// on clone+compile. See module-level docs for the three fast paths.
     pub fn request_for_path(&self, path: &Path) -> GrammarRequest {

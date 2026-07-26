@@ -2528,3 +2528,73 @@ fn shutdown_is_idempotent() {
     app.shutdown();
     assert!(app.lsp.is_none());
 }
+
+// ── Language-id resolution (registry-backed) ─────────────────────────────
+
+/// Every extension the old hand-written inline table in `lsp_glue` knew must
+/// keep resolving to the exact same LSP language id now that the lookup runs
+/// through the hjkl-lang registry plus the small override table. A drift here
+/// silently detaches a language from its configured server.
+#[test]
+fn language_id_pins_legacy_extension_table() {
+    let dir = hjkl_lang::LanguageDirectory::new().expect("language directory");
+    let legacy: &[(&str, &str)] = &[
+        ("rs", "rust"),
+        ("ts", "typescript"),
+        ("tsx", "typescript"),
+        ("js", "javascript"),
+        ("jsx", "javascript"),
+        ("py", "python"),
+        ("go", "go"),
+        ("c", "c"),
+        ("h", "c"),
+        ("cpp", "cpp"),
+        ("cc", "cpp"),
+        ("cxx", "cpp"),
+        ("hpp", "cpp"),
+        ("lua", "lua"),
+        ("toml", "toml"),
+        ("json", "json"),
+        ("md", "markdown"),
+    ];
+    for (ext, want) in legacy {
+        assert_eq!(
+            crate::app::lsp_glue::language_id_for_ext(&dir, ext).as_deref(),
+            Some(*want),
+            "language id for .{ext} drifted from the legacy table"
+        );
+    }
+
+    // Extension case is normalized, matching the registry's own path lookup.
+    assert_eq!(
+        crate::app::lsp_glue::language_id_for_ext(&dir, "RS").as_deref(),
+        Some("rust")
+    );
+
+    // A genuinely unknown extension still resolves to nothing.
+    assert_eq!(
+        crate::app::lsp_glue::language_id_for_ext(&dir, "zzznope"),
+        None
+    );
+}
+
+/// The point of routing through the registry: extensions the manifest knows
+/// but the frozen inline table never listed now resolve, so configuring
+/// `[lsp.servers.bash]` (etc.) actually attaches.
+#[test]
+fn language_id_resolves_extensions_the_legacy_table_lacked() {
+    let dir = hjkl_lang::LanguageDirectory::new().expect("language directory");
+    for (ext, want) in [
+        ("sh", "bash"),
+        ("yaml", "yaml"),
+        ("rb", "ruby"),
+        ("java", "java"),
+        ("zig", "zig"),
+    ] {
+        assert_eq!(
+            crate::app::lsp_glue::language_id_for_ext(&dir, ext).as_deref(),
+            Some(want),
+            "registry-known .{ext} must resolve"
+        );
+    }
+}

@@ -2910,12 +2910,12 @@ impl App {
             None => lines.push("Active buffer: [No Name] — no LSP attach possible".into()),
             Some(p) => {
                 let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("(none)");
-                let lang = super::lsp_glue::language_id_for_ext(ext);
+                let lang = super::lsp_glue::language_id_for_ext(&self.directory, ext);
                 lines.push(format!("Active buffer: {} (ext: {ext})", p.display()));
                 match lang {
                     None => lines.push(format!("  → no language id mapped for .{ext} extension")),
                     Some(lang_id) => {
-                        let configured = self.config.lsp.servers.contains_key(lang_id);
+                        let configured = self.config.lsp.servers.contains_key(lang_id.as_str());
                         lines.push(format!("  → language: {lang_id}"));
                         if !configured {
                             lines.push(format!(
@@ -2925,7 +2925,7 @@ impl App {
                         } else {
                             lines.push(format!(
                                 "  → server configured: {}",
-                                self.config.lsp.servers[lang_id].command
+                                self.config.lsp.servers[lang_id.as_str()].command
                             ));
                         }
                     }

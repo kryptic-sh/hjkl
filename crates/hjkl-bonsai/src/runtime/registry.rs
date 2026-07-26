@@ -57,7 +57,15 @@ impl GrammarRegistry {
     /// Resolve a path to the canonical language name (without returning the
     /// full spec). Useful for callers that just want the lookup key.
     pub fn name_for_path(&self, path: &Path) -> Option<&str> {
-        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+        let ext = path.extension()?.to_str()?;
+        self.name_for_ext(ext)
+    }
+
+    /// Resolve a bare file extension (no leading dot, any case) to the
+    /// canonical language name. Same lookup [`Self::name_for_path`] performs,
+    /// for callers that already carry an extension string and have no path.
+    pub fn name_for_ext(&self, ext: &str) -> Option<&str> {
+        let ext = ext.to_ascii_lowercase();
         self.by_ext.get(&ext).map(|s| s.as_str())
     }
 
