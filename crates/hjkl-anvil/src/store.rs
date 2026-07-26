@@ -221,10 +221,8 @@ pub fn write_rev_in(paths: &AnvilPaths, name: &str, rev: &RevSidecar) -> Result<
     std::fs::create_dir_all(&pkg_dir)?;
 
     let target = rev_file_in(paths, name)?;
-    // Write to a staging file alongside the target, then rename atomically.
-    let staging = target.with_extension("rev.tmp");
-    std::fs::write(&staging, rev.to_string())?;
-    std::fs::rename(&staging, &target)?;
+    let bytes = rev.to_string().into_bytes();
+    hjkl_fs::write_atomic(&target, &bytes, &hjkl_fs::WriteOptions::default())?;
     Ok(())
 }
 
@@ -358,15 +356,14 @@ impl ChecksumSidecar {
         Self::read_in(&AnvilPaths::from_xdg()?, tool)
     }
 
-    /// Write the checksum sidecar for `tool` atomically (tmpfile + rename).
+    /// Write the checksum sidecar for `tool` atomically.
     pub fn write_in(&self, paths: &AnvilPaths, tool: &str) -> Result<(), StoreError> {
         // Same escape guard as `read` — this path is written to.
         validate_name(tool)?;
         let dir = checksums_dir_in(paths)?;
         let target = dir.join(format!("{tool}.toml"));
-        let staging = target.with_extension("toml.tmp");
-        std::fs::write(&staging, self.to_toml())?;
-        std::fs::rename(&staging, &target)?;
+        let bytes = self.to_toml().into_bytes();
+        hjkl_fs::write_atomic(&target, &bytes, &hjkl_fs::WriteOptions::default())?;
         Ok(())
     }
 
@@ -647,9 +644,7 @@ mod tests {
             sha256: String::new(),
         };
         let target = pkg_dir.join(".rev");
-        let staging = target.with_extension("rev.tmp");
-        std::fs::write(&staging, rev.to_string()).unwrap();
-        std::fs::rename(&staging, &target).unwrap();
+        std::fs::write(&target, rev.to_string()).unwrap();
 
         // Read back manually
         let content = std::fs::read_to_string(&target).unwrap();
@@ -821,11 +816,9 @@ mod tests {
             "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567",
         );
 
-        // Manually write to the tmp dir (same logic as ChecksumSidecar::write).
+        // Manually write to the tmp dir.
         let target = tmp.path().join(format!("{tool}.toml"));
-        let staging = target.with_extension("toml.tmp");
-        std::fs::write(&staging, sidecar.to_toml()).unwrap();
-        std::fs::rename(&staging, &target).unwrap();
+        std::fs::write(&target, sidecar.to_toml()).unwrap();
 
         // Read back manually.
         let content = std::fs::read_to_string(&target).unwrap();
