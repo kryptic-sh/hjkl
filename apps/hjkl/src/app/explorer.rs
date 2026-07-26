@@ -439,6 +439,128 @@ pub(crate) struct ExplorerPane {
     pub redo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
 }
 
+// ── Render-derivation cache ────────────────────────────────────────────────────
+
+/// Per-frame handle to the explorer's text-derived render data (#312 / P7).
+///
+/// Every field is an `Arc` clone of the cached build, so handing one out per
+/// frame is O(1). Rebuilt only when the explorer buffer's `dirty_gen` (or the
+/// tree root) changes — see [`ExplorerRenderCache`].
+#[derive(Debug, Clone)]
+pub(crate) struct ExplorerRenderData {
+    /// Whole-buffer text (the buffer's own `dirty_gen`-cached `Arc<String>`).
+    pub text: std::sync::Arc<String>,
+    /// Byte range `[start, end)` of every buffer row, with `split('\n')`
+    /// semantics — index N is buffer row N, including the trailing empty row
+    /// a document-final newline produces.
+    pub line_spans: std::sync::Arc<Vec<(usize, usize)>>,
+    /// One conceal per row carrying an `<US><id>` tail, hiding the tail.
+    pub conceals: std::sync::Arc<Vec<hjkl_buffer_tui::Conceal>>,
+    /// Tree layout parsed from the live buffer text, 1:1 with buffer rows.
+    /// Empty when the explorer pane is closed (no root to resolve against).
+    pub overlay_nodes: std::sync::Arc<Vec<Option<ExplorerNode>>>,
+}
+
+impl ExplorerRenderData {
+    /// The text of buffer row `row`, with `str::lines()` semantics (a single
+    /// trailing `\r` stripped). `None` past the last row.
+    ///
+    /// Replaces the old `text.lines().nth(row)` walk, which was O(row) per
+    /// call and therefore O(viewport × N) per frame.
+    pub fn line(&self, row: usize) -> Option<&str> {
+        let &(start, end) = self.line_spans.get(row)?;
+        let line = &self.text[start..end];
+        Some(line.strip_suffix('\r').unwrap_or(line))
+    }
+}
+
+/// `dirty_gen`-keyed cache for the explorer's text-derived render data.
+///
+/// The explorer pane redoes the same whole-buffer passes on every frame while
+/// visible (a common steady state): a rope→String copy, a conceal per line, a
+/// full re-parse of the tree text, and an O(row) line walk per visible row.
+/// None of that depends on anything but the buffer text (plus the tree root),
+/// and the text only changes through `set_content` / an edit — both of which
+/// bump `dirty_gen`. So key the whole bundle on `(buffer_id, dirty_gen, root)`
+/// and rebuild only then. The `buffer_id` is in the key because closing and
+/// reopening the explorer builds a FRESH slot whose `dirty_gen` restarts from
+/// zero — without it a reopen at the same root could hit data built from the
+/// previous pane's text.
+///
+/// Deliberately NOT cached here (they change without a text edit, so they stay
+/// per-frame in `render.rs`): git status colors, the `expanded` set that drives
+/// the dir icon, folds, cursor/selection.
+#[derive(Debug, Default)]
+pub(crate) struct ExplorerRenderCache {
+    /// `(buffer id, dirty_gen, tree root)` the cached data was built from.
+    key: Option<(hjkl_lsp::BufferId, u64, Option<PathBuf>)>,
+    data: Option<ExplorerRenderData>,
+}
+
+impl ExplorerRenderCache {
+    /// Return the render data for `text` (the buffer's `dirty_gen`-cached
+    /// `Arc<String>`), rebuilding it only when the explorer buffer, its
+    /// `dirty_gen`, or the tree root differs from the cached key.
+    pub(crate) fn get(
+        &mut self,
+        buffer_id: hjkl_lsp::BufferId,
+        dirty_gen: u64,
+        root: Option<&Path>,
+        text: std::sync::Arc<String>,
+    ) -> ExplorerRenderData {
+        if let (Some((cached_id, cached_gen, cached_root)), Some(data)) = (&self.key, &self.data)
+            && *cached_id == buffer_id
+            && *cached_gen == dirty_gen
+            && cached_root.as_deref() == root
+        {
+            return data.clone();
+        }
+
+        // ── Line index + conceals, one pass over the text ────────────────────
+        //
+        // Conceals hide the `<US><id>` tail on each non-root line: the range
+        // `[US byte .. end of line]` with an empty replacement. Byte offsets are
+        // line-relative, matching the old `text.lines().enumerate()` build (a
+        // trailing empty row carries no `US`, so it produces no conceal either
+        // way).
+        use super::explorer_reconcile::ID_SEP;
+        let mut line_spans: Vec<(usize, usize)> = Vec::new();
+        let mut conceals: Vec<hjkl_buffer_tui::Conceal> = Vec::new();
+        let mut pos = 0usize;
+        for raw in text.split('\n') {
+            let start = pos;
+            let end = pos + raw.len();
+            pos = end + 1; // skip the '\n' separator
+            let row = line_spans.len();
+            line_spans.push((start, end));
+            let line = raw.strip_suffix('\r').unwrap_or(raw);
+            if let Some(us_byte) = line.find(ID_SEP) {
+                conceals.push(hjkl_buffer_tui::Conceal {
+                    row,
+                    start_byte: us_byte,
+                    end_byte: line.len(),
+                    replacement: String::new(),
+                });
+            }
+        }
+
+        let overlay_nodes = match root {
+            Some(r) => overlay_nodes_from_buffer(&text, r),
+            None => Vec::new(),
+        };
+
+        let data = ExplorerRenderData {
+            text,
+            line_spans: std::sync::Arc::new(line_spans),
+            conceals: std::sync::Arc::new(conceals),
+            overlay_nodes: std::sync::Arc::new(overlay_nodes),
+        };
+        self.key = Some((buffer_id, dirty_gen, root.map(Path::to_path_buf)));
+        self.data = Some(data.clone());
+        data
+    }
+}
+
 // ── nodes_from_buffer ──────────────────────────────────────────────────────────
 
 /// Derive the render-tree (`Vec<ExplorerNode>`) from the current buffer text.

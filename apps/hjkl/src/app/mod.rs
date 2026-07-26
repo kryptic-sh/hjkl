@@ -251,6 +251,11 @@ pub struct App {
     pub picker: Option<crate::picker::Picker>,
     /// Left file-explorer window (#55). `None` when closed; closed on launch.
     pub(crate) explorer: Option<explorer::ExplorerPane>,
+    /// `dirty_gen`-keyed cache of the explorer's text-derived render data
+    /// (whole-buffer text, line index, conceals, parsed overlay tree). Without
+    /// it the renderer redid all four whole-buffer passes on every frame the
+    /// explorer was visible. See [`explorer::ExplorerRenderCache`].
+    pub(crate) explorer_render_cache: explorer::ExplorerRenderCache,
     /// Left dock (#63 Phase A) — the window-management-tree-external home
     /// for the explorer window when open. `Some` exactly when `explorer` is
     /// `Some` (kept in lockstep by `explorer::open_explorer` /
@@ -2312,6 +2317,7 @@ impl App {
             search_field: None,
             picker: None,
             explorer: None,
+            explorer_render_cache: explorer::ExplorerRenderCache::default(),
             left_dock: None,
             bottom_dock: None,
             config_path: None,

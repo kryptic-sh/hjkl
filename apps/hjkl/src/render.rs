@@ -821,6 +821,34 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // Explorer render data (whole-buffer text, per-row byte index, conceals,
+    // parsed overlay tree) — shared by the conceal pass and the glyph/color
+    // overlay far below, and cached against the explorer buffer's `dirty_gen`
+    // (P7): all four are whole-buffer passes that used to rerun on EVERY frame
+    // the explorer was visible. `content_joined()` (not `as_string()`) so even
+    // the rope→String copy hits the buffer's own per-`dirty_gen` cache.
+    // Bound HERE — the cache lookup needs `&mut app`, so it must run before the
+    // long-lived immutable `settings()` / `buffer_spans()` borrows below. The
+    // returned handle is `Arc`-based and holds no borrow of `app`.
+    let explorer_render: Option<crate::app::explorer::ExplorerRenderData> =
+        if is_explorer_slot && !app.debug_mode {
+            let (buffer_id, dirty_gen, text) = {
+                let s = &app.slots()[slot_idx];
+                (
+                    s.buffer_id,
+                    s.buffer().dirty_gen(),
+                    s.buffer().content_joined(),
+                )
+            };
+            let root = app.explorer.as_ref().map(|ep| ep.tree.root.clone());
+            Some(
+                app.explorer_render_cache
+                    .get(buffer_id, dirty_gen, root.as_deref(), text),
+            )
+        } else {
+            None
+        };
+
     // P7: populate the engine's per-row hlsearch match cache for exactly the
     // rows this frame will paint, so `BufferView` reads cached byte ranges
     // instead of re-running the search regex on every visible line every frame.
@@ -1194,39 +1222,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     // ── Explorer conceals: hide the <US><id> tail on each non-root line ─────
     //
-    // When this slot is the explorer and debug_mode is off, build one Conceal
+    // When this slot is the explorer and debug_mode is off, there is one Conceal
     // per buffer line that contains a Unit Separator (U+001F). The conceal
     // covers [byte of US .. end of line] with an empty replacement so the tail
     // is invisible. The buffer text itself is unchanged; only the rendered cells
     // differ. In debug_mode the raw ids are shown for diagnostics.
-    // Whole-buffer text copy shared by the explorer conceal pass here and the
-    // glyph-overlay pass below — computed ONCE per frame (#312) instead of a
-    // second `as_string()` (a full rope→String copy) in the overlay.
-    let explorer_buf_text: Option<String> = if is_explorer_slot && !app.debug_mode {
-        Some(app.slots()[slot_idx].buffer().as_string())
-    } else {
-        None
-    };
-
-    let explorer_conceals: Vec<hjkl_buffer_tui::Conceal> =
-        if let Some(buf_text) = explorer_buf_text.as_deref() {
-            use crate::app::explorer_reconcile::ID_SEP;
-            buf_text
-                .lines()
-                .enumerate()
-                .filter_map(|(row, line)| {
-                    let us_byte = line.find(ID_SEP)?;
-                    Some(hjkl_buffer_tui::Conceal {
-                        row,
-                        start_byte: us_byte,
-                        end_byte: line.len(),
-                        replacement: String::new(),
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    // Built (with the rest of the explorer render data) above.
+    let explorer_conceals: &[hjkl_buffer_tui::Conceal] = explorer_render
+        .as_ref()
+        .map(|d| d.conceals.as_slice())
+        .unwrap_or(&[]);
 
     // Diff-mode filler plan (#250): blank rows that keep the two diff windows
     // aligned. Built once and reused by the renderer, the cursor placement, and
@@ -1272,7 +1277,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         gutter,
         search_bg,
         signs: &visible_signs,
-        conceals: &explorer_conceals,
+        conceals: explorer_conceals,
         spans: buffer_spans,
         search_pattern,
         search_ranges,
@@ -1338,6 +1343,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         && !app.debug_mode
         && let Some(ref pane) = app.explorer
         && pane.win_id == win_id
+        && let Some(ref ex_render) = explorer_render
     {
         let buf = frame.buffer_mut();
         let screen_top = area.y;
@@ -1370,17 +1376,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             } else {
                 Vec::new()
             };
-        // Reuse the whole-buffer text computed once above for the conceal pass
-        // (#312) rather than a second `as_string()` copy.
-        let buf_text: &str = explorer_buf_text.as_deref().unwrap_or("");
-
         // Layout (icons, guides, depth) is derived from the LIVE buffer text —
         // NOT the last-reconciled `pane.tree.nodes` — so glyphs stay aligned
         // while the buffer is being edited (a mid-edit `o`/`O` shifts rows
         // before the Normal-mode reconcile rebuilds the tree). `None` slots are
-        // blank lines (e.g. a fresh open-line awaiting a name).
-        let overlay_nodes =
-            crate::app::explorer::overlay_nodes_from_buffer(buf_text, &pane.tree.root);
+        // blank lines (e.g. a fresh open-line awaiting a name). Parsed once per
+        // `dirty_gen` (P7) rather than once per frame; the parse is a pure
+        // function of the buffer text plus the tree root, both of which are the
+        // cache key.
+        let overlay_nodes = &ex_render.overlay_nodes;
 
         // Git status follows the PATH, not the row: resolve each row's color
         // from the reconciled tree's status map (which carries rollup + the
@@ -1559,9 +1563,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // leaving the rest mis-colored. The trailing `/` on a dir name is
             // part of the line text, so it's counted naturally.
             let indent_chars = name_col.saturating_sub(text_x) as usize;
-            let name_len = buf_text
-                .lines()
-                .nth(buf_row)
+            let name_len = ex_render
+                .line(buf_row)
                 .map(|line| {
                     line.chars()
                         .skip(indent_chars)
@@ -3281,6 +3284,101 @@ mod tests {
             "every cell of the name must share the filetype color (no uncolored/white \
              cells); icon_fg={icon_fg:?} name fgs={fgs:?}"
         );
+    }
+
+    /// The explorer's text-derived render data is cached against the buffer's
+    /// `dirty_gen` (P7). A reconcile that ADDS an entry must invalidate it: the
+    /// new row has to get its overlay glyph/color (from `overlay_nodes`) and its
+    /// `<US><id>` tail has to be concealed (from `conceals`). A stale cache
+    /// shows up as an unstyled, un-concealed row.
+    #[test]
+    fn explorer_render_cache_invalidates_on_reconcile() {
+        use crate::app::App;
+        use crate::keymap_actions::AppAction;
+        use hjkl_engine::BufferEdit;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = App::new(Some("existing.txt".into()), false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Two frames: window rects settle AND the cache gets populated for the
+        // pre-reconcile buffer generation.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+
+        let find_run = |buf: &ratatui::buffer::Buffer, needle: &str| -> Option<(u16, u16)> {
+            let chars: Vec<String> = needle.chars().map(|c| c.to_string()).collect();
+            let n = chars.len() as u16;
+            // Skip row 0: the tab/buffer bar also spells out file names.
+            for y in 1..24u16 {
+                for x in 0..(80 - n) {
+                    if (0..n).all(|i| {
+                        buf.cell((x + i, y)).map(|c| c.symbol()) == Some(chars[i as usize].as_str())
+                    }) {
+                        return Some((x, y));
+                    }
+                }
+            }
+            None
+        };
+
+        assert!(
+            find_run(terminal.backend().buffer(), "newfile.rs").is_none(),
+            "newfile.rs must not exist before the reconcile"
+        );
+
+        // Add a root-depth entry and reconcile — this creates the file on disk
+        // and rewrites the explorer buffer (new `dirty_gen`).
+        let idx = app
+            .slots()
+            .iter()
+            .position(|s| s.is_explorer)
+            .expect("explorer slot");
+        let cur = app.slots()[idx].buffer().as_string();
+        let newtext = format!("{cur}\n  newfile.rs");
+        BufferEdit::replace_all(app.slots_mut()[idx].buffer_mut(), &newtext);
+        app.reconcile_window_editors();
+        app.maybe_reconcile_explorer();
+
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let (sx, sy) = find_run(&buf, "newfile.rs")
+            .expect("the reconciled entry must render (stale cached tree otherwise)");
+
+        // Overlay data rebuilt: the icon two cells left of the name is painted
+        // and carries a definite fg. A stale `overlay_nodes` has no slot for
+        // this row, so the overlay loop skips it entirely.
+        let icon = buf.cell((sx - 2, sy)).expect("icon cell");
+        assert_ne!(
+            icon.symbol().trim(),
+            "",
+            "new row must get its overlay icon glyph"
+        );
+        assert_ne!(
+            icon.fg,
+            Color::Reset,
+            "new row's icon must get its filetype color"
+        );
+
+        // Conceals rebuilt: the `<US><id>` tail after the name is hidden.
+        let n = "newfile.rs".chars().count() as u16;
+        for i in 0..4u16 {
+            let sym = buf
+                .cell((sx + n + i, sy))
+                .map(|c| c.symbol().to_string())
+                .unwrap_or_default();
+            assert!(
+                sym.trim().is_empty(),
+                "the id tail after the new entry must stay concealed, saw {sym:?} at +{i}"
+            );
+        }
     }
 
     /// `:diffsplit` paints DiffChange line bands and DiffText char highlights
