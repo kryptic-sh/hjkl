@@ -16,6 +16,10 @@ readme = "README.md"
 hjkl-engine.workspace = true
 hjkl-buffer.workspace = true
 hjkl-lang.workspace = true
+# `:r <file>` needs symlink-safe confinement (`resolve_under`) when the RPC
+# filesystem policy is active — a lexical check alone lets a symlink out of the
+# working directory through.
+hjkl-fs.workspace = true
 # `:jumps` reads the vim jumplist, which lives on the vim discipline rather
 # than the engine core (#267). hjkl-ex implements vim ex-commands (`:jumps`,
 # `:marks`, `:normal`), so depending on the vim discipline is honest layering,

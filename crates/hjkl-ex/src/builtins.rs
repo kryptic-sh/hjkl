@@ -136,14 +136,34 @@ fn read_handler<H: Host>(
         }
     } else {
         // Path reachable from `:r` in embed/nvim-api mode. The lexical
-        // check here is a cheap first gate; full symlink-safe confinement
-        // (hjkl_fs::resolve_under) is applied at the app layer before
-        // the ex dispatcher runs, so paths reaching this point have
-        // already been vetted when the FS policy is active.
+        // `check_fs_path` is the cheap first gate — it rejects obvious
+        // escapes (`..`, absolute paths) without touching the filesystem,
+        // but it passes any relative path whose components merely *spell*
+        // as staying inside. `hjkl_fs::resolve_under` supplies the actual
+        // symlink-safe confinement while the FS policy is active: it
+        // resolves the path and refuses one that lands outside the cwd.
+        // Nothing at the app layer intercepts `:r`, so this is the only
+        // place the check can happen.
         if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(path)) {
             return Some(ExEffect::Error(e));
         }
-        match std::fs::read_to_string(path) {
+        let target = if hjkl_engine::policy::fs_restricted() {
+            let cwd = match std::env::current_dir() {
+                Ok(c) => c,
+                Err(e) => {
+                    return Some(ExEffect::Error(format!(
+                        "cannot read `{path}`: no working directory: {e}"
+                    )));
+                }
+            };
+            match hjkl_fs::resolve_under(&cwd, std::path::Path::new(path)) {
+                Ok(resolved) => resolved,
+                Err(e) => return Some(ExEffect::Error(format!("cannot read `{path}`: {e}"))),
+            }
+        } else {
+            std::path::PathBuf::from(path)
+        };
+        match std::fs::read_to_string(&target) {
             Ok(s) => s,
             Err(e) => return Some(ExEffect::Error(format!("cannot read `{path}`: {e}"))),
         }

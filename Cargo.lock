@@ -1556,6 +1556,7 @@ version = "0.37.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
+ "hjkl-fs",
  "hjkl-lang",
  "hjkl-vim",
  "regex",
