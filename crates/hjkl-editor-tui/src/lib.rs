@@ -1,7 +1,7 @@
 //! # hjkl-editor-tui
 //!
 //! Adapters between [`hjkl_engine`]'s SPEC types and the
-//! [`ratatui`] / [`crossterm`] ecosystems.
+//! [`ratatui`] ecosystem.
 //!
 //! Engine types are deliberately UI-agnostic so non-terminal hosts
 //! (buffr's wasm-flavored renderer, future GUI shells) can consume
@@ -18,8 +18,9 @@
 //! - [`engine_to_ratatui_style`] / [`ratatui_to_engine_style`]
 //! - [`engine_to_ratatui_color`] / [`ratatui_to_engine_color`]
 //! - [`engine_to_ratatui_attrs`] / [`ratatui_to_engine_attrs`]
-//! - [`crossterm_key_event_to_input`] (behind `crossterm` feature, on
-//!   by default)
+//!
+//! Key-event bridging lives in `hjkl-engine-tui` (`crossterm_to_input`);
+//! this crate's own copy was deleted as dead code.
 //!
 //! Lossless within the styles each library can represent. Ratatui-only
 //! colors that the engine doesn't model (indexed-256, named) flatten to
