@@ -19,12 +19,18 @@
 //! - [`engine_to_ratatui_color`] / [`ratatui_to_engine_color`]
 //! - [`engine_to_ratatui_attrs`] / [`ratatui_to_engine_attrs`]
 //!
+//! These are one-line aliases for the canonical implementations in
+//! [`hjkl_engine_tui`], which owns the single engine↔ratatui color and
+//! attribute tables for the workspace. The names are kept so existing
+//! callers don't have to switch crates.
+//!
 //! Key-event bridging lives in `hjkl-engine-tui` (`crossterm_to_input`);
 //! this crate's own copy was deleted as dead code.
 //!
 //! Lossless within the styles each library can represent. Ratatui-only
 //! colors that the engine doesn't model (indexed-256, named) flatten to
-//! their nearest RGB approximation in the engine direction.
+//! their nearest RGB approximation in the engine direction — indexed
+//! colors resolve through the real xterm-256 palette.
 #![forbid(unsafe_code)]
 
 pub mod form;
@@ -48,141 +54,37 @@ pub(crate) fn col_span_width(line: &str, from_col: usize, to_col: usize) -> usiz
 }
 
 // ── Style ──
+//
+// All six conversions delegate to `hjkl_engine_tui`, which holds the
+// single implementation (and the only copy of the ANSI/xterm-256 color
+// table) for the workspace.
 
 pub fn engine_to_ratatui_style(s: Style) -> RStyle {
-    let mut out = RStyle::default();
-    if let Some(fg) = s.fg {
-        out = out.fg(engine_to_ratatui_color(fg));
-    }
-    if let Some(bg) = s.bg {
-        out = out.bg(engine_to_ratatui_color(bg));
-    }
-    out = out.add_modifier(engine_to_ratatui_attrs(s.attrs));
-    out
+    hjkl_engine_tui::style_to_ratatui(s)
 }
 
 pub fn ratatui_to_engine_style(s: RStyle) -> Style {
-    Style {
-        fg: s.fg.map(ratatui_to_engine_color),
-        bg: s.bg.map(ratatui_to_engine_color),
-        attrs: ratatui_to_engine_attrs(s.add_modifier),
-    }
+    hjkl_engine_tui::style_from_ratatui(s)
 }
 
 // ── Color ──
 
 pub fn engine_to_ratatui_color(c: Color) -> RColor {
-    RColor::Rgb(c.0, c.1, c.2)
+    hjkl_engine_tui::color_to_ratatui(c)
 }
 
 pub fn ratatui_to_engine_color(c: RColor) -> Color {
-    match c {
-        RColor::Rgb(r, g, b) => Color(r, g, b),
-        RColor::Indexed(i) => indexed_to_rgb(i),
-        // Named ANSI colors flatten to a sensible RGB; precise mapping
-        // is theme-dependent and lives in the host.
-        RColor::Black => Color(0, 0, 0),
-        RColor::Red => Color(205, 49, 49),
-        RColor::Green => Color(13, 188, 121),
-        RColor::Yellow => Color(229, 229, 16),
-        RColor::Blue => Color(36, 114, 200),
-        RColor::Magenta => Color(188, 63, 188),
-        RColor::Cyan => Color(17, 168, 205),
-        RColor::Gray => Color(229, 229, 229),
-        RColor::DarkGray => Color(102, 102, 102),
-        RColor::LightRed => Color(241, 76, 76),
-        RColor::LightGreen => Color(35, 209, 139),
-        RColor::LightYellow => Color(245, 245, 67),
-        RColor::LightBlue => Color(59, 142, 234),
-        RColor::LightMagenta => Color(214, 112, 214),
-        RColor::LightCyan => Color(41, 184, 219),
-        RColor::White => Color(255, 255, 255),
-        RColor::Reset => Color(0, 0, 0),
-    }
-}
-
-/// xterm-256 palette indexes 0–15 use the named colors; 16–231 cover
-/// the 6×6×6 RGB cube; 232–255 are the grayscale ramp.
-fn indexed_to_rgb(i: u8) -> Color {
-    if i < 16 {
-        let r: RColor = match i {
-            0 => RColor::Black,
-            1 => RColor::Red,
-            2 => RColor::Green,
-            3 => RColor::Yellow,
-            4 => RColor::Blue,
-            5 => RColor::Magenta,
-            6 => RColor::Cyan,
-            7 => RColor::Gray,
-            8 => RColor::DarkGray,
-            9 => RColor::LightRed,
-            10 => RColor::LightGreen,
-            11 => RColor::LightYellow,
-            12 => RColor::LightBlue,
-            13 => RColor::LightMagenta,
-            14 => RColor::LightCyan,
-            _ => RColor::White,
-        };
-        return ratatui_to_engine_color(r);
-    }
-    if (16..=231).contains(&i) {
-        let idx = i - 16;
-        let r = idx / 36;
-        let g = (idx / 6) % 6;
-        let b = idx % 6;
-        let comp = |v| if v == 0 { 0u8 } else { 55 + v * 40 };
-        return Color(comp(r), comp(g), comp(b));
-    }
-    let v = 8 + (i - 232) * 10;
-    Color(v, v, v)
+    hjkl_engine_tui::color_from_ratatui(c)
 }
 
 // ── Attrs ──
 
 pub fn engine_to_ratatui_attrs(a: Attrs) -> RMod {
-    let mut m = RMod::empty();
-    if a.contains(Attrs::BOLD) {
-        m |= RMod::BOLD;
-    }
-    if a.contains(Attrs::ITALIC) {
-        m |= RMod::ITALIC;
-    }
-    if a.contains(Attrs::UNDERLINE) {
-        m |= RMod::UNDERLINED;
-    }
-    if a.contains(Attrs::REVERSE) {
-        m |= RMod::REVERSED;
-    }
-    if a.contains(Attrs::DIM) {
-        m |= RMod::DIM;
-    }
-    if a.contains(Attrs::STRIKE) {
-        m |= RMod::CROSSED_OUT;
-    }
-    m
+    hjkl_engine_tui::attrs_to_ratatui(a)
 }
 
 pub fn ratatui_to_engine_attrs(m: RMod) -> Attrs {
-    let mut a = Attrs::empty();
-    if m.contains(RMod::BOLD) {
-        a |= Attrs::BOLD;
-    }
-    if m.contains(RMod::ITALIC) {
-        a |= Attrs::ITALIC;
-    }
-    if m.contains(RMod::UNDERLINED) {
-        a |= Attrs::UNDERLINE;
-    }
-    if m.contains(RMod::REVERSED) {
-        a |= Attrs::REVERSE;
-    }
-    if m.contains(RMod::DIM) {
-        a |= Attrs::DIM;
-    }
-    if m.contains(RMod::CROSSED_OUT) {
-        a |= Attrs::STRIKE;
-    }
-    a
+    hjkl_engine_tui::attrs_from_ratatui(m)
 }
 
 #[cfg(test)]
@@ -214,6 +116,112 @@ mod tests {
     fn indexed_into_engine_color() {
         let c = ratatui_to_engine_color(RColor::Indexed(1));
         assert_eq!(c, EColor(205, 49, 49));
+    }
+
+    /// Every ratatui color the engine can be handed must convert
+    /// identically through this crate's names and `hjkl-engine-tui`'s —
+    /// they are one implementation, and a form widget must not disagree
+    /// with a syntax span about the same color.
+    #[test]
+    fn conversions_agree_with_engine_tui() {
+        let named = [
+            RColor::Reset,
+            RColor::Black,
+            RColor::Red,
+            RColor::Green,
+            RColor::Yellow,
+            RColor::Blue,
+            RColor::Magenta,
+            RColor::Cyan,
+            RColor::Gray,
+            RColor::DarkGray,
+            RColor::LightRed,
+            RColor::LightGreen,
+            RColor::LightYellow,
+            RColor::LightBlue,
+            RColor::LightMagenta,
+            RColor::LightCyan,
+            RColor::White,
+        ];
+        // 0–15 named block, 16–231 cube, 232–255 gray ramp, plus edges.
+        let indexed = [0u8, 1, 7, 8, 15, 16, 17, 100, 196, 231, 232, 244, 255];
+        let rgb = [
+            RColor::Rgb(0, 0, 0),
+            RColor::Rgb(123, 45, 67),
+            RColor::Rgb(255, 255, 255),
+        ];
+
+        let cases: Vec<RColor> = named
+            .into_iter()
+            .chain(indexed.into_iter().map(RColor::Indexed))
+            .chain(rgb)
+            .collect();
+
+        for c in cases {
+            // ratatui → engine, color level.
+            assert_eq!(
+                ratatui_to_engine_color(c),
+                hjkl_engine_tui::color_from_ratatui(c),
+                "color_from_ratatui disagrees for {c:?}"
+            );
+            // ratatui → engine, style level (fg + bg + modifiers).
+            let rs = RStyle::default()
+                .fg(c)
+                .bg(c)
+                .add_modifier(RMod::BOLD | RMod::DIM | RMod::CROSSED_OUT);
+            assert_eq!(
+                ratatui_to_engine_style(rs),
+                hjkl_engine_tui::style_from_ratatui(rs),
+                "style_from_ratatui disagrees for {c:?}"
+            );
+            // engine → ratatui, both levels, from the converted value.
+            let ec = ratatui_to_engine_color(c);
+            assert_eq!(
+                engine_to_ratatui_color(ec),
+                hjkl_engine_tui::color_to_ratatui(ec),
+            );
+            let es = ratatui_to_engine_style(rs);
+            assert_eq!(
+                engine_to_ratatui_style(es),
+                hjkl_engine_tui::style_to_ratatui(es),
+            );
+        }
+
+        // Attrs, every modeled bit.
+        let all = Attrs::BOLD
+            | Attrs::ITALIC
+            | Attrs::UNDERLINE
+            | Attrs::REVERSE
+            | Attrs::DIM
+            | Attrs::STRIKE;
+        assert_eq!(
+            engine_to_ratatui_attrs(all),
+            hjkl_engine_tui::attrs_to_ratatui(all)
+        );
+        let m = engine_to_ratatui_attrs(all);
+        assert_eq!(
+            ratatui_to_engine_attrs(m),
+            hjkl_engine_tui::attrs_from_ratatui(m)
+        );
+    }
+
+    /// Indexed colors resolve through the real xterm-256 palette, not a
+    /// black flatten — the drift `hjkl-engine-tui` used to have.
+    #[test]
+    fn indexed_uses_real_palette_on_both_entry_points() {
+        // 16 = cube origin (0,0,0) is genuinely black; 21 = pure blue,
+        // 196 = pure red, 244 = mid gray ramp — all non-black.
+        for (i, want) in [
+            (21u8, EColor(0, 0, 255)),
+            (196, EColor(255, 0, 0)),
+            (244, EColor(128, 128, 128)),
+        ] {
+            assert_eq!(ratatui_to_engine_color(RColor::Indexed(i)), want);
+            assert_eq!(
+                hjkl_engine_tui::style_from_ratatui(RStyle::default().fg(RColor::Indexed(i))).fg,
+                Some(want)
+            );
+        }
     }
 
     #[test]

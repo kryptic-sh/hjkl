@@ -14,6 +14,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-engine.workspace = true
+hjkl-engine-tui.workspace = true
 hjkl-form.workspace = true
 ratatui = "0.30"
 unicode-width.workspace = true

@@ -1516,6 +1516,7 @@ name = "hjkl-editor-tui"
 version = "0.37.1"
 dependencies = [
  "hjkl-engine",
+ "hjkl-engine-tui",
  "hjkl-form",
  "ratatui",
  "unicode-width",
