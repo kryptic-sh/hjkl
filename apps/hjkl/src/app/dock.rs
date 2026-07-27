@@ -297,8 +297,16 @@ impl super::App {
     /// count — the qf dock slot needs the exact same treatment the explorer
     /// slot already gets, or it would show up as a fake "real" buffer the
     /// moment `:copen` creates it.
+    /// The command-line window (`q:` / `q/`) is included too: it is a
+    /// `LayoutTree` leaf rather than a dock, but it appends a scratch slot the
+    /// same way, and that slot is no more a user buffer than the explorer's.
     pub(crate) fn slot_is_special(&self, idx: usize) -> bool {
-        self.slots.get(idx).is_some_and(|s| s.is_explorer) || self.qf_dock_slot_idx() == Some(idx)
+        self.slots.get(idx).is_some_and(|s| s.is_explorer)
+            || self.qf_dock_slot_idx() == Some(idx)
+            || self
+                .cmdline_win
+                .as_ref()
+                .is_some_and(|cw| cw.slot_idx == idx)
     }
 
     /// How many slots are real user buffers, i.e. what the user would call
