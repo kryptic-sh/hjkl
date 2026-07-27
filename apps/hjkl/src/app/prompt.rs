@@ -976,6 +976,7 @@ impl App {
             .replace_leaf(focused, move |id| LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio: ratio_a,
+                fixed: None,
                 a: Box::new(LayoutTree::Leaf(id)),
                 b: Box::new(LayoutTree::Leaf(new_win_id)),
                 last_rect: None,

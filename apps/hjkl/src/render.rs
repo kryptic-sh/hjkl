@@ -639,6 +639,10 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
             a,
             b,
             last_rect,
+            // `fixed` is unused here until #63 Phase 2 routes rendering
+            // through `LayoutTree::window_rects`; nothing builds a fixed
+            // split yet, so ratio remains the only geometry input.
+            ..
         } => {
             // Record the FULL rect (pre-separator) so that resize commands
             // can convert line/column deltas to ratio updates correctly.

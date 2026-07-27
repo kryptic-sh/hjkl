@@ -15,12 +15,13 @@
 //! assert_eq!(tree.leaves(), vec![0]);
 //!
 //! // Split window 0 horizontally — window 1 below window 0.
-//! tree.replace_leaf(0, |id| LayoutTree::Split {
-//!     dir: SplitDir::Horizontal,
-//!     ratio: 0.5,
-//!     a: Box::new(LayoutTree::Leaf(id)),
-//!     b: Box::new(LayoutTree::Leaf(1)),
-//!     last_rect: None,
+//! tree.replace_leaf(0, |id| {
+//!     LayoutTree::split(
+//!         SplitDir::Horizontal,
+//!         0.5,
+//!         LayoutTree::Leaf(id),
+//!         LayoutTree::Leaf(1),
+//!     )
 //! });
 //! assert_eq!(tree.leaves(), vec![0, 1]);
 //! assert_eq!(tree.neighbor_below(0), Some(1));
@@ -175,6 +176,31 @@ impl SplitDir {
     }
 }
 
+/// An exact size for one child of a [`Split`](LayoutTree::Split), overriding
+/// that split's `ratio`.
+///
+/// The number is the child's **rendered** extent along the split axis (columns
+/// for [`SplitDir::Vertical`], rows for [`SplitDir::Horizontal`]) — the size
+/// that comes back from [`LayoutTree::window_rects`], not an allocation the
+/// separator is later taken out of. `First(30)` and `Second(30)` both render 30
+/// cells; the extra cell the separator needs is found for you.
+///
+/// This is deliberate: a dock's width comes from user config, and the caller
+/// must never have to add one to compensate for a separator it can't see.
+///
+/// The request is clamped so the sibling always keeps at least one cell — see
+/// [`LayoutTree::window_rects`] for the full geometry contract.
+///
+/// `#[non_exhaustive]` — additional variants may be added in minor releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Fixed {
+    /// Render the first (top / left) child at exactly this many cells.
+    First(u16),
+    /// Render the second (bottom / right) child at exactly this many cells.
+    Second(u16),
+}
+
 /// A binary spatial tree that partitions the editor area into windows.
 ///
 /// # Examples
@@ -182,13 +208,12 @@ impl SplitDir {
 /// ```rust
 /// use hjkl_layout::{LayoutTree, SplitDir};
 ///
-/// let tree = LayoutTree::Split {
-///     dir: SplitDir::Horizontal,
-///     ratio: 0.5,
-///     a: Box::new(LayoutTree::Leaf(0)),
-///     b: Box::new(LayoutTree::Leaf(1)),
-///     last_rect: None,
-/// };
+/// let tree = LayoutTree::split(
+///     SplitDir::Horizontal,
+///     0.5,
+///     LayoutTree::Leaf(0),
+///     LayoutTree::Leaf(1),
+/// );
 /// assert_eq!(tree.leaves(), vec![0, 1]);
 /// assert_eq!(tree.neighbor_below(0), Some(1));
 /// ```
@@ -202,7 +227,16 @@ pub enum LayoutTree {
         /// Axis along which the space is divided.
         dir: SplitDir,
         /// Fraction of the available space allocated to `a`. `0.0 < ratio < 1.0`.
+        ///
+        /// Ignored when `fixed` is `Some` — but still retained (and still
+        /// mutated by resize commands) so that clearing `fixed` restores the
+        /// previous proportional layout.
         ratio: f32,
+        /// Exact cell allocation for one child, overriding `ratio` when set.
+        ///
+        /// This is how a dock-style window keeps a constant width/height while
+        /// its sibling absorbs every resize.
+        fixed: Option<Fixed>,
         /// The first (top / left) sub-tree.
         a: Box<Self>,
         /// The second (bottom / right) sub-tree.
@@ -226,6 +260,68 @@ impl LayoutTree {
         Self::Leaf(id)
     }
 
+    /// Convenience constructor for an ordinary proportional split
+    /// (`fixed: None`, `last_rect: None`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_layout::{LayoutTree, SplitDir};
+    ///
+    /// let tree = LayoutTree::split(
+    ///     SplitDir::Vertical,
+    ///     0.5,
+    ///     LayoutTree::Leaf(0),
+    ///     LayoutTree::Leaf(1),
+    /// );
+    /// assert_eq!(tree.leaves(), vec![0, 1]);
+    /// ```
+    pub fn split(dir: SplitDir, ratio: f32, a: Self, b: Self) -> Self {
+        Self::Split {
+            dir,
+            ratio,
+            fixed: None,
+            a: Box::new(a),
+            b: Box::new(b),
+            last_rect: None,
+        }
+    }
+
+    /// Convenience constructor for a split that renders one child at a fixed
+    /// number of cells along the split axis.
+    ///
+    /// `ratio` is still stored (and used if `fixed` is later cleared); see
+    /// [`Fixed`] for the exact geometry.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_layout::{Fixed, LayoutRect, LayoutTree, SplitDir};
+    ///
+    /// // A 30-column dock on the left, the rest for window 1.
+    /// let tree = LayoutTree::split_fixed(
+    ///     SplitDir::Vertical,
+    ///     0.5,
+    ///     Fixed::First(30),
+    ///     LayoutTree::Leaf(0),
+    ///     LayoutTree::Leaf(1),
+    /// );
+    /// let rects = tree.window_rects(LayoutRect::new(0, 0, 80, 24));
+    /// // 30 columns of dock, 1 separator column, 49 columns for window 1.
+    /// assert_eq!(rects[0].1.w, 30);
+    /// assert_eq!(rects[1].1.w, 49);
+    /// ```
+    pub fn split_fixed(dir: SplitDir, ratio: f32, fixed: Fixed, a: Self, b: Self) -> Self {
+        Self::Split {
+            dir,
+            ratio,
+            fixed: Some(fixed),
+            a: Box::new(a),
+            b: Box::new(b),
+            last_rect: None,
+        }
+    }
+
     /// Pre-order traversal — returns all leaf ids in the order they appear
     /// top-to-bottom / left-to-right in the layout.
     ///
@@ -234,13 +330,12 @@ impl LayoutTree {
     /// ```rust
     /// use hjkl_layout::{LayoutTree, SplitDir};
     ///
-    /// let tree = LayoutTree::Split {
-    ///     dir: SplitDir::Horizontal,
-    ///     ratio: 0.5,
-    ///     a: Box::new(LayoutTree::Leaf(0)),
-    ///     b: Box::new(LayoutTree::Leaf(1)),
-    ///     last_rect: None,
-    /// };
+    /// let tree = LayoutTree::split(
+    ///     SplitDir::Horizontal,
+    ///     0.5,
+    ///     LayoutTree::Leaf(0),
+    ///     LayoutTree::Leaf(1),
+    /// );
     /// assert_eq!(tree.leaves(), vec![0, 1]);
     /// ```
     pub fn leaves(&self) -> Vec<WindowId> {
@@ -434,6 +529,7 @@ impl LayoutTree {
                 a,
                 b,
                 last_rect,
+                ..
             } => {
                 let in_a = a.contains(id);
                 let in_b = b.contains(id);
@@ -464,12 +560,122 @@ impl LayoutTree {
         }
     }
 
-    /// Reset all splits in the tree to 0.5 ratio.
-    pub fn equalize_all(&mut self) {
-        if let Self::Split { ratio, a, b, .. } = self {
-            *ratio = 0.5;
-            a.equalize_all();
-            b.equalize_all();
+    /// Reset all splits in the tree to 0.5 ratio, leaving pinned leaves at
+    /// their current size.
+    ///
+    /// `pinned` lists the leaves that must survive equalization unchanged
+    /// (docks and other fixed-size windows). A split is left alone when it
+    /// carries a [`Fixed`] allocation or when either of its immediate children
+    /// is a pinned leaf; recursion still descends into both children so
+    /// ordinary splits underneath a pinned one are still equalized.
+    ///
+    /// Pass `&[]` for the plain "equalize everything" behaviour.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_layout::{Fixed, LayoutRect, LayoutTree, SplitDir};
+    ///
+    /// let mut tree = LayoutTree::split_fixed(
+    ///     SplitDir::Vertical,
+    ///     0.5,
+    ///     Fixed::First(30),
+    ///     LayoutTree::Leaf(0),
+    ///     LayoutTree::Leaf(1),
+    /// );
+    /// let area = LayoutRect::new(0, 0, 80, 24);
+    /// let before = tree.window_rects(area);
+    /// tree.equalize_all(&[0]);
+    /// assert_eq!(tree.window_rects(area), before);
+    /// ```
+    pub fn equalize_all(&mut self, pinned: &[WindowId]) {
+        if let Self::Split {
+            ratio, fixed, a, b, ..
+        } = self
+        {
+            let touches_pinned =
+                fixed.is_some() || is_pinned_leaf(a, pinned) || is_pinned_leaf(b, pinned);
+            if !touches_pinned {
+                *ratio = 0.5;
+            }
+            a.equalize_all(pinned);
+            b.equalize_all(pinned);
+        }
+    }
+
+    /// Collapse the tree down to `keep` plus every pinned leaf (vim's `:only`).
+    ///
+    /// Leaves that are neither `keep` nor listed in `pinned` are dropped and
+    /// their parent splits collapse onto the surviving sibling, so the relative
+    /// arrangement of the retained leaves (and the geometry of the splits that
+    /// join them) is preserved.
+    ///
+    /// Returns the ids of the removed leaves so the caller can dispose of the
+    /// corresponding window state. Returns an empty vector — and leaves the
+    /// tree untouched — when `keep` is not in the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_layout::{LayoutTree, SplitDir};
+    ///
+    /// // dock | (1 | 2)
+    /// let mut tree = LayoutTree::split(
+    ///     SplitDir::Vertical,
+    ///     0.5,
+    ///     LayoutTree::Leaf(9),
+    ///     LayoutTree::split(SplitDir::Vertical, 0.5, LayoutTree::Leaf(1), LayoutTree::Leaf(2)),
+    /// );
+    /// let removed = tree.only(1, &[9]);
+    /// assert_eq!(removed, vec![2]);
+    /// assert_eq!(tree.leaves(), vec![9, 1]);
+    /// ```
+    pub fn only(&mut self, keep: WindowId, pinned: &[WindowId]) -> Vec<WindowId> {
+        if !self.contains(keep) {
+            return Vec::new();
+        }
+        let mut removed = Vec::new();
+        self.prune_to(keep, pinned, &mut removed);
+        removed
+    }
+
+    /// Recursive helper for [`only`](Self::only). Every subtree it is invoked
+    /// on retains at least one leaf, which `only` guarantees at the root by
+    /// checking that `keep` is present.
+    fn prune_to(&mut self, keep: WindowId, pinned: &[WindowId], removed: &mut Vec<WindowId>) {
+        let Self::Split { a, b, .. } = self else {
+            return;
+        };
+        let a_keeps = a.retains_any(keep, pinned);
+        let b_keeps = b.retains_any(keep, pinned);
+        match (a_keeps, b_keeps) {
+            (true, true) => {
+                a.prune_to(keep, pinned, removed);
+                b.prune_to(keep, pinned, removed);
+            }
+            (true, false) => {
+                b.collect_leaves(removed);
+                let mut survivor = std::mem::replace(a.as_mut(), Self::Leaf(keep));
+                survivor.prune_to(keep, pinned, removed);
+                *self = survivor;
+            }
+            (false, true) => {
+                a.collect_leaves(removed);
+                let mut survivor = std::mem::replace(b.as_mut(), Self::Leaf(keep));
+                survivor.prune_to(keep, pinned, removed);
+                *self = survivor;
+            }
+            // Unreachable from `only` (the root always retains `keep`), but a
+            // defensive no-op beats a panic if a caller reaches it directly.
+            (false, false) => {}
+        }
+    }
+
+    /// Does this subtree contain `keep` or any leaf in `pinned`?
+    fn retains_any(&self, keep: WindowId, pinned: &[WindowId]) -> bool {
+        match self {
+            Self::Leaf(id) => *id == keep || pinned.contains(id),
+            Self::Split { a, b, .. } => a.retains_any(keep, pinned) || b.retains_any(keep, pinned),
         }
     }
 
@@ -485,6 +691,7 @@ impl LayoutTree {
             a,
             b,
             last_rect,
+            ..
         } = self
         {
             let in_a = a.contains(id);
@@ -522,6 +729,22 @@ impl LayoutTree {
     ///
     /// Leaf → single entry `(id, area)`.
     ///
+    /// # Fixed sizes
+    ///
+    /// When the split carries `fixed: Some(..)`, the `round(len * ratio)` step
+    /// above is replaced by whatever allocation makes the named child *render*
+    /// the requested number of cells, and the sibling takes the remainder. The
+    /// two variants are symmetric: on an 80-column vertical split both
+    /// `Fixed::First(30)` and `Fixed::Second(30)` produce a 30-column rect for
+    /// their child, with the separator absorbed on the `a` side either way
+    /// (`First(30)` → `a` = 30, `b` = 49; `Fixed::Second(30)` → `a` = 49,
+    /// `b` = 30).
+    ///
+    /// The allocation is clamped to `1 ..= axis_len - 1` — the same clamp the
+    /// ratio path applies — so an oversized fixed size degrades to "as large as
+    /// possible while the sibling still gets one cell" instead of underflowing
+    /// or starving the sibling.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -542,9 +765,14 @@ impl LayoutTree {
         match self {
             Self::Leaf(id) => out.push((*id, area)),
             Self::Split {
-                dir, ratio, a, b, ..
+                dir,
+                ratio,
+                fixed,
+                a,
+                b,
+                ..
             } => {
-                let (rect_a, rect_b) = headless_split_rect(area, *dir, *ratio);
+                let (rect_a, rect_b) = headless_split_rect(area, *dir, *ratio, *fixed);
                 a.collect_rects(rect_a, out);
                 b.collect_rects(rect_b, out);
             }
@@ -556,22 +784,45 @@ impl LayoutTree {
     ///
     /// Returns `true` if the swap was applied (i.e. there is an enclosing
     /// Split — `false` when `id` is the only window).
-    pub fn swap_with_sibling(&mut self, id: WindowId) -> bool {
+    ///
+    /// Refuses (returns `false`, tree untouched) when either side of the swap
+    /// is pinned: `id` itself being in `pinned`, or the sibling subtree
+    /// containing any pinned leaf. A dock must not be dragged across the
+    /// layout, nor another window dragged through it.
+    ///
+    /// Pass `&[]` for the plain "swap anything" behaviour.
+    pub fn swap_with_sibling(&mut self, id: WindowId, pinned: &[WindowId]) -> bool {
+        if pinned.contains(&id) {
+            return false;
+        }
+        self.swap_with_sibling_inner(id, pinned)
+    }
+
+    fn swap_with_sibling_inner(&mut self, id: WindowId, pinned: &[WindowId]) -> bool {
         match self {
             Self::Leaf(_) => false,
             Self::Split { a, b, .. } => {
                 let a_is_focused_leaf = matches!(a.as_ref(), Self::Leaf(leaf) if *leaf == id);
                 let b_is_focused_leaf = matches!(b.as_ref(), Self::Leaf(leaf) if *leaf == id);
                 if a_is_focused_leaf || b_is_focused_leaf {
+                    // The sibling is whichever side isn't the focused leaf.
+                    let sibling_pinned = if a_is_focused_leaf {
+                        contains_pinned(b, pinned)
+                    } else {
+                        contains_pinned(a, pinned)
+                    };
+                    if sibling_pinned {
+                        return false;
+                    }
                     std::mem::swap(a, b);
                     return true;
                 }
                 // Recurse into whichever side contains id.
                 if a.contains(id) {
-                    return a.swap_with_sibling(id);
+                    return a.swap_with_sibling_inner(id, pinned);
                 }
                 if b.contains(id) {
-                    return b.swap_with_sibling(id);
+                    return b.swap_with_sibling_inner(id, pinned);
                 }
                 false
             }
@@ -650,7 +901,20 @@ impl LayoutTree {
 /// **Horizontal** (stacked, `Axis::Row`): separator is the bottom cell of
 /// `rect_a`. Applied only when `rect_a.h >= 2` AND `rect_b.h > 0`; `a`
 /// shrinks by 1 row, `b` position/size are unchanged.
-fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRect, LayoutRect) {
+///
+/// ## Fixed sizes
+///
+/// `fixed` replaces the `round(len * ratio)` term with the allocation that
+/// makes the named child render exactly the requested number of cells (see
+/// [`Fixed`] and `first_child_cells`). It goes through the identical clamp, so
+/// an oversized request can never underflow `u16` or leave the sibling with
+/// zero cells in an area that could hold both.
+fn headless_split_rect(
+    area: LayoutRect,
+    dir: SplitDir,
+    ratio: f32,
+    fixed: Option<Fixed>,
+) -> (LayoutRect, LayoutRect) {
     match dir.axis() {
         Axis::Row => {
             // A zero-height parent can't be split; the clamp below would
@@ -662,7 +926,7 @@ fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRe
                 );
             }
             // Horizontal split: divide height.
-            let a_h = ((area.h as f32) * ratio).round() as u16;
+            let a_h = first_child_cells(area.h, ratio, fixed);
             let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
             let b_h = area.h.saturating_sub(a_h);
             let mut rect_a = LayoutRect::new(area.x, area.y, area.w, a_h);
@@ -682,7 +946,7 @@ fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRe
                 );
             }
             // Vertical split: divide width.
-            let a_w = ((area.w as f32) * ratio).round() as u16;
+            let a_w = first_child_cells(area.w, ratio, fixed);
             let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
             let b_w = area.w.saturating_sub(a_w);
             let mut rect_a = LayoutRect::new(area.x, area.y, a_w, area.h);
@@ -693,6 +957,51 @@ fn headless_split_rect(area: LayoutRect, dir: SplitDir, ratio: f32) -> (LayoutRe
             }
             (rect_a, rect_b)
         }
+    }
+}
+
+/// Cells to allocate to the first child along the split axis, before the
+/// caller's `1 ..= len - 1` clamp.
+///
+/// `len` is the parent's extent along the split axis. Without a `fixed` the
+/// answer is the historical `round(len * ratio)`. With one:
+///
+/// - `Fixed::First(n)` → `n + 1`: [`Fixed`] counts **rendered** cells and the
+///   separator is carved out of the first child, so the first child needs one
+///   more cell than it renders. Saturating, so `u16::MAX` can't wrap.
+/// - `Fixed::Second(n)` → `len - n`, saturating at 0 so a request larger than
+///   the parent degrades (via the caller's clamp) to "everything but one cell"
+///   instead of wrapping around `u16`. No `+ 1` here: the separator already
+///   comes out of the *first* child, so the second renders its whole share.
+///
+/// The `+ 1` is unconditional because the caller's `1 ..= len - 1` clamp
+/// already collapses it in exactly the cases where no separator gets carved.
+/// A separator is skipped only when the first child ends up with a single cell
+/// (`rect_a < 2`) — the clamp's own floor — or when the second child gets zero,
+/// which the clamp's ceiling makes impossible for `len >= 2`. So `First(n)`
+/// renders `n` whenever the area can hold it, and the largest size that fits
+/// otherwise.
+///
+/// Unknown future `Fixed` variants fall back to the ratio, so they degrade to
+/// an ordinary split rather than a panic.
+fn first_child_cells(len: u16, ratio: f32, fixed: Option<Fixed>) -> u16 {
+    match fixed {
+        Some(Fixed::First(n)) => n.saturating_add(1),
+        Some(Fixed::Second(n)) => len.saturating_sub(n),
+        _ => ((len as f32) * ratio).round() as u16,
+    }
+}
+
+/// Is this subtree a single leaf that the caller asked to leave alone?
+fn is_pinned_leaf(tree: &LayoutTree, pinned: &[WindowId]) -> bool {
+    matches!(tree, LayoutTree::Leaf(id) if pinned.contains(id))
+}
+
+/// Does this subtree contain any leaf the caller asked to leave alone?
+fn contains_pinned(tree: &LayoutTree, pinned: &[WindowId]) -> bool {
+    match tree {
+        LayoutTree::Leaf(id) => pinned.contains(id),
+        LayoutTree::Split { a, b, .. } => contains_pinned(a, pinned) || contains_pinned(b, pinned),
     }
 }
 
@@ -732,29 +1041,18 @@ mod tests {
     }
 
     fn hsplit(ratio: f32, a: LayoutTree, b: LayoutTree) -> LayoutTree {
-        LayoutTree::Split {
-            dir: SplitDir::Horizontal,
-            ratio,
-            a: Box::new(a),
-            b: Box::new(b),
-            last_rect: None,
-        }
+        LayoutTree::split(SplitDir::Horizontal, ratio, a, b)
     }
 
     fn vsplit(ratio: f32, a: LayoutTree, b: LayoutTree) -> LayoutTree {
-        LayoutTree::Split {
-            dir: SplitDir::Vertical,
-            ratio,
-            a: Box::new(a),
-            b: Box::new(b),
-            last_rect: None,
-        }
+        LayoutTree::split(SplitDir::Vertical, ratio, a, b)
     }
 
     fn hsplit_with_rect(ratio: f32, a: LayoutTree, b: LayoutTree, rect: LayoutRect) -> LayoutTree {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
             ratio,
+            fixed: None,
             a: Box::new(a),
             b: Box::new(b),
             last_rect: Some(rect),
@@ -765,9 +1063,18 @@ mod tests {
         LayoutTree::Split {
             dir: SplitDir::Vertical,
             ratio,
+            fixed: None,
             a: Box::new(a),
             b: Box::new(b),
             last_rect: Some(rect),
+        }
+    }
+
+    /// Ratio of the split at the root, for equalize assertions.
+    fn root_ratio(t: &LayoutTree) -> f32 {
+        match t {
+            LayoutTree::Split { ratio, .. } => *ratio,
+            LayoutTree::Leaf(_) => panic!("expected a split at the root"),
         }
     }
 
@@ -792,10 +1099,16 @@ mod tests {
     fn headless_split_zero_size_parent_does_not_overflow() {
         // A zero-height parent must yield zero-height children, not a size-1
         // child that exceeds the parent.
-        let (a, b) = headless_split_rect(LayoutRect::new(0, 0, 10, 0), SplitDir::Horizontal, 0.5);
+        let (a, b) = headless_split_rect(
+            LayoutRect::new(0, 0, 10, 0),
+            SplitDir::Horizontal,
+            0.5,
+            None,
+        );
         assert_eq!((a.h, b.h), (0, 0), "row split of h=0 must stay 0");
         // Same for a zero-width parent under a vertical split.
-        let (a, b) = headless_split_rect(LayoutRect::new(0, 0, 0, 10), SplitDir::Vertical, 0.5);
+        let (a, b) =
+            headless_split_rect(LayoutRect::new(0, 0, 0, 10), SplitDir::Vertical, 0.5, None);
         assert_eq!((a.w, b.w), (0, 0), "col split of w=0 must stay 0");
     }
 
@@ -1103,7 +1416,7 @@ mod tests {
     #[test]
     fn equalize_all_resets_nested_splits_to_half() {
         let mut tree = hsplit(0.3, leaf(0), hsplit(0.7, leaf(1), leaf(2)));
-        tree.equalize_all();
+        tree.equalize_all(&[]);
         fn check_all_half(t: &LayoutTree) {
             if let LayoutTree::Split { ratio, a, b, .. } = t {
                 assert!(
@@ -1153,7 +1466,7 @@ mod tests {
     #[test]
     fn swap_with_sibling_swaps_two_leaves() {
         let mut tree = hsplit(0.5, leaf(0), leaf(1));
-        let swapped = tree.swap_with_sibling(0);
+        let swapped = tree.swap_with_sibling(0, &[]);
         assert!(swapped, "swap should succeed in a two-leaf split");
         assert_eq!(tree.leaves(), vec![1, 0], "leaves should be swapped");
     }
@@ -1161,7 +1474,7 @@ mod tests {
     #[test]
     fn swap_with_sibling_in_nested_split_swaps_at_focused_parent() {
         let mut tree = hsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
-        let swapped = tree.swap_with_sibling(1);
+        let swapped = tree.swap_with_sibling(1, &[]);
         assert!(swapped, "swap should succeed");
         assert_eq!(
             tree.leaves(),
@@ -1173,8 +1486,333 @@ mod tests {
     #[test]
     fn swap_with_sibling_returns_false_for_only_leaf() {
         let mut tree = leaf(0);
-        let swapped = tree.swap_with_sibling(0);
+        let swapped = tree.swap_with_sibling(0, &[]);
         assert!(!swapped, "single leaf has no sibling to swap with");
+    }
+
+    #[test]
+    fn swap_with_sibling_refuses_when_the_moving_leaf_is_pinned() {
+        let mut tree = vsplit(0.5, leaf(9), leaf(0));
+        let swapped = tree.swap_with_sibling(9, &[9]);
+        assert!(!swapped, "a pinned leaf must not move");
+        assert_eq!(tree.leaves(), vec![9, 0], "tree must be untouched");
+    }
+
+    #[test]
+    fn swap_with_sibling_refuses_when_the_sibling_is_pinned() {
+        let mut tree = vsplit(0.5, leaf(9), leaf(0));
+        let swapped = tree.swap_with_sibling(0, &[9]);
+        assert!(!swapped, "must not swap a pinned sibling out of place");
+        assert_eq!(tree.leaves(), vec![9, 0], "tree must be untouched");
+    }
+
+    #[test]
+    fn swap_with_sibling_refuses_when_the_sibling_subtree_holds_a_pin() {
+        // 0 | (9 | 1) — swapping 0 with its sibling would drag the pinned 9.
+        let mut tree = vsplit(0.5, leaf(0), vsplit(0.5, leaf(9), leaf(1)));
+        let swapped = tree.swap_with_sibling(0, &[9]);
+        assert!(!swapped, "a pin anywhere in the sibling blocks the swap");
+        assert_eq!(tree.leaves(), vec![0, 9, 1]);
+    }
+
+    #[test]
+    fn swap_with_sibling_still_works_beside_an_unrelated_pin() {
+        // 9 | (0 | 1) — swapping 0 and 1 leaves the pinned 9 where it is.
+        let mut tree = vsplit(0.5, leaf(9), vsplit(0.5, leaf(0), leaf(1)));
+        let swapped = tree.swap_with_sibling(0, &[9]);
+        assert!(swapped, "the pin is not on either side of this swap");
+        assert_eq!(tree.leaves(), vec![9, 1, 0]);
+    }
+
+    // ── equalize_all() with pins ──────────────────────────────────────────────
+
+    #[test]
+    fn equalize_all_leaves_a_pinned_leaf_at_its_size() {
+        // dock | (1 / 2), dock fixed at 30 columns.
+        let area = LayoutRect::new(0, 0, 80, 24);
+        let mut tree = LayoutTree::split_fixed(
+            SplitDir::Vertical,
+            0.9,
+            Fixed::First(30),
+            leaf(9),
+            hsplit(0.8, leaf(1), leaf(2)),
+        );
+        let dock_before = tree.window_rects(area)[0].1;
+        tree.equalize_all(&[9]);
+        let after = tree.window_rects(area);
+        assert_eq!(after[0].0, 9);
+        assert_eq!(after[0].1, dock_before, "pinned dock must keep its rect");
+        // The dock's own split kept its ratio; the regular split below did not.
+        assert!((root_ratio(&tree) - 0.9).abs() < 1e-5);
+        if let LayoutTree::Split { b, .. } = &tree {
+            assert!(
+                (root_ratio(b) - 0.5).abs() < 1e-5,
+                "ordinary splits under a pin still equalize"
+            );
+        } else {
+            panic!("root should still be a split");
+        }
+    }
+
+    #[test]
+    fn equalize_all_protects_a_ratio_split_next_to_a_pinned_leaf() {
+        // No `fixed` here — the pin alone must stop the ratio being reset.
+        let mut tree = vsplit(0.2, leaf(9), leaf(0));
+        tree.equalize_all(&[9]);
+        assert!(
+            (root_ratio(&tree) - 0.2).abs() < 1e-5,
+            "a split with a pinned child keeps its ratio"
+        );
+    }
+
+    // ── only() ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn only_collapses_to_the_kept_leaf_when_nothing_is_pinned() {
+        let mut tree = hsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
+        let mut removed = tree.only(1, &[]);
+        removed.sort_unstable();
+        assert_eq!(removed, vec![0, 2]);
+        assert_eq!(tree.leaves(), vec![1]);
+    }
+
+    #[test]
+    fn only_retains_pinned_leaves_and_their_arrangement() {
+        // dock | ((1 / 2) / qf) → only(1) keeps dock | (1 / qf), in that order.
+        let mut tree = vsplit(
+            0.5,
+            leaf(9),
+            hsplit(0.5, hsplit(0.5, leaf(1), leaf(2)), leaf(8)),
+        );
+        let removed = tree.only(1, &[9, 8]);
+        assert_eq!(removed, vec![2]);
+        assert_eq!(
+            tree.leaves(),
+            vec![9, 1, 8],
+            "dock stays left of the kept window, quickfix stays below it"
+        );
+    }
+
+    #[test]
+    fn only_on_a_single_leaf_is_a_no_op() {
+        let mut tree = leaf(0);
+        assert!(tree.only(0, &[]).is_empty());
+        assert_eq!(tree.leaves(), vec![0]);
+    }
+
+    #[test]
+    fn only_with_an_absent_keep_changes_nothing() {
+        let mut tree = hsplit(0.5, leaf(0), leaf(1));
+        assert!(tree.only(99, &[]).is_empty());
+        assert_eq!(tree.leaves(), vec![0, 1]);
+    }
+
+    #[test]
+    fn only_keeping_a_pinned_leaf_drops_the_rest() {
+        let mut tree = vsplit(0.5, leaf(9), hsplit(0.5, leaf(0), leaf(1)));
+        let mut removed = tree.only(9, &[9]);
+        removed.sort_unstable();
+        assert_eq!(removed, vec![0, 1]);
+        assert_eq!(tree.leaves(), vec![9]);
+    }
+
+    #[test]
+    fn only_preserves_the_geometry_of_the_surviving_split() {
+        let mut tree = vsplit(0.25, leaf(9), hsplit(0.5, leaf(0), leaf(1)));
+        tree.only(0, &[9]);
+        assert!(
+            (root_ratio(&tree) - 0.25).abs() < 1e-5,
+            "the split joining the retained leaves keeps its ratio"
+        );
+    }
+
+    // ── fixed sizing ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn fixed_first_renders_exact_cells_along_a_vertical_split() {
+        // The dock renders the full 30 columns it asked for; the separator
+        // costs the sibling, not the dock.
+        let tree =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::First(30), leaf(0), leaf(1));
+        let rects = tree.window_rects(LayoutRect::new(0, 0, 80, 24));
+        assert_eq!(rects[0].1, LayoutRect::new(0, 0, 30, 24));
+        assert_eq!(rects[1].1, LayoutRect::new(31, 0, 49, 24));
+    }
+
+    #[test]
+    fn fixed_second_renders_exact_cells_along_a_vertical_split() {
+        // Mirror image of the `First` case: same requested size, same rendered
+        // size, only the side differs. `Fixed` must not mean two things.
+        let tree =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::Second(30), leaf(0), leaf(1));
+        let rects = tree.window_rects(LayoutRect::new(0, 0, 80, 24));
+        assert_eq!(
+            rects[1].1.w, 30,
+            "Second(30) must render 30, like First(30)"
+        );
+        assert_eq!(rects[0].1, LayoutRect::new(0, 0, 49, 24));
+        assert_eq!(rects[1].1, LayoutRect::new(50, 0, 30, 24));
+    }
+
+    #[test]
+    fn fixed_first_and_second_render_the_same_size_on_both_axes() {
+        let area = LayoutRect::new(0, 0, 80, 24);
+        let along = |dir: SplitDir, r: LayoutRect| match dir.axis() {
+            Axis::Col => r.w,
+            Axis::Row => r.h,
+        };
+        for dir in [SplitDir::Vertical, SplitDir::Horizontal] {
+            for n in [1u16, 2, 10, 20] {
+                let first = LayoutTree::split_fixed(dir, 0.5, Fixed::First(n), leaf(0), leaf(1));
+                let second = LayoutTree::split_fixed(dir, 0.5, Fixed::Second(n), leaf(0), leaf(1));
+                assert_eq!(
+                    along(dir, first.window_rects(area)[0].1),
+                    n,
+                    "First({n}) on {dir:?} must render {n}"
+                );
+                assert_eq!(
+                    along(dir, second.window_rects(area)[1].1),
+                    n,
+                    "Second({n}) on {dir:?} must render {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_second_renders_exact_cells_along_a_horizontal_split() {
+        let tree = LayoutTree::split_fixed(
+            SplitDir::Horizontal,
+            0.5,
+            Fixed::Second(10),
+            leaf(0),
+            leaf(1),
+        );
+        let rects = tree.window_rects(LayoutRect::new(0, 0, 80, 24));
+        assert_eq!(rects[0].1, LayoutRect::new(0, 0, 80, 13));
+        assert_eq!(rects[1].1, LayoutRect::new(0, 14, 80, 10));
+    }
+
+    #[test]
+    fn fixed_wins_over_ratio() {
+        let ratio_only = LayoutTree::split(SplitDir::Vertical, 0.5, leaf(0), leaf(1));
+        let fixed =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::First(20), leaf(0), leaf(1));
+        let area = LayoutRect::new(0, 0, 80, 24);
+        assert_eq!(ratio_only.window_rects(area)[0].1.w, 39);
+        assert_eq!(fixed.window_rects(area)[0].1.w, 20);
+    }
+
+    #[test]
+    fn fixed_is_independent_of_the_parent_size() {
+        let tree =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::First(30), leaf(0), leaf(1));
+        for total in [60u16, 80, 120, 200] {
+            let rects = tree.window_rects(LayoutRect::new(0, 0, total, 24));
+            assert_eq!(rects[0].1.w, 30, "dock width must not track the parent");
+            assert_eq!(rects[1].1.w, total - 31);
+        }
+    }
+
+    #[test]
+    fn fixed_renders_the_requested_size_when_no_separator_is_carved() {
+        // A 2-cell axis is too small for a separator (`rect_a < 2`), so the
+        // `+ 1` the `First` path adds must be absorbed by the clamp rather
+        // than stealing the sibling's only cell.
+        let area = LayoutRect::new(0, 0, 2, 2);
+        for dir in [SplitDir::Vertical, SplitDir::Horizontal] {
+            let first = LayoutTree::split_fixed(dir, 0.5, Fixed::First(1), leaf(0), leaf(1));
+            let second = LayoutTree::split_fixed(dir, 0.5, Fixed::Second(1), leaf(0), leaf(1));
+            for tree in [first, second] {
+                let rects = tree.window_rects(area);
+                let (a, b) = (rects[0].1, rects[1].1);
+                let (a_len, b_len) = match dir.axis() {
+                    Axis::Col => (a.w, b.w),
+                    Axis::Row => (a.h, b.h),
+                };
+                assert_eq!((a_len, b_len), (1, 1), "{dir:?}: both children render 1");
+            }
+        }
+
+        // One cell more and the separator does get carved — the requested size
+        // is still exactly what renders, on both sides.
+        let area = LayoutRect::new(0, 0, 3, 24);
+        let first =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::First(1), leaf(0), leaf(1));
+        let rects = first.window_rects(area);
+        assert_eq!(rects[0].1, LayoutRect::new(0, 0, 1, 24));
+        assert_eq!(rects[1].1, LayoutRect::new(2, 0, 1, 24));
+        let second =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::Second(1), leaf(0), leaf(1));
+        let rects = second.window_rects(area);
+        assert_eq!(rects[0].1, LayoutRect::new(0, 0, 1, 24));
+        assert_eq!(rects[1].1, LayoutRect::new(2, 0, 1, 24));
+    }
+
+    #[test]
+    fn oversized_fixed_clamps_to_leave_the_sibling_one_cell() {
+        let area = LayoutRect::new(0, 0, 80, 24);
+
+        // First(200) in an 80-column area → a is clamped to 79 allocated cells
+        // (78 after the separator) and b keeps exactly 1.
+        let first =
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::First(200), leaf(0), leaf(1));
+        let rects = first.window_rects(area);
+        assert_eq!(rects[0].1.w, 78);
+        assert_eq!(rects[1].1.w, 1);
+
+        // Second(200) is the mirror image: `a` keeps 1 allocated cell (no
+        // separator is carved, since a.w < 2) and `b` takes the other 79.
+        let second = LayoutTree::split_fixed(
+            SplitDir::Vertical,
+            0.5,
+            Fixed::Second(200),
+            leaf(0),
+            leaf(1),
+        );
+        let rects = second.window_rects(area);
+        assert_eq!(rects[0].1.w, 1);
+        assert_eq!(rects[1].1.w, 79);
+        assert_eq!(
+            rects[0].1.w + rects[1].1.w,
+            80,
+            "no cells may be lost or invented"
+        );
+    }
+
+    #[test]
+    fn fixed_on_a_degenerate_area_does_not_underflow() {
+        // u16::MAX request against a 1-cell and a 0-cell axis: must not panic
+        // and must not wrap.
+        for dir in [SplitDir::Vertical, SplitDir::Horizontal] {
+            for fixed in [Fixed::First(u16::MAX), Fixed::Second(u16::MAX)] {
+                for area in [
+                    LayoutRect::new(0, 0, 0, 0),
+                    LayoutRect::new(0, 0, 1, 1),
+                    LayoutRect::new(0, 0, 2, 2),
+                ] {
+                    let tree = LayoutTree::split_fixed(dir, 0.5, fixed, leaf(0), leaf(1));
+                    let rects = tree.window_rects(area);
+                    let (a, b) = (rects[0].1, rects[1].1);
+                    assert!(a.w <= area.w && b.w <= area.w, "child wider than parent");
+                    assert!(a.h <= area.h && b.h <= area.h, "child taller than parent");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_nested_under_an_ordinary_split() {
+        // (0 | dock-fixed(20 rows)) stacked over 1.
+        let tree = hsplit(
+            0.5,
+            LayoutTree::split_fixed(SplitDir::Vertical, 0.5, Fixed::Second(20), leaf(0), leaf(9)),
+            leaf(1),
+        );
+        let rects = tree.window_rects(LayoutRect::new(0, 0, 80, 24));
+        assert_eq!(rects.len(), 3);
+        let dock = rects.iter().find(|(id, _)| *id == 9).unwrap().1;
+        assert_eq!(dock.w, 20, "nested fixed child keeps its exact width");
     }
 
     // ── mixed_layout_navigation ───────────────────────────────────────────────
@@ -1308,5 +1946,65 @@ mod tests {
         } else {
             panic!("tree should still be a Split");
         }
+    }
+}
+
+#[cfg(test)]
+mod fixed_sizing_sweep {
+    use super::*;
+
+    /// Exhaustive sweep of the `Fixed` contract, added during review of the
+    /// original implementation — which allocated cells rather than rendered
+    /// cells, so `First(n)` came out one short while `Second(n)` was exact.
+    /// A per-case example test let that through; only a sweep makes the
+    /// invariant unmissable.
+    ///
+    /// Two properties, over axis lengths 0..40 and requests 0..45:
+    ///
+    /// - **Everywhere** (degenerate sizes included): neither child may exceed
+    ///   the parent, and nothing may panic or underflow.
+    /// - **Where the request is satisfiable** (axis holds two children plus
+    ///   the separator): both variants render EXACTLY the requested size, so
+    ///   a config-sourced width needs no caller-side compensation.
+    ///
+    /// Outside that domain the two sides legitimately differ: clamping has to
+    /// pick a side to starve, and which one depends on the variant.
+    #[test]
+    fn fixed_renders_requested_size_and_never_exceeds_parent() {
+        let mut asym = Vec::new();
+        for len in 0u16..40 {
+            for n in 0u16..45 {
+                for dir in [SplitDir::Vertical, SplitDir::Horizontal] {
+                    let area = match dir.axis() {
+                        Axis::Col => LayoutRect::new(0, 0, len, 10),
+                        Axis::Row => LayoutRect::new(0, 0, 10, len),
+                    };
+                    let ext = |r: LayoutRect| match dir.axis() {
+                        Axis::Col => r.w,
+                        Axis::Row => r.h,
+                    };
+                    let (fa, _) = headless_split_rect(area, dir, 0.5, Some(Fixed::First(n)));
+                    let (_, sb) = headless_split_rect(area, dir, 0.5, Some(Fixed::Second(n)));
+                    let (first, second) = (ext(fa), ext(sb));
+                    // Meaningful domain only: the axis must hold two
+                    // children plus the separator, and the request must fit.
+                    let meaningful = len >= 3 && n >= 1 && n < len - 1;
+                    if meaningful && first != second {
+                        asym.push((len, n, format!("{dir:?}"), first, second));
+                    }
+                    if meaningful {
+                        assert_eq!(first, n, "First({n}) on len {len} rendered {first}");
+                        assert_eq!(second, n, "Second({n}) on len {len} rendered {second}");
+                    }
+                    assert!(first <= len && second <= len, "child exceeds parent");
+                }
+            }
+        }
+        assert!(
+            asym.is_empty(),
+            "First/Second render differently in {} cases, e.g. {:?}",
+            asym.len(),
+            &asym[..asym.len().min(6)]
+        );
     }
 }

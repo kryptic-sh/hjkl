@@ -134,6 +134,9 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
             a,
             b,
             last_rect,
+            // `fixed` splits are never built yet (#63 Phase 1 only adds the
+            // primitive); this hit-test still derives the separator from ratio.
+            ..
         } => {
             let area = (*last_rect)?;
             // Compute the separator position from ratio (matches render::split_rect).
@@ -1953,6 +1956,7 @@ mod tests {
             LayoutTree::Split {
                 dir: crate::app::window::SplitDir::Vertical,
                 ratio: 0.5,
+                fixed: None,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(split_area),
@@ -1987,6 +1991,7 @@ mod tests {
             LayoutTree::Split {
                 dir: crate::app::window::SplitDir::Horizontal,
                 ratio: 0.5,
+                fixed: None,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(split_area),
@@ -2159,9 +2164,11 @@ mod tests {
             LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio: 0.5,
+                fixed: None,
                 a: Box::new(LayoutTree::Split {
                     dir: SplitDir::Vertical,
                     ratio: 0.5,
+                    fixed: None,
                     a: Box::new(LayoutTree::Leaf(0)),
                     b: Box::new(LayoutTree::Leaf(win1)),
                     last_rect: Some(LayoutRect::new(0, 0, 80, 12)),

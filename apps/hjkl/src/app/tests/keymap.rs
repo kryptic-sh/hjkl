@@ -5333,6 +5333,7 @@ fn split_then_independent_cursors() {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
             ratio: 0.5,
+            fixed: None,
             a: Box::new(LayoutTree::Leaf(0)),
             b: Box::new(LayoutTree::Leaf(win1)),
             last_rect: Some(split_rect),
@@ -5385,6 +5386,7 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
             ratio: 0.5,
+            fixed: None,
             a: Box::new(LayoutTree::Leaf(0)),
             b: Box::new(LayoutTree::Leaf(win1)),
             last_rect: Some(split_rect),
@@ -5432,6 +5434,7 @@ fn edit_in_one_window_rebases_sibling_cursor_below() {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
             ratio: 0.5,
+            fixed: None,
             a: Box::new(LayoutTree::Leaf(0)),
             b: Box::new(LayoutTree::Leaf(win1)),
             last_rect: Some(split_rect),
@@ -5479,6 +5482,7 @@ fn close_window_keeps_buffer_for_other_window() {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
             ratio: 0.5,
+            fixed: None,
             a: Box::new(LayoutTree::Leaf(0)),
             b: Box::new(LayoutTree::Leaf(win1)),
             last_rect: Some(split_rect),

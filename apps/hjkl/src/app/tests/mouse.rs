@@ -244,6 +244,7 @@ mod border_drag_tests {
             LayoutTree::Split {
                 dir: SplitDir::Vertical,
                 ratio,
+                fixed: None,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(area),
@@ -273,6 +274,7 @@ mod border_drag_tests {
             LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio,
+                fixed: None,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(area),

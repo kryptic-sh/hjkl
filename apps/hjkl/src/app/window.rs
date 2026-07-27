@@ -264,7 +264,8 @@ impl App {
     /// Split. No-op (with no message) when the focused window is the only one.
     pub fn swap_with_sibling(&mut self) {
         let focused = self.focused_window();
-        if self.layout_mut().swap_with_sibling(focused) {
+        // No pins yet — see `equalize_layout`.
+        if self.layout_mut().swap_with_sibling(focused, &[]) {
             self.bus.info("swap");
         }
     }
@@ -440,8 +441,11 @@ impl App {
     }
 
     /// Equalize all splits to 0.5 ratio.
+    ///
+    /// No pins yet: docks still live outside every tree (#63 Phase 1), so
+    /// there is no leaf equalization has to spare.
     pub fn equalize_layout(&mut self) {
-        self.layout_mut().equalize_all();
+        self.layout_mut().equalize_all(&[]);
     }
 
     /// Resize the split whose `last_rect` encompasses `split_origin` and
@@ -493,6 +497,7 @@ impl App {
                 a,
                 b,
                 last_rect,
+                ..
             } = node
             {
                 if *my_dir == dir
