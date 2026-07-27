@@ -109,6 +109,25 @@ skip a fixed split and move the nearest resizable ancestor instead — vim's
 `resize_dock_width_by` path, which Phase 3 must preserve rather than routing
 dock borders through the tree resize path.
 
+## The hazard the refactor relocated (found in phase 3)
+
+Docks used to be invisible to `layout().leaves()`, which made
+`leaves().len() > 1` a safe proxy for "more than one editor". Now that docks are
+leaves it counts them, so `:q` in the last editor with `:copen` open would close
+the editor and strand the user in a quickfix list. Four sites now use
+`regular_leaf_count()` instead, and `close_focused_window` needed an explicit
+`<= 1 -> E444` pre-check because `remove_leaf` now succeeds where it used to
+fail.
+
+**This is the same silent-forgetting shape the refactor set out to delete,
+relocated rather than removed** — the invariant is no longer structural, it is
+four counting sites. Mitigation for now is
+`no_close_path_leaves_a_dock_as_the_last_window`, which sweeps `:q`, `:q!`,
+`:close`, `:only`, `<C-w>c`, `<C-w>q` and `<C-w>o` with both docks open and one
+editor, and fails if any of them strands the user in a dock. Phase 5 should
+consider a single `close_window_checked` chokepoint so the count cannot be
+forgotten at a new call site.
+
 ## Invariants that must hold at every phase
 
 - The nvim compat oracle stays **ALL-pass**; its corpus is never edited to make
