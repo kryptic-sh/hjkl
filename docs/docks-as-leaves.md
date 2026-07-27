@@ -87,6 +87,28 @@ the next begins.
 | 4   | `BufKind` on the slot                | Replace `is_explorer` + qf-slot derivation with one enum; `slot_is_special` becomes `slot.kind != Normal`.                                                                                          |
 | 5   | Cleanup                              | Delete what `dock.rs` no longer needs; drop dock branches from `:q`, `close_focused_window`, `QuitOrClose`, `H`/`L`; update docs + changelog.                                                       |
 
+## Settled during execution
+
+**`explorer.width` / `panel.height` become content sizes.** Today's hand-carved
+dock rect treats the config value as the _allocation_: `explorer.width = 30`
+renders a 29-column explorer plus a 1-column separator. Phase 1 defined
+`Fixed(n)` as "renders exactly n cells", so Phase 3 has two options — pass
+`width - 1` and keep today's pixels, or pass `width` and let the config value
+mean what it says.
+
+Decision: **pass `width`.** The explorer gains one column versus today. Keeping
+the old pixels would mean re-introducing a `- 1` compensation at the dock site,
+which is precisely the implicit, silently-forgettable knowledge this refactor
+exists to delete — the same shape as the dock special-casing being removed. This
+is a user-visible one-column change and belongs in the changelog as a fix: a
+config value named `width` should produce that width.
+
+**Fixed splits are not resizable.** `<C-w>+`/`<C-w><`/`<C-w>_` and border drags
+skip a fixed split and move the nearest resizable ancestor instead — vim's
+`winfixwidth`/`winfixheight`. Docks keep drag-to-resize through the existing
+`resize_dock_width_by` path, which Phase 3 must preserve rather than routing
+dock borders through the tree resize path.
+
 ## Invariants that must hold at every phase
 
 - The nvim compat oracle stays **ALL-pass**; its corpus is never edited to make
