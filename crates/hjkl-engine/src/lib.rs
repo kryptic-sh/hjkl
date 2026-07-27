@@ -23,6 +23,7 @@
 pub mod abbrev;
 pub mod buf_helpers;
 mod buffer_impl;
+mod cursor_move;
 mod discipline;
 mod editor;
 pub mod input;
@@ -38,6 +39,7 @@ pub mod tag;
 pub mod types;
 mod viewport_math;
 
+pub use cursor_move::Move;
 pub use discipline::{DisciplineState, NoDiscipline};
 pub use editor::{
     ChangeBank, CursorScrollTarget, Editor, GlobalMarks, LspIntent, MarkJump, SearchBank, Settings,
