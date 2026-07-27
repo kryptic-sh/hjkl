@@ -100,10 +100,15 @@ fn concurrent_processes_do_not_lose_updates() {
     );
 }
 
-/// A shared lock must admit several processes at once, or every read would
-/// serialize behind every other read.
+/// A shared lock guard must release cleanly and be re-acquirable.
+///
+/// This deliberately does NOT test that several processes hold a shared lock
+/// at once — the in-process layer serializes readers by design, so a
+/// single-process test structurally cannot demonstrate it. Cross-process
+/// sharing needs the spawned-children harness the other tests in this file
+/// use; until then this covers the release/re-acquire path only.
 #[test]
-fn shared_locks_do_not_exclude_each_other() {
+fn shared_lock_guard_releases_and_reacquires() {
     let td = tempfile::tempdir().expect("tempdir");
     let target = td.path().join("readable.bin");
     write_counter(&target, 7);
