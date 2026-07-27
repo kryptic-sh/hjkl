@@ -15,8 +15,23 @@ patch bumps.
   side won in a fresh TUI session. Vim's default is `nocursorline`; use
   `:set cursorline` to re-enable the highlight.
 
+### Added
+
+- **`'endofline'` and `'fixendofline'` options, matching vim.** `:set eol` /
+  `:set noeol` / `:set eol?` and `:set fixeol` / `:set nofixeol` /
+  `:set fixeol?` are supported. `endofline` is per-buffer and derived from the
+  bytes the file was loaded with; `fixendofline` defaults on, which is the
+  behaviour hjkl already had (a file with no final newline gains one on save).
+
 ### Fixed
 
+- **`:w` no longer truncates a file containing exactly one newline.** The
+  trailing newline was derived from buffer content alone, and a 0-byte file and
+  a 1-byte `"\n"` file both produce an empty body — so the latter was written
+  back as 0 bytes. Save now honours the loaded file's own end-of-line state.
+  Verified byte-for-byte against nvim across the full matrix of empty, `"\n"`,
+  no-final-newline, final-newline and trailing-blank-line files under both
+  `fixeol` and `nofixeol`.
 - **Installing syntax spans for a stale row count no longer panics.**
   `Query::line_bytes` documents that out-of-range rows return 0, but the rope
   backend forwarded straight to `ropey::Rope::line`, which panics past the last

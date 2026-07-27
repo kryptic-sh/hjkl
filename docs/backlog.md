@@ -59,17 +59,15 @@ attacks node count, which is not the cost, and cannot avoid the base copy or the
 Worst measured cell is 457 µs (20 000 lines, 1024 nodes) on a path that fires at
 most once per `updatetime` idle gap per dirty slot, so this is low-urgency.
 
-### 1.3 `"\n"` → `""` write-back — needs a vim-parity decision first
+### 1.3 `"\n"` → `""` write-back — decided and shipped
 
-All three save paths compute `trailing_nl` as `!body.is_empty()`:
-
-- `apps/hjkl/src/app/ex_dispatch.rs` (`needs_trailing_nl`, TUI `:w`)
-- `apps/hjkl/src/headless.rs`
-- `apps/hjkl/src/embed.rs`
-
-A buffer holding a single empty line therefore writes a **zero-byte file**
-rather than `"\n"`. This is the edge B2 deliberately left alone. One decision
-settles all three sites; it is a behavior call, not an implementation task.
+Resolved 2026-07-27 (`3a72858b`): match nvim, honouring the file's own bytes
+when no option is set. Details in
+[§6.5](#65-endofline--fixendofline-parity-2026-07-27). One accepted divergence
+remains, documented at the write rule: a buffer **emptied by editing** writes 1
+byte where nvim writes 0, because nvim tracks a zero-lines buffer state
+(`ML_EMPTY`) that survives edits and the rope model has no equivalent. Files as
+loaded round-trip exactly.
 
 ### 1.4 Round-2 deferred items
 
@@ -429,6 +427,43 @@ oracle in the spirit of `diff_reference`, checked against the accelerated path
 over a 5000-step random op stream. Mutation-tested during review — corrupting a
 cached intermediate fails two of the new tests loudly, and the pre-existing
 warm-vs-cold assertions do not catch it.
+
+### 6.5 `endofline` / `fixendofline` parity (2026-07-27)
+
+`3a72858b`. hjkl derived the trailing newline from content alone
+(`trailing_nl = !body.is_empty()`), which cannot distinguish a 0-byte file from
+a 1-byte `"\n"` file — both join back to an empty `body` — so the latter was
+silently truncated.
+
+Now: `'endofline'` is per-buffer state derived from the loaded bytes (on
+`BufferSlot`, not on the per-window `Editor`, since a document has one EOL state
+however many windows show it), and `'fixendofline'` is a normal option
+defaulting on. Both are settable via `:set eol` / `:set fixeol` and their `no`
+and `?` forms.
+
+**Two bits are required, not one.** `'endofline'` alone cannot encode the 0-byte
+case: nvim reports `endofline` for an empty file (there is no last line to be
+unterminated) yet writes 0 bytes, so a second `loaded_empty` bit carries vim's
+internal `ML_EMPTY`. The rule is
+`if body.is_empty() && loaded_empty { false } else { endofline || fixendofline }`
+— the empty gate self-invalidates once the buffer holds text, so typing into a
+0-byte file still writes a terminated line.
+
+Verified differentially against real nvim, byte-for-byte, 13/13 rows across
+default, `nofixeol`, and `noeol nofixeol`:
+
+| input     | nvim / hjkl (default) | nvim / hjkl (`nofixeol`) |
+| --------- | --------------------- | ------------------------ |
+| `""`      | 0 / 0                 | 0 / 0                    |
+| `"\n"`    | 1 / 1 (was 0)         | 1 / 1                    |
+| `"abc"`   | 4 / 4                 | 3 / 3                    |
+| `"abc\n"` | 4 / 4                 | 4 / 4                    |
+| `"a\n\n"` | 3 / 3                 | 3 / 3                    |
+| `"a\nb"`  | 4 / 4                 | —                        |
+
+Note the compat oracle cannot cover this: its harness cannot drive `:` commands,
+so `:w` behaviour is pinned by hand-written tests across all three hosts (TUI
+`:w`, `--headless`, `--embed`) rather than by the oracle.
 
 ---
 
