@@ -1918,6 +1918,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if found {
             let row = crate::types::Cursor::cursor(&self.buffer).line as usize;
             self.buffer.reveal_row(row);
+            self.sync_sticky_col_to_cursor();
         }
         found
     }
@@ -1930,8 +1931,27 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if found {
             let row = crate::types::Cursor::cursor(&self.buffer).line as usize;
             self.buffer.reveal_row(row);
+            self.sync_sticky_col_to_cursor();
         }
         found
+    }
+
+    /// Reset `sticky_col` (vim's `curswant`) to the column the cursor is
+    /// currently on.
+    ///
+    /// A search hit is an explicit jump, and vim resets `curswant` on every
+    /// explicit jump — so the next `j`/`k` aims at the match's column rather
+    /// than at wherever the cursor sat before the search.
+    ///
+    /// This lives on the *advance* rather than at each call site because
+    /// there are four of them across two crates (`App::commit_search`, the
+    /// `+/pattern` startup search, the vim search prompt, and the `n`/`N`
+    /// motion) and only the last happened to be correct — it runs through the
+    /// vim motion dispatch, which ends in `apply_sticky_col`. Putting it here
+    /// makes the guarantee structural instead of remembered; the motion path
+    /// then re-sets the same value, which is a no-op.
+    fn sync_sticky_col_to_cursor(&mut self) {
+        self.sticky_col = Some(buf_cursor_pos(&self.buffer).col);
     }
 
     /// Snapshot of the unnamed register (the default `p` / `P` source).

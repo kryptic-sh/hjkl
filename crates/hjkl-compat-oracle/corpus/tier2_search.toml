@@ -94,3 +94,58 @@ expected_cursor = [0, 7]
 # exercise hjkl-only default settings (ignorecase=true, smartcase=true) that
 # differ from nvim's out-of-the-box defaults and therefore cannot be compared
 # against nvim with --clean. The nvim_api_tier.toml driver runs hjkl alone.
+
+# ─── search updates the sticky column (curswant) ────────────────────────────
+# A search hit is an explicit jump: vim resets `curswant` to the column the
+# cursor actually landed on, so the NEXT `j`/`k` aims at the match's column,
+# not at wherever the cursor was before the search. Expectations below were
+# taken from headless nvim, not predicted.
+
+# `/` then `j`: the vertical motion must aim at the match column (10), not at
+# the column the preceding `j` established (0).
+[[cases]]
+name = "search_slash_sets_sticky_col_for_next_j"
+initial_buffer = "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz\n"
+initial_cursor = [0, 0]
+keys = "j/target<CR>j"
+expected_buffer = "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz\n"
+expected_cursor = [2, 10]
+
+# `?` then `j` onto a SHORT row: the landing column proves which sticky value
+# is live — clamped from 10 gives col 1, a stale sticky of 0 gives col 0.
+[[cases]]
+name = "search_question_sets_sticky_col_for_next_j"
+initial_buffer = "0123456789target0123\nab\nzzzzzzzzzzzzzzzzzzzzzz\n"
+initial_cursor = [0, 0]
+keys = "j?target<CR>j"
+expected_buffer = "0123456789target0123\nab\nzzzzzzzzzzzzzzzzzzzzzz\n"
+expected_cursor = [1, 1]
+
+# Same for `k` back onto a short row.
+[[cases]]
+name = "search_sets_sticky_col_for_next_k"
+initial_buffer = "qqqqqqqqqqqqqqqqqqqq\nab\n0123456789target\n"
+initial_cursor = [0, 0]
+keys = "j/target<CR>k"
+expected_buffer = "qqqqqqqqqqqqqqqqqqqq\nab\n0123456789target\n"
+expected_cursor = [1, 1]
+
+# `n` then `j` — `n` already went through the motion path, so this guards the
+# repeat direction rather than the commit path.
+[[cases]]
+name = "search_n_then_j_uses_match_col"
+initial_buffer = "ab\n01234target\nzzzzzzzzzzzz\n0123456789target\nqqqqqqqqqqqqqqqq\n"
+initial_cursor = [0, 0]
+keys = "j/target<CR>nj"
+expected_buffer = "ab\n01234target\nzzzzzzzzzzzz\n0123456789target\nqqqqqqqqqqqqqqqq\n"
+expected_cursor = [4, 10]
+
+# A search with no preceding vertical motion must also set the column, not
+# leave it unset — the first `j` after it aims at the match column.
+[[cases]]
+name = "search_sets_sticky_col_without_prior_motion"
+initial_buffer = "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz\n"
+initial_cursor = [0, 0]
+keys = "/target<CR>j"
+expected_buffer = "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz\n"
+expected_cursor = [2, 10]

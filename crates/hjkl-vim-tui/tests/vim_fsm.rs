@@ -6544,3 +6544,47 @@ fn bracket_open_close_forward_at_bottom_clamps() {
     run_keys(&mut e, "][");
     assert_eq!(e.cursor().0, row_before);
 }
+
+/// A search hit is an explicit jump: vim resets `curswant` to the column the
+/// cursor landed on, so the next `j`/`k` aims at the match's column rather
+/// than at whatever column a previous vertical motion established.
+///
+/// `n`/`N` always got this right (they run through the motion dispatch, which
+/// ends in `apply_sticky_col`); the `/` and `?` prompt commits did not, since
+/// they call `search_advance_*` on the engine directly.
+#[test]
+fn search_commit_sets_sticky_col_to_the_match_column() {
+    let mut e = editor_with("ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz");
+    run_keys(&mut e, "j");
+    assert_eq!(e.sticky_col(), Some(0), "j establishes the sticky column");
+
+    run_keys(&mut e, "/target<CR>");
+    assert_eq!(e.cursor(), (1, 10), "search lands on the match");
+    assert_eq!(
+        e.sticky_col(),
+        Some(10),
+        "the search hit must reset the sticky column to the match column"
+    );
+
+    run_keys(&mut e, "j");
+    assert_eq!(
+        e.cursor(),
+        (2, 10),
+        "j aims at the match column, not the old one"
+    );
+}
+
+/// Backward `?` commit takes the same path and must behave identically.
+/// Landing on a SHORT row proves which sticky value is live: clamped from 10
+/// gives col 1, a stale 0 gives col 0.
+#[test]
+fn backward_search_commit_sets_sticky_col() {
+    let mut e = editor_with("0123456789target0123\nab\nzzzzzzzzzzzzzzzzzzzzzz");
+    run_keys(&mut e, "j");
+    run_keys(&mut e, "?target<CR>");
+    assert_eq!(e.cursor(), (0, 10));
+    assert_eq!(e.sticky_col(), Some(10));
+
+    run_keys(&mut e, "j");
+    assert_eq!(e.cursor(), (1, 1), "clamped to the short row from col 10");
+}

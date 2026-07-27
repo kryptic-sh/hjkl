@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/pattern<CR>` now sets the sticky column, so the next `j`/`k` keeps the
+  match's column.** A search hit is an explicit jump, and vim resets `curswant`
+  on those — hjkl left the value from whatever vertical motion came before, so
+  `j` after a search snapped the cursor back to the old column. `n`/`N` were
+  already correct; the `/` and `?` prompt commits, and the `+/pattern` startup
+  search, were not.
+
 ## [0.39.0] - 2026-07-27
 
 ### Changed

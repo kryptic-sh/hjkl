@@ -5720,3 +5720,30 @@ fn parse_unknown_tag_errors() {
     let err = parse_key_sequence("<NoSuchKey>x", '\\');
     assert!(err.is_err(), "unknown tag must fail to parse");
 }
+
+/// App-layer twin of the engine test: the TUI `/pattern<CR>` commit
+/// (`App::commit_search`) must leave the sticky column on the match, so the
+/// next `j` aims there. This path calls `search_advance_*` on the engine
+/// directly, bypassing the vim motion dispatch that sets sticky for `n`/`N`.
+#[test]
+fn commit_search_sets_sticky_col_to_the_match_column() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz");
+    app.active_editor_mut().jump_cursor(0, 0);
+
+    app.active_editor_mut()
+        .apply_motion(hjkl_engine::MotionKind::LineDown, 1);
+    assert_eq!(app.active_editor().sticky_col(), Some(0));
+
+    app.commit_search("target");
+    assert_eq!(app.active_editor().cursor(), (1, 10));
+    assert_eq!(
+        app.active_editor().sticky_col(),
+        Some(10),
+        "`/pattern<CR>` must reset the sticky column to the match column"
+    );
+
+    app.active_editor_mut()
+        .apply_motion(hjkl_engine::MotionKind::LineDown, 1);
+    assert_eq!(app.active_editor().cursor(), (2, 10));
+}
