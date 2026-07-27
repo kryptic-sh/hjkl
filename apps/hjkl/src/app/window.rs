@@ -43,6 +43,19 @@ pub fn rect_to_layout(r: ratatui::layout::Rect) -> LayoutRect {
     LayoutRect::new(r.x, r.y, r.width, r.height)
 }
 
+/// Convert a [`LayoutRect`] back to a ratatui `Rect` — the inverse of
+/// [`rect_to_layout`], used by the renderer to draw what `hjkl_layout`
+/// computed.
+#[inline]
+pub fn layout_to_rect(r: LayoutRect) -> ratatui::layout::Rect {
+    ratatui::layout::Rect {
+        x: r.x,
+        y: r.y,
+        width: r.w,
+        height: r.h,
+    }
+}
+
 // ── App window-action dispatcher ──────────────────────────────────────────────
 
 use super::App;
@@ -456,6 +469,16 @@ impl App {
     /// Called by the border-drag handler in the event loop (Phase 9).
     /// `orientation` determines whether we're moving a column (VSplit) or
     /// a row (HSplit) boundary.
+    ///
+    /// **Dragging the border of a fixed split is refused** (#63 Phase 2): the
+    /// split is found, and then deliberately left alone. A `Fixed` allocation
+    /// is owned by whoever set it — for a dock, the persisted config
+    /// width/height — so a drag must go through that owner's own resize path
+    /// (`resize_dock_width_by` / `resize_dock_height_by`, which the event loop
+    /// already routes dock borders to), not silently rewrite a `ratio` the
+    /// renderer is ignoring. Same rule as
+    /// [`hjkl_layout::LayoutTree::enclosing_split_mut`], which keeps
+    /// `<C-w>+`/`<C-w><` off fixed splits.
     pub(crate) fn resize_split_to(
         &mut self,
         orientation: super::mouse::SplitOrientation,
@@ -494,10 +517,10 @@ impl App {
             if let LayoutTree::Split {
                 dir: my_dir,
                 ratio,
+                fixed,
                 a,
                 b,
                 last_rect,
-                ..
             } = node
             {
                 if *my_dir == dir
@@ -510,8 +533,13 @@ impl App {
                         Axis::Row => (r.y, r.h),
                     };
                     if rect_origin == origin && rect_total == total {
-                        *ratio = new_ratio;
-                        return; // found the target; done
+                        // Target found. A fixed split keeps its size — see the
+                        // doc comment above; drop the drag rather than write a
+                        // ratio the renderer ignores.
+                        if fixed.is_none() {
+                            *ratio = new_ratio;
+                        }
+                        return;
                     }
                 }
                 update_matching(a, dir, origin, total, new_ratio);

@@ -344,6 +344,89 @@ mod border_drag_tests {
         );
     }
 
+    // ── #63 Phase 2: a fixed split refuses to be dragged ──────────────────
+
+    /// Dragging the border of a split with a `Fixed` allocation must change
+    /// nothing: not the `fixed` cells (they belong to whoever configured
+    /// them), and not the `ratio` either (the renderer ignores it while
+    /// `fixed` is set, so writing it would do nothing now and make the layout
+    /// jump the moment `fixed` is cleared).
+    ///
+    /// Docks keep their drag-to-resize: the event loop routes dock borders to
+    /// `resize_dock_width_by` / `resize_dock_height_by`, which move the
+    /// persisted config value instead.
+    #[test]
+    fn border_drag_on_fixed_split_is_refused() {
+        use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+        use hjkl_layout::Fixed;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window::new(0)));
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
+                dir: SplitDir::Vertical,
+                ratio: 0.5,
+                fixed: Some(Fixed::First(20)),
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
+            },
+            0,
+        );
+
+        app.resize_split_to(SplitOrientation::Vertical, 0, 80, 44);
+
+        match app.layout() {
+            window::LayoutTree::Split { ratio, fixed, .. } => {
+                assert_eq!(*fixed, Some(Fixed::First(20)), "fixed size must survive");
+                assert!(
+                    (*ratio - 0.5).abs() < 1e-6,
+                    "the ignored ratio must not be rewritten either, got {ratio}"
+                );
+            }
+            _ => panic!("expected a split"),
+        }
+        // The geometry the user sees is therefore unchanged.
+        let rects = app.layout().window_rects(LayoutRect::new(0, 0, 80, 24));
+        assert_eq!(rects[0].1.w, 20, "the fixed child still renders 20 columns");
+    }
+
+    /// Keyboard resizes agree with the mouse: `<C-w><` inside a fixed split
+    /// finds no resizable ancestor and leaves the tree alone.
+    #[test]
+    fn keyboard_resize_inside_a_fixed_split_is_refused() {
+        use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+        use hjkl_layout::Fixed;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window::new(0)));
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
+                dir: SplitDir::Vertical,
+                ratio: 0.5,
+                fixed: Some(Fixed::Second(20)),
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
+            },
+            0,
+        );
+
+        app.resize_width(10);
+
+        match app.layout() {
+            window::LayoutTree::Split { ratio, fixed, .. } => {
+                assert_eq!(*fixed, Some(Fixed::Second(20)));
+                assert!((*ratio - 0.5).abs() < 1e-6, "ratio untouched, got {ratio}");
+            }
+            _ => panic!("expected a split"),
+        }
+    }
+
     // ── T7c: border_double_click_equalizes_split ─────────────────────────
 
     #[test]

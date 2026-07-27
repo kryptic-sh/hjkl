@@ -61,14 +61,14 @@ pub struct BorderHit {
     pub dock: bool,
 }
 
-/// Walk the layout tree and find a border within `tolerance` cells of
-/// `(col, row)`. `tolerance = 0` requires an exact hit on the 1-cell divider.
+/// Walk the layout tree and find the 1-cell divider under `(col, row)`.
 ///
-/// The divider geometry mirrors `render::render_layout`:
-/// - VSplit: separator column = `rect_a.x + a_w - 1` where `a_w = round(area.width * ratio)`.
-/// - HSplit: separator row    = `rect_a.y + a_h - 1` where `a_h = round(area.height * ratio)`.
+/// The divider geometry is not recomputed here: it comes from
+/// [`hjkl_layout::split_geometry`] applied to the split's `last_rect` (written
+/// by the renderer each frame), which is the same call `render::render_layout`
+/// makes to place the separator — so ratio splits and `fixed` splits alike are
+/// grabbable exactly where they are drawn.
 ///
-/// Both use the split's `last_rect` (written by the renderer each frame).
 /// Returns `None` before the first render or when not on any border.
 pub fn hit_test_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
     let layout = app.layout();
@@ -83,7 +83,7 @@ pub fn hit_test_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
 /// (`render::frame`, before `render_layout`), already shrunk by 1 column for
 /// the separator when one was drawn — so the border sits exactly one column
 /// past `rect.x + rect.w`, mirroring the Col-axis carving in
-/// `render::frame` / `headless_split_rect`.
+/// `render::frame` / [`hjkl_layout::split_geometry`].
 fn hit_test_dock_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
     let dock = app.left_dock.as_ref()?;
     let win = app.windows.get(dock.win_id)?.as_ref()?;
@@ -125,62 +125,42 @@ fn hit_test_bottom_dock_border(app: &App, col: u16, row: u16) -> Option<BorderHi
     }
 }
 
+/// Recursive worker for [`hit_test_border`], outermost split first.
+///
+/// The separator rect comes from [`hjkl_layout::split_geometry`] — the very
+/// function `render::render_layout` draws from — so a border is grabbable
+/// exactly when (and where) it is drawn, `fixed` splits included. Deriving it
+/// from `ratio` here instead is what would let a fixed split's visible divider
+/// and its draggable divider drift apart.
 fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Option<BorderHit> {
     match layout {
         window::LayoutTree::Leaf(_) => None,
         window::LayoutTree::Split {
             dir,
             ratio,
+            fixed,
             a,
             b,
             last_rect,
-            // `fixed` splits are never built yet (#63 Phase 1 only adds the
-            // primitive); this hit-test still derives the separator from ratio.
-            ..
         } => {
             let area = (*last_rect)?;
-            // Compute the separator position from ratio (matches render::split_rect).
             // Match on Axis (exhaustive) so future SplitDir variants cause a
             // compile error rather than a silent runtime no-op.
             use hjkl_layout::Axis;
-            let hit = match dir.axis() {
-                Axis::Col => {
-                    // Vertical split: side-by-side columns.
-                    let a_w = ((area.w as f32) * ratio).round() as u16;
-                    let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
-                    // Separator column: rightmost cell of rect_a (before shrinking).
-                    let sep_col = area.x + a_w.saturating_sub(1);
-                    if col == sep_col && row >= area.y && row < area.y + area.h {
-                        Some(BorderHit {
-                            orientation: SplitOrientation::Vertical,
-                            border_cell: (col, row),
-                            split_origin: area.x,
-                            split_total: area.w,
-                            dock: false,
-                        })
-                    } else {
-                        None
-                    }
+            let sep = hjkl_layout::split_geometry(area, *dir, *ratio, *fixed).separator;
+            let hit = sep.filter(|s| rect_contains(*s, col, row)).map(|_| {
+                let (orientation, split_origin, split_total) = match dir.axis() {
+                    Axis::Col => (SplitOrientation::Vertical, area.x, area.w),
+                    Axis::Row => (SplitOrientation::Horizontal, area.y, area.h),
+                };
+                BorderHit {
+                    orientation,
+                    border_cell: (col, row),
+                    split_origin,
+                    split_total,
+                    dock: false,
                 }
-                Axis::Row => {
-                    // Horizontal split: stacked rows.
-                    let a_h = ((area.h as f32) * ratio).round() as u16;
-                    let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
-                    // Separator row: bottom row of rect_a (before shrinking).
-                    let sep_row = area.y + a_h.saturating_sub(1);
-                    if row == sep_row && col >= area.x && col < area.x + area.w {
-                        Some(BorderHit {
-                            orientation: SplitOrientation::Horizontal,
-                            border_cell: (col, row),
-                            split_origin: area.y,
-                            split_total: area.h,
-                            dock: false,
-                        })
-                    } else {
-                        None
-                    }
-                }
-            };
+            });
             // Return this split's hit if found; otherwise recurse into children.
             if hit.is_some() {
                 hit
@@ -2098,6 +2078,83 @@ mod tests {
         assert_eq!(h.border_cell, (39, 10));
         assert_eq!(h.split_origin, 0);
         assert_eq!(h.split_total, 80);
+    }
+
+    /// Helper: two windows in a split with a `fixed` allocation, `last_rect`
+    /// pre-filled over an 80x24 area. Nothing in the editor builds a fixed
+    /// split until #63 Phase 3, so the hit-test can only be exercised against
+    /// a hand-planted one.
+    fn make_fixed_split_app(dir: crate::app::window::SplitDir, fixed: hjkl_layout::Fixed) -> App {
+        use crate::app::window::{LayoutRect, LayoutTree, Tab, Window};
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window::new(0)));
+        app.reconcile_window_editors();
+
+        let area = LayoutRect::new(0, 0, 80, 24);
+        let geo = hjkl_layout::split_geometry(area, dir, 0.5, Some(fixed));
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
+                dir,
+                ratio: 0.5,
+                fixed: Some(fixed),
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(area),
+            },
+            0,
+        );
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(geo.a);
+        }
+        if let Some(Some(w)) = app.windows.get_mut(win1) {
+            w.last_rect = Some(geo.b);
+        }
+        app
+    }
+
+    /// #63 Phase 2: the draggable border of a `fixed` split sits where the
+    /// renderer draws it (`split_geometry`'s separator), NOT where the ignored
+    /// `ratio` would have put it. Pre-Phase-2 this hit-test derived the column
+    /// from `ratio` alone, so on a fixed split the user would have been
+    /// grabbing empty text 19 columns away from the visible divider.
+    #[test]
+    fn hit_test_border_follows_fixed_allocation_not_ratio() {
+        use crate::app::window::SplitDir;
+        use hjkl_layout::Fixed;
+
+        // Vertical, `a` fixed at 20 columns → divider at column 20 (ratio 0.5
+        // would say 39).
+        let app = make_fixed_split_app(SplitDir::Vertical, Fixed::First(20));
+        let hit = hit_test_border(&app, 20, 7).expect("divider is at the fixed boundary");
+        assert_eq!(hit.orientation, SplitOrientation::Vertical);
+        assert_eq!(hit.border_cell, (20, 7));
+        assert_eq!((hit.split_origin, hit.split_total), (0, 80));
+        assert!(!hit.dock, "a tree split is not a dock hit");
+        assert!(
+            hit_test_border(&app, 39, 7).is_none(),
+            "the ratio-derived column must NOT be draggable"
+        );
+
+        // Vertical, `b` fixed at 20 columns → 59 for `a`, divider at 59.
+        let app = make_fixed_split_app(SplitDir::Vertical, Fixed::Second(20));
+        assert!(hit_test_border(&app, 59, 7).is_some(), "divider at col 59");
+        assert!(
+            hit_test_border(&app, 39, 7).is_none(),
+            "not at the ratio col"
+        );
+
+        // Horizontal, `a` fixed at 5 rows → divider on row 5 (ratio 0.5: 11).
+        let app = make_fixed_split_app(SplitDir::Horizontal, Fixed::First(5));
+        let hit = hit_test_border(&app, 12, 5).expect("divider is on the fixed boundary");
+        assert_eq!(hit.orientation, SplitOrientation::Horizontal);
+        assert_eq!((hit.split_origin, hit.split_total), (0, 24));
+        assert!(
+            hit_test_border(&app, 12, 11).is_none(),
+            "not at the ratio row"
+        );
     }
 
     #[test]

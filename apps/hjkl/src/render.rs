@@ -538,48 +538,6 @@ pub fn buffer_background_style(app: &App) -> Style {
     }
 }
 
-/// Split a `Rect` into two parts according to `dir` and `ratio`.
-fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
-    match dir.axis() {
-        window::Axis::Row => {
-            let a_h = ((area.height as f32) * ratio).round() as u16;
-            let a_h = a_h.clamp(1, area.height.saturating_sub(1).max(1));
-            let b_h = area.height.saturating_sub(a_h);
-            let rect_a = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: a_h,
-            };
-            let rect_b = Rect {
-                x: area.x,
-                y: area.y + a_h,
-                width: area.width,
-                height: b_h,
-            };
-            (rect_a, rect_b)
-        }
-        window::Axis::Col => {
-            let a_w = ((area.width as f32) * ratio).round() as u16;
-            let a_w = a_w.clamp(1, area.width.saturating_sub(1).max(1));
-            let b_w = area.width.saturating_sub(a_w);
-            let rect_a = Rect {
-                x: area.x,
-                y: area.y,
-                width: a_w,
-                height: area.height,
-            };
-            let rect_b = Rect {
-                x: area.x + a_w,
-                y: area.y,
-                width: b_w,
-                height: area.height,
-            };
-            (rect_a, rect_b)
-        }
-    }
-}
-
 /// Draw a 1-cell-wide separator between sibling panes.
 ///
 /// For `SplitDir::Vertical` (side-by-side panes) the separator is a column
@@ -630,71 +588,37 @@ fn draw_separator(
 /// Walk the layout tree and render each leaf window into its allocated rect.
 /// Takes `&mut LayoutTree` so that Split nodes can record their `last_rect`
 /// for use by resize commands in later phases.
+///
+/// The geometry itself — where each child goes, where the separator goes, and
+/// how a [`hjkl_layout::Fixed`] allocation overrides `ratio` — comes from
+/// [`hjkl_layout::split_geometry`], the same function
+/// [`hjkl_layout::LayoutTree::window_rects`] and `mouse::hit_test_border` use.
+/// The renderer descends the tree itself (rather than calling `window_rects`,
+/// which returns a flat leaf list) because it has to draw the separator at
+/// every internal node and record each split's `last_rect` on the way down.
 fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut window::LayoutTree) {
     match layout {
         window::LayoutTree::Leaf(id) => render_window(frame, app, area, *id),
         window::LayoutTree::Split {
             dir,
             ratio,
+            fixed,
             a,
             b,
             last_rect,
-            // `fixed` is unused here until #63 Phase 2 routes rendering
-            // through `LayoutTree::window_rects`; nothing builds a fixed
-            // split yet, so ratio remains the only geometry input.
-            ..
         } => {
-            // Record the FULL rect (pre-separator) so that resize commands
-            // can convert line/column deltas to ratio updates correctly.
+            // Record the FULL rect (pre-separator) so that resize commands and
+            // border drags can convert line/column deltas back to this split's
+            // geometry — for fixed splits too, since `split_geometry` derives
+            // both children from exactly this rect.
             *last_rect = Some(window::rect_to_layout(area));
 
-            let (rect_a, rect_b) = split_rect(area, *dir, *ratio);
-
-            // Carve a 1-cell separator between the two child rects and
-            // shrink the right/bottom child by 1 cell so children never
-            // overlap the separator. Skip when the rect is too small.
             let border_color = app.theme.ui.border;
-            let (rect_a, sep_rect, rect_b) = match dir.axis() {
-                window::Axis::Col => {
-                    // Side-by-side: separator is the rightmost column of rect_a.
-                    // Shrink rect_a by 1 on the right; sep is that freed column;
-                    // rect_b stays (it already starts right after rect_a).
-                    if rect_a.width < 2 || rect_b.width == 0 {
-                        // Too narrow — no separator, pass through as-is.
-                        (rect_a, None, rect_b)
-                    } else {
-                        let a_shrunk = Rect {
-                            width: rect_a.width.saturating_sub(1),
-                            ..rect_a
-                        };
-                        let sep = Rect {
-                            x: rect_a.x + rect_a.width.saturating_sub(1),
-                            y: rect_a.y,
-                            width: 1,
-                            height: rect_a.height,
-                        };
-                        (a_shrunk, Some(sep), rect_b)
-                    }
-                }
-                window::Axis::Row => {
-                    // Stacked: separator is the bottom row of rect_a.
-                    if rect_a.height < 2 || rect_b.height == 0 {
-                        (rect_a, None, rect_b)
-                    } else {
-                        let a_shrunk = Rect {
-                            height: rect_a.height.saturating_sub(1),
-                            ..rect_a
-                        };
-                        let sep = Rect {
-                            x: rect_a.x,
-                            y: rect_a.y + rect_a.height.saturating_sub(1),
-                            width: rect_a.width,
-                            height: 1,
-                        };
-                        (a_shrunk, Some(sep), rect_b)
-                    }
-                }
-            };
+            let geo =
+                hjkl_layout::split_geometry(window::rect_to_layout(area), *dir, *ratio, *fixed);
+            let rect_a = window::layout_to_rect(geo.a);
+            let rect_b = window::layout_to_rect(geo.b);
+            let sep_rect = geo.separator.map(window::layout_to_rect);
 
             render_layout(frame, app, rect_a, a);
             render_layout(frame, app, rect_b, b);
@@ -2086,9 +2010,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         let total_w = buf_area.width;
         let dock_w =
             crate::app::dock::clamp_dock_width(app.config.explorer.width, total_w).min(total_w);
-        // Mirrors the Col-axis separator carving in `render_layout` /
-        // `headless_split_rect` exactly, so `mouse::hit_test_border`'s dock
-        // border cell lines up with what's actually drawn.
+        // Mirrors the Col-axis separator carving in
+        // `hjkl_layout::split_geometry` exactly, so `mouse::hit_test_border`'s
+        // dock border cell lines up with what's actually drawn. (#63 Phase 3
+        // deletes this by making the dock a real fixed split, at which point
+        // the mirroring stops being hand-maintained.)
         let (dock_rect, sep_rect, rest) = if dock_w >= 2 && buf_area.width > dock_w {
             let content = Rect {
                 x: buf_area.x,
@@ -3836,5 +3762,160 @@ mod tests {
              target's — got top row {:?}",
             rows[0]
         );
+    }
+
+    // ── Fixed splits render where the layout crate says (#63 Phase 2) ────────
+
+    /// Build a two-window app whose tab holds a single split with `fixed`, draw
+    /// it, and return the app so callers can inspect the rendered rects.
+    ///
+    /// Nothing in the editor constructs a fixed split yet (docks join the tree
+    /// in Phase 3), so the only way to test the geometry is to plant one by
+    /// hand.
+    #[cfg(test)]
+    fn draw_fixed_split_app(
+        dir: window::SplitDir,
+        fixed: hjkl_layout::Fixed,
+    ) -> (crate::app::App, ratatui::buffer::Buffer) {
+        use crate::app::App;
+        use crate::app::window::{LayoutTree, Tab};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        // Skip the splash screen — it short-circuits `frame` before the tree
+        // is ever walked.
+        app.start_screen = None;
+
+        // Make a second window the normal way (so ids / editors / slots are
+        // wired exactly as in a live session), then re-shape the tab's tree
+        // into the fixed split under test.
+        app.dispatch_ex("split");
+        let leaves = app.layout().leaves();
+        assert_eq!(leaves.len(), 2, ":split must produce two windows");
+        app.tabs[0] = Tab::new(
+            LayoutTree::split_fixed(
+                dir,
+                0.5,
+                fixed,
+                LayoutTree::Leaf(leaves[0]),
+                LayoutTree::Leaf(leaves[1]),
+            ),
+            leaves[0],
+        );
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Draw twice: the first frame settles window rects/viewports.
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (app, buf)
+    }
+
+    /// The renderer must place a `fixed` split exactly where
+    /// `LayoutTree::window_rects` places it — same function, one source of
+    /// truth — and record the split's full pre-separator rect in `last_rect`
+    /// so resizes and border drags keep working.
+    ///
+    /// Before Phase 2 the renderer ignored `fixed` and used `ratio`, so every
+    /// one of these cases would have rendered a half-and-half split.
+    #[test]
+    fn renderer_places_fixed_splits_where_the_layout_crate_says() {
+        use hjkl_layout::Fixed;
+        use window::SplitDir;
+
+        for (dir, fixed) in [
+            (SplitDir::Vertical, Fixed::First(20)),
+            (SplitDir::Vertical, Fixed::Second(20)),
+            (SplitDir::Horizontal, Fixed::First(5)),
+            (SplitDir::Horizontal, Fixed::Second(5)),
+        ] {
+            let (app, _buf) = draw_fixed_split_app(dir, fixed);
+
+            // The split's own rect, as recorded during the draw.
+            let area = match app.layout() {
+                window::LayoutTree::Split { last_rect, .. } => {
+                    last_rect.expect("the renderer must record the split's rect")
+                }
+                _ => panic!("expected a split at the root"),
+            };
+            // The renderer's leaf rects must equal the headless walk's.
+            let expected = app.layout().window_rects(area);
+            let actual: Vec<_> = expected
+                .iter()
+                .map(|(id, _)| {
+                    (
+                        *id,
+                        app.windows[*id]
+                            .as_ref()
+                            .and_then(|w| w.last_rect)
+                            .expect("every rendered window records its rect"),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "{dir:?}/{fixed:?}: rendered rects must match window_rects"
+            );
+
+            // …and the fixed child must actually render the requested number
+            // of cells. A ratio-driven renderer would have split `area` in
+            // half instead (39 columns for an 80-column frame).
+            let extent = |r: window::LayoutRect| match dir.axis() {
+                window::Axis::Col => r.w,
+                window::Axis::Row => r.h,
+            };
+            let (rendered, requested) = match fixed {
+                Fixed::First(n) => (extent(actual[0].1), n),
+                Fixed::Second(n) => (extent(actual[1].1), n),
+                _ => unreachable!("no other Fixed variants exist"),
+            };
+            assert_eq!(
+                rendered, requested,
+                "{dir:?}/{fixed:?}: the fixed child must render {requested} cells"
+            );
+            // The sibling takes the rest of the axis, minus the separator.
+            let sibling = match fixed {
+                Fixed::First(_) => extent(actual[1].1),
+                _ => extent(actual[0].1),
+            };
+            assert_eq!(
+                rendered + 1 + sibling,
+                extent(area),
+                "{dir:?}/{fixed:?}: children + separator must tile the split"
+            );
+        }
+    }
+
+    /// The separator glyph must be drawn in the cell `split_geometry` reserves
+    /// for it — the cell `mouse::hit_test_border` lets the user grab. An
+    /// off-by-one shows up as a divider drawn over a window's text, or a
+    /// border that can't be dragged.
+    #[test]
+    fn fixed_split_separator_is_drawn_in_the_reserved_cell() {
+        use hjkl_layout::Fixed;
+        use window::SplitDir;
+
+        for (dir, fixed, glyph) in [
+            (SplitDir::Vertical, Fixed::First(20), "│"),
+            (SplitDir::Vertical, Fixed::Second(20), "│"),
+            (SplitDir::Horizontal, Fixed::First(5), "─"),
+        ] {
+            let (app, buf) = draw_fixed_split_app(dir, fixed);
+            let area = match app.layout() {
+                window::LayoutTree::Split { last_rect, .. } => last_rect.unwrap(),
+                _ => panic!("expected a split at the root"),
+            };
+            let sep = hjkl_layout::split_geometry(area, dir, 0.5, Some(fixed))
+                .separator
+                .expect("this geometry has room for a separator");
+            assert_eq!(
+                buf.cell((sep.x, sep.y)).map(|c| c.symbol()),
+                Some(glyph),
+                "{dir:?}/{fixed:?}: separator must be drawn at ({}, {})",
+                sep.x,
+                sep.y
+            );
+        }
     }
 }

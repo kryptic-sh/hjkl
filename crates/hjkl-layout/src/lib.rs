@@ -516,6 +516,14 @@ impl LayoutTree {
     /// `dir` that contains `id`. Returns a mutable reference to the ratio,
     /// a copy of the last_rect, and whether the focused leaf is in `a`.
     /// Returns None if no such enclosing Split exists.
+    ///
+    /// **Splits carrying a [`Fixed`] allocation are never candidates.** Their
+    /// size belongs to whoever set it (a dock's configured width, say), not to
+    /// a resize command, and `ratio` is ignored while `fixed` is set — writing
+    /// it would do nothing now and make the layout jump later, when `fixed` is
+    /// cleared. The search simply continues outward, so a `<C-w>+`-style resize
+    /// inside a fixed pane moves the nearest resizable ancestor instead. That
+    /// is vim's `winfixwidth` / `winfixheight` behaviour.
     pub fn enclosing_split_mut(
         &mut self,
         id: WindowId,
@@ -526,10 +534,10 @@ impl LayoutTree {
             Self::Split {
                 dir: my_dir,
                 ratio,
+                fixed,
                 a,
                 b,
                 last_rect,
-                ..
             } => {
                 let in_a = a.contains(id);
                 let in_b = b.contains(id);
@@ -539,6 +547,7 @@ impl LayoutTree {
 
                 let my_dir = *my_dir;
                 let saved_rect = *last_rect;
+                let is_fixed = fixed.is_some();
 
                 // Try deeper first (innermost wins).
                 let inner = if in_a {
@@ -550,8 +559,9 @@ impl LayoutTree {
                     return inner;
                 }
 
-                // No deeper match — am I a candidate?
-                if my_dir == dir {
+                // No deeper match — am I a candidate? A fixed split never is;
+                // returning None here hands the search to my parent.
+                if my_dir == dir && !is_fixed {
                     Some((ratio, saved_rect, in_a))
                 } else {
                     None
@@ -681,6 +691,11 @@ impl LayoutTree {
 
     /// For each enclosing Split on the path from root to leaf `id`, invoke
     /// `f` with the split's mutable state. Order: outermost first.
+    ///
+    /// Splits carrying a [`Fixed`] allocation are **skipped** (recursion still
+    /// descends through them) for the same reason
+    /// [`enclosing_split_mut`](Self::enclosing_split_mut) refuses them: their
+    /// size is not a ratio anyone may rewrite.
     pub fn for_each_ancestor<F>(&mut self, id: WindowId, f: &mut F)
     where
         F: FnMut(SplitDir, &mut f32, bool, Option<LayoutRect>),
@@ -688,10 +703,10 @@ impl LayoutTree {
         if let Self::Split {
             dir,
             ratio,
+            fixed,
             a,
             b,
             last_rect,
-            ..
         } = self
         {
             let in_a = a.contains(id);
@@ -700,7 +715,9 @@ impl LayoutTree {
                 return;
             }
             // Outermost first: call f on this node before recursing.
-            f(*dir, ratio, in_a, *last_rect);
+            if fixed.is_none() {
+                f(*dir, ratio, in_a, *last_rect);
+            }
             if in_a {
                 a.for_each_ancestor(id, f);
             } else {
@@ -710,10 +727,11 @@ impl LayoutTree {
     }
 
     /// Walk the tree and compute the [`LayoutRect`] each leaf window occupies
-    /// within `area`, mirroring the renderer's `split_rect` + separator logic
-    /// exactly so headless geometry matches what the TUI renderer would produce.
+    /// within `area`. Every step goes through [`split_geometry`], which is also
+    /// what the TUI renderer descends with, so headless geometry is the same
+    /// geometry the user sees rather than a copy of it.
     ///
-    /// # Split math (mirrors `render.rs::split_rect` + separator carving)
+    /// # Split math (see [`split_geometry`])
     ///
     /// For a **Horizontal** split (stacks top-to-bottom, `Axis::Row`):
     ///   `a_h = round(area.h * ratio).clamp(1, area.h - 1)`
@@ -772,9 +790,9 @@ impl LayoutTree {
                 b,
                 ..
             } => {
-                let (rect_a, rect_b) = headless_split_rect(area, *dir, *ratio, *fixed);
-                a.collect_rects(rect_a, out);
-                b.collect_rects(rect_b, out);
+                let geo = split_geometry(area, *dir, *ratio, *fixed);
+                a.collect_rects(geo.a, out);
+                b.collect_rects(geo.b, out);
             }
         }
     }
@@ -886,21 +904,43 @@ impl LayoutTree {
     }
 }
 
-/// Pure headless split — mirrors `render.rs::split_rect` + separator carving.
+/// Where one split's two children and its separator land inside a parent rect.
 ///
-/// Divides `area` at `ratio` along the axis implied by `dir`, then carves
-/// out the 1-cell separator so each child's rect is exactly what the TUI
-/// renderer would pass to `render_layout`.
+/// Produced by [`split_geometry`]. `a` and `b` are the rects the children are
+/// rendered into — already shrunk for the separator — and `separator` is the
+/// 1-cell strip between them, or `None` when the area was too small for one to
+/// be drawn.
 ///
-/// ## Separator rules (copied verbatim from `render.rs::render_layout`)
+/// `#[non_exhaustive]` — additional fields may be added in minor releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SplitGeometry {
+    /// Rect for the first (top / left) child.
+    pub a: LayoutRect,
+    /// Rect for the second (bottom / right) child.
+    pub b: LayoutRect,
+    /// The 1-cell separator strip between the children, if one fits. Its
+    /// orientation follows the split: a single column for [`SplitDir::Vertical`],
+    /// a single row for [`SplitDir::Horizontal`].
+    pub separator: Option<LayoutRect>,
+}
+
+/// Divide `area` between one split's two children, carving out the separator.
+///
+/// This is the **single source of truth** for split geometry: the headless
+/// [`LayoutTree::window_rects`] walk, the TUI renderer (which also needs the
+/// separator rect to draw it) and the mouse border hit-test all call it, so a
+/// border the user can see is always a border they can grab.
+///
+/// ## Separator rules
 ///
 /// **Vertical** (side-by-side, `Axis::Col`): separator is the rightmost cell
-/// of `rect_a`. Applied only when `rect_a.w >= 2` AND `rect_b.w > 0`; `a`
-/// shrinks by 1 column, `b` position/size are unchanged.
+/// of `a`'s allocation. Applied only when that allocation is `>= 2` columns AND
+/// `b` gets `> 0`; `a` shrinks by 1 column, `b` position/size are unchanged.
 ///
-/// **Horizontal** (stacked, `Axis::Row`): separator is the bottom cell of
-/// `rect_a`. Applied only when `rect_a.h >= 2` AND `rect_b.h > 0`; `a`
-/// shrinks by 1 row, `b` position/size are unchanged.
+/// **Horizontal** (stacked, `Axis::Row`): separator is the bottom cell of `a`'s
+/// allocation. Applied only when that allocation is `>= 2` rows AND `b` gets
+/// `> 0`; `a` shrinks by 1 row, `b` position/size are unchanged.
 ///
 /// ## Fixed sizes
 ///
@@ -909,21 +949,39 @@ impl LayoutTree {
 /// [`Fixed`] and `first_child_cells`). It goes through the identical clamp, so
 /// an oversized request can never underflow `u16` or leave the sibling with
 /// zero cells in an area that could hold both.
-fn headless_split_rect(
+///
+/// # Examples
+///
+/// ```rust
+/// use hjkl_layout::{Fixed, LayoutRect, SplitDir, split_geometry};
+///
+/// let geo = split_geometry(
+///     LayoutRect::new(0, 0, 80, 24),
+///     SplitDir::Vertical,
+///     0.5,
+///     Some(Fixed::First(30)),
+/// );
+/// assert_eq!(geo.a.w, 30);
+/// assert_eq!(geo.separator.map(|s| s.x), Some(30));
+/// assert_eq!((geo.b.x, geo.b.w), (31, 49));
+/// ```
+pub fn split_geometry(
     area: LayoutRect,
     dir: SplitDir,
     ratio: f32,
     fixed: Option<Fixed>,
-) -> (LayoutRect, LayoutRect) {
+) -> SplitGeometry {
     match dir.axis() {
         Axis::Row => {
             // A zero-height parent can't be split; the clamp below would
             // otherwise force a size-1 child that overflows the parent.
             if area.h == 0 {
-                return (
-                    LayoutRect::new(area.x, area.y, area.w, 0),
-                    LayoutRect::new(area.x, area.y, area.w, 0),
-                );
+                let empty = LayoutRect::new(area.x, area.y, area.w, 0);
+                return SplitGeometry {
+                    a: empty,
+                    b: empty,
+                    separator: None,
+                };
             }
             // Horizontal split: divide height.
             let a_h = first_child_cells(area.h, ratio, fixed);
@@ -932,18 +990,27 @@ fn headless_split_rect(
             let mut rect_a = LayoutRect::new(area.x, area.y, area.w, a_h);
             let rect_b = LayoutRect::new(area.x, area.y + a_h, area.w, b_h);
             // Carve separator: bottom row of rect_a, only when safe.
-            if rect_a.h >= 2 && rect_b.h > 0 {
+            let separator = if rect_a.h >= 2 && rect_b.h > 0 {
                 rect_a.h -= 1;
+                Some(LayoutRect::new(rect_a.x, rect_a.y + rect_a.h, rect_a.w, 1))
+            } else {
+                None
+            };
+            SplitGeometry {
+                a: rect_a,
+                b: rect_b,
+                separator,
             }
-            (rect_a, rect_b)
         }
         Axis::Col => {
             // A zero-width parent can't be split; see the Row branch.
             if area.w == 0 {
-                return (
-                    LayoutRect::new(area.x, area.y, 0, area.h),
-                    LayoutRect::new(area.x, area.y, 0, area.h),
-                );
+                let empty = LayoutRect::new(area.x, area.y, 0, area.h);
+                return SplitGeometry {
+                    a: empty,
+                    b: empty,
+                    separator: None,
+                };
             }
             // Vertical split: divide width.
             let a_w = first_child_cells(area.w, ratio, fixed);
@@ -952,10 +1019,17 @@ fn headless_split_rect(
             let mut rect_a = LayoutRect::new(area.x, area.y, a_w, area.h);
             let rect_b = LayoutRect::new(area.x + a_w, area.y, b_w, area.h);
             // Carve separator: rightmost column of rect_a, only when safe.
-            if rect_a.w >= 2 && rect_b.w > 0 {
+            let separator = if rect_a.w >= 2 && rect_b.w > 0 {
                 rect_a.w -= 1;
+                Some(LayoutRect::new(rect_a.x + rect_a.w, rect_a.y, 1, rect_a.h))
+            } else {
+                None
+            };
+            SplitGeometry {
+                a: rect_a,
+                b: rect_b,
+                separator,
             }
-            (rect_a, rect_b)
         }
     }
 }
@@ -1099,17 +1173,21 @@ mod tests {
     fn headless_split_zero_size_parent_does_not_overflow() {
         // A zero-height parent must yield zero-height children, not a size-1
         // child that exceeds the parent.
-        let (a, b) = headless_split_rect(
+        let geo = split_geometry(
             LayoutRect::new(0, 0, 10, 0),
             SplitDir::Horizontal,
             0.5,
             None,
         );
-        assert_eq!((a.h, b.h), (0, 0), "row split of h=0 must stay 0");
+        assert_eq!((geo.a.h, geo.b.h), (0, 0), "row split of h=0 must stay 0");
+        assert_eq!(
+            geo.separator, None,
+            "no separator fits in a zero-height row"
+        );
         // Same for a zero-width parent under a vertical split.
-        let (a, b) =
-            headless_split_rect(LayoutRect::new(0, 0, 0, 10), SplitDir::Vertical, 0.5, None);
-        assert_eq!((a.w, b.w), (0, 0), "col split of w=0 must stay 0");
+        let geo = split_geometry(LayoutRect::new(0, 0, 0, 10), SplitDir::Vertical, 0.5, None);
+        assert_eq!((geo.a.w, geo.b.w), (0, 0), "col split of w=0 must stay 0");
+        assert_eq!(geo.separator, None, "no separator fits in a zero-width col");
     }
 
     // ── Tab ───────────────────────────────────────────────────────────────────
@@ -1983,8 +2061,8 @@ mod fixed_sizing_sweep {
                         Axis::Col => r.w,
                         Axis::Row => r.h,
                     };
-                    let (fa, _) = headless_split_rect(area, dir, 0.5, Some(Fixed::First(n)));
-                    let (_, sb) = headless_split_rect(area, dir, 0.5, Some(Fixed::Second(n)));
+                    let fa = split_geometry(area, dir, 0.5, Some(Fixed::First(n))).a;
+                    let sb = split_geometry(area, dir, 0.5, Some(Fixed::Second(n))).b;
                     let (first, second) = (ext(fa), ext(sb));
                     // Meaningful domain only: the axis must hold two
                     // children plus the separator, and the request must fit.
@@ -2006,5 +2084,167 @@ mod fixed_sizing_sweep {
             asym.len(),
             &asym[..asym.len().min(6)]
         );
+    }
+
+    // ── split_geometry: the separator (#63 Phase 2) ───────────────────────────
+
+    /// `a`, the separator and `b` must tile the parent exactly, with no gap and
+    /// no overlap — for ratio splits and fixed splits alike. An off-by-one here
+    /// is a divider drawn over a window's last column, or one the user can see
+    /// but not grab.
+    #[test]
+    fn split_geometry_children_and_separator_tile_the_parent() {
+        let area = LayoutRect::new(3, 5, 40, 20);
+        let fixings = [
+            None,
+            Some(Fixed::First(10)),
+            Some(Fixed::Second(10)),
+            Some(Fixed::First(1)),
+            Some(Fixed::Second(1)),
+        ];
+        for dir in [SplitDir::Vertical, SplitDir::Horizontal] {
+            for fixed in fixings {
+                let geo = split_geometry(area, dir, 0.5, fixed);
+                let sep = geo
+                    .separator
+                    .unwrap_or_else(|| panic!("{dir:?}/{fixed:?} must fit a separator"));
+                match dir.axis() {
+                    Axis::Col => {
+                        assert_eq!(geo.a.x, area.x, "a starts at the parent's left edge");
+                        assert_eq!(sep.x, geo.a.x + geo.a.w, "separator abuts a's right edge");
+                        assert_eq!(sep.w, 1, "separator is one column");
+                        assert_eq!(geo.b.x, sep.x + 1, "b starts right after the separator");
+                        assert_eq!(
+                            geo.b.x + geo.b.w,
+                            area.x + area.w,
+                            "b reaches the right edge"
+                        );
+                        assert_eq!((sep.y, sep.h), (area.y, area.h), "separator spans the rows");
+                    }
+                    Axis::Row => {
+                        assert_eq!(geo.a.y, area.y, "a starts at the parent's top edge");
+                        assert_eq!(sep.y, geo.a.y + geo.a.h, "separator abuts a's bottom edge");
+                        assert_eq!(sep.h, 1, "separator is one row");
+                        assert_eq!(geo.b.y, sep.y + 1, "b starts right after the separator");
+                        assert_eq!(
+                            geo.b.y + geo.b.h,
+                            area.y + area.h,
+                            "b reaches the bottom edge"
+                        );
+                        assert_eq!(
+                            (sep.x, sep.w),
+                            (area.x, area.w),
+                            "separator spans the columns"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The separator is reported only when it is actually drawn: an area with
+    /// no room for one yields `None`, not a phantom border cell.
+    #[test]
+    fn split_geometry_reports_no_separator_when_none_is_drawn() {
+        // 1 column: `a` gets the single column, `b` gets nothing.
+        let geo = split_geometry(LayoutRect::new(0, 0, 1, 10), SplitDir::Vertical, 0.5, None);
+        assert_eq!(geo.separator, None);
+        // Same along the row axis.
+        let geo = split_geometry(
+            LayoutRect::new(0, 0, 10, 1),
+            SplitDir::Horizontal,
+            0.5,
+            None,
+        );
+        assert_eq!(geo.separator, None);
+    }
+
+    // ── Fixed splits refuse resizing (#63 Phase 2) ────────────────────────────
+
+    /// A fixed split is never the target of a resize command: the search walks
+    /// past it to the nearest resizable ancestor (vim's `winfixwidth`).
+    #[test]
+    fn enclosing_split_mut_skips_fixed_splits() {
+        // Vertical(ratio 0.25) { leaf 9 , Vertical(fixed) { leaf 0, leaf 1 } }
+        let inner = LayoutTree::Split {
+            dir: SplitDir::Vertical,
+            ratio: 0.5,
+            fixed: Some(Fixed::First(20)),
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(1)),
+            last_rect: Some(LayoutRect::new(20, 0, 60, 24)),
+        };
+        let mut tree = LayoutTree::Split {
+            dir: SplitDir::Vertical,
+            ratio: 0.25,
+            fixed: None,
+            a: Box::new(LayoutTree::Leaf(9)),
+            b: Box::new(inner),
+            last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
+        };
+
+        let (ratio, rect, in_a) = tree
+            .enclosing_split_mut(0, SplitDir::Vertical)
+            .expect("the outer ratio split is still resizable");
+        assert!(
+            (*ratio - 0.25).abs() < 1e-5,
+            "must be the OUTER split's ratio"
+        );
+        assert_eq!(rect, Some(LayoutRect::new(0, 0, 80, 24)));
+        assert!(!in_a, "leaf 0 lives in the outer split's `b` branch");
+    }
+
+    /// When the *only* enclosing split is fixed there is nothing to resize —
+    /// `<C-w><` becomes a no-op rather than silently rewriting a dead ratio.
+    #[test]
+    fn enclosing_split_mut_returns_none_for_a_lone_fixed_split() {
+        let mut tree = LayoutTree::Split {
+            dir: SplitDir::Vertical,
+            ratio: 0.5,
+            fixed: Some(Fixed::First(20)),
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(1)),
+            last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
+        };
+        assert!(tree.enclosing_split_mut(0, SplitDir::Vertical).is_none());
+        assert!(tree.enclosing_split_mut(1, SplitDir::Vertical).is_none());
+    }
+
+    /// `for_each_ancestor` (maximize height/width) skips fixed splits too, so a
+    /// dock can't be squashed to one cell by `<C-w>_` in a neighbouring pane.
+    #[test]
+    fn for_each_ancestor_skips_fixed_splits() {
+        let inner = LayoutTree::Split {
+            dir: SplitDir::Vertical,
+            ratio: 0.7,
+            fixed: Some(Fixed::First(20)),
+            a: Box::new(LayoutTree::Leaf(1)),
+            b: Box::new(LayoutTree::Leaf(2)),
+            last_rect: Some(LayoutRect::new(0, 12, 80, 12)),
+        };
+        let mut tree = LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.3,
+            fixed: None,
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(inner),
+            last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
+        };
+
+        let mut seen = Vec::new();
+        tree.for_each_ancestor(1, &mut |dir, ratio, _in_a, _rect| {
+            seen.push((dir, *ratio));
+            *ratio = 0.9;
+        });
+        assert_eq!(seen.len(), 1, "only the non-fixed ancestor is visited");
+        assert_eq!(seen[0].0, SplitDir::Horizontal);
+        // The fixed split's ratio survived untouched.
+        let LayoutTree::Split { b, .. } = &tree else {
+            panic!("expected a split at the root");
+        };
+        let LayoutTree::Split { ratio, .. } = b.as_ref() else {
+            panic!("expected a split at b");
+        };
+        assert!((*ratio - 0.7).abs() < 1e-5, "fixed split's ratio untouched");
     }
 }
