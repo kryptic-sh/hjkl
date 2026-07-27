@@ -52,19 +52,55 @@ review.
 One commit each, gated (`clippy -D warnings`, `fmt`, full `nextest` incl. the
 pty e2e suite, compat oracle ALL-pass), pushed with CI green before the next.
 
-| #   | Phase              | Scope                                                                                                                                                     |
-| --- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0   | Debug invariant    | Debug-only assertion in the key-dispatch loop: if the cursor moved and the motion was not vertical, curswant must equal the cursor column. No API change. |
-| 1   | `Move` API         | Add `Move` + `Editor::move_cursor` implemented over today's primitives. Nothing migrated yet.                                                             |
-| 2   | Migrate the engine | `hjkl-engine`'s own motions move through `move_cursor`.                                                                                                   |
-| 3   | Migrate vim        | `hjkl-vim`: motion, command, bridges, visual, operator. The bulk of the sites.                                                                            |
-| 4   | Migrate the app    | `apps/hjkl`.                                                                                                                                              |
-| 5   | Seal               | Raw primitives crate-internal; `set_sticky_col` off the public surface; `apply_sticky_col` shrinks to the vertical clamp.                                 |
+| #   | Phase                              | Scope                                                                                                                                                     |
+| --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | Debug invariant (done, `1fb21010`) | Debug-only assertion in the key-dispatch loop: if the cursor moved and the motion was not vertical, curswant must equal the cursor column. No API change. |
+| 1   | `Move` API (done, `c1627b9e`)      | Add `Move` + `Editor::move_cursor` implemented over today's primitives. Nothing migrated yet.                                                             |
+| 2   | Migrate the engine                 | `hjkl-engine`'s own motions move through `move_cursor`.                                                                                                   |
+| 3   | Migrate vim                        | `hjkl-vim`: motion, command, bridges, visual, operator. The bulk of the sites.                                                                            |
+| 4   | Migrate the app                    | `apps/hjkl`.                                                                                                                                              |
+| 5   | Seal                               | Raw primitives crate-internal; `set_sticky_col` off the public surface; `apply_sticky_col` shrinks to the vertical clamp.                                 |
 
 **Phase 0 comes first on purpose.** It is the safety net for the migration
 itself: a site classified into the wrong variant during phases 2–4 trips the
 assertion in the 5400-test suite rather than shipping as a silent behaviour
 change.
+
+## What phase 0 found
+
+The unconditional assertion the plan called for is **not enableable**: it
+produces 236 violations across 158 tests. The shipped check is therefore scoped
+to plain motions — no chord/count in flight, `dirty_gen` unchanged, mode
+unchanged across the key, no search prompt open. Every guard is structural, not
+a suppression list, so a motion added later is covered the day it is written.
+
+Two design calls made during implementation, both kept:
+
+- **State-based, not key-based.** Classifying the key is unsound: `j` is
+  vertical bare, a target in `dj`/`fj`/`rj`, and a literal in Insert. The check
+  instead tests the states the rules can produce — after a move `sticky_col`
+  must be `None`, equal to the landed column, or greater with the cursor clamped
+  to the row end.
+- **Fires on the transition, not the state.** It triggers only when a keystroke
+  goes from a legal pair to an illegal one. Without that, class D below was
+  blamed for staleness `J` had left a keystroke earlier — the assertion would
+  have pointed the next phase at the wrong file.
+
+Violations, to be fixed in later phases, **not** by weakening the assertion:
+
+| Class | Count | What                                                                                                                                                                                                                                                                                                                                 |
+| ----- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A     | 170   | Insert mode: every printable char, `Tab`, `<C-w>`. One systemic site.                                                                                                                                                                                                                                                                |
+| B     | 66    | Normal-mode operators/edits: `y{motion}`, `d{motion}`, `J`, `p`/`P`, `x`/`X`, `~`, `>`, `.`, `u`, `<C-a>`. The operator path never reaches `apply_sticky_col`.                                                                                                                                                                       |
+| C     | 12    | Visual-mode `y` — invisible to a `dirty_gen` check since yank makes no edit.                                                                                                                                                                                                                                                         |
+| D     | 1     | **A genuine motion-path bug**: `<C-e>` moves between rows without routing through motion dispatch, parking the cursor past end-of-line. `is_vertical_motion` already lists `ScreenUp`/`ScreenDown`; the key binding just doesn't go through it. Confirmed against nvim: `<C-e>` preserves curswant and clamps. Fix first in phase 2. |
+
+After excluding A–C, the surviving motion-path violations number **one** — the
+pre-existing motion code is in better shape than the ~186 unmaintained call
+sites suggest.
+
+Order for widening the assertion later: fix A (one insert-path site), then C,
+then B, then relax the guards in `crates/hjkl-vim/src/curswant.rs`.
 
 ## The real cost
 
