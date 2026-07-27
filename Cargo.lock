@@ -1259,7 +1259,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hjkl"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-anvil"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-bonsai"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -1427,7 +1427,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "criterion",
  "hjkl-buffer",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "async-trait",
  "bitflags 2.13.1",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-compat-oracle"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1464,14 +1464,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-completion"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "lsp-types",
 ]
 
 [[package]]
 name = "hjkl-completion-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-completion",
  "hjkl-theme",
@@ -1481,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-config"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-fs",
  "hjkl-xdg",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-css"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "cssparser",
  "pretty_assertions",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-engine",
  "hjkl-engine-tui",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "bitflags 2.13.1",
  "criterion",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-ex"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-form"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-fs"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-xdg",
  "libc",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-fs-watch"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossbeam-channel",
  "notify",
@@ -1596,15 +1596,15 @@ dependencies = [
 
 [[package]]
 name = "hjkl-fuzzy"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-holler"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-holler-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-holler",
  "ratatui",
@@ -1612,11 +1612,11 @@ dependencies = [
 
 [[package]]
 name = "hjkl-hover"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-hover-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-hover",
  "hjkl-markdown",
@@ -1626,15 +1626,15 @@ dependencies = [
 
 [[package]]
 name = "hjkl-icons"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-info-popup"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-info-popup-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-info-popup",
  "hjkl-markdown",
@@ -1644,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-keymap"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "bitflags 2.13.1",
  "thiserror 2.0.19",
@@ -1652,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-keymap-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-keymap",
@@ -1660,14 +1660,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-kitty"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
 ]
 
 [[package]]
 name = "hjkl-lang"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hjkl-bonsai",
@@ -1676,11 +1676,11 @@ dependencies = [
 
 [[package]]
 name = "hjkl-layout"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-lsp"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1695,21 +1695,21 @@ dependencies = [
 
 [[package]]
 name = "hjkl-mangler"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "hjkl-markdown"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "pulldown-cmark",
 ]
 
 [[package]]
 name = "hjkl-markdown-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-markdown",
  "ratatui",
@@ -1718,14 +1718,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-menu"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "unicode-width",
 ]
 
 [[package]]
 name = "hjkl-menu-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-menu",
  "ratatui",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1759,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-prompt"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-engine",
  "hjkl-form",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-prompt-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-form",
  "hjkl-prompt",
@@ -1777,18 +1777,18 @@ dependencies = [
 
 [[package]]
 name = "hjkl-quickfix"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "hjkl-splash"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-splash-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-splash",
  "ratatui",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-statusline"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-theme",
  "unicode-width",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-statusline-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-statusline",
  "hjkl-theme-tui",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-syntax"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-bonsai",
  "hjkl-buffer",
@@ -1827,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-syntax-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer-tui",
  "hjkl-syntax",
@@ -1837,11 +1837,11 @@ dependencies = [
 
 [[package]]
 name = "hjkl-tabs"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "hjkl-tabs-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-tabs",
  "ratatui",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-theme"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "serde",
  "thiserror 2.0.19",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-theme-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-theme",
  "ratatui",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1894,14 +1894,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim-types"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "ropey",
 ]
 
 [[package]]
 name = "hjkl-which-key"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-keymap",
  "hjkl-vim",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-which-key-tui"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "hjkl-theme",
  "hjkl-theme-tui",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-xdg"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "dirs",
  "tempfile",
