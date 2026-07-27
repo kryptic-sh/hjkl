@@ -56,10 +56,10 @@ Split { dir, ratio, fixed: Option<Fixed>, a, b, last_rect }
 ```
 
 `ratio` is retained for ordinary splits — replacing it wholesale would touch
-**61 `Split` construction sites and 412 `ratio` references** for no behavioural
-gain. `fixed`, when set, wins over `ratio` in `collect_rects`.
+**412 `ratio` references** across the workspace for no behavioural gain.
+`fixed`, when set, wins over `ratio` in `collect_rects`.
 
-**Adding the field is deliberately a breaking change.** All 61 construction
+**Adding the field is deliberately a breaking change.** All 19 construction
 sites get a compile error until they pass `fixed: None`. That is the point: this
 refactor exists because dock-ness was _silently_ forgettable, so the replacement
 must be loud. A `LayoutTree::split(dir, ratio, a, b)` helper keeps future sites
@@ -79,13 +79,13 @@ Each phase is one commit, gated (`clippy -D warnings`, `fmt`, full `nextest`
 incl. the pty e2e suite, compat oracle ALL-pass) and pushed with CI green before
 the next begins.
 
-| #   | Phase                        | Scope                                                                                                                                                                                               |
-| --- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Layout primitives            | `hjkl-layout`: `Fixed`, `fixed` field, `collect_rects` honouring it, pinned-aware `only`/`equalize_all`/`swap_with_sibling`, unit tests. No app behaviour change.                                   |
-| 2   | Render through the tree      | `render::frame` stops carving dock rects by hand; docks get their geometry from `window_rects` like every other window.                                                                             |
-| 3   | Docks into the tree, per tab | Explorer/quickfix become pinned fixed leaves in the active tab's tree; `left_dock`/`bottom_dock` move from `App` to `Tab`. Delete `dock_neighbor_*`; navigation flows through `neighbor_direction`. |
-| 4   | `BufKind` on the slot        | Replace `is_explorer` + qf-slot derivation with one enum; `slot_is_special` becomes `slot.kind != Normal`.                                                                                          |
-| 5   | Cleanup                      | Delete what `dock.rs` no longer needs; drop dock branches from `:q`, `close_focused_window`, `QuitOrClose`, `H`/`L`; update docs + changelog.                                                       |
+| #   | Phase                                | Scope                                                                                                                                                                                               |
+| --- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Layout primitives (done, `081d9151`) | `hjkl-layout`: `Fixed`, `fixed` field, `collect_rects` honouring it, pinned-aware `only`/`equalize_all`/`swap_with_sibling`, unit tests. No app behaviour change.                                   |
+| 2   | Render through the tree              | `render::frame` stops carving dock rects by hand; docks get their geometry from `window_rects` like every other window.                                                                             |
+| 3   | Docks into the tree, per tab         | Explorer/quickfix become pinned fixed leaves in the active tab's tree; `left_dock`/`bottom_dock` move from `App` to `Tab`. Delete `dock_neighbor_*`; navigation flows through `neighbor_direction`. |
+| 4   | `BufKind` on the slot                | Replace `is_explorer` + qf-slot derivation with one enum; `slot_is_special` becomes `slot.kind != Normal`.                                                                                          |
+| 5   | Cleanup                              | Delete what `dock.rs` no longer needs; drop dock branches from `:q`, `close_focused_window`, `QuitOrClose`, `H`/`L`; update docs + changelog.                                                       |
 
 ## Invariants that must hold at every phase
 
