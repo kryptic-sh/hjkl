@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-07-27
+
 ### Changed
 
 - **`cursorline` now defaults to off, matching vim.** The `Settings` and
@@ -4921,7 +4923,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.37.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/kryptic-sh/hjkl/compare/v0.37.1...v0.38.0
 [0.37.1]: https://github.com/kryptic-sh/hjkl/compare/v0.37.0...v0.37.1
 [0.37.0]: https://github.com/kryptic-sh/hjkl/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/kryptic-sh/hjkl/compare/v0.35.0...v0.36.0
