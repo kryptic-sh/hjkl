@@ -311,6 +311,41 @@ pub struct CommitCtx {
     pub msg_file: PathBuf,
 }
 
+/// What a [`BufferSlot`] *is* — this editor's `buftype` (#63 Phase 4).
+///
+/// Everything that is not [`BufKind::Normal`] is a programmatic scratch
+/// buffer that must never appear as a user buffer: it is excluded from `:ls`,
+/// from `:bn`/`:bp` and `H`/`L` cycling, from the buffer line, from the nvim
+/// buffer list, and from [`crate::app::App::real_slot_count`].
+///
+/// This lives on the SLOT, not on whatever window happens to point at it.
+/// The pre-Phase-4 derivation asked "which slot does some dock window
+/// currently show?", which is positional: per-tab docks (#63 Phase 3) meant
+/// scanning every tab, and any scan can find the wrong slot after a slot
+/// insertion/removal shifts indices. A field travels with the slot through
+/// those shifts and cannot drift.
+///
+/// There is deliberately no `Loclist` variant. Vim gives the quickfix window
+/// and the location-list window the SAME `buftype=quickfix`; which list a
+/// dock shows is a property of the dock
+/// ([`DockKind`](crate::app::dock::DockKind)), and `:copen`/`:lopen` retarget
+/// one dock window/slot pair between the two. Mirroring that distinction here
+/// would mean a second place to update on every retarget — the same
+/// keep-two-facts-in-sync hazard this enum exists to delete.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BufKind {
+    /// An ordinary user buffer: a file, or the unnamed scratch buffer the
+    /// editor starts with. The only kind `:ls` and buffer cycling see.
+    #[default]
+    Normal,
+    /// The file-explorer tree's scratch buffer (#55).
+    Explorer,
+    /// The bottom dock's quickfix / location-list scratch buffer (#63 Phase B).
+    Quickfix,
+    /// The command-line window's history scratch buffer (`q:` / `q/`, #37).
+    CmdLine,
+}
+
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 ///
@@ -334,9 +369,11 @@ pub struct CommitCtx {
 pub struct BufferSlot {
     /// Stable id used to multiplex the SyntaxLayer / Worker.
     pub buffer_id: BufferId,
-    /// `true` when this slot backs the explorer buffer window (#55).
+    /// What this buffer *is* — vim's `buftype` (#63 Phase 4).
     /// Drives: key interception, buffer-cycle exclusion, gutterless render.
-    pub(crate) is_explorer: bool,
+    /// Set once at slot construction and carried through every slot
+    /// insertion/removal; never re-derived from what a window points at.
+    pub(crate) kind: BufKind,
     /// Per-buffer feature opt-outs. Default: all enabled.
     pub(crate) features: BufferFeatures,
     /// Document handle: content, undo/redo, folds, dirty flag, and edit
@@ -481,7 +518,7 @@ pub fn find_project_root(start: &std::path::Path) -> PathBuf {
 impl BufferSlot {
     /// Build a slot around a document handle + settings template, with every
     /// other field at its "freshly created, nothing observed yet" default:
-    /// not the explorer, all features on, no filename, clean, tracked,
+    /// an ordinary user buffer, all features on, no filename, clean, tracked,
     /// no signs/diagnostics/blame, no cached disk metadata, disk in sync,
     /// no swap file, no commit context.
     ///
@@ -498,7 +535,7 @@ impl BufferSlot {
     pub(super) fn new(buffer_id: BufferId, view: View, settings: Settings) -> Self {
         Self {
             buffer_id,
-            is_explorer: false,
+            kind: BufKind::Normal,
             features: BufferFeatures::default(),
             view,
             settings,
@@ -529,6 +566,18 @@ impl BufferSlot {
             git_repo_present: None,
             commit_ctx: None,
         }
+    }
+
+    /// `true` when this slot backs an explorer window (#55).
+    pub(crate) fn is_explorer(&self) -> bool {
+        self.kind == BufKind::Explorer
+    }
+
+    /// `true` when this slot is anything other than a user buffer — see
+    /// [`BufKind`]. The whole of "is this special?" is this comparison;
+    /// [`crate::app::App::slot_is_special`] is just the by-index wrapper.
+    pub(crate) fn is_special(&self) -> bool {
+        self.kind != BufKind::Normal
     }
 
     /// Snapshot the loaded content so undo-to-saved clears dirty.
@@ -711,7 +760,9 @@ mod tests {
         let after = Instant::now();
 
         assert_eq!(slot.buffer_id, 7);
-        assert!(!slot.is_explorer);
+        assert_eq!(slot.kind, BufKind::Normal);
+        assert!(!slot.is_explorer());
+        assert!(!slot.is_special());
         let feat = BufferFeatures::default();
         assert_eq!(slot.features.syntax, feat.syntax);
         assert_eq!(slot.features.lsp, feat.lsp);
@@ -754,12 +805,12 @@ mod tests {
     #[test]
     fn struct_update_overrides_only_named_fields() {
         let slot = BufferSlot {
-            is_explorer: true,
+            kind: BufKind::Explorer,
             dirty: true,
             filename: Some(PathBuf::from("/tmp/x.rs")),
             ..BufferSlot::new(1, View::new(), Settings::default())
         };
-        assert!(slot.is_explorer);
+        assert!(slot.is_explorer());
         assert!(slot.dirty);
         assert_eq!(slot.filename, Some(PathBuf::from("/tmp/x.rs")));
         assert!(!slot.is_new_file);

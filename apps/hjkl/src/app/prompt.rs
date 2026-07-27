@@ -939,6 +939,12 @@ impl App {
         // the window editor once it exists, superseding any placement here.
 
         let slot = super::BufferSlot {
+            // The history scratch buffer is no more a user buffer than the
+            // explorer's (#63 Phase 4): `kind` keeps it out of `:ls` / `:bn`
+            // / the buffer line, where `slot_is_special` used to compare
+            // against `cmdline_win.slot_idx` — a positional index that is
+            // never re-indexed when another slot is removed.
+            kind: super::BufKind::CmdLine,
             is_new_file: true,
             ..super::BufferSlot::new(buffer_id, view, hjkl_engine::Settings::default())
         };

@@ -399,3 +399,36 @@ fn c_f_then_ctrl_c_returns_to_normal_without_reopening_prompt() {
     assert!(app.cmdline_win.is_none(), "cmdline_win must be closed");
     assert!(!app.exit_requested, "app must not exit");
 }
+
+/// The cmdline window's scratch slot must stay out of the buffer list even
+/// after an EARLIER slot is removed and shifts its index (#63 Phase 4).
+///
+/// Pre-Phase-4 the exclusion was `cmdline_win.slot_idx == idx` — a positional
+/// index recorded at open time and never re-indexed by the slot-removal
+/// fixups. Closing the explorer underneath an open `q:` window shifted the
+/// scratch slot down one, so the stale index stopped matching it: the history
+/// buffer resurfaced as a "real" buffer (buffer line, `:ls`, and `H`/`L`
+/// flipping from viewport motion to buffer cycling). `BufKind` is on the slot,
+/// so it travels with it through the shift.
+#[test]
+fn cmdline_slot_stays_special_when_an_earlier_slot_is_removed() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set nu");
+
+    app.toggle_explorer();
+    app.open_cmdline_window(CmdLineKind::Ex, None);
+    assert_eq!(
+        app.real_slot_count(),
+        1,
+        "only the startup scratch buffer is a real buffer"
+    );
+
+    // Closing the explorer removes its slot, shifting the cmdline slot down.
+    app.toggle_explorer();
+
+    assert_eq!(
+        app.real_slot_count(),
+        1,
+        "the cmdline history buffer is still not a user buffer"
+    );
+}

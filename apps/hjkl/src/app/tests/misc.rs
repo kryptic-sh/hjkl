@@ -1072,7 +1072,7 @@ fn explorer_buffer_is_modifiable() {
     let explorer_slot = app
         .slots
         .iter()
-        .find(|s| s.is_explorer)
+        .find(|s| s.is_explorer())
         .expect("explorer slot must exist after toggle");
     assert!(
         explorer_slot.is_modifiable(),

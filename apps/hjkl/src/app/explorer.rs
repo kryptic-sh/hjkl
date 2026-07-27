@@ -804,7 +804,7 @@ impl super::App {
         self.windows
             .get(fw)
             .and_then(|w| w.as_ref())
-            .is_some_and(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer))
+            .is_some_and(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer()))
     }
 
     /// `<leader>e` toggle: closed → open + focus; open → close. Persists the
@@ -871,7 +871,7 @@ impl super::App {
         };
 
         let slot = super::BufferSlot {
-            is_explorer: true,
+            kind: super::BufKind::Explorer,
             features: super::BufferFeatures {
                 syntax: false,
                 lsp: false,
@@ -934,11 +934,13 @@ impl super::App {
 
     /// Current slot index of the ACTIVE TAB's explorer scratch buffer.
     ///
-    /// Derived from the pane's window rather than by scanning for the
-    /// `is_explorer` flag: explorers are per-tab (#63 Phase 3), so two tabs
-    /// with the explorer open mean two `is_explorer` slots and a positional
-    /// scan would silently rewrite the other tab's tree. The window's `slot`
-    /// field is the single source of truth, and stays right across the slot
+    /// Derived from the pane's window rather than by scanning slots for
+    /// [`BufKind::Explorer`](super::BufKind::Explorer): explorers are per-tab
+    /// (#63 Phase 3), so two tabs with the explorer open mean two explorer
+    /// slots and a scan would pick whichever comes first — silently rewriting
+    /// the other tab's tree. `BufKind` answers "is this slot an explorer?",
+    /// never "*which* explorer"; that question only the owning pane's window
+    /// can answer. The window's `slot` field stays right across the slot
     /// re-indexing that `:bd`/`:bn` cause.
     fn explorer_slot_idx(&self) -> Option<usize> {
         let win_id = self.tabs[self.active_tab].explorer.as_ref()?.win_id;
@@ -1268,7 +1270,7 @@ impl super::App {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, s)| {
-                            if s.is_explorer {
+                            if s.is_explorer() {
                                 return None;
                             }
                             let p = s.filename.as_deref()?;
@@ -1291,7 +1293,7 @@ impl super::App {
                 }
                 AppliedOp::Trashed { original, .. } => {
                     for i in 0..self.slots.len() {
-                        if self.slots[i].is_explorer {
+                        if self.slots[i].is_explorer() {
                             continue;
                         }
                         let Some(p) = self.slots[i].filename.clone() else {
@@ -2366,7 +2368,7 @@ mod tests {
             "explorer should be open"
         );
         assert!(
-            app.slots.iter().any(|s| s.is_explorer),
+            app.slots.iter().any(|s| s.is_explorer()),
             "explorer slot must have is_explorer = true"
         );
         // Close explorer.
@@ -2941,7 +2943,7 @@ mod tests {
         match hit_test_zone(&app, col, 0) {
             Zone::BufferLine { slot_idx } => {
                 assert!(
-                    !app.slots[slot_idx].is_explorer,
+                    !app.slots[slot_idx].is_explorer(),
                     "buffer-line click must not map to the explorer slot"
                 );
                 assert_eq!(
@@ -2968,7 +2970,7 @@ mod tests {
 
         // Switching to the real buffer while the explorer is focused must NOT
         // clobber the explorer pane — it redirects to a non-explorer window.
-        let real_idx = app.slots.iter().position(|s| !s.is_explorer).unwrap();
+        let real_idx = app.slots.iter().position(|s| !s.is_explorer()).unwrap();
         app.switch_to(real_idx);
 
         assert!(
@@ -2976,13 +2978,13 @@ mod tests {
             "switch_to must move focus off the explorer window"
         );
         assert!(
-            !app.active().is_explorer,
+            !app.active().is_explorer(),
             "active buffer must be the real one"
         );
         let ep_win = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let ep_slot = app.windows[ep_win].as_ref().unwrap().slot;
         assert!(
-            app.slots[ep_slot].is_explorer,
+            app.slots[ep_slot].is_explorer(),
             "the explorer window must still display the explorer buffer"
         );
         let _ = std::fs::remove_file(&f1);
@@ -3004,12 +3006,12 @@ mod tests {
         assert!(app.tabs[app.active_tab].explorer.is_some());
         // Focus the right (editor) window so buffer_next operates on a real slot.
         app.dispatch_action(AppAction::FocusRight, 1);
-        assert!(!app.active().is_explorer, "should be on a real slot now");
+        assert!(!app.active().is_explorer(), "should be on a real slot now");
         // buffer_next should never land on the explorer slot.
         for _ in 0..10 {
             app.buffer_next();
             assert!(
-                !app.active().is_explorer,
+                !app.active().is_explorer(),
                 "buffer_next must skip is_explorer slots"
             );
         }
@@ -3135,7 +3137,7 @@ mod tests {
         let explorer_idx = app
             .slots
             .iter()
-            .position(|s| s.is_explorer)
+            .position(|s| s.is_explorer())
             .expect("explorer slot must exist after ToggleExplorer");
         let exp = &app.slots[explorer_idx];
 
@@ -3160,7 +3162,7 @@ mod tests {
         let explorer_idx = app
             .slots
             .iter()
-            .position(|s| s.is_explorer)
+            .position(|s| s.is_explorer())
             .expect("explorer slot must exist after ToggleExplorer");
         let exp = &app.slots[explorer_idx];
         assert!(
@@ -3403,7 +3405,7 @@ mod tests {
         set_cursor(&mut app, tr);
         press(&mut app, KeyCode::Char('p'));
 
-        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
         let buf = app.slots[slot].buffer().as_string();
         let inside = base.join("target").join("mover").join("inner.txt");
         let at_root = base.join("mover").join("inner.txt");
@@ -3538,7 +3540,7 @@ mod tests {
             .iter()
             .position(|n| n.path == aaa)
             .unwrap();
-        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
         app.slots[slot].buffer_mut().open_fold_at(aaa_row);
         let aaa_open = !app.slots[slot]
             .buffer()
@@ -3553,7 +3555,7 @@ mod tests {
         // Open a file under `bbb/` → triggers explorer_reveal_active.
         app.dispatch_ex("edit bbb/target.txt");
 
-        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
         let aaa_row2 = app.tabs[app.active_tab]
             .explorer
             .as_ref()
@@ -3670,7 +3672,7 @@ mod tests {
                 .unwrap()
         };
         let fold_open_at = |app: &super::super::App, row: usize| -> bool {
-            let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+            let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
             !app.slots[slot]
                 .buffer()
                 .folds()
@@ -3756,7 +3758,7 @@ mod tests {
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Esc);
 
-        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
         let text = app.slots[slot].buffer().as_string();
         assert!(
             !text.split('\n').any(|l| l.trim().is_empty()),
@@ -3801,7 +3803,7 @@ mod tests {
         app.set_explorer_window_cursor(sub_row, 0, None);
         app.explorer_activate();
 
-        let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
+        let slot = app.slots.iter().position(|s| s.is_explorer()).unwrap();
         let buf_folds = app.slots[slot].buffer().folds();
         let snap = app.window_folds.get(&win_id).cloned().unwrap();
         assert_eq!(

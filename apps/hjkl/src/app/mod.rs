@@ -58,8 +58,8 @@ use hjkl_info_popup::InfoPopup;
 
 pub use types::BufferFeatures;
 pub use types::{
-    BufferSlot, DiagSeverity, DiskState, LspDiag, LspPendingRequest, LspServerInfo, MouseFlags,
-    mouse_enabled_for,
+    BufKind, BufferSlot, DiagSeverity, DiskState, LspDiag, LspPendingRequest, LspServerInfo,
+    MouseFlags, mouse_enabled_for,
 };
 
 /// Height reserved for the status line at the bottom of the screen.
@@ -1101,7 +1101,7 @@ impl App {
             return rect;
         }
         let vp = self.active_editor().host().viewport();
-        let real_slots = self.slots.iter().filter(|s| !s.is_explorer).count();
+        let real_slots = self.slots.iter().filter(|s| !s.is_explorer()).count();
         let show_top_bar = self.tabs.len() > 1 || real_slots > 1;
         let top_bar_h = if show_top_bar { TOP_BAR_HEIGHT } else { 0 };
         ratatui::layout::Rect {

@@ -424,7 +424,7 @@ fn build_diag_overlays(
 pub fn max_lnum_width(app: &App) -> u16 {
     app.slots()
         .iter()
-        .filter(|s| !s.is_explorer)
+        .filter(|s| !s.is_explorer())
         .map(|s| s.lnum_width())
         .max()
         .unwrap_or(0)
@@ -442,7 +442,7 @@ pub fn stable_gutter_extra(app: &App) -> (u16, u16) {
     use hjkl_engine::types::SignColumnMode;
     let mut sign_w = 0u16;
     let mut fold_w = 0u16;
-    for slot in app.slots().iter().filter(|s| !s.is_explorer) {
+    for slot in app.slots().iter().filter(|s| !s.is_explorer()) {
         let st = slot.settings();
         let has_any_signs = !slot.diag_signs.is_empty()
             || !slot.diag_signs_lsp.is_empty()
@@ -486,7 +486,7 @@ pub fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 {
     let Some(slot) = app.slots().get(slot_idx) else {
         return 0;
     };
-    if slot.is_explorer {
+    if slot.is_explorer() {
         return 0;
     }
     let (sign_w, fold_w) = stable_gutter_extra(app);
@@ -653,7 +653,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // 1-col left/right padding for the file list so it isn't flush against
     // the pane edges.
     let mut area = area;
-    if app.slots()[slot_idx].is_explorer && area.width >= 2 {
+    if app.slots()[slot_idx].is_explorer() && area.width >= 2 {
         area.x += 1;
         area.width -= 2;
     }
@@ -709,7 +709,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // ALL open buffers, so a diagnostic/git sign (or fold) appearing in one
     // buffer doesn't shift the text column when switching buffers or scrolling.
     // The explorer pane is gutterless.
-    let is_explorer_slot = app.slots()[slot_idx].is_explorer;
+    let is_explorer_slot = app.slots()[slot_idx].is_explorer();
     let (sign_w, fold_w) = if is_explorer_slot {
         (0, 0)
     } else {
@@ -1299,9 +1299,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // `buffer.folds()`, an UNFOCUSED one from its `window_folds` snapshot
         // (window-level folds). Reading the wrong source here desyncs the glyph
         // overlay from the drawn rows and garbles the tree.
-        // Read from THIS window's own slot, not the first `is_explorer` slot
-        // anywhere: explorers are per-tab (#63 Phase 3), so a positional scan
-        // would render one tab's tree against another tab's folds.
+        // Read from THIS window's own slot, not the first explorer-kind slot
+        // anywhere: explorers are per-tab (#63 Phase 3), so a scan would
+        // render one tab's tree against another tab's folds.
         let explorer_folds: Vec<hjkl_buffer::Fold> = {
             let b = app.slots()[slot_idx].buffer();
             if is_focused {
@@ -3144,7 +3144,7 @@ mod tests {
         let idx = app
             .slots()
             .iter()
-            .position(|s| s.is_explorer)
+            .position(|s| s.is_explorer())
             .expect("explorer slot");
         let cur = app.slots()[idx].buffer().as_string();
         let newtext = format!("{cur}\n  newfile.rs");

@@ -1286,7 +1286,7 @@ impl App {
 
         // The explorer is a programmatic scratch buffer — never persist it to a
         // swap file (otherwise a crash would offer to "recover" the tree text).
-        if self.slots[idx].is_explorer {
+        if self.slots[idx].is_explorer() {
             return;
         }
 
@@ -1999,7 +1999,7 @@ impl App {
     pub(crate) fn quit_all(&mut self, force: bool) {
         // Explorer scratch buffers are programmatic (no file, never user-saved)
         // — they must never block quit, like they're skipped by :bnext/pickers.
-        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_explorer) {
+        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_explorer()) {
             let name = self.slots[idx]
                 .filename
                 .as_ref()
@@ -2080,7 +2080,7 @@ impl App {
             // `:e <path>` while the explorer window is focused would delete
             // the explorer slot itself instead of a throwaway default one
             // (audit A8 follow-up).
-            s.filename.is_none() && !s.dirty && !s.is_explorer
+            s.filename.is_none() && !s.dirty && !s.is_explorer()
         };
         match self.open_new_slot(path) {
             Ok(new_slot_idx) => {

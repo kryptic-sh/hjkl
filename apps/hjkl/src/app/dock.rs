@@ -264,9 +264,9 @@ impl super::App {
     ///
     /// Tab-close paths (`:tabclose`, `:tabonly`, close-tabs-left/right) null
     /// out every window the tab owned, but a dock also owns a scratch SLOT
-    /// that would otherwise outlive it — and a leaked quickfix slot stops
-    /// being recognised as special the moment its dock record is gone, so it
-    /// would resurface as a fake user buffer in `:ls` / `:bn`.
+    /// that would otherwise outlive it: an unreachable buffer holding its
+    /// `BufferId` (and so its syntax/change-bank entries) for the rest of the
+    /// session, with no window left to close it from.
     pub(crate) fn dispose_tab_docks(&mut self, tab_idx: usize) {
         let left = self.tabs[tab_idx].left_dock.take();
         let bottom = self.tabs[tab_idx].bottom_dock.take();
@@ -411,40 +411,24 @@ impl super::App {
         self.is_left_dock(id) || self.is_bottom_dock(id)
     }
 
-    /// `true` when slot `idx` backs ANY tab's bottom dock.
-    ///
-    /// Docks are per-tab, so the active tab's dock is not the only quickfix
-    /// scratch slot that can exist — a `:copen` left open in tab 1 must stay
-    /// out of `:ls` while the user is looking at tab 2.
-    fn is_qf_dock_slot(&self, idx: usize) -> bool {
-        self.tabs.iter().any(|t| {
-            t.bottom_dock.as_ref().is_some_and(|d| {
-                self.windows
-                    .get(d.win_id)
-                    .and_then(|w| w.as_ref())
-                    .is_some_and(|w| w.slot == idx)
-            })
-        })
-    }
-
     /// `true` when slot `idx` is a "special" pane slot that must never appear
-    /// as a normal user buffer: the explorer OR the bottom quickfix/
-    /// location-list dock. Used everywhere `is_explorer` used to be the sole
-    /// exclusion check for buffer cycling (`:bn`/`:bp`), `:ls`, the buffer
+    /// as a normal user buffer: the explorer, the bottom quickfix /
+    /// location-list dock, or the command-line window. This is the exclusion
+    /// check for buffer cycling (`:bn`/`:bp`, `H`/`L`), `:ls`, the buffer
     /// line, the nvim buffer list, and the top-bar multi-buffer visibility
-    /// count — the qf dock slot needs the exact same treatment the explorer
-    /// slot already gets, or it would show up as a fake "real" buffer the
-    /// moment `:copen` creates it.
-    /// The command-line window (`q:` / `q/`) is included too: it is a
-    /// `LayoutTree` leaf rather than a dock, but it appends a scratch slot the
-    /// same way, and that slot is no more a user buffer than the explorer's.
+    /// count.
+    ///
+    /// It is one field read ([`BufKind`](super::BufKind), #63 Phase 4).
+    /// Until Phase 4 it ORed three unrelated derivations — an `is_explorer`
+    /// bool, a scan of EVERY tab's bottom dock for whichever slot its window
+    /// pointed at, and a comparison against `cmdline_win.slot_idx` — so the
+    /// answer depended on what some window happened to point at and on slot
+    /// indices that shift under `:bd` / dock close. A slot's kind is fixed at
+    /// construction and travels with it.
     pub(crate) fn slot_is_special(&self, idx: usize) -> bool {
-        self.slots.get(idx).is_some_and(|s| s.is_explorer)
-            || self.is_qf_dock_slot(idx)
-            || self
-                .cmdline_win
-                .as_ref()
-                .is_some_and(|cw| cw.slot_idx == idx)
+        self.slots
+            .get(idx)
+            .is_some_and(super::BufferSlot::is_special)
     }
 
     /// How many slots are real user buffers, i.e. what the user would call
@@ -458,9 +442,7 @@ impl super::App {
     /// instead, or opening the explorer silently changes what those commands
     /// do.
     pub(crate) fn real_slot_count(&self) -> usize {
-        (0..self.slots.len())
-            .filter(|&i| !self.slot_is_special(i))
-            .count()
+        self.slots.iter().filter(|s| !s.is_special()).count()
     }
 
     // ── Fixed-size sync ─────────────────────────────────────────────────

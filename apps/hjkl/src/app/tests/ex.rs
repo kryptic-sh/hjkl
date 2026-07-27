@@ -272,7 +272,7 @@ fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
     app.dispatch_action(AppAction::ToggleExplorer, 1);
     assert_eq!(app.slots.len(), 2);
     assert!(
-        app.active().is_explorer,
+        app.active().is_explorer(),
         "explorer window must be focused after opening it"
     );
 
@@ -280,7 +280,7 @@ fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
     app.dispatch_ex(&format!("e {}", path.display()));
 
     assert!(
-        app.slots.iter().any(|s| s.is_explorer),
+        app.slots.iter().any(|s| s.is_explorer()),
         "the explorer slot must survive `:e` while it was the focused window"
     );
     assert_eq!(
@@ -689,7 +689,7 @@ fn b_num_targeting_explorer_slot_errors_e86() {
     assert_eq!(app.slots.len(), 1, "starts with one real (scratch) slot");
     app.toggle_explorer();
     assert_eq!(app.slots.len(), 2, "explorer appended as slot index 1");
-    assert!(app.slots[1].is_explorer);
+    assert!(app.slots[1].is_explorer());
     // Focus back on the real editor window (as a user would after opening
     // the explorer in a side split) before issuing `:b 2`.
     app.switch_to(0);
@@ -783,7 +783,7 @@ fn b_num_still_switches_to_real_buffer_when_explorer_open() {
     std::fs::write(&path_a, "a\n").unwrap();
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     app.toggle_explorer();
-    assert!(app.slots[1].is_explorer);
+    assert!(app.slots[1].is_explorer());
     // Focus back on the real editor window before opening a second file.
     app.switch_to(0);
     // Open a second real file so there's a real slot after the explorer.
@@ -791,7 +791,7 @@ fn b_num_still_switches_to_real_buffer_when_explorer_open() {
     std::fs::write(&path_b, "b\n").unwrap();
     app.dispatch_ex(&format!("e {}", path_b.display()));
     assert_eq!(app.slots.len(), 3);
-    assert!(!app.slots[2].is_explorer);
+    assert!(!app.slots[2].is_explorer());
     app.dispatch_ex("b 3");
     assert_eq!(
         app.active_index(),
@@ -1032,7 +1032,7 @@ fn ctrl_c_with_clean_buffers_exits_normally() {
 fn ctrl_c_ignores_dirty_explorer_scratch_buffer() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.active_mut().dirty = true;
-    app.active_mut().is_explorer = true;
+    app.active_mut().kind = crate::app::BufKind::Explorer;
 
     let outcome = app.handle_keypress(ctrl_key('c'));
 

@@ -486,7 +486,7 @@ fn picker_open_path_while_explorer_focused_routes_to_regular_window() {
     );
     let expl_slot = app.windows[explorer_win].as_ref().unwrap().slot;
     assert!(
-        app.slots[expl_slot].is_explorer,
+        app.slots[expl_slot].is_explorer(),
         "explorer window must still show the explorer slot"
     );
     assert_eq!(
@@ -516,8 +516,8 @@ fn picker_switch_slot_while_explorer_focused_routes_to_regular_window() {
 
     assert_ne!(app.focused_window(), explorer_win);
     let expl_slot = app.windows[explorer_win].as_ref().unwrap().slot;
-    assert!(app.slots[expl_slot].is_explorer);
-    assert!(!app.active().is_explorer, "active slot must be regular");
+    assert!(app.slots[expl_slot].is_explorer());
+    assert!(!app.active().is_explorer(), "active slot must be regular");
 }
 
 /// `editor_target_window` prefers the LAST regular window the user focused,

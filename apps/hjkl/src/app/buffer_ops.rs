@@ -63,7 +63,7 @@ impl App {
         if !self.config.editor.restore_cursor {
             return;
         }
-        if idx >= self.slots.len() || self.slots[idx].is_explorer {
+        if idx >= self.slots.len() || self.slots[idx].is_explorer() {
             return;
         }
         let Some(filename) = self.slots[idx].filename.clone() else {
@@ -88,7 +88,7 @@ impl App {
         if !self.config.editor.undofile {
             return;
         }
-        if idx >= self.slots.len() || self.slots[idx].is_explorer {
+        if idx >= self.slots.len() || self.slots[idx].is_explorer() {
             return;
         }
         let Some(filename) = self.slots[idx].filename.clone() else {
@@ -139,7 +139,7 @@ impl App {
         // the store I/O and not for canonicalizing paths and hashing buffers.
         let mut pending: Vec<(String, (u32, u32), u64)> = Vec::new();
         for idx in 0..self.slots.len() {
-            if self.slots[idx].is_explorer {
+            if self.slots[idx].is_explorer() {
                 continue;
             }
             let Some(filename) = self.slots[idx].filename.clone() else {

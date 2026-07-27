@@ -5530,7 +5530,7 @@ fn toggle_explorer_opens_window_and_is_explorer_slot() {
         "explorer pane should be open"
     );
     assert!(
-        app.slots.iter().any(|s| s.is_explorer),
+        app.slots.iter().any(|s| s.is_explorer()),
         "explorer slot must have is_explorer=true"
     );
     assert!(

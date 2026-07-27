@@ -507,7 +507,7 @@ impl HostCmd<App> for BCmd {
             // `:b N` target — it's excluded from `:ls`'s listing and
             // `switch_to` silently no-ops on it — so treat it the same as
             // out-of-range.
-            let is_valid = n != 0 && app.slots.get(n - 1).is_some_and(|s| !s.is_explorer);
+            let is_valid = n != 0 && app.slots.get(n - 1).is_some_and(|s| !s.is_explorer());
             if !is_valid {
                 return Some(ExEffect::Error(format!("E86: Buffer {n} does not exist")));
             }

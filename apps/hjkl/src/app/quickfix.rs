@@ -196,6 +196,14 @@ impl crate::app::App {
         };
 
         let slot = super::BufferSlot {
+            // Both `:copen` and `:lopen` land here; the slot is
+            // `BufKind::Quickfix` either way (vim gives both windows
+            // `buftype=quickfix`), so retargeting the dock between the two
+            // lists never has to touch the slot. `kind` here is the ONLY
+            // thing that keeps this scratch buffer out of `:ls` / `:bn` —
+            // pre-Phase-4 it was inferred by scanning every tab's dock for
+            // whichever slot its window pointed at.
+            kind: super::BufKind::Quickfix,
             features: super::BufferFeatures {
                 syntax: false,
                 lsp: false,
@@ -938,7 +946,7 @@ impl crate::app::App {
                 // Collect from all non-explorer slots.
                 self.slots
                     .iter()
-                    .filter(|s| !s.is_explorer)
+                    .filter(|s| !s.is_explorer())
                     .flat_map(|s| {
                         let path = s.filename.clone().unwrap_or_default();
                         s.lsp_diags.iter().map(move |d| QfEntry {
