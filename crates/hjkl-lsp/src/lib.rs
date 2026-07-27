@@ -5,6 +5,7 @@ pub mod config;
 pub mod encoding;
 pub mod event;
 mod manager;
+pub mod params;
 mod runtime;
 mod server;
 pub mod uri;

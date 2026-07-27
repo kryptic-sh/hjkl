@@ -1682,6 +1682,7 @@ name = "hjkl-lsp"
 version = "0.37.1"
 dependencies = [
  "anyhow",
+ "criterion",
  "crossbeam-channel",
  "serde",
  "serde_json",

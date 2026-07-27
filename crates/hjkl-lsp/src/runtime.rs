@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use serde_json::json;
@@ -12,7 +13,7 @@ use crate::BufferId;
 use crate::config::LspConfig;
 use crate::event::{LspCommand, LspEvent, ServerKey, TextChange};
 use crate::server::Server;
-use crate::workspace;
+use crate::{params, workspace};
 
 /// Per-buffer attachment record.
 struct AttachedBuffer {
@@ -55,7 +56,7 @@ pub async fn dispatch(
                 handle_detach(id, &mut servers, &mut buffers).await;
             }
             LspCommand::NotifyChange { id, full_text } => {
-                handle_notify_change(id, &full_text, &mut servers, &mut buffers);
+                handle_notify_change(id, full_text, &mut servers, &mut buffers);
             }
             LspCommand::NotifyChangeIncremental { id, changes } => {
                 handle_notify_change_incremental(id, changes, &mut servers, &mut buffers);
@@ -157,17 +158,12 @@ async fn handle_attach(
 
     let server = servers.get_mut(&key).expect("just inserted");
 
-    // Send textDocument/didOpen.
+    // Send textDocument/didOpen. `text` is *moved* into the params object
+    // (see `crate::params`) — building it with `json!` would have deep-copied
+    // the whole document.
     server.send_notification(
         "textDocument/didOpen",
-        json!({
-            "textDocument": {
-                "uri": uri.as_str(),
-                "languageId": language_id,
-                "version": 1,
-                "text": text,
-            }
-        }),
+        params::did_open(uri.as_str(), language_id, 1, text),
     );
 
     buffers.insert(
@@ -234,9 +230,21 @@ fn handle_request(
     }
 }
 
+/// Full-document sync. Takes the text `Arc` by value so the params object
+/// can *move* the `String` in when this side holds the only reference —
+/// `Arc::unwrap_or_clone` copies only when the sender still shares it.
+///
+/// Note the app's current caller does still share it: `content_joined()`
+/// keeps the `Arc` in the buffer's `dirty_gen` cache, so on that path
+/// `unwrap_or_clone` pays for one copy — exactly the one `json!` used to
+/// make, no more. Fully eliminating it for a shared `Arc` would require
+/// serializing the notification directly instead of materializing a
+/// `serde_json::Value` (which has no borrowed/shared string variant).
+/// The unconditional win is on the owned-text paths: `didOpen` and
+/// incremental `didChange`, where the text really does move.
 fn handle_notify_change(
     id: BufferId,
-    full_text: &str,
+    full_text: Arc<String>,
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
@@ -246,15 +254,11 @@ fn handle_notify_change(
     };
     buf.version += 1;
     let version = buf.version;
-    let uri = buf.uri.as_str().to_string();
 
     if let Some(server) = servers.get_mut(&buf.server_key) {
         server.send_notification(
             "textDocument/didChange",
-            json!({
-                "textDocument": { "uri": uri, "version": version },
-                "contentChanges": [{ "text": full_text }],
-            }),
+            params::did_change_full(buf.uri.as_str(), version, Arc::unwrap_or_clone(full_text)),
         );
     }
 }
@@ -292,27 +296,11 @@ fn handle_notify_change_incremental(
     };
     buf.version += 1;
     let version = buf.version;
-    let uri = buf.uri.as_str().to_string();
 
     if let Some(server) = servers.get_mut(&buf.server_key) {
-        let content_changes: Vec<serde_json::Value> = changes
-            .into_iter()
-            .map(|c| {
-                json!({
-                    "range": {
-                        "start": { "line": c.start_line, "character": c.start_col },
-                        "end":   { "line": c.end_line,   "character": c.end_col },
-                    },
-                    "text": c.text,
-                })
-            })
-            .collect();
         server.send_notification(
             "textDocument/didChange",
-            json!({
-                "textDocument": { "uri": uri, "version": version },
-                "contentChanges": content_changes,
-            }),
+            params::did_change_incremental(buf.uri.as_str(), version, changes),
         );
     }
 }
