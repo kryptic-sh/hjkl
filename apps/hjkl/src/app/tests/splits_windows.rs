@@ -1971,3 +1971,32 @@ fn bottom_dock_resize_clamps_to_minimum_height() {
         "height must clamp at the minimum rather than going to 0 or negative"
     );
 }
+
+/// Three-window layout `LEFT | (TOP-RIGHT / BOTTOM-RIGHT)`: `<C-h>` from the
+/// BOTTOM-right pane must return to the left pane, not just from the top one.
+/// The bottom pane's parent is the horizontal split, so the left neighbour is
+/// only reachable by ascending past it to the enclosing vertical split.
+#[test]
+fn ctrl_h_from_bottom_right_pane_returns_to_left_pane() {
+    use crate::app::NavDir;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("vsp");
+    let left = app.focused_window();
+    app.dispatch_tmux_navigate(NavDir::Right);
+    let right = app.focused_window();
+    assert_ne!(right, left, ":vsp + <C-l> must reach the other pane");
+
+    // Split the right pane; focus lands in one of its halves.
+    app.dispatch_ex("sp");
+    app.dispatch_tmux_navigate(NavDir::Down);
+    let bottom_right = app.focused_window();
+
+    app.dispatch_tmux_navigate(NavDir::Left);
+
+    assert_eq!(
+        app.focused_window(),
+        left,
+        "<C-h> from the bottom-right pane must focus the left pane (was {bottom_right})"
+    );
+}
