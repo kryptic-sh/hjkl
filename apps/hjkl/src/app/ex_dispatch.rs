@@ -2071,16 +2071,28 @@ impl App {
         }
 
         // Otherwise create a new slot.
+        //
+        // Never into a dock: the focused window is about to be pointed at the
+        // new slot, and if that window is the explorer / quickfix dock the
+        // file lands INSIDE the dock — the window then reports `is_dock` while
+        // showing a user file, and the tab still records it as its dock, so a
+        // later `:cclose` / `<leader>e` disposes of the window and the slot
+        // holding that file. Reroute first, exactly as `:sp`, `q:` and
+        // `:DiffOrig` already do (`switch_to` does it for the switch path
+        // above).
+        self.focus_editor_window_for_open();
         let prev_idx = self.focused_slot_idx();
         let prev_pristine = {
             let s = &self.slots[prev_idx];
-            // The explorer's own scratch slot is ALSO `filename.is_none() &&
-            // !dirty` — the same shape as the pristine-default buffer this
-            // check exists to discard. Without the `is_explorer` guard,
-            // `:e <path>` while the explorer window is focused would delete
-            // the explorer slot itself instead of a throwaway default one
-            // (audit A8 follow-up).
-            s.filename.is_none() && !s.dirty && !s.is_explorer()
+            // EVERY special scratch slot (explorer, quickfix/location dock,
+            // `q:` cmdline history) is ALSO `filename.is_none() && !dirty` —
+            // the same shape as the pristine-default buffer this check exists
+            // to discard. Without the `is_special` guard, `:e <path>` with one
+            // of those focused would delete that pane's own slot instead of a
+            // throwaway default one (audit A8 follow-up; widened from
+            // `is_explorer` in #63 Phase 5, which is when quickfix and cmdline
+            // slots started satisfying it too).
+            s.filename.is_none() && !s.dirty && !s.is_special()
         };
         match self.open_new_slot(path) {
             Ok(new_slot_idx) => {

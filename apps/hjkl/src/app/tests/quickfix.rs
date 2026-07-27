@@ -836,6 +836,69 @@ fn make_app_with_qf_files() -> (App, std::path::PathBuf, tempfile::TempDir) {
     (app, file_a, dir)
 }
 
+/// `:e <new path>` with the quickfix dock focused must open the file in a
+/// REGULAR window and leave the dock completely alone.
+///
+/// `do_edit`'s create path used to point the FOCUSED window at the new slot
+/// without rerouting off a dock first, and its "drop the pristine
+/// placeholder" test was `filename.is_none() && !dirty && !is_explorer()` —
+/// which the quickfix dock's own scratch slot satisfies. So `:e` in the dock
+/// loaded the file into the dock window AND deleted the dock's slot as
+/// "pristine", while the tab still recorded that window as its bottom dock:
+/// the next `:cclose` then disposed of the window and the slot holding the
+/// user's file.
+#[test]
+fn edit_from_the_quickfix_dock_never_loads_the_file_into_it() {
+    let (mut app, _file_a, dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .expect("bottom dock must be open")
+        .win_id;
+    app.set_focused_window(dock_win);
+
+    let fresh = dir.path().join("fresh.txt");
+    std::fs::write(&fresh, "fresh-line0\n").unwrap();
+    app.dispatch_ex(&format!("e {}", fresh.display()));
+
+    // The dock is untouched: still recorded, still its own window, still
+    // showing a special scratch slot rather than the user's file.
+    assert!(
+        app.tabs[app.active_tab].bottom_dock.is_some(),
+        ":e must not tear the quickfix dock down"
+    );
+    assert!(app.quickfix_open(), "the quickfix list must stay open");
+    let dock_slot = app.windows[dock_win]
+        .as_ref()
+        .expect("dock window must still be open")
+        .slot;
+    assert!(
+        app.slot_is_special(dock_slot),
+        ":e loaded a user file into the dock window"
+    );
+
+    // And the file really opened, in a regular window.
+    let focused = app.focused_window();
+    assert!(
+        !app.is_dock_window(focused),
+        ":e must leave focus in a regular window"
+    );
+    assert_eq!(
+        app.active().filename.as_deref(),
+        Some(fresh.as_path()),
+        ":e must open the file in the focused regular window"
+    );
+
+    // Closing the dock afterwards must not take the file's window with it.
+    app.handle_quickfix_command(QfCommand::Close);
+    assert_eq!(
+        app.active().filename.as_deref(),
+        Some(fresh.as_path()),
+        ":cclose must not dispose of the window holding the opened file"
+    );
+}
+
 /// `:copen` creates a bottom-dock window whose buffer has one line per
 /// entry, formatted `path:line:col message` (1-based line/col, a single
 /// space between the location column and the message — no alignment or

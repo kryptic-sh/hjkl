@@ -254,9 +254,15 @@ fn edit_existing_path_switches_to_open_slot() {
 /// Regression (audit A8 follow-up): the explorer's own scratch slot has
 /// `filename == None && !dirty` — the exact same shape `:e <path>`'s
 /// "drop the pristine default buffer" logic used to treat as discardable.
-/// Without the `is_explorer` guard, opening a file while the explorer
+/// Without the `is_special` guard, opening a file while the explorer
 /// window is focused deleted the explorer slot instead of the intended
 /// throwaway default buffer.
+///
+/// #63 Phase 5 additionally routes the create path through
+/// `focus_editor_window_for_open`, so the file lands in the regular window
+/// rather than in the explorer's. The pristine default buffer that regular
+/// window was showing is then the one discarded — which is the whole point
+/// of the pristine check, and is why only two slots remain here.
 #[test]
 fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
     use crate::keymap_actions::AppAction;
@@ -275,6 +281,7 @@ fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
         app.active().is_explorer(),
         "explorer window must be focused after opening it"
     );
+    let explorer_win = app.focused_window();
 
     // `:e <path>` while the explorer is focused.
     app.dispatch_ex(&format!("e {}", path.display()));
@@ -285,8 +292,26 @@ fn edit_while_explorer_focused_does_not_delete_the_explorer_slot() {
     );
     assert_eq!(
         app.slots.len(),
-        3,
-        "pristine default (untouched) + explorer + newly opened file"
+        2,
+        "explorer + newly opened file (the pristine default was discarded)"
+    );
+    assert_ne!(
+        app.focused_window(),
+        explorer_win,
+        "`:e` must move focus off the explorer before opening the file"
+    );
+    let explorer_slot = app.windows[explorer_win]
+        .as_ref()
+        .expect("explorer window must still be open")
+        .slot;
+    assert!(
+        app.slots[explorer_slot].is_explorer(),
+        "the explorer window must still show its own scratch slot"
+    );
+    assert_eq!(
+        app.active().filename.as_deref(),
+        Some(path.as_path()),
+        "the file must be open in the focused regular window"
     );
 
     let _ = std::fs::remove_file(&path);
