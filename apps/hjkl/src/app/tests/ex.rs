@@ -744,7 +744,10 @@ fn q_on_focused_explorer_closes_the_dock() {
     app.dispatch_ex("q");
 
     assert!(!app.exit_requested, "`:q` in the explorer must not quit");
-    assert!(app.left_dock.is_none(), "the explorer dock must be closed");
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_none(),
+        "the explorer dock must be closed"
+    );
     assert_eq!(app.slots.len(), 1, "the explorer slot must be gone too");
     assert!(!app.explorer_buf_focused());
 }
@@ -766,7 +769,10 @@ fn ctrl_w_q_on_focused_explorer_closes_the_dock_instead_of_quitting() {
         !app.exit_requested,
         "`<C-w>q` in the explorer must not quit the editor"
     );
-    assert!(app.left_dock.is_none(), "the explorer dock must be closed");
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_none(),
+        "the explorer dock must be closed"
+    );
 }
 
 #[test]

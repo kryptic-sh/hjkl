@@ -7,7 +7,7 @@
 //!
 //! `:copen`/`:lopen` used to show a `Clear`+`List` overlay with hardcoded key
 //! interception (`j`/`k`/`<CR>`/`Esc`/`q`) that owned every keypress while up.
-//! Phase B replaces that with a REAL window/buffer in `App::bottom_dock` (see
+//! Phase B replaces that with a REAL window/buffer in `Tab::bottom_dock` (see
 //! `crate::app::dock`): a real `Editor` backs it, so every vim motion,
 //! search, and yank works on the list for free. The only key this module
 //! still intercepts is `<CR>` (jump to the entry under the dock's cursor,
@@ -90,16 +90,14 @@ impl crate::app::App {
     /// bool — the dock's presence/kind now IS the "list is shown" state, so
     /// there's nothing left to go stale against it.
     pub(crate) fn quickfix_open(&self) -> bool {
-        self.bottom_dock
-            .as_ref()
+        self.bottom_dock()
             .is_some_and(|d| d.kind == crate::app::dock::DockKind::Quickfix)
     }
 
     /// `true` while the bottom dock is showing the location list. Twin of
     /// [`Self::quickfix_open`].
     pub(crate) fn loclist_open(&self) -> bool {
-        self.bottom_dock
-            .as_ref()
+        self.bottom_dock()
             .is_some_and(|d| d.kind == crate::app::dock::DockKind::Loclist)
     }
 
@@ -136,11 +134,13 @@ impl crate::app::App {
     fn open_bottom_dock_for(&mut self, w: QfWhich) {
         let kind = w.dock_kind();
         self.sync_viewport_from_editor();
-        let win_id = match self.bottom_dock.as_ref().map(|d| d.kind) {
-            Some(k) if k == kind => self.bottom_dock.as_ref().unwrap().win_id,
-            Some(_) => {
-                let win_id = self.bottom_dock.as_ref().unwrap().win_id;
-                if let Some(d) = self.bottom_dock.as_mut() {
+        // Reuse the ACTIVE TAB's dock when it already exists, retargeting
+        // which list it shows; only a tab without one installs a new dock.
+        let win_id = match self.bottom_dock().map(|d| (d.win_id, d.kind)) {
+            Some((win_id, k)) => {
+                if k != kind
+                    && let Some(d) = self.tabs[self.active_tab].bottom_dock.as_mut()
+                {
                     d.kind = kind;
                 }
                 win_id
@@ -223,7 +223,7 @@ impl crate::app::App {
     /// (same pattern as `explorer::explorer_rebuild_buffer`) since this is a
     /// structural content reset, not a user edit.
     fn qf_rebuild_dock_buffer(&mut self, w: QfWhich) {
-        let Some(dock) = self.bottom_dock.as_ref() else {
+        let Some(dock) = self.bottom_dock() else {
             return;
         };
         if dock.kind != w.dock_kind() {
@@ -348,7 +348,7 @@ impl crate::app::App {
     /// move the list cursor so the dock's highlighted row (the cursor line)
     /// stays in sync with which entry the editor jumped to.
     fn qf_sync_dock_cursor(&mut self, w: QfWhich) {
-        let Some(dock) = self.bottom_dock.as_ref() else {
+        let Some(dock) = self.bottom_dock() else {
             return;
         };
         if dock.kind != w.dock_kind() {
@@ -372,7 +372,7 @@ impl crate::app::App {
     /// (readonly) dock itself — matching vim: the quickfix window is never
     /// the target of the file it opens.
     pub(crate) fn qf_dock_jump_at_cursor(&mut self) {
-        let Some(dock) = self.bottom_dock.as_ref() else {
+        let Some(dock) = self.bottom_dock() else {
             return;
         };
         let w = match dock.kind {

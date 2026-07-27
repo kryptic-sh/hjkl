@@ -518,12 +518,12 @@ impl App {
                 self.do_save(Some(PathBuf::from(path)));
             }
             ExEffect::Quit { force, save } => {
-                // Docks (explorer, quickfix/location list) are neither
-                // `LayoutTree` leaves nor user buffers, so neither branch
-                // below can see them: `:q` in a dock used to fall through to
-                // `buffer_delete` and destroy the dock's scratch slot. Close
-                // the dock instead — same as `:close` / `<C-w>c`, and the
-                // same thing vim does in a quickfix window.
+                // Docks (explorer, quickfix/location list) are not user
+                // buffers, so the `buffer_delete` branch below must not see
+                // them: `:q` in a dock used to fall through to it and destroy
+                // the dock's scratch slot. Close the dock instead — same as
+                // `:close` / `<C-w>c`, and the same thing vim does in a
+                // quickfix window.
                 //
                 // `:wq` still falls through, so writing a scratch dock buffer
                 // reports its own error rather than silently closing.
@@ -541,7 +541,11 @@ impl App {
                 // window (same as :close). :q! with multiple windows also
                 // just closes the focused window (force discards dirty state
                 // for that window but doesn't quit the app).
-                if self.layout().leaves().len() > 1 {
+                //
+                // REGULAR leaves only — an open dock is a leaf too, and
+                // counting it here would turn `:q` in the last editor into a
+                // window close that leaves the dock as the last window.
+                if self.regular_leaf_count() > 1 {
                     self.close_focused_window();
                     return;
                 }
@@ -780,10 +784,10 @@ impl App {
     /// scroll).  With a filename: opens a new slot in the upper half.
     pub(super) fn do_split(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        // Docks are never `LayoutTree` leaves (#63 Phase A) — splitting one
-        // would leave the new window unreachable by any tree op (never
-        // spliced in, never focusable via `<C-w>` cycling). Reroute to a
-        // regular window first, same as buffer-open paths already do.
+        // Splitting a dock would put a file buffer inside the explorer's or
+        // the quickfix window's fixed column/row, at the dock's size — vim
+        // doesn't let `:sp` land there either. Reroute to a regular window
+        // first, same as buffer-open paths already do.
         self.focus_editor_window_for_open();
         let focused = self.focused_window();
         let cur_slot = self.windows[focused]
@@ -2394,12 +2398,19 @@ impl App {
             self.bus.info("tabonly");
             return;
         }
+        // Dispose each closing tab's docks first: a dock owns a scratch slot
+        // that the plain window drop below would leak (#63 Phase 3).
+        for i in 0..self.tabs.len() {
+            if i != self.active_tab {
+                self.dispose_tab_docks(i);
+            }
+        }
         // Collect window ids from all tabs except the active one and drop them.
-        for (i, tab) in self.tabs.iter().enumerate() {
+        for i in 0..self.tabs.len() {
             if i == self.active_tab {
                 continue;
             }
-            for wid in tab.layout.leaves() {
+            for wid in self.tabs[i].layout.leaves() {
                 self.windows[wid] = None;
                 self.window_folds.remove(&wid);
             }
@@ -2426,7 +2437,11 @@ impl App {
             // Already the last tab — nothing to close.
             return;
         }
-        // Drop window slots for every tab that lives to the right.
+        // Drop window slots for every tab that lives to the right, docks
+        // (and their scratch slots) first.
+        for i in (active + 1)..self.tabs.len() {
+            self.dispose_tab_docks(i);
+        }
         for i in (active + 1)..self.tabs.len() {
             for wid in self.tabs[i].layout.leaves() {
                 self.windows[wid] = None;
@@ -2450,7 +2465,11 @@ impl App {
             // Already the first tab — nothing to close.
             return;
         }
-        // Drop window slots for every tab that lives to the left.
+        // Drop window slots for every tab that lives to the left, docks
+        // (and their scratch slots) first.
+        for i in 0..active {
+            self.dispose_tab_docks(i);
+        }
         for i in 0..active {
             for wid in self.tabs[i].layout.leaves() {
                 self.windows[wid] = None;
@@ -2612,6 +2631,9 @@ impl App {
             self.bus.error("E444: Cannot close last tab");
             return;
         }
+        // Dispose the closing tab's docks first — the plain window drop below
+        // would leak their scratch slots (#63 Phase 3).
+        self.dispose_tab_docks(self.active_tab);
         // Collect window ids in the closing tab.
         let closing_leaves = self.tabs[self.active_tab].layout.leaves();
         // Drop those windows.

@@ -179,13 +179,11 @@ impl App {
     pub(crate) fn switch_tab(&mut self, tab_idx: usize) {
         self.sync_viewport_from_editor();
         self.active_tab = tab_idx;
-        // A tab's remembered focus can go stale when it pointed at a dock
-        // that has since closed — docks are global (#63 Phase A), so
-        // closing one can invalidate the remembered focus of tabs other
-        // than whichever was active at close time (`teardown_left_dock`
-        // sweeps every tab, but a caller that skips it, or any other
-        // future source of a dangling id, is covered here too). Fall back
-        // through the same regular-window search buffer-opens use.
+        // A tab's remembered focus can go stale if any window it pointed at
+        // was closed while another tab was active. Dock teardown repairs the
+        // owning tab's focus itself, so this is a general safety net for ANY
+        // dangling remembered-focus id rather than a dock-specific fix. Fall
+        // back through the same regular-window search buffer-opens use.
         let fw = self.tabs[tab_idx].focused_window;
         if self.windows.get(fw).is_none_or(Option::is_none)
             && let Some(target) = self.editor_target_window()

@@ -464,7 +464,11 @@ fn picker_open_path_while_explorer_focused_routes_to_regular_window() {
 
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
-    let explorer_win = app.explorer.as_ref().expect("explorer open").win_id;
+    let explorer_win = app.tabs[app.active_tab]
+        .explorer
+        .as_ref()
+        .expect("explorer open")
+        .win_id;
     assert_eq!(
         app.focused_window(),
         explorer_win,
@@ -501,7 +505,11 @@ fn picker_switch_slot_while_explorer_focused_routes_to_regular_window() {
     use hjkl_picker::PickerAction;
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
-    let explorer_win = app.explorer.as_ref().expect("explorer open").win_id;
+    let explorer_win = app.tabs[app.active_tab]
+        .explorer
+        .as_ref()
+        .expect("explorer open")
+        .win_id;
     assert_eq!(app.focused_window(), explorer_win);
 
     app.dispatch_picker_action(PickerAction::Custom(Box::new(AppAction::SwitchSlot(0))));
@@ -525,7 +533,7 @@ fn editor_target_prefers_last_focused_regular_window() {
 
     // Open the explorer — focus moves to its (non-regular) window.
     app.dispatch_action(crate::keymap_actions::AppAction::ToggleExplorer, 1);
-    let explorer_win = app.explorer.as_ref().unwrap().win_id;
+    let explorer_win = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
     assert_eq!(app.focused_window(), explorer_win);
     assert!(!app.window_is_regular(explorer_win));
 

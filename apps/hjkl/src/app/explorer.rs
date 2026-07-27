@@ -812,7 +812,7 @@ impl super::App {
     /// #63 Phase C) so it's restored on the next launch — see
     /// `dock::App::persist_explorer_open` / `restore_dock_state_from_config`.
     pub(crate) fn toggle_explorer(&mut self) {
-        if self.explorer.is_some() {
+        if self.tabs[self.active_tab].explorer.is_some() {
             self.close_explorer();
         } else {
             self.open_explorer();
@@ -886,10 +886,10 @@ impl super::App {
         // Save the outgoing window's cursor/scroll before changing focus.
         self.sync_viewport_from_editor();
 
-        // Install as the left dock (#63 Phase A) — a real window with its
-        // own slot, but never woven into any tab's `LayoutTree`. Its width
-        // comes from config (`render::frame` carves its rect off the frame
-        // each draw), not a split ratio.
+        // Install as the ACTIVE TAB's left dock — an ordinary leaf of that
+        // tab's `LayoutTree`, woven in as the full-height leftmost column.
+        // Its width comes from config (as the split's `Fixed` allocation),
+        // not a ratio, so it survives every resize unchanged.
         let new_win_id = self.install_left_dock(slot_idx, super::dock::DockKind::Explorer);
 
         // Focus the new explorer window.
@@ -908,14 +908,9 @@ impl super::App {
 
         // Record the dirty_gen AFTER set_content so the first reconcile check
         // starts from the correct generation and doesn't fire immediately.
-        let initial_gen = self
-            .slots
-            .iter()
-            .rev()
-            .find(|s| s.is_explorer)
-            .map_or(0, |s| s.buffer().dirty_gen());
+        let initial_gen = self.slots[slot_idx].buffer().dirty_gen();
 
-        self.explorer = Some(ExplorerPane {
+        self.tabs[self.active_tab].explorer = Some(ExplorerPane {
             win_id: new_win_id,
             tree,
             last_reconcile_gen: initial_gen,
@@ -937,18 +932,25 @@ impl super::App {
         }
     }
 
-    /// Current slot index of the explorer's scratch buffer, found by its
-    /// `is_explorer` flag (robust to slot re-indexing from `:bd`/`:bn`).
+    /// Current slot index of the ACTIVE TAB's explorer scratch buffer.
+    ///
+    /// Derived from the pane's window rather than by scanning for the
+    /// `is_explorer` flag: explorers are per-tab (#63 Phase 3), so two tabs
+    /// with the explorer open mean two `is_explorer` slots and a positional
+    /// scan would silently rewrite the other tab's tree. The window's `slot`
+    /// field is the single source of truth, and stays right across the slot
+    /// re-indexing that `:bd`/`:bn` cause.
     fn explorer_slot_idx(&self) -> Option<usize> {
-        self.slots.iter().position(|s| s.is_explorer)
+        let win_id = self.tabs[self.active_tab].explorer.as_ref()?.win_id;
+        self.windows.get(win_id)?.as_ref().map(|w| w.slot)
     }
 
-    /// Close the explorer dock and remove its slot (#63 Phase A). Since the
-    /// dock was never a `LayoutTree` leaf, there is no tree collapse — just
-    /// tear the dock down and move focus onto a regular window if the
-    /// explorer (or nothing at all, in a degenerate test setup) was focused.
+    /// Close the active tab's explorer dock and remove its slot. Unweaving the
+    /// leaf (and collapsing its fixed split onto the main area) is
+    /// `teardown_left_dock`'s job; this drops the pane state that goes with it
+    /// and moves focus onto a regular window.
     fn close_explorer(&mut self) {
-        if self.explorer.take().is_none() {
+        if self.tabs[self.active_tab].explorer.take().is_none() {
             return;
         }
         self.teardown_left_dock();
@@ -971,13 +973,13 @@ impl super::App {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
-        let (text, win_id) = match self.explorer.as_ref() {
+        let (text, win_id) = match self.tabs[self.active_tab].explorer.as_ref() {
             Some(ep) => (ep.tree.render_text(), ep.win_id),
             None => return,
         };
         // Stash the path currently under cursor before we rebuild.
         let prev_row = self.window_cursor(win_id).0;
-        let prev_path = self
+        let prev_path = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .and_then(|ep| ep.tree.nodes.get(prev_row))
@@ -992,7 +994,7 @@ impl super::App {
         // Apply folds derived from the current `expanded` set so collapsed dirs
         // hide their subtrees. Must happen after set_content so row indices are
         // correct for the new text. `set_folds` is idempotent when unchanged.
-        let folds = self
+        let folds = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .map(|ep| ep.tree.compute_folds())
@@ -1004,7 +1006,7 @@ impl super::App {
         // reconcile diffs against the post-toggle state. Also update
         // last_reconcile_gen to the new dirty_gen so the structural reset
         // doesn't trigger a spurious reconcile.
-        let new_baseline: Vec<(u64, PathBuf, bool)> = self
+        let new_baseline: Vec<(u64, PathBuf, bool)> = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .map(|ep| {
@@ -1017,14 +1019,15 @@ impl super::App {
             })
             .unwrap_or_default();
         let new_gen = self.slots[slot_idx].buffer().dirty_gen();
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.baseline = new_baseline;
             ep.last_reconcile_gen = new_gen;
         }
 
         // Try to keep cursor on the same path.
         let new_row = if let Some(ref p) = prev_path {
-            self.explorer
+            self.tabs[self.active_tab]
+                .explorer
                 .as_ref()
                 .and_then(|ep| ep.tree.nodes.iter().position(|n| &n.path == p))
                 .unwrap_or(prev_row)
@@ -1032,7 +1035,8 @@ impl super::App {
             prev_row
         };
         let clamped = new_row.min(
-            self.explorer
+            self.tabs[self.active_tab]
+                .explorer
                 .as_ref()
                 .map_or(0, |ep| ep.tree.nodes.len().saturating_sub(1)),
         );
@@ -1055,7 +1059,7 @@ impl super::App {
         use hjkl_engine::VimMode;
 
         // Nothing to do if the explorer is not open.
-        if self.explorer.is_none() {
+        if self.tabs[self.active_tab].explorer.is_none() {
             return;
         }
 
@@ -1071,7 +1075,7 @@ impl super::App {
         // fall back to anymore), default to Normal — an editor that was never
         // dispatched is always at rest in Normal mode, which is exactly what
         // the old slot-bridge-editor fallback always read too.
-        let vim_mode = self
+        let vim_mode = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .and_then(|e| self.window_editors.get(&e.win_id))
@@ -1084,14 +1088,18 @@ impl super::App {
         let cur_gen = self.slots[slot_idx].buffer().dirty_gen();
 
         // Guard: nothing changed since last reconcile.
-        let last_gen = self.explorer.as_ref().map_or(0, |ep| ep.last_reconcile_gen);
+        let last_gen = self.tabs[self.active_tab]
+            .explorer
+            .as_ref()
+            .map_or(0, |ep| ep.last_reconcile_gen);
         if cur_gen == last_gen {
             return;
         }
 
-        // Clone what we need out of `self.explorer` before borrowing self mutably.
+        // Clone what we need out of the tab's explorer pane before borrowing
+        // self mutably.
         let (baseline, text, root) = {
-            let ep = self.explorer.as_ref().unwrap();
+            let ep = self.tabs[self.active_tab].explorer.as_ref().unwrap();
             let baseline = ep.baseline.clone();
             let text = self.slots[slot_idx].buffer().as_string();
             let root = ep.tree.root.clone();
@@ -1107,21 +1115,21 @@ impl super::App {
             // longer matches the tree's canonical render, rebuild to normalize
             // it away; otherwise just advance the gen (a pure cursor move on
             // unchanged content).
-            let canonical = self
+            let canonical = self.tabs[self.active_tab]
                 .explorer
                 .as_ref()
                 .map(|ep| ep.tree.render_text())
                 .unwrap_or_default();
             if text != canonical {
                 self.explorer_rebuild_buffer(); // also syncs baseline + gen
-            } else if let Some(ep) = self.explorer.as_mut() {
+            } else if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
                 ep.last_reconcile_gen = cur_gen;
             }
             return;
         }
 
         // Take the trashed registry out of the pane so we can mutate it.
-        let mut trashed = self
+        let mut trashed = self.tabs[self.active_tab]
             .explorer
             .as_mut()
             .map(|ep| std::mem::take(&mut ep.trashed))
@@ -1147,7 +1155,7 @@ impl super::App {
         };
 
         // Put the trashed registry back.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.trashed = trashed;
         }
 
@@ -1162,7 +1170,7 @@ impl super::App {
 
         // Push to undo stack if ops actually happened; clear redo stack.
         if !applied.is_empty()
-            && let Some(ep) = self.explorer.as_mut()
+            && let Some(ep) = self.tabs[self.active_tab].explorer.as_mut()
         {
             ep.undo_stack.push(applied);
             ep.redo_stack.clear();
@@ -1172,7 +1180,7 @@ impl super::App {
         // every result path so a multi-level create (`somedir/test.txt`) shows
         // the new leaf rather than leaving `somedir` collapsed. Walk each result
         // path's parents up to (and including) the root.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             let root = ep.tree.root.clone();
             for p in &result_paths {
                 if !p.starts_with(&root) {
@@ -1191,7 +1199,7 @@ impl super::App {
 
         // Rebuild the tree from disk + git so that tracked-but-deleted files
         // appear as red nodes (WT_DELETED injection in push_children).
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.tree.rebuild();
         }
         // Reset the buffer content from the freshly-rebuilt tree and sync
@@ -1204,7 +1212,7 @@ impl super::App {
         // renamed path), overriding the sticky-cursor restore — so after a
         // paste you're on the pasted file.
         if !result_paths.is_empty() {
-            let target = self.explorer.as_ref().and_then(|ep| {
+            let target = self.tabs[self.active_tab].explorer.as_ref().and_then(|ep| {
                 ep.tree
                     .nodes
                     .iter()
@@ -1373,7 +1381,7 @@ impl super::App {
     pub(crate) fn explorer_undo(&mut self) -> bool {
         // Pop the top transaction from the undo stack.
         let txn = {
-            let Some(ep) = self.explorer.as_mut() else {
+            let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() else {
                 return false;
             };
             match ep.undo_stack.pop() {
@@ -1383,7 +1391,7 @@ impl super::App {
         };
 
         // Take the trashed registry.
-        let mut trashed = self
+        let mut trashed = self.tabs[self.active_tab]
             .explorer
             .as_mut()
             .map(|ep| std::mem::take(&mut ep.trashed))
@@ -1392,7 +1400,7 @@ impl super::App {
         let (redo_journal, errors) = super::explorer_reconcile::revert_ops(&txn, &mut trashed);
 
         // Put the trashed registry back and push to redo stack.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.trashed = trashed;
             ep.redo_stack.push(redo_journal);
         }
@@ -1402,7 +1410,7 @@ impl super::App {
         }
 
         // Rebuild tree + buffer from disk + git.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.tree.rebuild();
         }
         self.explorer_rebuild_buffer();
@@ -1419,7 +1427,7 @@ impl super::App {
     pub(crate) fn explorer_redo(&mut self) {
         // Pop the top transaction from the redo stack.
         let redo_txn = {
-            let Some(ep) = self.explorer.as_mut() else {
+            let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() else {
                 return;
             };
             match ep.redo_stack.pop() {
@@ -1429,7 +1437,7 @@ impl super::App {
         };
 
         // Take the trashed registry.
-        let mut trashed = self
+        let mut trashed = self.tabs[self.active_tab]
             .explorer
             .as_mut()
             .map(|ep| std::mem::take(&mut ep.trashed))
@@ -1439,7 +1447,7 @@ impl super::App {
             super::explorer_reconcile::apply_applied(&redo_txn, &mut trashed);
 
         // Put the trashed registry back and push to undo stack.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.trashed = trashed;
             if !new_applied.is_empty() {
                 ep.undo_stack.push(new_applied);
@@ -1451,7 +1459,7 @@ impl super::App {
         }
 
         // Rebuild tree + buffer from disk + git.
-        if let Some(ep) = self.explorer.as_mut() {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
             ep.tree.rebuild();
         }
         self.explorer_rebuild_buffer();
@@ -1470,7 +1478,11 @@ impl super::App {
     /// the two desync and the tree renders garbled. Call after every explorer
     /// fold mutation.
     pub(crate) fn sync_explorer_window_folds(&mut self) {
-        let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) else {
+        let Some(win_id) = self.tabs[self.active_tab]
+            .explorer
+            .as_ref()
+            .map(|ep| ep.win_id)
+        else {
             return;
         };
         let Some(slot_idx) = self.explorer_slot_idx() else {
@@ -1499,10 +1511,14 @@ impl super::App {
         col: usize,
         top: Option<usize>,
     ) {
-        let Some(win_id) = self.explorer.as_ref().map(|e| e.win_id) else {
+        let Some(win_id) = self.tabs[self.active_tab]
+            .explorer
+            .as_ref()
+            .map(|e| e.win_id)
+        else {
             return;
         };
-        let Some(slot_idx) = self.slots.iter().position(|s| s.is_explorer) else {
+        let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
         match self.window_editors.get_mut(&win_id) {
@@ -1527,7 +1543,7 @@ impl super::App {
     /// highlighted row in the tree. Does NOT change window focus. No-op for
     /// scratch buffers or files outside the tree root.
     pub(crate) fn explorer_reveal_active(&mut self) {
-        if self.explorer.is_none() {
+        if self.tabs[self.active_tab].explorer.is_none() {
             return;
         }
         let Some(fname) = self.active().filename.clone() else {
@@ -1551,7 +1567,7 @@ impl super::App {
         // rebuilds the tree from disk ONLY when the node is missing (e.g. a
         // freshly-created file), which changes the node count.
         let (win_id, row, structural) = {
-            let Some(ep) = self.explorer.as_mut() else {
+            let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() else {
                 return;
             };
             if !abs.starts_with(&ep.tree.root) {
@@ -1642,12 +1658,12 @@ impl super::App {
     pub(crate) fn explorer_activate(&mut self) {
         // Determine the cursor row in the explorer window (its own editor).
         let cursor_row = {
-            let wid = self.explorer.as_ref().unwrap().win_id;
+            let wid = self.tabs[self.active_tab].explorer.as_ref().unwrap().win_id;
             self.window_cursor(wid).0
         };
 
         // Get the node at cursor.
-        let node = self
+        let node = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .and_then(|ep| ep.tree.nodes.get(cursor_row))
@@ -1661,7 +1677,7 @@ impl super::App {
             // drops its subtree from `nodes`. `explorer_rebuild_buffer` re-renders
             // and keeps the cursor on this dir's path.
             let path = node.path;
-            if let Some(ref mut ep) = self.explorer {
+            if let Some(ref mut ep) = self.tabs[self.active_tab].explorer {
                 let now = ep.tree.is_expanded(&path);
                 ep.tree.set_expanded(&path, !now);
                 ep.tree.rebuild();
@@ -1697,7 +1713,7 @@ impl super::App {
         // Expand the dir (lazy-load its one level) so the new line lands as its
         // first child, then re-render. If already expanded this is a cheap
         // re-read. `explorer_rebuild_buffer` keeps the cursor on the dir row.
-        if let Some(ref mut ep) = self.explorer
+        if let Some(ref mut ep) = self.tabs[self.active_tab].explorer
             && !ep.tree.is_expanded(&node.path)
         {
             ep.tree.set_expanded(&node.path, true);
@@ -1747,7 +1763,7 @@ impl super::App {
         }
         let cursor_row = self.active_editor().cursor().0;
         // Node under the editor cursor must be a directory.
-        let node = match self
+        let node = match self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .and_then(|ep| ep.tree.nodes.get(cursor_row))
@@ -1796,7 +1812,7 @@ impl super::App {
 
         // Expand the dir (lazy-load its one level) so the paste lands as visible
         // children right after the dir line, not after a collapsed subtree.
-        if let Some(ref mut ep) = self.explorer
+        if let Some(ref mut ep) = self.tabs[self.active_tab].explorer
             && !ep.tree.is_expanded(&node.path)
         {
             ep.tree.set_expanded(&node.path, true);
@@ -1828,7 +1844,7 @@ impl super::App {
 
     /// Return the node currently under the explorer cursor.
     fn explorer_cursor_node(&self) -> Option<ExplorerNode> {
-        let ep = self.explorer.as_ref()?;
+        let ep = self.tabs[self.active_tab].explorer.as_ref()?;
         let row = self.window_cursor(ep.win_id).0;
         ep.tree.nodes.get(row).cloned()
     }
@@ -1853,7 +1869,7 @@ impl super::App {
 
     /// Toggle dotfile visibility and rebuild.
     pub(crate) fn explorer_toggle_hidden(&mut self) {
-        if let Some(ref mut ep) = self.explorer {
+        if let Some(ref mut ep) = self.tabs[self.active_tab].explorer {
             ep.tree.toggle_hidden();
         }
         self.explorer_rebuild_buffer();
@@ -1861,7 +1877,7 @@ impl super::App {
 
     /// Toggle git-ignore honoring (show/hide ignored entries) and rebuild.
     pub(crate) fn explorer_toggle_gitignore(&mut self) {
-        if let Some(ref mut ep) = self.explorer {
+        if let Some(ref mut ep) = self.tabs[self.active_tab].explorer {
             ep.tree.toggle_gitignore();
         }
         self.explorer_rebuild_buffer();
@@ -1869,12 +1885,12 @@ impl super::App {
 
     /// Move the tree root up to its parent directory.
     pub(crate) fn explorer_root_up(&mut self) {
-        let parent = self
+        let parent = self.tabs[self.active_tab]
             .explorer
             .as_ref()
             .and_then(|ep| ep.tree.root.parent().map(|p| p.to_path_buf()));
         if let Some(parent) = parent {
-            if let Some(ref mut ep) = self.explorer {
+            if let Some(ref mut ep) = self.tabs[self.active_tab].explorer {
                 ep.tree.set_root(parent);
             }
             self.explorer_rebuild_buffer();
@@ -1947,7 +1963,7 @@ impl super::App {
         let Some(node) = self.explorer_cursor_node() else {
             return;
         };
-        let Some(ep) = self.explorer.as_ref() else {
+        let Some(ep) = self.tabs[self.active_tab].explorer.as_ref() else {
             return;
         };
         if !ep.tree.repo_present {
@@ -1984,7 +2000,7 @@ impl super::App {
         let Some(node) = self.explorer_cursor_node() else {
             return;
         };
-        let Some(ep) = self.explorer.as_ref() else {
+        let Some(ep) = self.tabs[self.active_tab].explorer.as_ref() else {
             return;
         };
         if !ep.tree.repo_present {
@@ -2036,7 +2052,7 @@ impl super::App {
     /// `close_focused_window` runs `git commit --cleanup=strip -F <msg_file>`.
     pub(crate) fn explorer_git_commit(&mut self) {
         // Resolve root from the explorer tree.
-        let root = match self.explorer.as_ref() {
+        let root = match self.tabs[self.active_tab].explorer.as_ref() {
             Some(ep) => {
                 if !ep.tree.repo_present {
                     self.bus.warn("not a git repository");
@@ -2282,7 +2298,8 @@ mod tests {
         app.dispatch_action(AppAction::ToggleExplorer, 1);
 
         let has_deep = |app: &super::super::App| {
-            app.explorer
+            app.tabs[app.active_tab]
+                .explorer
                 .as_ref()
                 .unwrap()
                 .tree
@@ -2300,7 +2317,7 @@ mod tests {
         // The explorer followed the active buffer: deep.txt now in the tree, and
         // its ancestor dirs were lazily expanded to reach it.
         let revealed = has_deep(&app);
-        let a_expanded = app
+        let a_expanded = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -2341,17 +2358,23 @@ mod tests {
     fn toggle_explorer_creates_window_and_is_explorer_slot() {
         use crate::keymap_actions::AppAction;
         let mut app = super::super::App::new(None, false, None, None).unwrap();
-        assert!(app.explorer.is_none());
+        assert!(app.tabs[app.active_tab].explorer.is_none());
         // Open explorer.
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        assert!(app.explorer.is_some(), "explorer should be open");
+        assert!(
+            app.tabs[app.active_tab].explorer.is_some(),
+            "explorer should be open"
+        );
         assert!(
             app.slots.iter().any(|s| s.is_explorer),
             "explorer slot must have is_explorer = true"
         );
         // Close explorer.
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        assert!(app.explorer.is_none(), "explorer should be closed");
+        assert!(
+            app.tabs[app.active_tab].explorer.is_none(),
+            "explorer should be closed"
+        );
     }
 
     #[test]
@@ -2452,7 +2475,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let dir_exists = cwd.join("somedir").is_dir();
         let file_exists = cwd.join("somedir").join("test.txt").exists();
-        let ep = app.explorer.as_ref().unwrap();
+        let ep = app.tabs[app.active_tab].explorer.as_ref().unwrap();
         let expanded = ep.tree.is_expanded(&cwd.join("somedir"));
         let test_visible = ep
             .tree
@@ -2777,7 +2800,7 @@ mod tests {
 
         let on_disk = tmp.path().join("a.txt").exists();
         let cursor_path = {
-            let ep = app.explorer.as_ref().unwrap();
+            let ep = app.tabs[app.active_tab].explorer.as_ref().unwrap();
             let row = app.window_cursor(ep.win_id).0;
             ep.tree.nodes.get(row).map(|n| n.path.clone())
         };
@@ -2956,7 +2979,7 @@ mod tests {
             !app.active().is_explorer,
             "active buffer must be the real one"
         );
-        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        let ep_win = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let ep_slot = app.windows[ep_win].as_ref().unwrap().slot;
         assert!(
             app.slots[ep_slot].is_explorer,
@@ -2978,7 +3001,7 @@ mod tests {
         app.dispatch_ex(&format!("edit {}", f2.display()));
         // Open the explorer (it gets focused).
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        assert!(app.explorer.is_some());
+        assert!(app.tabs[app.active_tab].explorer.is_some());
         // Focus the right (editor) window so buffer_next operates on a real slot.
         app.dispatch_action(AppAction::FocusRight, 1);
         assert!(!app.active().is_explorer, "should be on a real slot now");
@@ -3275,7 +3298,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let _win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
@@ -3293,7 +3316,7 @@ mod tests {
             app.maybe_reconcile_explorer();
         };
         let dir = base.join("d");
-        let dir_row = app
+        let dir_row = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3338,7 +3361,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let _win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
@@ -3356,7 +3379,8 @@ mod tests {
             app.maybe_reconcile_explorer();
         };
         let row_of = |app: &super::super::App, p: &std::path::Path| -> Option<usize> {
-            app.explorer
+            app.tabs[app.active_tab]
+                .explorer
                 .as_ref()
                 .unwrap()
                 .tree
@@ -3504,8 +3528,8 @@ mod tests {
         // rebuild-from-`expanded` path wrongly collapsed on the next buffer
         // open.
         let aaa = std::env::current_dir().unwrap().join("aaa");
-        let win_id = app.explorer.as_ref().unwrap().win_id;
-        let aaa_row = app
+        let win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
+        let aaa_row = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3530,7 +3554,7 @@ mod tests {
         app.dispatch_ex("edit bbb/target.txt");
 
         let slot = app.slots.iter().position(|s| s.is_explorer).unwrap();
-        let aaa_row2 = app
+        let aaa_row2 = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3549,7 +3573,7 @@ mod tests {
             .unwrap()
             .join("bbb")
             .join("target.txt");
-        let target_row = app
+        let target_row = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3590,12 +3614,12 @@ mod tests {
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
 
-        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         if let Some(Some(w)) = app.windows.get_mut(win_id) {
             w.last_rect = Some(LayoutRect::new(0, 0, 30, 24));
         }
         let target = std::env::current_dir().unwrap().join("target.txt");
-        let target_row = app
+        let target_row = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3632,10 +3656,11 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let _win_id = app.explorer.as_ref().unwrap().win_id;
+        let _win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
 
         let row_of = |app: &super::super::App, p: &std::path::Path| -> usize {
-            app.explorer
+            app.tabs[app.active_tab]
+                .explorer
                 .as_ref()
                 .unwrap()
                 .tree
@@ -3753,7 +3778,7 @@ mod tests {
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
-        let win_id = app.explorer.as_ref().unwrap().win_id;
+        let win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         // Focus away → populates window_folds[explorer] (the snapshot the
         // unfocused render path uses).
         app.dispatch_action(AppAction::FocusRight, 1);
@@ -3764,7 +3789,7 @@ mod tests {
 
         // Toggle `sub/`'s fold via the activate path (what a mouse click runs).
         let sub = std::env::current_dir().unwrap().join("sub");
-        let sub_row = app
+        let sub_row = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -3791,12 +3816,15 @@ mod tests {
     /// the given filename. Use this instead of `buf.contains(name)` to avoid
     /// false positives from nested paths (e.g. trash/ subdir containing the name).
     fn has_root_child(app: &super::super::App, name: &str) -> bool {
-        app.explorer.as_ref().is_some_and(|ep| {
-            ep.tree
-                .nodes
-                .iter()
-                .any(|n| n.depth == 1 && n.path.file_name().is_some_and(|f| f == name))
-        })
+        app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .is_some_and(|ep| {
+                ep.tree
+                    .nodes
+                    .iter()
+                    .any(|n| n.depth == 1 && n.path.file_name().is_some_and(|f| f == name))
+            })
     }
 
     /// Press a key through the full event loop path (same as existing tests).
@@ -3898,7 +3926,7 @@ mod tests {
 
         // Creating a new file opens it in the main window (focus moves there).
         // Refocus the explorer so `u` operates on the explorer buffer.
-        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        let ep_win = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         app.set_focused_window(ep_win);
         app.sync_viewport_to_editor();
 
@@ -3975,7 +4003,7 @@ mod tests {
         let buf = app.slots[idx].buffer().as_string();
 
         // Check that the node has Deleted git status.
-        let node_git = app
+        let node_git = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .and_then(|ep| {
@@ -4051,7 +4079,10 @@ mod tests {
             "must be trashed after dd"
         );
         // undo_stack has 1 entry after dd.
-        let undo_len = app.explorer.as_ref().map_or(0, |ep| ep.undo_stack.len());
+        let undo_len = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .map_or(0, |ep| ep.undo_stack.len());
         assert_eq!(undo_len, 1, "undo_stack must have 1 entry after dd");
 
         // u → journal undo
@@ -4059,8 +4090,14 @@ mod tests {
         let on_disk = tmp.path().join("recover.txt").exists();
         let idx = app.explorer_slot_idx().unwrap();
         let buf = app.slots[idx].buffer().as_string();
-        let undo_len2 = app.explorer.as_ref().map_or(1, |ep| ep.undo_stack.len());
-        let redo_len = app.explorer.as_ref().map_or(0, |ep| ep.redo_stack.len());
+        let undo_len2 = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .map_or(1, |ep| ep.undo_stack.len());
+        let redo_len = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .map_or(0, |ep| ep.redo_stack.len());
 
         assert!(on_disk, "u must restore recover.txt to disk");
         assert!(
@@ -4142,7 +4179,7 @@ mod tests {
         );
 
         // Refocus explorer after file creation opened it in the editor window.
-        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        let ep_win = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         app.set_focused_window(ep_win);
         app.sync_viewport_to_editor();
 
@@ -4267,18 +4304,30 @@ mod tests {
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
 
-        let nodes_before = app.explorer.as_ref().unwrap().tree.nodes.len();
+        let nodes_before = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .len();
 
         // Move to subdir (row 1) and activate → expands, child.txt joins the tree.
         press(&mut app, KeyCode::Char('j'));
         app.explorer_activate();
 
-        let nodes_open = app.explorer.as_ref().unwrap().tree.nodes.len();
+        let nodes_open = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .len();
         assert!(
             nodes_open > nodes_before,
             "activate on a collapsed dir must add its children"
         );
-        let has_child = app
+        let has_child = app.tabs[app.active_tab]
             .explorer
             .as_ref()
             .unwrap()
@@ -4293,7 +4342,13 @@ mod tests {
 
         // Activate again → collapses, child.txt drops out.
         app.explorer_activate();
-        let nodes_closed = app.explorer.as_ref().unwrap().tree.nodes.len();
+        let nodes_closed = app.tabs[app.active_tab]
+            .explorer
+            .as_ref()
+            .unwrap()
+            .tree
+            .nodes
+            .len();
         assert_eq!(
             nodes_closed, nodes_before,
             "activate again must collapse back to the prior node count"

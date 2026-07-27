@@ -145,7 +145,7 @@ impl App {
     /// `git_signs` is empty → no overlay → the node falls back to
     /// `git_base` (clean). Returns `true` when the tree was re-tagged.
     pub(crate) fn refresh_explorer_git(&mut self) -> bool {
-        let Some(pane) = self.explorer.as_ref() else {
+        let Some(pane) = self.tabs[self.active_tab].explorer.as_ref() else {
             return false;
         };
         if !pane.tree.repo_present {
@@ -179,7 +179,7 @@ impl App {
                 }
             }
         }
-        let pane = self.explorer.as_mut().unwrap();
+        let pane = self.tabs[self.active_tab].explorer.as_mut().unwrap();
         pane.tree.retag_git(&map);
         true
     }
@@ -189,7 +189,7 @@ impl App {
     /// changed (save / stage / checkout). No-op when explorer is closed or
     /// root is not in a git repo.
     pub(crate) fn recompute_explorer_git_base(&mut self) -> bool {
-        let Some(pane) = self.explorer.as_ref() else {
+        let Some(pane) = self.tabs[self.active_tab].explorer.as_ref() else {
             return false;
         };
         if !pane.tree.repo_present {
@@ -197,7 +197,7 @@ impl App {
         }
         let root = pane.tree.root.clone();
         let base = hjkl_app::git::explorer_status_map(&root);
-        if let Some(pane) = self.explorer.as_mut() {
+        if let Some(pane) = self.tabs[self.active_tab].explorer.as_mut() {
             pane.tree.git_base = base;
         }
         self.refresh_explorer_git()

@@ -108,10 +108,12 @@ impl App {
 
             // ── App lifecycle ──────────────────────────────────────────────
             AppAction::QuitOrClose => {
-                // Docks are not `LayoutTree` leaves, so without the dock check
-                // `<C-w>q` in the explorer or a `:copen` dock saw "one window"
-                // and quit the whole editor instead of closing that dock.
-                if self.is_dock_window(self.focused_window()) || self.layout().leaves().len() > 1 {
+                // `<C-w>q` in a dock closes that dock, never the editor. And
+                // the "more than one window" test counts REGULAR leaves only:
+                // docks are leaves too now, so `leaves().len() > 1` would make
+                // `<C-w>q` in the last editor close it and leave a dock as the
+                // last window instead of quitting.
+                if self.is_dock_window(self.focused_window()) || self.regular_leaf_count() > 1 {
                     self.close_focused_window();
                 } else {
                     self.exit_requested = true;

@@ -5522,10 +5522,13 @@ fn toggle_explorer_opens_window_and_is_explorer_slot() {
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
     // Closed on launch.
-    assert!(app.explorer.is_none());
+    assert!(app.tabs[app.active_tab].explorer.is_none());
     // Open: creates a window and an is_explorer slot, focused on the explorer.
     app.dispatch_action(AppAction::ToggleExplorer, 1);
-    assert!(app.explorer.is_some(), "explorer pane should be open");
+    assert!(
+        app.tabs[app.active_tab].explorer.is_some(),
+        "explorer pane should be open"
+    );
     assert!(
         app.slots.iter().any(|s| s.is_explorer),
         "explorer slot must have is_explorer=true"
@@ -5537,7 +5540,7 @@ fn toggle_explorer_opens_window_and_is_explorer_slot() {
     // Toggle again → close.
     app.dispatch_action(AppAction::ToggleExplorer, 1);
     assert!(
-        app.explorer.is_none(),
+        app.tabs[app.active_tab].explorer.is_none(),
         "explorer should be closed after second toggle"
     );
 }

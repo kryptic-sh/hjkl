@@ -1310,7 +1310,11 @@ impl App {
                 // and activate it (toggle a dir / open-or-focus a file).
                 // The search box is gone — the explorer is now a plain buffer
                 // where `/` opens the normal incremental search.
-                if let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) {
+                if let Some(win_id) = self.tabs[self.active_tab]
+                    .explorer
+                    .as_ref()
+                    .map(|ep| ep.win_id)
+                {
                     let rect = self
                         .windows
                         .get(win_id)

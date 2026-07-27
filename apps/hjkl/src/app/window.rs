@@ -25,7 +25,58 @@
 //! every window on the buffer) and a settings template used to seed a
 //! freshly (re)targeted window's editor.
 
-pub use hjkl_layout::{Axis, LayoutRect, LayoutTree, SplitDir, Tab, WindowId};
+pub use hjkl_layout::{Axis, LayoutRect, LayoutTree, SplitDir, WindowId};
+
+/// Per-tab state: the window arrangement, its focused window, and the tab's
+/// own docks.
+///
+/// This shadows [`hjkl_layout::Tab`] (same `layout` / `focused_window` field
+/// shape, so every `tabs[i].layout` call site is unchanged) and adds the
+/// per-tab dock state that used to live globally on `App` (#63 Phase 3).
+/// Docks are ordinary pinned, fixed-size leaves of `layout` now, so the
+/// [`Dock`](super::dock::Dock) records here are *bookkeeping* — which leaf is
+/// which dock, and what it hosts — not a parallel window list.
+///
+/// Per-tab is what vim does: `:copen` and netrw open a window in the current
+/// tab page, and every tab page has its own. Opening the explorer in tab 2
+/// leaves tab 1 alone, and closing a tab disposes of its docks along with its
+/// other windows.
+#[derive(Debug, Clone)]
+pub struct Tab {
+    /// Spatial layout tree for this tab. Leaves reference [`WindowId`]s —
+    /// including this tab's dock windows.
+    pub layout: LayoutTree,
+    /// The window that has focus within this tab.
+    pub focused_window: WindowId,
+    /// This tab's left dock (the file explorer), when open.
+    pub(crate) left_dock: Option<super::dock::Dock>,
+    /// This tab's bottom dock (quickfix / location list), when open.
+    pub(crate) bottom_dock: Option<super::dock::Dock>,
+    /// This tab's explorer pane state (tree model, reconcile baseline, undo
+    /// stacks). `Some` exactly when `left_dock` is — kept in lockstep by
+    /// `explorer::open_explorer` / `close_explorer`.
+    pub(crate) explorer: Option<super::explorer::ExplorerPane>,
+}
+
+impl Tab {
+    /// Create a new tab with the given layout and focused window, and no
+    /// docks — a fresh tab starts dock-free, like a fresh vim tab page.
+    pub fn new(layout: LayoutTree, focused_window: WindowId) -> Self {
+        Self {
+            layout,
+            focused_window,
+            left_dock: None,
+            bottom_dock: None,
+            explorer: None,
+        }
+    }
+}
+
+impl Default for Tab {
+    fn default() -> Self {
+        Self::new(LayoutTree::Leaf(0), 0)
+    }
+}
 
 // Re-export hjkl_layout::Window as AppWindow so callers that imported Window
 // continue to compile. This also preserves the public field shape (slot,
@@ -100,8 +151,7 @@ impl App {
             AppAction::ResizeHeight(delta) => {
                 // `<C-w>+` / `<C-w>-` while the bottom dock is focused resize
                 // the dock (config-driven, persisted) instead of a tree
-                // split — twin of the `ResizeWidth` / left-dock case below
-                // (#63 Phase B).
+                // split — twin of the `ResizeWidth` / left-dock case below.
                 if self.is_bottom_dock(self.focused_window()) {
                     self.resize_dock_height_by(delta * count as i32);
                     self.persist_dock_height();
@@ -112,8 +162,9 @@ impl App {
             AppAction::ResizeWidth(delta) => {
                 // `<C-w><` / `<C-w>>` while the left dock is focused resize
                 // the dock (config-driven, persisted) instead of a tree
-                // split — there's no enclosing Vertical split to find (#63
-                // Phase A).
+                // split. The dock's own enclosing split is `Fixed`, which the
+                // tree path refuses to touch (vim's `winfixwidth`) — this is
+                // the resize path its config owner exposes instead.
                 if self.is_left_dock(self.focused_window()) {
                     self.resize_dock_width_by(delta * count as i32);
                     self.persist_dock_width();
@@ -136,27 +187,15 @@ impl App {
     pub(crate) fn dispatch_tmux_navigate(&mut self, dir: super::NavDir) {
         use super::NavDir;
         let focused = self.focused_window();
-        // Dock adjacency (#63 Phase A) counts as a real neighbour here too —
-        // otherwise `<C-h>` at the leftmost tree window with the explorer
-        // dock open would wrongly fall through to tmux instead of focusing
-        // the dock.
+        // Docks are ordinary leaves (#63 Phase 3), so the tree's own
+        // adjacency already crosses in and out of them — `<C-h>` at the
+        // leftmost regular window with the explorer open finds the explorer
+        // here, and only a genuinely edge-most window falls through to tmux.
         let neighbour = match dir {
-            NavDir::Left => self
-                .layout()
-                .neighbor_left(focused)
-                .or_else(|| self.dock_neighbor_left(focused)),
-            NavDir::Down => self
-                .layout()
-                .neighbor_below(focused)
-                .or_else(|| self.dock_neighbor_down(focused)),
-            NavDir::Up => self
-                .layout()
-                .neighbor_above(focused)
-                .or_else(|| self.dock_neighbor_up(focused)),
-            NavDir::Right => self
-                .layout()
-                .neighbor_right(focused)
-                .or_else(|| self.dock_neighbor_right(focused)),
+            NavDir::Left => self.layout().neighbor_left(focused),
+            NavDir::Down => self.layout().neighbor_below(focused),
+            NavDir::Up => self.layout().neighbor_above(focused),
+            NavDir::Right => self.layout().neighbor_right(focused),
         };
         if neighbour.is_some() {
             match dir {
@@ -180,61 +219,49 @@ impl App {
 
     // ── Window focus navigation ───────────────────────────────────────────
 
-    /// Move focus to the window below the current one (`Ctrl-w j`). Tree
-    /// navigation first; when it finds no neighbour below, the bottom dock
-    /// (if open) is the frame-level neighbour below (#63 Phase B) — see
-    /// `dock::dock_neighbor_down`.
+    /// Move focus to the window below the current one (`Ctrl-w j`).
+    ///
+    /// Docks are ordinary leaves, so this is plain tree navigation — the
+    /// bottom dock is found because it genuinely is the leaf below the tree,
+    /// and it is NOT found from the explorer because it is nested inside the
+    /// explorer's sibling rather than beneath it (#63 Phase 3).
     pub fn focus_below(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_below(fw) {
             self.switch_focus(target);
-        } else if let Some(target) = self.dock_neighbor_down(fw) {
-            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the window above the current one (`Ctrl-w k`). When
-    /// leaving the bottom dock, re-enters the main area (#63 Phase B).
+    /// Move focus to the window above the current one (`Ctrl-w k`).
     pub fn focus_above(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_above(fw) {
             self.switch_focus(target);
-        } else if let Some(target) = self.dock_neighbor_up(fw) {
-            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the window left of the current one (`Ctrl-w h`). Tree
-    /// navigation first; when it finds no left neighbour, the left dock (if
-    /// open) is the frame-level left neighbour (#63 Phase A) — see
-    /// `dock::dock_neighbor_left` for why that's always correct without
-    /// hjkl-layout knowing docks exist.
+    /// Move focus to the window left of the current one (`Ctrl-w h`).
     pub fn focus_left(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_left(fw) {
             self.switch_focus(target);
-        } else if let Some(target) = self.dock_neighbor_left(fw) {
-            self.switch_focus(target);
         }
     }
 
-    /// Move focus to the window right of the current one (`Ctrl-w l`). When
-    /// leaving the left dock, re-enters the main area (#63 Phase A).
+    /// Move focus to the window right of the current one (`Ctrl-w l`).
     pub fn focus_right(&mut self) {
         let fw = self.focused_window();
         if let Some(target) = self.layout().neighbor_right(fw) {
-            self.switch_focus(target);
-        } else if let Some(target) = self.dock_neighbor_right(fw) {
             self.switch_focus(target);
         }
     }
 
     /// Move focus to the next window, wrapping around (`Ctrl-w w`). Cycle
-    /// order includes open docks (#63 Phase A) — vim includes special
-    /// windows in the `<C-w>w` cycle.
+    /// order includes open docks — vim includes special windows in the
+    /// `<C-w>w` cycle.
     pub fn focus_next(&mut self) {
         let fw = self.focused_window();
-        let order = self.focus_cycle_order();
+        let order = self.layout().leaves();
         if let Some(pos) = order.iter().position(|&id| id == fw) {
             self.switch_focus(order[(pos + 1) % order.len()]);
         }
@@ -243,42 +270,46 @@ impl App {
     /// Move focus to the previous window, wrapping around (`Ctrl-w W`).
     pub fn focus_previous(&mut self) {
         let fw = self.focused_window();
-        let order = self.focus_cycle_order();
+        let order = self.layout().leaves();
         if let Some(pos) = order.iter().position(|&id| id == fw) {
             let len = order.len();
             self.switch_focus(order[(pos + len - 1) % len]);
         }
     }
 
-    /// Close all windows except the focused one. Replaces the layout with a
-    /// single leaf and drops the `Option<Window>` entries for all other
-    /// windows. Docks are left open untouched either way — they're never
-    /// tree leaves, so the collapse can't reach them (#63 Phase A). When the
-    /// focused window IS a dock, there's nothing in the tree to collapse
-    /// around it, so this is a no-op (matches vim: `:only` from a special
-    /// window doesn't touch the regular splits behind it).
+    /// Close all windows except the focused one — and every dock, which is
+    /// pinned ([`hjkl_layout::LayoutTree::only`] keeps pinned leaves and their
+    /// enclosing fixed splits, so the dock's position and size survive the
+    /// collapse).
+    ///
+    /// When the focused window IS a dock this is a no-op: `:only` from a
+    /// special window must not collapse the regular splits behind it (vim's
+    /// behaviour), and `only(dock, pinned)` would keep only docks.
     pub fn only_focused_window(&mut self) {
         let focused = self.focused_window();
+        if self.is_dock_window(focused) {
+            return;
+        }
         if !self.layout().contains(focused) {
             return;
         }
-        let all_leaves = self.layout().leaves();
-        for id in all_leaves {
-            if id != focused {
-                self.windows[id] = None;
-                self.window_folds.remove(&id);
-            }
+        let pinned = self.dock_pins();
+        let removed = self.layout_mut().only(focused, &pinned);
+        for id in removed {
+            self.windows[id] = None;
+            self.window_folds.remove(&id);
         }
-        *self.layout_mut() = LayoutTree::Leaf(focused);
         self.bus.info("only");
     }
 
     /// Swap the focused leaf with its sibling in the immediately enclosing
-    /// Split. No-op (with no message) when the focused window is the only one.
+    /// Split. No-op (with no message) when the focused window is the only one,
+    /// when it is a dock, or when its sibling subtree holds one — a dock must
+    /// not be dragged across the layout, nor another window dragged through it.
     pub fn swap_with_sibling(&mut self) {
         let focused = self.focused_window();
-        // No pins yet — see `equalize_layout`.
-        if self.layout_mut().swap_with_sibling(focused, &[]) {
+        let pinned = self.dock_pins();
+        if self.layout_mut().swap_with_sibling(focused, &pinned) {
             self.bus.info("swap");
         }
     }
@@ -291,14 +322,16 @@ impl App {
     /// containing only the moved window.
     pub fn move_window_to_new_tab(&mut self) -> Result<(), &'static str> {
         let focused = self.focused_window();
-        // Docks are global (#63 Phase A) — moving one "to a new tab" is
-        // meaningless (it would still be visible on every tab, including
-        // the one it supposedly moved to). Clean no-op with its own message
-        // rather than the tree-only "E1" check below, which doesn't apply.
-        if !self.layout().contains(focused) {
+        // A dock belongs to its tab's frame, not to a buffer the user is
+        // editing — moving one "to a new tab" would strand the explorer or a
+        // quickfix list as a tab's only window. Clean no-op with its own
+        // message rather than the "E1" check below.
+        if self.is_dock_window(focused) || !self.layout().contains(focused) {
             return Err("dock windows can't move to a new tab");
         }
-        if self.layout().leaves().len() <= 1 {
+        // Docks don't count: moving the one regular window out would leave a
+        // dock as this tab's last window.
+        if self.regular_leaf_count() <= 1 {
             return Err("E1: only one window in this tab");
         }
         // Save cursor/scroll of the focused window before changing focus.
@@ -334,13 +367,10 @@ impl App {
             self.close_cmdline_window();
             return;
         }
-        // Dock: closing it is the explorer's own toggle-off path, not a
-        // tree op — docks are never `LayoutTree` leaves, so
-        // `layout_mut().remove_leaf` would either wrongly report "E444:
-        // cannot close last window" (dock id not found anywhere in the
-        // tree) or, worse, silently do nothing to the tree while this
-        // function went on to null out a window the tree still doesn't
-        // reference at all (#63 Phase A).
+        // Dock: the leaf removal is the same `remove_leaf` every window gets,
+        // but a dock also owns feature state (the explorer's tree model, the
+        // dock's scratch slot) that has to come down with it — so route
+        // through the dock's own close path, which does both.
         let focused = self.focused_window();
         if self.is_left_dock(focused) {
             self.close_left_dock();
@@ -348,6 +378,15 @@ impl App {
         }
         if self.is_bottom_dock(focused) {
             self.close_bottom_dock();
+            return;
+        }
+
+        // A dock must never become the last window: with a dock open the tree
+        // still has two leaves after this one goes, so `remove_leaf` would
+        // happily succeed and leave the user staring at a quickfix list with
+        // no editor. Count regular leaves instead.
+        if self.regular_leaf_count() <= 1 {
+            self.bus.error("E444: Cannot close last window");
             return;
         }
 
@@ -453,12 +492,11 @@ impl App {
         }
     }
 
-    /// Equalize all splits to 0.5 ratio.
-    ///
-    /// No pins yet: docks still live outside every tree (#63 Phase 1), so
-    /// there is no leaf equalization has to spare.
+    /// Equalize all splits to 0.5 ratio, leaving this tab's docks at their
+    /// configured size (they are the pinned set).
     pub fn equalize_layout(&mut self) {
-        self.layout_mut().equalize_all(&[]);
+        let pinned = self.dock_pins();
+        self.layout_mut().equalize_all(&pinned);
     }
 
     /// Resize the split whose `last_rect` encompasses `split_origin` and

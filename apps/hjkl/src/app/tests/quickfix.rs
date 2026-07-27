@@ -27,11 +27,11 @@ fn quickfix_dock_nav_and_toggle() {
 
     app.handle_quickfix_command(QfCommand::Open);
     assert!(app.quickfix_open());
-    assert!(app.bottom_dock.is_some());
+    assert!(app.tabs[app.active_tab].bottom_dock.is_some());
 
     app.handle_quickfix_command(QfCommand::Close);
     assert!(!app.quickfix_open());
-    assert!(app.bottom_dock.is_none());
+    assert!(app.tabs[app.active_tab].bottom_dock.is_none());
 }
 
 #[cfg(unix)]
@@ -846,7 +846,10 @@ fn copen_creates_bottom_dock_with_matching_buffer_lines() {
 
     app.handle_quickfix_command(QfCommand::Open);
 
-    let dock = app.bottom_dock.as_ref().expect("bottom dock must be open");
+    let dock = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .expect("bottom dock must be open");
     assert_eq!(dock.kind, crate::app::dock::DockKind::Quickfix);
     assert_eq!(
         app.focused_window(),
@@ -880,7 +883,11 @@ fn copen_creates_bottom_dock_with_matching_buffer_lines() {
 fn dock_j_k_move_a_real_cursor_without_touching_the_list_cursor() {
     let (mut app, _file_a, _dir) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
-    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    let dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .unwrap()
+        .win_id;
 
     super::macro_key_seq(&mut app, &[super::ck('j')]);
     assert_eq!(
@@ -929,7 +936,11 @@ fn dock_yy_yanks_the_entry_line() {
 fn dock_enter_jumps_to_entry_and_focus_lands_on_a_regular_window() {
     let (mut app, file_a, _dir) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
-    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    let dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .unwrap()
+        .win_id;
 
     // Move to entry 1 (a.txt row 1 col 2) and jump.
     super::macro_key_seq(&mut app, &[super::ck('j')]);
@@ -952,7 +963,7 @@ fn dock_enter_jumps_to_entry_and_focus_lands_on_a_regular_window() {
     assert_eq!(app.active().filename.as_deref(), Some(file_a.as_path()));
     assert_eq!(app.active_editor().cursor(), (1, 2));
     assert!(
-        app.bottom_dock.is_some(),
+        app.tabs[app.active_tab].bottom_dock.is_some(),
         "the dock itself must remain open after the jump (vim parity)"
     );
 }
@@ -1000,7 +1011,11 @@ fn dock_buffer_is_readonly_and_rejects_edits() {
 fn cnext_syncs_the_dock_cursor_row() {
     let (mut app, _file_a, _dir) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
-    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    let dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .unwrap()
+        .win_id;
     assert_eq!(app.window_cursor(dock_win).0, 0);
 
     app.handle_quickfix_command(QfCommand::Next);
@@ -1020,13 +1035,20 @@ fn cnext_syncs_the_dock_cursor_row() {
 fn lopen_reuses_the_open_quickfix_dock() {
     let (mut app, _file_a, _dir) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
-    let qf_dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    let qf_dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .unwrap()
+        .win_id;
 
     let p = std::path::PathBuf::from("loc.rs");
     app.loclist.set(vec![entry(&p, 4)]);
     app.handle_loclist_command(QfCommand::Open);
 
-    let dock = app.bottom_dock.as_ref().expect("dock must still be open");
+    let dock = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .expect("dock must still be open");
     assert_eq!(dock.win_id, qf_dock_win, "the SAME window/slot is reused");
     assert_eq!(dock.kind, crate::app::dock::DockKind::Loclist);
     assert!(!app.quickfix_open());
@@ -1065,7 +1087,10 @@ fn dock_rebuild_handles_a_2000_entry_list_without_hanging() {
     app.quickfix.set(entries);
     app.handle_quickfix_command(QfCommand::Open);
 
-    let dock = app.bottom_dock.as_ref().expect("bottom dock must be open");
+    let dock = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .expect("bottom dock must be open");
     assert_eq!(dock.kind, crate::app::dock::DockKind::Quickfix);
     let rope = app.active_editor().buffer().rope();
     assert_eq!(rope.len_lines(), n, "every entry must render a line");
@@ -1085,7 +1110,10 @@ fn q_from_main_window_quits_even_with_quickfix_dock_open() {
     app.handle_quickfix_command(QfCommand::Open);
     // Focus back on the real editor window, as a user would after `:copen`.
     app.switch_to(0);
-    assert!(app.bottom_dock.is_some(), "dock is open");
+    assert!(
+        app.tabs[app.active_tab].bottom_dock.is_some(),
+        "dock is open"
+    );
 
     app.dispatch_ex("q");
 
@@ -1101,23 +1129,32 @@ fn q_from_main_window_quits_even_with_quickfix_dock_open() {
 fn q_inside_quickfix_dock_closes_the_dock() {
     let (mut app, _file_a, _dir) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
-    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    let dock_win = app.tabs[app.active_tab]
+        .bottom_dock
+        .as_ref()
+        .unwrap()
+        .win_id;
     assert_eq!(app.focused_window(), dock_win, ":copen focuses the dock");
 
     app.dispatch_ex("q");
 
     assert!(!app.exit_requested, "`:q` in the qf dock must not quit");
-    assert!(app.bottom_dock.is_none(), "the qf dock must be closed");
+    assert!(
+        app.tabs[app.active_tab].bottom_dock.is_none(),
+        "the qf dock must be closed"
+    );
     assert_ne!(app.focused_window(), dock_win);
 }
 
 /// `<C-h>` inside an open quickfix dock must reach the explorer.
 ///
-/// `render::frame` carves the bottom dock out of the area REMAINING after the
-/// left dock, so the dock sits to the *right* of the explorer and never spans
-/// beneath it — the explorer is genuinely its left neighbour. The adjacency
-/// helper used to require tree membership, which no dock has, so the quickfix
-/// list was a one-way trip: `k` back to the tree was the only way out.
+/// The bottom dock is woven INSIDE the explorer's sibling subtree, so it sits
+/// to the *right* of the explorer and never spans beneath it — the explorer is
+/// genuinely its left neighbour, and `neighbor_direction` finds it by walking
+/// out of the horizontal split into the enclosing vertical one. This used to
+/// need a hand-rolled adjacency helper that required tree membership, which no
+/// dock had, so the quickfix list was a one-way trip: `k` back to the tree was
+/// the only way out.
 #[test]
 fn ctrl_h_from_quickfix_dock_reaches_the_explorer() {
     use crate::app::NavDir;
@@ -1127,7 +1164,11 @@ fn ctrl_h_from_quickfix_dock_reaches_the_explorer() {
     app.switch_to(0);
     app.handle_quickfix_command(QfCommand::Open);
     let qf = app.focused_window();
-    let explorer = app.left_dock.as_ref().expect("explorer open").win_id;
+    let explorer = app.tabs[app.active_tab]
+        .left_dock
+        .as_ref()
+        .expect("explorer open")
+        .win_id;
     assert_ne!(qf, explorer);
 
     app.dispatch_tmux_navigate(NavDir::Left);
@@ -1148,9 +1189,60 @@ fn ctrl_h_from_quickfix_dock_without_explorer_stays_put() {
     let (mut app, _f, _d) = make_app_with_qf_files();
     app.handle_quickfix_command(QfCommand::Open);
     let qf = app.focused_window();
-    assert!(app.left_dock.is_none());
+    assert!(app.tabs[app.active_tab].left_dock.is_none());
 
     app.dispatch_tmux_navigate(NavDir::Left);
 
     assert_eq!(app.focused_window(), qf);
+}
+
+/// The invariant that a dock may never be left as the only window is no
+/// longer structural — docks are leaves now, so it is enforced by counting
+/// regular leaves at each close path, and missing one is silent. Sweep every
+/// close path with both docks open and one editor: each must either quit the
+/// app or leave a regular window focused. Never "only docks remain".
+#[test]
+fn no_close_path_leaves_a_dock_as_the_last_window() {
+    use hjkl_app::keymap_actions::AppAction;
+
+    type ClosePath = (&'static str, fn(&mut App));
+    let paths: Vec<ClosePath> = vec![
+        (":q", |a| a.dispatch_ex("q")),
+        (":q!", |a| a.dispatch_ex("q!")),
+        (":close", |a| a.dispatch_ex("close")),
+        (":only", |a| a.dispatch_ex("only")),
+        ("<C-w>c", |a| a.close_focused_window()),
+        ("<C-w>q", |a| a.dispatch_action(AppAction::QuitOrClose, 1)),
+        ("<C-w>o", |a| a.only_focused_window()),
+    ];
+
+    for (name, run) in paths {
+        let (mut app, _f, _d) = make_app_with_qf_files();
+        app.toggle_explorer();
+        app.switch_to(0);
+        app.handle_quickfix_command(QfCommand::Open);
+        // Focus the single real editor window, as a user would be.
+        let editor = app
+            .layout()
+            .leaves()
+            .into_iter()
+            .find(|&id| !app.is_dock_window(id))
+            .expect("one regular window");
+        app.set_focused_window(editor);
+        assert_eq!(app.regular_leaf_count(), 1, "{name}: setup");
+
+        run(&mut app);
+
+        if app.exit_requested {
+            continue; // quitting is a valid outcome
+        }
+        assert!(
+            !app.is_dock_window(app.focused_window()),
+            "{name}: left the user focused in a dock with no editor window"
+        );
+        assert!(
+            app.regular_leaf_count() >= 1,
+            "{name}: destroyed the last regular window without quitting"
+        );
+    }
 }

@@ -762,7 +762,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     s.buffer().content_joined(),
                 )
             };
-            let root = app.explorer.as_ref().map(|ep| ep.tree.root.clone());
+            let root = app.tabs[app.active_tab]
+                .explorer
+                .as_ref()
+                .map(|ep| ep.tree.root.clone());
             Some(
                 app.explorer_render_cache
                     .get(buffer_id, dirty_gen, root.as_deref(), text),
@@ -1275,7 +1278,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // visible for debugging.
     if is_explorer_slot
         && !app.debug_mode
-        && let Some(ref pane) = app.explorer
+        && let Some(ref pane) = app.tabs[app.active_tab].explorer
         && pane.win_id == win_id
         && let Some(ref ex_render) = explorer_render
     {
@@ -1296,20 +1299,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // `buffer.folds()`, an UNFOCUSED one from its `window_folds` snapshot
         // (window-level folds). Reading the wrong source here desyncs the glyph
         // overlay from the drawn rows and garbles the tree.
-        let explorer_folds: Vec<hjkl_buffer::Fold> =
-            if let Some(slot_idx) = app.slots().iter().position(|s| s.is_explorer) {
-                let b = app.slots()[slot_idx].buffer();
-                if is_focused {
-                    b.folds()
-                } else {
-                    app.window_folds
-                        .get(&win_id)
-                        .cloned()
-                        .unwrap_or_else(|| b.folds())
-                }
+        // Read from THIS window's own slot, not the first `is_explorer` slot
+        // anywhere: explorers are per-tab (#63 Phase 3), so a positional scan
+        // would render one tab's tree against another tab's folds.
+        let explorer_folds: Vec<hjkl_buffer::Fold> = {
+            let b = app.slots()[slot_idx].buffer();
+            if is_focused {
+                b.folds()
             } else {
-                Vec::new()
-            };
+                app.window_folds
+                    .get(&win_id)
+                    .cloned()
+                    .unwrap_or_else(|| b.folds())
+            }
+        };
         // Layout (icons, guides, depth) is derived from the LIVE buffer text —
         // NOT the last-reconciled `pane.tree.nodes` — so glyphs stay aligned
         // while the buffer is being edited (a mid-edit `o`/`O` shifts rows
@@ -1367,7 +1370,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // Drive the dir open/closed icon from the tree's `expanded` set. The
             // lazy explorer has no buffer folds — a collapsed dir's children are
             // simply absent — so the icon reads expansion state directly.
-            let is_expanded = app
+            let is_expanded = app.tabs[app.active_tab]
                 .explorer
                 .as_ref()
                 .is_some_and(|ep| ep.tree.is_expanded(node.path.as_path()));
@@ -1997,137 +2000,20 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         top_bar(frame, app, tb);
     }
 
-    // Left dock (#63 Phase A): carved off the frame BEFORE the tree gets the
-    // remainder, exactly once per frame, so it holds a config-driven width
-    // across resizes without needing a split ratio at all (the old
-    // `pin_explorer_width` re-pinned a ratio every frame; the dock doesn't
-    // have one to re-pin — its rect is computed directly here). Uses
-    // `render_window` directly, same as any tree leaf — the dock's `WindowId`
-    // has a normal `windows[..]` / `window_editors[..]` entry, it's just
-    // never referenced by a `LayoutTree` leaf.
-    let dock_win = app.left_dock.as_ref().map(|d| d.win_id);
-    let main_area = if let Some(dock_win) = dock_win {
-        let total_w = buf_area.width;
-        let dock_w =
-            crate::app::dock::clamp_dock_width(app.config.explorer.width, total_w).min(total_w);
-        // Mirrors the Col-axis separator carving in
-        // `hjkl_layout::split_geometry` exactly, so `mouse::hit_test_border`'s
-        // dock border cell lines up with what's actually drawn. (#63 Phase 3
-        // deletes this by making the dock a real fixed split, at which point
-        // the mirroring stops being hand-maintained.)
-        let (dock_rect, sep_rect, rest) = if dock_w >= 2 && buf_area.width > dock_w {
-            let content = Rect {
-                x: buf_area.x,
-                y: buf_area.y,
-                width: dock_w - 1,
-                height: buf_area.height,
-            };
-            let sep = Rect {
-                x: buf_area.x + dock_w - 1,
-                y: buf_area.y,
-                width: 1,
-                height: buf_area.height,
-            };
-            let rest = Rect {
-                x: buf_area.x + dock_w,
-                y: buf_area.y,
-                width: buf_area.width - dock_w,
-                height: buf_area.height,
-            };
-            (content, Some(sep), rest)
-        } else {
-            let w = dock_w.min(buf_area.width);
-            let content = Rect {
-                x: buf_area.x,
-                y: buf_area.y,
-                width: w,
-                height: buf_area.height,
-            };
-            let rest = Rect {
-                x: buf_area.x + w,
-                y: buf_area.y,
-                width: buf_area.width - w,
-                height: buf_area.height,
-            };
-            (content, None, rest)
-        };
-        render_window(frame, app, dock_rect, dock_win);
-        if let Some(sep) = sep_rect {
-            draw_separator(frame, sep, window::SplitDir::Vertical, app.theme.ui.border);
-        }
-        rest
-    } else {
-        buf_area
-    };
-
-    // Bottom dock (#63 Phase B: quickfix/location-list, real window/buffer —
-    // replaces the old `quickfix_popup_overlay`). Carved from the REMAINDER
-    // after the left dock, so it spans only the main area's width — per the
-    // approved design, `<C-w>j` from the explorer must not reach it (the
-    // bottom dock sits below the tree, to the right of the left dock, not
-    // below the left dock too). Same `render_window` / separator approach as
-    // the left dock, just along the row axis instead of the column axis.
-    let bottom_dock_win = app.bottom_dock.as_ref().map(|d| d.win_id);
-    let main_area = if let Some(dock_win) = bottom_dock_win {
-        let total_h = main_area.height;
-        let dock_h =
-            crate::app::dock::clamp_dock_height(app.config.panel.height, total_h).min(total_h);
-        let (dock_rect, sep_rect, rest) = if dock_h >= 2 && main_area.height > dock_h {
-            let sep = Rect {
-                x: main_area.x,
-                y: main_area.y + main_area.height - dock_h,
-                width: main_area.width,
-                height: 1,
-            };
-            let content = Rect {
-                x: main_area.x,
-                y: sep.y + 1,
-                width: main_area.width,
-                height: dock_h - 1,
-            };
-            let rest = Rect {
-                x: main_area.x,
-                y: main_area.y,
-                width: main_area.width,
-                height: main_area.height - dock_h,
-            };
-            (content, Some(sep), rest)
-        } else {
-            let h = dock_h.min(main_area.height);
-            let content = Rect {
-                x: main_area.x,
-                y: main_area.y + main_area.height - h,
-                width: main_area.width,
-                height: h,
-            };
-            let rest = Rect {
-                x: main_area.x,
-                y: main_area.y,
-                width: main_area.width,
-                height: main_area.height - h,
-            };
-            (content, None, rest)
-        };
-        render_window(frame, app, dock_rect, dock_win);
-        if let Some(sep) = sep_rect {
-            draw_separator(
-                frame,
-                sep,
-                window::SplitDir::Horizontal,
-                app.theme.ui.border,
-            );
-        }
-        rest
-    } else {
-        main_area
-    };
+    // Docks are ordinary pinned, fixed-size leaves of the tab tree (#63
+    // Phase 3), so there is nothing to carve off the frame here:
+    // `render_layout` places them, draws their separators and records their
+    // rects exactly like any other window. All that's needed first is to
+    // re-project the configured dock sizes onto the tree, since they are
+    // clamped against the live frame recorded at the top of this function.
+    app.sync_dock_fixed_sizes();
 
     // Walk the window tree and render each pane. Use take_layout /
     // restore_layout so we can pass `&mut LayoutTree` to render_layout
     // (which writes last_rect on Split nodes) while also holding
     // `&mut App` for render_window.
     let mut layout = app.take_layout();
-    render_layout(frame, app, main_area, &mut layout);
+    render_layout(frame, app, buf_area, &mut layout);
     app.restore_layout(layout);
 
     status_line(frame, app, status_area);

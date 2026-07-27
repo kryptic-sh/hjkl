@@ -59,6 +59,8 @@ impl App {
         };
 
         // Build a read-only scratch slot holding the diff (mirrors `do_vnew`).
+        // Split off a REGULAR window, never a dock — see `do_split`.
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         // Inherit the focused window's scroll from its own editor (#151 Phase D).
         let (top_row, top_col) = self.window_scroll(focused);

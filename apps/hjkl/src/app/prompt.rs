@@ -949,6 +949,12 @@ impl App {
         let total_lines = history.len() + if prefill.is_some() { 1 } else { 0 };
         let win_rows = (total_lines + 1).clamp(1, 7);
 
+        // Split off a REGULAR window, never a dock: the cmdline window would
+        // otherwise land inside the explorer's fixed column, sized by the
+        // explorer's config width, and would break the "explorer is the root
+        // split's first child" shape `install_bottom_dock` keys the quickfix
+        // dock's placement off (#63 Phase 3). Same reroute `:sp` does.
+        self.focus_editor_window_for_open();
         let focused = self.focused_window();
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;

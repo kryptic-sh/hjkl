@@ -256,23 +256,15 @@ pub struct App {
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
     pub picker: Option<crate::picker::Picker>,
-    /// Left file-explorer window (#55). `None` when closed; closed on launch.
-    pub(crate) explorer: Option<explorer::ExplorerPane>,
     /// `dirty_gen`-keyed cache of the explorer's text-derived render data
     /// (whole-buffer text, line index, conceals, parsed overlay tree). Without
     /// it the renderer redid all four whole-buffer passes on every frame the
     /// explorer was visible. See [`explorer::ExplorerRenderCache`].
+    ///
+    /// Stays app-level (not per-tab) deliberately: it is a pure `dirty_gen`
+    /// memo of one explorer buffer's render derivation, so at worst a tab
+    /// switch between two open explorers costs one rebuild.
     pub(crate) explorer_render_cache: explorer::ExplorerRenderCache,
-    /// Left dock (#63 Phase A) — the window-management-tree-external home
-    /// for the explorer window when open. `Some` exactly when `explorer` is
-    /// `Some` (kept in lockstep by `explorer::open_explorer` /
-    /// `close_explorer`); a second field rather than deriving dock-ness from
-    /// `explorer` alone so future dock kinds (Phase B) share one mechanism.
-    pub(crate) left_dock: Option<dock::Dock>,
-    /// Bottom dock (#63 Phase A, unused). Reserved for quickfix/location-list
-    /// (Phase B) — wired through render/focus/dispatch now so that phase is
-    /// additive rather than another refactor.
-    pub(crate) bottom_dock: Option<dock::Dock>,
     /// Resolved path of the user's config file, as loaded by `main` (either
     /// the XDG default or an explicit `--config <PATH>`). `None` when no
     /// config file exists yet (bundled-defaults-only) or in tests that never
@@ -609,9 +601,11 @@ pub struct App {
     pub(crate) hop: Option<hop::HopState>,
     /// Quickfix list (#184): file+line locations from `:grep` (and later `:make`
     /// / LSP). Navigated via `:cnext`/`:cprev`/`]q`/`[q`; shown by `:copen` as
-    /// a real bottom-dock window/buffer (#63 Phase B — see `App::bottom_dock`
-    /// / `App::quickfix_open()`, which derives open/closed from the dock's
-    /// kind rather than tracking a separate bool).
+    /// a real bottom-dock window/buffer (see `Tab::bottom_dock` /
+    /// `App::quickfix_open()`, which derives open/closed from the dock's kind
+    /// rather than tracking a separate bool). The LIST itself stays app-level
+    /// while the window showing it is per-tab — same as vim, where `:copen` in
+    /// two tab pages shows one shared quickfix list.
     pub(crate) quickfix: hjkl_quickfix::QfList,
     /// Location list (#184 phase 3): the `:l*` analogue of the quickfix list.
     /// Populated by `:lgrep` / `:lmake` and LSP references; navigated via
@@ -774,8 +768,8 @@ pub struct BorderDrag {
     pub split_total: u16,
     /// Most recent mouse position (column for VSplit, row for HSplit).
     pub last_pos: u16,
-    /// `true` when dragging the left dock's border rather than a tree split
-    /// (#63 Phase A). Dock drags adjust `config.explorer.width` by the
+    /// `true` when dragging a dock's border rather than an ordinary tree
+    /// split. Dock drags adjust `config.explorer.width` by the
     /// per-frame delta and persist once on release; tree drags call
     /// `resize_split_to` every frame (no persistence — ratios aren't config).
     pub dock: bool,
@@ -1149,16 +1143,14 @@ impl App {
     }
 
     /// `true` when `id` is a REGULAR editor window — one that may hold an
-    /// ordinary file buffer. Special panes are not regular: dock windows
-    /// (#63 Phase A — the explorer today, quickfix/location-list docks in
-    /// Phase B) and the cmdline window (`q:`/`q/`).
+    /// ordinary file buffer. Special panes are not regular: dock windows (the
+    /// explorer and the quickfix/location-list dock) and the cmdline window
+    /// (`q:`/`q/`).
     ///
-    /// Docks live outside every tab's `LayoutTree` by construction (see
-    /// `dock.rs`), so the old "belt and braces: a window pointing at an
-    /// explorer-backed slot is not regular even if the tracked win_id is out
-    /// of sync" fallback is gone — there is now exactly one source of truth
-    /// for dock membership (`is_dock_window`), not a window/slot pair that
-    /// could drift apart.
+    /// Dock-ness is read from the owning tab's `Dock` record (`is_dock_window`),
+    /// which is the single source of truth — not a window/slot pair that could
+    /// drift apart. Being a `LayoutTree` leaf says nothing either way: every
+    /// window is one, docks included (#63 Phase 3).
     pub(crate) fn window_is_regular(&self, id: window::WindowId) -> bool {
         let exists = self.windows.get(id).is_some_and(Option::is_some);
         if !exists {
@@ -2299,10 +2291,7 @@ impl App {
             filter_pending_range: None,
             search_field: None,
             picker: None,
-            explorer: None,
             explorer_render_cache: explorer::ExplorerRenderCache::default(),
-            left_dock: None,
-            bottom_dock: None,
             config_path: None,
             explorer_git_discard_confirm: None,
             icon_mode: hjkl_icons::IconMode::default(),
