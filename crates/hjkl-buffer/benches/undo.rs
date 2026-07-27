@@ -1,20 +1,22 @@
-//! Cold undo-tree node jump cost vs history depth — evidence for the
-//! deferred "keyframe materialization" item of issue #302.
+//! Cold undo-tree node jump cost vs history depth — the regression guard for
+//! the "keyframe materialization" item of issue #302.
 //!
-//! Storage today (`src/undo.rs`, Phase 3a): the root holds a full base rope,
-//! every other edge holds a reversible `Delta`, and a node's content is
-//! reconstructed on demand behind a bounded warm LRU (`WARM_CAP = 16`).
-//! `u` / `<C-r>` have an adjacent-node fast path (one inverse delta apply), but
-//! `g-` / `g+` (`seq_earlier_step` / `seq_later_step`) go through
-//! `entry_of` → `materialize`, which walks UP to the nearest warm ancestor (or
-//! the root) and replays forward deltas — O(distance-to-warm-ancestor).
-//! Keyframes (a full rope every K nodes) would bound that at O(K).
+//! Storage (`src/undo.rs`, Phase 3a): the root holds a full base rope, every
+//! other edge holds a reversible `Delta`, and a node's content is reconstructed
+//! on demand behind a bounded warm LRU. `u` / `<C-r>` have an adjacent-node fast
+//! path (one inverse delta apply), but `g-` / `g+` (`seq_earlier_step` /
+//! `seq_later_step`) go through `entry_of` → `materialize`, which walks UP to
+//! the nearest ancestor holding content and replays forward deltas. Before
+//! keyframes that ancestor could be the root, making one jump O(depth) and a
+//! full walk O(depth²); pinning a materialized rope every `KEYFRAME_INTERVAL`
+//! nodes bounds a jump at O(K) and — since `materialize` also caches the
+//! intermediates it replays — a full walk at O(N).
 //!
-//! The two benches below measure the two shapes that matter for that decision:
+//! The two benches below measure the two shapes that matter:
 //!
 //! - `cold_jump_back` — hold `g-` / `:earlier 9999`: walk tip → root.
-//! - `single_deep_jump` — ONE `g-` landing on a node far outside the warm
-//!   window, i.e. the per-jump cold-replay cost in isolation.
+//! - `single_deep_jump` — ONE `g-` deep inside the history (see [`WALKBACK`]
+//!   for what that isolates before and after keyframes).
 //!
 //! Both are parameterized over history depth N so the scaling curve is visible.
 //! History construction always happens in `iter_batched`'s SETUP closure, so it
@@ -29,14 +31,23 @@ use std::time::{Duration, SystemTime};
 const BASE_LINES: usize = 2_000;
 const BASE_WIDTH: usize = 60;
 
-/// History depths to chart. `WARM_CAP` is 16, so N = 16 is the fully-warm
-/// control point and the rest progressively exceed the warm window.
+/// History depths to chart. N = 16 is the shallow control point; the rest
+/// progressively exceed the warm window (`WARM_CAP`).
 const DEPTHS: [usize; 4] = [16, 64, 256, 1024];
 
-/// How far back `single_deep_jump`'s setup walks before the timed jump. Must
-/// exceed `WARM_CAP` (16): after this many steps the warm LRU holds only nodes
-/// BELOW the current one (descendants), so the next `g-` target — and its whole
-/// ancestor chain — is cold and must replay from the root base.
+/// How far back `single_deep_jump`'s setup walks before the timed jump.
+///
+/// Held at 20 so the number stays comparable across the keyframe change, but
+/// note what it measures on each side. Before keyframes (`WARM_CAP = 16`, only
+/// the jump TARGET cached) 20 steps left the warm LRU holding descendants only,
+/// so the timed jump replayed the whole ancestor chain from the root base — the
+/// cold-jump cost. Now `materialize` caches every intermediate it replays, so
+/// walking back pre-warms the nodes ahead of the walk and no sequential `g-`
+/// lands cold: the timed jump measures the steady-state per-step cost of holding
+/// `g-` instead. The worst-case cold bound (`< KEYFRAME_INTERVAL` delta applies
+/// from any node) is asserted directly in
+/// `undo.rs::keyframes_bound_the_cold_replay_distance`, which is a sharper tool
+/// for it than a wall-clock bench.
 const WALKBACK: usize = 20;
 
 fn base_text() -> String {
@@ -128,16 +139,13 @@ fn bench_cold_jump_back(c: &mut Criterion) {
     group.finish();
 }
 
-/// ONE `g-` onto a cold node, with the warm window sitting on the wrong side.
+/// ONE `g-` deep inside a long history, after an untimed `WALKBACK`-step walk.
 ///
-/// Setup builds the history and walks back `WALKBACK` (> `WARM_CAP`) steps —
-/// untimed. That leaves the warm LRU holding the 16 nodes just visited, all of
-/// them DESCENDANTS of `current`, so the timed jump's target has no warm
-/// ancestor and `materialize` replays the whole chain from the root base.
+/// See [`WALKBACK`] for exactly what this measures before and after keyframes.
 ///
-/// N = 16 is excluded: with `WARM_CAP = 16` the entire history fits in the warm
-/// window, so no cold single jump exists to measure there — reporting that
-/// point would be a warm number wearing a cold label.
+/// N = 16 is excluded: that whole history fits in the warm window, so there is
+/// no deep jump to measure there — reporting that point would be a warm number
+/// wearing a cold label.
 fn bench_single_deep_jump(c: &mut Criterion) {
     let text = base_text();
     let mut group = c.benchmark_group("undo");

@@ -291,15 +291,71 @@ fn apply_inverse(child: &ropey::Rope, d: &Delta) -> ropey::Rope {
 // `delta`/content is FINALIZED lazily on the way past it (whenever the live rope
 // is written into it), never read as a restore target until then — so the fresh
 // leaf `current` holds a placeholder edge that is corrected before it matters.
+//
+// Keyframes (issue #302): the warm LRU alone bounds nothing — a `g-` onto a node
+// far outside it replayed the WHOLE chain from the root, so one jump was O(depth)
+// and `:earlier 9999` was O(depth²) (measured 212 ms for a 1024-deep history).
+// Every node at a depth that is a multiple of `KEYFRAME_INTERVAL` therefore PINS
+// its materialized rope, capping any single replay at `KEYFRAME_INTERVAL - 1`
+// applies; and `materialize` caches every intermediate it replays, so the
+// step-by-step walk pays that replay once per interval rather than once per step.
+// Keyframes are a pure in-memory cache: they are recomputable from the root base
+// plus the deltas, so they are NOT part of the `SerTree` on-disk projection, and
+// dropping every one of them changes only speed, never content.
+
+/// Keyframe spacing, in nodes of depth. Every node whose depth from the root is
+/// a multiple of this pins its materialized rope, so `materialize` never replays
+/// more than `KEYFRAME_INTERVAL - 1` deltas from the nearest anchor.
+///
+/// **Why 16.** The cost of a keyframe is *not* a document copy. `ropey::Rope` is
+/// a persistent tree with `Arc`-shared leaves, so a snapshot taken between small
+/// edits shares every chunk outside the edited path with its neighbours and only
+/// retains the O(log N) interior nodes the edit rewrote. Measured marginal RSS of
+/// retaining one such snapshot (1024 small edits, keeping every 16th):
+///
+/// | document | bytes retained per keyframe |
+/// | --- | --- |
+/// | 119 KiB | ~3.0 KiB |
+/// | 11.9 MiB | ~7.2 KiB |
+/// | 11.9 MiB, 4 KiB edits | ~11.5 KiB |
+///
+/// i.e. essentially independent of document size — a 200 MB buffer does not pay
+/// 200 MB per keyframe. At one keyframe per 16 nodes that is well under a KiB of
+/// amortized overhead per undo state, next to the `Delta` (two `String`s of the
+/// changed span) every node already stores unconditionally. 16 also sits under
+/// [`WARM_CAP`], which is what lets a full walk stay linear (see there).
+///
+/// The one shape that would break the "cheap" argument — an edit that rewrites
+/// the entire document, so consecutive states share nothing — already costs two
+/// full-document `String`s in that node's own `Delta`, so the keyframe adds at
+/// most another 1/16 of a cost the tree was paying anyway.
+const KEYFRAME_INTERVAL: usize = 16;
+
+/// Hard ceiling on how many keyframes are pinned at once; beyond it the
+/// least-recently-touched keyframe is unpinned (it becomes an ordinary cold
+/// node, replayable as before — correctness is unaffected).
+///
+/// Deliberately a COUNT, not a byte budget: by the measurement on
+/// [`KEYFRAME_INTERVAL`] a keyframe's real retention is roughly document-size
+/// *independent*, so a byte budget computed from `len_bytes()` would be a wild
+/// over-estimate and would switch keyframes off precisely on the large documents
+/// that need them most. 512 keyframes covers 8192 undo states — past any sane
+/// `undolevels` — for a measured ceiling of a few MiB.
+const KEYFRAME_CAP: usize = 512;
 
 /// Index into [`UndoTree::nodes`]. Slots are reused via a free list, so an id is
 /// only valid while the node it names is live — the tree never hands ids out.
 pub type NodeId = usize;
 
-/// How many recently-materialized node ropes to keep warm (besides the root
-/// base and `current`, which are always available). A cold jump beyond this
-/// window replays deltas from the nearest warm ancestor — rare and bounded.
-const WARM_CAP: usize = 16;
+/// How many recently-materialized ORDINARY node ropes to keep warm (besides the
+/// root base, `current`, and the pinned keyframes, which are always available).
+///
+/// Kept above [`KEYFRAME_INTERVAL`] on purpose: `materialize` caches every
+/// intermediate it replays, so one keyframe interval's worth of intermediates has
+/// to survive here for a step-by-step history walk (`:earlier 9999`) to cost one
+/// replay per INTERVAL rather than one per step — the difference between an O(N)
+/// and an O(N·K) walk.
+const WARM_CAP: usize = 32;
 
 /// One node of the undo arena tree: a buffer state the user could land on, plus
 /// its links and the reversible edge to its parent. A node with `> 1` child is a
@@ -316,9 +372,15 @@ pub struct UndoNode {
     /// Full base rope. `Some` ONLY for the root — the anchor the delta chain
     /// replays from. Non-root nodes leave this `None` and carry a `delta`.
     pub base: Option<ropey::Rope>,
-    /// Materialized content, LRU-managed. Warm for `current` and recently
-    /// visited nodes; `None` (cold) otherwise, reconstructable from deltas.
+    /// Materialized content, LRU-managed. Warm for `current`, recently visited
+    /// nodes, and keyframe-depth nodes (which are pinned rather than aged out);
+    /// `None` (cold) otherwise, reconstructable from deltas.
     pub rope_cache: Option<ropey::Rope>,
+    /// Distance from the root, root == 0. Assigned once at creation and never
+    /// renumbered — root-side pruning shifts the whole numbering down uniformly,
+    /// which leaves keyframes exactly [`KEYFRAME_INTERVAL`] apart either way.
+    /// Purely a cache-placement input: a wrong depth costs speed, never content.
+    pub depth: usize,
     /// Post-state cursor for this node (restored alongside the text).
     pub cursor: (usize, usize),
     /// Wall-clock time this state was created — drives `:earlier`/`:later`.
@@ -345,13 +407,35 @@ pub struct UndoTree {
     nodes: Vec<Option<UndoNode>>,
     /// Reusable slot indices (frees push here, allocs pop here first).
     free: Vec<NodeId>,
-    /// LRU of node ids with a warm `rope_cache` (root excluded — it uses
-    /// `base`), most-recently-touched last. Bounded by [`WARM_CAP`]; `current`
-    /// is never evicted.
+    /// LRU of ORDINARY node ids with a warm `rope_cache` (root and keyframe-depth
+    /// nodes excluded — they live in `base` / `keyframes`), most-recently-touched
+    /// last. Bounded by [`WARM_CAP`]; `current` is never evicted.
     warm: Vec<NodeId>,
+    /// Node ids at a keyframe depth whose `rope_cache` is PINNED — the replay
+    /// anchors that bound `materialize` at [`KEYFRAME_INTERVAL`] applies.
+    /// Most-recently-touched last, bounded by [`KEYFRAME_CAP`].
+    keyframes: Vec<NodeId>,
     root: NodeId,
     current: NodeId,
     next_seq: u64,
+}
+
+/// Trim `list` (an LRU, oldest first) down to `cap`, dropping the evicted
+/// nodes' materialized ropes. `current` is never evicted — the live state must
+/// stay available without a replay.
+///
+/// A free function over the pieces rather than a method so it can hold `&mut`
+/// on one arena field and one list at the same time.
+fn evict_to(list: &mut Vec<NodeId>, nodes: &mut [Option<UndoNode>], current: NodeId, cap: usize) {
+    while list.len() > cap {
+        let Some(pos) = list.iter().position(|&n| n != current) else {
+            break;
+        };
+        let victim = list.remove(pos);
+        if let Some(node) = nodes[victim].as_mut() {
+            node.rope_cache = None;
+        }
+    }
 }
 
 impl UndoTree {
@@ -366,6 +450,7 @@ impl UndoTree {
             delta: None,
             base: Some(rope),
             rope_cache: None,
+            depth: 0,
             cursor: (0, 0),
             timestamp: SystemTime::now(),
             marks: Arc::default(),
@@ -375,6 +460,7 @@ impl UndoTree {
             nodes: vec![Some(root)],
             free: Vec::new(),
             warm: Vec::new(),
+            keyframes: Vec::new(),
             root: 0,
             current: 0,
             next_seq: 1,
@@ -403,38 +489,53 @@ impl UndoTree {
 
     /// Free a single slot (does NOT recurse into children — callers detach
     /// links first). Drops the node's delta + materialized cache and purges it
-    /// from the warm LRU.
+    /// from both cache LRUs.
     fn free(&mut self, id: NodeId) {
         self.nodes[id] = None;
         self.free.push(id);
         self.warm.retain(|&n| n != id);
+        self.keyframes.retain(|&n| n != id);
     }
 
-    // ── materialization (Phase 3a) ────────────────────────────────────────────
+    // ── materialization (Phase 3a + keyframes) ───────────────────────────────
 
-    /// Record `id` as freshly materialized, evicting the coldest cache beyond
-    /// [`WARM_CAP`] (never the root — it has no cache — nor `current`).
+    /// Is `id` at a keyframe depth, i.e. should its materialized rope be PINNED
+    /// as a replay anchor rather than aged out of the ordinary warm LRU?
+    ///
+    /// The root qualifies arithmetically (depth 0) but is excluded: it carries a
+    /// full `base` and is already an anchor.
+    fn is_keyframe(&self, id: NodeId) -> bool {
+        id != self.root && self.get(id).depth.is_multiple_of(KEYFRAME_INTERVAL)
+    }
+
+    /// Record `id` as freshly materialized. Keyframe-depth nodes go into the
+    /// pinned `keyframes` LRU (bounded by [`KEYFRAME_CAP`]), everything else into
+    /// the ordinary `warm` LRU (bounded by [`WARM_CAP`]). Neither ever evicts
+    /// `current`; the root is skipped entirely (it has no cache, it has `base`).
     fn touch_warm(&mut self, id: NodeId) {
         if id == self.root {
             return;
         }
-        self.warm.retain(|&n| n != id);
-        self.warm.push(id);
-        while self.warm.len() > WARM_CAP {
-            let Some(pos) = self.warm.iter().position(|&n| n != self.current) else {
-                break;
-            };
-            let victim = self.warm.remove(pos);
-            if let Some(node) = self.nodes[victim].as_mut() {
-                node.rope_cache = None;
-            }
-        }
+        let (list, cap) = if self.is_keyframe(id) {
+            (&mut self.keyframes, KEYFRAME_CAP)
+        } else {
+            (&mut self.warm, WARM_CAP)
+        };
+        list.retain(|&n| n != id);
+        list.push(id);
+        evict_to(list, &mut self.nodes, self.current, cap);
     }
 
-    /// Materialize node `id`'s content, warming its cache. Uses the warm cache
-    /// if present, else the root `base`, else replays forward deltas from the
-    /// nearest materialized ancestor (or the root). Always terminates: the root
-    /// carries a base.
+    /// Materialize node `id`'s content, warming its cache. Uses the node's own
+    /// cache if present, else the root `base`, else replays forward deltas from
+    /// the nearest materialized ancestor — a warm node, a pinned keyframe, or the
+    /// root. Always terminates: the root carries a base.
+    ///
+    /// Every intermediate along the replay is cached too, not just the target:
+    /// they were computed anyway and a `ropey::Rope` clone is an `Arc` bump, so
+    /// caching them is free — and it is what makes a step-by-step history walk
+    /// (`g-` held down, `:earlier 9999`) pay ONE replay per keyframe interval
+    /// instead of one per step.
     fn materialize(&mut self, id: NodeId) -> ropey::Rope {
         if let Some(r) = &self.get(id).rope_cache {
             return r.clone();
@@ -442,8 +543,10 @@ impl UndoTree {
         if let Some(base) = &self.get(id).base {
             return base.clone();
         }
-        // Walk up to the nearest ancestor that is warm or is the root, recording
-        // the path of nodes to replay forward.
+        // Walk up to the nearest ancestor that holds content (warm cache, pinned
+        // keyframe, or the root base), recording the path to replay forward.
+        // Bounded by the keyframe spacing whenever the ancestor chain has been
+        // materialized before.
         let mut path = Vec::new();
         let base_rope;
         let mut anchor = id;
@@ -464,16 +567,19 @@ impl UndoTree {
             anchor = par;
         }
         let mut rope = base_rope;
+        // `path` is target-first, so replaying in reverse ends on `id` — which
+        // therefore lands last in its LRU and cannot be the eviction picked by
+        // its own `touch_warm`.
         for &node in path.iter().rev() {
             let d = self
                 .get(node)
                 .delta
-                .clone()
+                .as_ref()
                 .expect("a non-root node always carries its edge delta");
-            rope = apply_forward(&rope, &d);
+            rope = apply_forward(&rope, d);
+            self.get_mut(node).rope_cache = Some(rope.clone());
+            self.touch_warm(node);
         }
-        self.get_mut(id).rope_cache = Some(rope.clone());
-        self.touch_warm(id);
         rope
     }
 
@@ -520,6 +626,7 @@ impl UndoTree {
             // The root is materialized from `base`; keep no stale cache.
             self.get_mut(id).rope_cache = None;
             self.warm.retain(|&n| n != id);
+            self.keyframes.retain(|&n| n != id);
         } else {
             let par = self.get(id).parent.expect("non-root has a parent");
             let par_rope = self.materialize(par);
@@ -611,6 +718,7 @@ impl UndoTree {
         // holding the pre-edit rope). Its true post-edit content is finalized on
         // the way past it (next move) or by the next `push`, at which point the
         // edge delta is recomputed against `cur`.
+        let child_depth = self.get(cur).depth + 1;
         let child = self.alloc(UndoNode {
             parent: Some(cur),
             children: Vec::new(),
@@ -618,6 +726,7 @@ impl UndoTree {
             delta: Some(Delta::default()),
             base: None,
             rope_cache: Some(entry.rope),
+            depth: child_depth,
             cursor: entry.cursor,
             timestamp: entry.timestamp,
             marks,
@@ -953,6 +1062,7 @@ impl UndoTree {
             node.rope_cache = None;
         }
         self.warm.retain(|&n| n != child);
+        self.keyframes.retain(|&n| n != child);
         self.root = child;
         self.free(root);
         true
@@ -982,6 +1092,7 @@ impl UndoTree {
             }
         }
         self.warm.clear();
+        self.keyframes.clear();
         let node = self.get_mut(cur);
         node.parent = None;
         node.children.clear();
@@ -989,6 +1100,9 @@ impl UndoTree {
         node.delta = None;
         node.base = Some(base);
         node.rope_cache = None;
+        // The survivor is the new root: restart the depth numbering under it so
+        // its descendants land on the keyframe ladder from 0 again.
+        node.depth = 0;
         self.root = cur;
     }
 }
@@ -1162,6 +1276,7 @@ impl UndoTree {
             }
         }
         let base = ropey::Rope::from_str(&s.base);
+        let depths = depths_from_root(s);
         let nodes: Vec<Option<UndoNode>> = s
             .nodes
             .iter()
@@ -1175,6 +1290,7 @@ impl UndoTree {
                     delta: n.delta.clone(),
                     base: if is_root { Some(base.clone()) } else { None },
                     rope_cache: None,
+                    depth: depths[i],
                     cursor: (n.cursor.0 as usize, n.cursor.1 as usize),
                     timestamp: unix_ms_to_system_time(n.timestamp_unix_ms),
                     marks: Arc::new(n.marks.clone()),
@@ -1186,11 +1302,38 @@ impl UndoTree {
             nodes,
             free: Vec::new(),
             warm: Vec::new(),
+            keyframes: Vec::new(),
             root: s.root as NodeId,
             current: s.current as NodeId,
             next_seq: s.next_seq,
         })
     }
+}
+
+/// Depth-from-root of every node in a projection, by BFS over `children`.
+///
+/// Depth is NOT part of the on-disk format — it is derivable, and the undofile
+/// deliberately stores only what is not (issue #302: keyframes are an in-memory
+/// cache, so nothing about them enters `SerTree`). The `seen` guard makes this
+/// terminate on a malformed file whose links form a cycle; anything unreachable
+/// from the root keeps depth 0, which at worst places a keyframe oddly.
+fn depths_from_root(s: &SerTree) -> Vec<usize> {
+    let mut depths = vec![0usize; s.nodes.len()];
+    let mut seen = vec![false; s.nodes.len()];
+    let mut queue = std::collections::VecDeque::new();
+    seen[s.root as usize] = true;
+    queue.push_back(s.root as usize);
+    while let Some(i) = queue.pop_front() {
+        for &c in &s.nodes[i].children {
+            let c = c as usize;
+            if !seen[c] {
+                seen[c] = true;
+                depths[c] = depths[i] + 1;
+                queue.push_back(c);
+            }
+        }
+    }
+    depths
 }
 
 #[cfg(test)]
@@ -1207,13 +1350,72 @@ impl UndoTree {
         self.materialize(id)
     }
 
-    /// Evict every warm cache (root keeps its `base`), forcing the next
-    /// materialization of any node to reconstruct purely from deltas.
+    /// Evict every cache INCLUDING the pinned keyframes (root keeps its `base`),
+    /// forcing the next materialization of any node to reconstruct purely from
+    /// deltas off the root — the strongest cold path there is.
     fn drop_all_caches(&mut self) {
         for n in self.nodes.iter_mut().flatten() {
             n.rope_cache = None;
         }
         self.warm.clear();
+        self.keyframes.clear();
+    }
+
+    /// Evict only the ordinary warm LRU, leaving the pinned keyframes — the
+    /// steady state a deep history walk actually runs in.
+    fn drop_warm_caches(&mut self) {
+        for id in std::mem::take(&mut self.warm) {
+            if let Some(n) = self.nodes[id].as_mut() {
+                n.rope_cache = None;
+            }
+        }
+    }
+
+    /// How many forward delta applies `materialize(id)` would perform right now
+    /// (0 when `id` already holds content). This is the cost keyframes exist to
+    /// bound, made assertable.
+    fn replay_distance(&self, id: NodeId) -> usize {
+        let mut n = 0;
+        let mut cur = id;
+        loop {
+            let node = self.get(cur);
+            if node.rope_cache.is_some() || node.base.is_some() {
+                return n;
+            }
+            n += 1;
+            match node.parent {
+                Some(p) => cur = p,
+                None => return n,
+            }
+        }
+    }
+
+    /// Reconstruct `id`'s content the naive way: walk to the root and replay
+    /// every forward delta off the root `base`, consulting NO cache and NO
+    /// keyframe. The differential oracle for keyframe-accelerated
+    /// [`Self::materialize`] — the two must agree exactly, always.
+    fn materialize_naive(&self, id: NodeId) -> ropey::Rope {
+        let mut path = vec![id];
+        let mut cur = id;
+        while let Some(p) = self.get(cur).parent {
+            path.push(p);
+            cur = p;
+        }
+        let mut rope = self
+            .get(cur)
+            .base
+            .clone()
+            .expect("the root always carries a base");
+        // Skip the root itself (it has no edge delta); replay root-ward → target.
+        for &node in path.iter().rev().skip(1) {
+            let d = self
+                .get(node)
+                .delta
+                .as_ref()
+                .expect("a non-root node always carries its edge delta");
+            rope = apply_forward(&rope, d);
+        }
+        rope
     }
 }
 
@@ -1996,6 +2198,220 @@ mod delta_tests {
             }
         }
         assert_warm_equals_cold(&mut real);
+    }
+
+    // ── (iv) keyframes: accelerated materialize vs the naive root replay ──────
+    //
+    // Keyframes (issue #302) pin a materialized rope every `KEYFRAME_INTERVAL`
+    // nodes so a cold `g-` replays O(K) deltas instead of O(depth). They are a
+    // CACHE: whatever they accelerate must be bit-identical to replaying every
+    // delta from the root base with no cache at all. `materialize_naive` is that
+    // oracle, in the same spirit as `diff_reference` above.
+
+    /// For every live node: the keyframe-accelerated `materialize` must equal the
+    /// naive root-base replay exactly.
+    #[track_caller]
+    fn assert_materialize_matches_naive(t: &mut UndoTree) {
+        for id in t.live_ids() {
+            let naive = t.materialize_naive(id).to_string();
+            let got = t.materialize_for_test(id).to_string();
+            assert_eq!(got, naive, "accelerated != naive root replay for node {id}");
+        }
+    }
+
+    /// A linear history `n` states deep (so it crosses many keyframe intervals),
+    /// plus the expected content of each state indexed by `seq`/depth. Every node
+    /// is finalized, including the tip.
+    fn deep_linear_history(n: usize) -> (UndoTree, Vec<String>) {
+        let base: String =
+            "the quick brown fox\njumps over the lazy dog\ncafé 日本語 🎉\n".repeat(20);
+        let mut t = UndoTree::new(ropey::Rope::from_str(&base));
+        let mut states = vec![base.clone()];
+        let mut live = base;
+        for i in 0..n {
+            // Engine discipline: commit the PRE-edit state, then mutate.
+            t.push(entry_str(&live));
+            live = format!("e{i} {live}");
+            states.push(live.clone());
+        }
+        // Stash the tip's live content so no node is left holding a stale edge.
+        t.sync_current(ropey::Rope::from_str(&live));
+        (t, states)
+    }
+
+    #[test]
+    fn deep_history_walks_back_and_forward_exactly() {
+        // The `:earlier 9999` / `:later 9999` shape, deep enough that most jumps
+        // land outside the warm window and go through a keyframe.
+        let n = 200;
+        assert!(n > 4 * KEYFRAME_INTERVAL);
+        let (mut t, states) = deep_linear_history(n);
+
+        let mut live = states[n].clone();
+        for want in (0..n).rev() {
+            let got = t
+                .seq_earlier_step(
+                    ropey::Rope::from_str(&live),
+                    (0, 0),
+                    MarkSnapshot::default(),
+                )
+                .expect("history is deeper than the walk");
+            live = got.rope.to_string();
+            assert_eq!(live, states[want], "g- onto seq {want}");
+        }
+        assert!(
+            t.seq_earlier_step(
+                ropey::Rope::from_str(&live),
+                (0, 0),
+                MarkSnapshot::default()
+            )
+            .is_none(),
+            "walk ended at the oldest state"
+        );
+        for (seq, want) in states.iter().enumerate().skip(1) {
+            let got = t
+                .seq_later_step(
+                    ropey::Rope::from_str(&live),
+                    (0, 0),
+                    MarkSnapshot::default(),
+                )
+                .expect("history is deeper than the walk");
+            live = got.rope.to_string();
+            assert_eq!(&live, want, "g+ onto seq {seq}");
+        }
+        assert_materialize_matches_naive(&mut t);
+        assert_warm_equals_cold(&mut t);
+    }
+
+    #[test]
+    fn keyframes_bound_the_cold_replay_distance() {
+        let n = 200;
+        let (mut t, _) = deep_linear_history(n);
+        // Steady state: the ordinary warm entries have aged out, the keyframes
+        // are still pinned. Every node must be within one interval of an anchor.
+        t.drop_warm_caches();
+        for id in t.live_ids() {
+            let d = t.replay_distance(id);
+            assert!(
+                d < KEYFRAME_INTERVAL,
+                "node {id} (depth {}) replays {d} deltas, over the keyframe bound",
+                t.get(id).depth
+            );
+        }
+        // Drop the keyframes too and the bound is gone — proof that it is the
+        // keyframes doing the bounding and not the warm LRU or the tree shape.
+        let deepest = *t
+            .live_ids()
+            .iter()
+            .max_by_key(|&&id| t.get(id).depth)
+            .unwrap();
+        t.drop_all_caches();
+        assert!(t.replay_distance(deepest) > KEYFRAME_INTERVAL);
+        // One materialize off the fully-cold tree re-pins the whole ladder.
+        t.materialize_for_test(deepest);
+        t.drop_warm_caches();
+        for id in t.live_ids() {
+            assert!(t.replay_distance(id) < KEYFRAME_INTERVAL, "node {id}");
+        }
+    }
+
+    #[test]
+    fn keyframe_materialize_matches_naive_over_random_ops() {
+        // Push-heavy op mix so the tree gets deep enough to cross many keyframe
+        // intervals, with undo/redo/g-/g+ and periodic `cap` pruning mixed in —
+        // pruning renumbers nothing but does free nodes and re-root the tree, so
+        // it is where a stale keyframe would surface as corrupted text.
+        let mut rng = Rng::new(0x0FF1_CE00_D15E_A5E5);
+        let start = "α\nβγ\n日本🎉\nthe quick brown fox\n";
+        let mut t = UndoTree::new(ropey::Rope::from_str(start));
+        let mut live = start.to_string();
+
+        for step in 0..5000 {
+            match rng.below(10) {
+                0..=5 => {
+                    let pre = live.clone();
+                    t.push(entry_str(&pre));
+                    live = mutate(&live, &mut rng);
+                }
+                6 => {
+                    if let Some(e) = t.undo_step(
+                        ropey::Rope::from_str(&live),
+                        (0, 0),
+                        MarkSnapshot::default(),
+                    ) {
+                        live = e.rope.to_string();
+                    }
+                }
+                7 => {
+                    if let Some(e) = t.redo_step(
+                        ropey::Rope::from_str(&live),
+                        (0, 0),
+                        MarkSnapshot::default(),
+                    ) {
+                        live = e.rope.to_string();
+                    }
+                }
+                8 => {
+                    if let Some(e) = t.seq_earlier_step(
+                        ropey::Rope::from_str(&live),
+                        (0, 0),
+                        MarkSnapshot::default(),
+                    ) {
+                        live = e.rope.to_string();
+                    }
+                }
+                _ => {
+                    if let Some(e) = t.seq_later_step(
+                        ropey::Rope::from_str(&live),
+                        (0, 0),
+                        MarkSnapshot::default(),
+                    ) {
+                        live = e.rope.to_string();
+                    }
+                }
+            }
+            // Whatever the tree hands back must be what the naive replay of the
+            // node it landed on says — checked every step, cheaply.
+            let cur = t.current;
+            assert_eq!(
+                t.materialize_for_test(cur).to_string(),
+                t.materialize_naive(cur).to_string(),
+                "current node diverged @ {step}"
+            );
+            if step % 250 == 0 {
+                assert_materialize_matches_naive(&mut t);
+            }
+            if step % 700 == 0 {
+                t.cap(60);
+            }
+        }
+        assert_materialize_matches_naive(&mut t);
+        assert_warm_equals_cold(&mut t);
+    }
+
+    #[test]
+    fn deserialized_deep_tree_rebuilds_the_keyframe_ladder() {
+        // Depth is NOT serialized (keyframes are a cache, the on-disk format is
+        // untouched), so a loaded tree has to recompute it — otherwise every
+        // cross-session `g-` would be a full replay again.
+        let n = 100;
+        let (t, states) = deep_linear_history(n);
+        let ser = t.to_serializable();
+        let mut back = UndoTree::from_serializable(&ser).expect("valid projection");
+
+        let deepest = *back
+            .live_ids()
+            .iter()
+            .max_by_key(|&&id| back.get(id).depth)
+            .unwrap();
+        assert_eq!(back.get(deepest).depth, n, "depths recomputed on load");
+        assert_eq!(back.materialize_for_test(deepest).to_string(), states[n]);
+        assert_materialize_matches_naive(&mut back);
+
+        back.drop_warm_caches();
+        for id in back.live_ids() {
+            assert!(back.replay_distance(id) < KEYFRAME_INTERVAL, "node {id}");
+        }
     }
 
     /// For every live node: materialize warm, drop all caches, materialize cold,
