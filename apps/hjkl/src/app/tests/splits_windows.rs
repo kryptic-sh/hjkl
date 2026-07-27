@@ -1577,6 +1577,42 @@ fn move_window_to_new_tab_on_dock_is_a_clean_error_not_a_panic() {
     );
 }
 
+/// `<C-w>T` on the last REGULAR window must refuse while a dock is open:
+/// moving it to a new tab strands the dock as this tab's only window, which
+/// is exactly the loss `:q` / `<C-w>c` / `<C-w>q` refuse. All four ask one
+/// function (`detach_focused_leaf`, #63 Phase 5), so they cannot drift apart
+/// — only the wording of the refusal differs (E1 here, E444 there).
+#[test]
+fn move_window_to_new_tab_refuses_the_last_regular_window_with_a_dock_open() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    let editor = app
+        .layout()
+        .leaves()
+        .into_iter()
+        .find(|&id| !app.is_dock_window(id))
+        .expect("one regular window");
+    app.set_focused_window(editor);
+    assert_eq!(app.regular_leaf_count(), 1, "setup: one editor + one dock");
+    let tabs_before = app.tabs.len();
+
+    let err = app
+        .move_window_to_new_tab()
+        .expect_err("moving the last regular window out must be refused");
+
+    assert_eq!(err, "E1: only one window in this tab");
+    assert_eq!(app.tabs.len(), tabs_before, "no tab may have been created");
+    assert!(
+        app.layout().contains(editor),
+        "the refused window must stay in this tab"
+    );
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_some(),
+        "the dock must remain open"
+    );
+}
+
 #[test]
 fn explorer_still_opens_files_into_main_area_not_the_dock() {
     use crate::keymap_actions::AppAction;

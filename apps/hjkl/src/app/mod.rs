@@ -1105,8 +1105,13 @@ impl App {
             return rect;
         }
         let vp = self.active_editor().host().viewport();
-        let real_slots = self.slots.iter().filter(|s| !s.is_explorer()).count();
-        let show_top_bar = self.tabs.len() > 1 || real_slots > 1;
+        // Same visibility rule as `render::frame` and `mouse::hit_test_zone`,
+        // through the same helper. This site used to count `!is_explorer()`
+        // slots while those two counted `!slot_is_special()`, so with `:copen`
+        // (or `q:`) open and one file, they disagreed: the renderer drew no
+        // top bar and this said there was one, over-reporting the screen
+        // height by a row and flipping a bottom-anchored popup one row early.
+        let show_top_bar = self.tabs.len() > 1 || self.real_slot_count() > 1;
         let top_bar_h = if show_top_bar { TOP_BAR_HEIGHT } else { 0 };
         ratatui::layout::Rect {
             x: 0,

@@ -107,6 +107,24 @@ pub fn layout_to_rect(r: LayoutRect) -> ratatui::layout::Rect {
     }
 }
 
+/// Why a window was not taken out of its tab's layout.
+///
+/// A type rather than a `bool` so every refusal has to be matched on: adding
+/// a second reason later is a compile error at each call site instead of a
+/// silently-wrong branch, which is the failure mode this whole area
+/// (#63) exists to stamp out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseRefused {
+    /// The focused window is the last REGULAR (non-dock) leaf of its tab.
+    /// Removing it would leave a dock as the tab's last window — the user
+    /// stranded in a quickfix list or file tree with nothing to edit — or
+    /// leave the tab with no windows at all.
+    ///
+    /// Callers differ on what to do about it: `<C-w>c` reports E444, `<C-w>T`
+    /// reports E1, `:q` / `<C-w>q` quit the editor instead.
+    LastRegularWindow,
+}
+
 // ── App window-action dispatcher ──────────────────────────────────────────────
 
 use super::App;
@@ -329,19 +347,17 @@ impl App {
         if self.is_dock_window(focused) || !self.layout().contains(focused) {
             return Err("dock windows can't move to a new tab");
         }
-        // Docks don't count: moving the one regular window out would leave a
-        // dock as this tab's last window.
-        if self.regular_leaf_count() <= 1 {
-            return Err("E1: only one window in this tab");
-        }
         // Save cursor/scroll of the focused window before changing focus.
         self.sync_viewport_from_editor();
-        // Remove the focused leaf from the current tab's layout. The returned
+        // Detach the focused leaf from the current tab's layout. The returned
         // value is the leaf that should receive focus in the current tab.
+        // `detach_focused_leaf` is where "would this strand a dock as the last
+        // window?" is decided — moving the one regular window out is the same
+        // loss as closing it, so it gets the same answer and E1 is just this
+        // path's phrasing of the refusal.
         let new_focus_in_old_tab = self
-            .layout_mut()
-            .remove_leaf(focused)
-            .map_err(|_| "remove_leaf failed")?;
+            .detach_focused_leaf()
+            .map_err(|CloseRefused::LastRegularWindow| "E1: only one window in this tab")?;
         // Update the old tab's focused window to the surviving sibling.
         self.tabs[self.active_tab].focused_window = new_focus_in_old_tab;
 
@@ -354,18 +370,68 @@ impl App {
         Ok(())
     }
 
-    /// Close the focused window.  Fails (with status message) when only one
-    /// window remains.  On success the layout collapses and focus moves to the
-    /// sibling that took over.
+    /// Detach the focused window's leaf from the active tab's layout, or
+    /// refuse — **the** chokepoint for "a dock must never be the last
+    /// window".
     ///
-    /// When the focused window is the command-line window (issue #37), the
-    /// transient slot is cleaned up via `close_cmdline_window` instead of the
-    /// normal path to avoid leaving orphaned slots.
+    /// Every path that takes a window out of a tab's tree goes through here:
+    /// `:q`, `:close`, `<C-w>c`, `<C-w>q` and `<C-w>T`. The invariant stopped
+    /// being structural when docks became real leaves (#63 Phase 3) — docks
+    /// are counted by `leaves().len()`, so the check became a `regular_leaf_count`
+    /// comparison repeated at four call sites, and a fifth site that forgot it
+    /// would fail silently (the user ends up staring at a quickfix list with no
+    /// editor). One function owns the count now, and a caller can only get the
+    /// decision wrong by not calling it at all.
+    ///
+    /// Returns the leaf that inherits focus in this tab. Docks are exempt:
+    /// closing a dock never strands anything, and dock teardown is routed
+    /// through the dock's own path anyway (it owns feature state a bare leaf
+    /// removal would leak).
+    fn detach_focused_leaf(&mut self) -> Result<WindowId, CloseRefused> {
+        let focused = self.focused_window();
+        if !self.is_dock_window(focused) && self.regular_leaf_count() <= 1 {
+            return Err(CloseRefused::LastRegularWindow);
+        }
+        // With a dock open the tree still has two leaves after this one goes,
+        // so `remove_leaf` succeeds where the count above would have refused —
+        // it is not a second opinion, just the mechanics. A failure here means
+        // a degenerate single-leaf tree, which is the same refusal.
+        self.layout_mut()
+            .remove_leaf(focused)
+            .map_err(|_| CloseRefused::LastRegularWindow)
+    }
+
+    /// Close the focused window.  Reports E444 when it is the last one.  On
+    /// success the layout collapses and focus moves to the sibling that took
+    /// over.
+    ///
+    /// Thin wrapper over [`Self::close_focused_window_checked`] that turns a
+    /// refusal into vim's message; callers that want to do something else on
+    /// refusal (`:q` quits, `<C-w>q` quits) call the checked form directly.
     pub fn close_focused_window(&mut self) {
+        if self.close_focused_window_checked().is_err() {
+            self.bus.error("E444: Cannot close last window");
+        }
+    }
+
+    /// Close the focused window, or refuse **without** a status message.
+    ///
+    /// `Err(CloseRefused::LastRegularWindow)` means nothing was touched: the
+    /// focused window is the tab's last regular one, so closing it would leave
+    /// the user with only docks. What that means is the caller's decision —
+    /// `<C-w>c` reports E444, `:q` and `<C-w>q` quit the editor instead — but
+    /// the decision itself is made in exactly one place
+    /// ([`Self::detach_focused_leaf`]).
+    ///
+    /// When the focused window is the command-line window (issue #37) or a
+    /// dock, its own teardown path runs instead of the normal one (they own
+    /// transient slots / feature state a bare leaf removal would leak), and
+    /// the result is always `Ok`.
+    pub fn close_focused_window_checked(&mut self) -> Result<(), CloseRefused> {
         // Cmdline window: delegate to its own cleanup.
         if self.is_cmdline_win_focused() {
             self.close_cmdline_window();
-            return;
+            return Ok(());
         }
         // Dock: the leaf removal is the same `remove_leaf` every window gets,
         // but a dock also owns feature state (the explorer's tree model, the
@@ -374,20 +440,11 @@ impl App {
         let focused = self.focused_window();
         if self.is_left_dock(focused) {
             self.close_left_dock();
-            return;
+            return Ok(());
         }
         if self.is_bottom_dock(focused) {
             self.close_bottom_dock();
-            return;
-        }
-
-        // A dock must never become the last window: with a dock open the tree
-        // still has two leaves after this one goes, so `remove_leaf` would
-        // happily succeed and leave the user staring at a quickfix list with
-        // no editor. Count regular leaves instead.
-        if self.regular_leaf_count() <= 1 {
-            self.bus.error("E444: Cannot close last window");
-            return;
+            return Ok(());
         }
 
         // Capture commit context BEFORE the window is torn down so we can
@@ -399,39 +456,34 @@ impl App {
             .and_then(|w| self.slots.get(w.slot))
             .and_then(|s| s.commit_ctx.clone());
 
-        match self.layout_mut().remove_leaf(focused) {
-            Err(_) => {
-                self.bus.error("E444: Cannot close last window");
-            }
-            Ok(new_focus) => {
-                self.windows[focused] = None;
-                self.window_folds.remove(&focused);
-                // switch_focus saves the outgoing window then restores the
-                // incoming one — but the outgoing window is being closed, so
-                // we set the new focus directly and only restore the incoming.
-                self.set_focused_window(new_focus);
-                self.sync_viewport_to_editor();
-                self.bus.info("window closed");
+        let new_focus = self.detach_focused_leaf()?;
+        self.windows[focused] = None;
+        self.window_folds.remove(&focused);
+        // switch_focus saves the outgoing window then restores the incoming
+        // one — but the outgoing window is being closed, so we set the new
+        // focus directly and only restore the incoming.
+        self.set_focused_window(new_focus);
+        self.sync_viewport_to_editor();
+        self.bus.info("window closed");
 
-                // Commit-on-close: if this was a gc commit buffer, run git commit.
-                if let Some(ctx) = commit_ctx {
-                    match hjkl_app::git::commit_with_file(&ctx.root, &ctx.msg_file) {
-                        Ok(out) => {
-                            let first = out.lines().next().unwrap_or("committed").to_string();
-                            self.bus.info(first);
-                        }
-                        Err(e) => {
-                            let first = e.lines().next().unwrap_or("commit failed").to_string();
-                            self.bus.warn(first);
-                        }
-                    }
-                    let _ = std::fs::remove_file(&ctx.msg_file);
-                    self.recompute_explorer_git_base();
-                    self.refresh_git_signs_force();
-                    self.explorer_rebuild_buffer();
+        // Commit-on-close: if this was a gc commit buffer, run git commit.
+        if let Some(ctx) = commit_ctx {
+            match hjkl_app::git::commit_with_file(&ctx.root, &ctx.msg_file) {
+                Ok(out) => {
+                    let first = out.lines().next().unwrap_or("committed").to_string();
+                    self.bus.info(first);
+                }
+                Err(e) => {
+                    let first = e.lines().next().unwrap_or("commit failed").to_string();
+                    self.bus.warn(first);
                 }
             }
+            let _ = std::fs::remove_file(&ctx.msg_file);
+            self.recompute_explorer_git_base();
+            self.refresh_git_signs_force();
+            self.explorer_rebuild_buffer();
         }
+        Ok(())
     }
 
     // ── Window size manipulation ───────────────────────────────────────────

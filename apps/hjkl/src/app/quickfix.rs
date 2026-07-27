@@ -931,7 +931,7 @@ impl crate::app::App {
     /// `:diagnostics` / `:ldiagnostics` — populate the quickfix / location list
     /// from the LSP diagnostics stored on buffer slots.
     ///
-    /// For [`QfWhich::Quickfix`]: iterates ALL non-explorer slots.
+    /// For [`QfWhich::Quickfix`]: iterates ALL real user buffers.
     /// For [`QfWhich::Location`]: only the ACTIVE slot.
     ///
     /// Maps [`DiagSeverity`] → [`QfKind`]:
@@ -943,10 +943,14 @@ impl crate::app::App {
     fn qf_run_diagnostics(&mut self, w: QfWhich) {
         let mut entries: Vec<QfEntry> = match w {
             QfWhich::Quickfix => {
-                // Collect from all non-explorer slots.
+                // Collect from every real user buffer. Special panes are
+                // excluded wholesale, not just the explorer: they are all
+                // filename-less, so a diagnostic ever landing on one would
+                // produce an entry with an empty path that no jump could
+                // resolve.
                 self.slots
                     .iter()
-                    .filter(|s| !s.is_explorer())
+                    .filter(|s| !s.is_special())
                     .flat_map(|s| {
                         let path = s.filename.clone().unwrap_or_default();
                         s.lsp_diags.iter().map(move |d| QfEntry {

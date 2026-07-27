@@ -941,10 +941,8 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
 pub fn picker_overlay_rect(app: &App) -> Option<Rect> {
     app.picker.as_ref()?;
     let vp = app.active_editor().host().viewport();
-    let real_slots = (0..app.slots().len())
-        .filter(|&idx| !app.slot_is_special(idx))
-        .count();
-    let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
+    // Same counter as `render::frame` — see the note there.
+    let show_top_bar = app.tabs.len() > 1 || app.real_slot_count() > 1;
     let top_bar_h = if show_top_bar {
         crate::app::TOP_BAR_HEIGHT
     } else {
@@ -1053,10 +1051,8 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     }
 
     let show_tab_bar = app.tabs.len() > 1;
-    let real_slots = (0..app.slots().len())
-        .filter(|&idx| !app.slot_is_special(idx))
-        .count();
-    let show_buffer_line = real_slots > 1;
+    // Same counter as `render::frame` — see the note there.
+    let show_buffer_line = app.real_slot_count() > 1;
     let show_top_bar = show_tab_bar || show_buffer_line;
 
     // Terminal width fallback for bar-geometry math (windows publish their

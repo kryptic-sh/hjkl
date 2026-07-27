@@ -421,6 +421,16 @@ fn build_diag_overlays(
 /// Widest line-number gutter across all open (non-explorer) buffers, so the
 /// number column can be sized to the biggest file and the text column stays put
 /// when switching buffers. Buffers with line numbers off contribute 0.
+///
+/// Deliberately `is_explorer`, NOT `is_special` (#63 Phase 5 audit): this set
+/// must be exactly the set of windows that RENDER a gutter, and the explorer
+/// is the only gutterless one — the quickfix dock and the `q:` window draw
+/// their gutters like any other window (vim's quickfix window honours
+/// `'number'` too). Excluding them from the max while `render_window` still
+/// sizes their number column to it would make their own text column narrower
+/// than the numbers they draw. [`stable_gutter_extra`] and
+/// [`rendered_gutter_width`] partition on the same line for the same reason;
+/// all three move together or not at all.
 pub fn max_lnum_width(app: &App) -> u16 {
     app.slots()
         .iter()
@@ -438,6 +448,9 @@ pub fn max_lnum_width(app: &App) -> u16 {
 ///
 /// The sign decision uses whether a buffer has ANY signs (not just ones in the
 /// current viewport), so scrolling within a buffer doesn't jiggle either.
+///
+/// `is_explorer` rather than `is_special` on purpose — see
+/// [`max_lnum_width`]: the explorer is the only gutterless window.
 pub fn stable_gutter_extra(app: &App) -> (u16, u16) {
     use hjkl_engine::types::SignColumnMode;
     let mut sign_w = 0u16;
@@ -475,9 +488,11 @@ pub fn stable_gutter_extra(app: &App) -> (u16, u16) {
 /// Total rendered gutter width (sign + number + fold cells) for `slot_idx`,
 /// matching exactly what `render_window` draws: the number column is sized to
 /// the cross-buffer max, and the sign/fold columns are the stable reserved
-/// widths. The explorer pane is gutterless (0). This is the single source of
-/// truth shared with the mouse hit-test so clicks map to the right column even
-/// when the gutter is widened beyond the buffer's own line-count width.
+/// widths. The explorer pane is gutterless (0) — and only the explorer, which
+/// is what `render_window` itself draws (`is_explorer_slot` there); this is
+/// the single source of truth shared with the mouse hit-test so clicks map to
+/// the right column even when the gutter is widened beyond the buffer's own
+/// line-count width, so the two must agree exactly.
 pub fn rendered_gutter_width(app: &App, win_id: window::WindowId) -> u16 {
     let Some(Some(win)) = app.windows.get(win_id) else {
         return 0;
@@ -1944,13 +1959,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // the one place that unconditionally sees the full frame every draw.
     app.last_frame_rect = Some(area);
 
-    // Special-pane slots (explorer, bottom qf/loclist dock) don't count as
-    // additional user buffers for the top-bar visibility decision —
-    // otherwise opening the explorer or `:copen` alone would show the bar.
-    let real_slots = (0..app.slots().len())
-        .filter(|&idx| !app.slot_is_special(idx))
-        .count();
-    let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
+    // Special-pane slots (explorer, bottom qf/loclist dock, cmdline history)
+    // don't count as additional user buffers for the top-bar visibility
+    // decision — otherwise opening the explorer or `:copen` alone would show
+    // the bar. `App::screen_rect` and `mouse::hit_test_zone` must reach the
+    // same verdict from the same counter, or the geometry they derive from it
+    // disagrees with what is drawn here.
+    let show_top_bar = app.tabs.len() > 1 || app.real_slot_count() > 1;
     let (buf_area, status_area, top_bar_area) = {
         // Build constraint list dynamically based on what rows are visible.
         let mut constraints = Vec::new();

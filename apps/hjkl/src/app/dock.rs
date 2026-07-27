@@ -32,32 +32,34 @@ use hjkl_layout::{Fixed, LayoutTree, SplitDir};
 
 use super::window::{self, WindowId};
 
-/// Which feature a dock hosts. Only [`DockKind::Explorer`] is wired up in
-/// Phase A; the other two are reserved for the bottom dock landing in a
-/// later phase (kryptic-sh/hjkl#63 Phase B) so the type is stable now.
+/// Which feature a dock hosts. [`DockKind::Explorer`] is the only left-dock
+/// kind; the other two are the bottom dock's, and `:copen` / `:lopen`
+/// retarget one bottom-dock window between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockKind {
     /// Left dock: the file-explorer tree.
     Explorer,
-    /// Bottom dock: `:copen` quickfix list (#63 Phase B).
+    /// Bottom dock: `:copen` quickfix list.
     Quickfix,
-    /// Bottom dock: `:lopen` location list (#63 Phase B).
+    /// Bottom dock: `:lopen` location list.
     Loclist,
 }
 
 /// A pinned, fixed-size leaf of its tab's `LayoutTree`.
+///
+/// Bookkeeping only — which leaf is this tab's dock, and what it hosts. The
+/// window itself lives in `windows[..]` like any other, and the slot it shows
+/// is read from there (`windows[win_id].slot`). A creation-time `slot_idx`
+/// used to be recorded here too; it was never authoritative, because any slot
+/// insertion/removal shifts it, and reading it instead of the window's own
+/// `slot` is precisely how both `dispose_dock_window` and the cmdline
+/// window's teardown came to remove the wrong buffer (#63 Phase 5).
 #[derive(Debug, Clone)]
 pub struct Dock {
     /// The dock's real `WindowId` — has a normal `windows[..]` entry, a
     /// normal `window_editors` entry, and a normal `LayoutTree::Leaf`,
     /// exactly like any other window.
     pub win_id: WindowId,
-    /// Slot index at the time the dock was created. NOT authoritative after
-    /// other slots are inserted/removed — always prefer
-    /// `app.windows[dock.win_id].slot` for the current value; this is kept
-    /// only as a creation-time record (matches the design doc's field
-    /// shape) and as a fallback if the window entry is ever already gone.
-    pub slot_idx: usize,
     pub kind: DockKind,
 }
 
@@ -139,18 +141,14 @@ impl super::App {
             rest,
         );
 
-        self.tabs[self.active_tab].left_dock = Some(Dock {
-            win_id,
-            slot_idx,
-            kind,
-        });
+        self.tabs[self.active_tab].left_dock = Some(Dock { win_id, kind });
         win_id
     }
 
     /// Tear down the active tab's left dock: remove its leaf from the tab's
     /// tree, drop its window entry + folds + editor, and remove its slot
     /// (reindexing every other window's slot reference). Returns the removed
-    /// [`Dock`] (its `slot_idx` is the pre-removal value, informational only).
+    /// [`Dock`] record.
     ///
     /// Does not touch focus beyond repairing a `focused_window` that pointed
     /// at the dock — call [`App::set_focused_window`] afterward if the caller
@@ -207,11 +205,7 @@ impl super::App {
             LayoutTree::Leaf(win_id),
         );
 
-        self.tabs[self.active_tab].bottom_dock = Some(Dock {
-            win_id,
-            slot_idx,
-            kind,
-        });
+        self.tabs[self.active_tab].bottom_dock = Some(Dock { win_id, kind });
         win_id
     }
 
@@ -230,16 +224,23 @@ impl super::App {
     /// active one, so a dock disposed as part of closing some OTHER tab
     /// (`:tabclose`, `:tabonly`) is unwoven from the right tree.
     fn dispose_dock_window(&mut self, dock: &Dock) {
+        // The slot this dock ACTUALLY shows, never a recorded index: slots
+        // shift under `:bd` and under every other dock close. `None` means the
+        // window entry is already gone, and with it any claim on a slot.
         let slot_idx = self
             .windows
             .get(dock.win_id)
             .and_then(|w| w.as_ref())
-            .map_or(dock.slot_idx, |w| w.slot);
+            .map(|w| w.slot);
 
         if let Some(i) = (0..self.tabs.len()).find(|&i| self.tabs[i].layout.contains(dock.win_id)) {
-            // A dock is never the last leaf (see `regular_leaf_count`'s
-            // callers), so `remove_leaf` only fails in a degenerate test
-            // layout — leave the tree alone there rather than panicking.
+            // A dock is never the last leaf (see
+            // `App::detach_focused_leaf`), so `remove_leaf` only fails in a
+            // degenerate test layout — leave the tree alone there rather
+            // than panicking. This is a dock coming down, which is never the
+            // refusable case, so it does not go through that chokepoint: it
+            // also has to work on a NON-active tab (`:tabclose`), which the
+            // focused-window path by definition cannot do.
             if let Ok(new_focus) = self.tabs[i].layout.remove_leaf(dock.win_id) {
                 if self.tabs[i].focused_window == dock.win_id {
                     self.tabs[i].focused_window = new_focus;
@@ -254,7 +255,9 @@ impl super::App {
         self.window_folds.remove(&dock.win_id);
         self.window_editors.remove(&dock.win_id);
 
-        if slot_idx < self.slots.len() {
+        if let Some(slot_idx) = slot_idx
+            && slot_idx < self.slots.len()
+        {
             self.slots.remove(slot_idx);
             self.reindex_after_slot_removal(slot_idx);
         }
@@ -390,6 +393,12 @@ impl super::App {
     /// two windows when the user sees one editor plus a quickfix list — and
     /// `:q` / `<C-w>q` would close that editor instead of quitting, leaving a
     /// dock as the last window. A dock must never become the last window.
+    ///
+    /// Exactly one production call site asks:
+    /// [`App::detach_focused_leaf`](super::App), the chokepoint every close /
+    /// quit / move-to-new-tab path goes through (#63 Phase 5). It was four
+    /// sites, which is one forgotten comparison away from the silent breakage
+    /// above; leave it at one.
     pub(crate) fn regular_leaf_count(&self) -> usize {
         self.layout()
             .leaves()

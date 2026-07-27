@@ -108,14 +108,14 @@ impl App {
 
             // ── App lifecycle ──────────────────────────────────────────────
             AppAction::QuitOrClose => {
-                // `<C-w>q` in a dock closes that dock, never the editor. And
-                // the "more than one window" test counts REGULAR leaves only:
-                // docks are leaves too now, so `leaves().len() > 1` would make
-                // `<C-w>q` in the last editor close it and leave a dock as the
-                // last window instead of quitting.
-                if self.is_dock_window(self.focused_window()) || self.regular_leaf_count() > 1 {
-                    self.close_focused_window();
-                } else {
+                // Close the window if there is another one to fall back on,
+                // else quit. Which of those it is belongs to
+                // `close_focused_window_checked` — docks are leaves now, so a
+                // local `leaves().len() > 1` would make `<C-w>q` in the last
+                // editor close it and strand the user in a dock instead of
+                // quitting. A dock is never a refusal: `<C-w>q` in one closes
+                // that dock and never the editor.
+                if self.close_focused_window_checked().is_err() {
                     self.exit_requested = true;
                 }
             }

@@ -518,19 +518,6 @@ impl App {
                 self.do_save(Some(PathBuf::from(path)));
             }
             ExEffect::Quit { force, save } => {
-                // Docks (explorer, quickfix/location list) are not user
-                // buffers, so the `buffer_delete` branch below must not see
-                // them: `:q` in a dock used to fall through to it and destroy
-                // the dock's scratch slot. Close the dock instead — same as
-                // `:close` / `<C-w>c`, and the same thing vim does in a
-                // quickfix window.
-                //
-                // `:wq` still falls through, so writing a scratch dock buffer
-                // reports its own error rather than silently closing.
-                if !save && self.is_dock_window(self.focused_window()) {
-                    self.close_focused_window();
-                    return;
-                }
                 if save && !self.do_save_force(None, force) {
                     // Save failed (E32 / E45 / IO error). Status_message
                     // already set by do_save; refuse to exit so the user
@@ -542,11 +529,19 @@ impl App {
                 // just closes the focused window (force discards dirty state
                 // for that window but doesn't quit the app).
                 //
-                // REGULAR leaves only — an open dock is a leaf too, and
-                // counting it here would turn `:q` in the last editor into a
-                // window close that leaves the dock as the last window.
-                if self.regular_leaf_count() > 1 {
-                    self.close_focused_window();
+                // Whether there IS another window to fall back on is
+                // `close_focused_window_checked`'s call, not this site's: an
+                // open dock is a leaf too, so counting leaves here would turn
+                // `:q` in the last editor into a window close that leaves the
+                // dock as the last window. A refusal means "this really was
+                // the last window", and quitting/`:bdelete` continues below.
+                //
+                // It also subsumes the old explicit dock branch: `:q` in a
+                // dock closes that dock (like `:close` / `<C-w>c`, and like
+                // vim in a quickfix window) rather than falling through to the
+                // `buffer_delete` below and destroying the dock's scratch
+                // slot.
+                if self.close_focused_window_checked().is_ok() {
                     return;
                 }
                 // E4: multi-slot — close active slot, stay in app. Counts real

@@ -503,11 +503,13 @@ impl HostCmd<App> for BCmd {
             let n: usize = arg.parse().unwrap_or(0);
             // Buffer numbers are raw 1-based slot indices (matches `:ls`'s
             // `i + 1` numbering, which is never renumbered/compacted around
-            // the explorer). The explorer's scratch slot is never a valid
-            // `:b N` target — it's excluded from `:ls`'s listing and
-            // `switch_to` silently no-ops on it — so treat it the same as
-            // out-of-range.
-            let is_valid = n != 0 && app.slots.get(n - 1).is_some_and(|s| !s.is_explorer());
+            // the special panes). NO special slot is a valid `:b N` target —
+            // every one of them is excluded from `:ls`'s listing and
+            // `switch_to` silently no-ops on all of them — so treat them the
+            // same as out-of-range. Explorer-only here meant `:b N` on the
+            // quickfix or `q:` scratch slot passed validation and then did
+            // nothing at all, with no message (#63 Phase 5).
+            let is_valid = n != 0 && app.slots.get(n - 1).is_some_and(|s| !s.is_special());
             if !is_valid {
                 return Some(ExEffect::Error(format!("E86: Buffer {n} does not exist")));
             }
