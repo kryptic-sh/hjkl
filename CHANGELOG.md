@@ -17,6 +17,11 @@ patch bumps.
 
 ### Fixed
 
+- **Installing syntax spans for a stale row count no longer panics.**
+  `Query::line_bytes` documents that out-of-range rows return 0, but the rope
+  backend forwarded straight to `ropey::Rope::line`, which panics past the last
+  line — reachable when a lagging syntax worker delivers a span table with more
+  rows than the buffer still has.
 - **`current_options()` no longer resets unmapped options to defaults.**
   `Settings::to_options` mapped only ~20 of 50 fields and backfilled the rest
   with `Options::default()`, so any read-modify-apply through the nvim API
@@ -28,6 +33,22 @@ patch bumps.
 
 ### Performance
 
+- **`:earlier` / held `g-` no longer stall on deep histories.** Undo nodes at
+  every 16th depth pin their materialized rope as a replay anchor, and
+  materialization now caches every intermediate it replays instead of only the
+  target, so a step-by-step walk pays one replay per interval rather than one
+  per step. A full tip→root walk on a 1024-deep history drops from 212 ms to
+  5.45 ms; a single cold jump from 445 µs to 75 µs. Keyframes are a pure
+  in-memory cache — nothing changes in the undofile format.
+- **LSP notifications move the document text instead of copying it.** `json!`
+  deep-copies even an owned value, so every didOpen/didChange copied the whole
+  buffer once more on its way into the params object. On a 2 MiB document:
+  didOpen 27.6 µs → 110 ns, incremental didChange 49.8 µs → 396 ns. Wire bytes
+  unchanged.
+- **Syntax-span installs stopped cloning each row to measure it.** The clamp
+  read the row length via `buf_line(row).len()` — a full line clone allocated
+  under the content mutex — and now reads it from the rope directly. The
+  per-keystroke viewport patch drops ~16%.
 - **LSP sends no longer deep-clone the params tree.** The JSON-RPC envelope
   moves `params` in instead of re-serializing it via `json!` (~40 µs → ~0.3 µs
   per full-document sync at 3.5 MB; O(1) instead of O(tree)). Wire bytes

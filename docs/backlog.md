@@ -8,11 +8,13 @@ in git): `audit-2026-07-26.md`, `round2-2026-07-26.md`, `code-review.md`,
 `perf-review.md`, `security-audit.md`, `tidy-report.md`. `embed-rpc.md` stays
 separate — it is protocol reference, not review output.
 
-**Every claim below was re-verified against the tree at `73c06b1a`** on
-2026-07-27: all 26 cited commit hashes resolve and match their descriptions,
+**Every claim below was re-verified against the tree** on 2026-07-27 (baseline
+`73c06b1a`): all 26 cited commit hashes resolve and match their descriptions,
 every open finding was re-read at its current location, and the lint-based
-claims were re-run rather than trusted. Six claims turned out stale or wrong —
-see [§4](#4-corrections-from-the-2026-07-27-verification-pass).
+claims were re-run rather than trusted. Six documented claims turned out stale
+or wrong, and executing the top items exposed three more wrong premises plus a
+latent panic — see [§4](#4-corrections-from-the-2026-07-27-verification-pass).
+Items shipped that day are indexed in [§6.4](#64-backlog-execution-2026-07-27).
 
 Findings are anchored by **symbol name, not line number**. Every line anchor in
 the source documents had drifted (typically 5–90 lines); symbol names survive
@@ -22,29 +24,25 @@ refactors.
 
 ## 1. Open work — ranked
 
-### 1.1 Undo keyframe materialization — the only measured user-facing stall
+### 1.1 Undo-tree step cost after keyframes
 
-`crates/hjkl-buffer/src/undo.rs`, tracked as
-[#302](https://github.com/kryptic-sh/hjkl/issues/302).
+`crates/hjkl-buffer/src/undo.rs`. Keyframes shipped (`5da674f1`, see
+[§6.4](#64-backlog-execution-2026-07-27)) and took `:earlier 9999` at depth 1024
+from 212 ms to 5.4 ms. What is left is a different bottleneck, now visible
+because materialization no longer hides it:
 
-`g-`/`:earlier` reaches a cold node by replaying deltas from the nearest warm
-ancestor, and the warm LRU is only `WARM_CAP = 16` deep. Per-jump cost is
-**linear in depth**, so a tip→root walk is **quadratic**:
+- `node_below` / `node_above` linear-scan the whole arena on every history step.
+- `retarget_current` rewrites the entire root→target path per step.
+- `set_node_state`'s `unchanged` check does a full rope content comparison on
+  every history step.
 
-Re-measured 2026-07-27 on the current tree (`single_deep_jump` /
-`cold_jump_back`); the original figures reproduced within noise:
+Together these are an O(N)-per-step floor: 75 µs at depth 1024 despite ≤ 15
+delta applies. Lower urgency than the original stall — 5.4 ms is not a
+perceptible hang — but it is now the dominant term.
 
-| undo depth | one cold `g-` | full tip→root walk |
-| ---------- | ------------- | ------------------ |
-| 16         | (all warm)    | 77.7 µs            |
-| 64         | 23.9 µs       | 612 µs             |
-| 256        | 107.6 µs      | 11.45 ms           |
-| 1024       | 443 µs        | 201.3 ms           |
-
-`:earlier 9999` on a 1024-deep history costs **~200 ms today and ~3.2 s at
-4096**. Keyframes every K nodes bound each jump at O(K) and the walk at O(N).
-
-Bench: `cargo bench -p hjkl-buffer --bench undo` (`cold_jump_back/1024`).
+Also by design: a freshly deserialized undofile has no keyframes (they are built
+lazily by materialization), so the first deep jump after load is still O(depth).
+Eager construction at load would cost work and memory that may never be used.
 
 ### 1.2 Swap `SerTree.base` duplicates the document
 
@@ -78,17 +76,23 @@ settles all three sites; it is a behavior call, not an implementation task.
 From the DRY/YAGNI/idiom/perf round (2026-07-26). Each was a conscious defer,
 not an oversight.
 
-| Item                            | Where                                                           | Why deferred                                                                                                                    |
-| ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Settings/Options full collapse  | `hjkl-engine/src/editor.rs` (see the `0.1.0 (Patch C-δ)` note)  | L-sized; staged for 0.1.0. Round-2 item 1 removed the live data-loss hazard only.                                               |
-| P6 per-cell span resolve sweep  | engine span layering                                            | M–L, layering-order-sensitive; needs the sortedness guarantee established first.                                                |
-| P10 wrap-mode scrolloff O(h²)   | wrap scroll math                                                | Wrap is not the default; deserves the same care as P6.                                                                          |
-| R10 stringly errors → enum      | `hjkl-app/src/git.rs` (`Result<(), String>`)                    | Design decision, not mechanical.                                                                                                |
-| R13 `unnecessary_wraps` triage  | dispatch tables                                                 | The uniform-signature shapes are deliberate; needs per-family review.                                                           |
-| Y5 `hjkl-editor::spec`          | `crates/hjkl-editor/src/lib.rs`                                 | Needs external-consumer confirmation (sqeel/buffr) before deletion — see [§3.4](#34-published-crates-are-not-workspace-local).  |
-| Multicursor `lens` vector       | `hjkl-engine/src/editor.rs` (`buf_line_chars` collect)          | O(buffer) per edit, but gated behind unwired multicursor. Fix when wired.                                                       |
-| LSP params doc-text copy        | `hjkl-lsp/src/runtime.rs` (`json!` params in didOpen/didChange) | Round-2 item 5 killed the envelope copy; the params literal still copies once. Needs Map-built params + `Arc::unwrap_or_clone`. |
-| Engine-side span install ~24 µs | engine recompute path                                           | Style interning + per-row `buf_line` clones under the content mutex. Next candidate if that path is revisited.                  |
+| Item                           | Where                                                          | Why deferred                                                                                                                   |
+| ------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Settings/Options full collapse | `hjkl-engine/src/editor.rs` (see the `0.1.0 (Patch C-δ)` note) | L-sized; staged for 0.1.0. Round-2 item 1 removed the live data-loss hazard only.                                              |
+| P6 per-cell span resolve sweep | engine span layering                                           | M–L, layering-order-sensitive; needs the sortedness guarantee established first.                                               |
+| P10 wrap-mode scrolloff O(h²)  | wrap scroll math                                               | Wrap is not the default; deserves the same care as P6.                                                                         |
+| R10 stringly errors → enum     | `hjkl-app/src/git.rs` (`Result<(), String>`)                   | Design decision, not mechanical.                                                                                               |
+| R13 `unnecessary_wraps` triage | dispatch tables                                                | The uniform-signature shapes are deliberate; needs per-family review.                                                          |
+| Y5 `hjkl-editor::spec`         | `crates/hjkl-editor/src/lib.rs`                                | Needs external-consumer confirmation (sqeel/buffr) before deletion — see [§3.4](#34-published-crates-are-not-workspace-local). |
+| Multicursor `lens` vector      | `hjkl-engine/src/editor.rs` (`buf_line_chars` collect)         | O(buffer) per edit, but gated behind unwired multicursor. Fix when wired.                                                      |
+
+### 1.5 Follow-ups raised by the 2026-07-27 slices
+
+| Item                                        | Where                                       | Note                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LSP full-sync still copies once             | `hjkl-lsp/src/runtime.rs`, `server.rs`      | `Arc::unwrap_or_clone` cannot move because `Buffer::content_joined()` caches the `Arc` (refcount ≥ 2). Removing the copy needs `send_notification` to serialize directly instead of materializing a `serde_json::Value`, which has no borrowed-string variant.                                      |
+| `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and does `text.to_string()`, so didOpen still pays one copy before the params builder ever sees it. Signature change, separate item.                                                                                                                                             |
+| `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | Verified to have **no readers** anywhere — every apparent hit is a comment or a test name. Deleting it wins ~27% on the full-install path and **nothing** per keystroke. It is a `pub` removal on a published crate, so it is your call — see [§3.4](#34-published-crates-are-not-workspace-local). |
 
 ---
 
@@ -151,12 +155,10 @@ design (signature/hash pinning) before any code changes.
   (`hjkl-engine/src/substitute.rs`, `Some('n') => out.push('\0')`). Verified
   exactly as described. Vim-compatible per `:h sub-replace-special`; valid in a
   Rust `String` but can confuse terminal display and C-FFI consumers.
-- **Mis-named test** — `hjkl-fs/tests/multi_process.rs`,
-  `shared_locks_do_not_exclude_each_other` acquires and drops two shared locks
-  sequentially in one process, and structurally cannot demonstrate cross-process
-  sharing since the in-process layer serializes readers by design. The body now
-  carries a comment saying so; the name still overpromises. Rename candidate,
-  zero urgency.
+- **Mis-named test** — fixed 2026-07-27 (`960eaaa7`): renamed to
+  `shared_lock_guard_releases_and_reacquires`, with a comment recording that
+  cross-process sharing needs the spawned-children harness the other tests in
+  that file use.
 
 ### 3.4 Published crates are not workspace-local
 
@@ -226,7 +228,41 @@ FFI out-param, the idiomatic use) and `ManuallyDrop` in a `wayland_socket.rs`
 test guarding fd ownership. `todo!()` and `get_unchecked` are genuinely absent
 workspace-wide.
 
-### 4.6 Line anchors had drifted everywhere
+### 4.6 Corrections raised while executing the backlog (2026-07-27)
+
+Three premises in this document's own item briefs turned out to be wrong, each
+caught by measuring instead of assuming:
+
+- **"A keyframe is a full document snapshot."** False for ropey. Measured
+  marginal retention is ~3.0 KiB (119 KiB doc) to ~11.5 KiB (11.9 MiB doc) per
+  keyframe — essentially independent of document size, because a snapshot
+  between small edits shares every leaf outside the edited path. A
+  `len_bytes()`-based memory budget would have disabled keyframes on exactly the
+  large documents that need them; the shipped ceiling is a count.
+- **"`Arc::unwrap_or_clone` makes the LSP full-sync path a move."** False:
+  `Buffer::content_joined()` stores the `Arc` in its `dirty_gen` cache and
+  returns a clone, so the refcount is never 1. See §1.5.
+- **"`styled_spans` has consumers in `render.rs` / `syntax_glue.rs`."** False —
+  those are comments and test names. It has no readers at all. Measuring before
+  removing also showed the removal is worth nothing on the per-keystroke path,
+  which is what the item claimed to be about.
+
+### 4.7 Latent panic found under the span-install item
+
+`Query::line_bytes` documents "out-of-range rows return 0", but the
+`hjkl_buffer::View` override forwarded straight to `ropey::Rope::line`, which
+**panics** past the last line. The row is reachable: a lagging syntax worker can
+deliver a span table with more rows than the buffer now has. Guarded in
+`6b156334`, with the contract pinned by tests.
+
+Related, deliberately accepted: `line_bytes` and `line(row).len()` diverge for
+rows terminated by a non-LF break ropey still counts (lone `\r`, `U+0085`,
+`U+2028/9`) — `line()` keeps the terminator bytes, `line_bytes` drops one. Safe
+here because the clamp only ever tightens and spans are resolved by per-byte
+containment (`resolve_span_style` in `hjkl-buffer-tui/src/render.rs`), never by
+string slicing, so an end landing mid-codepoint cannot panic.
+
+### 4.8 Line anchors had drifted everywhere
 
 Every `file:line` anchor in the source documents was stale, by 5 lines
 (`quickfix.rs`) to ~90 (`hjkl-engine/src/editor.rs`, where the round-2 note
@@ -367,6 +403,32 @@ Correctness bugs found incidentally while doing the above: `current_options()`
 silently reset 26 of 50 options on any nvim-API read-modify-apply;
 `:later <time>` sampled two different clock instants; new languages never
 attached LSP servers; Indexed colors flattened to black in one of two adapters.
+
+### 6.4 Backlog execution (2026-07-27)
+
+Highest-ROI open items, one commit each, reviewed against the diff (not the
+report) before merging. Every gate re-run on `main` after each merge.
+
+| Item                            | Result                                                                                  | Commit     |
+| ------------------------------- | --------------------------------------------------------------------------------------- | ---------- |
+| Undo keyframes (§1.1, #302)     | `:earlier 9999` at depth 1024: **212 ms → 5.45 ms**; cold jump 445 µs → 75.5 µs         | `5da674f1` |
+| LSP params doc-text copy (§1.4) | didOpen **27.6 µs → 109 ns**, didChange incremental **49.8 µs → 396 ns** (2 MiB doc)    | `d758bd96` |
+| Span-install residual (§1.4)    | per-keystroke `patch_viewport_range` **16.2 µs → 13.6 µs** (−16%); fixes the §4.7 panic | `6b156334` |
+| Mis-named lock test (§3.3)      | renamed to match what it verifies                                                       | `960eaaa7` |
+
+Keyframe design notes worth keeping: `KEYFRAME_INTERVAL = 16` was chosen by
+measurement (K=4 → 5.00 ms, K=16 → 4.39 ms, K=32 → 4.78 ms for the depth-1024
+walk), with `KEYFRAME_CAP = 512` as a count ceiling. Keyframes alone were **not
+sufficient** — they give O(N·K) for a full walk, because `materialize` cached
+only the target. Caching every replayed intermediate (plus `WARM_CAP` 16 → 32)
+is the larger half of the win; keyframes add ~2× on top plus the worst-case
+bound. Nothing enters `SerTree`: depth is recomputed on load by BFS.
+
+The undo work is guarded by `materialize_naive`, a no-cache no-keyframe replay
+oracle in the spirit of `diff_reference`, checked against the accelerated path
+over a 5000-step random op stream. Mutation-tested during review — corrupting a
+cached intermediate fails two of the new tests loudly, and the pre-existing
+warm-vs-cold assertions do not catch it.
 
 ---
 
