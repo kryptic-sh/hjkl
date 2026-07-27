@@ -1,5 +1,7 @@
 pub mod cmd;
 pub mod count;
+#[cfg(debug_assertions)]
+mod curswant;
 pub mod descriptors;
 pub mod editor_ext;
 pub mod insert;
@@ -76,7 +78,25 @@ pub fn feed_input<H: hjkl_engine::Host>(
 /// are hosted in `hjkl-vim::normal::step_normal`. Both are wrapped with
 /// `begin_step` / `end_step` so macro recording, viewport scrolling, and
 /// `current_mode` sync all fire correctly.
+///
+/// In debug builds this is also where the `curswant` invariant is checked —
+/// see [`crate::curswant`]. Every keystroke that reaches the vim FSM passes
+/// through here, from the app (`hjkl_vim_tui::handle_key`), the compat-oracle
+/// driver, `:normal`, and macro replay alike, which makes it the one place
+/// the check has to live.
 pub fn dispatch_input<H: hjkl_engine::Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    input: hjkl_engine::Input,
+) -> bool {
+    #[cfg(debug_assertions)]
+    let pre = curswant::capture(editor);
+    let consumed = dispatch_input_inner(editor, input);
+    #[cfg(debug_assertions)]
+    curswant::assert_invariant(editor, pre, input);
+    consumed
+}
+
+fn dispatch_input_inner<H: hjkl_engine::Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: hjkl_engine::Input,
 ) -> bool {
