@@ -124,9 +124,15 @@ relocated rather than removed** — the invariant is no longer structural, it is
 four counting sites. Mitigation for now is
 `no_close_path_leaves_a_dock_as_the_last_window`, which sweeps `:q`, `:q!`,
 `:close`, `:only`, `<C-w>c`, `<C-w>q` and `<C-w>o` with both docks open and one
-editor, and fails if any of them strands the user in a dock. Phase 5 should
-consider a single `close_window_checked` chokepoint so the count cannot be
-forgotten at a new call site.
+editor, and fails if any of them strands the user in a dock. **Resolved in phase
+5** by `App::detach_focused_leaf() -> Result<WindowId, CloseRefused>`, now the
+_only_ production reader of `regular_leaf_count` (verified by grep: one call
+site). `move_window_to_new_tab` asks the same question without closing anything,
+so the chokepoint is the leaf **detach**, not the close. The four sites
+genuinely do want different responses to a refusal (E444 / E1 / quit / quit) —
+the `Result` split centralises the decision while leaving the response local,
+and `CloseRefused` is an enum so a second refusal reason becomes a compile error
+at every site rather than a silently-wrong branch.
 
 ## Invariants that must hold at every phase
 
@@ -140,3 +146,35 @@ forgotten at a new call site.
   window with a dock open must still quit (regression from 2026-07-27).
 - `:only` keeps pinned leaves; `<C-w>w` cycling includes docks (vim includes
   special windows in the cycle).
+
+## Outcome
+
+All five phases shipped 2026-07-27. Docks are ordinary pinned, fixed-size,
+per-tab leaves; `dock_neighbor_*`, `focus_cycle_order` and the dock loop in
+`hit_test_window` are deleted; `slot_is_special` is one field read.
+
+Bugs found and fixed _because_ of the migration, none of which the original five
+phases set out to fix:
+
+- `:e <file>` from the quickfix panel loaded the file into the dock window while
+  the dock record still claimed it — closing the panel then disposed of the
+  user's buffer. Data loss, pre-existing.
+- The command-line window removed its slot by an index recorded at open time,
+  leaking the buffer after any earlier slot was removed — and the same stale
+  index made the history buffer count as a real one (`:ls`, buffer line,
+  `H`/`L`).
+- `screen_rect` counted scratch buffers as real, assuming a tab bar the renderer
+  had not drawn, so first-frame popups misjudged the height by a row.
+- `q:` from a focused explorer would have split the dock's own leaf.
+- Two positional slot scans would have silently rewritten the _other_ tab's tree
+  once two tabs each had an explorer.
+
+Still open, same class, found in phase 5 and deliberately not fixed there — both
+now in `docs/backlog.md`:
+
+- `write_swap_for_slot` guards on `is_explorer()` only, so `:copen` and `q:`
+  scratch buffers get swap files written; a crash then offers to "recover" a
+  quickfix listing.
+- `quit_all` blocks on `dirty && !is_explorer()`, so a dirty quickfix or cmdline
+  scratch slot would make `:qa` refuse with an unsatisfiable
+  `E37 ... "[No Name]"`.

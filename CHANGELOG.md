@@ -8,7 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **The explorer and the quickfix/location-list panel are now per-tab**, as in
+  vim. Opening the explorer in one tab no longer opens it in every tab, and each
+  tab has its own quickfix window onto the (still shared) quickfix list.
+- **`explorer.width` and `panel.height` now mean the rendered size.** They
+  previously included the separator, so `explorer.width = 30` drew a 29-column
+  explorer; it now draws 30. Both grow by one cell at the same setting.
+- **`:b N` targeting a quickfix or command-line-window buffer reports `E86`**
+  instead of silently doing nothing. Those buffers were never switchable — the
+  validation just failed to say so, as it already did for the explorer.
+
 ### Fixed
+
+- **`:e <file>` from the quickfix panel no longer loads the file into the
+  panel.** The file opened inside the dock window while the editor still tracked
+  that window as a dock, so closing the panel afterwards disposed of the window
+  and slot holding the user's file. The open path now always targets a regular
+  window, and no special scratch buffer can be mistaken for a discardable empty
+  placeholder.
+- **The command-line window (`q:`) no longer leaks its buffer** when an earlier
+  buffer was closed while it was open. It removed its slot by an index recorded
+  at open time, which drifts when another slot is removed first; the same stale
+  index also made the history buffer start counting as a real buffer, so it
+  appeared in `:ls` and the buffer line and turned `H`/`L` into buffer cycling.
+- **Popups no longer misjudge the screen height by a row** on the first frame
+  when a quickfix or command-line window is open — the screen-rect helper
+  counted those scratch buffers as real ones and assumed a tab bar the renderer
+  had not drawn.
 
 - **`<C-h>` now leaves the quickfix / location-list dock.** The bottom dock is
   carved out of the area remaining after the explorer, so the explorer really is

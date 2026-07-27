@@ -84,7 +84,18 @@ not an oversight.
 | Y5 `hjkl-editor::spec`         | `crates/hjkl-editor/src/lib.rs`                                | Needs external-consumer confirmation (sqeel/buffr) before deletion — see [§3.4](#34-published-crates-are-not-workspace-local). |
 | Multicursor `lens` vector      | `hjkl-engine/src/editor.rs` (`buf_line_chars` collect)         | O(buffer) per edit, but gated behind unwired multicursor. Fix when wired.                                                      |
 
-### 1.5 Follow-ups raised by the 2026-07-27 slices
+### 1.5 Special-buffer guards that still say `is_explorer` (found in the dock refactor)
+
+Two sites gate on "is this the explorer?" where they mean "is this a special
+scratch buffer?" — the same shape as the bugs the dock refactor fixed, in code
+it did not touch. See `docs/docks-as-leaves.md`.
+
+| Item                            | Where                 | Effect                                                                                                                                                                                                    |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Swap files for scratch docks    | `write_swap_for_slot` | Guards on `is_explorer()` only, and its scratch branch fires for any filename-less buffer with content — so `:copen` and `q:` buffers get swap files, and a crash offers to "recover" a quickfix listing. |
+| `:qa` blocked by a scratch slot | `quit_all`            | Blocks on `dirty && !is_explorer()`. A dirty quickfix/cmdline scratch slot makes `:qa` refuse with `E37 ... "[No Name]"` and no way to satisfy it.                                                        |
+
+### 1.6 Follow-ups raised by the 2026-07-27 slices
 
 | Item                                        | Where                                       | Note                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
