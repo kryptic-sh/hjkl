@@ -307,7 +307,9 @@ impl super::App {
 
     /// Fix up window `slot` pointers AND [`super::App::prev_active`] after
     /// `self.slots[removed_idx]` has been removed. Shared by
-    /// [`Self::teardown_left_dock`] and [`Self::teardown_bottom_dock`].
+    /// [`Self::teardown_left_dock`], [`Self::teardown_bottom_dock`] and
+    /// [`super::App::close_cmdline_window`] — every path that drops a
+    /// special pane's scratch slot out from under the other slots.
     ///
     /// `prev_active` is a raw slot index (`<C-^>` / `:b#`'s alternate-buffer
     /// pointer) that Phase A's `teardown_left_dock` never fixed up — the
@@ -320,7 +322,7 @@ impl super::App {
     /// (`buffer_alt`'s `i < self.slots.len()` bounds check tolerates a
     /// stale-but-in-range index without ever detecting the drift). Fixed here
     /// for both dock kinds rather than left as a Phase-B-only patch.
-    fn reindex_after_slot_removal(&mut self, removed_idx: usize) {
+    pub(crate) fn reindex_after_slot_removal(&mut self, removed_idx: usize) {
         let slot_count = self.slots.len();
         for win in self.windows.iter_mut().flatten() {
             if win.slot == removed_idx {

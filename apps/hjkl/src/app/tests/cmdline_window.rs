@@ -106,6 +106,20 @@ fn prompt_ctrl_n_after_p_advances() {
 
 // ── Phase 3: command-line window ────────────────────────────────────────────
 
+/// Slot backing the open command-line window, read from the window itself.
+/// `CmdLineWindow` deliberately records no slot index — see its doc comment.
+fn cmdline_slot(app: &App) -> usize {
+    let win_id = app
+        .cmdline_win
+        .as_ref()
+        .expect("cmdline window open")
+        .win_id;
+    app.windows[win_id]
+        .as_ref()
+        .expect("cmdline window still open")
+        .slot
+}
+
 #[test]
 fn q_colon_opens_cmdline_window() {
     let mut app = App::new(None, false, None, None).unwrap();
@@ -135,7 +149,7 @@ fn q_colon_opens_cmdline_window() {
     );
 
     // View should contain 3 history lines.
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
+    let slot_idx = cmdline_slot(&app);
     let line_count = app.slots()[slot_idx].buffer().row_count();
     assert_eq!(line_count, 3, "buffer must have 3 history lines");
 }
@@ -249,7 +263,7 @@ fn c_f_from_ex_prompt_opens_q_colon_with_inprogress_text() {
         "kind must be Ex"
     );
 
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
+    let slot_idx = cmdline_slot(&app);
     let buffer = app.slots()[slot_idx].buffer();
     // View: 1 history line + 1 prefill line = 2 rows.
     assert_eq!(
@@ -299,7 +313,7 @@ fn c_f_from_search_forward_prompt_opens_q_slash() {
         "kind must be SearchForward for / prompt"
     );
 
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
+    let slot_idx = cmdline_slot(&app);
     let buffer = app.slots()[slot_idx].buffer();
     let last_row = buffer.row_count() - 1;
     let last_line = hjkl_buffer::rope_line_str(&buffer.rope(), last_row);
@@ -327,7 +341,7 @@ fn c_f_from_search_backward_prompt_opens_q_question() {
         "kind must be SearchBackward for ? prompt"
     );
 
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
+    let slot_idx = cmdline_slot(&app);
     let buffer = app.slots()[slot_idx].buffer();
     let last_row = buffer.row_count() - 1;
     let last_line = hjkl_buffer::rope_line_str(&buffer.rope(), last_row);
@@ -348,7 +362,7 @@ fn c_f_empty_ex_prompt_opens_q_colon_with_empty_trailing_line() {
     assert!(app.command_field.is_none());
     assert!(app.cmdline_win.is_some());
 
-    let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
+    let slot_idx = cmdline_slot(&app);
     let buffer = app.slots()[slot_idx].buffer();
     // 1 history + 1 empty prefill = 2 rows.
     assert_eq!(
@@ -430,5 +444,49 @@ fn cmdline_slot_stays_special_when_an_earlier_slot_is_removed() {
         app.real_slot_count(),
         1,
         "the cmdline history buffer is still not a user buffer"
+    );
+}
+
+/// Closing the cmdline window must remove ITS slot, even after an earlier
+/// slot was removed underneath it (#63 Phase 5) — the other half of the same
+/// positional-index bug as the test above.
+///
+/// `close_cmdline_window` removed `cmdline_win.slot_idx`, the index recorded
+/// at open time. Close the explorer while `q:` is open and every later slot
+/// shifts down one, so that index either names a different buffer or (as
+/// here) runs past the end of `slots` — leaking the history scratch buffer,
+/// which then lives on with no window left to close it from.
+/// `dispose_dock_window` reads `windows[id].slot` instead; so does this now.
+#[test]
+fn closing_the_cmdline_window_removes_its_own_slot_after_an_earlier_removal() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set nu");
+
+    app.toggle_explorer();
+    app.open_cmdline_window(CmdLineKind::Ex, None);
+    // Startup scratch + explorer + cmdline history.
+    assert_eq!(app.slots().len(), 3);
+    let cmdline_buffer_id = app.slots()[cmdline_slot(&app)].buffer_id;
+
+    // Remove the EARLIER (explorer) slot: the cmdline slot shifts down one,
+    // and the index recorded at `q:` time now points off the end.
+    app.toggle_explorer();
+    assert_eq!(app.slots().len(), 2);
+
+    app.close_cmdline_window();
+
+    assert!(app.cmdline_win.is_none(), "cmdline_win must be cleared");
+    assert_eq!(
+        app.slots().len(),
+        1,
+        "the history scratch slot must come down with its window"
+    );
+    assert!(
+        !app.slots().iter().any(|s| s.buffer_id == cmdline_buffer_id),
+        "the slot left behind is the cmdline history buffer itself"
+    );
+    assert!(
+        !app.slot_is_special(0),
+        "the surviving slot must be the user's buffer"
     );
 }

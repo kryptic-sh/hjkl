@@ -1000,7 +1000,6 @@ impl App {
 
         self.cmdline_win = Some(CmdLineWindow {
             win_id: new_win_id,
-            slot_idx,
             kind,
         });
     }
@@ -1013,19 +1012,24 @@ impl App {
         let Ok(new_focus) = self.layout_mut().remove_leaf(cw.win_id) else {
             return;
         };
+        // Remove the slot this window ACTUALLY points at. The old code
+        // removed the creation-time index, which is positional: close the
+        // explorer while `q:` is open and every later slot shifts down one,
+        // so the recorded index names a different buffer (removing the wrong
+        // one) or runs off the end (leaking the history scratch slot for the
+        // rest of the session). `dispose_dock_window` already reads the
+        // window's own `slot` for exactly this reason; the recorded index is
+        // gone from `CmdLineWindow` entirely so it can't drift again.
+        let slot_idx = self.windows[cw.win_id].as_ref().map(|w| w.slot);
         self.windows[cw.win_id] = None;
-        let slot_idx = cw.slot_idx;
-        if slot_idx < self.slots.len() {
+        if let Some(slot_idx) = slot_idx
+            && slot_idx < self.slots.len()
+        {
             self.slots.remove(slot_idx);
-            let slot_count = self.slots.len();
-            for win in self.windows.iter_mut().flatten() {
-                if win.slot == slot_idx {
-                    win.slot = 0;
-                } else if win.slot > slot_idx {
-                    win.slot -= 1;
-                }
-                win.slot = win.slot.min(slot_count.saturating_sub(1));
-            }
+            // Shared with the dock teardown: fixes up every window's `slot`
+            // AND `prev_active`, which the hand-rolled loop here used to
+            // leave pointing one slot too far right after the removal.
+            self.reindex_after_slot_removal(slot_idx);
         }
         // The closed cmdline window is already gone; just restore the new focus.
         self.set_focused_window(new_focus);

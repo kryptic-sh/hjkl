@@ -81,9 +81,13 @@ pub enum CmdLineKind {
 #[derive(Debug, Clone)]
 pub struct CmdLineWindow {
     /// The `WindowId` of the cmdline window in the active tab's layout.
+    ///
+    /// The slot backing the transient buffer is deliberately NOT recorded
+    /// here: `windows[win_id].slot` is the live answer, and a recorded index
+    /// silently drifts the moment an earlier slot is removed (closing the
+    /// explorer while `q:` is open) — which is exactly how
+    /// `close_cmdline_window` came to remove the wrong slot.
     pub win_id: window::WindowId,
-    /// The slot index that backs the transient buffer.
-    pub slot_idx: usize,
     /// Which history ring this window shows.
     pub kind: CmdLineKind,
 }
