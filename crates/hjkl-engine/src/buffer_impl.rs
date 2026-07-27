@@ -156,6 +156,13 @@ impl Query for RopeBuffer {
     fn line_bytes(&self, row: usize) -> usize {
         // One lock, zero allocations via rope API.
         let rope = self.rope();
+        // `Query::line_bytes` contracts out-of-range rows to 0, but
+        // `ropey::Rope::line` *panics* past the last line — guard here
+        // rather than at each call site. `len_lines()` is O(1) on the
+        // already-cloned rope, so this costs nothing extra.
+        if row >= rope.len_lines() {
+            return 0;
+        }
         hjkl_buffer::rope_line_bytes(&rope, row)
     }
 
@@ -663,6 +670,63 @@ mod tests {
         assert_eq!(Query::line_count(&b), 3);
         assert_eq!(Query::line(&b, 0), "a");
         assert_eq!(Query::line(&b, 2), "c");
+    }
+
+    /// `Query::line_bytes` is the allocation-free stand-in for
+    /// `line(row).len()`. Both are BYTE counts and the hot paths that
+    /// swapped one for the other (syntax-span clamping) depend on that being
+    /// exact, so pin the equivalence over the shapes that reach a real
+    /// buffer: ASCII, multi-byte UTF-8, tabs, empty rows, trailing newline,
+    /// CRLF, and out-of-range rows (contract: 0, never a panic).
+    #[test]
+    fn line_bytes_matches_line_len() {
+        let corpus = [
+            "",
+            "a",
+            "a\n",
+            "a\nbb\nccc",
+            "héllo\nwörld",
+            "emoji 🎉 tail\nnext",
+            "tabs\there\nx",
+            "a\r\nb\r\nc",
+            "trailing\n\n",
+        ];
+        for text in corpus {
+            let b = RopeBuffer::from_str(text);
+            let n = Query::line_count(&b) as usize;
+            for row in 0..n {
+                assert_eq!(
+                    Query::line_bytes(&b, row),
+                    Query::line(&b, row as u32).len(),
+                    "row {row} of {text:?}"
+                );
+            }
+            // Out of range: 0, and no panic (ropey's `Rope::line` panics
+            // past the last line — the impl must guard).
+            for row in n..n + 3 {
+                assert_eq!(Query::line_bytes(&b, row), 0, "oob row {row} of {text:?}");
+            }
+        }
+    }
+
+    /// Documented divergence: for rows terminated by a non-LF break that
+    /// ropey still counts as a line break (lone CR, NEL, U+2028/9),
+    /// `line_bytes` excludes the terminator while `line()` — which only
+    /// strips a trailing `'\n'` — keeps it. `line_bytes` is the tighter,
+    /// engine-consistent answer (it matches `rope_line_char_count`, which is
+    /// what cursor-column clamping uses), so span clamps can only shrink,
+    /// never overrun.
+    #[test]
+    fn line_bytes_excludes_non_lf_line_break() {
+        for (text, row, line_len, bytes) in [
+            ("a\rb", 0, 2, 1),
+            ("a\u{2028}b", 0, 4, 3),
+            ("a\u{0085}b", 0, 3, 2),
+        ] {
+            let b = RopeBuffer::from_str(text);
+            assert_eq!(Query::line(&b, row).len(), line_len, "{text:?}");
+            assert_eq!(Query::line_bytes(&b, row as usize), bytes, "{text:?}");
+        }
     }
 
     #[test]

@@ -1528,6 +1528,7 @@ name = "hjkl-engine"
 version = "0.37.1"
 dependencies = [
  "bitflags 2.13.1",
+ "criterion",
  "hjkl-buffer",
  "hjkl-lang",
  "hjkl-vim",

@@ -612,8 +612,8 @@ pub enum CursorScrollTarget {
 // `use` so the editor body keeps its terse call shape.
 
 use crate::buf_helpers::{
-    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_chars,
-    buf_row_count, buf_set_cursor_rc,
+    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_bytes,
+    buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
 
 /// Return value from the engine's `try_goto_mark_*` methods. Tells the
@@ -2099,12 +2099,24 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// pair stored for that row. Shared by
     /// [`Self::install_syntax_spans`] and [`Self::patch_syntax_spans_range`].
     ///
-    /// Note: do NOT pre-collect line lengths for the whole buffer. `buf_line`
-    /// clones the row string under a content-mutex lock; pre-collecting for
-    /// every row turns a 10k-row file's install into 10k mutex-locked String
-    /// clones (visible as j/k cursor lag). The lookup here is lazy — a row
-    /// with no spans never touches the buffer — so the cost stays
-    /// proportional to populated rows, not file size.
+    /// Note: do NOT pre-collect line lengths for the whole buffer. Every
+    /// row-length lookup takes the content mutex; pre-collecting for a
+    /// 10k-row file turns one install into 10k locks (visible as j/k cursor
+    /// lag). The lookup here is lazy — a row with no spans never touches the
+    /// buffer — and memoized per row, so the cost stays proportional to
+    /// populated rows, not file size.
+    ///
+    /// The length comes from [`buf_line_bytes`] (→ `Query::line_bytes`,
+    /// overridden for `hjkl_buffer::View` to read the rope's line length
+    /// under one lock with no allocation), *not* from `buf_line(row).len()`,
+    /// which cloned the whole row into a `String` just to read its length.
+    /// Both are BYTE counts — `Span::{start,end}_byte` and the tree-sitter
+    /// ranges they come from are byte offsets, so the clamp unit is
+    /// unchanged. See `line_bytes_matches_line_len` in `buffer_impl` for the
+    /// pinned equivalence (and the one documented divergence: rows ended by
+    /// a non-LF Unicode line break, where `line_bytes` excludes the
+    /// terminator byte the `String` form kept — the clamp can only get
+    /// tighter, never looser).
     fn translate_row_spans<R>(
         &mut self,
         row: usize,
@@ -2125,7 +2137,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let len = match line_len {
                 Some(l) => l,
                 None => {
-                    let l = buf_line(&self.buffer, row).map_or(0, |s| s.len());
+                    let l = buf_line_bytes(&self.buffer, row);
                     line_len = Some(l);
                     l
                 }
@@ -5521,6 +5533,49 @@ mod shift_syntax_spans_tests {
             edit_insert_newline_at(1, 1),
         ]);
         assert_eq!(e.buffer_spans().len(), 5);
+    }
+
+    /// The syntax worker lags the buffer, so a span table can arrive with
+    /// MORE rows than the buffer currently has (e.g. `dd` landed between the
+    /// parse and its delivery). Those rows must clamp to length 0 and drop
+    /// their spans — never panic. Guards the row-length lookup, which reads
+    /// the rope directly (`ropey::Rope::line` panics past the last line).
+    #[test]
+    fn install_tolerates_more_span_rows_than_buffer_rows() {
+        let text = "aaaa\nbbbb\ncccc";
+        let mut e = Editor::new(View::from_str(text), DefaultHost::new(), Options::default());
+        let style = Style::default();
+        let spans: Vec<Vec<(usize, usize, Style)>> = (0..10).map(|_| vec![(0, 4, style)]).collect();
+        e.install_syntax_spans(spans);
+        assert_eq!(e.buffer_spans().len(), 10, "one row per supplied entry");
+        for row in 0..3 {
+            assert_eq!(e.buffer_spans()[row].len(), 1, "row {row} keeps its span");
+        }
+        for row in 3..10 {
+            assert!(
+                e.buffer_spans()[row].is_empty(),
+                "row {row} is past the buffer — clamps to 0 and drops"
+            );
+        }
+    }
+
+    /// Spans are clamped in BYTES, not chars — a row of multi-byte text must
+    /// keep a span that ends past the char count but inside the byte length.
+    #[test]
+    fn clamp_unit_is_bytes_not_chars() {
+        // 5 chars, 10 bytes.
+        let text = "ααααα\nx";
+        let mut e = Editor::new(View::from_str(text), DefaultHost::new(), Options::default());
+        let style = Style::default();
+        e.install_syntax_spans(vec![vec![(0usize, 10usize, style)], vec![]]);
+        assert_eq!(
+            e.buffer_spans()[0][0].end_byte,
+            10,
+            "byte-length clamp must not truncate to the char count"
+        );
+        // One byte past the row is clamped back to the byte length.
+        e.install_syntax_spans(vec![vec![(0usize, 11usize, style)], vec![]]);
+        assert_eq!(e.buffer_spans()[0][0].end_byte, 10);
     }
 
     /// Build a buffer with `line_count` rows where row `i` has a span at

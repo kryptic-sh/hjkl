@@ -23,6 +23,14 @@ readme = "README.md"
 # `hjkl-vim ^X.Y` has nothing to resolve against on crates.io yet.
 hjkl-vim = { path = "../hjkl-vim" }
 proptest = "1"
+criterion = { version = "0.8", default-features = false, features = [
+  "cargo_bench_support",
+] }
+
+[[bench]]
+name = "syntax_spans"
+harness = false
+
 [dependencies]
 # Ratatui + crossterm adapter surface lives in `hjkl-engine-tui` (#162 phase 3).
 # `serde` is optional; wasm / no_std hosts opt out via `default-features = false`.
