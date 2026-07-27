@@ -1110,3 +1110,47 @@ fn q_inside_quickfix_dock_closes_the_dock() {
     assert!(app.bottom_dock.is_none(), "the qf dock must be closed");
     assert_ne!(app.focused_window(), dock_win);
 }
+
+/// `<C-h>` inside an open quickfix dock must reach the explorer.
+///
+/// `render::frame` carves the bottom dock out of the area REMAINING after the
+/// left dock, so the dock sits to the *right* of the explorer and never spans
+/// beneath it — the explorer is genuinely its left neighbour. The adjacency
+/// helper used to require tree membership, which no dock has, so the quickfix
+/// list was a one-way trip: `k` back to the tree was the only way out.
+#[test]
+fn ctrl_h_from_quickfix_dock_reaches_the_explorer() {
+    use crate::app::NavDir;
+
+    let (mut app, _f, _d) = make_app_with_qf_files();
+    app.toggle_explorer();
+    app.switch_to(0);
+    app.handle_quickfix_command(QfCommand::Open);
+    let qf = app.focused_window();
+    let explorer = app.left_dock.as_ref().expect("explorer open").win_id;
+    assert_ne!(qf, explorer);
+
+    app.dispatch_tmux_navigate(NavDir::Left);
+
+    assert_eq!(
+        app.focused_window(),
+        explorer,
+        "<C-h> in the quickfix dock must focus the explorer to its left"
+    );
+}
+
+/// With no explorer open there is nothing left of the quickfix dock, so
+/// `<C-h>` must stay put rather than focusing something arbitrary.
+#[test]
+fn ctrl_h_from_quickfix_dock_without_explorer_stays_put() {
+    use crate::app::NavDir;
+
+    let (mut app, _f, _d) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let qf = app.focused_window();
+    assert!(app.left_dock.is_none());
+
+    app.dispatch_tmux_navigate(NavDir::Left);
+
+    assert_eq!(app.focused_window(), qf);
+}

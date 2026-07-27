@@ -10,6 +10,13 @@ patch bumps.
 
 ### Fixed
 
+- **`<C-h>` now leaves the quickfix / location-list dock.** The bottom dock is
+  carved out of the area remaining after the explorer, so the explorer really is
+  its left neighbour — but the adjacency check required tree membership, which
+  no dock has, making an open `:copen` list a one-way trip: `<C-k>` back up to
+  the tree was the only exit. Under `$TMUX` it was worse than a no-op, falling
+  through to `tmux select-pane -L` and moving focus out of the editor.
+
 - **`:q` no longer needs pressing twice when the explorer or a quickfix dock is
   open.** Dock slots live in the buffer list like any other buffer, so `:q` on
   the last real file took the multi-buffer `:bdelete` path instead of quitting —

@@ -341,7 +341,17 @@ impl super::App {
     /// dock (nothing further left).
     pub(crate) fn dock_neighbor_left(&self, fw: WindowId) -> Option<WindowId> {
         let dock = self.left_dock.as_ref()?;
-        if fw == dock.win_id || !self.layout().contains(fw) {
+        if fw == dock.win_id {
+            return None;
+        }
+        // Tree windows all sit right of the left dock — and so does the
+        // bottom dock, which `render::frame` carves out of the area
+        // REMAINING after the left dock, so it never spans beneath it. Both
+        // therefore have the left dock as their left neighbour; testing only
+        // for tree membership left the bottom dock with no way out
+        // horizontally (`<C-h>` in an open `:copen` list did nothing, or fell
+        // through to `tmux select-pane` under $TMUX).
+        if !self.layout().contains(fw) && !self.is_bottom_dock(fw) {
             return None;
         }
         Some(dock.win_id)
