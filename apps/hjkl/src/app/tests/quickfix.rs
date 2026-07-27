@@ -1075,3 +1075,38 @@ fn dock_rebuild_handles_a_2000_entry_list_without_hanging() {
         "last entry must be fully rendered too, got {last:?}"
     );
 }
+
+/// The quickfix dock is a special slot exactly like the explorer, so `:q`
+/// from the real editor window must still quit rather than `:bdelete` the
+/// last real buffer and leave the dock's scratch buffer showing.
+#[test]
+fn q_from_main_window_quits_even_with_quickfix_dock_open() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    // Focus back on the real editor window, as a user would after `:copen`.
+    app.switch_to(0);
+    assert!(app.bottom_dock.is_some(), "dock is open");
+
+    app.dispatch_ex("q");
+
+    assert!(
+        app.exit_requested,
+        "`:q` with only the quickfix dock alongside one real buffer must quit"
+    );
+}
+
+/// `:q` inside the quickfix dock closes the dock — vim's behaviour in a
+/// quickfix window — instead of deleting its scratch slot.
+#[test]
+fn q_inside_quickfix_dock_closes_the_dock() {
+    let (mut app, _file_a, _dir) = make_app_with_qf_files();
+    app.handle_quickfix_command(QfCommand::Open);
+    let dock_win = app.bottom_dock.as_ref().unwrap().win_id;
+    assert_eq!(app.focused_window(), dock_win, ":copen focuses the dock");
+
+    app.dispatch_ex("q");
+
+    assert!(!app.exit_requested, "`:q` in the qf dock must not quit");
+    assert!(app.bottom_dock.is_none(), "the qf dock must be closed");
+    assert_ne!(app.focused_window(), dock_win);
+}

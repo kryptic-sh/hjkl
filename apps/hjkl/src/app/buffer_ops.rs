@@ -633,7 +633,10 @@ impl App {
             AppAction::BufferPrev => self.buffer_prev(),
             AppAction::BufferAlt => self.buffer_alt(),
             AppAction::BufferCycleH => {
-                if self.slots.len() > 1 {
+                // Real buffers only — `buffer_prev` skips dock slots, so
+                // counting them here made `H` a no-op cycle instead of the
+                // viewport motion whenever the explorer was open.
+                if self.real_slot_count() > 1 {
                     self.buffer_prev();
                 } else {
                     // Single slot: fall back to viewport-top motion.
@@ -643,7 +646,8 @@ impl App {
                 }
             }
             AppAction::BufferCycleL => {
-                if self.slots.len() > 1 {
+                // Real buffers only — see `BufferCycleH`.
+                if self.real_slot_count() > 1 {
                     self.buffer_next();
                 } else {
                     // Single slot: fall back to viewport-bottom motion.

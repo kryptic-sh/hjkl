@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`:q` no longer needs pressing twice when the explorer or a quickfix dock is
+  open.** Dock slots live in the buffer list like any other buffer, so `:q` on
+  the last real file took the multi-buffer `:bdelete` path instead of quitting —
+  deleting the file's buffer and leaving the dock's scratch buffer rendering in
+  the main window.
+- **`:q` inside the explorer or a `:copen` / `:lopen` dock now closes that
+  dock** instead of deleting its scratch buffer, matching `:close` / `<C-w>c`
+  and vim's behaviour in a quickfix window.
+- **`<C-w>q` inside a dock no longer quits the editor.** Docks are not layout
+  leaves, so the "last window" check was true while a dock was focused and took
+  the quit branch.
+- **`H` / `L` keep their viewport-motion fallback when a dock is open.** With a
+  single real buffer plus an open explorer they cycled buffers (a no-op, since
+  cycling skips dock slots) instead of jumping to the top/bottom of the
+  viewport.
+
 ## [0.38.0] - 2026-07-27
 
 ### Changed

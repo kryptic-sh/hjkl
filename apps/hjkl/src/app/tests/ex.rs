@@ -712,6 +712,63 @@ fn b_num_targeting_explorer_slot_errors_e86() {
     );
 }
 
+/// `:q` from the real editor window with one real buffer must quit the app,
+/// even when the explorer is open. The explorer's slot is not a user buffer,
+/// so it must not push the quit path into the multi-slot `:bdelete` branch —
+/// which used to delete the real buffer and leave the explorer rendering in
+/// the main window, requiring a second `:q`.
+#[test]
+fn q_from_main_window_quits_even_with_explorer_open() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.toggle_explorer();
+    app.switch_to(0);
+    assert!(!app.explorer_buf_focused(), "focus must be the real window");
+    assert_eq!(app.slots.len(), 2, "real slot + explorer slot");
+
+    app.dispatch_ex("q");
+
+    assert!(
+        app.exit_requested,
+        "`:q` with only the explorer alongside one real buffer must quit"
+    );
+}
+
+/// `:q` while the explorer is focused must close the explorer dock (same as
+/// toggling it off), not delete its scratch buffer and not quit the app.
+#[test]
+fn q_on_focused_explorer_closes_the_dock() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.toggle_explorer();
+    assert!(app.explorer_buf_focused(), "toggle focuses the explorer");
+
+    app.dispatch_ex("q");
+
+    assert!(!app.exit_requested, "`:q` in the explorer must not quit");
+    assert!(app.left_dock.is_none(), "the explorer dock must be closed");
+    assert_eq!(app.slots.len(), 1, "the explorer slot must be gone too");
+    assert!(!app.explorer_buf_focused());
+}
+
+/// `<C-w>q` in the explorer must close the dock, not quit the editor. Docks
+/// are not `LayoutTree` leaves, so the "only one window left" test used to be
+/// true while the explorer was focused and took the quit branch.
+#[test]
+fn ctrl_w_q_on_focused_explorer_closes_the_dock_instead_of_quitting() {
+    use hjkl_app::keymap_actions::AppAction;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.toggle_explorer();
+    assert!(app.explorer_buf_focused());
+
+    app.dispatch_action(AppAction::QuitOrClose, 1);
+
+    assert!(
+        !app.exit_requested,
+        "`<C-w>q` in the explorer must not quit the editor"
+    );
+    assert!(app.left_dock.is_none(), "the explorer dock must be closed");
+}
+
 #[test]
 fn b_num_still_switches_to_real_buffer_when_explorer_open() {
     // Companion to the E86 test above: a real file slot placed *after* the

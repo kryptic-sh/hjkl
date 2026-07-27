@@ -518,6 +518,19 @@ impl App {
                 self.do_save(Some(PathBuf::from(path)));
             }
             ExEffect::Quit { force, save } => {
+                // Docks (explorer, quickfix/location list) are neither
+                // `LayoutTree` leaves nor user buffers, so neither branch
+                // below can see them: `:q` in a dock used to fall through to
+                // `buffer_delete` and destroy the dock's scratch slot. Close
+                // the dock instead — same as `:close` / `<C-w>c`, and the
+                // same thing vim does in a quickfix window.
+                //
+                // `:wq` still falls through, so writing a scratch dock buffer
+                // reports its own error rather than silently closing.
+                if !save && self.is_dock_window(self.focused_window()) {
+                    self.close_focused_window();
+                    return;
+                }
                 if save && !self.do_save_force(None, force) {
                     // Save failed (E32 / E45 / IO error). Status_message
                     // already set by do_save; refuse to exit so the user
@@ -532,8 +545,11 @@ impl App {
                     self.close_focused_window();
                     return;
                 }
-                // E4: multi-slot — close active slot, stay in app.
-                if self.slots.len() > 1 {
+                // E4: multi-slot — close active slot, stay in app. Counts real
+                // buffers only: an open explorer or `:copen` dock must not
+                // turn `:q` on the last file into a `:bdelete` that leaves the
+                // dock's scratch buffer showing in the main window.
+                if self.real_slot_count() > 1 {
                     self.buffer_delete(force);
                     return;
                 }

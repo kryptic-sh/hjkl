@@ -301,6 +301,22 @@ impl super::App {
         self.slots.get(idx).is_some_and(|s| s.is_explorer) || self.qf_dock_slot_idx() == Some(idx)
     }
 
+    /// How many slots are real user buffers, i.e. what the user would call
+    /// "open buffers".
+    ///
+    /// Dock slots live in `slots` like any other buffer, so a bare
+    /// `self.slots.len() > 1` reads "multiple buffers open" the moment the
+    /// explorer or a `:copen` dock exists. Anything deciding *user-facing*
+    /// multiplicity — `:q` choosing between quitting and `:bdelete`, `H`/`L`
+    /// choosing between buffer cycling and viewport motion — must count this
+    /// instead, or opening the explorer silently changes what those commands
+    /// do.
+    pub(crate) fn real_slot_count(&self) -> usize {
+        (0..self.slots.len())
+            .filter(|&i| !self.slot_is_special(i))
+            .count()
+    }
+
     // ── Frame-level focus navigation ────────────────────────────────────
     //
     // The tree itself stays dock-blind (hjkl-layout is untouched); this is
