@@ -73,10 +73,14 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
         // --- load buffer ---
         let mut buffer = View::new();
         let mut is_new_file = false;
+        // Vim `'endofline'` for this file — derived from the bytes read, and
+        // consulted by every write below. See `save::EolState`.
+        let mut eol = crate::save::EolState::default();
 
         if let Some(ref path) = maybe_path {
             match hjkl_fs::read_to_string_unbounded(path) {
                 Ok(content) => {
+                    eol = crate::save::EolState::from_loaded(&content);
                     let content = content.strip_suffix('\n').unwrap_or(&content);
                     BufferEdit::replace_all(&mut buffer, content);
                 }
@@ -111,6 +115,28 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             // Strip an optional leading `:` so both `-c ':wq'` and `-c 'wq'`
             // work — matches the `+:cmd` / `+cmd` tolerance for `+` tokens.
             let cmd = cmd.strip_prefix(':').unwrap_or(cmd);
+            // `:set endofline` / `:set noeol` / `:set eol?` — buffer-local host
+            // state, not an engine setting, so pull those tokens out before
+            // hjkl-ex sees the line (same interception the TUI does). Query
+            // replies are dropped: headless suppresses `Info` output.
+            let rebuilt_set: String;
+            let cmd: &str = match cmd.strip_prefix("set ") {
+                Some(body) if !body.trim().is_empty() => {
+                    let tokens: Vec<&str> = body.split_whitespace().collect();
+                    let before = tokens.len();
+                    let (rest, _replies) =
+                        crate::save::take_endofline_tokens(tokens.into_iter(), &mut eol);
+                    if rest.len() == before {
+                        cmd
+                    } else if rest.is_empty() {
+                        continue;
+                    } else {
+                        rebuilt_set = format!("set {}", rest.join(" "));
+                        rebuilt_set.as_str()
+                    }
+                }
+                _ => cmd,
+            };
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
             let effect = hjkl_ex::try_dispatch(&reg, &mut editor, cmd)
                 .unwrap_or_else(|| ExEffect::Unknown(cmd.to_string()));
@@ -143,7 +169,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                 }
 
                 ExEffect::Save => {
-                    if let Err(e) = write_buffer(&editor, &current_filename, &display_name) {
+                    if let Err(e) = write_buffer(&editor, &current_filename, &display_name, eol) {
                         eprintln!("{e}");
                         exit_code = 1;
                     } else {
@@ -153,7 +179,9 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
                 ExEffect::SaveAs(path_str) => {
                     let new_path = PathBuf::from(&path_str);
-                    if let Err(e) = write_buffer(&editor, &Some(new_path.clone()), &display_name) {
+                    if let Err(e) =
+                        write_buffer(&editor, &Some(new_path.clone()), &display_name, eol)
+                    {
                         eprintln!("{e}");
                         exit_code = 1;
                     } else {
@@ -164,7 +192,8 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
                 ExEffect::Quit { save, force: _ } => {
                     if save {
-                        if let Err(e) = write_buffer(&editor, &current_filename, &display_name) {
+                        if let Err(e) = write_buffer(&editor, &current_filename, &display_name, eol)
+                        {
                             eprintln!("{e}");
                             exit_code = 1;
                         } else {
@@ -179,6 +208,7 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                     // In headless mode, treat :e as switching the current file target.
                     match hjkl_fs::read_to_string_unbounded(std::path::Path::new(&path)) {
                         Ok(content) => {
+                            eol = crate::save::EolState::from_loaded(&content);
                             let content = content.strip_suffix('\n').unwrap_or(&content);
                             hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
                             current_filename = Some(PathBuf::from(&path));
@@ -201,7 +231,9 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
                 ExEffect::SaveAndRename { path } => {
                     let new_path = PathBuf::from(&path);
-                    if let Err(e) = write_buffer(&editor, &Some(new_path.clone()), &display_name) {
+                    if let Err(e) =
+                        write_buffer(&editor, &Some(new_path.clone()), &display_name, eol)
+                    {
                         eprintln!("{e}");
                         exit_code = 1;
                     } else {
@@ -253,12 +285,15 @@ fn write_buffer(
     editor: &Editor<View, DefaultHost>,
     path: &Option<PathBuf>,
     display_name: &str,
+    eol: crate::save::EolState,
 ) -> Result<(), String> {
     match path {
         None => Err(format!("hjkl: {display_name}: E32: No file name")),
         Some(p) => {
             let joined = editor.buffer().content_joined();
-            let trailing_nl = !joined.is_empty();
+            // vim `'endofline'`/`'fixendofline'` — see
+            // `save::EolState::trailing_newline`.
+            let trailing_nl = eol.trailing_newline(&joined, editor.settings().fixendofline);
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl, &cwd)
                 .map_err(|e| format!("hjkl: {}: {e}", p.display()))

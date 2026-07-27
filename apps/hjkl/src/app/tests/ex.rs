@@ -3605,6 +3605,209 @@ fn save_adds_trailing_newline_when_missing() {
     );
 }
 
+// ── vim `'endofline'` / `'fixendofline'` parity, byte-for-byte ───────────────
+//
+// Ground truth measured against nvim 0.12 — `nvim --clean --headless -c wq
+// FILE`, then the same with `-c 'set nofixeol'`. These drive the REAL `:w`
+// path (`save_slot` → `save::save_file_durable`); the rule itself is unit
+// tested in `save::eol_state_tests`, and `apps/hjkl/tests/headless.rs` runs
+// the identical rows through the `--headless` binary.
+//
+// The interesting row is `"\n"`: hjkl's line model strips the file-final
+// newline, so a 1-byte `"\n"` file and a 0-byte file both join back to an
+// empty body. Deriving the trailing newline from the body alone (as `:w` used
+// to) truncated the former to 0 bytes.
+
+/// Load `input` from a temp file, run `setup` (e.g. `:set nofixeol`), `:w`,
+/// and return the exact bytes on disk. The tempdir is dropped at the end —
+/// nothing outlives the assertion.
+fn eol_write_round_trip(input: &str, setup: &[&str]) -> Vec<u8> {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("eol_case.txt");
+    std::fs::write(&path, input).unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    for cmd in setup {
+        app.dispatch_ex(cmd);
+    }
+    // `:w` on a clean buffer is a no-op write in some paths; force it so the
+    // bytes on disk are the ones this save produced.
+    app.active_mut().dirty = true;
+    app.dispatch_ex("w");
+    std::fs::read(&path).unwrap()
+}
+
+#[test]
+fn write_matches_nvim_with_fixendofline_on() {
+    // (loaded bytes, bytes nvim writes back with the default `fixeol`)
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc\n"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = eol_write_round_trip(input, &[]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "fixeol: {input:?} ({} bytes in) must save as {want:?} ({} bytes), got {:?}",
+            input.len(),
+            want.len(),
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+#[test]
+fn write_matches_nvim_with_nofixendofline() {
+    // (loaded bytes, bytes nvim writes back under `:set nofixeol`)
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = eol_write_round_trip(input, &["set nofixeol"]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "nofixeol: {input:?} ({} bytes in) must save as {want:?} ({} bytes), got {:?}",
+            input.len(),
+            want.len(),
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+/// The regression this feature exists for: `:w` on a file holding exactly one
+/// newline used to write 0 bytes, silently truncating it.
+#[test]
+fn lone_newline_file_is_not_truncated_by_save() {
+    let got = eol_write_round_trip("\n", &[]);
+    assert_eq!(got, b"\n", "a 1-byte `\\n` file must stay 1 byte");
+}
+
+/// …and `:w <other>` writes the same bytes as an in-place `:w` (nvim does).
+#[test]
+fn lone_newline_file_writes_one_byte_to_a_new_path_too() {
+    let td = tempfile::tempdir().unwrap();
+    let src = td.path().join("src.txt");
+    let dst = td.path().join("dst.txt");
+    std::fs::write(&src, "\n").unwrap();
+    let mut app = App::new(Some(src), false, None, None).unwrap();
+    app.dispatch_ex(&format!("w {}", dst.display()));
+    assert_eq!(std::fs::read(&dst).unwrap(), b"\n");
+}
+
+/// `'endofline'` is derived from the file at load, matching what nvim
+/// reports for `&eol` — and `:set eol?` reports it.
+#[test]
+fn set_eol_query_reports_the_loaded_endofline_state() {
+    for (input, want) in [
+        ("", "endofline=on"),
+        ("\n", "endofline=on"),
+        ("abc", "endofline=off"),
+        ("abc\n", "endofline=on"),
+        ("a\n\n", "endofline=on"),
+    ] {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("q.txt");
+        std::fs::write(&path, input).unwrap();
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        app.dispatch_ex("set eol?");
+        assert_eq!(
+            app.bus.last_body_or_empty(),
+            want,
+            "`:set eol?` after loading {input:?}"
+        );
+        // The long spelling answers identically.
+        app.dispatch_ex("set endofline?");
+        assert_eq!(app.bus.last_body_or_empty(), want);
+    }
+}
+
+/// `:set noeol` / `:set eol` override the derived state, and `:set eol!`
+/// toggles — all three change what `:w` writes (verified against nvim).
+#[test]
+fn set_eol_overrides_change_the_written_bytes() {
+    // `abc\n` + `:set noeol nofixeol` → nvim writes 3 bytes.
+    assert_eq!(
+        eol_write_round_trip("abc\n", &["set noeol nofixeol"]),
+        b"abc"
+    );
+    // `abc` + `:set nofixeol eol` → nvim writes 4 bytes.
+    assert_eq!(eol_write_round_trip("abc", &["set nofixeol eol"]), b"abc\n");
+    // `\n` + `:set noeol nofixeol` → nvim writes 0 bytes (the single empty
+    // line contributes nothing and no EOL is appended).
+    assert_eq!(
+        eol_write_round_trip("\n", &["set noeol nofixeol"]),
+        b"" as &[u8]
+    );
+    // `:set eol!` toggles back on.
+    assert_eq!(
+        eol_write_round_trip("abc", &["set nofixeol", "set eol!"]),
+        b"abc\n"
+    );
+}
+
+/// A `:set` line mixing host-owned `eol` tokens with engine options must
+/// apply BOTH — the residual tokens have to reach hjkl-ex.
+#[test]
+fn set_line_mixing_eol_and_engine_options_applies_both() {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("mixed.txt");
+    std::fs::write(&path, "abc\n").unwrap();
+    let mut app = App::new(Some(path), false, None, None).unwrap();
+    app.dispatch_ex("set noeol number nofixeol");
+    assert!(!app.active().eol.endofline, "`noeol` must apply");
+    assert!(
+        app.active_editor().settings().number,
+        "`number` must still reach the engine"
+    );
+    assert!(
+        !app.active_editor().settings().fixendofline,
+        "`nofixeol` must still reach the engine"
+    );
+}
+
+/// `'endofline'` is buffer-local (vim semantics): setting it on one buffer
+/// must not touch another.
+#[test]
+fn endofline_is_per_buffer_not_global() {
+    let td = tempfile::tempdir().unwrap();
+    let a = td.path().join("a.txt");
+    let b = td.path().join("b.txt");
+    std::fs::write(&a, "aaa\n").unwrap();
+    std::fs::write(&b, "bbb\n").unwrap();
+    let mut app = App::new(Some(a), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", b.display()));
+    app.dispatch_ex("set noeol");
+    assert!(!app.active().eol.endofline, "`noeol` applies to b.txt");
+    app.dispatch_ex("bprevious");
+    assert!(
+        app.active().eol.endofline,
+        "a.txt must keep its own 'endofline' — the option is buffer-local"
+    );
+}
+
+/// `:e` re-derives `'endofline'` from the bytes on disk (vim resets it on
+/// reload), so a rewritten file doesn't keep a stale flag.
+#[test]
+fn reload_re_derives_endofline() {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("reload.txt");
+    std::fs::write(&path, "abc").unwrap(); // no trailing newline
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    assert!(!app.active().eol.endofline);
+    std::fs::write(&path, "abc\n").unwrap();
+    app.dispatch_ex("e!");
+    assert!(
+        app.active().eol.endofline,
+        ":e must re-derive 'endofline' from the reloaded bytes"
+    );
+}
+
 // ── sed-style ex commands: vim-compat (range + %/# literal-in-body) ───────────
 //
 // These run through the full `dispatch_ex` path WITH A CURRENT FILE so the

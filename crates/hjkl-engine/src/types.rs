@@ -351,6 +351,16 @@ pub struct Options {
     /// C-style brackets only: `()[]{}` and `<>`. Alias `mps`.
     /// `:set nomatchparen` disables. hjkl-specific.
     pub matchparen: bool,
+    /// Vim `'fixendofline'` / `'fixeol'`. When `true` (the vim default), a
+    /// buffer whose last line has no terminating newline gets one added on
+    /// write. When `false`, the file's original end-of-line state
+    /// (`'endofline'`) is preserved byte-for-byte.
+    ///
+    /// This is a plain user option — unlike `'endofline'` it is NEVER
+    /// derived from the file. `'endofline'` is buffer-local state owned by
+    /// the host (it is set from the bytes actually read), so it has no
+    /// `Options` field; see `hjkl`'s `save::EolState`.
+    pub fixendofline: bool,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -502,6 +512,7 @@ impl Default for Options {
             rainbow_brackets: true,
             updatetime: 4000,
             matchparen: true,
+            fixendofline: true,
         }
     }
 }
@@ -793,6 +804,7 @@ impl Options {
             "rainbow_brackets" | "rb" => set_bool!(rainbow_brackets),
             "updatetime" | "ut" => set_u32!(updatetime),
             "matchparen" | "mps" => set_bool!(matchparen),
+            "fixendofline" | "fixeol" => set_bool!(fixendofline),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -866,6 +878,7 @@ impl Options {
             "rainbow_brackets" | "rb" => OptionValue::Bool(self.rainbow_brackets),
             "updatetime" | "ut" => OptionValue::Int(self.updatetime as i64),
             "matchparen" | "mps" => OptionValue::Bool(self.matchparen),
+            "fixendofline" | "fixeol" => OptionValue::Bool(self.fixendofline),
             _ => return None,
         })
     }
@@ -2279,6 +2292,42 @@ mod tests {
             o.get_by_name("mps"),
             Some(OptionValue::Bool(true)),
             "get_by_name(mps) must reflect true"
+        );
+    }
+
+    // ── fixendofline ──────────────────────────────────────────────────────────
+
+    /// vim's default is `fixendofline` ON — a missing final newline is added
+    /// on write. Confirmed against nvim 0.12 (`"abc"` saves as `"abc\n"`).
+    #[test]
+    fn fixendofline_default_true() {
+        let o = Options::default();
+        assert!(o.fixendofline, "fixendofline must default to true");
+        assert_eq!(
+            o.get_by_name("fixendofline"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(fixendofline) must return Bool(true)"
+        );
+    }
+
+    #[test]
+    fn options_fixendofline_set_and_get() {
+        let mut o = Options::default();
+        o.set_by_name("fixendofline", OptionValue::Bool(false))
+            .unwrap();
+        assert!(!o.fixendofline, "fixendofline must be false after set");
+        assert_eq!(
+            o.get_by_name("fixendofline"),
+            Some(OptionValue::Bool(false)),
+            "get_by_name(fixendofline) must reflect false"
+        );
+        // Alias fixeol
+        o.set_by_name("fixeol", OptionValue::Bool(true)).unwrap();
+        assert!(o.fixendofline, "fixeol alias must set fixendofline to true");
+        assert_eq!(
+            o.get_by_name("fixeol"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(fixeol) must reflect true"
         );
     }
 

@@ -820,6 +820,10 @@ pub fn build_slot(
     let mut disk_len: Option<u64> = None;
     // Retained for modeline scanning after the buffer is seeded.
     let mut file_content: Option<String> = None;
+    // Vim `'endofline'`: derived from the bytes read, so `:w` can round-trip a
+    // file that has (or lacks) a final newline. Stays at the "no file loaded"
+    // default when the path doesn't exist yet.
+    let mut eol = crate::save::EolState::default();
     if let Some(ref p) = path {
         // Deliberately unbounded: the user named this file, and refusing to open
         // one the previous version opened is a regression, not a safety win.
@@ -831,6 +835,7 @@ pub fn build_slot(
                     disk_mtime = meta.modified().ok();
                     disk_len = Some(meta.len());
                 }
+                eol = crate::save::EolState::from_loaded(&content);
                 let stripped = content.strip_suffix('\n').unwrap_or(&content);
                 BufferEdit::replace_all(&mut buffer, stripped);
                 file_content = Some(content);
@@ -949,6 +954,7 @@ pub fn build_slot(
         disk_mtime,
         disk_len,
         swap_path,
+        eol,
         ..BufferSlot::new(buffer_id, buffer, settings)
     };
     slot.snapshot_saved();

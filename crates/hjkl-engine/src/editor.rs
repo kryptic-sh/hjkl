@@ -1213,6 +1213,10 @@ pub struct Settings {
     /// `:set nomatchparen` / `:set mps` to toggle. Only the char-scan path
     /// (C-style brackets) is active; tag-pair matching is pending #240.
     pub matchparen: bool,
+    /// Vim `'fixendofline'` / `'fixeol'`. Default `true`: add the missing
+    /// final newline on write. See [`crate::types::Options::fixendofline`] —
+    /// its buffer-local partner `'endofline'` is host state, not a setting.
+    pub fixendofline: bool,
     /// Smooth-scroll animation duration for page/recenter motions, ms.
     /// `:set scroll_duration_ms`. Default `0` (instant — animation off).
     pub scroll_duration_ms: u16,
@@ -1346,6 +1350,7 @@ impl Default for Settings {
             rainbow_brackets: true,
             updatetime: 4000,
             matchparen: true,
+            fixendofline: true,
             scroll_duration_ms: 0,
             selection_exclusive: false,
             undo_granularity: UndoGranularity::InsertSession,
@@ -1436,6 +1441,7 @@ impl Settings {
             rainbow_brackets: self.rainbow_brackets,
             updatetime: self.updatetime,
             matchparen: self.matchparen,
+            fixendofline: self.fixendofline,
         }
     }
 
@@ -1497,6 +1503,7 @@ impl Settings {
         self.rainbow_brackets = opts.rainbow_brackets;
         self.updatetime = opts.updatetime;
         self.matchparen = opts.matchparen;
+        self.fixendofline = opts.fixendofline;
     }
 }
 
@@ -1563,6 +1570,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         rainbow_brackets: o.rainbow_brackets,
         updatetime: o.updatetime,
         matchparen: o.matchparen,
+        fixendofline: o.fixendofline,
         scroll_duration_ms: 0,
         // `selection_exclusive` is not part of `Options` — it is set
         // programmatically by the host (e.g. VSCode keybinding mode via
@@ -7053,6 +7061,7 @@ mod options_conversion_tests {
             rainbow_brackets: false,
             updatetime: 250,
             matchparen: false,
+            fixendofline: false,
         };
         // Guard the guard: if a future field lands with a value that happens to
         // equal the default, this literal stops proving anything for it.

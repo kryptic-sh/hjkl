@@ -350,6 +350,17 @@ pub struct BufferSlot {
     pub(crate) view: View,
     /// Buffer-local settings template — see the struct doc.
     pub(crate) settings: Settings,
+    /// Vim `'endofline'` (+ the zero-line `ML_EMPTY` bit), derived from the
+    /// bytes this buffer was loaded with and consulted by `:w` to decide the
+    /// trailing newline — see [`crate::save::EolState::trailing_newline`].
+    ///
+    /// Buffer-local, exactly like vim's `'endofline'`: it lives here rather
+    /// than in [`BufferSlot::settings`] (which every window's `Editor` copies,
+    /// so window copies would diverge from the document's real on-disk state)
+    /// and rather than on the per-window `Editor` (a buffer has one end-of-line
+    /// state no matter how many windows show it). Re-derived on every load of
+    /// this slot: `build_slot`, `:e` reload, and the autoreload path.
+    pub eol: crate::save::EolState,
     /// File path shown in status line and used for `:w` saves.
     pub filename: Option<PathBuf>,
     /// Persistent dirty flag. Set when `editor.take_dirty()` returns `true`;
@@ -491,6 +502,7 @@ impl BufferSlot {
             features: BufferFeatures::default(),
             view,
             settings,
+            eol: crate::save::EolState::default(),
             filename: None,
             dirty: false,
             is_new_file: false,

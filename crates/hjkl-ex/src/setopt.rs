@@ -115,6 +115,10 @@ pub fn all_setting_names() -> Vec<String> {
         "rb".into(),
         "matchparen".into(),
         "mps".into(),
+        "fixendofline".into(),
+        "fixeol".into(),
+        "endofline".into(),
+        "eol".into(),
     ]
 }
 
@@ -153,6 +157,8 @@ const BOOLEAN_CANONICAL_NAMES: &[&str] = &[
     "rainbow_brackets",
     "matchparen",
     "foldenable",
+    "fixendofline",
+    "endofline",
 ];
 
 /// Canonical names of the boolean `:set` options, for the `:set no…`/`inv…`
@@ -366,6 +372,10 @@ pub fn query_option_value<H: Host>(
         "trim_trailing_whitespace" | "tts" => on_off(s.trim_trailing_whitespace),
         "rainbow_brackets" | "rb" => on_off(s.rainbow_brackets),
         "matchparen" | "mps" => on_off(s.matchparen),
+        "fixendofline" | "fixeol" => on_off(s.fixendofline),
+        // `endofline`/`eol` is deliberately absent — it is host-owned
+        // buffer-local state (see `apply_bool_option`), so the host answers
+        // `:set eol?` before this function is reached.
         _ => return None,
     })
 }
@@ -671,6 +681,13 @@ fn apply_bool_option<H: Host>(
         "rainbow_brackets" | "rb" => editor.settings_mut().rainbow_brackets = value,
         "matchparen" | "mps" => editor.settings_mut().matchparen = value,
         "foldenable" | "fen" => editor.settings_mut().foldenable = value,
+        "fixendofline" | "fixeol" => editor.settings_mut().fixendofline = value,
+        // NOTE: `endofline` is buffer-local state derived from the bytes the
+        // file was loaded with, not a `Settings` field — the host owns it and
+        // intercepts these tokens before hjkl-ex is consulted (same shape as
+        // `background` below; see `hjkl`'s `save::EolState`). Accept silently
+        // here so a token that reaches this path never errors.
+        "endofline" | "eol" => {}
         "background" | "bg" => {}
         _ => return false,
     }
@@ -1161,6 +1178,54 @@ mod tests {
         match apply_set(&mut editor, "autopair?") {
             ExEffect::Info(s) => assert_eq!(s, "autopair=on"),
             other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    // ---- fixendofline / endofline -------------------------------------------
+
+    /// `:set nofixeol` / `:set fixendofline` flip the engine setting, and
+    /// `:set fixeol?` reports it — the vim default is ON.
+    #[test]
+    fn set_fixendofline_applies_and_queries_through_both_spellings() {
+        let mut editor = make_editor();
+        assert!(
+            editor.settings().fixendofline,
+            "vim's 'fixendofline' defaults on"
+        );
+
+        assert_eq!(apply_set(&mut editor, "nofixeol"), ExEffect::Ok);
+        assert!(
+            !editor.settings().fixendofline,
+            "`nofixeol` alias must apply"
+        );
+        match apply_set(&mut editor, "fixendofline?") {
+            ExEffect::Info(s) => assert_eq!(s, "fixendofline=off"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+
+        assert_eq!(apply_set(&mut editor, "fixendofline"), ExEffect::Ok);
+        assert!(editor.settings().fixendofline);
+        match apply_set(&mut editor, "fixeol?") {
+            ExEffect::Info(s) => assert_eq!(s, "fixeol=on"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+
+        assert_eq!(apply_set(&mut editor, "nofixendofline"), ExEffect::Ok);
+        assert!(!editor.settings().fixendofline);
+    }
+
+    /// `endofline` is host-owned buffer-local state (the TUI / headless /
+    /// embed hosts intercept it before hjkl-ex). hjkl-ex must therefore accept
+    /// the token silently rather than erroring, exactly like `background`.
+    #[test]
+    fn set_endofline_is_accepted_silently_for_the_host_to_own() {
+        let mut editor = make_editor();
+        for token in ["endofline", "eol", "noendofline", "noeol"] {
+            assert_eq!(
+                apply_set(&mut editor, token),
+                ExEffect::Ok,
+                "`:set {token}` must not error in hjkl-ex"
+            );
         }
     }
 

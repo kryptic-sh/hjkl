@@ -91,6 +91,78 @@ fn headless_dash_c_and_plus_interleave() {
     assert_eq!(contents, "c\n", "unexpected contents: {contents:?}");
 }
 
+// ── vim `'endofline'` / `'fixendofline'` parity ──────────────────────────────
+//
+// Ground truth measured against nvim 0.12 (`nvim --clean --headless -c wq
+// FILE`, and the same with `-c 'set nofixeol'`). Same rows as
+// `save::eol_state_tests` and the app-layer `:w` tests, driven here through
+// the real `--headless` binary.
+
+/// Write `input` to a temp file, run it through `--headless` with `commands`,
+/// and return the exact bytes left on disk.
+fn headless_eol_round_trip(input: &[u8], commands: &[&str]) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("eol_case.txt");
+    std::fs::write(&path, input).unwrap();
+
+    let mut cmd = hjkl();
+    cmd.arg("--headless");
+    for c in commands {
+        cmd.args(["-c", c]);
+    }
+    let status = cmd.arg(&path).status().expect("hjkl binary");
+    assert!(status.success(), "exit code: {status}");
+    std::fs::read(&path).unwrap()
+}
+
+#[test]
+fn headless_write_matches_nvim_with_fixendofline_on() {
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc\n"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = headless_eol_round_trip(input.as_bytes(), &[":wq"]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "fixeol: {input:?} must save as {want:?}, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+#[test]
+fn headless_write_matches_nvim_with_nofixendofline() {
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = headless_eol_round_trip(input.as_bytes(), &[":set nofixeol", ":wq"]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "nofixeol: {input:?} must save as {want:?}, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+/// `:set noeol` is honoured in headless mode too (the token is intercepted
+/// before hjkl-ex, exactly like in the TUI).
+#[test]
+fn headless_set_noeol_strips_the_trailing_newline() {
+    assert_eq!(
+        headless_eol_round_trip(b"abc\n", &[":set noeol nofixeol", ":wq"]),
+        b"abc"
+    );
+}
+
 /// --headless with no files and no commands: warn to stderr, exit 0.
 #[test]
 fn headless_no_files_exits_clean() {

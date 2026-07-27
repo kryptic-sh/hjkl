@@ -141,6 +141,82 @@ fn embed_command_substitute() {
     assert_eq!(lines[0], "baz bar baz", "substitution mismatch: {lines:?}");
 }
 
+// ── vim `'endofline'` / `'fixendofline'` parity ──────────────────────────────
+//
+// Ground truth measured against nvim 0.12. Same rows as
+// `save::eol_state_tests`, driven here through the `--embed` write path.
+
+/// Open `input` in an embed session, run `commands`, and return the bytes on
+/// disk afterwards.
+fn embed_eol_round_trip(input: &[u8], commands: &[&str]) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("eol_case.txt");
+    std::fs::write(&path, input).unwrap();
+
+    // Embed mode confines writes to the working directory, so run the child
+    // inside the tempdir and address the file relatively.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hjkl"))
+        .arg("--embed")
+        .arg("eol_case.txt")
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn");
+    let stdin = BufWriter::new(child.stdin.take().unwrap());
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut s = EmbedSession {
+        child,
+        stdin,
+        stdout,
+        next_id: 1,
+    };
+    for c in commands {
+        let r = s.request("hjkl_command", json!([c]));
+        assert!(r.get("error").is_none(), "`{c}` failed: {r}");
+    }
+    std::fs::read(&path).unwrap()
+}
+
+#[test]
+fn embed_write_matches_nvim_with_fixendofline_on() {
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc\n"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = embed_eol_round_trip(input.as_bytes(), &[":w"]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "fixeol: {input:?} must save as {want:?}, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
+#[test]
+fn embed_write_matches_nvim_with_nofixendofline() {
+    for (input, want) in [
+        ("", ""),
+        ("\n", "\n"),
+        ("abc", "abc"),
+        ("abc\n", "abc\n"),
+        ("a\n\n", "a\n\n"),
+    ] {
+        let got = embed_eol_round_trip(input.as_bytes(), &[":set nofixeol", ":w"]);
+        assert_eq!(
+            got,
+            want.as_bytes(),
+            "nofixeol: {input:?} must save as {want:?}, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+    }
+}
+
 /// After "ihello world<Esc>0w" the cursor should be at col 6.
 #[test]
 fn embed_get_cursor_after_motion() {

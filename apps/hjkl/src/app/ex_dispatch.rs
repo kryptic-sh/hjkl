@@ -257,6 +257,26 @@ impl App {
                         other => remaining.push(other),
                     }
                 }
+                // App-level `:set endofline` / `:set noeol` / `:set eol?` /
+                // `:set eol!`. Same reason as mouse: `'endofline'` is
+                // buffer-local host state derived from the bytes on disk
+                // (`BufferSlot::eol`), not an engine `Settings` field, so
+                // hjkl-ex has nothing to apply it to. Runs on the tokens the
+                // mouse pass left behind; anything it doesn't recognise flows
+                // on to the engine unchanged.
+                {
+                    let slot_idx = self.focused_slot_idx();
+                    let mut eol = self.slots[slot_idx].eol;
+                    let before = remaining.len();
+                    let (rest, replies) =
+                        crate::save::take_endofline_tokens(remaining.into_iter(), &mut eol);
+                    self.slots[slot_idx].eol = eol;
+                    for reply in replies {
+                        self.bus.info(reply);
+                    }
+                    consumed_any |= rest.len() != before;
+                    remaining = rest;
+                }
                 if consumed_any {
                     if remaining.is_empty() {
                         return;
@@ -1116,7 +1136,18 @@ impl App {
                 use hjkl_engine::Query;
                 let joined = self.slots[idx].buffer().content_joined();
                 let body: &[u8] = joined.as_bytes();
-                let needs_trailing_nl = !body.is_empty();
+                // vim `'endofline'`/`'fixendofline'` — see
+                // `save::EolState::trailing_newline` for the full rule (and
+                // the one documented divergence from nvim).
+                // `fixendofline` is read the same way the pre-save hooks read
+                // their flags above: the focused window's editor when saving
+                // the focused slot, else the slot's own settings template.
+                let fixendofline = if idx == self.focused_slot_idx() {
+                    self.active_editor().settings().fixendofline
+                } else {
+                    self.slots[idx].settings().fixendofline
+                };
+                let needs_trailing_nl = self.slots[idx].eol.trailing_newline(&joined, fixendofline);
                 let line_count = self.slots[idx].buffer().line_count() as usize;
                 let byte_count = body.len() + usize::from(needs_trailing_nl);
                 // Create parent dir(s) if missing so writing into a fresh
@@ -2107,6 +2138,9 @@ impl App {
                 return;
             }
         };
+        // Re-derive `'endofline'` from the freshly read bytes — a reload is a
+        // load (vim resets 'eol' on `:e` too).
+        self.active_mut().eol = crate::save::EolState::from_loaded(&content);
         let trimmed = content.strip_suffix('\n').unwrap_or(&content);
         let line_count = trimmed.lines().count();
         let byte_count = content.len();
@@ -2245,6 +2279,8 @@ impl App {
                     let Ok(content) = hjkl_fs::read_to_string_unbounded(&path) else {
                         return false;
                     };
+                    // An autoread is a load — re-derive `'endofline'` too.
+                    self.slots[idx].eol = crate::save::EolState::from_loaded(&content);
                     let trimmed = content.strip_suffix('\n').unwrap_or(&content);
                     // Preserve cursor row + column, clamped to the new
                     // content (vim's autoread keeps the cursor where it was).

@@ -79,12 +79,21 @@ fn drain_to_newline<R: BufRead>(r: &mut R) -> std::io::Result<()> {
 // Editor construction (mirrors headless.rs)
 // ---------------------------------------------------------------------------
 
-fn build_editor(maybe_path: Option<&Path>) -> Result<(Editor<View, DefaultHost>, Option<PathBuf>)> {
+fn build_editor(
+    maybe_path: Option<&Path>,
+) -> Result<(
+    Editor<View, DefaultHost>,
+    Option<PathBuf>,
+    crate::save::EolState,
+)> {
     let mut buffer = View::new();
+    // Vim `'endofline'` — derived from the bytes read; see `save::EolState`.
+    let mut eol = crate::save::EolState::default();
 
     if let Some(path) = maybe_path {
         match hjkl_fs::read_to_string_unbounded(path) {
             Ok(content) => {
+                eol = crate::save::EolState::from_loaded(&content);
                 let content = content.strip_suffix('\n').unwrap_or(&content);
                 BufferEdit::replace_all(&mut buffer, content);
             }
@@ -99,7 +108,7 @@ fn build_editor(maybe_path: Option<&Path>) -> Result<(Editor<View, DefaultHost>,
 
     let host = DefaultHost::new();
     let editor = hjkl_vim::vim_editor(buffer, host, Options::default());
-    Ok((editor, maybe_path.map(Path::to_path_buf)))
+    Ok((editor, maybe_path.map(Path::to_path_buf), eol))
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +118,7 @@ fn build_editor(maybe_path: Option<&Path>) -> Result<(Editor<View, DefaultHost>,
 fn dispatch(
     editor: &mut Editor<View, DefaultHost>,
     current_filename: &mut Option<PathBuf>,
+    eol: &mut crate::save::EolState,
     should_quit: &mut bool,
     method: &str,
     params: &Value,
@@ -133,6 +143,27 @@ fn dispatch(
                 Err(msg) => return error_resp(id, ERR_INVALID_PARAMS, &msg),
             };
             let cmd = cmd.strip_prefix(':').unwrap_or(&cmd).to_string();
+            // `:set endofline` / `:set noeol` / `:set eol?` — buffer-local host
+            // state, not an engine setting, so pull those tokens out before
+            // hjkl-ex sees the line (same interception the TUI does).
+            // `None` = nothing consumed (dispatch `cmd` as-is); `Some(None)` =
+            // the whole line was eol tokens; `Some(Some(s))` = residual tokens.
+            let mut consumed: Option<Option<String>> = None;
+            if let Some(body) = cmd.strip_prefix("set ")
+                && !body.trim().is_empty()
+            {
+                let tokens: Vec<&str> = body.split_whitespace().collect();
+                let before = tokens.len();
+                let (rest, _replies) = crate::save::take_endofline_tokens(tokens.into_iter(), eol);
+                if rest.len() != before {
+                    consumed = Some((!rest.is_empty()).then(|| format!("set {}", rest.join(" "))));
+                }
+            }
+            let cmd = match consumed {
+                None => cmd,
+                Some(None) => return success(id, Value::Null),
+                Some(Some(rebuilt)) => rebuilt,
+            };
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
             let effect = hjkl_ex::try_dispatch(&reg, editor, &cmd)
                 .unwrap_or_else(|| ExEffect::Unknown(cmd.clone()));
@@ -148,7 +179,7 @@ fn dispatch(
                     error_resp(id, ERR_EX_COMMAND, &msg)
                 }
                 ExEffect::Save => {
-                    if let Err(e) = write_buffer(editor, current_filename) {
+                    if let Err(e) = write_buffer(editor, current_filename, *eol) {
                         error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         success(id, Value::Null)
@@ -156,7 +187,7 @@ fn dispatch(
                 }
                 ExEffect::SaveAs(path_str) => {
                     let new_path = PathBuf::from(&path_str);
-                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
+                    if let Err(e) = write_buffer(editor, &Some(new_path.clone()), *eol) {
                         error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         *current_filename = Some(new_path);
@@ -164,7 +195,7 @@ fn dispatch(
                     }
                 }
                 ExEffect::Quit { save, force: _ } => {
-                    if save && let Err(e) = write_buffer(editor, current_filename) {
+                    if save && let Err(e) = write_buffer(editor, current_filename, *eol) {
                         return error_resp(id, ERR_EX_COMMAND, &e);
                     }
                     *should_quit = true;
@@ -193,6 +224,7 @@ fn dispatch(
                     };
                     match hjkl_fs::read_to_string_unbounded(&resolved) {
                         Ok(content) => {
+                            *eol = crate::save::EolState::from_loaded(&content);
                             let content = content.strip_suffix('\n').unwrap_or(&content);
                             hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
                             *current_filename = Some(PathBuf::from(&path));
@@ -212,7 +244,7 @@ fn dispatch(
                 }
                 ExEffect::SaveAndRename { path } => {
                     let new_path = PathBuf::from(&path);
-                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
+                    if let Err(e) = write_buffer(editor, &Some(new_path.clone()), *eol) {
                         error_resp(id, ERR_EX_COMMAND, &e)
                     } else {
                         *current_filename = Some(new_path);
@@ -406,12 +438,15 @@ fn params_array(params: &Value, idx: usize) -> std::result::Result<Vec<Value>, S
 fn write_buffer(
     editor: &Editor<View, DefaultHost>,
     path: &Option<PathBuf>,
+    eol: crate::save::EolState,
 ) -> std::result::Result<(), String> {
     match path {
         None => Err("E32: No file name".to_string()),
         Some(p) => {
             let joined = editor.buffer().content_joined();
-            let trailing_nl = !joined.is_empty();
+            // vim `'endofline'`/`'fixendofline'` — see
+            // `save::EolState::trailing_newline`.
+            let trailing_nl = eol.trailing_newline(&joined, editor.settings().fixendofline);
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl, &cwd)
                 .map_err(|e| format!("hjkl: {}: {e}", p.display()))
@@ -432,7 +467,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     // fallback can't write escapes into the protocol stream (#264).
     crate::host::disable_clipboard_for_rpc();
     let first_file = files.into_iter().next();
-    let (mut editor, mut current_filename) = build_editor(first_file.as_deref())?;
+    let (mut editor, mut current_filename, mut eol) = build_editor(first_file.as_deref())?;
     let mut should_quit = false;
 
     let stdin = std::io::stdin();
@@ -512,6 +547,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
             dispatch(
                 &mut editor,
                 &mut current_filename,
+                &mut eol,
                 &mut should_quit,
                 &method,
                 &params,
@@ -526,6 +562,7 @@ pub fn run(files: Vec<PathBuf>) -> Result<i32> {
         let resp = dispatch(
             &mut editor,
             &mut current_filename,
+            &mut eol,
             &mut should_quit,
             &method,
             &params,
