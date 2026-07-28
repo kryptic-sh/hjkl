@@ -513,13 +513,20 @@ pub fn auto_indent_rows<H: hjkl_engine::types::Host>(
         let starts_with_dot = trimmed_owned.starts_with('.')
             && !trimmed_owned.starts_with("..")
             && !trimmed_owned.starts_with(".;");
+        // `.max(0)` is load-bearing: `depth` is an i32 and `saturating_sub`
+        // saturates towards i32::MIN, not towards zero. An unmatched close
+        // bracket at depth 0 therefore produced -1, and the `as usize` cast
+        // wrapped it to usize::MAX — `indent_unit.repeat(usize::MAX)` panics
+        // with "capacity overflow", killing the editor on a plain `==` over
+        // a line starting with `}`.
         let effective_depth = if starts_with_close {
             depth.saturating_sub(1)
         } else if starts_with_dot {
             depth.saturating_add(1)
         } else {
             depth
-        } as usize;
+        }
+        .max(0) as usize;
 
         // Build new line: indent × depth + stripped content.
         let new_line = format!("{}{}", indent_unit.repeat(effective_depth), trimmed_owned);

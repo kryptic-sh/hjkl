@@ -44,6 +44,39 @@ fn equal_equal_in_normal_reindents_current_line() {
 }
 
 #[test]
+fn equal_equal_on_unmatched_close_bracket_does_not_panic() {
+    // A line starting with `}` when the running bracket depth is already 0.
+    // `depth` is an i32, so `depth.saturating_sub(1)` saturates towards
+    // i32::MIN — it does NOT clamp at zero — and the `as usize` cast turned
+    // -1 into usize::MAX, blowing up `indent_unit.repeat()` with "capacity
+    // overflow". Found by the `handle_key` fuzz target.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "}\n}\n}");
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    drive_chars(&mut app, "==");
+
+    let lines: Vec<_> = app
+        .active_editor()
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        vec!["}", "}", "}"],
+        "an unmatched close bracket clamps to depth 0, not a negative indent"
+    );
+}
+
+#[test]
 fn eq_g_from_top_reindents_entire_buffer() {
     // `=G` from row 0 covers the whole buffer (top → last line).
     // View: "{\nbody\n}" where "body" has wrong zero indent.
