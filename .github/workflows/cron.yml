@@ -17,6 +17,11 @@ jobs:
   miri:
     name: miri (hjkl-buffer)
     runs-on: ubuntu-latest
+    # miri interprets rather than executes, so a test that is cheap natively
+    # can run for tens of minutes here. Without a cap a regression in test
+    # cost silently burns a 6-hour runner before anyone notices; the scoped
+    # suite finishes well inside this.
+    timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: nightly
       # Two isolated-syscall problems, and only full disable covers both:

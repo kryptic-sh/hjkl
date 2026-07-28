@@ -1724,6 +1724,22 @@ mod tree_tests {
 mod delta_tests {
     use super::*;
 
+    /// Iteration count for the randomized differential loops below, capped
+    /// hard under miri.
+    ///
+    /// These loops are worth thousands of steps on a normal run: their value
+    /// is statistical, shaking out logic bugs in the diff / keyframe code from
+    /// a random op mix. That is a property of *executing* them, and miri
+    /// interprets instead — six loops totalling ~22 300 iterations is the bulk
+    /// of the weekly miri job's runtime, enough to push it past an hour.
+    ///
+    /// miri is there to catch UB, and UB shows up on the code *paths*, not on
+    /// the thousandth repetition of one — so a short pass covers what miri can
+    /// actually detect. Normal runs are untouched and keep the full count.
+    fn stress_iters(n: usize) -> usize {
+        if cfg!(miri) { n.min(50) } else { n }
+    }
+
     /// Deterministic xorshift64* PRNG, fixed-seeded so runs are reproducible.
     struct Rng(u64);
     impl Rng {
@@ -1861,6 +1877,13 @@ mod delta_tests {
     }
 
     #[test]
+    // Deliberately NOT size-scaled for miri: the documents here are sized to span
+    // several of ropey's ~1 KB leaf chunks, which is the entire property under
+    // test, so shrinking them would quietly test something weaker. Running them
+    // interpreted costs >10 min on its own. hjkl-buffer has no `unsafe`, so miri's
+    // reach is UB in ropey/std on these code paths — already covered by the ~185
+    // other tests in this crate that do run under it.
+    #[cfg_attr(miri, ignore = "multi-chunk documents are too slow interpreted")]
     fn diff_matches_reference_on_edge_cases() {
         let cases: &[(&str, &str)] = &[
             // equal / empty
@@ -1939,7 +1962,7 @@ mod delta_tests {
     fn diff_matches_reference_over_random_evolving_content() {
         let mut rng = Rng::new(0x0BAD_F00D_1234_5678);
         let mut s = String::from("seed café 日本語\n🎉");
-        for _ in 0..4000 {
+        for _ in 0..stress_iters(4000) {
             let t = mutate(&s, &mut rng);
             let a = ropey::Rope::from_str(&s);
             let b = ropey::Rope::from_str(&t);
@@ -1993,6 +2016,10 @@ mod delta_tests {
     }
 
     #[test]
+    // Same reasoning as `diff_matches_reference_on_edge_cases`: the 300-line base
+    // document exists to force multi-chunk ropes, so it is not size-scaled and the
+    // test is skipped under miri rather than weakened.
+    #[cfg_attr(miri, ignore = "multi-chunk documents are too slow interpreted")]
     fn diff_matches_reference_over_random_multi_chunk_pairs() {
         // Random pairs built from a multi-chunk corpus, so chunk seams land in
         // arbitrary places relative to the common prefix/suffix.
@@ -2005,7 +2032,7 @@ mod delta_tests {
             }
             s
         };
-        for _ in 0..300 {
+        for _ in 0..stress_iters(300) {
             let sa = build(&mut rng);
             // Half the pairs share a long common prefix/suffix with `sa`.
             let sb = if rng.below(2) == 0 {
@@ -2032,7 +2059,7 @@ mod delta_tests {
     fn diff_round_trips_over_random_evolving_content() {
         let mut rng = Rng::new(0x1234_5678_9ABC_DEF0);
         let mut s = String::from("seed café 日本語\n🎉");
-        for _ in 0..4000 {
+        for _ in 0..stress_iters(4000) {
             let t = mutate(&s, &mut rng);
             let a = ropey::Rope::from_str(&s);
             let b = ropey::Rope::from_str(&t);
@@ -2076,7 +2103,7 @@ mod delta_tests {
             "🎉x🎉y🎉",
         ];
         let mut rng = Rng::new(0xDEAD_BEEF_CAFE_1234);
-        for _ in 0..3000 {
+        for _ in 0..stress_iters(3000) {
             let sa = corpus[rng.below(corpus.len())];
             let sb = corpus[rng.below(corpus.len())];
             let a = ropey::Rope::from_str(sa);
@@ -2117,7 +2144,7 @@ mod delta_tests {
         let mut refr = RefTree::new(start);
         let mut live = start.to_string();
 
-        for step in 0..6000 {
+        for step in 0..stress_iters(6000) {
             // Structural predicates stay in lockstep with the reference.
             assert_eq!(real.is_at_root(), refr.is_at_root(), "is_at_root @ {step}");
             assert_eq!(real.has_redo(), refr.has_redo(), "has_redo @ {step}");
@@ -2223,8 +2250,17 @@ mod delta_tests {
     /// plus the expected content of each state indexed by `seq`/depth. Every node
     /// is finalized, including the tip.
     fn deep_linear_history(n: usize) -> (UndoTree, Vec<String>) {
+        // Under miri the document is shrunk 10x. `n` is deliberately NOT
+        // touched: the keyframe ladder, the `n > 4 * KEYFRAME_INTERVAL`
+        // assertion and every depth-related property stay exactly as they are
+        // on a normal run — only the per-step rope volume drops. Without this
+        // a single one of these tests ran for over 22 minutes under miri
+        // (interpreted, not executed) and stalled the weekly job. The base
+        // keeps its multi-line and multi-byte content, which is the part that
+        // matters for the rope/delta paths.
+        let reps = if cfg!(miri) { 2 } else { 20 };
         let base: String =
-            "the quick brown fox\njumps over the lazy dog\ncafé 日本語 🎉\n".repeat(20);
+            "the quick brown fox\njumps over the lazy dog\ncafé 日本語 🎉\n".repeat(reps);
         let mut t = UndoTree::new(ropey::Rope::from_str(&base));
         let mut states = vec![base.clone()];
         let mut live = base;
@@ -2243,7 +2279,10 @@ mod delta_tests {
     fn deep_history_walks_back_and_forward_exactly() {
         // The `:earlier 9999` / `:later 9999` shape, deep enough that most jumps
         // land outside the warm window and go through a keyframe.
-        let n = 200;
+        // 65 under miri still satisfies the `> 4 * KEYFRAME_INTERVAL` floor
+        // asserted below, so the walk still crosses four keyframes — the
+        // property under test. See `deep_linear_history` for why.
+        let n = if cfg!(miri) { 65 } else { 200 };
         assert!(n > 4 * KEYFRAME_INTERVAL);
         let (mut t, states) = deep_linear_history(n);
 
@@ -2285,7 +2324,10 @@ mod delta_tests {
 
     #[test]
     fn keyframes_bound_the_cold_replay_distance() {
-        let n = 200;
+        // 65 still spans four keyframe intervals, which is what makes the
+        // per-node replay-distance bound below meaningful. See
+        // `deep_linear_history` for why miri gets a smaller history.
+        let n = if cfg!(miri) { 65 } else { 200 };
         let (mut t, _) = deep_linear_history(n);
         // Steady state: the ordinary warm entries have aged out, the keyframes
         // are still pinned. Every node must be within one interval of an anchor.
@@ -2326,7 +2368,7 @@ mod delta_tests {
         let mut t = UndoTree::new(ropey::Rope::from_str(start));
         let mut live = start.to_string();
 
-        for step in 0..5000 {
+        for step in 0..stress_iters(5000) {
             match rng.below(10) {
                 0..=5 => {
                     let pre = live.clone();
@@ -2394,7 +2436,10 @@ mod delta_tests {
         // Depth is NOT serialized (keyframes are a cache, the on-disk format is
         // untouched), so a loaded tree has to recompute it — otherwise every
         // cross-session `g-` would be a full replay again.
-        let n = 100;
+        // 65 still spans four keyframe intervals, so the reloaded tree must
+        // still rebuild a real ladder rather than a trivial one. See
+        // `deep_linear_history` for why miri gets a smaller history.
+        let n = if cfg!(miri) { 65 } else { 100 };
         let (t, states) = deep_linear_history(n);
         let ser = t.to_serializable();
         let mut back = UndoTree::from_serializable(&ser).expect("valid projection");
