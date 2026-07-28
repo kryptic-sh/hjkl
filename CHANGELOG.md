@@ -48,6 +48,51 @@ patch bumps.
   `j` after a search snapped the cursor back to the old column. `n`/`N` were
   already correct; the `/` and `?` prompt commits, and the `+/pattern` startup
   search, were not.
+- **Linewise case operators (`guu`, `gUU`, `g~~`, `g??`) no longer scramble the
+  buffer when the range includes the last line.** The transform text was
+  re-inserted at the post-cut cursor position, which clamps to a wrong location
+  when the cut removes the trailing newline. It now inserts at the range start,
+  using a separate read-before-cut so the text format is consistent regardless
+  of position. Found by the differential fuzzer against nvim.
+- **Linewise visual case (`VgU`, `Vgu`, `Vg~`, `Vg?`) now lands the cursor at
+  column 0 of the selection start** (matching vim) instead of at the first
+  non-blank character of that line. Found by the differential fuzzer.
+- **Operators (`dk`, `d+`, `d-`, `y+`, etc.) at buffer edges now abort when
+  their motion makes no progress**, matching vim. Previously the motion silently
+  clamped to the edge and the operator edited anyway — `dk` on a one-line buffer
+  deleted the line. `+`, `-`, and `_` at the first or last line are now also
+  no-ops instead of clamping. Found by the differential fuzzer.
+- **`[count]$` now moves `count-1` lines down before landing at line-end.**
+  Previously the count was discarded, so `2$` behaved as `$`. The count also
+  threads through `D` and `C`: `[count]D` and `[count]C` now extend through
+  `count-1` additional lines (equivalent to `d[count]$` / `c[count]$`). Found by
+  the differential fuzzer.
+- **Blockwise visual mode (`<C-v>`) with a text object (`iw`, `ip`, etc.) now
+  switches to charwise or linewise visual and selects the text object's natural
+  range**, matching vim. Previously the block anchor was kept, the `i` / `a` key
+  was treated as an unknown motion, and the `w`/`p` that followed extended the
+  block — producing a wrong column range. Found by the differential fuzzer.
+- **`j` / `k` now track the virtual (display) column, not the raw character
+  index.** When crossing lines with different tab structures the cursor now
+  lands at the same display column instead of the same char index, matching vim.
+  All vertical motions (`j`, `k`, `<C-e>`, `<C-y>`, `gk`, `gj`) and
+  sticky-column write sites were updated to convert between char and display
+  columns using the current `tabstop`. Found by the differential fuzzer.
+- **Assorted motion landing edge cases fixed.** `}` at EOF no longer jumps to
+  row 0. `b` inside leading whitespace lands at column 0 (the previous "word").
+  `B` at column 0 of a non-first line finds the previous BIGWORD instead of
+  jumping to row 0. Counted `w` / `W` past EOF no longer parks past the last
+  character. `W` on consecutive blank lines no longer advances to out-of-bounds
+  rows. Found by the differential fuzzer.
+- **Linewise register content now always ends with `\n`**, matching vim's
+  convention. `dd` on an empty buffer now records `"\n"` instead of an empty
+  string; `3dd` at EOF records `"l2\nl3\n"` instead of `"\nl2\nl3"` (newline on
+  the wrong end); `dip` on a single line appends `\n`. Found by the differential
+  fuzzer.
+- **Paste operations with huge count prefixes (`yy1000000p`) no longer OOM.**
+  The paste count is now capped at `MAX_COUNT` (999,999,999), the same bound
+  already applied to motion walks. Without the cap a large count could allocate
+  gigabytes. Found by the `handle_key` fuzz target.
 
 ## [0.39.0] - 2026-07-27
 
