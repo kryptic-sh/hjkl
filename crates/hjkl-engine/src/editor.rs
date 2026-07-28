@@ -3101,11 +3101,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         };
         self.set_viewport_top(new_top);
         // Clamp cursor to stay within the new visible region.
-        let (row, col) = self.cursor();
+        let (row, _) = self.cursor();
         let bot = (new_top + h).saturating_sub(1).min(last);
         let clamped = row.max(new_top).min(bot);
         if clamped != row {
-            buf_set_cursor_rc(&mut self.buffer, clamped, col);
+            // `<C-e>` / `<C-y>` are screen-line vertical motions, so pushing
+            // the cursor onto a new row follows the `j` / `k` rule: aim at
+            // `curswant`, clamp to the row, keep the un-clamped want. This
+            // used to re-use the old column verbatim, which both ignored
+            // `curswant` and parked the cursor past end-of-line on a shorter
+            // row. Found by the `esc_returns_to_normal` proptest via the
+            // phase-0 curswant assertion; class D in docs/cursor-moves.md.
+            self.move_cursor(crate::cursor_move::Move::Vertical { row: clamped });
         }
     }
 

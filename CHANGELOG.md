@@ -21,6 +21,13 @@ patch bumps.
 
 ### Fixed
 
+- **`<C-e>` / `<C-y>` now keep the cursor on the line and honour the sticky
+  column.** When the scroll pushed the cursor onto a new row it re-used the old
+  column verbatim, so on a shorter row the cursor parked past end-of-line, and
+  the column `j`/`k` aim at was ignored rather than preserved. They are
+  screen-line vertical motions and now follow the same rule as `j`/`k`: clamp to
+  the row, keep the un-clamped want, so scrolling across a short line and back
+  returns to the original column.
 - **`=` over a line starting with an unmatched `}`, `)` or `]` no longer
   crashes.** The running bracket depth is an `i32`, and `saturating_sub`
   saturates towards `i32::MIN` rather than clamping at zero, so a close bracket

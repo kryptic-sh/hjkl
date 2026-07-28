@@ -2207,6 +2207,40 @@ fn scroll_line_clamps_cursor_when_off_screen() {
     assert!(e.cursor().0 >= 8);
 }
 
+/// `<C-e>` / `<C-y>` are screen-line vertical motions: when the scroll pushes
+/// the cursor onto a new row it must follow the `j` / `k` rule — clamp to the
+/// row's length and keep the un-clamped `curswant`. It previously re-used the
+/// old column verbatim, parking the cursor past end-of-line on a short row.
+/// Class D in docs/cursor-moves.md; caught by the phase-0 curswant assertion.
+#[test]
+fn scroll_line_onto_short_row_clamps_and_keeps_curswant() {
+    use hjkl_engine::ScrollDir;
+    // Row 0 long, row 1 short, rows 2+ long again.
+    let mut e = fresh_editor("abcdefghij\nab\nabcdefghij\nabcdefghij\nabcdefghij");
+    e.set_viewport_height(2);
+    e.jump_cursor(0, 7);
+    e.set_viewport_top(0);
+    assert_eq!(e.sticky_col(), Some(7));
+
+    // Scroll down so row 0 leaves the viewport; the cursor lands on row 1,
+    // which only has 2 chars.
+    e.scroll_line(ScrollDir::Down, 1);
+    assert_eq!(
+        e.cursor(),
+        (1, 1),
+        "must clamp to the short row's last char"
+    );
+    assert_eq!(
+        e.sticky_col(),
+        Some(7),
+        "the un-clamped want must survive the short row"
+    );
+
+    // Continuing onto a long row restores the original column.
+    e.scroll_line(ScrollDir::Down, 1);
+    assert_eq!(e.cursor(), (2, 7), "curswant restores on the next long row");
+}
+
 #[test]
 fn scroll_doesnt_crash_at_buffer_edges() {
     use hjkl_engine::ScrollDir;
