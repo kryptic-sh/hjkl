@@ -411,7 +411,14 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
-    if row + 1 >= buf_row_count(ed.buffer()) {
+    let n_rows = buf_row_count(ed.buffer());
+    if row + 1 >= n_rows {
+        return false;
+    }
+    // Vim does not join with ropey's phantom trailing empty row (the
+    // ropey representation of a trailing newline).  If the only row
+    // below is the phantom, treat it as "no line below" and abort.
+    if row + 2 >= n_rows && buf_line(ed.buffer(), row + 1).is_some_and(|s| s.is_empty()) {
         return false;
     }
     let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
@@ -449,7 +456,12 @@ pub fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
-    if row + 1 >= buf_row_count(ed.buffer()) {
+    let n_rows = buf_row_count(ed.buffer());
+    if row + 1 >= n_rows {
+        return false;
+    }
+    // Same phantom-row guard as `join_line` — see there for rationale.
+    if row + 2 >= n_rows && buf_line(ed.buffer(), row + 1).is_some_and(|s| s.is_empty()) {
         return false;
     }
     let join_col = buf_line_chars(ed.buffer(), row);
@@ -590,7 +602,7 @@ pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::S
 pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
-    count: usize,
+    mut count: usize,
     cursor_after: bool,
     reindent: bool,
 ) {
@@ -647,6 +659,16 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     // loop instead of `continue`-spinning through a huge count prefix.
     if yank.is_empty() {
         return;
+    }
+    // Clamp the paste count so the total payload stays within a byte
+    // budget, preventing OOM from pathological count prefixes (e.g.
+    // `yy999999999p` on a 10-byte register would allocate ~10 GB).
+    // Both charwise (`yank.repeat(count)`) and linewise (count
+    // iterations) produce at most `count * yank.len()` bytes.
+    const MAX_PASTE_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
+    if !yank.is_empty() {
+        let max_count = (MAX_PASTE_BYTES / yank.len()).max(1);
+        count = count.min(max_count);
     }
     // Blockwise register (`<C-v>` yank/delete): re-insert the row segments
     // as columns at the cursor. Handles its own cursor / marks / sticky
