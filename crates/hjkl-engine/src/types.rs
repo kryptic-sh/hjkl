@@ -242,7 +242,12 @@ pub struct Options {
     /// `settings_default_matches_options_default` pins.
     pub cursorline: bool,
     /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
-    /// Default `false`.
+    ///
+    /// Default `true` — a deliberate hjkl divergence from vim, which defaults
+    /// to `nocursorcolumn`. Use `:set nocuc` to turn it off. Must stay in
+    /// lockstep with [`crate::editor::Options::default`], which
+    /// `settings_default_matches_options_default` pins — the `cursorline`
+    /// twins disagreed once and silently won in a fresh session.
     pub cursorcolumn: bool,
     /// Whether to reserve a 1-cell sign column for diagnostics and git signs.
     /// Matches vim's `:set signcolumn`. Default [`SignColumnMode::Auto`].
@@ -473,7 +478,7 @@ impl Default for Options {
             relativenumber: false,
             numberwidth: 4,
             cursorline: false,
-            cursorcolumn: false,
+            cursorcolumn: true,
             signcolumn: SignColumnMode::Auto,
             foldcolumn: 0,
             foldmethod: FoldMethod::Expr,
@@ -1822,7 +1827,13 @@ mod tests {
     #[test]
     fn options_cursorcolumn_roundtrip() {
         let mut o = Options::default();
-        assert!(!o.cursorcolumn, "cursorcolumn defaults to false");
+        // hjkl turns this on by default, unlike vim's `nocursorcolumn`.
+        assert!(o.cursorcolumn, "cursorcolumn defaults to true in hjkl");
+        o.set_by_name("cuc", OptionValue::Bool(false)).unwrap();
+        assert!(matches!(
+            o.get_by_name("cursorcolumn"),
+            Some(OptionValue::Bool(false))
+        ));
         o.set_by_name("cuc", OptionValue::Bool(true)).unwrap();
         assert!(matches!(
             o.get_by_name("cursorcolumn"),

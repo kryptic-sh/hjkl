@@ -1098,7 +1098,10 @@ pub struct Settings {
     /// Default `false`.
     pub cursorline: bool,
     /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
-    /// Default `false`.
+    ///
+    /// Default `true` — a deliberate hjkl divergence from vim, which defaults
+    /// to `nocursorcolumn`. Must stay in lockstep with
+    /// [`crate::types::Settings::default`].
     pub cursorcolumn: bool,
     /// Sign-column display mode. Matches vim's `:set signcolumn`.
     /// Default [`crate::types::SignColumnMode::Auto`].
@@ -1305,7 +1308,7 @@ impl Default for Settings {
             relativenumber: false,
             numberwidth: 4,
             cursorline: false,
-            cursorcolumn: false,
+            cursorcolumn: true,
             signcolumn: crate::types::SignColumnMode::Auto,
             foldcolumn: 0,
             foldmethod: crate::types::FoldMethod::Expr,
@@ -7045,7 +7048,7 @@ mod options_conversion_tests {
             relativenumber: true,
             numberwidth: 9,
             cursorline: true,
-            cursorcolumn: true,
+            cursorcolumn: false,
             signcolumn: SignColumnMode::Yes,
             foldcolumn: 3,
             foldmethod: FoldMethod::Marker,

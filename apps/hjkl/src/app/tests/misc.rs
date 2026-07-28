@@ -408,11 +408,13 @@ fn set_cul_alias_works() {
 #[test]
 fn set_cursorcolumn_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert!(!app.active_editor().settings().cursorcolumn);
-    app.dispatch_ex("set cuc");
+    // On by default in hjkl (vim defaults to `nocursorcolumn`), so this
+    // exercises the off-then-on direction.
     assert!(app.active_editor().settings().cursorcolumn);
     app.dispatch_ex("set nocuc");
     assert!(!app.active_editor().settings().cursorcolumn);
+    app.dispatch_ex("set cuc");
+    assert!(app.active_editor().settings().cursorcolumn);
 }
 
 #[test]

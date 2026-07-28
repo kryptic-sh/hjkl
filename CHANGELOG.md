@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **`cursorcolumn` is now on by default.** The column under the cursor is
+  highlighted in a fresh session; `:set nocuc` turns it off. This is a
+  deliberate divergence from vim, which defaults to `nocursorcolumn` — unlike
+  `cursorline`, which was aligned _to_ vim's default in 0.38.0.
+
 ### Fixed
 
 - **`/pattern<CR>` now sets the sticky column, so the next `j`/`k` keeps the
