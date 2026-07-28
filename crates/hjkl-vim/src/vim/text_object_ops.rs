@@ -289,6 +289,11 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
     // cut_vim_range's inverse format varies (leading '\n' for last-line
     // deletes), which makes the re-insertion point context-dependent.
     let selection = read_vim_range(ed, top, bot, kind);
+    // Snapshot the row count before the cut so we can tell whether the
+    // original buffer had a phantom trailing empty row (ropey convention:
+    // "foo\nbar\n" → 3 rows, "foo\nbar" → 2 rows).  Needed after the cut
+    // to decide whether to strip read_vim_range's synthetic trailing '\n'.
+    let n_rows_before = buf_row_count(ed.buffer());
     // Perform the delete (yank, clipboard, registers are handled inside).
     cut_vim_range(ed, top, bot, kind);
     let transformed = match op {
@@ -299,7 +304,7 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
         _ => unreachable!(),
     };
     if !transformed.is_empty() {
-        let (ordered_top, _) = order(top, bot);
+        let (ordered_top, ordered_bot) = order(top, bot);
         // After the cut the buffer may be shorter. Compute the insertion
         // point from the current buffer state.
         let n_rows = buf_row_count(ed.buffer());
@@ -319,7 +324,22 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
                 RangeKind::Linewise => Position::new(ordered_top.0, 0),
                 _ => Position::new(ordered_top.0, ordered_top.1),
             };
-            (at, transformed)
+            // When the cut covered the entire buffer (only the phantom
+            // row remains, n_rows == 1) and the original buffer had *no*
+            // trailing newline (n_rows_before == number of content rows
+            // cut, not content_rows + 1 phantom), strip read_vim_range's
+            // synthetic trailing '\n' so it doesn't create a spurious
+            // blank line.
+            let text = if kind == RangeKind::Linewise
+                && n_rows == 1
+                && ordered_top.0 == 0
+                && n_rows_before == ordered_bot.0 - ordered_top.0 + 1
+            {
+                transformed.trim_end_matches('\n').to_string()
+            } else {
+                transformed
+            };
+            (at, text)
         };
         ed.mutate_edit(Edit::InsertStr {
             at: insert_at,
