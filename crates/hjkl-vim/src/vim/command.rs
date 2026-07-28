@@ -79,6 +79,15 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
     use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
+    // Snapshot the undo depth before the cut so we can tell whether the
+    // buffer was just created (empty from the start) or was emptied by a
+    // prior operation.  `push_undo` has already run at this point, so a
+    // depth of 1 means this is the very first mutation — a first `dd` on
+    // a genuinely empty buffer should record "\n".  A depth > 1 means a
+    // prior operation (e.g. `VGd`) already modified the buffer; if the
+    // current delete produced no text it is a no-op and must leave
+    // registers untouched.
+    let undo_depth = ed.undo_stack_len();
     let (buf_start, buf_end, buf_kind) = match kind {
         RangeKind::Linewise => (
             Position::new(top.0, 0),
@@ -127,6 +136,12 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
             // at the end (vim register convention).
             (format!("{}\n", raw_text.strip_prefix('\n').unwrap()), false)
         } else if raw_text.is_empty() {
+            if undo_depth > 1 {
+                // Buffer was modified by a prior operation (e.g. `VGd`
+                // emptied the buffer) — this delete is a true no-op.
+                // Leave registers untouched.
+                return String::new();
+            }
             // Empty buffer dd: vim records "\n".
             ("\n".to_string(), true)
         } else {
