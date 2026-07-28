@@ -371,17 +371,25 @@ pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
 pub fn move_first_non_blank_next_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let last = read_row_count(buf).saturating_sub(1);
-    let target_row = (cursor.row + count.max(1)).min(last);
-    write_cursor(buf, Position::new(target_row, 0));
+    let desired = cursor.row + count.max(1);
+    // Vim: `+` on the last line is a no-op (no next line to move to).
+    if desired > last {
+        return;
+    }
+    write_cursor(buf, Position::new(desired, 0));
     move_first_non_blank(buf);
 }
 
 /// `-` — first non-blank of the previous line (`count` lines up).
-/// Linewise motion. On the first line, stays on row 0's first non-blank.
+/// Linewise motion. On the first line, the motion is a no-op (vim behavior).
 pub fn move_first_non_blank_prev_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let target_row = cursor.row.saturating_sub(count.max(1));
-    write_cursor(buf, Position::new(target_row, 0));
+    let steps = count.max(1);
+    // Vim: `-` on the first line is a no-op (no previous line to move to).
+    if cursor.row < steps {
+        return;
+    }
+    write_cursor(buf, Position::new(cursor.row - steps, 0));
     move_first_non_blank(buf);
 }
 
@@ -392,8 +400,12 @@ pub fn move_first_non_blank_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let last = read_row_count(buf).saturating_sub(1);
     let offset = count.max(1).saturating_sub(1);
-    let target_row = (cursor.row + offset).min(last);
-    write_cursor(buf, Position::new(target_row, 0));
+    let desired = cursor.row + offset;
+    // Vim: `_` with a count that overshoots the buffer is a no-op.
+    if desired > last {
+        return;
+    }
+    write_cursor(buf, Position::new(desired, 0));
     move_first_non_blank(buf);
 }
 
@@ -2109,10 +2121,14 @@ mod tests {
     }
 
     #[test]
-    fn first_non_blank_line_clamps_at_last_row() {
+    fn first_non_blank_line_noop_when_overshooting() {
         let mut b = View::from_str("a\nb");
-        // 10_ from row 0 → last row (row 1), first non-blank.
+        // 10_ from row 0 would overshoot; vim no-ops.
+        let before = at(&b);
         move_first_non_blank_line(&mut b, 10);
+        assert_eq!(at(&b), before, "overshooting _ should be a no-op");
+        // 2_ from row 0 → row 1 (offset=1), first non-blank.
+        move_first_non_blank_line(&mut b, 2);
         assert_eq!(at(&b).row, 1);
     }
 }

@@ -22,6 +22,12 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // `yl` to cover the final char.
     apply_motion_cursor_ctx(ed, motion, count, true);
     let mut end = ed.cursor();
+    // If the motion made no progress, abort the operator (vim behavior).
+    // An edge motion that can't advance (e.g. `dk` on a one-line buffer,
+    // `d+` on the last line) leaves the buffer unchanged.
+    if start == end {
+        return;
+    }
     let mut kind = motion_kind(motion);
     // Vim special case (`:h word`): when `w`/`W` is used with an operator and
     // the last word moved over ends its line, the operated text stops at the
