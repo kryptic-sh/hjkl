@@ -125,7 +125,7 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
         } else if raw_text.starts_with('\n') {
             // Last-line delete with rows above: leading '\n' belongs
             // at the end (vim register convention).
-            (format!("{}\n", &raw_text[1..]), false)
+            (format!("{}\n", raw_text.strip_prefix('\n').unwrap()), false)
         } else if raw_text.is_empty() {
             // Empty buffer dd: vim records "\n".
             ("\n".to_string(), true)
