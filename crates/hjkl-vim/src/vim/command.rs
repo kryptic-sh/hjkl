@@ -110,15 +110,39 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
         end: buf_end,
         kind: buf_kind,
     });
-    let text = match inverse {
+    let raw_text = match inverse {
         Edit::InsertStr { text, .. } => text,
         _ => String::new(),
     };
-    if !text.is_empty() {
-        ed.record_yank_to_host(text.clone());
-        let target = vim_mut(ed).pending_register.take();
-        ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
+    // Normalize linewise register text: vim always appends '\n' to
+    // linewise register content. The inverse from do_delete_range may
+    // produce text with a leading '\n' (last-line delete with rows
+    // above) or no newline at all (whole-buffer delete / empty buffer).
+    let (text, is_empty_op) = if matches!(kind, RangeKind::Linewise) {
+        if raw_text.ends_with('\n') {
+            // Normal mid-buffer delete: trailing '\n' already correct.
+            (raw_text, false)
+        } else if raw_text.starts_with('\n') {
+            // Last-line delete with rows above: leading '\n' belongs
+            // at the end (vim register convention).
+            (format!("{}\n", &raw_text[1..]), false)
+        } else if raw_text.is_empty() {
+            // Empty buffer dd: vim records "\n".
+            ("\n".to_string(), true)
+        } else {
+            // Whole-buffer delete: no newline in inverse text, append one.
+            (format!("{}\n", raw_text), false)
+        }
+    } else {
+        (raw_text, false)
+    };
+    if !is_empty_op && text.is_empty() {
+        // Non-linewise delete yielded no text — nothing to record.
+        return text;
     }
+    ed.record_yank_to_host(text.clone());
+    let target = vim_mut(ed).pending_register.take();
+    ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
     text
 }
 /// `D` / `C` — delete from cursor to end of line through the edit
