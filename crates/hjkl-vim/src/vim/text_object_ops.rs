@@ -6,10 +6,11 @@ use hjkl_vim_types::{Mode, Operator, RangeKind};
 
 use hjkl_engine::rope_util::rope_to_lines_vec;
 
+use super::command::read_vim_range;
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
 /// Resolve the range of `i<quote>` (inner quote) at the current cursor
 /// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
@@ -279,11 +280,17 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
     bot: (usize, usize),
     kind: RangeKind,
 ) {
-    use hjkl_buffer::Edit;
+    use hjkl_buffer::{Edit, Position};
     ed.push_undo();
     let saved_yank = ed.yank();
     let saved_yank_linewise = ed.yank_linewise();
-    let selection = cut_vim_range(ed, top, bot, kind);
+    // Read the text with read_vim_range so we get a consistently-formatted
+    // string: trailing '\n' for linewise, no terminator for charwise.
+    // cut_vim_range's inverse format varies (leading '\n' for last-line
+    // deletes), which makes the re-insertion point context-dependent.
+    let selection = read_vim_range(ed, top, bot, kind);
+    // Perform the delete (yank, clipboard, registers are handled inside).
+    cut_vim_range(ed, top, bot, kind);
     let transformed = match op {
         Operator::Uppercase => selection.to_uppercase(),
         Operator::Lowercase => selection.to_lowercase(),
@@ -292,10 +299,31 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
         _ => unreachable!(),
     };
     if !transformed.is_empty() {
-        let cursor = buf_cursor_pos(ed.buffer());
+        let (ordered_top, _) = order(top, bot);
+        // After the cut the buffer may be shorter. Compute the insertion
+        // point from the current buffer state.
+        let n_rows = buf_row_count(ed.buffer());
+        let (insert_at, final_text) = if kind == RangeKind::Linewise && ordered_top.0 >= n_rows {
+            // The cut removed the last row(s); no surviving rows remain
+            // at or below the cut point.  read_vim_range's trailing '\n'
+            // must become a leading '\n' so it re-joins with the last
+            // surviving line above.
+            let last_row = n_rows.saturating_sub(1);
+            let last_col = buf_line_chars(ed.buffer(), last_row);
+            // Strip trailing '\n' (always present from read_vim_range)
+            // and prepend '\n' for append-after-last-line insertion.
+            let body = transformed.trim_end_matches('\n');
+            (Position::new(last_row, last_col), format!("\n{}", body))
+        } else {
+            let at = match kind {
+                RangeKind::Linewise => Position::new(ordered_top.0, 0),
+                _ => Position::new(ordered_top.0, ordered_top.1),
+            };
+            (at, transformed)
+        };
         ed.mutate_edit(Edit::InsertStr {
-            at: cursor,
-            text: transformed,
+            at: insert_at,
+            text: final_text,
         });
     }
     buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
