@@ -14,9 +14,14 @@ survives) and printed as paste-ready corpus TOML.
   through both engines, for narrowing a shrunk case by hand.
 
 ```
+cargo build -p hjkl-compat-oracle --release --examples   # BOTH, see note
 cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777
 cargo run -p hjkl-compat-oracle --release --example dfcase -- '<buf>' <row> <col> '<keys>'
 ```
+
+Build with `--examples`, not `--example dfcase`. Rebuilding only one leaves the
+other stale, and a stale `difffuzz` silently reports the previous commit's
+divergences — byte-identical results across a run are the tell.
 
 Both drivers pin `shiftwidth=4`, `expandtab`, `noautoindent`,
 `foldmethod=manual`, so a divergence means an engine defect rather than config
@@ -27,109 +32,99 @@ them.
 
 ## Status
 
-The first audit pass (seed 777, 400 cases) produced 114 divergences across 11
-findings. The fix pass that followed closed most of them. **Re-running the same
-seed after the fixes: 99 divergences** — roughly 9 are known harness noise and
-21 are the residual blockwise cluster (finding 5 below).
+Seed 777, 400 cases, measured after each pass:
+
+| pass                          | divergences |
+| ----------------------------- | ----------- |
+| original audit                | 114         |
+| after the first fix pass      | 99          |
+| after the regression fix pass | **91**      |
+
+Of the 91: ~9 are known harness noise, 21 are the residual blockwise cluster
+(finding 5), and the rest are the long tail below. Gate state:
+`cargo clippy --all-targets -D warnings` clean, `cargo test --workspace` 5595
+passed, `hjkl-compat-oracle` 81 passed across 4 suites.
 
 Resolved and pruned from this document:
 
-| Finding                             | Fixed by               |
-| ----------------------------------- | ---------------------- |
-| 1 — linewise case-op corruption     | `05418277` (see R3)    |
-| 3 — `$` ignores its count           | `2e5b484b`             |
-| 4 — `D` / `C` drop their count      | `2e5b484b`, `46561b22` |
-| 6 — `j`/`k` lose the display column | `37b62b73`, `b949484c` |
-| 7 — `+` / `-` / `_` clamp at edges  | `b4458135` (see R1)    |
-| 10 — `VgU` cursor column            | `7e260e27` (see W1)    |
-| 2 — `dk` on a one-line buffer       | `b4458135`             |
-| 5 — blockwise + **text object**     | `ba813ca0`             |
-| 8 — `b` in leading ws, `3w`, `W`    | `f808513e`             |
-| 9 — empty-buffer `dd` register      | `d0ee6cca` (see R2)    |
+| Finding                                     | Fixed by                            |
+| ------------------------------------------- | ----------------------------------- |
+| 1 — linewise case-op corruption             | `05418277`, `19638f39`              |
+| 2 — `dk` one-line, `J` on the last line     | `b4458135`, `62bd4853` (but see R4) |
+| 3 — `$` ignores its count                   | `2e5b484b`                          |
+| 4 — `D` / `C` drop their count              | `2e5b484b`, `46561b22`              |
+| 6 — `j`/`k` lose the display column         | `37b62b73`, `b949484c`              |
+| 7 — `+` / `-` / `_` clamp at edges          | `b4458135`                          |
+| 8 — `b` in leading ws, `3w`, `W`            | `f808513e`                          |
+| 9 — register newline placement              | `d0ee6cca`, `79e024d5`              |
+| 10 — `VgU` cursor column                    | `7e260e27` (see W1)                 |
+| R1 — `d_` no-op                             | `0107e2e8` (but see R4)             |
+| R2 — no-op delete clobbers the register     | `79e024d5` (see W2)                 |
+| R3 — whole-buffer case op adds a blank line | `19638f39`                          |
 
-Note the changelog entry claiming all nine findings are fixed overstates it —
-findings 2, 5, 8 and 9 were only partially closed, and 11 was not closed at all.
-The residue is tracked below.
+The case-op family cleared 10 fuzz cases in the last pass (`guu`, `gUap`, `g~G`,
+`VjU`, `V1bU`, `V3toU`, `V}uyG`, `gE`, `==1dL`, `IZ>H`).
 
-## Regressions introduced by the fix pass
+## Open
 
-These broke previously-passing cases and are the highest priority.
+### R4. `dk` / `dj` / `d+` / `d-` destroy the line at a buffer edge
 
-### R1. `d_` is a no-op — breaks `tier1_corpus_passes`
-
-```
-`d_` on "one\ntwo\nthree", cursor (0,0)
-hjkl: "one\ntwo\nthree"   (unchanged)
-nvim: "two\nthree"
-```
-
-`b4458135` added a blanket guard to `apply_op_with_motion`
-(`crates/hjkl-vim/src/vim/op_motion.rs`):
+Introduced by `0107e2e8`, which fixed R1 by exempting linewise motions from the
+`start == end` guard in `apply_op_with_motion`:
 
 ```rust
-if start == end {
+if start == end && !matches!(kind, RangeKind::Linewise) {
     return;
 }
 ```
 
-It sits _before_ `motion_kind(motion)` is consulted, so it never exempts
-linewise motions. Count-1 `_` legitimately stays on its own row and still covers
-that line. The guard is right for charwise motions and wrong for linewise ones.
-Corpus case: `op_d_underscore_linewise_current`.
-
-### R2. A no-op linewise delete clobbers the register — breaks `tier2_registers_corpus_passes`
+The exemption is too broad. It is correct for `_`, whose count-1 form covers the
+current row by definition, but `j` / `k` / `+` / `-` are also linewise and must
+**fail** when there is no row to move to. All four now delete:
 
 ```
-`VGddd` on "one\ntwo\nthree\nfour\n"
-hjkl register: "\n"
-nvim register: "one\ntwo\nthree\nfour\n"
+`dk` (also `dj`, `d+`, `d-`) on "only line", cursor (0,3)
+hjkl: ""              ← line destroyed
+nvim: "only line"     ← unchanged
 ```
 
-`d0ee6cca` added an `is_empty_op` branch to `cut_vim_range`
-(`crates/hjkl-vim/src/vim/command.rs`) that force-records `"\n"` whenever the
-delete yielded no text; the previous code skipped recording entirely.
+This re-breaks the half of finding 2 that `b4458135` had fixed. The fuzzer
+independently surfaced `dk` as a new divergence in the latest pass. Multi-line
+`dk` (row 2 of 3) is still correct.
 
-The distinction it missed: a _first_ `dd` on an empty buffer does record `"\n"`
-(that was finding 9, correctly fixed), but a linewise delete that removes
-nothing must leave the register untouched. Record `"\n"` only when the operation
-actually deleted a line. Corpus cases: `register_survives_noop_dd`,
-`register_survives_noop_visual_line_delete`.
+The guard needs to key off whether the _motion failed_, not off the cursor delta
+— `_` does not fail at count 1; `k` at row 0 does.
 
-### R3. Whole-buffer case operators append a blank line
+### 11. Unbounded memory on large paste counts — improved, not closed
 
-```
-`VGgU` / `gUG` on "aa\nbb"
-hjkl: "AA\nBB\n"   ← spurious trailing blank line
-nvim: "AA\nBB"
-```
+`62bd4853` replaced the ineffective count cap with a 10 MiB byte budget in
+`do_paste`. The payload is now bounded, but applying it still peaks far above
+the budget:
 
-`05418277`'s last-row special case keys off `ordered_top.0 >= n_rows`, which is
-false when the range covers _every_ row (the cut leaves one empty row behind).
-The else branch then re-inserts text carrying `read_vim_range`'s trailing `\n`
-at (0,0), growing the buffer by a line. Not caught by any existing test.
+| case                                        | `ulimit -v 2 GB` |
+| ------------------------------------------- | ---------------- |
+| `yy999999999p`, 10-byte register            | abort (134)      |
+| `yy999999999p`, 2000-byte register          | abort (134)      |
+| `yy5000p`, 10-byte register (50 KB payload) | ok               |
 
-## Still open from the original audit
+Same input succeeds at `ulimit -v 8 GB`. The cost tracks total payload bytes,
+not iteration count — ~5200 iterations of a 2000-byte register (10 MiB, the
+clamp ceiling) aborts, while 5000 iterations of a 10-byte register (50 KB) does
+not. So a paste sitting exactly at the permitted ceiling needs >2 GB peak RSS,
+roughly 200× amplification.
 
-### 11. Unbounded memory on large paste counts — fix was ineffective
+The budget is therefore too generous relative to per-byte overhead. Either drop
+it substantially or build the payload once and apply it as a single edit rather
+than looping `count` times.
 
-`1116270b` clamps the paste count to `MAX_COUNT` (999,999,999), but the OOM
-occurs far below that ceiling. Verified at exactly the cap:
-
-```
-yy999999999p   →  memory allocation of 12582912 bytes failed, exit 134
-```
-
-A 10-byte register at the cap is ~10 GB. The clamp bounds nothing that matters;
-the limit has to be on resulting bytes, not on the count.
-
-Original signal: `cargo fuzz run handle_key` OOMed at 4.3 GB from a seed under 1
-KB (artifact `oom-2932edc579699c6bfaec9cbeb18e1673945ce40b`).
+The weekly cron fuzz job runs with libFuzzer's default 2048 MB rss limit, so
+this remains reachable there.
 
 ### 5 (residual). Blockwise visual — non-delete operators
 
 `ba813ca0` fixed blockwise + text object (`<C-v>iwd`, `<C-v>i(d` now match). 21
-blockwise divergences remain, concentrated on the indent operators and on `H` /
-`L` / `gE` motions:
+blockwise divergences remain, unchanged across the last two passes, concentrated
+on the indent operators and on `H` / `L` / `gE` motions:
 
 ```
 `<C-v>iw<` on "\t(x).[y]", cursor (0,6)
@@ -146,18 +141,20 @@ nvim: "\t(x).[y]"   ← unchanged
 | `}` at EOF, buffer `"    it's.{foo}.A-B.{A-B}"` | (0,21) | (0,23) |
 | `B` at col 0 of row 1                           | (0,0)  | (1,0)  |
 
-`}` changed behaviour (it used to land on (0,0)) but still does not reach the
-last character. `B` still overshoots to the previous line.
+`}` no longer jumps to (0,0) but still does not reach the last character. `B`
+still overshoots to the previous line.
 
-### 2 (residual). `J` on the last line
+### T1. Composite case-op sequence — needs triage
 
 ```
-`J` on "abc\n\n", cursor (1,0)
-hjkl: "abc\n"     ← consumed the trailing blank
-nvim: "abc\n\n"
+`V}u2)1gUiW` on "'qux'  A-B", cursor (0,9)
+hjkl: "'qux'  A-B"   (unchanged)
+nvim: "'QUX'  a-b"
 ```
 
-`dk` is fixed; `J` still edits where vim aborts.
+New in the latest pass. Every component passes in isolation (`Vu`, `V}u`, `gUiW`
+all match), so the likely culprit is cursor placement after `2)` rather than the
+case operators — unconfirmed.
 
 ## Watch items
 
@@ -165,6 +162,18 @@ nvim: "abc\n\n"
 position is correct, but per `docs/cursor-moves.md` that primitive does not
 maintain curswant — the exact class of latent bug that document exists to
 prevent. A following `j` may snap to a stale column.
+
+**W2. `79e024d5` distinguishes a no-op delete by undo-stack depth.** It reads
+`ed.undo_stack_len() > 1` as "the buffer was modified by a prior operation",
+which is a proxy for the real rule rather than the rule itself. It makes the
+oracle cases pass, but the register outcome of a no-op `dd` now depends on
+whether _any_ prior undoable action occurred in the session, which is not what
+vim keys off.
+
+**W3. `62bd4853` silently truncates oversized pastes.** A user asking for N
+copies of a large register gets fewer, with no message. Silent partial execution
+is arguably worse than refusing; consider surfacing it the way vim reports
+`E1240`-style limits.
 
 ## Verified — not defects
 
@@ -199,10 +208,10 @@ Checked and deliberately excluded, so they are not re-reported next time:
 
 ## Suggested next steps
 
-1. R1 and R2 first — they are the two failing oracle suites, and both are a few
-   lines.
-2. R3 next; it silently grows the buffer and nothing tests it.
-3. Re-point finding 11 at a byte budget rather than a count ceiling.
+1. R4 first — it is a live data-loss path and the narrowest fix here.
+2. Re-point finding 11 at a smaller budget plus a single batched edit.
+3. Replace W2's undo-depth proxy with the actual "did this delete remove a line"
+   condition.
 4. Promote each fixed case into the tier-2 corpus so the oracle guards it,
    rather than leaving it to the fuzzer to rediscover.
 5. Teach the nvim driver to clear undo history after seeding (`nvim_command`
