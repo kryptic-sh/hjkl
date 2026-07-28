@@ -1986,7 +1986,7 @@ fn substitute_line_clears_content_and_enters_insert() {
 fn delete_to_eol_removes_from_cursor_to_end() {
     let mut e = normal_editor("hello world");
     e.jump_cursor(0, 5);
-    e.delete_to_eol();
+    e.delete_to_eol(1);
     // col 5 is ' ' — deletes " world", leaving "hello".
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
@@ -1995,7 +1995,7 @@ fn delete_to_eol_removes_from_cursor_to_end() {
 fn delete_to_eol_noop_when_cursor_past_end() {
     let mut e = normal_editor("hi");
     e.jump_cursor(0, 2);
-    e.delete_to_eol();
+    e.delete_to_eol(1);
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hi");
 }
 
@@ -2003,7 +2003,7 @@ fn delete_to_eol_noop_when_cursor_past_end() {
 fn change_to_eol_enters_insert() {
     let mut e = normal_editor("hello world");
     e.jump_cursor(0, 5);
-    e.change_to_eol();
+    e.change_to_eol(1);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
     // col 5 is ' ' — deletes " world", leaving "hello".
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");

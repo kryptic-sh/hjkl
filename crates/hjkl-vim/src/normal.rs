@@ -662,7 +662,7 @@ fn handle_normal_only<H: Host>(
             true
         }
         Key::Char('D') => {
-            ed.delete_to_eol();
+            ed.delete_to_eol(count);
             true
         }
         Key::Char('Y') => {
@@ -670,7 +670,7 @@ fn handle_normal_only<H: Host>(
             true
         }
         Key::Char('C') => {
-            ed.change_to_eol();
+            ed.change_to_eol(count);
             true
         }
         Key::Char('s') => {

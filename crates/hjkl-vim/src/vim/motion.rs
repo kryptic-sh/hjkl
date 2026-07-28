@@ -253,10 +253,9 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
             execute_motion_with_block_vcol(ed, Motion::FileBottom, count);
         }
         hjkl_engine::MotionKind::LineEnd => {
-            // `$` / `<End>`: last character on the current line.
-            // count is ignored at the keymap-path level (vim `N$` moves
-            // down N-1 lines then lands at line-end; not yet wired).
-            execute_motion_with_block_vcol(ed, Motion::LineEnd, 1);
+            // `[count]$` / `<End>`: move count-1 lines down then land
+            // at the last character of the destination line.
+            execute_motion_with_block_vcol(ed, Motion::LineEnd, count);
         }
         hjkl_engine::MotionKind::FindRepeat => {
             // `;` — repeat last f/F/t/T in the same direction.
@@ -512,7 +511,14 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
         }
         Motion::LineEnd => {
+            // `[count]$`: move count-1 lines down, then to line end.
             // Vim normal-mode `$` lands on the last char, not one past it.
+            if count > 1 {
+                let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+                let mut sticky = ed.sticky_col();
+                hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count - 1, &mut sticky);
+                ed.set_sticky_col(sticky);
+            }
             hjkl_engine::motions::move_line_end(ed.buffer_mut());
         }
         Motion::FileTop => {

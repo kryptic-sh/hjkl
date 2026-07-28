@@ -743,10 +743,10 @@ pub trait VimEditorExt {
     fn substitute_char(&mut self, count: usize);
     /// `S` — substitute whole lines.
     fn substitute_line(&mut self, count: usize);
-    /// `D` — delete to end-of-line.
-    fn delete_to_eol(&mut self);
-    /// `C` — change to end-of-line.
-    fn change_to_eol(&mut self);
+    /// `D` — delete to end-of-line (`[count]D` extends down count-1 lines).
+    fn delete_to_eol(&mut self, count: usize);
+    /// `C` — change to end-of-line (`[count]C` extends down count-1 lines).
+    fn change_to_eol(&mut self, count: usize);
     /// `Y` — yank to end-of-line.
     fn yank_to_eol(&mut self, count: usize);
     /// `J` — join `count` lines.
@@ -2086,12 +2086,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         crate::vim::substitute_line_bridge(self, count);
     }
 
-    fn delete_to_eol(&mut self) {
-        crate::vim::delete_to_eol_bridge(self);
+    fn delete_to_eol(&mut self, count: usize) {
+        crate::vim::delete_to_eol_bridge(self, count);
     }
 
-    fn change_to_eol(&mut self) {
-        crate::vim::change_to_eol_bridge(self);
+    fn change_to_eol(&mut self, count: usize) {
+        crate::vim::change_to_eol_bridge(self, count);
     }
 
     fn yank_to_eol(&mut self, count: usize) {

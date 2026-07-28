@@ -209,21 +209,48 @@ pub fn substitute_line_bridge<H: hjkl_engine::types::Host>(
     }
 }
 /// `D` — delete from the cursor to end-of-line, writing to the unnamed
-/// register. Cursor parks on the new last char. Records for dot-repeat.
-pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
-    ed.push_undo();
-    delete_to_eol(ed);
-    hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+/// register. `[count]D` extends the deletion down `count-1` lines (equivalent
+/// to `d[count]$`). Cursor parks on the new last char. Records for dot-repeat.
+pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+) {
+    if count <= 1 {
+        ed.push_undo();
+        delete_to_eol(ed);
+        hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+    } else {
+        apply_op_with_motion(ed, Operator::Delete, &Motion::LineEnd, count);
+    }
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::DeleteToEol { inserted: None });
     }
 }
 /// `C` — change from the cursor to end-of-line (delete then enter Insert).
-/// Equivalent to `c$`. Shares the delete path with `D`.
-pub fn change_to_eol_bridge<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
-    ed.push_undo();
-    delete_to_eol(ed);
-    begin_insert_noundo(ed, 1, InsertReason::DeleteToEol);
+/// `[count]C` extends the change down `count-1` lines (equivalent to
+/// `c[count]$`). Shares the delete path with `D`.
+pub fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+) {
+    let count = count.max(1);
+    if count <= 1 {
+        ed.push_undo();
+        delete_to_eol(ed);
+        begin_insert_noundo(ed, 1, InsertReason::DeleteToEol);
+    } else {
+        // Stash last_change before the operation so AfterChange insert-exit
+        // can fill in the `inserted` text for dot-repeat.
+        if !vim(ed).replaying {
+            vim_mut(ed).last_change = Some(LastChange::OpMotion {
+                op: Operator::Change,
+                motion: Motion::LineEnd,
+                count,
+                inserted: None,
+            });
+        }
+        apply_op_with_motion(ed, Operator::Change, &Motion::LineEnd, count);
+    }
 }
 /// `Y` — yank from the cursor to end-of-line (same as `y$` in Vim 8 default).
 pub fn yank_to_eol_bridge<H: hjkl_engine::types::Host>(
