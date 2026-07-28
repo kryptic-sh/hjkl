@@ -557,7 +557,14 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             if count > 1 {
                 let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
                 let mut sticky = ed.sticky_col();
-                hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count - 1, &mut sticky);
+                let tabstop = ed.settings().tabstop;
+                hjkl_engine::motions::move_down(
+                    ed.buffer_mut(),
+                    &folds,
+                    count - 1,
+                    &mut sticky,
+                    tabstop,
+                );
                 ed.set_sticky_col(sticky);
             }
             hjkl_engine::motions::move_line_end(ed.buffer_mut());
