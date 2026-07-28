@@ -15,8 +15,9 @@
 
 use crate::vim::{Mode, Pending};
 use crate::vim_state::vim;
+use hjkl_buffer::char_col_to_visual_col;
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::buf_line_chars;
+use hjkl_engine::buf_helpers::{buf_line, buf_line_chars};
 
 /// Pre-keystroke state, captured before the FSM runs.
 pub struct Pre {
@@ -62,14 +63,18 @@ fn holds<H: hjkl_engine::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
     let Some(want) = ed.sticky_col() else {
         return true; // no motion has run yet
     };
-    if want == col {
+    // sticky_col now stores a display column — convert the cursor's char
+    // index to a display column before comparing.
+    let line = buf_line(ed.buffer(), row).unwrap_or_default();
+    let display_col = char_col_to_visual_col(&line, col, ed.settings().tabstop);
+    if want == display_col {
         return true; // synced to the landed column
     }
     // A vertical motion clamped to a short row. Normal mode parks on the last
     // char (`len - 1`); Visual may sit one past the end, so both count as
     // "the end of this row".
     let line_len = buf_line_chars(ed.buffer(), row);
-    want > col && col >= line_len.saturating_sub(1)
+    want > display_col && col >= line_len.saturating_sub(1)
 }
 
 /// Check the `curswant` invariant after one keystroke has been dispatched.

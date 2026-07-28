@@ -13,6 +13,8 @@ use hjkl_engine::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
 
+use hjkl_buffer::{char_col_to_visual_col, visual_col_to_char_col};
+
 /// Parse the first key of a normal/visual-mode motion. Returns `None` for
 /// keys that don't start a motion (operator keys, command keys, etc.).
 /// Promoted to `pub` in Phase 6.6e so `hjkl-vim::normal` can call it.
@@ -196,10 +198,13 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
             // semantics but goes through the fold-aware buffer motion path.
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+            let pos = buf_cursor_pos(ed.buffer());
+            let line = buf_line(ed.buffer(), pos.row).unwrap_or_default();
+            ed.set_sticky_col(Some(char_col_to_visual_col(&line, pos.col, tabstop)));
             ed.sync_buffer_from_textarea();
         }
         hjkl_engine::MotionKind::FirstNonBlankUp => {
@@ -207,10 +212,13 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
             // Same pattern as FirstNonBlankDown, direction reversed.
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+            let pos = buf_cursor_pos(ed.buffer());
+            let line = buf_line(ed.buffer(), pos.row).unwrap_or_default();
+            ed.set_sticky_col(Some(char_col_to_visual_col(&line, pos.col, tabstop)));
             ed.sync_buffer_from_textarea();
         }
         hjkl_engine::MotionKind::WordForward => {
@@ -356,17 +364,26 @@ pub fn apply_sticky_col<H: hjkl_engine::types::Host>(
     pre_col: usize,
 ) {
     if is_vertical_motion(motion) {
-        let want = ed.sticky_col().unwrap_or(pre_col);
+        // sticky_col now stores a display column (vim's curswant).
+        // `pre_col` is a char index captured before the motion — convert
+        // to display on the current line when sticky hasn't been set yet.
+        let want = ed.sticky_col().unwrap_or_else(|| {
+            let (row, _) = ed.cursor();
+            let line = buf_line(ed.buffer(), row).unwrap_or_default();
+            char_col_to_visual_col(&line, pre_col, ed.settings().tabstop)
+        });
         // Record the desired column so the next vertical motion sees
         // it even if we currently clamped to a shorter row.
         ed.set_sticky_col(Some(want));
         let (row, _) = ed.cursor();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
+        // Convert the display column to a char index on this row,
+        // then clamp to the last char (vim normal-mode never parks
+        // one past end of line).
+        let char_col = visual_col_to_char_col(&line, want, ed.settings().tabstop);
         let line_len = buf_line_chars(ed.buffer(), row);
-        // Clamp to the last char on non-empty lines (vim normal-mode
-        // never parks the cursor one past end of line). Empty lines
-        // collapse to col 0.
         let max_col = line_len.saturating_sub(1);
-        let target = want.min(max_col);
+        let target = char_col.min(max_col);
         // raw primitive: this function MUST preserve the un-clamped `want`
         // already stored in `ed.sticky_col()`; `jump_cursor` would overwrite
         // it with the clamped `target`.
@@ -374,7 +391,13 @@ pub fn apply_sticky_col<H: hjkl_engine::types::Host>(
     } else {
         // Horizontal motion or non-motion: sticky column tracks the
         // new cursor column so the *next* vertical motion aims there.
-        ed.set_sticky_col(Some(ed.cursor().1));
+        let (row, col) = ed.cursor();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
+        ed.set_sticky_col(Some(char_col_to_visual_col(
+            &line,
+            col,
+            ed.settings().tabstop,
+        )));
     }
 }
 pub fn is_vertical_motion(motion: &Motion) -> bool {
@@ -449,27 +472,45 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             // finish the work.
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
         }
         Motion::Down => {
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
         }
         Motion::ScreenUp => {
             let v = *ed.host().viewport();
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_screen_up(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_screen_up(
+                ed.buffer_mut(),
+                &folds,
+                &v,
+                count,
+                &mut sticky,
+                tabstop,
+            );
             ed.set_sticky_col(sticky);
         }
         Motion::ScreenDown => {
             let v = *ed.host().viewport();
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_screen_down(ed.buffer_mut(), &folds, &v, count, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_screen_down(
+                ed.buffer_mut(),
+                &folds,
+                &v,
+                count,
+                &mut sticky,
+                tabstop,
+            );
             ed.set_sticky_col(sticky);
         }
         Motion::WordFwd => {

@@ -542,13 +542,15 @@ pub fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
         InsertDir::Up => {
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
         }
         InsertDir::Down => {
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
-            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky);
+            let tabstop = ed.settings().tabstop;
+            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
         }
     }

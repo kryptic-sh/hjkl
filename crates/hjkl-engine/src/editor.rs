@@ -616,6 +616,8 @@ use crate::buf_helpers::{
     buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
 
+use hjkl_buffer::char_col_to_visual_col;
+
 /// Return value from the engine's `try_goto_mark_*` methods. Tells the
 /// caller (app layer) whether a cross-buffer switch is required.
 ///
@@ -1954,7 +1956,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// makes the guarantee structural instead of remembered; the motion path
     /// then re-sets the same value, which is a no-op.
     fn sync_sticky_col_to_cursor(&mut self) {
-        self.sticky_col = Some(buf_cursor_pos(&self.buffer).col);
+        let pos = buf_cursor_pos(&self.buffer);
+        let line = buf_line(&self.buffer, pos.row).unwrap_or_default();
+        self.sticky_col = Some(char_col_to_visual_col(
+            &line,
+            pos.col,
+            self.settings().tabstop,
+        ));
     }
 
     /// Snapshot of the unnamed register (the default `p` / `P` source).
@@ -2374,7 +2382,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// else resets it to the column where the cursor actually landed.
     pub fn jump_cursor(&mut self, row: usize, col: usize) {
         buf_set_cursor_rc(&mut self.buffer, row, col);
-        self.sticky_col = Some(col);
+        let line = buf_line(&self.buffer, row).unwrap_or_default();
+        self.sticky_col = Some(char_col_to_visual_col(&line, col, self.settings().tabstop));
     }
 
     /// Set the cursor to `(row, col)` without modifying `sticky_col`.
@@ -3063,7 +3072,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
         buf_set_cursor_rc(&mut self.buffer, target, 0);
         crate::motions::move_first_non_blank(&mut self.buffer);
-        self.sticky_col = Some(buf_cursor_pos(&self.buffer).col);
+        let pos = buf_cursor_pos(&self.buffer);
+        let line = buf_line(&self.buffer, pos.row).unwrap_or_default();
+        self.sticky_col = Some(char_col_to_visual_col(
+            &line,
+            pos.col,
+            self.settings().tabstop,
+        ));
     }
 
     /// Scroll the cursor by one full viewport height (height − 2 rows,

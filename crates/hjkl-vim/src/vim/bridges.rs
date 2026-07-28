@@ -119,7 +119,8 @@ pub fn open_line_above_bridge<H: hjkl_engine::types::Host>(
     });
     let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
     let mut sticky = ed.sticky_col();
-    hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky);
+    let tabstop = ed.settings().tabstop;
+    hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
     ed.set_sticky_col(sticky);
     let new_row = buf_cursor_pos(ed.buffer()).row;
     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());

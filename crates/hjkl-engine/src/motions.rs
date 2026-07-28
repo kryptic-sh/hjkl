@@ -24,7 +24,9 @@
 //! `iskeyword` spec so the host can change it without re-publishing
 //! it onto the buffer. Both have lived as `Editor` fields since 0.0.28.
 //!
-use hjkl_buffer::{KeywordSpec, Position, Wrap, wrap};
+use hjkl_buffer::{
+    KeywordSpec, Position, Wrap, char_col_to_visual_col, visual_col_to_char_col, wrap,
+};
 
 use crate::types::{Cursor, FoldProvider, Pos, Query};
 
@@ -415,14 +417,16 @@ pub fn move_first_non_blank_line<B: Cursor + Query>(buf: &mut B, count: usize) {
 /// caller (`Editor::sticky_col` per 0.0.28); pass `&mut None` if
 /// the row's current column should bootstrap the sticky value.
 /// `folds` drives fold-aware row stepping so closed folds count as
-/// one visual line.
+/// one visual line. `tabstop` drives display-column ↔ char-index
+/// conversion so `j`/`k` preserve the virtual column across tabs.
 pub fn move_up<B: Cursor + Query>(
     buf: &mut B,
     folds: &dyn FoldProvider,
     count: usize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
-    move_vertical(buf, folds, -(count.max(1) as isize), sticky_col);
+    move_vertical(buf, folds, -(count.max(1) as isize), sticky_col, tabstop);
 }
 
 /// `j` — `count` rows down. See [`move_up`] for sticky / fold ownership.
@@ -431,8 +435,9 @@ pub fn move_down<B: Cursor + Query>(
     folds: &dyn FoldProvider,
     count: usize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
-    move_vertical(buf, folds, count.max(1) as isize, sticky_col);
+    move_vertical(buf, folds, count.max(1) as isize, sticky_col, tabstop);
 }
 
 /// `gk` — `count` visual rows up. With `Wrap::None` (or before
@@ -450,8 +455,16 @@ pub fn move_screen_up<B: Cursor + Query>(
     viewport: &hjkl_buffer::Viewport,
     count: usize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
-    move_screen_vertical(buf, folds, viewport, -(count.max(1) as isize), sticky_col);
+    move_screen_vertical(
+        buf,
+        folds,
+        viewport,
+        -(count.max(1) as isize),
+        sticky_col,
+        tabstop,
+    );
 }
 
 /// `gj` — `count` visual rows down. See [`move_screen_up`].
@@ -461,8 +474,16 @@ pub fn move_screen_down<B: Cursor + Query>(
     viewport: &hjkl_buffer::Viewport,
     count: usize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
-    move_screen_vertical(buf, folds, viewport, count.max(1) as isize, sticky_col);
+    move_screen_vertical(
+        buf,
+        folds,
+        viewport,
+        count.max(1) as isize,
+        sticky_col,
+        tabstop,
+    );
 }
 
 /// `gg` — first row, first non-blank.
@@ -799,9 +820,10 @@ fn move_screen_vertical<B: Cursor + Query>(
     viewport: &hjkl_buffer::Viewport,
     delta: isize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
     if matches!(viewport.wrap, Wrap::None) || viewport.text_width == 0 {
-        move_vertical(buf, folds, delta, sticky_col);
+        move_vertical(buf, folds, delta, sticky_col, tabstop);
         return;
     }
     // Preserve curswant across visual vertical motions through shorter
@@ -877,12 +899,19 @@ fn move_vertical<B: Cursor + Query>(
     folds: &dyn FoldProvider,
     delta: isize,
     sticky_col: &mut Option<usize>,
+    tabstop: usize,
 ) {
     let cursor = read_cursor(buf);
-    let want = sticky_col.unwrap_or(cursor.col);
-    // Sticky col only bootstraps from the cursor on the first
-    // vertical move; subsequent moves read it back so a short
-    // row clamping us to col 3 doesn't lose the desired col 12.
+    // sticky_col now stores a display column (vim's curswant).
+    // Bootstrap from the current cursor position converted to display
+    // columns so the first `j`/`k` after a horizontal move preserves the
+    // visual column.
+    let want = if let Some(col) = *sticky_col {
+        col
+    } else {
+        let cursor_line = read_line(buf, cursor.row);
+        char_col_to_visual_col(&cursor_line, cursor.col, tabstop)
+    };
     *sticky_col = Some(want);
     // Walk one visible row at a time so closed folds count as one
     // visual line. Stops at top/bottom of buffer.
@@ -903,9 +932,12 @@ fn move_vertical<B: Cursor + Query>(
             }
         }
     }
+    // Convert the display column back to a char index on the target line.
+    // On a line with tabs, display col 8 might map to char index 5, etc.
     let line = read_line(buf, target_row);
+    let char_col = visual_col_to_char_col(&line, want, tabstop);
     let max_col = last_col(&line);
-    let target_col = want.min(max_col);
+    let target_col = char_col.min(max_col);
     write_cursor(buf, Position::new(target_row, target_col));
 }
 
@@ -1267,7 +1299,7 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 1);
         move_left(&mut b, 99);
@@ -1314,14 +1346,14 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 1);
         // Short row clamps to col 1 (last char of "hi").
         assert_eq!(at(&b).col, 1);
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         // Sticky col 7 restored on the longer row.
         assert_eq!(at(&b), Position::new(2, 7));
@@ -1336,14 +1368,14 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 1);
         assert_eq!(at(&b).col, 0); // empty line clamps to 0
         assert_eq!(sticky, Some(7)); // want preserved
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(2, 7)); // restored on long line
     }
@@ -1357,12 +1389,12 @@ mod tests {
         // rows 1..=3 into a single visual line at row 1.
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 1);
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 4);
     }
@@ -1375,12 +1407,12 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_up(&mut b, &f, 1, &mut sticky);
+            move_up(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 1);
         {
             let f = folds(&b);
-            move_up(&mut b, &f, 1, &mut sticky);
+            move_up(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 0);
     }
@@ -1393,7 +1425,7 @@ mod tests {
         // Open fold: every row is visible, plain row-by-row stepping.
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 2, &mut sticky);
+            move_down(&mut b, &f, 2, &mut sticky, 4);
         }
         assert_eq!(at(&b).row, 2);
     }
@@ -1404,7 +1436,7 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         move_top(&mut b);
         assert_eq!(at(&b), Position::new(0, 4));
@@ -1450,7 +1482,7 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
         move_word_fwd(&mut b, false, 1, ISK);
@@ -1465,7 +1497,7 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_down(&mut b, &f, 1, &mut sticky);
+            move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
         move_word_fwd(&mut b, false, 1, ISK);
@@ -1778,12 +1810,12 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(2, 0));
     }
@@ -1797,19 +1829,19 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         // visual_col = 1 → next segment starts at 4 → land col 5.
         assert_eq!(at(&b), Position::new(0, 5));
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(0, 9));
         // Past the last segment crosses to the next doc row.
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
     }
@@ -1822,19 +1854,19 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_screen_up(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_up(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         // visual_col = 9 - 8 = 1 → previous segment col = 4 + 1 = 5.
         assert_eq!(at(&b), Position::new(0, 5));
         {
             let f = folds(&b);
-            move_screen_up(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_up(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(0, 1));
         // Already on first segment of first row — no further move.
         {
             let f = folds(&b);
-            move_screen_up(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_up(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(0, 1));
     }
@@ -1850,13 +1882,13 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         // visual_col = 4 → segment 1 is (6, 8); want=10 clamps to 7.
         assert_eq!(at(&b), Position::new(0, 7));
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 1, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         // crosses into row 1, segment (0, 1) — clamps to col 0.
         assert_eq!(at(&b), Position::new(1, 0));
@@ -1870,7 +1902,7 @@ mod tests {
         let mut sticky = None;
         {
             let f = folds(&b);
-            move_screen_down(&mut b, &f, &v, 2, &mut sticky);
+            move_screen_down(&mut b, &f, &v, 2, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(0, 8));
     }
