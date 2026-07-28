@@ -101,7 +101,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         .row
                         .max(vim(ed).visual_line_anchor);
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
-                    move_first_non_whitespace(ed);
+                    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
                     record_visual_last_change(
                         ed,
                         op,
