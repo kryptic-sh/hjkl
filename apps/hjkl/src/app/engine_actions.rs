@@ -433,13 +433,16 @@ impl App {
                 self.sync_after_engine_mutation();
             }
             AppAction::DeleteToEol => {
+                // These two action variants carry no count of their own (and
+                // drop any pending one), so they are always the bare `D` / `C`.
+                // The counted forms go through the vim normal-mode dispatch.
                 self.pending_count.reset();
-                self.active_editor_mut().delete_to_eol();
+                self.active_editor_mut().delete_to_eol(1);
                 self.sync_after_engine_mutation();
             }
             AppAction::ChangeToEol => {
                 self.pending_count.reset();
-                self.active_editor_mut().change_to_eol();
+                self.active_editor_mut().change_to_eol(1);
                 self.sync_after_engine_mutation();
             }
             AppAction::YankToEol {
