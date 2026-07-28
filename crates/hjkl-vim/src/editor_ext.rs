@@ -1863,6 +1863,28 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         } else {
             (start, end)
         };
+        // vim switches from visual-block to the text-object's native mode
+        // (charwise for iw/aw/iquote/ibracket, linewise for ip/ap).  The
+        // block anchor is meaningless for the resulting charwise/linewise
+        // selection — replace it with the text object's computed start.
+        if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
+            match kind {
+                RangeKind::Linewise => {
+                    crate::vim_state::vim_mut(self).visual_line_anchor = start.0;
+                    crate::vim_state::vim_mut(self).mode = FsmMode::VisualLine;
+                    crate::vim_state::vim_mut(self).current_mode = VimMode::VisualLine;
+                    self.jump_cursor(end.0, 0);
+                }
+                _ => {
+                    crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                    crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                    crate::vim_state::vim_mut(self).visual_anchor = (start.0, start.1);
+                    let (er, ec) = crate::vim::retreat_one(self, end);
+                    self.jump_cursor(er, ec);
+                }
+            }
+            return;
+        }
         match kind {
             RangeKind::Linewise => {
                 crate::vim_state::vim_mut(self).visual_line_anchor = start.0;

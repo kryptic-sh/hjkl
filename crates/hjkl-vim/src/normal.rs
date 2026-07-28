@@ -351,8 +351,10 @@ pub fn step_normal<H: Host>(
     }
 
     // Visual mode: `i` / `a` start a text-object extension.
-    if matches!(ed.fsm_mode(), FsmMode::Visual | FsmMode::VisualLine)
-        && !input.ctrl
+    if matches!(
+        ed.fsm_mode(),
+        FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+    ) && !input.ctrl
         && matches!(input.key, Key::Char('i') | Key::Char('a'))
     {
         let inner = matches!(input.key, Key::Char('i'));
