@@ -14,9 +14,27 @@ patch bumps.
   highlighted in a fresh session; `:set nocuc` turns it off. This is a
   deliberate divergence from vim, which defaults to `nocursorcolumn` — unlike
   `cursorline`, which was aligned _to_ vim's default in 0.38.0.
+- **`postcard` is now built without default features**, dropping the `heapless`
+  0.7 → `atomic-polyfill` chain. `atomic-polyfill` is unmaintained with no safe
+  upgrade (RUSTSEC-2023-0089) and was reaching released `hjkl` artifacts.
+  Nothing used postcard's heapless types.
 
 ### Fixed
 
+- **`=` over a line starting with an unmatched `}`, `)` or `]` no longer
+  crashes.** The running bracket depth is an `i32`, and `saturating_sub`
+  saturates towards `i32::MIN` rather than clamping at zero, so a close bracket
+  at depth 0 produced `-1`; the `as usize` cast wrapped it to `usize::MAX` and
+  building the indent string panicked with "capacity overflow". A plain `==` on
+  a `}` line was enough to take the editor down. Found by the `handle_key` fuzz
+  target.
+- **Editing a buffer containing U+0085, U+2028 or U+2029 no longer panics.**
+  ropey treats those as line breaks alongside `\n`, but they are 2–3 bytes wide,
+  and `rope_row_range_str` stepped back a hard-coded single byte from the next
+  row's start to drop the separator. That landed inside the separator, and
+  `Rope::byte_slice` panics on a non-char-boundary index — taking the editor
+  down on comment toggling (`gcc`), linewise `:` ranges and `!` filters. Found
+  by the `handle_key` fuzz target.
 - **`/pattern<CR>` now sets the sticky column, so the next `j`/`k` keeps the
   match's column.** A search hit is an explicit jump, and vim resets `curswant`
   on those — hjkl left the value from whatever vertical motion came before, so

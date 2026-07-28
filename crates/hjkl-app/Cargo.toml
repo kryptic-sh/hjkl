@@ -26,7 +26,11 @@ hjkl-lsp.workspace = true
 hjkl-picker.workspace = true
 hjkl-vim.workspace = true
 libc = "0.2"
-postcard = { version = "1", features = ["use-std"] }
+# default-features = false drops postcard's `heapless-cas` default, which
+# pulls heapless 0.7 -> atomic-polyfill (RUSTSEC-2023-0089, unmaintained with
+# no safe upgrade). Nothing here uses postcard's heapless types; `use-std`
+# already enables `alloc`, which is what the session codec needs.
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 similar = "3"
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }

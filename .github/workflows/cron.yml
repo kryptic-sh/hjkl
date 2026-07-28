@@ -19,11 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: nightly
-      # proptest stores regression seeds in a directory it discovers
-      # via `getcwd`. miri rejects libc syscalls when isolated; flip
-      # to warn-mode so the syscall returns an error code and the
-      # regression reload skips gracefully.
-      MIRIFLAGS: -Zmiri-isolation-error=warn
+      # Two isolated-syscall problems, and only full disable covers both:
+      #   - proptest discovers its regression-seed directory via `getcwd`.
+      #     Warn-mode is enough here: the syscall returns an error code and
+      #     the regression reload skips gracefully.
+      #   - `UndoTree::new` calls `SystemTime::now()` on every buffer
+      #     construction. Warn-mode canNOT satisfy a clock read — miri has no
+      #     error code to hand back and aborts ("if supported for that
+      #     operation"), which failed every scheduled run until 2026-07-28.
+      MIRIFLAGS: -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly

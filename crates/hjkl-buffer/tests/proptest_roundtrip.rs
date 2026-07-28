@@ -32,7 +32,12 @@ fn pos_from_fractions(buf: &View, row_frac: f64, col_frac: f64) -> Position {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
+        // miri interprets rather than executes, so 256 cases per property
+        // across four properties makes the weekly miri job take hours. The
+        // point of running these under miri is UB detection in the rope/undo
+        // code, which a handful of cases exercises just as well; normal runs
+        // keep the full 256.
+        cases: if cfg!(miri) { 8 } else { 256 },
         ..ProptestConfig::default()
     })]
 

@@ -41,6 +41,13 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Three crates carry a version-less `hjkl-vim = { path = "../hjkl-vim" }`
+# dev-dependency on purpose: it breaks the publish-time cycle, since the first
+# release of a new minor has no `hjkl-vim ^X.Y` on crates.io to resolve
+# against yet. cargo-deny counts a path dep with no version as a wildcard.
+# This setting keeps `wildcards = "deny"` meaningful for real registry
+# wildcards while allowing the path form.
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

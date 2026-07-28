@@ -546,11 +546,11 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hjkl-bonsai"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "ahash",
  "anyhow",
- "dirs",
+ "hjkl-fs",
  "hjkl-theme",
  "hjkl-xdg",
  "libloading",
@@ -568,16 +568,17 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "regex",
  "ropey",
+ "serde",
  "unicode-width",
 ]
 
 [[package]]
 name = "hjkl-engine"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "bitflags 2.11.1",
  "hjkl-buffer",
@@ -585,7 +586,6 @@ dependencies = [
  "hjkl-vim-types",
  "regex",
  "ropey",
- "serde",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine-tui"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -614,8 +614,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-fs"
+version = "0.39.0"
+dependencies = [
+ "hjkl-xdg",
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "hjkl-keymap"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "bitflags 2.11.1",
  "thiserror 2.0.18",
@@ -623,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-lang"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hjkl-bonsai",
@@ -632,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-theme"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -641,16 +650,19 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-keymap",
+ "hjkl-vim-types",
+ "regex",
+ "tracing",
 ]
 
 [[package]]
 name = "hjkl-vim-tui"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
@@ -660,14 +672,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim-types"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "ropey",
 ]
 
 [[package]]
 name = "hjkl-xdg"
-version = "0.33.5"
+version = "0.39.0"
 dependencies = [
  "dirs",
  "thiserror 2.0.18",

@@ -949,6 +949,10 @@ mod tests {
     /// With ropey, InsertStr is O(log N + edit_size) — this test confirms it
     /// stays comfortably under the 200 ms budget.
     #[test]
+    // miri interprets rather than executes, so a 60 k-row splice takes orders
+    // of magnitude longer than the 200 ms budget and would both stall the
+    // weekly miri job and fail an assertion that says nothing about UB.
+    #[cfg_attr(miri, ignore = "wall-clock budget is meaningless under miri")]
     fn splice_at_60k_paste_at_row_zero_is_under_200ms() {
         // View with 60 k rows of empty content.
         let initial = "\n".repeat(60_000);
