@@ -2241,6 +2241,40 @@ fn scroll_line_onto_short_row_clamps_and_keeps_curswant() {
     assert_eq!(e.cursor(), (2, 7), "curswant restores on the next long row");
 }
 
+/// The `<C-y>` half of the same rule. `scroll_line` shares one clamp for both
+/// directions, but scrolling *up* pushes the cursor onto the viewport's new
+/// *bottom* row rather than its top — a different branch of the clamp
+/// arithmetic. Without its own case the upward path rides on the downward
+/// test's coverage and could regress silently.
+#[test]
+fn scroll_line_up_onto_short_row_clamps_and_keeps_curswant() {
+    use hjkl_engine::ScrollDir;
+    // Row 3 is the short one; the cursor starts below it on row 4.
+    let mut e = fresh_editor("abcdefghij\nabcdefghij\nabcdefghij\nab\nabcdefghij");
+    e.set_viewport_height(2);
+    e.jump_cursor(4, 7);
+    e.set_viewport_top(3);
+    assert_eq!(e.sticky_col(), Some(7));
+
+    // Scroll up so row 4 leaves the viewport; the cursor is pushed back onto
+    // row 3, which only has 2 chars.
+    e.scroll_line(ScrollDir::Up, 1);
+    assert_eq!(
+        e.cursor(),
+        (3, 1),
+        "must clamp to the short row's last char scrolling up too"
+    );
+    assert_eq!(
+        e.sticky_col(),
+        Some(7),
+        "the un-clamped want must survive the short row"
+    );
+
+    // Continuing onto a long row restores the original column.
+    e.scroll_line(ScrollDir::Up, 1);
+    assert_eq!(e.cursor(), (2, 7), "curswant restores on the next long row");
+}
+
 #[test]
 fn scroll_doesnt_crash_at_buffer_edges() {
     use hjkl_engine::ScrollDir;

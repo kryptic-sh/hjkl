@@ -77,6 +77,38 @@ fn equal_equal_on_unmatched_close_bracket_does_not_panic() {
 }
 
 #[test]
+fn eq_g_on_unmatched_close_brackets_does_not_panic() {
+    // Same depth-0 clamp as above, reached through the *range* entry point
+    // (`=G`) rather than the doubled `==`. Both funnel into `auto_indent_rows`
+    // today, so this guards against a future split of those paths letting the
+    // negative-depth cast come back on one of them.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "}\n}\n}");
+    app.active_editor_mut().settings_mut().shiftwidth = 4;
+    app.active_editor_mut().settings_mut().expandtab = true;
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    drive_chars(&mut app, "=G");
+
+    let lines: Vec<_> = app
+        .active_editor()
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        vec!["}", "}", "}"],
+        "=G over unmatched close brackets must clamp to depth 0 too"
+    );
+}
+
+#[test]
 fn eq_g_from_top_reindents_entire_buffer() {
     // `=G` from row 0 covers the whole buffer (top → last line).
     // View: "{\nbody\n}" where "body" has wrong zero indent.
