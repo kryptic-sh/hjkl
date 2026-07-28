@@ -25,10 +25,14 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // If the motion made no progress, abort the operator (vim behavior).
     // An edge motion that can't advance (e.g. `dk` on a one-line buffer,
     // `d+` on the last line) leaves the buffer unchanged.
-    if start == end {
+    let mut kind = motion_kind(motion);
+    // A charwise motion that made no progress is a no-op (vim behavior):
+    // e.g. `dk` on a one-line buffer, `d+` on the last line.
+    // Linewise motions always cover their row even when start == end
+    // (e.g. `d_` with count 1 on a single row must still delete it).
+    if start == end && !matches!(kind, RangeKind::Linewise) {
         return;
     }
-    let mut kind = motion_kind(motion);
     // Vim special case (`:h word`): when `w`/`W` is used with an operator and
     // the last word moved over ends its line, the operated text stops at the
     // end of that word instead of eating the line break into the next line's
