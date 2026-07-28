@@ -516,6 +516,15 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::WordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
+            // Cursor context: clamp to the last char of the line so a counted
+            // `w` past EOF never lands past the last character.
+            if !as_operator {
+                let (row, col) = ed.cursor();
+                let line_len = buf_line_chars(ed.buffer(), row);
+                if col > line_len.saturating_sub(1) {
+                    ed.jump_cursor(row, line_len.saturating_sub(1));
+                }
+            }
         }
         Motion::WordBack => {
             let iskeyword = ed.settings().iskeyword.clone();
@@ -528,6 +537,14 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::BigWordFwd => {
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
+            // Cursor context: clamp to the last char of the line.
+            if !as_operator {
+                let (row, col) = ed.cursor();
+                let line_len = buf_line_chars(ed.buffer(), row);
+                if col > line_len.saturating_sub(1) {
+                    ed.jump_cursor(row, line_len.saturating_sub(1));
+                }
+            }
         }
         Motion::BigWordBack => {
             let iskeyword = ed.settings().iskeyword.clone();

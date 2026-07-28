@@ -277,7 +277,8 @@ pub fn move_paragraph_prev<B: Cursor + Query>(buf: &mut B, count: usize) {
 /// before scanning down through the following paragraph to the next boundary.
 pub fn move_paragraph_next<B: Cursor + Query>(buf: &mut B, count: usize) {
     let last = read_row_count(buf).saturating_sub(1);
-    let mut row = read_cursor(buf).row;
+    let cursor = read_cursor(buf);
+    let mut row = cursor.row;
     for _ in 0..count.max(1) {
         if row >= last {
             break;
@@ -291,7 +292,10 @@ pub fn move_paragraph_next<B: Cursor + Query>(buf: &mut B, count: usize) {
         }
         row = r;
     }
-    write_cursor(buf, Position::new(row, 0));
+    // Only move when a paragraph boundary was found (row changed).
+    if row != cursor.row {
+        write_cursor(buf, Position::new(row, 0));
+    }
 }
 
 /// `[[` — backward to the previous `{` at column 0 (C section header).
@@ -1078,13 +1082,18 @@ fn next_word_start<B: Query + ?Sized>(
         }
     } else {
         // `from` sits on an empty line. Vim counts an empty line as a word
-        // (`:help word`), so `w` steps off it — the whitespace/word scan
-        // below then lands on the next word start (possibly another empty
-        // line, which stops the scan since its char kind is neither Space
-        // nor a word char).
-        match step_forward(buf, cache, cur) {
-            Some(next) => cur = next,
-            None => return Some(end_of_buffer(buf)),
+        // (`:help word`), so `w` steps off it. For `W` (big word), empty
+        // lines are not WORDs — skip through consecutive empty lines to
+        // find the next non-empty line.
+        {
+            let next = step_forward(buf, cache, cur)?;
+            cur = next;
+        }
+        if big {
+            while cache.char_at(buf, cur).is_none() {
+                let next = step_forward(buf, cache, cur)?;
+                cur = next;
+            }
         }
     }
     // Skip whitespace runs (within row + across rows) to land on
@@ -1125,7 +1134,18 @@ fn prev_word_start<B: Query + ?Sized>(
         .map(|c| char_kind(c, big, iskeyword))
         == Some(CharKind::Space)
     {
-        cur = step_back(buf, cache, cur)?;
+        match step_back(buf, cache, cur) {
+            Some(prev) => cur = prev,
+            None => {
+                // Hit buffer start inside leading whitespace.
+                // Only land here when we started on row 0
+                // (the previous "word" is the start of the line).
+                if from.row == 0 {
+                    return Some(cur);
+                }
+                return None;
+            }
+        }
     }
     let target_kind = cache
         .char_at(buf, cur)
