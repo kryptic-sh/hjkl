@@ -303,11 +303,12 @@ pub fn paste_bridge<H: hjkl_engine::types::Host>(
     cursor_after: bool,
     reindent: bool,
 ) {
-    do_paste(ed, before, count.max(1), cursor_after, reindent);
+    let count = count.clamp(1, MAX_COUNT);
+    do_paste(ed, before, count, cursor_after, reindent);
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::Paste {
             before,
-            count: count.max(1),
+            count,
             cursor_after,
             reindent,
         });
