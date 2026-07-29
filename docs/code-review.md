@@ -65,7 +65,7 @@ Resolved and pruned from this document:
 The case-op family cleared 10 fuzz cases in the last pass (`guu`, `gUap`, `g~G`,
 `VjU`, `V1bU`, `V3toU`, `V}uyG`, `gE`, `==1dL`, `IZ>H`).
 
-## Open
+## Evidence for differential-audit backlog items
 
 ### R4. `dk` / `dj` / `d+` / `d-` destroy the line at a buffer edge
 
@@ -92,8 +92,9 @@ This re-breaks the half of finding 2 that `b4458135` had fixed. The fuzzer
 independently surfaced `dk` as a new divergence in the latest pass. Multi-line
 `dk` (row 2 of 3) is still correct.
 
-The guard needs to key off whether the _motion failed_, not off the cursor delta
-— `_` does not fail at count 1; `k` at row 0 does.
+This distinguishes failed motions from zero-distance successful motions: `_`
+does not fail at count 1; `k` at row 0 does. The action is tracked in
+`docs/backlog.md`.
 
 ### 11. Unbounded memory on large paste counts — improved, not closed
 
@@ -113,9 +114,8 @@ clamp ceiling) aborts, while 5000 iterations of a 10-byte register (50 KB) does
 not. So a paste sitting exactly at the permitted ceiling needs >2 GB peak RSS,
 roughly 200× amplification.
 
-The budget is therefore too generous relative to per-byte overhead. Either drop
-it substantially or build the payload once and apply it as a single edit rather
-than looping `count` times.
+The budget is therefore too generous relative to per-byte overhead. Remediation
+is tracked in `docs/backlog.md`.
 
 The weekly cron fuzz job runs with libFuzzer's default 2048 MB rss limit, so
 this remains reachable there.
@@ -144,7 +144,7 @@ nvim: "\t(x).[y]"   ← unchanged
 `}` no longer jumps to (0,0) but still does not reach the last character. `B`
 still overshoots to the previous line.
 
-### T1. Composite case-op sequence — needs triage
+### T1. Composite case-op sequence — unconfirmed cause
 
 ```
 `V}u2)1gUiW` on "'qux'  A-B", cursor (0,9)
@@ -172,8 +172,7 @@ vim keys off.
 
 **W3. `62bd4853` silently truncates oversized pastes.** A user asking for N
 copies of a large register gets fewer, with no message. Silent partial execution
-is arguably worse than refusing; consider surfacing it the way vim reports
-`E1240`-style limits.
+is arguably worse than refusing; remediation is tracked in `docs/backlog.md`.
 
 ## Verified — not defects
 
@@ -213,7 +212,7 @@ sub-agents (hjkl-vim, hjkl-engine, hjkl-buffer) plus direct review of the recent
 diff, curswant invariant, rope_util, and Move API. Every cited file:line was
 re-read and every failure scenario traced end-to-end by hand.
 
-## Findings
+## Evidence for code-review backlog items
 
 ### 1. `Move::Vertical` mixes display-column `sticky_col` with char-column cursor math
 
@@ -240,8 +239,7 @@ Repro: tabstop=4, buffer "\tabcdef\n\txyz", cursor (0,2)='b'
 Expect: cursor (1,2)='y' (visual col 5 on a tab+line = char col 2)
 ```
 
-Fix: convert `want` from display to char column before clamping, matching what
-`apply_sticky_col` does.
+Remediation is tracked in `docs/backlog.md`.
 
 ### 2. `outdent_rows` strips by character count, not visual column width
 
@@ -258,8 +256,7 @@ Repro: << on "\t\tfoo" (tabstop=4, shiftwidth=4, noexpandtab)
 Expect: "\tfoo" (vim strips 4 visual cols = 1 tab)
 ```
 
-Fix: iterate chars, accumulating visual width via the existing `indent_width`
-helper (`command.rs:572`), stop when accumulated width reaches `width`.
+Remediation is tracked in `docs/backlog.md`.
 
 ### 3. `adjust_number_visual` ignores hex literals
 
@@ -276,8 +273,7 @@ Repro: Vg<C-a> on "0xFF", cursor row 0
 Expect: hex increment → "0x100"
 ```
 
-Fix: replicate the `is_hex_prefix` check and hex-increment logic from
-`adjust_number` into `adjust_number_visual`.
+Remediation is tracked in `docs/backlog.md`.
 
 ### 4. `:s` `/i` and `/I` flags ignore inline `\c`/`\C` overrides
 
@@ -301,9 +297,8 @@ Repro: :s/\CFOO/bar/i
 Expect: \C forces case-sensitive despite the i flag
 ```
 
-Same bug in `collect_substitute_matches` (lines 442-458). Fix: pass the
-flag-resolved `CaseMode` as `base` to `resolve_case_mode` so inline overrides
-win, then apply the result.
+The same bug exists in `collect_substitute_matches` (lines 442-458). Remediation
+is tracked in `docs/backlog.md`.
 
 ### 5. `toggle_case_str` discards multi-character case mappings
 
@@ -381,12 +376,13 @@ case mappings.
 - **14 additional items from sub-agent #3 (buffer crate)** — all verified safe
   by the sub-agent and spot-checked.
 
-## Hardening
+## Hardening evidence
 
-- **`SnapshotFoldProvider::next_visible_row` unbounded `+= 1`**
+- **`SnapshotFoldProvider::next_visible_row` uses unbounded `+= 1`**
   (`buffer_impl.rs:608`): `r += 1` in while loop without `checked_add`.
   `prev_visible_row` uses `checked_sub`. Risk only at `last == usize::MAX`,
-  unreachable with realistic buffers. Use `checked_add` for consistency.
+  unreachable with realistic buffers. Remediation is tracked in
+  `docs/backlog.md`.
 
 - **`Move::Vertical` bootstrap path** (`cursor_move.rs:89`): when `sticky_col`
   is `None`, the bootstrap uses `self.cursor().1` (char column) as `want`, but
@@ -396,17 +392,16 @@ case mappings.
 
 - **`prune_root_side` depth inconsistency with `clear_all`** (`undo.rs`):
   `clear_all` resets survivor depth to 0 (line 1105); `prune_root_side` does not
-  (line 1032-1068). Rename `depth` to `depth_for_keyframe` to make the
-  cache-only contract explicit.
+  (line 1032-1068). The naming remediation is tracked in `docs/backlog.md`.
 
 - **`rope_line_char_count` / `rope_line_bytes` OOB panic** (`buffer.rs:806-815`,
-  `794-803`): public functions without bounds checks. Clamp row internally,
-  matching `pos_to_char_idx` which does.
+  `794-803`): public functions without bounds checks. Current callers clamp the
+  row; API hardening is tracked in `docs/backlog.md`.
 
 - **`ensure_cursor_visible` top_row stale on shrink from other view**
   (`buffer.rs:189-191`): when `cursor_screen_row_from` returns `None`, only
   `top_col` is zeroed; `top_row` stays where it was, potentially leaving cursor
-  invisible. Clamp `top_row` to `last_content_row()`.
+  invisible. Remediation is tracked in `docs/backlog.md`.
 
 ## Coverage
 
@@ -467,17 +462,7 @@ All 22 failures are pre-existing (tree unchanged this session):
 
 No regressions introduced by this review.
 
-## Suggested next steps
-
-1. R4 first — it is a live data-loss path and the narrowest fix here.
-2. Re-point finding 11 at a smaller budget plus a single batched edit.
-3. Replace W2's undo-depth proxy with the actual "did this delete remove a line"
-   condition.
-4. Promote each fixed case into the tier-2 corpus so the oracle guards it,
-   rather than leaving it to the fuzzer to rediscover.
-5. Teach the nvim driver to clear undo history after seeding (`nvim_command`
-   with `:let old_ul=&ul | set ul=-1 | ... | let &ul=old_ul`) so undo/redo
-   becomes fuzzable.
+Open follow-up actions from this review are consolidated in `docs/backlog.md`.
 
 # Code review — pending changes (2026-07-29)
 
@@ -491,9 +476,7 @@ property test and also triggers in `no_panic_on_random_keys`.
 `replay_last_change`, `finish_insert_session`, and the curswant invariant check.
 Verified the same code-path reproduction with the exact shrunk sequences.
 
-## Findings
-
-### 1. `replay_last_change` for empty `ReplaceMode` moves cursor without updating `sticky_col`
+## Evidence for pending-change backlog item
 
 `crates/hjkl-vim/src/vim/dot_repeat.rs:205–226`
 
@@ -557,17 +540,18 @@ and `input.key == Key::Char('.')` — it does not reject `alt` or `shift`.
   `ed.set_sticky_col(Some(ed.cursor().1))` after `move_left`, syncing the sticky
   column (`crates/hjkl-vim/src/vim/insert_bridges.rs:867`).
 
-## Hardening
+## Hardening evidence
 
 - **Dot-repeat gate doesn't filter `alt`/`shift`** — `step_normal` line 463
   checks only `!input.ctrl && input.key == Key::Char('.')`. Real vim does not
-  trigger dot-repeat on `Alt-.` or `Shift-.`. This is a divergence that
-  increases the input surface hitting this bug but is not itself a correctness
-  defect.
+  trigger dot-repeat on `Alt-.` or `Shift-.`. This divergence increases the
+  input surface hitting this bug but is not itself a correctness defect.
 
 - **Wasteful `push_undo()` on empty ReplaceMode replay** — `dot_repeat.rs:207`
   pushes an undo entry for a replay that performs zero buffer mutations. This is
   harmless but creates pointless undo-tree entries.
+
+Both actions are tracked in `docs/backlog.md`.
 
 ## Coverage
 

@@ -103,6 +103,61 @@ it did not touch. See `docs/docks-as-leaves.md`.
 | `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and does `text.to_string()`, so didOpen still pays one copy before the params builder ever sees it. Signature change, separate item.                                                                                                                                             |
 | `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | Verified to have **no readers** anywhere — every apparent hit is a comment or a test name. Deleting it wins ~27% on the full-install path and **nothing** per keystroke. It is a `pub` removal on a published crate, so it is your call — see [§3.4](#34-published-crates-are-not-workspace-local). |
 
+### 1.7 Differential-oracle and code-review fixes (2026-07-28–29)
+
+Consolidated from `docs/code-review.md`. Preserve each fixed case in the tier-2
+compatibility corpus and verify it against nvim before changing expectations.
+
+| Priority | Task                                                                                                                                                                                                                                               | Where / acceptance criterion                                                                                                                            |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Highest  | Distinguish failed linewise motions from zero-distance successful motions. At a buffer edge, `dk`, `dj`, `d+`, and `d-` must leave the only line unchanged; count-1 `d_` must still delete it.                                                     | `hjkl-vim::apply_op_with_motion`; live data-loss regression introduced by `0107e2e8`.                                                                   |
+| High     | Replace repeated paste application with one batched edit and set a memory budget that does not amplify a permitted 10 MiB paste beyond libFuzzer's 2048 MiB RSS limit. Refuse oversized pastes with an error rather than silently truncating them. | `do_paste`; `yy999999999p` currently aborts under `ulimit -v 2 GB` but succeeds under 8 GB.                                                             |
+| High     | Replace the no-op-delete undo-depth proxy with the actual “did this delete remove a line?” result.                                                                                                                                                 | The register outcome of a no-op `dd` must not depend on unrelated prior undoable actions.                                                               |
+| High     | Fix empty `ReplaceMode` dot replay so `R<Esc>e.` does not move left while leaving `sticky_col` stale. Reject Alt/Shift-modified `.` as dot-repeat and avoid pushing an undo entry when replay performs no mutation.                                | `crates/hjkl-vim/src/vim/dot_repeat.rs`, `normal.rs`; must make the saved `37433df2` proptest regression pass without weakening the curswant invariant. |
+| Medium   | Implement blockwise non-delete operators with block geometry rather than whole-line indentation, including `H`, `L`, and `gE` motion/cursor behavior.                                                                                              | 21 residual differential cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.                                                            |
+| Medium   | Correct paragraph/WORD landings: `}` at EOF must reach the last character and `B` at column 0 of row 1 must remain on row 1.                                                                                                                       | `}` case expects `(0,23)`, `B` case expects `(1,0)`.                                                                                                    |
+| Medium   | Triage the composite `V}u2)1gUiW` divergence and fix the state or cursor transition between individually-correct components.                                                                                                                       | `"'qux'  A-B"` must become `"'QUX'  a-b"` like nvim.                                                                                                    |
+| Medium   | Convert `Move::Vertical`'s display-column `sticky_col` back to a character column before clamping.                                                                                                                                                 | `crates/hjkl-engine/src/cursor_move.rs`; tabstop=4 repro must land on `(1,2)`, not `(1,3)`.                                                             |
+| Medium   | Make `outdent_rows` consume visual indentation width, including tabs, instead of taking `width` characters.                                                                                                                                        | `crates/hjkl-vim/src/vim/text_object_ops.rs`; `<<` on `"\t\tfoo"` with tabstop/shiftwidth 4 must produce `"\tfoo"`.                                     |
+| Medium   | Add hexadecimal handling to visual `<C-a>`/`<C-x>` using the normal-mode number adjustment semantics.                                                                                                                                              | `crates/hjkl-vim/src/vim/command.rs`; `Vg<C-a>` on `0xFF` must produce `0x100`.                                                                         |
+| Medium   | Make inline `\c`/`\C` override substitute `/i` and `/I` flags in both execution and match collection.                                                                                                                                              | `crates/hjkl-engine/src/substitute.rs`; cover `apply_substitute` and `collect_substitute_matches`.                                                      |
+| Low      | Preserve every character emitted by Unicode upper/lowercase mappings instead of taking only the first.                                                                                                                                             | `toggle_case_str` and command case conversion; cover multi-character mappings such as `ß → SS` and `İ → i\u{307}`.                                      |
+
+### 1.8 Cursor-move API migration
+
+Consolidated from unfinished phases in `docs/cursor-moves.md`. `Move` and the
+debug invariant already shipped; remaining work must not weaken that invariant.
+
+1. Migrate `hjkl-engine` motions to `Editor::move_cursor`, first fixing
+   `<C-e>`/`<C-y>` vertical curswant preservation and row-end clamping.
+2. Migrate `hjkl-vim` motion, command, bridge, visual, and operator paths. Fix
+   insert paths first, then visual yank, then normal operators/edits, widening
+   `crates/hjkl-vim/src/curswant.rs` after each class is clean.
+3. Migrate `apps/hjkl` cursor writes.
+4. Make raw cursor primitives crate-internal, remove `set_sticky_col` from the
+   public surface, and reduce `apply_sticky_col` to the vertical clamp.
+5. Report counts by `Move` variant for each migration phase; justify every
+   `Move::Raw` site. Keep compat-oracle and PTY e2e behavior unchanged.
+
+### 1.9 Harness, coverage, and hardening
+
+Consolidated from `docs/code-review.md`.
+
+- Teach the nvim differential driver to clear undo history after fixture
+  seeding, then fuzz undo/redo. Extend sound cursor comparison beyond ASCII, and
+  add coverage for ex/search prompts, folds, and `gq` where harness support
+  permits.
+- Complete review coverage for `apps/hjkl`, LSP, editor/TUI, ex/completion,
+  prompt/menu/picker, and remaining non-core crates.
+- Stabilize process-global CWD/environment explorer tests and flaky PTY e2e
+  cases so full workspace `nextest` is reliable.
+- Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
+- Rename undo-tree `depth` to `depth_for_keyframe` so its cache-only contract is
+  explicit and consistent with pruning behavior.
+- Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
+- Clamp `top_row` when another view shrinks a buffer and
+  `cursor_screen_row_from` returns `None`.
+
 ---
 
 ## 2. Blocked on platform access
@@ -250,7 +305,7 @@ caught by measuring instead of assuming:
   large documents that need them; the shipped ceiling is a count.
 - **"`Arc::unwrap_or_clone` makes the LSP full-sync path a move."** False:
   `Buffer::content_joined()` stores the `Arc` in its `dirty_gen` cache and
-  returns a clone, so the refcount is never 1. See §1.5.
+  returns a clone, so the refcount is never 1. See §1.6.
 - **"`styled_spans` has consumers in `render.rs` / `syntax_glue.rs`."** False —
   those are comments and test names. It has no readers at all. Measuring before
   removing also showed the removal is worth nothing on the per-keystroke path,
@@ -418,12 +473,12 @@ attached LSP servers; Indexed colors flattened to black in one of two adapters.
 Highest-ROI open items, one commit each, reviewed against the diff (not the
 report) before merging. Every gate re-run on `main` after each merge.
 
-| Item                            | Result                                                                                  | Commit     |
-| ------------------------------- | --------------------------------------------------------------------------------------- | ---------- |
-| Undo keyframes (§1.1, #302)     | `:earlier 9999` at depth 1024: **212 ms → 5.45 ms**; cold jump 445 µs → 75.5 µs         | `5da674f1` |
-| LSP params doc-text copy (§1.4) | didOpen **27.6 µs → 109 ns**, didChange incremental **49.8 µs → 396 ns** (2 MiB doc)    | `d758bd96` |
-| Span-install residual (§1.4)    | per-keystroke `patch_viewport_range` **16.2 µs → 13.6 µs** (−16%); fixes the §4.7 panic | `6b156334` |
-| Mis-named lock test (§3.3)      | renamed to match what it verifies                                                       | `960eaaa7` |
+| Item                        | Result                                                                                  | Commit     |
+| --------------------------- | --------------------------------------------------------------------------------------- | ---------- |
+| Undo keyframes (§1.1, #302) | `:earlier 9999` at depth 1024: **212 ms → 5.45 ms**; cold jump 445 µs → 75.5 µs         | `5da674f1` |
+| LSP params doc-text copy    | didOpen **27.6 µs → 109 ns**, didChange incremental **49.8 µs → 396 ns** (2 MiB doc)    | `d758bd96` |
+| Span-install residual       | per-keystroke `patch_viewport_range` **16.2 µs → 13.6 µs** (−16%); fixes the §4.7 panic | `6b156334` |
+| Mis-named lock test (§3.3)  | renamed to match what it verifies                                                       | `960eaaa7` |
 
 Keyframe design notes worth keeping: `KEYFRAME_INTERVAL = 16` was chosen by
 measurement (K=4 → 5.00 ms, K=16 → 4.39 ms, K=32 → 4.78 ms for the depth-1024

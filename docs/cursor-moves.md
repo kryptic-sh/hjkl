@@ -25,8 +25,7 @@ one routed through the vim motion dispatch was right.
 
 ## Target shape
 
-Make "what does this do to curswant?" a required argument of moving, not a
-follow-up call:
+The selected design makes curswant semantics part of every cursor move:
 
 ```rust
 pub enum Move {
@@ -39,9 +38,10 @@ pub enum Move {
 impl Editor { pub fn move_cursor(&mut self, m: Move); }
 ```
 
-Then **seal the raw primitives**: `buf_set_cursor_rc` and `View::set_cursor`
-become crate-internal, unreachable from vim/app code. A new motion then cannot
-forget — it must name a variant to compile.
+The reserved end state for raw primitives is crate-internal use, keeping
+`buf_set_cursor_rc` and `View::set_cursor` unreachable from vim/app code. This
+explains why every migrated motion requires an explicit variant; unfinished work
+is tracked in `docs/backlog.md`.
 
 `Raw` is deliberately conspicuous. Today the forgetful option is the one that
 looks like the default; naming it inverts that, and it stays greppable for
@@ -49,17 +49,15 @@ review.
 
 ## Phases
 
-One commit each, gated (`clippy -D warnings`, `fmt`, full `nextest` incl. the
-pty e2e suite, compat oracle ALL-pass), pushed with CI green before the next.
+Phases 0–1 shipped separately; remaining work is tracked in `docs/backlog.md`.
 
 | #   | Phase                              | Scope                                                                                                                                                     |
 | --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0   | Debug invariant (done, `1fb21010`) | Debug-only assertion in the key-dispatch loop: if the cursor moved and the motion was not vertical, curswant must equal the cursor column. No API change. |
 | 1   | `Move` API (done, `c1627b9e`)      | Add `Move` + `Editor::move_cursor` implemented over today's primitives. Nothing migrated yet.                                                             |
-| 2   | Migrate the engine                 | `hjkl-engine`'s own motions move through `move_cursor`.                                                                                                   |
-| 3   | Migrate vim                        | `hjkl-vim`: motion, command, bridges, visual, operator. The bulk of the sites.                                                                            |
-| 4   | Migrate the app                    | `apps/hjkl`.                                                                                                                                              |
-| 5   | Seal                               | Raw primitives crate-internal; `set_sticky_col` off the public surface; `apply_sticky_col` shrinks to the vertical clamp.                                 |
+
+Remaining phases and their acceptance criteria are consolidated in
+`docs/backlog.md`.
 
 **Phase 0 comes first on purpose.** It is the safety net for the migration
 itself: a site classified into the wrong variant during phases 2–4 trips the
@@ -86,36 +84,30 @@ Two design calls made during implementation, both kept:
   blamed for staleness `J` had left a keystroke earlier — the assertion would
   have pointed the next phase at the wrong file.
 
-Violations, to be fixed in later phases, **not** by weakening the assertion:
+Observed phase-0 violations:
 
-| Class | Count | What                                                                                                                                                                                                                                                                                                                                 |
-| ----- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A     | 170   | Insert mode: every printable char, `Tab`, `<C-w>`. One systemic site.                                                                                                                                                                                                                                                                |
-| B     | 66    | Normal-mode operators/edits: `y{motion}`, `d{motion}`, `J`, `p`/`P`, `x`/`X`, `~`, `>`, `.`, `u`, `<C-a>`. The operator path never reaches `apply_sticky_col`.                                                                                                                                                                       |
-| C     | 12    | Visual-mode `y` — invisible to a `dirty_gen` check since yank makes no edit.                                                                                                                                                                                                                                                         |
-| D     | 1     | **A genuine motion-path bug**: `<C-e>` moves between rows without routing through motion dispatch, parking the cursor past end-of-line. `is_vertical_motion` already lists `ScreenUp`/`ScreenDown`; the key binding just doesn't go through it. Confirmed against nvim: `<C-e>` preserves curswant and clamps. Fix first in phase 2. |
+| Class | Count | What                                                                                                                                                                                                                                                                                                           |
+| ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A     | 170   | Insert mode: every printable char, `Tab`, `<C-w>`. One systemic site.                                                                                                                                                                                                                                          |
+| B     | 66    | Normal-mode operators/edits: `y{motion}`, `d{motion}`, `J`, `p`/`P`, `x`/`X`, `~`, `>`, `.`, `u`, `<C-a>`. The operator path never reaches `apply_sticky_col`.                                                                                                                                                 |
+| C     | 12    | Visual-mode `y` — invisible to a `dirty_gen` check since yank makes no edit.                                                                                                                                                                                                                                   |
+| D     | 1     | **A genuine motion-path bug**: `<C-e>` moves between rows without routing through motion dispatch, parking the cursor past end-of-line. `is_vertical_motion` already lists `ScreenUp`/`ScreenDown`; the key binding just doesn't go through it. Confirmed against nvim: `<C-e>` preserves curswant and clamps. |
 
-After excluding A–C, the surviving motion-path violations number **one** — the
-pre-existing motion code is in better shape than the ~186 unmaintained call
-sites suggest.
-
-Order for widening the assertion later: fix A (one insert-path site), then C,
-then B, then relax the guards in `crates/hjkl-vim/src/curswant.rs`.
+After excluding A–C, the surviving motion-path violations numbered **one** — the
+pre-existing motion code was in better shape than the ~186 unmaintained call
+sites suggested.
 
 ## The real cost
 
-~186 sites each need a decision about which variant they are. That is the work,
-and it is also the point: those decisions exist today, unrecorded. A mechanical
-translation that picks `Raw` everywhere would compile, pass, and preserve the
-bug class exactly — so **`Raw` must be justified per site**, not used as the
-default landing zone. Phases 2–4 should report how many sites landed in each
-variant, and any `Raw` needs a one-line reason.
+The ~186 sites expose the migration's classification cost. A mechanical
+translation to `Raw` would compile while preserving the bug class. Variant-count
+reporting and raw-move justification are tracked in `docs/backlog.md`.
 
-## Invariants
+## Invariants established by phases 0–1
 
-- Compat oracle stays ALL-pass; its corpus is never edited to make a change
-  pass. It now covers search/curswant directly (5 cases, expectations taken from
-  headless nvim).
-- The pty e2e suite is the real safety net for cursor behaviour.
-- No phase except 0 may change behaviour. If an assertion has to change, that is
-  a misclassification — stop and report it.
+- The compat oracle remained ALL-pass; its corpus was not edited to make either
+  phase pass. It covers search/curswant directly with five expectations taken
+  from headless nvim.
+- The pty e2e suite served as the cursor-behavior safety net.
+- Phase 0 was the only phase allowed to change behavior; later assertion changes
+  indicate a migration misclassification.

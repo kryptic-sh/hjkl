@@ -27,20 +27,19 @@ windows; what makes them special is per-window/per-buffer attributes (`buftype`,
 `winfixwidth`/`winfixheight`), not exile from the layout. Put the specialness in
 attributes and the layout stays uniform.
 
-## Target shape
+## Implemented shape
 
-1. **`hjkl-layout` learns fixed sizing and pinning.** A split may allocate one
-   child a fixed cell count instead of a ratio; a leaf may be pinned so `:only`
+1. **`hjkl-layout` learned fixed sizing and pinning.** A split can allocate one
+   child a fixed cell count instead of a ratio; a leaf can be pinned so `:only`
    / `equalize_all` / `swap_with_sibling` leave it alone.
-2. **Docks become ordinary pinned, fixed-size leaves**, woven into each tab's
+2. **Docks became ordinary pinned, fixed-size leaves**, woven into each tab's
    tree. Navigation, `:q`, `<C-w>c`/`<C-w>q`, `<C-w>w` cycling and rect
-   computation then all flow through the single existing path.
-3. **Docks become per-tab**, matching vim: each tab has its own explorer and its
-   own quickfix window. This is a deliberate behaviour change — dock state is
-   currently global across tabs.
-4. **Buffer-list exclusion stays a buffer property.** `is_explorer: bool` and
-   the derived qf-dock-slot check become one `BufKind` on `BufferSlot`, which is
-   where vim puts it (`buftype`). This is not a layout concern.
+   computation flow through the single existing path.
+3. **Docks became per-tab**, matching vim: each tab has its own explorer and its
+   own quickfix window. This deliberately changed dock state from global.
+4. **Buffer-list exclusion stayed a buffer property.** `is_explorer: bool` and
+   the derived qf-dock-slot check became one `BufKind` on `BufferSlot`, where
+   vim puts it (`buftype`).
 
 ## Design decisions
 
@@ -69,23 +68,21 @@ short.
 tuple-variant reason: `only(keep, pinned)`, `equalize_all(pinned)`,
 `swap_with_sibling(id, pinned)`. Signature changes are compiler-enforced.
 
-**Per-tab docks replace global docks.** `App.left_dock` / `App.bottom_dock`
-(global) become per-tab state. Opening the explorer in tab 2 does not disturb
+**Per-tab docks replaced global docks.** `App.left_dock` / `App.bottom_dock`
+(global) became per-tab state. Opening the explorer in tab 2 does not disturb
 tab 1. Closing a tab disposes of its docks with the rest of its windows.
 
 ## Phases
 
-Each phase is one commit, gated (`clippy -D warnings`, `fmt`, full `nextest`
-incl. the pty e2e suite, compat oracle ALL-pass) and pushed with CI green before
-the next begins.
+All phases shipped as separate gated commits. The table records their scope.
 
-| #   | Phase                                | Scope                                                                                                                                                                                               |
-| --- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Layout primitives (done, `081d9151`) | `hjkl-layout`: `Fixed`, `fixed` field, `collect_rects` honouring it, pinned-aware `only`/`equalize_all`/`swap_with_sibling`, unit tests. No app behaviour change.                                   |
-| 2   | Render through the tree              | `render::frame` stops carving dock rects by hand; docks get their geometry from `window_rects` like every other window.                                                                             |
-| 3   | Docks into the tree, per tab         | Explorer/quickfix become pinned fixed leaves in the active tab's tree; `left_dock`/`bottom_dock` move from `App` to `Tab`. Delete `dock_neighbor_*`; navigation flows through `neighbor_direction`. |
-| 4   | `BufKind` on the slot                | Replace `is_explorer` + qf-slot derivation with one enum; `slot_is_special` becomes `slot.kind != Normal`.                                                                                          |
-| 5   | Cleanup                              | Delete what `dock.rs` no longer needs; drop dock branches from `:q`, `close_focused_window`, `QuitOrClose`, `H`/`L`; update docs + changelog.                                                       |
+| #   | Phase                                | Scope                                                                                                                                                             |
+| --- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Layout primitives (done, `081d9151`) | `hjkl-layout`: `Fixed`, `fixed` field, `collect_rects` honouring it, pinned-aware `only`/`equalize_all`/`swap_with_sibling`, unit tests. No app behaviour change. |
+| 2   | Render through the tree              | `render::frame` stopped carving dock rects by hand; docks received geometry from `window_rects` like every other window.                                          |
+| 3   | Docks into the tree, per tab         | Explorer/quickfix became pinned fixed leaves in each tab's tree; `left_dock`/`bottom_dock` moved from `App` to `Tab`; navigation moved to `neighbor_direction`.   |
+| 4   | `BufKind` on the slot                | `is_explorer` plus qf-slot derivation became one enum; `slot_is_special` became `slot.kind != Normal`.                                                            |
+| 5   | Cleanup                              | Obsolete `dock.rs` and dock branches were deleted; docs and changelog were updated.                                                                               |
 
 ## Settled during execution
 
@@ -105,9 +102,9 @@ config value named `width` should produce that width.
 
 **Fixed splits are not resizable.** `<C-w>+`/`<C-w><`/`<C-w>_` and border drags
 skip a fixed split and move the nearest resizable ancestor instead — vim's
-`winfixwidth`/`winfixheight`. Docks keep drag-to-resize through the existing
-`resize_dock_width_by` path, which Phase 3 must preserve rather than routing
-dock borders through the tree resize path.
+`winfixwidth`/`winfixheight`. Phase 3 preserved dock drag-to-resize through the
+existing `resize_dock_width_by` path rather than routing dock borders through
+the tree resize path.
 
 ## The hazard the refactor relocated (found in phase 3)
 
@@ -134,18 +131,16 @@ the `Result` split centralises the decision while leaving the response local,
 and `CloseRefused` is an enum so a second refusal reason becomes a compile error
 at every site rather than a silently-wrong branch.
 
-## Invariants that must hold at every phase
+## Invariants preserved across the phases
 
-- The nvim compat oracle stays **ALL-pass**; its corpus is never edited to make
+- The nvim compat oracle stayed **ALL-pass**; its corpus was not edited to make
   a change pass.
-- The pty e2e suite is the real safety net for window behaviour — unit tests did
-  not catch the `<C-h>` dock trap, and a synthetic `App` reproduction of the
-  3-window navigation report disagreed with the pty until the status line was
-  used as the focus signal.
-- Dock windows must never become the _last_ window: closing the final regular
-  window with a dock open must still quit (regression from 2026-07-27).
-- `:only` keeps pinned leaves; `<C-w>w` cycling includes docks (vim includes
-  special windows in the cycle).
+- The pty e2e suite was the window-behavior safety net; unit tests had not
+  caught the `<C-h>` dock trap, and a synthetic `App` reproduction disagreed
+  with the pty until the status line was used as the focus signal.
+- Dock windows never became the _last_ window: closing the final regular window
+  with a dock open still quits.
+- `:only` keeps pinned leaves; `<C-w>w` cycling includes docks, matching vim.
 
 ## Outcome
 
@@ -169,12 +164,12 @@ phases set out to fix:
 - Two positional slot scans would have silently rewritten the _other_ tab's tree
   once two tabs each had an explorer.
 
-Still open, same class, found in phase 5 and deliberately not fixed there — both
-now in `docs/backlog.md`:
+Two same-class defects found during phase 5 remain open:
 
 - `write_swap_for_slot` guards on `is_explorer()` only, so `:copen` and `q:`
   scratch buffers get swap files written; a crash then offers to "recover" a
   quickfix listing.
 - `quit_all` blocks on `dirty && !is_explorer()`, so a dirty quickfix or cmdline
-  scratch slot would make `:qa` refuse with an unsatisfiable
-  `E37 ... "[No Name]"`.
+  scratch slot makes `:qa` refuse with an unsatisfiable `E37 ... "[No Name]"`.
+
+Their actions are tracked only in `docs/backlog.md`.
