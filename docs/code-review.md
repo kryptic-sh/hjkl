@@ -478,3 +478,109 @@ No regressions introduced by this review.
 5. Teach the nvim driver to clear undo history after seeding (`nvim_command`
    with `:let old_ul=&ul | set ul=-1 | ... | let &ul=old_ul`) so undo/redo
    becomes fuzzable.
+
+# Code review — pending changes (2026-07-29)
+
+**Scope:** pending unstaged change: a new proptest regression entry in
+`crates/hjkl-vim-tui/tests/proptest_fsm.proptest-regressions` (+1 line, hash
+`37433df2`). The regression was discovered by the `esc_returns_to_normal`
+property test and also triggers in `no_panic_on_random_keys`.
+
+**Method:** Traced each failing input from `handle_key` through
+`crossterm_to_input`, `dispatch_input`, `step_insert`/`step_normal`,
+`replay_last_change`, `finish_insert_session`, and the curswant invariant check.
+Verified the same code-path reproduction with the exact shrunk sequences.
+
+## Findings
+
+### 1. `replay_last_change` for empty `ReplaceMode` moves cursor without updating `sticky_col`
+
+`crates/hjkl-vim/src/vim/dot_repeat.rs:205–226`
+
+Dot-replay of an empty `ReplaceMode` session (user typed `R<Esc>` then `.`)
+calls `push_undo()` (no buffer-content change → `dirty_gen` unchanged) and then
+`move_left` (cursor moves but `sticky_col` is left stale). The debug-only
+curswant invariant (`crates/hjkl-vim/src/curswant.rs:181`) catches this and
+panics. In release builds the bug is silent but leaves `sticky_col` wrong,
+causing `j`/`k` to snap to the pre-dot-repeat column instead of the current one.
+
+The sequence `R` → `Esc` → `e` → `.` on `"hello world\nsecond line\n"`:
+
+- `R` enters replace mode (`VimMode::Insert`)
+- `Esc` exits without typing → `finish_insert_session` sets
+  `last_change = ReplaceMode { text: "" }`, `sticky_col = Some(0)`
+- `e` (word-end motion) moves cursor to (0,4), sets `sticky_col = Some(4)`
+- `.` (dot-repeat) enters `replay_last_change`:
+  - `push_undo()` — no dirty_gen change
+  - `for ch in "".chars()` — loop body never executes, no dirty_gen change
+  - `cursor.1 > 0` (4 > 0) → `move_left(buf, 1)` — cursor moves to (0,3)
+  - `sticky_col` remains `Some(4)` ← **stale**
+
+Curswant check fires: cursor moved from (0,4) to (0,3), dirty_gen unchanged,
+mode unchanged, but `sticky_col == Some(4)` while `display_col == 3` — not a
+vertical clamp (line has 5 chars, col 3 < 4).
+
+```
+Repro: replay_last_change with last_change = ReplaceMode { text: "" },
+       cursor at (0, 4), sticky_col = Some(4)
+Expect: sticky_col = Some(3) (or cursor unchanged)
+Actual: sticky_col = Some(4), cursor at (0, 3)
+       → debug-only panic in curswant::assert_invariant
+       → release: stale sticky_col, next j/k snaps to column 4
+```
+
+The same bug also manifests when modifiers are present on the `.` key
+(`KeyModifiers::ALT` or `KeyModifiers::SHIFT`) because the dot-repeat gate in
+`step_normal` (`crates/hjkl-vim/src/normal.rs:463`) only checks `!input.ctrl`
+and `input.key == Key::Char('.')` — it does not reject `alt` or `shift`.
+
+## Cleared
+
+- **`push_undo()` doesn't change `dirty_gen`** — confirmed by reading
+  `Editor::push_undo_at` (`crates/hjkl-engine/src/editor.rs:4808–4828`): it
+  snapshots the rope (read-only), pushes into the undo tree, and clears redo —
+  none of which bumps `dirty_gen`. So an empty `ReplaceMode` replay does pass
+  through the curswant guard at line 142 (`dirty_gen` unchanged) and reaches the
+  motion check. This is correct for the guard but exposes the missing
+  `sticky_col` update.
+
+- **`replay_insert_and_finish` is not affected** — it calls `mutate_edit` before
+  `move_left`, which bumps `dirty_gen`, so the curswant check skips it. And it
+  explicitly sets `vim_mut(ed).mode = Mode::Normal`, which also trips the
+  mode-change guard.
+
+- **Other `LastChange` variants in `replay_last_change` are safe**: all either
+  mutate the buffer (changing `dirty_gen`) or change mode (tripping the
+  mode-change guard) before any raw cursor move.
+
+- **`leave_insert_to_normal_bridge` is not affected** — it explicitly calls
+  `ed.set_sticky_col(Some(ed.cursor().1))` after `move_left`, syncing the sticky
+  column (`crates/hjkl-vim/src/vim/insert_bridges.rs:867`).
+
+## Hardening
+
+- **Dot-repeat gate doesn't filter `alt`/`shift`** — `step_normal` line 463
+  checks only `!input.ctrl && input.key == Key::Char('.')`. Real vim does not
+  trigger dot-repeat on `Alt-.` or `Shift-.`. This is a divergence that
+  increases the input surface hitting this bug but is not itself a correctness
+  defect.
+
+- **Wasteful `push_undo()` on empty ReplaceMode replay** — `dot_repeat.rs:207`
+  pushes an undo entry for a replay that performs zero buffer mutations. This is
+  harmless but creates pointless undo-tree entries.
+
+## Coverage
+
+Examined: the full dispatch chain from `hjkl_vim_tui::handle_key` →
+`crossterm_to_input` → `dispatch_input` (including curswant pre/post checks) →
+`dispatch_input_inner` → `step_insert` / `step_normal` →
+`leave_insert_to_normal_bridge` → `finish_insert_session` →
+`replay_last_change`. Also verified `push_undo_at` doesn't bump `dirty_gen`, and
+confirmed `move_left` only moves the cursor with no sticky_col side effect.
+
+Both failing proptest cases (`esc_returns_to_normal` and
+`no_panic_on_random_keys`) converge on the same root cause.
+
+Not reviewed: the remaining five proptest tests (all pass — they don't generate
+the `R→Esc→e→.` or equivalent pattern). No other pending changes exist in the
+working tree.
