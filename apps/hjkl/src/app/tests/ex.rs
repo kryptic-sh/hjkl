@@ -1,5 +1,7 @@
 use super::*;
+use crate::app::CmdLineKind;
 use crate::app::event_loop::KeyOutcome;
+use hjkl_ex::QfCommand;
 
 // ── :write / :write! disk-state guard tests ─────────────────────────────
 
@@ -949,6 +951,82 @@ fn qa_force_exits_with_dirty() {
     app.dispatch_ex("qa!");
     assert!(app.exit_requested, ":qa! should exit even when dirty");
     let _ = std::fs::remove_file(&path_a);
+}
+
+/// `:qa` must not block on a dirty quickfix slot — it's a programmatic
+/// scratch buffer, not a user file.
+#[test]
+fn qa_ignores_dirty_quickfix_slot() {
+    let path = std::env::temp_dir().join("hjkl_qa_qf_dirty.txt");
+    std::fs::write(&path, "a\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.handle_quickfix_command(QfCommand::Open);
+    // Mark the quickfix scratch slot dirty — under the old is_explorer()
+    // guard this would block :qa with E37.
+    for s in app.slots.iter_mut() {
+        if s.is_special() {
+            s.dirty = true;
+        }
+    }
+    app.dispatch_ex("qa");
+    assert!(
+        app.exit_requested,
+        ":qa should exit when only special buffers are dirty"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `:qa` must not block on a dirty cmdline-window slot.
+#[test]
+fn qa_ignores_dirty_cmdline_slot() {
+    let path = std::env::temp_dir().join("hjkl_qa_cl_dirty.txt");
+    std::fs::write(&path, "a\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.open_cmdline_window(CmdLineKind::Ex, None);
+    for s in app.slots.iter_mut() {
+        if s.is_special() {
+            s.dirty = true;
+        }
+    }
+    app.dispatch_ex("qa");
+    assert!(
+        app.exit_requested,
+        ":qa should exit when only cmdline buffer is dirty"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `write_swap_for_slot` on a special slot must not create a swap file.
+/// Proof: `swap_path` stays `None` — the function returns before assigning
+/// one.
+#[test]
+fn write_swap_skips_special_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("qf.txt");
+    std::fs::write(&file, "quickfix line\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.quickfix.set(vec![hjkl_quickfix::QfEntry {
+        path: file,
+        row: 0,
+        col: 0,
+        kind: hjkl_quickfix::QfKind::Grep,
+        message: "hit".into(),
+    }]);
+    app.handle_quickfix_command(QfCommand::Open);
+    // Find the quickfix slot's index.
+    let qf_idx = app
+        .slots
+        .iter()
+        .position(|s| s.is_special())
+        .expect("quickfix slot must exist");
+    // Seed content so the empty-buffer short-circuit doesn't fire first.
+    hjkl_engine::BufferEdit::replace_all(&mut app.slots[qf_idx].view, "quickfix content");
+    app.write_swap_for_slot(qf_idx);
+    assert!(
+        app.slots[qf_idx].swap_path.is_none(),
+        "special slot must not get a swap path"
+    );
 }
 
 #[test]

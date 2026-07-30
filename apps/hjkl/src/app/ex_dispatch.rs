@@ -1279,9 +1279,10 @@ impl App {
             return;
         }
 
-        // The explorer is a programmatic scratch buffer — never persist it to a
-        // swap file (otherwise a crash would offer to "recover" the tree text).
-        if self.slots[idx].is_explorer() {
+        // Special scratch buffers (explorer, quickfix, cmdline) are programmatic
+        // — never persist them to a swap file (otherwise a crash would offer to
+        // "recover" a tree listing or quickfix history).
+        if self.slots[idx].is_special() {
             return;
         }
 
@@ -1992,9 +1993,10 @@ impl App {
     /// exact same all-slots dirty check and E37 message instead of exiting
     /// unconditionally (see the doc comment at that call site).
     pub(crate) fn quit_all(&mut self, force: bool) {
-        // Explorer scratch buffers are programmatic (no file, never user-saved)
-        // — they must never block quit, like they're skipped by :bnext/pickers.
-        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_explorer()) {
+        // Special scratch buffers (explorer, quickfix, cmdline) are programmatic
+        // (no file, never user-saved) — they must never block quit, like they're
+        // skipped by :bnext/pickers.
+        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_special()) {
             let name = self.slots[idx]
                 .filename
                 .as_ref()
