@@ -405,18 +405,18 @@ pub fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
         return false;
     };
     let toggled = if c.is_uppercase() {
-        c.to_lowercase().next().unwrap_or(c)
+        c.to_lowercase().collect::<String>()
     } else {
-        c.to_uppercase().next().unwrap_or(c)
+        c.to_uppercase().collect::<String>()
     };
     ed.mutate_edit(Edit::DeleteRange {
         start: cursor,
         end: Position::new(cursor.row, cursor.col + 1),
         kind: MotionKind::Char,
     });
-    ed.mutate_edit(Edit::InsertChar {
+    ed.mutate_edit(Edit::InsertStr {
         at: cursor,
-        ch: toggled,
+        text: toggled,
     });
     true
 }

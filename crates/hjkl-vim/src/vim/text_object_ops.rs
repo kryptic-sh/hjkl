@@ -397,17 +397,29 @@ pub fn outdent_rows<H: hjkl_engine::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
+    let tabstop = ed.settings().tabstop.max(1);
     let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
-        let strip: usize = line
-            .chars()
-            .take(width)
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .count();
+        let mut strip = 0;
+        let mut visual_width = 0;
+        for ch in line.chars() {
+            if !matches!(ch, ' ' | '\t') {
+                break;
+            }
+            let next_width = if ch == '\t' {
+                visual_width + tabstop - visual_width % tabstop
+            } else {
+                visual_width + 1
+            };
+            if next_width > width {
+                break;
+            }
+            strip += ch.len_utf8();
+            visual_width = next_width;
+        }
         if strip > 0 {
-            let byte_len: usize = line.chars().take(strip).map(|c| c.len_utf8()).sum();
-            line.drain(..byte_len);
+            line.drain(..strip);
         }
     }
     ed.restore(&lines, (top, 0));
@@ -598,11 +610,11 @@ pub fn toggle_case_str(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_lowercase() {
-                c.to_uppercase().next().unwrap_or(c)
+                c.to_uppercase().collect::<String>()
             } else if c.is_uppercase() {
-                c.to_lowercase().next().unwrap_or(c)
+                c.to_lowercase().collect::<String>()
             } else {
-                c
+                c.to_string()
             }
         })
         .collect()
@@ -622,5 +634,32 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
     let max_col = line_chars.saturating_sub(1);
     if col > max_col {
         buf_set_cursor_rc(ed.buffer_mut(), row, max_col);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{outdent_rows, toggle_case_str};
+    use hjkl_buffer::{View, rope_line_str};
+    use hjkl_engine::{DefaultHost, Editor, Options};
+
+    #[test]
+    fn toggle_case_preserves_multi_character_unicode_mappings() {
+        assert_eq!(toggle_case_str("Straße"), "sTRASSE");
+        assert_eq!(toggle_case_str("İ"), "i\u{307}");
+    }
+
+    #[test]
+    fn outdent_rows_consumes_visual_tab_width() {
+        let options = Options {
+            tabstop: 4,
+            shiftwidth: 4,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(View::from_str("\t\tfoo"), DefaultHost::new(), options);
+
+        outdent_rows(&mut ed, 0, 0, 1);
+
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "\tfoo");
     }
 }

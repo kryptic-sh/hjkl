@@ -13,7 +13,8 @@
 //! (`buf_set_cursor_rc`, `View::set_cursor`) behind it.
 
 use crate::Editor;
-use crate::buf_helpers::buf_line_chars;
+use crate::buf_helpers::{buf_line, buf_line_chars};
+use hjkl_buffer::{char_col_to_visual_col, visual_col_to_char_col};
 
 /// How a cursor move relates to `sticky_col` (vim's `curswant`) — the column
 /// `j` / `k` aim at.
@@ -86,16 +87,22 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             Move::Vertical { row } => {
                 // Bootstrap from the current column on the very first vertical
                 // motion, exactly as `apply_sticky_col` does.
-                let want = self.sticky_col().unwrap_or_else(|| self.cursor().1);
+                let (current_row, current_col) = self.cursor();
+                let current_line = buf_line(&self.buffer, current_row).unwrap_or_default();
+                let want = self.sticky_col().unwrap_or_else(|| {
+                    char_col_to_visual_col(&current_line, current_col, self.settings().tabstop)
+                });
                 // Record the un-clamped want first so the next vertical motion
                 // still sees it even though this one may clamp short.
                 self.set_sticky_col(Some(want));
                 // Clamp to the last char on non-empty rows — vim normal mode
                 // never parks one past end of line; empty rows collapse to 0.
+                let line = buf_line(&self.buffer, row).unwrap_or_default();
+                let char_col = visual_col_to_char_col(&line, want, self.settings().tabstop);
                 let max_col = buf_line_chars(&self.buffer, row).saturating_sub(1);
                 // Quiet write: `jump_cursor` would overwrite the want stored
                 // above with the clamped column.
-                self.set_cursor_quiet(row, want.min(max_col));
+                self.set_cursor_quiet(row, char_col.min(max_col));
             }
             Move::Jump { row, col } => self.jump_cursor(row, col),
             Move::Horizontal { col } => {
@@ -203,6 +210,30 @@ mod tests {
         fresh.move_cursor(Move::Raw { row: 0, col: 4 });
         assert_eq!(fresh.cursor(), (0, 4));
         assert_eq!(fresh.sticky_col(), None);
+    }
+
+    #[test]
+    fn vertical_bootstraps_display_want_from_the_current_column() {
+        let mut e = editor("\tabcdef\n\txyz");
+        e.move_cursor(Move::Raw { row: 0, col: 2 });
+        assert_eq!(e.sticky_col(), None);
+
+        e.move_cursor(Move::Vertical { row: 1 });
+        assert_eq!(e.cursor(), (1, 2));
+        assert_eq!(e.sticky_col(), Some(5));
+    }
+
+    /// Display columns are converted back to character columns before clamping,
+    /// so tabs do not make the cursor land too far right.
+    #[test]
+    fn vertical_converts_display_want_to_a_character_column() {
+        let mut e = editor("\tabcdef\n\txyz");
+        e.move_cursor(Move::Horizontal { col: 2 });
+        assert_eq!(e.sticky_col(), Some(5));
+
+        e.move_cursor(Move::Vertical { row: 1 });
+        assert_eq!(e.cursor(), (1, 2));
+        assert_eq!(e.sticky_col(), Some(5));
     }
 
     /// `Vertical` reproduces `apply_sticky_col`'s vertical branch exactly —

@@ -460,7 +460,12 @@ pub fn step_normal<H: Host>(
     // user typed no count so the engine reuses the change's original count.
     // Handled here (not in `handle_normal_only`) because that helper only
     // sees the count-defaulted-to-1 value and loses `had_explicit_count`.
-    if ed.fsm_mode() == FsmMode::Normal && !input.ctrl && input.key == Key::Char('.') {
+    if ed.fsm_mode() == FsmMode::Normal
+        && !input.ctrl
+        && !input.alt
+        && !input.shift
+        && input.key == Key::Char('.')
+    {
         ed.replay_last_change(if had_explicit_count { count } else { 0 });
         return true;
     }

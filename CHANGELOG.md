@@ -21,6 +21,14 @@ patch bumps.
 
 ### Fixed
 
+- **Cursor movement, substitutions, indentation, and case conversion now retain
+  their intended semantics.** Vertical cursor moves convert display-column
+  curswant back to character columns on tabbed lines; inline `\c` / `\C`
+  override substitute `/i` / `/I` flags in both execution and confirm-match
+  collection; outdent consumes tab width; Unicode case mappings retain every
+  output character; empty `R<Esc>` dot-repeat is a no-op; and modified `.` keys
+  do not trigger repeat.
+
 - **`<C-e>` / `<C-y>` now keep the cursor on the line and honour the sticky
   column.** When the scroll pushed the cursor onto a new row it re-used the old
   column verbatim, so on a shorter row the cursor parked past end-of-line, and

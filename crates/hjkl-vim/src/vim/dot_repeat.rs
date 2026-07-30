@@ -202,7 +202,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
         } => {
             replay_block_insert(ed, &text, rows, cols, to_eol, append);
         }
-        LastChange::ReplaceMode { text } => {
+        LastChange::ReplaceMode { text } if !text.is_empty() => {
             use hjkl_buffer::{Edit, MotionKind, Position};
             ed.push_undo();
             for ch in text.chars() {
@@ -224,6 +224,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
         }
+        LastChange::ReplaceMode { .. } => {}
         LastChange::DeleteToEol { inserted } => {
             use hjkl_buffer::{Edit, Position};
             ed.push_undo();

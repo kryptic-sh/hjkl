@@ -266,25 +266,16 @@ pub fn apply_substitute<H: crate::types::Host>(
     // magic `~` expands to it, and replacement-side `~` re-expands it per match.
     let prev_replacement = ed.last_substitute_replacement();
 
-    // Case-sensitivity.
-    // Per-substitute `/I` (case-sensitive) and `/i` (case-insensitive) flags
-    // short-circuit all other resolution — they win over `\c`/`\C` in the
-    // pattern (matching vim's documented precedence: flag > inline override).
-    let effective_pattern = if cmd.flags.case_sensitive {
-        // /I flag: force case-sensitive — run vim_to_rust_regex to strip \c/\C
-        // but do NOT add (?i).
+    // Case-sensitivity. Inline `\c` / `\C` overrides `/i` and `/I`.
+    let effective_pattern = {
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
-        stripped
-    } else if cmd.flags.ignore_case {
-        // /i flag: force case-insensitive — strip \c/\C and prepend (?i).
-        use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
-        format!("(?i){stripped}")
-    } else {
-        // No explicit flag: honour ignorecase + smartcase + inline \c/\C.
-        use crate::search::{CaseMode, resolve_case_mode};
-        let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
+        let base = if cmd.flags.case_sensitive {
+            CaseMode::Sensitive
+        } else if cmd.flags.ignore_case {
+            CaseMode::Insensitive
+        } else {
+            CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase)
+        };
         let (stripped, mode) = resolve_case_mode(&pattern_str, base, &prev_replacement);
         if mode == CaseMode::Insensitive {
             format!("(?i){stripped}")
@@ -439,17 +430,15 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
     // replacement-side `~` re-expands it per match (same as apply_substitute).
     let prev_replacement = ed.last_substitute_replacement();
 
-    let effective_pattern = if cmd.flags.case_sensitive {
+    let effective_pattern = {
         use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
-        stripped
-    } else if cmd.flags.ignore_case {
-        use crate::search::{CaseMode, resolve_case_mode};
-        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive, &prev_replacement);
-        format!("(?i){stripped}")
-    } else {
-        use crate::search::{CaseMode, resolve_case_mode};
-        let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
+        let base = if cmd.flags.case_sensitive {
+            CaseMode::Sensitive
+        } else if cmd.flags.ignore_case {
+            CaseMode::Insensitive
+        } else {
+            CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase)
+        };
         let (stripped, mode) = resolve_case_mode(&pattern_str, base, &prev_replacement);
         if mode == CaseMode::Insensitive {
             format!("(?i){stripped}")
@@ -988,6 +977,21 @@ mod tests {
     }
 
     #[test]
+    fn apply_inline_case_override_wins_over_flag() {
+        let mut insensitive = editor_with("Foo FOO foo");
+        let cmd = parse_substitute("/\\cFOO/bar/I").unwrap();
+        let out = apply_substitute(&mut insensitive, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(buf_line(&insensitive, 0), "bar FOO foo");
+
+        let mut sensitive = editor_with("Foo FOO foo");
+        let cmd = parse_substitute("/\\Cfoo/bar/i").unwrap();
+        let out = apply_substitute(&mut sensitive, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(buf_line(&sensitive, 0), "Foo FOO bar");
+    }
+
+    #[test]
     fn apply_empty_pattern_reuses_last_search() {
         let mut e = editor_with("hello world");
         e.set_last_search(Some("world".to_string()), true);
@@ -1281,6 +1285,22 @@ mod tests {
     }
 
     // ── collect_substitute_matches tests ────────────────────────────────────
+
+    #[test]
+    fn collect_inline_case_override_wins_over_flag() {
+        let e = editor_with("Foo FOO foo");
+        let cmd = parse_substitute("/\\cFOO/bar/I").unwrap();
+        assert_eq!(
+            collect_substitute_matches(&e, &cmd, 0..=0).unwrap().len(),
+            1
+        );
+
+        let cmd = parse_substitute("/\\Cfoo/bar/i").unwrap();
+        assert_eq!(
+            collect_substitute_matches(&e, &cmd, 0..=0).unwrap().len(),
+            1
+        );
+    }
 
     #[test]
     fn collect_substitute_matches_finds_all_occurrences() {

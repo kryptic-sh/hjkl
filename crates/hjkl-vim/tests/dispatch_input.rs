@@ -33,6 +33,15 @@ fn ctrl(key: Key) -> Input {
     }
 }
 
+fn modified(key: Key, ctrl: bool, alt: bool, shift: bool) -> Input {
+    Input {
+        key,
+        ctrl,
+        alt,
+        shift,
+    }
+}
+
 /// Run a string of keys through `dispatch_input` (not the deprecated shim).
 /// Supports the same `<tag>` notation the engine tests use.
 fn dispatch_keys(e: &mut Editor, keys: &str) {
@@ -65,7 +74,31 @@ fn dispatch_keys(e: &mut Editor, keys: &str) {
     }
 }
 
-// ── insert-mode dispatch tests (Phase 6.6d) ───────────────────────────────────
+#[test]
+fn modified_dot_does_not_repeat_last_change() {
+    for (ctrl, alt, shift) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let mut e = editor_with("abc");
+        dispatch_keys(&mut e, "x");
+        assert_eq!(e.content(), "bc\n");
+
+        hjkl_vim::dispatch_input(&mut e, modified(Key::Char('.'), ctrl, alt, shift));
+
+        assert_eq!(e.content(), "bc\n");
+    }
+}
+
+#[test]
+fn empty_replace_repeat_allows_the_next_change_to_be_repeated() {
+    let mut e = editor_with("abc");
+
+    dispatch_keys(&mut e, "R<Esc>.iX<Esc>.");
+
+    assert_eq!(e.content(), "XXabc\n");
+}
 
 #[test]
 fn insert_char_appends_to_buffer() {
