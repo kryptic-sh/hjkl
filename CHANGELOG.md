@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-07-31
+
 ### Changed
 
 - **`cursorcolumn` is now on by default.** The column under the cursor is
@@ -5098,7 +5100,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.39.1...HEAD
+[0.39.1]: https://github.com/kryptic-sh/hjkl/compare/v0.39.0...v0.39.1
 [0.39.0]: https://github.com/kryptic-sh/hjkl/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/kryptic-sh/hjkl/compare/v0.37.1...v0.38.0
 [0.37.1]: https://github.com/kryptic-sh/hjkl/compare/v0.37.0...v0.37.1
