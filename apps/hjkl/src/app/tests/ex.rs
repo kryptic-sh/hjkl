@@ -3192,13 +3192,12 @@ fn locked_secondary_slot_is_readonly_not_removed() {
 
 // ── Scratch-buffer swap tests (issue #185) ────────────────────────────────────
 
-/// A scratch buffer with content gets a swap file written lazily.
-///
-/// No `XDG_CACHE_HOME` env mutation — that's a process-global var and other
-/// parallel tests inherit it, racing on the swap dir. Instead we let the
-/// writer pick the real swap_dir path (unique per pid+buffer_id) and clean up.
+/// A scratch buffer with content gets a swap file written lazily in an isolated
+/// cache directory.
 #[test]
 fn scratch_buffer_writes_swap_when_dirty() {
+    let td = tempfile::tempdir().unwrap();
+    let _cache = crate::test_cwd::EnvVarGuard::set("XDG_CACHE_HOME", td.path());
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "unsaved work");
 

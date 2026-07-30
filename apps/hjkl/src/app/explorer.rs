@@ -2503,9 +2503,11 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "bye").unwrap();
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -2553,8 +2555,8 @@ mod tests {
         let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "alpha\n").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit a.txt");
@@ -2614,8 +2616,8 @@ mod tests {
         // A sibling whose name merely string-starts with "d" must NOT be
         // rebased by the dir rename.
         std::fs::write(tmp.path().join("dx.txt"), "decoy").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit d/inner.txt");
@@ -2670,8 +2672,8 @@ mod tests {
         let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "alpha").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit a.txt");
@@ -2773,8 +2775,8 @@ mod tests {
         let cache_tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
         std::fs::write(tmp.path().join("z.txt"), "z").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", cache_tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3289,11 +3291,13 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("d").join("a.rs"), b"a").unwrap();
         std::fs::write(tmp.path().join("d").join("b.rs"), b"b").unwrap();
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
         // The explorer roots at the canonicalized cwd; build expected paths from
         // it (tempdirs are symlinked on macOS/CI, so raw `tmp.path()` mismatches).
         let base = std::env::current_dir().unwrap();
@@ -3353,12 +3357,14 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("mover")).unwrap();
         std::fs::write(tmp.path().join("mover").join("inner.txt"), b"CONTENT").unwrap();
         std::fs::create_dir(tmp.path().join("target")).unwrap();
         std::fs::write(tmp.path().join("target").join("keep.txt"), b"k").unwrap();
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
         let base = std::env::current_dir().unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
@@ -3863,8 +3869,8 @@ mod tests {
         std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
         // Isolate the trash directory so the restore doesn't pick up stale
         // entries from parallel tests.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3908,8 +3914,8 @@ mod tests {
         use crossterm::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -3973,7 +3979,6 @@ mod tests {
 
         // Create an isolated git repo with one committed file.
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
 
         // Init a git repo, create + commit a tracked file.
         let run = |args: &[&str], dir: &std::path::Path| {
@@ -3990,7 +3995,8 @@ mod tests {
         run(&["add", "tracked.txt"], tmp.path());
         run(&["commit", "-m", "init"], tmp.path());
 
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4035,9 +4041,9 @@ mod tests {
 
         // Temp dir that is NOT a git repo.
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
         std::fs::write(tmp.path().join("untracked.txt"), "bye").unwrap();
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4066,8 +4072,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("recover.txt"), "restore_me").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4119,8 +4125,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("trashable.txt"), "yo").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4163,8 +4169,8 @@ mod tests {
         use crossterm::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4207,8 +4213,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "data").unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", tmp.path()) };
-        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);

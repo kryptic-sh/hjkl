@@ -233,6 +233,9 @@ impl TerminalSession {
 
         let hjkl_bin = env!("CARGO_BIN_EXE_hjkl");
         let mut cmd = CommandBuilder::new(hjkl_bin);
+        // Render assertions require styles regardless of the runner's ambient
+        // preference. NO_COLOR suppresses the software cursor and icon colors.
+        cmd.env_remove("NO_COLOR");
         cmd.env("HJKL_LOG", "off");
         // Force the terminal OSC 52 clipboard backend so copy/paste tests use
         // the deterministic register-fallback path on every platform. Without
@@ -489,6 +492,9 @@ impl TerminalSession {
 
         let hjkl_bin = env!("CARGO_BIN_EXE_hjkl");
         let mut cmd = CommandBuilder::new(hjkl_bin);
+        // Render assertions require styles regardless of the runner's ambient
+        // preference. NO_COLOR suppresses the software cursor and icon colors.
+        cmd.env_remove("NO_COLOR");
         // Suppress logging noise in test output.
         cmd.env("HJKL_LOG", "off");
         // Force the terminal OSC 52 clipboard backend so copy/paste tests use

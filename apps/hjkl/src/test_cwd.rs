@@ -33,6 +33,7 @@ fn lock() -> MutexGuard<'static, ()> {
 pub struct CwdGuard {
     _lock: MutexGuard<'static, ()>,
     prev: PathBuf,
+    env: Vec<(OsString, Option<OsString>)>,
 }
 
 impl CwdGuard {
@@ -42,13 +43,36 @@ impl CwdGuard {
         let lock = lock();
         let prev = std::env::current_dir().expect("read current dir");
         std::env::set_current_dir(dir).expect("set current dir");
-        Self { _lock: lock, prev }
+        Self {
+            _lock: lock,
+            prev,
+            env: Vec::new(),
+        }
+    }
+
+    /// Set an environment variable while holding the same process-global lock
+    /// as the cwd change. The previous value is restored with the cwd on drop.
+    pub(crate) fn set_env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
+        let key = key.as_ref().to_os_string();
+        let prev = std::env::var_os(&key);
+        // SAFETY: this guard holds SERIAL_LOCK for its entire lifetime.
+        unsafe { std::env::set_var(&key, value) };
+        self.env.push((key, prev));
     }
 }
 
 impl Drop for CwdGuard {
     fn drop(&mut self) {
         let _ = std::env::set_current_dir(&self.prev);
+        for (key, prev) in self.env.drain(..).rev() {
+            // SAFETY: still holding SERIAL_LOCK.
+            unsafe {
+                match prev {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 }
 
