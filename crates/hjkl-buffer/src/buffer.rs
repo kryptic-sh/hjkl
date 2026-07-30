@@ -187,9 +187,21 @@ impl View {
         // `cursor_screen_row_from` every step (which was O(distance^2) on a
         // large soft-wrapped jump).
         let Some(mut screen) = self.cursor_screen_row_from(viewport, viewport.top_row) else {
-            // A concurrent view shrink moved the cursor above top_row — snap
-            // the viewport down so the cursor is visible.
-            viewport.top_row = cursor.row;
+            // Two ways to land here, both repaired by snapping `top_row` to the
+            // cursor's row clamped against the live rope:
+            //   - a concurrent view shrink dropped rows, so this view's stale
+            //     cursor row *and* `top_row` are both past the last line;
+            //   - the cursor's row is hidden by a fold, so the walk from
+            //     `top_row` never reaches it.
+            // The clamp is what does the work in the shrink case: `cursor.row
+            // >= top_row` is already known here, so assigning the raw
+            // `cursor.row` would push `top_row` further past the end rather
+            // than pulling it back into the rope.
+            let last_row = {
+                let c = self.content.lock().unwrap();
+                c.text.len_lines().saturating_sub(1)
+            };
+            viewport.top_row = cursor.row.min(last_row);
             viewport.top_col = 0;
             return;
         };
@@ -1014,6 +1026,46 @@ mod tests {
         assert_eq!(view_b.cursor_screen_row(&v), Some(0));
         let mut v2 = vp_wrap(4, 3);
         view_b.ensure_cursor_visible(&mut v2); // must not panic
+    }
+
+    /// Regression: after another view shrank the shared Buffer, a `top_row`
+    /// left past the rope's end must be pulled *back* to the clamped cursor
+    /// row. Assigning the raw stale `cursor.row` would push `top_row` further
+    /// past the end, leaving the cursor off-screen.
+    #[test]
+    fn ensure_cursor_visible_clamps_stale_top_row_after_shrink() {
+        let a = View::from_str("a\nb\nc\nd\ne");
+        let arc = a.content_arc();
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
+        view_b.set_cursor(Position::new(4, 0));
+        view_a.replace_all("a");
+        let mut v = vp_wrap(4, 3);
+        // Stale scroll position: below the cursor's clamped row, above the
+        // stale cursor row, and past the (now single-line) rope.
+        v.top_row = 3;
+        view_b.ensure_cursor_visible(&mut v);
+        assert_eq!(v.top_row, 0, "top_row must clamp into the live rope");
+        assert_eq!(v.top_col, 0);
+    }
+
+    /// The other `cursor_screen_row_from` `None` path: the cursor's row is
+    /// hidden inside a closed fold, so the walk never reaches it. `top_row`
+    /// still snaps to the cursor row (in-range, so no clamping applies).
+    #[test]
+    fn ensure_cursor_visible_snaps_when_cursor_row_folded() {
+        let mut b = View::from_str("a\nb\nc\nd\ne");
+        b.set_folds(&[crate::Fold {
+            start_row: 2,
+            end_row: 4,
+            closed: true,
+            auto_generated: false,
+        }]);
+        let mut v = vp_wrap(4, 2);
+        v.top_row = 1;
+        b.set_cursor(Position::new(3, 0));
+        b.ensure_cursor_visible(&mut v);
+        assert_eq!(v.top_row, 3);
     }
 
     #[test]
