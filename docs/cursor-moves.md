@@ -47,22 +47,12 @@ is tracked in `docs/backlog.md`.
 looks like the default; naming it inverts that, and it stays greppable for
 review.
 
-## Phases
+## Phase-0 safety net
 
-Phases 0–1 shipped separately; remaining work is tracked in `docs/backlog.md`.
-
-| #   | Phase                              | Scope                                                                                                                                                     |
-| --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0   | Debug invariant (done, `1fb21010`) | Debug-only assertion in the key-dispatch loop: if the cursor moved and the motion was not vertical, curswant must equal the cursor column. No API change. |
-| 1   | `Move` API (done, `c1627b9e`)      | Add `Move` + `Editor::move_cursor` implemented over today's primitives. Nothing migrated yet.                                                             |
-
-Remaining phases and their acceptance criteria are consolidated in
-`docs/backlog.md`.
-
-**Phase 0 comes first on purpose.** It is the safety net for the migration
-itself: a site classified into the wrong variant during phases 2–4 trips the
-assertion in the 5400-test suite rather than shipping as a silent behaviour
-change.
+The unfinished migration and its acceptance criteria are tracked in
+`docs/backlog.md`. Phase 0 shipped the debug invariant that guards that work: a
+site classified into the wrong variant trips the assertion instead of shipping a
+silent behavior change.
 
 ## What phase 0 found
 
@@ -80,22 +70,16 @@ Two design calls made during implementation, both kept:
   must be `None`, equal to the landed column, or greater with the cursor clamped
   to the row end.
 - **Fires on the transition, not the state.** It triggers only when a keystroke
-  goes from a legal pair to an illegal one. Without that, class D below was
-  blamed for staleness `J` had left a keystroke earlier — the assertion would
-  have pointed the next phase at the wrong file.
+  goes from a legal pair to an illegal one, so stale state from an earlier key
+  is not blamed on the next movement.
 
-Observed phase-0 violations:
+Observed phase-0 violation classes still relevant to migration:
 
-| Class | Count | What                                                                                                                                                                                                                                                                                                           |
-| ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A     | 170   | Insert mode: every printable char, `Tab`, `<C-w>`. One systemic site.                                                                                                                                                                                                                                          |
-| B     | 66    | Normal-mode operators/edits: `y{motion}`, `d{motion}`, `J`, `p`/`P`, `x`/`X`, `~`, `>`, `.`, `u`, `<C-a>`. The operator path never reaches `apply_sticky_col`.                                                                                                                                                 |
-| C     | 12    | Visual-mode `y` — invisible to a `dirty_gen` check since yank makes no edit.                                                                                                                                                                                                                                   |
-| D     | 1     | **A genuine motion-path bug**: `<C-e>` moves between rows without routing through motion dispatch, parking the cursor past end-of-line. `is_vertical_motion` already lists `ScreenUp`/`ScreenDown`; the key binding just doesn't go through it. Confirmed against nvim: `<C-e>` preserves curswant and clamps. |
-
-After excluding A–C, the surviving motion-path violations numbered **one** — the
-pre-existing motion code was in better shape than the ~186 unmaintained call
-sites suggested.
+| Class | Count | What                                                                                                                                                           |
+| ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A     | 170   | Insert mode: every printable char, `Tab`, `<C-w>`. One systemic site.                                                                                          |
+| B     | 66    | Normal-mode operators/edits: `y{motion}`, `d{motion}`, `J`, `p`/`P`, `x`/`X`, `~`, `>`, `.`, `u`, `<C-a>`. The operator path never reaches `apply_sticky_col`. |
+| C     | 12    | Visual-mode `y` — invisible to a `dirty_gen` check since yank makes no edit.                                                                                   |
 
 ## The real cost
 

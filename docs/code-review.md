@@ -30,41 +30,6 @@ skew between hjkl and `nvim --clean`.
 Every entry below was verified by hand through `dfcase`; the fuzzer only located
 them.
 
-## Status
-
-Seed 777, 400 cases, measured after each pass:
-
-| pass                          | divergences |
-| ----------------------------- | ----------- |
-| original audit                | 114         |
-| after the first fix pass      | 99          |
-| after the regression fix pass | **91**      |
-
-Of the 91: ~9 are known harness noise, 21 are the residual blockwise cluster
-(finding 5), and the rest are the long tail below. Gate state:
-`cargo clippy --all-targets -D warnings` clean, `cargo test --workspace` 5595
-passed, `hjkl-compat-oracle` 81 passed across 4 suites.
-
-Resolved and pruned from this document:
-
-| Finding                                     | Fixed by                            |
-| ------------------------------------------- | ----------------------------------- |
-| 1 — linewise case-op corruption             | `05418277`, `19638f39`              |
-| 2 — `dk` one-line, `J` on the last line     | `b4458135`, `62bd4853` (but see R4) |
-| 3 — `$` ignores its count                   | `2e5b484b`                          |
-| 4 — `D` / `C` drop their count              | `2e5b484b`, `46561b22`              |
-| 6 — `j`/`k` lose the display column         | `37b62b73`, `b949484c`              |
-| 7 — `+` / `-` / `_` clamp at edges          | `b4458135`                          |
-| 8 — `b` in leading ws, `3w`, `W`            | `f808513e`                          |
-| 9 — register newline placement              | `d0ee6cca`, `79e024d5`              |
-| 10 — `VgU` cursor column                    | `7e260e27` (see W1)                 |
-| R1 — `d_` no-op                             | `0107e2e8` (but see R4)             |
-| R2 — no-op delete clobbers the register     | `79e024d5` (see W2)                 |
-| R3 — whole-buffer case op adds a blank line | `19638f39`                          |
-
-The case-op family cleared 10 fuzz cases in the last pass (`guu`, `gUap`, `g~G`,
-`VjU`, `V1bU`, `V3toU`, `V}uyG`, `gE`, `==1dL`, `IZ>H`).
-
 ## Evidence for differential-audit backlog items
 
 ### R4. `dk` / `dj` / `d+` / `d-` destroy the line at a buffer edge
@@ -88,7 +53,7 @@ hjkl: ""              ← line destroyed
 nvim: "only line"     ← unchanged
 ```
 
-This re-breaks the half of finding 2 that `b4458135` had fixed. The fuzzer
+This regresses the earlier one-line `dk` edge fix from `b4458135`. The fuzzer
 independently surfaced `dk` as a new divergence in the latest pass. Multi-line
 `dk` (row 2 of 3) is still correct.
 
@@ -174,26 +139,6 @@ vim keys off.
 copies of a large register gets fewer, with no message. Silent partial execution
 is arguably worse than refusing; remediation is tracked in `docs/backlog.md`.
 
-## Verified — not defects
-
-Checked and deliberately excluded, so they are not re-reported next time:
-
-- **`s` / `S` do not substitute.** They are bound to vim-sneak when
-  `settings().motion_sneak` is on (`crates/hjkl-vim/src/normal.rs`), which is
-  the default. Intentional divergence.
-- **`Y` yanks to end-of-line, not the whole line.** Matches nvim 0.12, which
-  maps `Y` to `y$`. hjkl is right; traditional vim is the odd one out.
-- **All `u` / `<C-r>` divergences were a harness artifact.** The nvim driver
-  seeds the buffer over RPC, which is itself an undoable change, so `u` rolls
-  back the fixture. Not an engine defect — but it does mean undo/redo is
-  currently invisible to this fuzzer.
-- **`==` reindents where `nvim --clean` does not.** hjkl ships a real formatter;
-  stock nvim has no `indentexpr` for plain text. Design choice.
-- **`app::explorer::tests::non_git_dd_vanishes` failing under
-  `cargo test --workspace`.** Pre-existing flake, not a regression: it passes in
-  isolation and across repeated app-suite runs. It mutates process-global CWD
-  and env, so it races under workspace-wide parallelism.
-
 ## Not covered by this pass
 
 - **Non-ASCII.** `HjklOutcome.cursor` is a char index and `NvimOutcome.cursor`
@@ -201,7 +146,8 @@ Checked and deliberately excluded, so they are not re-reported next time:
   where the char-vs-grapheme column trap lives, and it is unaudited.
 - **Ex commands** (`:`), search prompts (`/`, `?`) — the in-process hjkl driver
   cannot replay them.
-- **Undo / redo** — masked by the harness artifact above.
+- **Undo / redo** — nvim fixture seeding over RPC creates an undoable change, so
+  `u` rolls back the fixture rather than the generated operation.
 - **Folds** (`z`) and `gq` — excluded to avoid config-skew noise.
 - The app / window layer, LSP, and everything above the engine.
 
@@ -319,63 +265,6 @@ Expect: "STRASSE" (or "STRAẞE")
 Minor — affects users whose text contains precomposed characters with multi-char
 case mappings.
 
-## Cleared
-
-- **`content_row_count` false-positive** (sub-agent #2): ropey always produces
-  exactly one phantom trailing empty line. `"foo\n\n"` → 3 ropey lines (real
-  "foo", real empty, phantom empty). Stripping only the last is correct; the
-  second empty line is a genuine user line. Verified with `"foo"`, `"foo\n"`,
-  `"foo\n\n"`, `"foo\n\n\n"`, `"foo\nbar"`, `"foo\n\nbar"`.
-
-- **`to_uppercase`/`to_lowercase` next().unwrap_or(c) pattern in `command.rs`**
-  — same as finding 5, confirmed as minor-only.
-
-- **`read_vim_range` exclusive-row blank segments** — `lo < hi` guard prevents
-  empty pushes; `row < bot.0` newline push is correct. Safe.
-
-- **`cut_vim_range` inclusive wrap to next row at buffer edge** — unreachable in
-  practice; safeguard exists but never triggers. Safe.
-
-- **`reflow_keep_cursor` blank-line char offset** — traced a concrete 4-line
-  example with blank middle line; +1 separator accumulation cancels with -1
-  scanning. Safe.
-
-- **`change_linewise_rows` single-line `cc`** — `end_row > top_row` false → only
-  content deleted, indent preserved. Safe.
-
-- **`replace_char` count guard** — `>` (not `>=`), so exact fit is allowed.
-  Safe.
-
-- **`do_char_delete` empty-line guard** — `break` not `continue`, prevents
-  infinite spin. Safe.
-
-- **`indent_rows` empty-line skip** — whitespace-only lines are NOT empty, so
-  they get indented = matches vim. Safe.
-
-- **`word_at_cursor_search` punctuation-only line** — empty-vec guard returns
-  early. Safe.
-
-- **`bracket_net` single-quote lifetime heuristic** — 5-char lookahead is
-  bounded; 6+ char literals don't exist in practice. Safe.
-
-- **`do_block_paste` width-padding gated on `tail`** — empty `tail` → no
-  trailing padding, matches nvim v0.12.4. Safe.
-
-- **`do_insert_block` double-lock pattern** — safe on current single-threaded
-  architecture. Hardening note only.
-
-- **`rope_line_char_count` public OOB panic** — all current callers clamp row
-  first. Hardening note only.
-
-- **`prune_root_side` stale `depth`** — documented as cache-only field.
-  Hardening note only.
-
-- **`ensure_cursor_visible` stale `top_row` on `cursor_screen_row_from` None** —
-  edge case with multi-view shrink; very low risk.
-
-- **14 additional items from sub-agent #3 (buffer crate)** — all verified safe
-  by the sub-agent and spot-checked.
-
 ## Hardening evidence
 
 - **`SnapshotFoldProvider::next_visible_row` uses unbounded `+= 1`**
@@ -403,66 +292,14 @@ case mappings.
   `top_col` is zeroed; `top_row` stays where it was, potentially leaving cursor
   invisible. Remediation is tracked in `docs/backlog.md`.
 
-## Coverage
+## Remaining review coverage
 
-Reviewed:
-
-- Recent diff (v0.39.0..HEAD): 13 commits, all changed files read in full.
-- `crates/hjkl-vim/src/vim/command.rs` — full file (1245 lines).
-- `crates/hjkl-vim/src/vim/text_object_ops.rs` — full file (626 lines).
-- `crates/hjkl-vim/src/vim/motion.rs` — `apply_sticky_col`,
-  `is_vertical_motion`.
-- `crates/hjkl-vim/src/curswant.rs` — full file (189 lines).
-- `crates/hjkl-engine/src/cursor_move.rs` — full file (221 lines).
-- `crates/hjkl-engine/src/rope_util.rs` — full file (141 lines).
-- `crates/hjkl-engine/src/editor.rs` — `search_advance`, `scroll_line`,
-  `jump_cursor`, `sync_sticky_col_to_cursor`.
-- `crates/hjkl-engine/src/motions.rs` — `content_row_count`, `move_bottom`.
-- `crates/hjkl-engine/src/substitute.rs` — `apply_substitute` case-mode branch.
-- `crates/hjkl-engine/src/types.rs` — `Options` defaults diff.
-- `crates/hjkl-buffer/src/engine_types.rs` — full file.
-- `crates/hjkl-buffer/src/buffer.rs` — `View` impl, first 200 lines.
-
-Sub-agent coverage (read-only, changes nothing):
-
-- Sub-agent #1 (hjkl-vim): `motion.rs`, `command.rs`, `text_object_ops.rs`,
-  `normal.rs`, `visual.rs`, `state.rs`, `count.rs`, `linewise.rs`.
-- Sub-agent #2 (hjkl-engine): `motions.rs`, `buffer_impl.rs`, `substitute.rs`,
-  `search.rs`, `editor.rs`, `types.rs`.
-- Sub-agent #3 (hjkl-buffer): `edit.rs`, `undo.rs`, `buffer.rs`, `geom.rs`,
-  `lib.rs`.
-
-Not reviewed:
-
-- `apps/hjkl/` — app layer, PTY harness, e2e tests. GAP.
-- `crates/hjkl-lsp/` — LSP runtime, codec, manager. GAP.
-- `crates/hjkl-editor/`, `crates/hjkl-editor-tui/` and sibling TUI crates. GAP.
-- `crates/hjkl-ex/`, `crates/hjkl-completion/` — ex commands, completion. GAP.
-- `crates/hjkl-prompt/`, `crates/hjkl-menu/`, `crates/hjkl-picker/` —
-  prompt/menu/picker logic. GAP.
-- All remaining TUI and non-core crates. GAP.
-
-## Gate
-
-`cargo fmt --all --check` ✓,
-`cargo clippy --all-targets --all-features -- -D warnings` ✓,
-`cargo build --workspace --examples --all-features` ✓.
-`cargo nextest run --workspace --all-features --no-fail-fast`: 5453 passed, 22
-failed, 95 skipped.
-
-All 22 failures are pre-existing (tree unchanged this session):
-
-- 3 `app::explorer::tests::dd_*` — same class as the documented
-  `non_git_dd_vanishes` flake (process-global CWD/env mutation).
-- 1 `app::tests::ex::scratch_buffer_writes_swap_when_dirty` — pre-existing.
-- 1 `hjkl-vim-tui::proptest_fsm esc_returns_to_normal` — curswant invariant
-  correctly caught `M-.` (Alt+dot) cursor move without syncing `sticky_col`; the
-  point of the phase-0 assertion. Pre-existing.
-- 17 `e2e pty_harness::*` — all TRY 3, PTY/TTY flake class. Pre-existing.
-
-No regressions introduced by this review.
-
-Open follow-up actions from this review are consolidated in `docs/backlog.md`.
+- `apps/hjkl/` — app layer, PTY harness, e2e tests.
+- `crates/hjkl-lsp/` — LSP runtime, codec, manager.
+- `crates/hjkl-editor/`, `crates/hjkl-editor-tui/`, and sibling TUI crates.
+- `crates/hjkl-ex/`, `crates/hjkl-completion/` — ex commands, completion.
+- `crates/hjkl-prompt/`, `crates/hjkl-menu/`, `crates/hjkl-picker/`.
+- All remaining TUI and non-core crates.
 
 # Code review — pending changes (2026-07-29)
 
@@ -517,29 +354,6 @@ The same bug also manifests when modifiers are present on the `.` key
 `step_normal` (`crates/hjkl-vim/src/normal.rs:463`) only checks `!input.ctrl`
 and `input.key == Key::Char('.')` — it does not reject `alt` or `shift`.
 
-## Cleared
-
-- **`push_undo()` doesn't change `dirty_gen`** — confirmed by reading
-  `Editor::push_undo_at` (`crates/hjkl-engine/src/editor.rs:4808–4828`): it
-  snapshots the rope (read-only), pushes into the undo tree, and clears redo —
-  none of which bumps `dirty_gen`. So an empty `ReplaceMode` replay does pass
-  through the curswant guard at line 142 (`dirty_gen` unchanged) and reaches the
-  motion check. This is correct for the guard but exposes the missing
-  `sticky_col` update.
-
-- **`replay_insert_and_finish` is not affected** — it calls `mutate_edit` before
-  `move_left`, which bumps `dirty_gen`, so the curswant check skips it. And it
-  explicitly sets `vim_mut(ed).mode = Mode::Normal`, which also trips the
-  mode-change guard.
-
-- **Other `LastChange` variants in `replay_last_change` are safe**: all either
-  mutate the buffer (changing `dirty_gen`) or change mode (tripping the
-  mode-change guard) before any raw cursor move.
-
-- **`leave_insert_to_normal_bridge` is not affected** — it explicitly calls
-  `ed.set_sticky_col(Some(ed.cursor().1))` after `move_left`, syncing the sticky
-  column (`crates/hjkl-vim/src/vim/insert_bridges.rs:867`).
-
 ## Hardening evidence
 
 - **Dot-repeat gate doesn't filter `alt`/`shift`** — `step_normal` line 463
@@ -552,19 +366,3 @@ and `input.key == Key::Char('.')` — it does not reject `alt` or `shift`.
   harmless but creates pointless undo-tree entries.
 
 Both actions are tracked in `docs/backlog.md`.
-
-## Coverage
-
-Examined: the full dispatch chain from `hjkl_vim_tui::handle_key` →
-`crossterm_to_input` → `dispatch_input` (including curswant pre/post checks) →
-`dispatch_input_inner` → `step_insert` / `step_normal` →
-`leave_insert_to_normal_bridge` → `finish_insert_session` →
-`replay_last_change`. Also verified `push_undo_at` doesn't bump `dirty_gen`, and
-confirmed `move_left` only moves the cursor with no sticky_col side effect.
-
-Both failing proptest cases (`esc_returns_to_normal` and
-`no_panic_on_random_keys`) converge on the same root cause.
-
-Not reviewed: the remaining five proptest tests (all pass — they don't generate
-the `R→Esc→e→.` or equivalent pattern). No other pending changes exist in the
-working tree.

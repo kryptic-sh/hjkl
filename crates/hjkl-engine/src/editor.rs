@@ -3126,7 +3126,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             // used to re-use the old column verbatim, which both ignored
             // `curswant` and parked the cursor past end-of-line on a shorter
             // row. Found by the `esc_returns_to_normal` proptest via the
-            // phase-0 curswant assertion; class D in docs/cursor-moves.md.
+            // phase-0 curswant assertion.
             self.move_cursor(crate::cursor_move::Move::Vertical { row: clamped });
         }
     }

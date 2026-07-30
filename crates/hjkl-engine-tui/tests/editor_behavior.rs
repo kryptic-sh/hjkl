@@ -2210,8 +2210,8 @@ fn scroll_line_clamps_cursor_when_off_screen() {
 /// `<C-e>` / `<C-y>` are screen-line vertical motions: when the scroll pushes
 /// the cursor onto a new row it must follow the `j` / `k` rule — clamp to the
 /// row's length and keep the un-clamped `curswant`. It previously re-used the
-/// old column verbatim, parking the cursor past end-of-line on a short row.
-/// Class D in docs/cursor-moves.md; caught by the phase-0 curswant assertion.
+/// old column verbatim, parking the cursor past end-of-line on a short row;
+/// caught by the phase-0 curswant assertion.
 #[test]
 fn scroll_line_onto_short_row_clamps_and_keeps_curswant() {
     use hjkl_engine::ScrollDir;
