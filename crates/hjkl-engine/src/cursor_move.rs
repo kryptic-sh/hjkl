@@ -1,5 +1,5 @@
 //! Cursor moves that carry their own `curswant` semantics — phase 1 of
-//! `docs/cursor-moves.md`.
+//! `docs/backlog.md`.
 //!
 //! Today, moving the cursor and maintaining `sticky_col` (vim's `curswant`)
 //! are two separate actions, and ~186 call sites do only the first. [`Move`]

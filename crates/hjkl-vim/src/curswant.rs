@@ -1,5 +1,5 @@
 //! Debug-only `sticky_col` (vim's `curswant`) invariant — phase 0 of the
-//! cursor-move refactor described in `docs/cursor-moves.md`.
+//! cursor-move refactor described in `docs/backlog.md`.
 //!
 //! Moving the cursor and maintaining `sticky_col` are two separate actions
 //! today and nothing forces the second, which is how `c022a3a4` happened:
@@ -182,7 +182,7 @@ pub fn assert_invariant<H: hjkl_engine::Host>(
         "curswant invariant violated after {input:?}: the cursor moved \
          {:?} -> ({row}, {col}) without editing the buffer, but sticky_col is \
          {want}. A non-vertical motion must set sticky_col to the column it \
-         landed on (see docs/cursor-moves.md); row {row} has {line_len} \
+         landed on (see docs/backlog.md); row {row} has {line_len} \
          chars, so {want} is not a vertical clamp either.",
         pre.cursor
     );
