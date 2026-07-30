@@ -721,3 +721,22 @@ fn join_plain_inserts_space() {
     dispatch_keys(&mut e, "J");
     assert_eq!(e.content(), "hello world\n");
 }
+
+/// Visual hex increment: `Vg<C-a>` on `0xFF` must produce `0x100`,
+/// matching nvim behaviour.
+#[test]
+fn visual_hex_increment() {
+    let mut e = editor_with("0xFF");
+    // Enter linewise visual on the row, then g<C-a> for hex increment.
+    dispatch_keys(&mut e, "Vg<C-a>");
+    assert_eq!(e.content(), "0x100\n");
+}
+
+/// Visual hex decrement: `Vg<C-x>` on `0x10` must produce `0x0f`,
+/// preserving the hex digit width.
+#[test]
+fn visual_hex_decrement() {
+    let mut e = editor_with("0x10");
+    dispatch_keys(&mut e, "Vg<C-x>");
+    assert_eq!(e.content(), "0x0f\n");
+}

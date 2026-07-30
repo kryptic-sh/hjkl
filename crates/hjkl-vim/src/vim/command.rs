@@ -1096,31 +1096,66 @@ pub fn adjust_number_visual<H: hjkl_engine::types::Host>(
             Some(l) => l.chars().collect(),
             None => continue,
         };
-        let Some(digit_start) =
-            (start_col.min(chars.len())..chars.len()).find(|&i| chars[i].is_ascii_digit())
+        // Scan for a number start: hex (`0x`/`0X` + digit) takes priority over
+        // bare decimal, matching normal-mode `adjust_number`.
+        let is_hex_prefix = |i: usize| {
+            i + 2 < chars.len()
+                && chars[i] == '0'
+                && matches!(chars[i + 1], 'x' | 'X')
+                && chars[i + 2].is_ascii_hexdigit()
+        };
+        let Some(num_start) = (start_col.min(chars.len())..chars.len())
+            .find(|&i| is_hex_prefix(i) || chars[i].is_ascii_digit())
         else {
             continue;
         };
-        let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
-            digit_start - 1
+        let hex = is_hex_prefix(num_start);
+
+        let (span_start, span_end, new_s) = if hex {
+            let digits_start = num_start + 2;
+            let mut digits_end = digits_start;
+            while digits_end < chars.len() && chars[digits_end].is_ascii_hexdigit() {
+                digits_end += 1;
+            }
+            let hexs: String = chars[digits_start..digits_end].iter().collect();
+            let Ok(n) = u64::from_str_radix(&hexs, 16) else {
+                continue;
+            };
+            found_count += 1;
+            let this_delta = if sequential {
+                delta.saturating_mul(found_count) as i128
+            } else {
+                delta as i128
+            };
+            let new_val = (n as i128 + this_delta).max(0) as u64;
+            let width = digits_end - digits_start;
+            let prefix: String = chars[num_start..digits_start].iter().collect();
+            (num_start, digits_end, format!("{prefix}{new_val:0width$x}"))
         } else {
-            digit_start
+            // Signed decimal.
+            let digit_start = num_start;
+            let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
+                digit_start - 1
+            } else {
+                digit_start
+            };
+            let mut span_end = digit_start;
+            while span_end < chars.len() && chars[span_end].is_ascii_digit() {
+                span_end += 1;
+            }
+            let s: String = chars[span_start..span_end].iter().collect();
+            let Ok(n) = s.parse::<i64>() else {
+                continue;
+            };
+            found_count += 1;
+            let this_delta = if sequential {
+                delta.saturating_mul(found_count)
+            } else {
+                delta
+            };
+            let new_s = n.saturating_add(this_delta).to_string();
+            (span_start, span_end, new_s)
         };
-        let mut span_end = digit_start;
-        while span_end < chars.len() && chars[span_end].is_ascii_digit() {
-            span_end += 1;
-        }
-        let s: String = chars[span_start..span_end].iter().collect();
-        let Ok(n) = s.parse::<i64>() else {
-            continue;
-        };
-        found_count += 1;
-        let this_delta = if sequential {
-            delta.saturating_mul(found_count)
-        } else {
-            delta
-        };
-        let new_s = n.saturating_add(this_delta).to_string();
         let span_start_pos = Position::new(row, span_start);
         let span_end_pos = Position::new(row, span_end);
         ed.mutate_edit(Edit::DeleteRange {
