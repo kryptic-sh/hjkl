@@ -235,10 +235,111 @@ pub fn do_char_delete<H: hjkl_engine::types::Host>(
         buf_set_cursor_pos(ed.buffer_mut(), Position::new(cursor.row, line_chars - 1));
     }
 }
+/// A number located on one line, with its post-`delta` text already formatted.
+///
+/// `start..end` are char indices into the line the span was found on; replacing
+/// that range with `text` performs the adjustment.
+struct AdjustedNumber {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Find the leftmost number at or after char index `from` on `chars`, add
+/// `delta`, and format the result the way vim does.
+///
+/// A `0x`/`0X` hex literal wins over a bare decimal starting at the same index.
+/// Returns `None` when the rest of the line holds no number, or when the digits
+/// found do not fit the parse type — both cases mean "leave the line alone".
+///
+/// This is the single implementation shared by normal-mode
+/// [`adjust_number`] and visual-mode [`adjust_number_visual`]; keeping one
+/// copy is what stops the two modes from drifting on padding and digit case.
+fn adjusted_number_at(chars: &[char], from: usize, delta: i64) -> Option<AdjustedNumber> {
+    let len = chars.len();
+    let is_hex_prefix = |i: usize| {
+        chars[i] == '0'
+            && matches!(chars.get(i + 1), Some('x' | 'X'))
+            && chars.get(i + 2).is_some_and(|c| c.is_ascii_hexdigit())
+    };
+    let start = (from.min(len)..len).find(|&i| is_hex_prefix(i) || chars[i].is_ascii_digit())?;
+
+    if is_hex_prefix(start) {
+        // `0x` + hex digits. Increment in hex, preserve the digit width.
+        let digits_start = start + 2;
+        let mut digits_end = digits_start;
+        while digits_end < len && chars[digits_end].is_ascii_hexdigit() {
+            digits_end += 1;
+        }
+        let digits: String = chars[digits_start..digits_end].iter().collect();
+        let n = u64::from_str_radix(&digits, 16).ok()?;
+        let new_val = (n as i128 + delta as i128).max(0) as u64;
+        let width = digits_end - digits_start;
+        let prefix: String = chars[start..digits_start].iter().collect();
+        // Vim picks the output's letter case from the *last* letter digit of
+        // the original ("0xaB" <C-a> -> "0xAC", "0xAb" -> "0xac"). With no
+        // letter digit to go by it falls back to the `x`/`X` prefix's own case
+        // ("0X19" <C-a> -> "0X1A", "0x19" -> "0x1a").
+        let upper = digits
+            .chars()
+            .rev()
+            .find(|c| c.is_ascii_alphabetic())
+            .map_or(chars[start + 1] == 'X', |c| c.is_ascii_uppercase());
+        let text = if upper {
+            format!("{prefix}{new_val:0width$X}")
+        } else {
+            format!("{prefix}{new_val:0width$x}")
+        };
+        return Some(AdjustedNumber {
+            start,
+            end: digits_end,
+            text,
+        });
+    }
+
+    // Signed decimal. A leading `-` immediately before the digits is part of
+    // the number.
+    let span_start = if start > 0 && chars[start - 1] == '-' {
+        start - 1
+    } else {
+        start
+    };
+    let mut span_end = start;
+    while span_end < len && chars[span_end].is_ascii_digit() {
+        span_end += 1;
+    }
+    let s: String = chars[span_start..span_end].iter().collect();
+    let n = s.parse::<i64>().ok()?;
+    let new_val = n as i128 + delta as i128;
+    // Vim zero-pads the result back to the original digit width, but only when
+    // the original number actually had a leading zero (`:h CTRL-A`): "10"
+    // <C-x> -> "9", not "09"; "007" <C-x> -> "006". The `-` sign is never part
+    // of the padded width — "-007" <C-a> -> "-006", and crossing zero into
+    // negative still pads the digits ("009" 20<C-x> -> "-011").
+    let digits: String = chars[start..span_end].iter().collect();
+    let width = digits.len();
+    let text = if width > 1 && digits.starts_with('0') {
+        if new_val < 0 {
+            let mag = new_val.unsigned_abs();
+            format!("-{mag:0width$}")
+        } else {
+            format!("{new_val:0width$}")
+        }
+    } else {
+        new_val.to_string()
+    };
+    Some(AdjustedNumber {
+        start: span_start,
+        end: span_end,
+        text,
+    })
+}
+
 /// Vim `Ctrl-a` / `Ctrl-x` — find the next number at or after the cursor on the
 /// current line, add `delta`, leave the cursor on the last digit of the result.
-/// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
-/// well as signed decimals. No-op if the line has no number to the right.
+/// Recognises `0x`/`0X` hex literals (incremented in hex, width and digit case
+/// preserved) as well as signed decimals. No-op if the line has no number to
+/// the right.
 pub fn adjust_number<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     delta: i64,
@@ -251,83 +352,13 @@ pub fn adjust_number<H: hjkl_engine::types::Host>(
         Some(l) => l.chars().collect(),
         None => return false,
     };
-    let len = chars.len();
-
-    // Scan from the cursor for the start of the leftmost number — a `0x`/`0X`
-    // hex literal takes priority over a bare decimal at the same position.
-    let is_hex_prefix = |i: usize| {
-        chars[i] == '0'
-            && i + 1 < len
-            && matches!(chars[i + 1], 'x' | 'X')
-            && chars.get(i + 2).is_some_and(|c| c.is_ascii_hexdigit())
-    };
-    let mut i = cursor.col;
-    let mut hex = false;
-    loop {
-        if i >= len {
-            return false;
-        }
-        if is_hex_prefix(i) {
-            hex = true;
-            break;
-        }
-        if chars[i].is_ascii_digit() {
-            break;
-        }
-        i += 1;
-    }
-
-    let (span_start, span_end, new_s) = if hex {
-        // `0x` + hex digits. Increment the value, preserve the digit width.
-        let digits_start = i + 2;
-        let mut digits_end = digits_start;
-        while digits_end < len && chars[digits_end].is_ascii_hexdigit() {
-            digits_end += 1;
-        }
-        let hexs: String = chars[digits_start..digits_end].iter().collect();
-        let Ok(n) = u64::from_str_radix(&hexs, 16) else {
-            return false;
-        };
-        let new_val = (n as i128 + delta as i128).max(0) as u64;
-        let width = digits_end - digits_start;
-        let prefix: String = chars[i..digits_start].iter().collect();
-        (i, digits_end, format!("{prefix}{new_val:0width$x}"))
-    } else {
-        // Signed decimal.
-        let digit_start = i;
-        let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
-            digit_start - 1
-        } else {
-            digit_start
-        };
-        let mut span_end = digit_start;
-        while span_end < len && chars[span_end].is_ascii_digit() {
-            span_end += 1;
-        }
-        let s: String = chars[span_start..span_end].iter().collect();
-        let Ok(n) = s.parse::<i64>() else {
-            return false;
-        };
-        let new_val = n as i128 + delta as i128;
-        // Vim zero-pads the result back to the original digit width, but
-        // only when the original number actually had a leading zero
-        // (`:h CTRL-A`): "10" <C-x> -> "9", not "09"; "007" <C-x> -> "006".
-        // The `-` sign is never part of the padded width — "-007" <C-a> ->
-        // "-006", and crossing zero into negative still pads the digits
-        // ("009" 20<C-x> -> "-011").
-        let digits: String = chars[digit_start..span_end].iter().collect();
-        let width = digits.len();
-        let new_s = if width > 1 && digits.starts_with('0') {
-            if new_val < 0 {
-                let mag = new_val.unsigned_abs();
-                format!("-{mag:0width$}")
-            } else {
-                format!("{new_val:0width$}")
-            }
-        } else {
-            new_val.to_string()
-        };
-        (span_start, span_end, new_s)
+    let Some(AdjustedNumber {
+        start: span_start,
+        end: span_end,
+        text: new_s,
+    }) = adjusted_number_at(&chars, cursor.col, delta)
+    else {
+        return false;
     };
 
     ed.push_undo();
@@ -1096,66 +1127,25 @@ pub fn adjust_number_visual<H: hjkl_engine::types::Host>(
             Some(l) => l.chars().collect(),
             None => continue,
         };
-        // Scan for a number start: hex (`0x`/`0X` + digit) takes priority over
-        // bare decimal, matching normal-mode `adjust_number`.
-        let is_hex_prefix = |i: usize| {
-            i + 2 < chars.len()
-                && chars[i] == '0'
-                && matches!(chars[i + 1], 'x' | 'X')
-                && chars[i + 2].is_ascii_hexdigit()
+        // `g<C-a>` scales the increment by how many numbers have been adjusted
+        // so far, so the delta for *this* row assumes the row yields one.
+        // `found_count` only advances once `adjusted_number_at` confirms it did
+        // — a row with no number, or with digits that fail to parse, must not
+        // consume a step of the sequence.
+        let this_delta = if sequential {
+            delta.saturating_mul(found_count.saturating_add(1))
+        } else {
+            delta
         };
-        let Some(num_start) = (start_col.min(chars.len())..chars.len())
-            .find(|&i| is_hex_prefix(i) || chars[i].is_ascii_digit())
+        let Some(AdjustedNumber {
+            start: span_start,
+            end: span_end,
+            text: new_s,
+        }) = adjusted_number_at(&chars, start_col, this_delta)
         else {
             continue;
         };
-        let hex = is_hex_prefix(num_start);
-
-        let (span_start, span_end, new_s) = if hex {
-            let digits_start = num_start + 2;
-            let mut digits_end = digits_start;
-            while digits_end < chars.len() && chars[digits_end].is_ascii_hexdigit() {
-                digits_end += 1;
-            }
-            let hexs: String = chars[digits_start..digits_end].iter().collect();
-            let Ok(n) = u64::from_str_radix(&hexs, 16) else {
-                continue;
-            };
-            found_count += 1;
-            let this_delta = if sequential {
-                delta.saturating_mul(found_count) as i128
-            } else {
-                delta as i128
-            };
-            let new_val = (n as i128 + this_delta).max(0) as u64;
-            let width = digits_end - digits_start;
-            let prefix: String = chars[num_start..digits_start].iter().collect();
-            (num_start, digits_end, format!("{prefix}{new_val:0width$x}"))
-        } else {
-            // Signed decimal.
-            let digit_start = num_start;
-            let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
-                digit_start - 1
-            } else {
-                digit_start
-            };
-            let mut span_end = digit_start;
-            while span_end < chars.len() && chars[span_end].is_ascii_digit() {
-                span_end += 1;
-            }
-            let s: String = chars[span_start..span_end].iter().collect();
-            let Ok(n) = s.parse::<i64>() else {
-                continue;
-            };
-            found_count += 1;
-            let this_delta = if sequential {
-                delta.saturating_mul(found_count)
-            } else {
-                delta
-            };
-            let new_s = n.saturating_add(this_delta).to_string();
-            (span_start, span_end, new_s)
-        };
+        found_count += 1;
         let span_start_pos = Position::new(row, span_start);
         let span_end_pos = Position::new(row, span_end);
         ed.mutate_edit(Edit::DeleteRange {

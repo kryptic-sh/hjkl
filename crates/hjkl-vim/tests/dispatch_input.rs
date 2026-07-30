@@ -740,3 +740,75 @@ fn visual_hex_decrement() {
     dispatch_keys(&mut e, "Vg<C-x>");
     assert_eq!(e.content(), "0x0f\n");
 }
+
+/// Hex digit case follows the *last* letter digit of the original, in both
+/// normal and visual mode. Expectations checked against nvim 0.12.4.
+#[test]
+fn hex_increment_keeps_digit_case() {
+    for (before, after) in [
+        ("0xAB", "0xAC"),
+        ("0xab", "0xac"),
+        // Mixed case: the last letter digit wins over the first.
+        ("0xaB", "0xAC"),
+        ("0xAb", "0xac"),
+        ("0xDEADBEEF", "0xDEADBEF0"),
+        ("0xdeadbeef", "0xdeadbef0"),
+    ] {
+        let mut normal = editor_with(before);
+        dispatch_keys(&mut normal, "<C-a>");
+        assert_eq!(normal.content(), format!("{after}\n"), "normal {before}");
+
+        let mut visual = editor_with(before);
+        dispatch_keys(&mut visual, "V<C-a>");
+        assert_eq!(visual.content(), format!("{after}\n"), "visual {before}");
+    }
+}
+
+/// With no letter digit to copy the case from, vim falls back to the case of
+/// the `x`/`X` prefix itself: `0X19` <C-a> -> `0X1A`, `0x19` -> `0x1a`.
+#[test]
+fn hex_increment_falls_back_to_prefix_case() {
+    for (before, after) in [
+        ("0X19", "0X1A"),
+        ("0x19", "0x1a"),
+        ("0X1", "0X2"),
+        ("0xF", "0x10"),
+    ] {
+        let mut normal = editor_with(before);
+        dispatch_keys(&mut normal, "<C-a>");
+        assert_eq!(normal.content(), format!("{after}\n"), "normal {before}");
+
+        let mut visual = editor_with(before);
+        dispatch_keys(&mut visual, "V<C-a>");
+        assert_eq!(visual.content(), format!("{after}\n"), "visual {before}");
+    }
+}
+
+/// Visual `<C-a>`/`<C-x>` must zero-pad exactly like normal mode does: pad
+/// back to the original digit width only when the original led with a zero,
+/// and never count the `-` sign in that width.
+#[test]
+fn visual_decimal_preserves_zero_padding() {
+    for (before, keys, after) in [
+        ("007", "V<C-a>", "008"),
+        ("-007", "V<C-a>", "-006"),
+        ("09", "V<C-a>", "10"),
+        // No leading zero: no padding, so a shrinking number stays short.
+        ("10", "V<C-x>", "9"),
+        // Crossing zero still pads the digits, sign excluded.
+        ("009", "V20<C-x>", "-011"),
+    ] {
+        let mut visual = editor_with(before);
+        dispatch_keys(&mut visual, keys);
+        assert_eq!(visual.content(), format!("{after}\n"), "visual {before}");
+    }
+}
+
+/// `g<C-a>` scales the increment by the number of numbers adjusted so far.
+/// Rows without a number must not consume a step of that sequence.
+#[test]
+fn visual_sequential_increment_skips_numberless_rows() {
+    let mut e = editor_with("1\nno digits here\n1\n1");
+    dispatch_keys(&mut e, "VGg<C-a>");
+    assert_eq!(e.content(), "2\nno digits here\n3\n4\n");
+}
