@@ -21,6 +21,32 @@ patch bumps.
 
 ### Fixed
 
+- **The quickfix and command-line-window buffers no longer get swap files or
+  block `:qa`.** Both guards tested `is_explorer()`, so only the file explorer
+  was recognised as a programmatic scratch buffer. A `:copen` listing or a `q:`
+  history buffer was persisted to a swap file — after a crash the editor would
+  offer to "recover" a quickfix listing — and a dirty one made `:qa` refuse with
+  an `E37` naming `[No Name]`, which no `:w` could satisfy. Both now test
+  `is_special()`, which covers explorer, quickfix and cmdline alike.
+- **Visual-mode `<C-a>` / `<C-x>` now handle hexadecimal literals.** The scan
+  looked for `is_ascii_digit()` only, so the `0` of `0xFF` matched as a decimal
+  and `Vg<C-a>` produced `1xFF`. Hex literals are now recognised ahead of bare
+  decimals, incremented in hex with their digit width preserved.
+- **`<C-a>` / `<C-x>` now preserve hexadecimal digit case, and visual mode
+  preserves decimal zero-padding.** Hex results were always lowercased, so
+  `0xAB` became `0xac`; vim takes the case from the last letter digit of the
+  original (`0xaB` → `0xAC`, `0xAb` → `0xac`) and falls back to the case of the
+  `x` / `X` prefix when the number has no letter digit (`0X19` → `0X1A`).
+  Separately, visual `<C-a>` dropped the zero-padding that normal mode had
+  always kept, turning `007` into `8` rather than `008`. Normal and visual mode
+  now share one implementation, so the two cannot drift apart again. Expected
+  values checked against nvim 0.12.4.
+- **A soft-wrapped viewport now scrolls back into range when another window
+  shrinks the buffer.** When the cursor's screen row could not be computed,
+  `ensure_cursor_visible` zeroed `top_col` but left `top_row` past the end of
+  the shortened rope, so the window rendered empty until the next event moved
+  the cursor. `top_row` is now clamped to the cursor's row against the live
+  rope. The same path also covers a cursor sitting inside a closed fold.
 - **Cursor movement, substitutions, indentation, and case conversion now retain
   their intended semantics.** Vertical cursor moves convert display-column
   curswant back to character columns on tabbed lines; inline `\c` / `\C`

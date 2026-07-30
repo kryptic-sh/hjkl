@@ -40,14 +40,7 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 | Y5 `hjkl-editor::spec`         | `crates/hjkl-editor/src/lib.rs`                        | Needs external-consumer confirmation before deletion; workspace grep is insufficient for public APIs. |
 | Multicursor `lens` vector      | `hjkl-engine/src/editor.rs` (`buf_line_chars` collect) | O(buffer) per edit, but gated behind unwired multicursor.                                             |
 
-### 1.4 Special-buffer guards that still say `is_explorer`
-
-| Item                            | Where                 | Effect                                                                                                                                  |
-| ------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Swap files for scratch docks    | `write_swap_for_slot` | Guards on `is_explorer()` only, so `:copen` and `q:` buffers get swap files and a crash can offer to “recover” a quickfix listing.      |
-| `:qa` blocked by a scratch slot | `quit_all`            | Blocks on `dirty && !is_explorer()`. A dirty quickfix/cmdline scratch slot makes `:qa` refuse with unsatisfiable `E37 ... "[No Name]"`. |
-
-### 1.5 LSP and span follow-ups
+### 1.4 LSP and span follow-ups
 
 | Item                                        | Where                                       | Note                                                                                                                                                                                |
 | ------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -55,12 +48,12 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 | `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                               |
 | `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | No readers. Removal wins ~27% on full installation and nothing per keystroke, but it is a public API removal on a published crate.                                                  |
 
-### 1.6 Remaining differential-oracle and code-review fixes
+### 1.5 Remaining differential-oracle and code-review fixes
 
-Fixed by `9a156885`, `b97e9bce`, and earlier commits. Detailed reproductions for
-resolved entries are preserved in the supporting-evidence appendix below, marked
-as fixed. Preserve each fixed case in the tier-2 compatibility corpus and verify
-it against nvim before changing expectations.
+Fixed by `9a156885`, `b97e9bce`, `76cfb459`, and earlier commits. Detailed
+reproductions for resolved entries are preserved in the supporting-evidence
+appendix below, marked as fixed. Preserve each fixed case in the tier-2
+compatibility corpus and verify it against nvim before changing expectations.
 
 | Priority | Task                                                                                                                                                     | Where / acceptance criterion                                                           |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -68,9 +61,8 @@ it against nvim before changing expectations.
 | Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                       | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.        |
 | Medium   | Correct paragraph/WORD landings: `}` at EOF must reach the last character and `B` at column 0 of row 1 must remain on row 1.                             | Expected positions `(0,23)` and `(1,0)`.                                               |
 | Medium   | Triage `V}u2)1gUiW` and fix the state or cursor transition between individually-correct components.                                                      | `"'qux'  A-B"` must become `"'QUX'  a-b"`.                                             |
-| Medium   | Add hexadecimal handling to visual `<C-a>`/`<C-x>`.                                                                                                      | `Vg<C-a>` on `0xFF` must produce `0x100`.                                              |
 
-### 1.7 Cursor-move API migration
+### 1.6 Cursor-move API migration
 
 `Move` and the debug invariant shipped; remaining phases are:
 
@@ -84,20 +76,21 @@ it against nvim before changing expectations.
 5. Report counts by `Move` variant and justify every `Move::Raw` site. Keep the
    compat oracle and PTY e2e behavior unchanged.
 
-### 1.8 Harness, coverage, and hardening
+### 1.7 Harness, coverage, and hardening
 
 - Clear nvim undo history after fixture seeding, then fuzz undo/redo. Extend
   cursor comparison beyond ASCII and add ex/search, fold, and `gq` coverage.
 - Complete review coverage for app, LSP, editor/TUI, ex/completion,
   prompt/menu/picker, and remaining non-core crates.
-- Stabilize process-global CWD/environment explorer tests and flaky PTY e2e
-  cases. Cache/CWD/color isolation landed in `ca3852b2`; unspecified PTY flakes
-  may remain.
+- Stabilize flaky PTY e2e cases. Cache/CWD/color isolation landed in `ca3852b2`;
+  the two explorer `dd` tests that still failed under `cargo test`'s thread pool
+  are fixed — they pointed `XDG_CACHE_HOME` at the very directory they were
+  exploring, so the trash's own `hjkl/` directory appeared as a tree entry and,
+  sorting before files, absorbed the `j` that was meant to land on the file
+  under test. Unspecified PTY flakes may remain.
 - Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
 - Rename undo-tree `depth` to `depth_for_keyframe`.
 - Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
-- Clamp `top_row` when another view shrinks a buffer and
-  `cursor_screen_row_from` returns `None`.
 
 ## 2. Blocked on platform access
 
@@ -381,7 +374,18 @@ Repro: Vg<C-a> on "0xFF", cursor row 0
 Expect: hex increment → "0x100"
 ```
 
-Remediation is tracked in the ranked backlog above.
+Fixed. The first pass added a hex branch to `adjust_number_visual` but left two
+divergences that the normal-mode path did not have; both are closed by folding
+the two implementations into one shared `adjusted_number_at` helper, so the
+modes can no longer drift:
+
+- Hex digit case was always lowercased (`0xAB` `<C-a>` → `0xac`). vim takes the
+  case of the **last letter digit** of the original (`0xaB` → `0xAC`, `0xAb` →
+  `0xac`), falling back to the `x`/`X` prefix's own case when the number has no
+  letter digit (`0X19` → `0X1A`, `0x19` → `0x1a`). This one was wrong in normal
+  mode too.
+- Visual decimal dropped zero-padding (`007` `<C-a>` → `8` instead of `008`),
+  which normal-mode `adjust_number` had handled since it was written.
 
 ##### 4. `:s` `/i` and `/I` flags ignore inline `\c`/`\C` overrides
 
@@ -453,7 +457,13 @@ case mappings. Fixed by `9a156885`.
 - **`ensure_cursor_visible` top_row stale on shrink from other view**
   (`buffer.rs:189-191`): when `cursor_screen_row_from` returns `None`, only
   `top_col` is zeroed; `top_row` stays where it was, potentially leaving cursor
-  invisible. Remediation is tracked in the ranked backlog above.
+  invisible. Fixed. `e219e664` first assigned the raw `cursor.row`, which does
+  not repair the shrink case at all: the guard above already establishes
+  `cursor.row >= top_row`, so on a shrink (`last < top_row <= cursor.row`) that
+  assignment can only move `top_row` further past the rope's end. `top_row` is
+  now set to `cursor.row.min(last_row)`, which pulls it back into the live rope.
+  The other `None` path — the cursor's row hidden inside a closed fold — is
+  covered by the same assignment, and both paths now have a regression test.
 
 #### Remaining review coverage
 
