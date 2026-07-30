@@ -3995,8 +3995,11 @@ mod tests {
         run(&["add", "tracked.txt"], tmp.path());
         run(&["commit", "-m", "init"], tmp.path());
 
+        // Keep the cache outside the explored tree — see the note in
+        // `non_git_dd_vanishes`.
+        let cache = tempfile::tempdir().unwrap();
         let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
@@ -4042,8 +4045,13 @@ mod tests {
         // Temp dir that is NOT a git repo.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("untracked.txt"), "bye").unwrap();
+        // The cache must live *outside* the explored tree: pointing
+        // XDG_CACHE_HOME at `tmp` makes the trash's own `hjkl/` directory show
+        // up as a tree entry, and since directories sort first the `j` below
+        // would land on it instead of the file under test.
+        let cache = tempfile::tempdir().unwrap();
         let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        cwd.set_env("XDG_CACHE_HOME", cache.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
