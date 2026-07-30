@@ -187,6 +187,9 @@ impl View {
         // `cursor_screen_row_from` every step (which was O(distance^2) on a
         // large soft-wrapped jump).
         let Some(mut screen) = self.cursor_screen_row_from(viewport, viewport.top_row) else {
+            // A concurrent view shrink moved the cursor above top_row — snap
+            // the viewport down so the cursor is visible.
+            viewport.top_row = cursor.row;
             viewport.top_col = 0;
             return;
         };
