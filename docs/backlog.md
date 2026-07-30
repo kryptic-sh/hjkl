@@ -55,26 +55,20 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 | `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                               |
 | `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | No readers. Removal wins ~27% on full installation and nothing per keystroke, but it is a public API removal on a published crate.                                                  |
 
-### 1.6 Differential-oracle and code-review fixes
+### 1.6 Remaining differential-oracle and code-review fixes
 
-Detailed reproductions are preserved in the supporting-evidence appendix below.
-Preserve each fixed case in the tier-2 compatibility corpus and verify it
-against nvim before changing expectations.
+Fixed by `9a156885`, `b97e9bce`, and earlier commits. Detailed reproductions for
+resolved entries are preserved in the supporting-evidence appendix below, marked
+as fixed. Preserve each fixed case in the tier-2 compatibility corpus and verify
+it against nvim before changing expectations.
 
-| Priority | Task                                                                                                                                                                                                                                               | Where / acceptance criterion                                                                                                    |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Highest  | Distinguish failed linewise motions from zero-distance successful motions. At a buffer edge, `dk`, `dj`, `d+`, and `d-` must leave the only line unchanged; count-1 `d_` must still delete it.                                                     | `hjkl-vim::apply_op_with_motion`; live data-loss regression introduced by `0107e2e8`.                                           |
-| High     | Replace repeated paste application with one batched edit and set a memory budget that does not amplify a permitted 10 MiB paste beyond libFuzzer's 2048 MiB RSS limit. Refuse oversized pastes with an error rather than silently truncating them. | `do_paste`; `yy999999999p` currently aborts under `ulimit -v 2 GB` but succeeds under 8 GB.                                     |
-| High     | Replace the no-op-delete undo-depth proxy with the actual “did this delete remove a line?” result.                                                                                                                                                 | No-op `dd` register behavior must not depend on unrelated prior undoable actions.                                               |
-| High     | Fix empty `ReplaceMode` dot replay so `R<Esc>e.` does not leave `sticky_col` stale. Reject Alt/Shift-modified `.` and avoid an undo entry when replay performs no mutation.                                                                        | `crates/hjkl-vim/src/vim/dot_repeat.rs`, `normal.rs`; make regression `37433df2` pass without weakening the curswant invariant. |
-| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                                                                                                                 | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.                                                 |
-| Medium   | Correct paragraph/WORD landings: `}` at EOF must reach the last character and `B` at column 0 of row 1 must remain on row 1.                                                                                                                       | Expected positions `(0,23)` and `(1,0)`.                                                                                        |
-| Medium   | Triage `V}u2)1gUiW` and fix the state or cursor transition between individually-correct components.                                                                                                                                                | `"'qux'  A-B"` must become `"'QUX'  a-b"`.                                                                                      |
-| Medium   | Convert `Move::Vertical`'s display-column `sticky_col` back to a character column before clamping.                                                                                                                                                 | Tabstop=4 repro must land on `(1,2)`, not `(1,3)`.                                                                              |
-| Medium   | Make `outdent_rows` consume visual indentation width, including tabs.                                                                                                                                                                              | `<<` on `"\t\tfoo"` with tabstop/shiftwidth 4 must produce `"\tfoo"`.                                                           |
-| Medium   | Add hexadecimal handling to visual `<C-a>`/`<C-x>`.                                                                                                                                                                                                | `Vg<C-a>` on `0xFF` must produce `0x100`.                                                                                       |
-| Medium   | Make inline `\c`/`\C` override substitute `/i` and `/I` flags in execution and match collection.                                                                                                                                                   | Cover `apply_substitute` and `collect_substitute_matches`.                                                                      |
-| Low      | Preserve every character emitted by Unicode upper/lowercase mappings.                                                                                                                                                                              | Cover mappings such as `ß → SS` and `İ → i\u{307}`.                                                                             |
+| Priority | Task                                                                                                                                                     | Where / acceptance criterion                                                           |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| High     | Surface a user-visible error when a paste is rejected for exceeding the 1 MiB budget. Currently `do_paste` returns `false` silently — no `Host` channel. | `crates/hjkl-vim/src/vim/command.rs:657-685`; `hjkl-engine/src/types.rs` `Host` trait. |
+| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                       | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.        |
+| Medium   | Correct paragraph/WORD landings: `}` at EOF must reach the last character and `B` at column 0 of row 1 must remain on row 1.                             | Expected positions `(0,23)` and `(1,0)`.                                               |
+| Medium   | Triage `V}u2)1gUiW` and fix the state or cursor transition between individually-correct components.                                                      | `"'qux'  A-B"` must become `"'QUX'  a-b"`.                                             |
+| Medium   | Add hexadecimal handling to visual `<C-a>`/`<C-x>`.                                                                                                      | `Vg<C-a>` on `0xFF` must produce `0x100`.                                              |
 
 ### 1.7 Cursor-move API migration
 
@@ -97,7 +91,8 @@ against nvim before changing expectations.
 - Complete review coverage for app, LSP, editor/TUI, ex/completion,
   prompt/menu/picker, and remaining non-core crates.
 - Stabilize process-global CWD/environment explorer tests and flaky PTY e2e
-  cases.
+  cases. Cache/CWD/color isolation landed in `ca3852b2`; unspecified PTY flakes
+  may remain.
 - Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
 - Rename undo-tree `depth` to `depth_for_keyframe`.
 - Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
@@ -222,8 +217,7 @@ independently surfaced `dk` as a new divergence in the latest pass. Multi-line
 `dk` (row 2 of 3) is still correct.
 
 This distinguishes failed motions from zero-distance successful motions: `_`
-does not fail at count 1; `k` at row 0 does. The action is tracked in the ranked
-backlog above.
+does not fail at count 1; `k` at row 0 does. Fixed by `b97e9bce`.
 
 ##### 11. Unbounded memory on large paste counts — improved, not closed
 
@@ -243,8 +237,9 @@ clamp ceiling) aborts, while 5000 iterations of a 10-byte register (50 KB) does
 not. So a paste sitting exactly at the permitted ceiling needs >2 GB peak RSS,
 roughly 200× amplification.
 
-The budget is therefore too generous relative to per-byte overhead. Remediation
-is tracked in the ranked backlog above.
+The budget is therefore too generous relative to per-byte overhead. Fixed by
+`b97e9bce`: budget lowered to 1 MiB with batched, pre-allocated edits. Silent
+rejection of over-budget pastes is tracked in the ranked backlog above.
 
 The weekly cron fuzz job runs with libFuzzer's default 2048 MB rss limit, so
 this remains reachable there.
@@ -297,12 +292,14 @@ document exists to prevent. A following `j` may snap to a stale column.
 which is a proxy for the real rule rather than the rule itself. It makes the
 oracle cases pass, but the register outcome of a no-op `dd` now depends on
 whether _any_ prior undoable action occurred in the session, which is not what
-vim keys off.
+vim keys off. Fixed by `b97e9bce`: `cut_vim_range` now uses the actual inverse
+edit payload; an empty inverse leaves registers untouched.
 
 **W3. `62bd4853` silently truncates oversized pastes.** A user asking for N
 copies of a large register gets fewer, with no message. Silent partial execution
-is arguably worse than refusing; remediation is tracked in the ranked backlog
-above.
+is arguably worse than refusing. Superseded by `b97e9bce`: oversized pastes are
+now rejected outright rather than silently truncated. The rejection is still
+silent — tracked in the ranked backlog above.
 
 #### Not covered by this pass
 
@@ -350,7 +347,7 @@ Repro: tabstop=4, buffer "\tabcdef\n\txyz", cursor (0,2)='b'
 Expect: cursor (1,2)='y' (visual col 5 on a tab+line = char col 2)
 ```
 
-Remediation is tracked in the ranked backlog above.
+Remediation is tracked in the ranked backlog above. Fixed by `9a156885`.
 
 ##### 2. `outdent_rows` strips by character count, not visual column width
 
@@ -367,7 +364,7 @@ Repro: << on "\t\tfoo" (tabstop=4, shiftwidth=4, noexpandtab)
 Expect: "\tfoo" (vim strips 4 visual cols = 1 tab)
 ```
 
-Remediation is tracked in the ranked backlog above.
+Fixed by `9a156885`.
 
 ##### 3. `adjust_number_visual` ignores hex literals
 
@@ -408,8 +405,8 @@ Repro: :s/\CFOO/bar/i
 Expect: \C forces case-sensitive despite the i flag
 ```
 
-The same bug exists in `collect_substitute_matches` (lines 442-458). Remediation
-is tracked in the ranked backlog above.
+The same bug exists in `collect_substitute_matches` (lines 442-458). Fixed by
+`9a156885`.
 
 ##### 5. `toggle_case_str` discards multi-character case mappings
 
@@ -428,7 +425,7 @@ Expect: "STRASSE" (or "STRAẞE")
 ```
 
 Minor — affects users whose text contains precomposed characters with multi-char
-case mappings.
+case mappings. Fixed by `9a156885`.
 
 #### Hardening evidence
 
@@ -442,7 +439,7 @@ case mappings.
   is `None`, the bootstrap uses `self.cursor().1` (char column) as `want`, but
   `want` is later compared against `max_col` (char count, ok) and used directly
   as cursor column (ok for the bootstrap case). The real bug is when
-  `sticky_col` IS `Some` (display column) — see finding 1.
+  `sticky_col` IS `Some` (display column) — see finding 1 (fixed by `9a156885`).
 
 - **`prune_root_side` depth inconsistency with `clear_all`** (`undo.rs`):
   `clear_all` resets survivor depth to 0 (line 1105); `prune_root_side` does not
@@ -531,7 +528,8 @@ and `input.key == Key::Char('.')` — it does not reject `alt` or `shift`.
   pushes an undo entry for a replay that performs zero buffer mutations. This is
   harmless but creates pointless undo-tree entries.
 
-Both actions are tracked in the ranked backlog above.
+Both actions are tracked in the ranked backlog above. Fixed by `9a156885` (empty
+replay) and `b97e9bce` (modifier rejection).
 
 ### Cursor moves carry their own curswant semantics (2026-07-27)
 
