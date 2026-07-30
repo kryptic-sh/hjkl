@@ -22,14 +22,27 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // `yl` to cover the final char.
     apply_motion_cursor_ctx(ed, motion, count, true);
     let mut end = ed.cursor();
+    // Linewise motions normally cover their row even when their endpoint has
+    // the same row. `_` is a successful zero-distance motion, but `j`/`k` and
+    // `+`/`-` fail at a buffer edge and must not operate on the current row.
+    if start.0 == end.0
+        && matches!(
+            motion,
+            Motion::Up
+                | Motion::Down
+                | Motion::ScreenUp
+                | Motion::ScreenDown
+                | Motion::FirstNonBlankNextLine
+                | Motion::FirstNonBlankPrevLine
+        )
+    {
+        return;
+    }
     // If the motion made no progress, abort the operator (vim behavior).
-    // An edge motion that can't advance (e.g. `dk` on a one-line buffer,
-    // `d+` on the last line) leaves the buffer unchanged.
+    // A charwise edge motion that cannot advance leaves the buffer unchanged.
     let mut kind = motion_kind(motion);
-    // A charwise motion that made no progress is a no-op (vim behavior):
-    // e.g. `dk` on a one-line buffer, `d+` on the last line.
-    // Linewise motions always cover their row even when start == end
-    // (e.g. `d_` with count 1 on a single row must still delete it).
+    // Linewise motions always cover their row when successful even if
+    // `start == end` (e.g. `d_` with count 1 on a single row deletes it).
     if start == end && !matches!(kind, RangeKind::Linewise) {
         return;
     }

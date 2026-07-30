@@ -79,15 +79,6 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
     use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
-    // Snapshot the undo depth before the cut so we can tell whether the
-    // buffer was just created (empty from the start) or was emptied by a
-    // prior operation.  `push_undo` has already run at this point, so a
-    // depth of 1 means this is the very first mutation — a first `dd` on
-    // a genuinely empty buffer should record "\n".  A depth > 1 means a
-    // prior operation (e.g. `VGd`) already modified the buffer; if the
-    // current delete produced no text it is a no-op and must leave
-    // registers untouched.
-    let undo_depth = ed.undo_stack_len();
     let (buf_start, buf_end, buf_kind) = match kind {
         RangeKind::Linewise => (
             Position::new(top.0, 0),
@@ -127,31 +118,26 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
     // linewise register content. The inverse from do_delete_range may
     // produce text with a leading '\n' (last-line delete with rows
     // above) or no newline at all (whole-buffer delete / empty buffer).
-    let (text, is_empty_op) = if matches!(kind, RangeKind::Linewise) {
+    let text = if matches!(kind, RangeKind::Linewise) {
         if raw_text.ends_with('\n') {
             // Normal mid-buffer delete: trailing '\n' already correct.
-            (raw_text, false)
+            raw_text
         } else if raw_text.starts_with('\n') {
             // Last-line delete with rows above: leading '\n' belongs
             // at the end (vim register convention).
-            (format!("{}\n", raw_text.strip_prefix('\n').unwrap()), false)
+            format!("{}\n", raw_text.strip_prefix('\n').unwrap())
         } else if raw_text.is_empty() {
-            if undo_depth > 1 {
-                // Buffer was modified by a prior operation (e.g. `VGd`
-                // emptied the buffer) — this delete is a true no-op.
-                // Leave registers untouched.
-                return String::new();
-            }
-            // Empty buffer dd: vim records "\n".
-            ("\n".to_string(), true)
+            // The buffer reports an empty inverse only when this linewise
+            // operation removed nothing. Keep registers untouched.
+            return String::new();
         } else {
             // Whole-buffer delete: no newline in inverse text, append one.
-            (format!("{}\n", raw_text), false)
+            format!("{raw_text}\n")
         }
     } else {
-        (raw_text, false)
+        raw_text
     };
-    if !is_empty_op && text.is_empty() {
+    if text.is_empty() {
         // Non-linewise delete yielded no text — nothing to record.
         return text;
     }
@@ -617,12 +603,11 @@ pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::S
 pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
-    mut count: usize,
+    count: usize,
     cursor_after: bool,
     reindent: bool,
-) {
+) -> bool {
     use hjkl_buffer::{Edit, Position};
-    ed.push_undo();
     // Resolve the source register: `"reg` prefix (consumed) or the
     // unnamed register otherwise. Read text + linewise from the
     // selected slot rather than the global `vim.yank_linewise` so
@@ -655,7 +640,6 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     // Vim `:h '[` / `:h ']`: after paste `[` = first inserted char of
     // the final paste, `]` = last inserted char of the final paste.
     // We track (lo, hi) across iterations; the last value wins.
-    let mut paste_mark: Option<((usize, usize), (usize, usize))> = None;
     // Capture the cursor row before any paste iterations. Vim's
     // linewise `[count]p` lands the cursor on the FIRST pasted line
     // (original_row + 1), not on the last iteration's paste row.
@@ -673,124 +657,116 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     // Empty register: nothing to paste on any iteration — bail before the
     // loop instead of `continue`-spinning through a huge count prefix.
     if yank.is_empty() {
-        return;
+        return false;
     }
-    // Clamp the paste count so the total payload stays within a byte
-    // budget, preventing OOM from pathological count prefixes (e.g.
-    // `yy999999999p` on a 10-byte register would allocate ~10 GB).
-    // Both charwise (`yank.repeat(count)`) and linewise (count
-    // iterations) produce at most `count * yank.len()` bytes.
-    const MAX_PASTE_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
-    if !yank.is_empty() {
-        let max_count = (MAX_PASTE_BYTES / yank.len()).max(1);
-        count = count.min(max_count);
+    // Bound requested source bytes before allocating or opening an undo entry.
+    // The paste paths construct temporary strings, so this conservative limit
+    // leaves headroom beneath the fuzz worker's 2 GiB RSS ceiling.
+    const MAX_PASTE_BYTES: usize = 1024 * 1024;
+    let Some(requested_bytes) = yank.len().checked_mul(count) else {
+        return false;
+    };
+    if requested_bytes > MAX_PASTE_BYTES {
+        return false;
     }
+    if blockwise {
+        let Some(block_bytes) = block_width
+            .checked_mul(yank.split('\n').count())
+            .and_then(|bytes| bytes.checked_mul(count))
+        else {
+            return false;
+        };
+        let Some(total_bytes) = requested_bytes.checked_add(block_bytes) else {
+            return false;
+        };
+        if total_bytes > MAX_PASTE_BYTES {
+            return false;
+        }
+    }
+    ed.push_undo();
     // Blockwise register (`<C-v>` yank/delete): re-insert the row segments
     // as columns at the cursor. Handles its own cursor / marks / sticky
     // column, so return before the charwise/linewise loop below.
     if blockwise {
         do_block_paste(ed, before, count, block_width, &yank);
-        return;
+        return true;
     }
     // Charwise pastes insert the register text repeated `count` times as a
-    // single block (see the `i == 0` branch below), so they only need one
-    // pass through the loop; linewise pastes still iterate `count` times
-    // (each pass opens its own fresh row(s)).
-    let iterations = if linewise { count } else { count.min(1) };
-    for _ in 0..iterations {
+    // single block. Linewise pastes likewise construct one multi-line edit:
+    // applying a separate edit per copy magnifies undo and allocation costs.
+    let paste_mark = if linewise {
         ed.sync_buffer_content_from_textarea();
-        let yank = yank.clone();
-        if linewise {
-            // Linewise paste: insert payload as fresh row(s) above
-            // (`P`) or below (`p`) the cursor's row. Cursor lands on
-            // the first non-blank of the first pasted line.
-            let mut text = yank.trim_matches('\n').to_string();
-            let row = buf_cursor_pos(ed.buffer()).row;
-            // `]p` / `[p` — reindent the pasted block to the current line.
-            if reindent {
-                let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
-                let target_w = indent_width(&cur_line, ed.settings().tabstop.max(1));
-                text = reindent_block(&text, target_w, ed.settings());
-            }
-            // Fold-aware: linewise paste lands relative to the whole CLOSED
-            // fold, not just the cursor line — `p` after the fold's last row,
-            // `P` before its first row (vim behaviour). No fold → unchanged.
-            let (fold_start, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), row, row);
-            let target_row = if before {
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(fold_start, 0),
-                    text: format!("{text}\n"),
-                });
-                fold_start
-            } else {
-                let line_chars = buf_line_chars(ed.buffer(), fold_end);
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(fold_end, line_chars),
-                    text: format!("\n{text}"),
-                });
-                fold_end + 1
-            };
-            buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            // Linewise: `[` = (target_row, 0), `]` = (bot_row, last_col).
-            let payload_lines = text.lines().count().max(1);
-            let bot_row = target_row + payload_lines - 1;
-            let bot_last_col = buf_line_chars(ed.buffer(), bot_row).saturating_sub(1);
-            paste_mark = Some(((target_row, 0), (bot_row, bot_last_col)));
-        } else {
-            // Charwise paste. `P` inserts at cursor (shifting cell
-            // right); `p` inserts after cursor (advance one cell
-            // first, clamped to the end of the line).
-            //
-            // B20: `[count]p`/`[count]P` insert the register text
-            // repeated `count` times as a SINGLE block (vim semantics),
-            // not `count` separate paste operations — a per-iteration
-            // loop is only correct for `p` (each pass's cursor lands
-            // right after the previous insert, so it happens to
-            // append); for `P` every pass re-anchors on the *original*
-            // cursor, re-inserting at the same point and leaving the
-            // cursor on the wrong char once the loop ends. Building the
-            // repeated text once and inserting it in one shot gives the
-            // right buffer AND the right final cursor for both.
-            let cursor = buf_cursor_pos(ed.buffer());
-            let at = if before {
-                cursor
-            } else {
-                let line_chars = buf_line_chars(ed.buffer(), cursor.row);
-                Position::new(cursor.row, (cursor.col + 1).min(line_chars))
-            };
-            let repeated = yank.repeat(count);
-            ed.mutate_edit(Edit::InsertStr { at, text: repeated });
-            // Vim parks the cursor on the last char of the pasted text
-            // (do_insert_str leaves it one past the end). `gp` instead
-            // leaves the cursor just AFTER the pasted text, so skip the
-            // step-back there.
-            if !cursor_after && ed.cursor().1 > 0 {
-                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
-            }
-            // Charwise: `[` = insert start, `]` = last pasted char.
-            let lo = (at.row, at.col);
-            let hi = if cursor_after {
-                let c = ed.cursor();
-                (c.0, c.1.saturating_sub(1))
-            } else {
-                ed.cursor()
-            };
-            paste_mark = Some((lo, hi));
+        let row = buf_cursor_pos(ed.buffer()).row;
+        let mut text = yank.trim_matches('\n').to_string();
+        if reindent {
+            let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
+            let target_w = indent_width(&cur_line, ed.settings().tabstop.max(1));
+            text = reindent_block(&text, target_w, ed.settings());
         }
-    }
-    if let Some((lo, hi)) = paste_mark {
-        ed.set_mark('[', lo);
-        ed.set_mark(']', hi);
-    }
+        let (fold_start, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), row, row);
+        let payload = std::iter::repeat_n(text.as_str(), count)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let target_row = if before {
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(fold_start, 0),
+                text: format!("{payload}\n"),
+            });
+            fold_start
+        } else {
+            let line_chars = buf_line_chars(ed.buffer(), fold_end);
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(fold_end, line_chars),
+                text: format!("\n{payload}"),
+            });
+            fold_end + 1
+        };
+        buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+        hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
+        let payload_lines = payload.lines().count().max(1);
+        let bot_row = target_row + payload_lines - 1;
+        let bot_last_col = buf_line_chars(ed.buffer(), bot_row).saturating_sub(1);
+        ((target_row, 0), (bot_row, bot_last_col))
+    } else {
+        ed.sync_buffer_content_from_textarea();
+        // Charwise paste. `P` inserts at cursor (shifting cell
+        // right); `p` inserts after cursor (advance one cell first,
+        // clamped to the end of the line).
+        let cursor = buf_cursor_pos(ed.buffer());
+        let at = if before {
+            cursor
+        } else {
+            let line_chars = buf_line_chars(ed.buffer(), cursor.row);
+            Position::new(cursor.row, (cursor.col + 1).min(line_chars))
+        };
+        let repeated = yank.repeat(count);
+        ed.mutate_edit(Edit::InsertStr { at, text: repeated });
+        // Vim parks the cursor on the last char of the pasted text
+        // (do_insert_str leaves it one past the end). `gp` instead
+        // leaves the cursor just AFTER the pasted text, so skip the
+        // step-back there.
+        if !cursor_after && ed.cursor().1 > 0 {
+            hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+        }
+        // Charwise: `[` = insert start, `]` = last pasted char.
+        let lo = (at.row, at.col);
+        let hi = if cursor_after {
+            let c = ed.cursor();
+            (c.0, c.1.saturating_sub(1))
+        } else {
+            ed.cursor()
+        };
+        (lo, hi)
+    };
+    ed.set_mark('[', paste_mark.0);
+    ed.set_mark(']', paste_mark.1);
     // `gp` / `gP` linewise: cursor lands on the line just AFTER the pasted
     // block (the `]` mark's row + 1), at column 0, clamped to the last row.
     if cursor_after && linewise {
-        if let Some((_, (bot_row, _))) = paste_mark {
-            let last_row = buf_row_count(ed.buffer()).saturating_sub(1);
-            let target = (bot_row + 1).min(last_row);
-            buf_set_cursor_rc(ed.buffer_mut(), target, 0);
-        }
+        let bot_row = paste_mark.1.0;
+        let last_row = buf_row_count(ed.buffer()).saturating_sub(1);
+        let target = (bot_row + 1).min(last_row);
+        buf_set_cursor_rc(ed.buffer_mut(), target, 0);
     } else if let Some(orig_row) = original_row_for_linewise_after {
         // Linewise `p` (after) with count: cursor lands on the FIRST pasted
         // line (original_row + 1) — vim parity. The per-iteration loop
@@ -802,6 +778,7 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     }
     // Any paste re-anchors the sticky column to the new cursor position.
     ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+    true
 }
 /// Blockwise paste (`p`/`P` with a visual-block register). Re-inserts the
 /// register's row segments as COLUMNS at the cursor — vim's true

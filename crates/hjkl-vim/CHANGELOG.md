@@ -8,6 +8,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Linewise operator motions at a buffer edge no longer delete the current line;
+  rejected oversized pastes preserve the prior dot-repeat change; and empty
+  Replace-mode dot replay restores the cursor's sticky column without an undo
+  entry.
+- Counted linewise paste now uses one edit and rejects oversized charwise or
+  blockwise payloads before allocating or mutating the buffer.
+
 ### Removed
 
 - Dropped the `crossterm` feature and `handle_key`. The crossterm-driven FSM

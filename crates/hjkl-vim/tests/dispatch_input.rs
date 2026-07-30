@@ -75,6 +75,96 @@ fn dispatch_keys(e: &mut Editor, keys: &str) {
 }
 
 #[test]
+fn failed_linewise_motion_does_not_delete_at_buffer_edge() {
+    for keys in ["dk", "dj", "d+", "d-", "dgk", "dgj"] {
+        let mut e = editor_with("only line");
+        e.jump_cursor(0, 3);
+
+        dispatch_keys(&mut e, keys);
+
+        assert_eq!(
+            e.content(),
+            "only line\n",
+            "{keys} must be a no-op at the edge"
+        );
+    }
+}
+
+#[test]
+fn count_one_d_deletes_the_current_line() {
+    let mut e = editor_with("only line");
+
+    dispatch_keys(&mut e, "d_");
+
+    assert_eq!(e.content(), "\n");
+}
+
+#[test]
+fn counted_linewise_paste_is_one_undoable_edit() {
+    let mut e = editor_with("base");
+    e.with_registers_mut(|r| r.record_yank("one\ntwo\n".to_string(), true, None));
+
+    dispatch_keys(&mut e, "3p");
+
+    assert_eq!(e.content(), "base\none\ntwo\none\ntwo\none\ntwo\n");
+    e.undo();
+    assert_eq!(e.content(), "base\n");
+}
+
+#[test]
+fn oversized_paste_is_rejected_without_mutation() {
+    let mut e = editor_with("base");
+    e.with_registers_mut(|r| r.record_yank("x".repeat(1024 * 1024 + 1), false, None));
+    let cursor = e.cursor();
+    let undo_depth = e.undo_stack_len();
+
+    dispatch_keys(&mut e, "p");
+
+    assert_eq!(e.content(), "base\n");
+    assert_eq!(e.cursor(), cursor);
+    assert_eq!(e.undo_stack_len(), undo_depth);
+}
+
+#[test]
+fn oversized_block_paste_is_rejected_without_mutation() {
+    let mut e = editor_with("tail");
+    e.record_yank_block("x".to_string(), 1024 * 1024 + 1, None);
+    let cursor = e.cursor();
+    let undo_depth = e.undo_stack_len();
+
+    dispatch_keys(&mut e, "p");
+
+    assert_eq!(e.content(), "tail\n");
+    assert_eq!(e.cursor(), cursor);
+    assert_eq!(e.undo_stack_len(), undo_depth);
+}
+
+#[test]
+fn rejected_paste_preserves_the_prior_dot_change() {
+    let mut e = editor_with("abc");
+    dispatch_keys(&mut e, "x");
+    e.with_registers_mut(|r| r.record_yank("x".repeat(1024 * 1024 + 1), false, None));
+
+    dispatch_keys(&mut e, "p.");
+
+    assert_eq!(e.content(), "c\n");
+}
+
+#[test]
+fn empty_replace_repeat_reanchors_sticky_column_without_undo() {
+    let mut e = editor_with("hello world");
+    dispatch_keys(&mut e, "R<Esc>e");
+    let cursor = e.cursor();
+    let undo_depth = e.undo_stack_len();
+
+    dispatch_keys(&mut e, ".");
+
+    assert_eq!(e.cursor(), cursor);
+    assert_eq!(e.sticky_col(), Some(cursor.1));
+    assert_eq!(e.undo_stack_len(), undo_depth);
+}
+
+#[test]
 fn modified_dot_does_not_repeat_last_change() {
     for (ctrl, alt, shift) in [
         (true, false, false),

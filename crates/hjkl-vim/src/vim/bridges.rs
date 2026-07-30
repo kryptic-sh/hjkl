@@ -332,8 +332,7 @@ pub fn paste_bridge<H: hjkl_engine::types::Host>(
     reindent: bool,
 ) {
     let count = count.clamp(1, MAX_COUNT);
-    do_paste(ed, before, count, cursor_after, reindent);
-    if !vim(ed).replaying {
+    if do_paste(ed, before, count, cursor_after, reindent) && !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::Paste {
             before,
             count,
