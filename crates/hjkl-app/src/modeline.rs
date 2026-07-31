@@ -76,15 +76,26 @@ fn parse_line(line: &str, out: &mut Vec<(String, OptionValue)>) {
         rest
     };
 
-    // Tokenise: split on whitespace, stop at a bare `:` token (terminator).
+    // Tokenise: split on whitespace. Vim terminates the modeline at the first
+    // `:` after the options — everything past that colon is ordinary comment
+    // text, not more options. So the token that *carries* the trailing colon
+    // is the last one we look at; we parse it, then stop. Breaking only on an
+    // empty token (a bare `:`) let the trailing comment of
+    // `/* vim: set ts=2: list of pending items */` keep parsing, and words
+    // like `list` / `wrap` / `number` / `expandtab` are perfectly ordinary
+    // English that would silently flip real options.
     for token in body.split_whitespace() {
-        // Trim a trailing colon from the last real token (e.g. "et:" → "et").
-        let token = token.strip_suffix(':').unwrap_or(token);
-        if token.is_empty() {
-            break;
-        }
+        let (token, terminates) = match token.strip_suffix(':') {
+            // e.g. "et:" → "et", and nothing after this token is a modeline.
+            Some(stripped) => (stripped, true),
+            None => (token, false),
+        };
+        // An empty token (the bare `:` case) is rejected by `parse_token`.
         if let Some(entry) = parse_token(token) {
             out.push(entry);
+        }
+        if terminates {
+            break;
         }
     }
 }
@@ -92,13 +103,18 @@ fn parse_line(line: &str, out: &mut Vec<(String, OptionValue)>) {
 /// Find the earliest `vim:` / `ex:` / `vi:` marker in `line`.
 /// Returns `(byte_offset_of_marker, &str_after_colon)`.
 fn find_marker(line: &str) -> Option<(usize, &str)> {
-    for marker in &["vim:", "ex:", "vi:"] {
-        if let Some(pos) = line.find(marker) {
-            let after = &line[pos + marker.len()..];
-            return Some((pos, after));
-        }
-    }
-    None
+    // Pick the marker with the smallest byte offset, not the first entry of
+    // the list that happens to occur anywhere in the line: vim parses from the
+    // *first* marker on the line, so `# vi: ts=2 vim: sw=4` is a `vi:` modeline
+    // whose options are `ts=2` (list-order matching would have started at
+    // `vim:` and thrown away the `vi:` options).
+    ["vim:", "ex:", "vi:"]
+        .iter()
+        .filter_map(|marker| {
+            line.find(marker)
+                .map(|pos| (pos, &line[pos + marker.len()..]))
+        })
+        .min_by_key(|(pos, _)| *pos)
 }
 
 /// Parse a single `key=value`, `key`, or `nokey` token into `(name, value)`.
@@ -106,32 +122,41 @@ fn find_marker(line: &str) -> Option<(usize, &str)> {
 /// Alias resolution happens via a scratch `Options` and `set_by_name` — if
 /// the token name is unknown to `set_by_name` the option is silently dropped.
 fn parse_token(token: &str) -> Option<(String, OptionValue)> {
-    let (name_raw, val) = if let Some((k, v)) = token.split_once('=') {
-        // key=value — try numeric first, then string.
+    // Validate via set_by_name on a scratch Options — this doubles as
+    // alias resolution (the canonical name is the one used in set_by_name's
+    // match arms, but we expose the user-supplied alias unchanged since
+    // set_by_name already accepts aliases).
+    let accepts = |name: &str, val: &OptionValue| {
+        let mut probe = Options::default();
+        probe.set_by_name(name, val.clone()).is_ok()
+    };
+
+    // key=value — try numeric first, then string.
+    if let Some((k, v)) = token.split_once('=') {
         let value = if let Ok(n) = v.parse::<i64>() {
             OptionValue::Int(n)
         } else {
             OptionValue::String(v.to_owned())
         };
-        (k, value)
-    } else if let Some(bare) = token.strip_prefix("no") {
-        // nokey → Bool(false)
-        (bare, OptionValue::Bool(false))
-    } else {
-        // bare key → Bool(true) for booleans, skipped for non-booleans
-        (token, OptionValue::Bool(true))
-    };
-
-    // Validate via set_by_name on a scratch Options — this doubles as
-    // alias resolution (the canonical name is the one used in set_by_name's
-    // match arms, but we expose the user-supplied alias unchanged since
-    // set_by_name already accepts aliases).
-    let mut probe = Options::default();
-    if probe.set_by_name(name_raw, val.clone()).is_ok() {
-        Some((name_raw.to_owned(), val))
-    } else {
-        None
+        return accepts(k, &value).then(|| (k.to_owned(), value));
     }
+
+    // Bare name → Bool(true). The whole token has to be tried as a name FIRST:
+    // stripping a leading "no" before validating mangles the real options that
+    // simply start with those two letters, and `number` is one of them — it
+    // became `umber`, `set_by_name` rejected it, and `# vim: number` was
+    // dropped without a trace. `nonumber` kept working (it strips to `number`),
+    // which is why the bug stayed hidden.
+    let on = OptionValue::Bool(true);
+    if accepts(token, &on) {
+        return Some((token.to_owned(), on));
+    }
+
+    // Not an option under its own name — now read a leading "no" as negation
+    // (`noet` → et=false, `nonumber` → number=false).
+    let bare = token.strip_prefix("no")?;
+    let off = OptionValue::Bool(false);
+    accepts(bare, &off).then(|| (bare.to_owned(), off))
 }
 
 // ── Overlay ───────────────────────────────────────────────────────────────────
@@ -331,6 +356,94 @@ mod tests {
         assert!(has("et", &OptionValue::Bool(true)), "et alias");
         assert!(has("ic", &OptionValue::Bool(false)), "noic alias");
         assert!(has("scs", &OptionValue::Bool(false)), "noscs alias");
+    }
+
+    // ── parse_modeline_bare_no_prefixed_option ────────────────────────────────
+
+    #[test]
+    fn parse_modeline_bare_no_prefixed_option() {
+        // `number` is a real option that happens to start with "no". Stripping
+        // the negation prefix before validating the name turned it into
+        // `umber`, which `set_by_name` rejects — so the option vanished.
+        let entries = parse_modelines("# vim: number\n", 5);
+        assert!(
+            entries
+                .iter()
+                .any(|(n, v)| n == "number" && *v == OptionValue::Bool(true)),
+            "`# vim: number` must parse as (\"number\", Bool(true)), got {entries:?}"
+        );
+
+        // And it must actually reach Options. `number` defaults to true, so
+        // start from false to prove the modeline is what flipped it.
+        let mut opts = Options {
+            number: false,
+            ..Options::default()
+        };
+        overlay_modeline_for_content(&mut opts, "# vim: number\n", 5);
+        assert!(opts.number, "`# vim: number` must enable 'number'");
+    }
+
+    // ── parse_modeline_no_prefix_negation_still_works ─────────────────────────
+
+    #[test]
+    fn parse_modeline_no_prefix_negation_still_works() {
+        // The working half of the bug above: `nonumber` is not itself an
+        // option name, so it must still fall through to negation.
+        let entries = parse_modelines("# vim: nonumber\n", 5);
+        assert!(
+            entries
+                .iter()
+                .any(|(n, v)| n == "number" && *v == OptionValue::Bool(false)),
+            "`nonumber` must parse as (\"number\", Bool(false)), got {entries:?}"
+        );
+
+        let opts = opts_with_modeline("# vim: nonumber\n");
+        assert!(!opts.number, "`# vim: nonumber` must disable 'number'");
+    }
+
+    // ── parse_modeline_stops_at_terminating_colon ─────────────────────────────
+
+    #[test]
+    fn parse_modeline_stops_at_terminating_colon() {
+        // Vim ends the modeline at the colon after the options; the rest of
+        // the line is comment prose. `list` is both a real option and an
+        // ordinary English word, so a trailing comment used to flip it on.
+        let content = "/* vim: set ts=2: list of stuff */\n";
+        let entries = parse_modelines(content, 5);
+        assert!(
+            entries
+                .iter()
+                .any(|(n, v)| n == "ts" && *v == OptionValue::Int(2)),
+            "options before the terminating colon must still apply, got {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|(n, _)| n == "list"),
+            "words after the terminating colon are comment text, not options: {entries:?}"
+        );
+
+        let opts = opts_with_modeline(content);
+        assert_eq!(opts.tabstop, 2, "ts=2 must apply");
+        assert!(!opts.list, "the trailing comment must not enable 'list'");
+    }
+
+    // ── parse_modeline_uses_earliest_marker ───────────────────────────────────
+
+    #[test]
+    fn parse_modeline_uses_earliest_marker() {
+        // Two markers on one line: vim parses from the first one, so this is a
+        // `vi:` modeline (`ts=2`) whose body happens to mention `vim:`.
+        // Matching markers in list order started at `vim:` and lost `ts=2`.
+        let entries = parse_modelines("# vi: ts=2 vim: sw=4\n", 5);
+        assert!(
+            entries
+                .iter()
+                .any(|(n, v)| n == "ts" && *v == OptionValue::Int(2)),
+            "options must come from the earliest marker (`vi:`), got {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|(n, _)| n == "sw"),
+            "`vim:` here terminates the `vi:` modeline; sw=4 is comment text: {entries:?}"
+        );
     }
 
     // ── overlay_applies_to_options ────────────────────────────────────────────
