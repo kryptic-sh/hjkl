@@ -172,15 +172,20 @@ The approximation is wrong in both directions:
 - Emoji (U+1F300–U+1FAFF) are width 2 in `unicode-width` and are not in
   `is_wide`'s range list → counted as 1.
 - Combining marks (U+0300–U+036F) are width 0 → counted as 1.
-- `UnicodeWidthChar::width` returns `None` for control characters (treated as 0
-  by the renderer) → counted as 1 here.
 
-Because `col` drives trailing-space detection and the `eol` marker placement,
-`:set list` on a line containing an emoji or a combining mark produces listchars
-output whose column accounting disagrees with the renderer's.
+Control characters are **not** affected: `UnicodeWidthChar::width` returns
+`None` for them, and the renderer maps `None` to 1 on purpose —
+`sanitize_control` (`render.rs:60-73`) substitutes a width-1 Control Pictures
+glyph, so `unwrap_or(1)` is the value that keeps column and cursor math aligned.
+An earlier draft of this finding claimed the renderer treats `None` as 0; that
+was wrong.
+
+Because `col` drives tab-stop expansion, `:set list` on a line containing an
+emoji or a combining mark produces listchars output whose column accounting
+disagrees with the renderer's.
 
 **Fix.** Delete `unicode_width`/`is_wide` and use
-`UnicodeWidthChar::width(ch) .unwrap_or(0)`, matching `wrap.rs` and `render.rs`.
+`UnicodeWidthChar::width(ch).unwrap_or(1)`, matching `wrap.rs` and `render.rs`.
 
 ### C6. `errorformat` silently never matches a real vim `&errorformat`
 

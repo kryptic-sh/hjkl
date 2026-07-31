@@ -3,6 +3,8 @@
 //! [`ListChars`] holds the glyph substitutions used when
 //! `:set list` is active. Mirrors vim's `listchars` option.
 
+use unicode_width::UnicodeWidthChar;
+
 /// Invisibles rendering configuration. Matches vim's `:set listchars`.
 ///
 /// When `:set list` is on, the render layer substitutes whitespace characters
@@ -230,7 +232,16 @@ pub fn apply_listchars<'a>(
             }
             other => {
                 out.push(other);
-                col += unicode_width(other);
+                // Same per-char width formula the renderer advances by
+                // (`hjkl-buffer-tui::render::paint_row` / `display_width`) and
+                // that `wrap.rs` sums. It must be the real `unicode-width`
+                // table, not a hand-rolled CJK range list: an approximation
+                // silently mis-counts emoji (width 2) and combining marks
+                // (width 0), so `col` — and therefore tab-stop expansion —
+                // drifts from where the renderer actually paints. `None`
+                // (control chars) maps to 1 because the renderer substitutes
+                // a width-1 Control Pictures glyph for them.
+                col += other.width().unwrap_or(1);
             }
         }
     }
@@ -241,41 +252,6 @@ pub fn apply_listchars<'a>(
     }
 
     std::borrow::Cow::Owned(out)
-}
-
-/// Unicode display width for a char (1 for most, 2 for CJK wide chars, 0 for controls).
-#[inline]
-fn unicode_width(ch: char) -> usize {
-    // Use a simple approximation: CJK wide = 2, everything else = 1.
-    // This avoids adding unicode-width as a direct dep here; buffer-tui
-    // uses the real UnicodeWidthChar for rendering.
-    if is_wide(ch) { 2 } else { 1 }
-}
-
-/// Very small is_wide predicate covering the most common CJK blocks.
-#[inline]
-fn is_wide(ch: char) -> bool {
-    matches!(ch,
-        '\u{1100}'..='\u{115F}'   // Hangul Jamo
-        | '\u{2E80}'..='\u{303E}' // CJK Radicals
-        | '\u{3041}'..='\u{33BF}' // Hiragana/Katakana/CJK
-        | '\u{33FF}'..='\u{A4CF}' // CJK Unified
-        | '\u{A960}'..='\u{A97F}' // Hangul extension
-        | '\u{AC00}'..='\u{D7FF}' // Hangul Syllables
-        | '\u{F900}'..='\u{FAFF}' // CJK Compatibility
-        | '\u{FE10}'..='\u{FE1F}' // Vertical forms
-        | '\u{FE30}'..='\u{FE6F}' // CJK Compatibility forms
-        | '\u{FF00}'..='\u{FF60}' // Fullwidth
-        | '\u{FFE0}'..='\u{FFE6}' // Fullwidth signs
-        | '\u{1B000}'..='\u{1B0FF}' // Kana Supplement
-        | '\u{1F004}'              // Mahjong tile
-        | '\u{1F0CF}'              // Playing card
-        | '\u{1F200}'..='\u{1F2FF}' // Enclosed CJK
-        | '\u{20000}'..='\u{2A6DF}' // CJK Unified Ext B
-        | '\u{2A700}'..='\u{2CEAF}' // CJK Unified Ext C/D/E
-        | '\u{2CEB0}'..='\u{2EBEF}' // CJK Unified Ext F
-        | '\u{30000}'..='\u{3134F}' // CJK Unified Ext G
-    )
 }
 
 #[cfg(test)]
@@ -410,6 +386,45 @@ mod tests {
         let lc = ListChars::parse("tab:>-").unwrap();
         let result = apply_listchars("\tx", &lc, true, 0);
         assert_eq!(result.as_ref(), ">x");
+    }
+
+    /// Regression: column accounting used a hand-rolled CJK range list that
+    /// missed emoji, counting U+1F600 as 1 cell. `unicode-width` (what the
+    /// renderer paints with) says 2, so the following tab must start at
+    /// column 2 and expand to 2 cells, not 3.
+    #[test]
+    fn apply_listchars_emoji_counts_as_width_two() {
+        let lc = ListChars::parse("tab:>-").unwrap();
+        let result = apply_listchars("\u{1F600}\tx", &lc, true, 4);
+        assert_eq!(result.as_ref(), "\u{1F600}>-x");
+    }
+
+    /// Regression: combining marks are zero-width in `unicode-width` but the
+    /// old approximation counted them as 1, pushing the tab stop one cell off.
+    #[test]
+    fn apply_listchars_combining_mark_counts_as_width_zero() {
+        let lc = ListChars::parse("tab:>-").unwrap();
+        // 'a' (1) + U+0301 combining acute (0) → tab starts at column 1.
+        let result = apply_listchars("a\u{0301}\tx", &lc, true, 4);
+        assert_eq!(result.as_ref(), "a\u{0301}>--x");
+    }
+
+    /// A CJK char the old hand-rolled `is_wide` already covered stays width 2
+    /// under the real table — the switch is not a regression for CJK.
+    #[test]
+    fn apply_listchars_cjk_still_counts_as_width_two() {
+        let lc = ListChars::parse("tab:>-").unwrap();
+        let result = apply_listchars("\u{4e2d}\tx", &lc, true, 4);
+        assert_eq!(result.as_ref(), "\u{4e2d}>-x");
+    }
+
+    /// Plain ASCII is width 1 per char — the overwhelmingly common path is
+    /// untouched by the width-table switch.
+    #[test]
+    fn apply_listchars_ascii_width_unchanged() {
+        let lc = ListChars::parse("tab:>-").unwrap();
+        let result = apply_listchars("ab\tx", &lc, true, 4);
+        assert_eq!(result.as_ref(), "ab>-x");
     }
 
     #[test]
