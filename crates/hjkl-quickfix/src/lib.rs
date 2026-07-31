@@ -7,7 +7,7 @@
 //! pure `std`.
 
 mod errorformat;
-pub use errorformat::{parse_errorformat, parse_make_output};
+pub use errorformat::{EfmError, EfmParse, EfmSkip, parse_errorformat, parse_make_output};
 
 use std::path::PathBuf;
 

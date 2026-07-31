@@ -35,9 +35,60 @@ struct EfmGroupMap {
     kind: usize,
 }
 
+/// Why one `&errorformat` pattern could not be compiled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EfmError {
+    /// The pattern uses a `%X` specifier this parser does not implement: the
+    /// multi-line kinds (`%E %W %I %C %Z %A %G %O %P %Q`), the qualifiers
+    /// (`%- %+ %# %>`), or the scanf atoms (`%*[^ ]`, `%.`, `%\`, `%s`).
+    ///
+    /// Such a specifier must NEVER fall through to "escape it as a literal".
+    /// A literal `E` anchored at `^` still compiles and still runs — it just
+    /// never matches any real build line, so `:cexpr` yields zero entries and
+    /// the user cannot tell an unsupported pattern from a clean build. Being
+    /// loud about the gap is strictly better than a silent empty list.
+    Unsupported(char),
+    /// The translated regex itself failed to compile.
+    BadRegex,
+}
+
+/// One skipped `&errorformat` pattern: its 1-based position in the
+/// comma-separated list (so a message can point at it), the pattern text, and
+/// the reason it was dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EfmSkip {
+    /// 1-based index of the pattern within the comma-separated `&errorformat`.
+    pub index: usize,
+    /// The pattern text exactly as it appeared in the list.
+    pub pattern: String,
+    pub error: EfmError,
+}
+
+impl std::fmt::Display for EfmSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.error {
+            EfmError::Unsupported(c) => write!(f, "pattern {} uses unsupported %{c}", self.index),
+            EfmError::BadRegex => write!(f, "pattern {} is not a valid pattern", self.index),
+        }
+    }
+}
+
+/// Result of [`parse_errorformat`]: the entries that were produced plus every
+/// pattern that had to be skipped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EfmParse {
+    pub entries: Vec<QfEntry>,
+    /// Patterns dropped from the list. Empty on a fully supported
+    /// `&errorformat`; the host is expected to warn for each entry.
+    pub skipped: Vec<EfmSkip>,
+}
+
 /// Compile one errorformat pattern into a `(Regex, EfmGroupMap)` pair.
-/// Returns `None` if the resulting regex is invalid (silently skip).
-fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
+///
+/// Returns [`EfmError::Unsupported`] for any `%X` this parser does not
+/// implement rather than escaping it into the regex — see the variant docs for
+/// why a literal fallback is the worst possible outcome here.
+fn compile_efm_pattern(efm: &str) -> Result<(regex::Regex, EfmGroupMap), EfmError> {
     let mut re_src = String::from("^");
     let mut map = EfmGroupMap::default();
     let mut group = 0usize;
@@ -74,10 +125,14 @@ fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
                     re_src.push('%');
                 }
                 Some(other) => {
-                    // Unknown specifier: treat literally.
-                    re_src.push_str(&regex::escape(&other.to_string()));
+                    // Unimplemented specifier. Refuse the whole pattern — a
+                    // literal `E` for `%E` would compile fine and match
+                    // nothing, which reads to the user as "clean build".
+                    return Err(EfmError::Unsupported(other));
                 }
                 None => {
+                    // Trailing lone `%` — not a specifier at all; the user
+                    // most likely meant a literal percent, so keep it.
                     re_src.push('%');
                 }
             }
@@ -86,7 +141,9 @@ fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
         }
     }
     re_src.push('$');
-    regex::Regex::new(&re_src).ok().map(|r| (r, map))
+    regex::Regex::new(&re_src)
+        .map(|r| (r, map))
+        .map_err(|_| EfmError::BadRegex)
 }
 
 /// Parse `text` using a vim-style comma-separated `efm` list of errorformat
@@ -95,13 +152,32 @@ fn compile_efm_pattern(efm: &str) -> Option<(regex::Regex, EfmGroupMap)> {
 /// are silently skipped.
 ///
 /// `root` is used to join relative file paths (same as `parse_make_output`).
-pub fn parse_errorformat(text: &str, efm: &str, root: &Path) -> Vec<QfEntry> {
-    // Compile all patterns up front.
-    let compiled: Vec<_> = efm
-        .split(',')
-        .filter(|p| !p.is_empty())
-        .filter_map(compile_efm_pattern)
-        .collect();
+///
+/// Patterns using a specifier this parser does not implement are dropped and
+/// reported in [`EfmParse::skipped`]; the *supported* patterns in the list
+/// still run. Subset-not-refuse is deliberate: a real `&errorformat` is a long
+/// comma-separated list (vim's default has a dozen entries) that a user pastes
+/// wholesale, and one `%-G` noise filter at the end should not disable the
+/// `%f:%l:%c:%m` entry that does all the work. The host warns per skipped
+/// pattern, so a run that ends up with nothing usable is still explained.
+pub fn parse_errorformat(text: &str, efm: &str, root: &Path) -> EfmParse {
+    // Compile all patterns up front. `index` counts every comma-separated
+    // field (1-based) so it matches what the user counts in their own string.
+    let mut compiled = Vec::new();
+    let mut skipped = Vec::new();
+    for (i, pat) in efm.split(',').enumerate() {
+        if pat.is_empty() {
+            continue;
+        }
+        match compile_efm_pattern(pat) {
+            Ok(c) => compiled.push(c),
+            Err(error) => skipped.push(EfmSkip {
+                index: i + 1,
+                pattern: pat.to_string(),
+                error,
+            }),
+        }
+    }
 
     let mut out = Vec::new();
     for line in text.lines() {
@@ -160,7 +236,10 @@ pub fn parse_errorformat(text: &str, efm: &str, root: &Path) -> Vec<QfEntry> {
             }
         }
     }
-    out
+    EfmParse {
+        entries: out,
+        skipped,
+    }
 }
 
 /// Parse build output into quickfix entries. `root` is the directory the build
@@ -368,10 +447,19 @@ warning: unused variable: `y`
 
     // ---- parse_errorformat tests -----------------------------------------------
 
+    /// Parse with a fully supported `efm` and return just the entries. Asserts
+    /// nothing was skipped, so a pattern that quietly becomes unsupported
+    /// fails the test that uses it instead of returning an empty list.
+    fn efm(text: &str, pat: &str, root: &Path) -> Vec<QfEntry> {
+        let r = parse_errorformat(text, pat, root);
+        assert!(r.skipped.is_empty(), "unexpected skips: {:?}", r.skipped);
+        r.entries
+    }
+
     #[test]
     fn efm_line_col_msg_no_file() {
         // %l:%c:%m — no %f → empty path, row/col 0-based
-        let e = parse_errorformat("3:2:hello world", "%l:%c:%m", Path::new("/proj"));
+        let e = efm("3:2:hello world", "%l:%c:%m", Path::new("/proj"));
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].path, PathBuf::new());
         assert_eq!((e[0].row, e[0].col), (2, 1)); // 3-1=2, 2-1=1
@@ -382,7 +470,7 @@ warning: unused variable: `y`
     #[test]
     fn efm_file_line_col_msg() {
         // %f:%l:%c:%m
-        let e = parse_errorformat(
+        let e = efm(
             "src/main.rs:10:5:something failed",
             "%f:%l:%c:%m",
             Path::new("/proj"),
@@ -396,7 +484,7 @@ warning: unused variable: `y`
     #[test]
     fn efm_file_line_msg_no_col() {
         // %f:%l:%m — no col → col 0
-        let e = parse_errorformat("foo.py:7:oops", "%f:%l:%m", Path::new("/root"));
+        let e = efm("foo.py:7:oops", "%f:%l:%m", Path::new("/root"));
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].path, Path::new("/root/foo.py"));
         assert_eq!((e[0].row, e[0].col), (6, 0));
@@ -406,15 +494,15 @@ warning: unused variable: `y`
     #[test]
     fn efm_multi_pattern_alternative() {
         // %f:%l:%c:%m,%f:%l:%m — first pattern has col, second doesn't
-        let efm = "%f:%l:%c:%m,%f:%l:%m";
+        let pat = "%f:%l:%c:%m,%f:%l:%m";
         let root = Path::new("/");
         // Line with col matches first pattern
-        let e1 = parse_errorformat("a.rs:1:3:err", efm, root);
+        let e1 = efm("a.rs:1:3:err", pat, root);
         assert_eq!(e1.len(), 1);
         assert_eq!((e1[0].row, e1[0].col), (0, 2));
 
         // Line without col falls through to second pattern
-        let e2 = parse_errorformat("b.rs:2:msg only", efm, root);
+        let e2 = efm("b.rs:2:msg only", pat, root);
         assert_eq!(e2.len(), 1);
         assert_eq!((e2[0].row, e2[0].col), (1, 0));
         assert_eq!(e2[0].message, "msg only");
@@ -422,7 +510,7 @@ warning: unused variable: `y`
 
     #[test]
     fn efm_unmatched_lines_skipped() {
-        let e = parse_errorformat(
+        let e = efm(
             "this does not match\nnor does this",
             "%f:%l:%c:%m",
             Path::new("/"),
@@ -432,13 +520,13 @@ warning: unused variable: `y`
 
     #[test]
     fn efm_empty_text_no_entries() {
-        let e = parse_errorformat("", "%f:%l:%c:%m", Path::new("/"));
+        let e = efm("", "%f:%l:%c:%m", Path::new("/"));
         assert!(e.is_empty());
     }
 
     #[test]
     fn efm_absolute_path_kept_as_is() {
-        let e = parse_errorformat("/abs/path.rs:1:1:abs", "%f:%l:%c:%m", Path::new("/proj"));
+        let e = efm("/abs/path.rs:1:1:abs", "%f:%l:%c:%m", Path::new("/proj"));
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].path, Path::new("/abs/path.rs"));
     }
@@ -446,7 +534,7 @@ warning: unused variable: `y`
     #[test]
     fn efm_type_field_maps_kind() {
         // %t maps e→Error, w→Warning, i→Info, n→Note
-        let efm = "%f:%l:%t:%m";
+        let pat = "%f:%l:%t:%m";
         let root = Path::new("/");
         for (t, expected) in [
             ("e", QfKind::Error),
@@ -455,9 +543,124 @@ warning: unused variable: `y`
             ("n", QfKind::Note),
         ] {
             let line = format!("x.rs:1:{t}:msg");
-            let e = parse_errorformat(&line, efm, root);
+            let e = efm(&line, pat, root);
             assert_eq!(e.len(), 1, "kind {t}");
             assert_eq!(e[0].kind, expected, "kind {t}");
         }
+    }
+
+    // ---- unsupported-specifier reporting (C6) ----------------------------------
+
+    /// The whole point of the change: `%E` must be reported, not compiled to a
+    /// literal `E` that silently matches nothing.
+    #[test]
+    fn efm_unsupported_specifier_is_reported_not_silently_literal() {
+        let r = parse_errorformat(
+            "src/main.rs:3: error: boom",
+            r"%E%f:%l:\ error:\ %m",
+            Path::new("/proj"),
+        );
+        assert!(
+            r.entries.is_empty(),
+            "unsupported pattern must not produce entries"
+        );
+        assert_eq!(r.skipped.len(), 1, "the %E pattern must be reported");
+        assert_eq!(r.skipped[0].index, 1);
+        assert_eq!(r.skipped[0].error, EfmError::Unsupported('E'));
+        assert_eq!(
+            r.skipped[0].to_string(),
+            "pattern 1 uses unsupported %E",
+            "the message must name the specifier"
+        );
+    }
+
+    /// Every specifier the review called out compiles to a literal today; each
+    /// must now be refused, and the reported char must be the one written.
+    #[test]
+    fn efm_all_unimplemented_specifiers_are_refused() {
+        for (pat, want) in [
+            ("%E%f:%l:%m", 'E'),
+            ("%W%f:%l:%m", 'W'),
+            ("%I%f:%l:%m", 'I'),
+            ("%C%m", 'C'),
+            ("%Z%m", 'Z'),
+            ("%A%f:%l:%m", 'A'),
+            ("%G%m", 'G'),
+            ("%O%m", 'O'),
+            ("%P%f", 'P'),
+            ("%Q%f", 'Q'),
+            ("%-G%m", '-'),
+            ("%+C%m", '+'),
+            ("%#%m", '#'),
+            ("%>%m", '>'),
+            ("%*[^ ]%m", '*'),
+            ("%.%#%m", '.'),
+            (r"%\s%m", '\\'),
+            ("%s", 's'),
+            ("%n:%m", 'n'),
+        ] {
+            let r = parse_errorformat("anything at all", pat, Path::new("/"));
+            assert_eq!(
+                r.skipped.len(),
+                1,
+                "{pat} must be refused, not compiled to a literal"
+            );
+            assert_eq!(r.skipped[0].error, EfmError::Unsupported(want), "{pat}");
+            assert_eq!(r.skipped[0].pattern, pat);
+        }
+    }
+
+    /// Pin today's behaviour for the supported shape so this change (and the
+    /// next one) cannot regress it into a skip.
+    #[test]
+    fn efm_supported_pattern_unchanged() {
+        let r = parse_errorformat(
+            "src/main.rs:10:5: something failed",
+            "%f:%l:%c: %m",
+            Path::new("/proj"),
+        );
+        assert!(
+            r.skipped.is_empty(),
+            "supported pattern must not be skipped"
+        );
+        assert_eq!(r.entries.len(), 1);
+        assert_eq!(r.entries[0].path, Path::new("/proj/src/main.rs"));
+        assert_eq!((r.entries[0].row, r.entries[0].col), (9, 4));
+        assert_eq!(r.entries[0].message, "something failed");
+        assert_eq!(r.entries[0].kind, QfKind::Error);
+    }
+
+    /// `%%` is an escaped literal percent, not an unsupported specifier.
+    #[test]
+    fn efm_double_percent_is_a_literal_percent() {
+        let e = efm("100%: done at 4:2", "%l%%: %m at %c:2", Path::new("/"));
+        assert_eq!(e.len(), 1, "%% must compile to a literal %");
+        assert_eq!((e[0].row, e[0].col), (99, 3));
+        assert_eq!(e[0].message, "done");
+    }
+
+    /// Mixed list: the supported patterns keep working and only the
+    /// unsupported ones are reported (subset, not refuse — see
+    /// `parse_errorformat`'s docs).
+    #[test]
+    fn efm_mixed_list_runs_the_supported_subset() {
+        let r = parse_errorformat(
+            "src/a.rs:4:2:bad",
+            "%E%f:%l:%m,%f:%l:%c:%m,%-G%.%#",
+            Path::new("/proj"),
+        );
+        assert_eq!(r.entries.len(), 1, "the supported pattern must still run");
+        assert_eq!(r.entries[0].path, Path::new("/proj/src/a.rs"));
+        assert_eq!((r.entries[0].row, r.entries[0].col), (3, 1));
+
+        let msgs: Vec<String> = r.skipped.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            msgs,
+            vec![
+                "pattern 1 uses unsupported %E".to_string(),
+                "pattern 3 uses unsupported %-".to_string(),
+            ],
+            "indices must be 1-based positions in the comma-separated list"
+        );
     }
 }

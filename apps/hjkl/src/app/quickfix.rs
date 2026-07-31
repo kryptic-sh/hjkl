@@ -823,7 +823,9 @@ impl crate::app::App {
         let parsed = parse_expr_text(text);
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let efm = self.active_editor().settings().errorformat.clone();
-        let entries = hjkl_quickfix::parse_errorformat(&parsed, &efm, &cwd);
+        let parse = hjkl_quickfix::parse_errorformat(&parsed, &efm, &cwd);
+        self.qf_warn_efm_skips(&parse.skipped);
+        let entries = parse.entries;
         if append {
             let new = entries;
             self.qf_list_mut(w).extend(new);
@@ -866,7 +868,9 @@ impl crate::app::App {
             text.push_str(&line);
         }
         drop(rope);
-        let entries = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        let parse = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        self.qf_warn_efm_skips(&parse.skipped);
+        let entries = parse.entries;
         if append {
             self.qf_list_mut(w).extend(entries);
         } else {
@@ -903,7 +907,9 @@ impl crate::app::App {
         };
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let efm = self.active_editor().settings().errorformat.clone();
-        let entries = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        let parse = hjkl_quickfix::parse_errorformat(&text, &efm, &cwd);
+        self.qf_warn_efm_skips(&parse.skipped);
+        let entries = parse.entries;
         if append {
             self.qf_list_mut(w).extend(entries);
         } else {
@@ -915,6 +921,18 @@ impl crate::app::App {
                 self.qf_list_mut(w).first();
             }
             self.qf_jump_to_current(w);
+        }
+    }
+
+    /// Warn once per `&errorformat` pattern the parser had to drop.
+    ///
+    /// Without this the user sees an empty quickfix list and reads it as "no
+    /// errors" — an unsupported specifier compiles to a pattern that matches
+    /// nothing, which is indistinguishable from a clean build. The supported
+    /// patterns in the list still ran; only the named ones were skipped.
+    fn qf_warn_efm_skips(&mut self, skipped: &[hjkl_quickfix::EfmSkip]) {
+        for skip in skipped {
+            self.bus.warn(format!("errorformat: {skip} — skipped"));
         }
     }
 
