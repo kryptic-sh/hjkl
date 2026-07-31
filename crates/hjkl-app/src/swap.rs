@@ -450,7 +450,20 @@ pub fn now_unix_ms() -> u64 {
 /// - Other targets cannot cheaply check, so return `false` (no lock
 ///   enforced) — recovery still works; only the multi-instance refusal is
 ///   skipped.
+///
+/// pid 0 is special-cased as dead on every platform: no OS probe answers
+/// "is pid 0 running?" the way the caller means it. POSIX defines pid 0 for
+/// `kill` as *every process in the caller's process group*, so `kill(0, 0)`
+/// succeeds and reports "alive"; Windows resolves pid 0 to the System Idle
+/// Process, which either opens or fails access-denied — both of which this
+/// function reads as alive. A `writer_pid` of 0 only ever comes from a
+/// truncated or corrupted header, and classifying it as live pins the swap
+/// file to a "live owner" forever: the multi-instance refusal then blocks the
+/// user from opening the file with no in-editor way to clear it.
 pub fn pid_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
     #[cfg(unix)]
     {
         // kill(pid, 0): 0 = alive & ours; EPERM = alive, not ours;
@@ -662,6 +675,18 @@ mod tests {
         assert!(
             !pid_is_alive(999_999_999),
             "pid 999_999_999 should not be alive"
+        );
+    }
+
+    /// pid 0 is never a live owner. `kill(0, 0)` targets the caller's whole
+    /// process group and returns success, so without the explicit guard a
+    /// truncated/corrupt header decoding `writer_pid == 0` would be classified
+    /// as owned by a live process forever and lock the user out of the file.
+    #[test]
+    fn pid_is_alive_false_for_pid_zero() {
+        assert!(
+            !pid_is_alive(0),
+            "pid 0 must never report as a live process owner"
         );
     }
 
