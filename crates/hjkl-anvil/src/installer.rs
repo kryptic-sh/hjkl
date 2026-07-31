@@ -78,6 +78,9 @@ pub enum InstallError {
 
     #[error("refusing option-like or empty argument: {0:?}")]
     OptionLike(String),
+
+    #[error("refusing unsafe URL component: {0:?}")]
+    UnsafeUrlComponent(String),
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -175,6 +178,78 @@ fn reject_option_like(value: &str) -> Result<(), InstallError> {
         return Err(InstallError::OptionLike(value.to_string()));
     }
     Ok(())
+}
+
+/// True if `value` is safe to paste into a single path segment of the Github
+/// release URL.
+///
+/// The host is fixed, but the path is not: a manifest value carrying `/` adds
+/// path segments, `..` walks up out of `/<repo>/releases/download/…`, and `?`
+/// or `#` truncate the path into a query/fragment — each of which points the
+/// fetch at a *different* artifact on github.com. That is only caught by a
+/// pinned checksum; on the TOFU path (first install, no pin) whatever comes
+/// back becomes the trusted baseline for every later install. Backslashes and
+/// whitespace/control characters are rejected too, since they invite parser
+/// disagreement between us and the HTTP stack.
+///
+/// `%` is rejected for the same reason: rejecting a literal `../` while letting
+/// `%2e%2e%2f` through would only move the traversal one decoding step away, and
+/// no legitimate version or asset name in a release URL contains a percent.
+fn is_safe_url_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains("..")
+        && !value.chars().any(|c| {
+            matches!(c, '/' | '\\' | '?' | '#' | '%') || c.is_whitespace() || c.is_control()
+        })
+}
+
+/// True if `repo` is a plain `owner/name` pair — exactly one `/`, both segments
+/// non-empty, only `[A-Za-z0-9._-]`, and neither segment a `.`/`..` traversal.
+///
+/// `repo` is the first thing interpolated into the release URL path, so the same
+/// redirection attack as [`is_safe_url_component`] applies, with more room: a
+/// repo of `owner/name/../../other` or `owner/name?x=` rewrites the whole path.
+/// Restricting to the character set Github actually allows in an owner/repo
+/// closes it without needing a URL parser.
+fn is_safe_repo(repo: &str) -> bool {
+    let Some((owner, name)) = repo.split_once('/') else {
+        return false;
+    };
+    // A second `/` lands inside `name` and is rejected by the char check below,
+    // which is what enforces "exactly one separator".
+    [owner, name].into_iter().all(|seg| {
+        !seg.is_empty()
+            && seg != "."
+            && seg != ".."
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    })
+}
+
+/// Rollback backup path for a package directory: a sibling named
+/// `<pkgname>.bak`.
+///
+/// Derived by appending to the whole file name, never with
+/// `Path::with_extension`, which *replaces* a trailing extension instead.
+/// Package names are validated as a single path component but a dot is legal
+/// inside one, so `with_extension("bak")` maps `foo.bar`, `foo.baz`, and plain
+/// `foo` all onto the same `foo.bak`. The per-package install lock serializes
+/// installs of the same tool but not of two *different* tools, so colliding
+/// backups let one install `remove_dir_all` another's live rollback target — or
+/// roll back by restoring the wrong package tree over it.
+fn package_backup_path(final_pkg: &Path) -> PathBuf {
+    match final_pkg.file_name() {
+        Some(name) => {
+            let mut bak = name.to_os_string();
+            bak.push(".bak");
+            final_pkg.with_file_name(bak)
+        }
+        // Root / `..` — no file name to append to. Unreachable for a validated
+        // package dir; keep the result distinct from the input so a caller can
+        // never `remove_dir_all` the package itself.
+        None => final_pkg.join("hjkl-anvil.bak"),
+    }
 }
 
 pub fn safe_join(root: &Path, entry: &Path) -> Result<PathBuf, InstallError> {
@@ -507,10 +582,29 @@ fn install_github_locked(
     let expected = resolve_expected_sha(gh, name, &spec.version, triple, paths)?;
 
     // 2. Build download URL.
+    //
+    // `repo`, `version`, and the expanded asset name are pasted straight into
+    // the URL path, so each has to be proven inert first: a value carrying
+    // `../`, `?`, or `#` steers the fetch to a different artifact on
+    // github.com, and on the TOFU path (first install, no pinned hash) whatever
+    // that returns becomes the trusted baseline. The manifest is user-owned
+    // config today; this closes the hole before a shared or remote registry
+    // makes it reachable by someone other than the user.
+    if !is_safe_repo(&gh.repo) {
+        return Err(InstallError::UnsafeUrlComponent(gh.repo.clone()));
+    }
+    if !is_safe_url_component(&spec.version) {
+        return Err(InstallError::UnsafeUrlComponent(spec.version.clone()));
+    }
     let asset = gh
         .asset_pattern
         .replace("{triple}", triple)
         .replace("{version}", &spec.version);
+    // Validate the *expanded* asset — the pattern is only safe if what the
+    // substitutions produce is.
+    if !is_safe_url_component(&asset) {
+        return Err(InstallError::UnsafeUrlComponent(asset));
+    }
     let url = format!(
         "https://github.com/{}/releases/download/{}/{}",
         gh.repo, spec.version, asset
@@ -585,7 +679,7 @@ fn install_github_locked(
     // 8. Two-stage rename: staging → final. `final_pkg` is the path the caller
     // locked; its parent is already created there.
     progress(InstallStatus::Installing);
-    let bak = final_pkg.with_extension("bak");
+    let bak = package_backup_path(final_pkg);
 
     // If an old install exists, move it aside.
     if final_pkg.exists() {
@@ -1439,6 +1533,183 @@ mod tests {
 
         assert!(neighbor.exists(), "hello.tmp must not be deleted");
         assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    }
+
+    // ── rollback backup path isolation ────────────────────────────────────────
+
+    /// The rollback backup must be a sibling named `<pkgname>.bak`, derived by
+    /// appending to the whole file name. `with_extension("bak")` would collapse
+    /// `foo.bar`, `foo.baz`, and plain `foo` onto one `foo.bak`.
+    #[test]
+    fn package_backup_path_appends_to_full_name() {
+        let packages = Path::new("/data/anvil/packages");
+
+        let dotted = package_backup_path(&packages.join("foo.bar"));
+        assert_eq!(dotted, packages.join("foo.bar.bak"));
+        assert_eq!(dotted.parent(), Some(packages), "backup must be a sibling");
+
+        let sibling = package_backup_path(&packages.join("foo.baz"));
+        let plain = package_backup_path(&packages.join("foo"));
+        assert_ne!(
+            dotted, sibling,
+            "stem-sharing tools must not share a backup"
+        );
+        assert_ne!(
+            dotted, plain,
+            "`foo.bar` must not back up onto `foo`'s path"
+        );
+        assert_eq!(plain, packages.join("foo.bak"));
+    }
+
+    /// End-to-end: reinstalling a dotted tool name must not remove the backup
+    /// tree of a different tool that shares its stem. Under
+    /// `with_extension("bak")` both map to `packages/hello.bak`, so this
+    /// reinstall would `remove_dir_all` the neighbor's live rollback target.
+    #[cfg(unix)]
+    #[test]
+    fn reinstall_does_not_clobber_stem_sharing_backup() {
+        let (_tmp, paths) = temp_paths();
+        let triple = host_triple().unwrap();
+        let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+
+        install_github_inner(
+            "hello.tool",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        )
+        .expect("first install must succeed");
+
+        // Stand in for another tool (`hello` / `hello.other`) mid-install: its
+        // backup tree lives at packages/hello.bak.
+        let neighbor_bak = paths.data_root.join("packages").join("hello.bak");
+        std::fs::create_dir_all(&neighbor_bak).unwrap();
+        std::fs::write(neighbor_bak.join("marker"), b"neighbor").unwrap();
+
+        install_github_inner(
+            "hello.tool",
+            &spec,
+            &paths,
+            stub_download("hello.tar.gz"),
+            &|_| {},
+        )
+        .expect("reinstall must succeed");
+
+        assert!(
+            neighbor_bak.join("marker").exists(),
+            "reinstall must not touch a stem-sharing tool's backup tree"
+        );
+        assert!(
+            paths
+                .data_root
+                .join("packages")
+                .join("hello.tool")
+                .join("bin")
+                .join("hello")
+                .exists(),
+            "reinstalled package must be in place"
+        );
+    }
+
+    // ── URL component validation ──────────────────────────────────────────────
+
+    /// Rebuild `spec` with a patched Github method field.
+    fn patch_github(spec: &ToolSpec, repo: Option<&str>, asset_pattern: Option<&str>) -> ToolSpec {
+        let mut out = spec.clone();
+        if let InstallMethod::Github(ref mut gh) = out.method {
+            if let Some(r) = repo {
+                gh.repo = r.to_string();
+            }
+            if let Some(a) = asset_pattern {
+                gh.asset_pattern = a.to_string();
+            }
+        }
+        out
+    }
+
+    /// Manifest values are interpolated into the release URL path, so a `repo`,
+    /// `version`, or expanded asset carrying `/`, `..`, `?`, or `#` must be
+    /// refused before any request is made — otherwise the fetch is redirected
+    /// to another path on github.com, and on the TOFU path that artifact
+    /// becomes the trusted baseline.
+    #[test]
+    fn install_github_rejects_unsafe_url_components() {
+        let Ok(triple) = host_triple() else { return };
+        let base = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+
+        let mut bad_version = base.clone();
+        bad_version.version = "../../../evil".to_string();
+
+        let cases = [
+            (
+                "repo with traversal",
+                patch_github(&base, Some("owner/repo/../../evil"), None),
+            ),
+            (
+                "repo missing owner",
+                patch_github(&base, Some("repo"), None),
+            ),
+            ("version with traversal", bad_version),
+            (
+                "asset expanding to a query",
+                patch_github(&base, None, Some("hello-{triple}.tar.gz?to=/evil")),
+            ),
+            // Rejecting a literal `../` but accepting its percent-encoded form
+            // would only move the traversal one decoding step away.
+            (
+                "asset with percent-encoded traversal",
+                patch_github(&base, None, Some("%2e%2e%2fevil-{triple}.tar.gz")),
+            ),
+        ];
+
+        for (label, spec) in &cases {
+            let (_tmp, paths) = temp_paths();
+            let err = install_github_inner(
+                "hello",
+                spec,
+                &paths,
+                |_url, _dest, _progress| {
+                    Err(InstallError::Archive("downloader must not run".to_string()))
+                },
+                &|_| {},
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, InstallError::UnsafeUrlComponent(_)),
+                "{label}: expected UnsafeUrlComponent, got {err:?}"
+            );
+        }
+    }
+
+    /// Positive case: a normal spec still builds the expected release URL and
+    /// installs through the stub downloader.
+    #[cfg(unix)]
+    #[test]
+    fn install_github_builds_expected_url_for_valid_spec() {
+        let (_tmp, paths) = temp_paths();
+        let triple = host_triple().unwrap();
+        let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+
+        let seen: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            |url, dest, progress| {
+                seen.lock().unwrap().push(url.to_string());
+                stub_download("hello.tar.gz")(url, dest, progress)
+            },
+            &|_| {},
+        );
+
+        result.expect("valid spec must still install");
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![format!(
+                "https://github.com/owner/repo/releases/download/v1.0/hello-{triple}.tar.gz"
+            )],
+        );
     }
 
     // ── checksum mismatch ─────────────────────────────────────────────────────
