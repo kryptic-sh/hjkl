@@ -654,16 +654,26 @@ pub fn repo_root(path: &Path) -> Option<std::path::PathBuf> {
     repo.workdir().map(|w| w.to_path_buf())
 }
 
-/// Run `git -C <root> <args...>` with no stdin.
+/// Run `git -C <root> <args...> <path>` with no stdin.
+///
+/// `path` is appended verbatim as the final argument — callers put the `--`
+/// pathspec separator at the end of `args`. It is deliberately *not* routed
+/// through `Path::to_str`: a non-UTF-8 path has no `&str` form, and the obvious
+/// `to_str().unwrap_or("")` fallback would hand git an empty pathspec. That is
+/// not a harmless no-op — git before 2.16 reads an empty pathspec as "match
+/// everything", so a per-file `checkout --` would blow away the whole worktree.
+/// `Command::arg` takes `AsRef<OsStr>`, so the raw bytes pass through untouched
+/// and git always receives the pathspec the caller asked for.
 ///
 /// Returns `Ok(())` on exit-code 0 and `Err(stderr)` otherwise.
-fn run_git_cmd(root: &Path, args: &[&str]) -> Result<(), String> {
+fn run_git_cmd(root: &Path, args: &[&str], path: &Path) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
+        .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -682,7 +692,7 @@ fn run_git_cmd(root: &Path, args: &[&str]) -> Result<(), String> {
 /// Works for files, directories (stages all changes recursively), new
 /// (untracked) files, and deletions. `root` should come from [`repo_root`].
 pub fn stage_path(root: &Path, path: &Path) -> Result<(), String> {
-    run_git_cmd(root, &["add", "--", path.to_str().unwrap_or("")])
+    run_git_cmd(root, &["add", "--"], path)
 }
 
 /// Unstage `path` from the index (`git -C <root> reset -q -- <path>`).
@@ -690,7 +700,7 @@ pub fn stage_path(root: &Path, path: &Path) -> Result<(), String> {
 /// Works with or without a HEAD commit (unborn branch). Does not touch
 /// the worktree — staged changes return to worktree-modified status.
 pub fn unstage_path(root: &Path, path: &Path) -> Result<(), String> {
-    run_git_cmd(root, &["reset", "-q", "--", path.to_str().unwrap_or("")])
+    run_git_cmd(root, &["reset", "-q", "--"], path)
 }
 
 /// Discard worktree changes to `path` (`git -C <root> checkout -- <path>`).
@@ -699,7 +709,7 @@ pub fn unstage_path(root: &Path, path: &Path) -> Result<(), String> {
 /// Untracked files are never touched by this operation. For directories the
 /// checkout is recursive over all tracked descendants.
 pub fn discard_path(root: &Path, path: &Path) -> Result<(), String> {
-    run_git_cmd(root, &["checkout", "--", path.to_str().unwrap_or("")])
+    run_git_cmd(root, &["checkout", "--"], path)
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,6 +1535,55 @@ mod tests {
         assert!(
             result.is_err(),
             "stage_path outside a repo must return Err; got Ok(())"
+        );
+    }
+
+    /// Regression: a non-UTF-8 path must reach git as a real pathspec.
+    ///
+    /// The old implementation went through `path.to_str().unwrap_or("")`, which
+    /// silently degraded any non-UTF-8 path to an *empty* pathspec. Old git
+    /// reads that as "match everything", so discarding one file would have
+    /// discarded the entire worktree; new git rejects it outright. Both are
+    /// wrong, so this asserts the two halves of correct behaviour: the target
+    /// file is restored, and an unrelated dirty file is left alone.
+    #[test]
+    #[cfg(unix)]
+    fn discard_path_handles_non_utf8_path() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        // Disable autocrlf so checkout doesn't rewrite `\n` → `\r\n`.
+        git(tmp.path(), &["config", "core.autocrlf", "false"]);
+
+        // Latin-1 "café.txt" — valid on a unix filesystem, but not valid UTF-8,
+        // so `Path::to_str` returns None for it.
+        let weird = tmp.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt"));
+        std::fs::write(&weird, "original\n").unwrap();
+        let bystander = tmp.path().join("bystander.txt");
+        std::fs::write(&bystander, "bystander-original\n").unwrap();
+
+        // `git add` via the &str helper can't name the non-UTF-8 file, so stage
+        // everything instead.
+        git(tmp.path(), &["add", "-A"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Dirty both files.
+        std::fs::write(&weird, "dirty\n").unwrap();
+        std::fs::write(&bystander, "bystander-dirty\n").unwrap();
+
+        let root = repo_root(&weird).expect("must be in repo");
+        discard_path(&root, &weird).expect("discard_path must accept a non-UTF-8 path");
+
+        assert_eq!(
+            std::fs::read_to_string(&weird).unwrap(),
+            "original\n",
+            "the non-UTF-8 path must be checked out, so it reached git as a pathspec"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&bystander).unwrap(),
+            "bystander-dirty\n",
+            "an empty pathspec would have matched everything and reverted this file too"
         );
     }
 
