@@ -2107,6 +2107,43 @@ impl App {
             }
         }
 
+        // Merge entries that name the SAME file before applying anything.
+        // The end-descending sort below is what stops an applied edit from
+        // shifting the ranges of the edits still queued behind it — but that
+        // invariant only holds across the edits it actually sorts, i.e.
+        // WITHIN one entry. `documentChanges` is a JSON array and the spec
+        // lets a server emit several `TextDocumentEdit`s for one document;
+        // every one of them computed its ranges against the ORIGINAL
+        // document, so applying a second entry to a rope the first already
+        // mutated lands its edits at stale offsets — silent corruption of the
+        // user's buffer. Concatenating same-file entries puts all of a file's
+        // edits under the single sort, which restores the invariant.
+        //
+        // Group on the RESOLVED PATH, not the raw URL string: two spellings
+        // (percent-encoding, `..` segments) can name the same file. A URL
+        // that resolves to no path can't be compared this way, so each such
+        // entry stays its own group and still hits the `non-file URI` error
+        // below with its own URL. First-appearance order is preserved (no
+        // sort by path) so application order stays deterministic.
+        let mut merged: Vec<(
+            url::Url,
+            Option<std::path::PathBuf>,
+            Vec<lsp_types::TextEdit>,
+        )> = Vec::new();
+        for (url, edits) in file_edits {
+            let target_path = hjkl_lsp::uri::to_path(&url);
+            let existing = target_path.as_ref().and_then(|tp| {
+                merged
+                    .iter_mut()
+                    .find(|(_, p, _)| p.as_ref().is_some_and(|q| q == tp))
+            });
+            match existing {
+                Some((_, _, acc)) => acc.extend(edits),
+                None => merged.push((url, target_path, edits)),
+            }
+        }
+        let file_edits = merged;
+
         // Active LSP workspace roots, for the out-of-root warning below.
         // When no server is tracked yet (`lsp_state` empty) fall back to the
         // process cwd so the containment check still means something.
@@ -2117,11 +2154,11 @@ impl App {
         };
         let mut out_of_root: Vec<std::path::PathBuf> = Vec::new();
 
+        // DISTINCT files, not entries — the caller reports this to the user as
+        // "{count} files changed", and a server that split one file across two
+        // `TextDocumentEdit`s must not inflate it.
         let count = file_edits.len();
-        for (url, mut edits) in file_edits {
-            // Find or open the slot for this URI.
-            let target_path = hjkl_lsp::uri::to_path(&url);
-
+        for (url, target_path, mut edits) in file_edits {
             // A server may direct edits at files OUTSIDE every workspace root
             // (e.g. `~/.bashrc`). Still apply them — buffers are not saved
             // automatically and legitimate multi-root / out-of-tree setups
@@ -2137,6 +2174,7 @@ impl App {
                     out_of_root.push(tp.clone());
                 }
             }
+            // Find or open the slot for this URI.
             let slot_idx = if let Some(ref tp) = target_path {
                 // Try to find an existing slot.
                 let existing = self.slots.iter().position(|s| {
@@ -2158,7 +2196,9 @@ impl App {
             };
 
             // Sort edits by range END descending so applying later edits
-            // doesn't shift the positions of earlier ones.
+            // doesn't shift the positions of earlier ones. This runs ONCE
+            // over every edit aimed at this file (merged above), which is
+            // what makes the ordering hold across entry boundaries too.
             edits.sort_by(|a, b| {
                 let ea = (a.range.end.line, a.range.end.character);
                 let eb = (b.range.end.line, b.range.end.character);

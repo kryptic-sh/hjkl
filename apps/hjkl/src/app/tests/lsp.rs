@@ -1901,6 +1901,78 @@ fn apply_workspace_edit_multi_file_notifies_both_buffers() {
     let _ = std::fs::remove_file(&path_b);
 }
 
+/// Regression (audit C2): `documentChanges` is an ARRAY, and the spec lets a
+/// server emit SEVERAL `TextDocumentEdit`s for the SAME document — each with
+/// ranges computed against the ORIGINAL document. Applying them entry by
+/// entry made the second entry's ranges land on a rope the first entry had
+/// already mutated, silently corrupting the buffer. All of a file's edits must
+/// be merged into one end-descending batch, and the returned count must be the
+/// number of DISTINCT FILES, not of entries.
+#[test]
+fn apply_workspace_edit_merges_duplicate_document_changes_entries() {
+    use std::str::FromStr;
+
+    let path = std::env::temp_dir().join("hjkl_ws_dup_doc_changes.txt");
+    std::fs::write(&path, "hello world foo\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = lsp_types::Uri::from_str(&file_url(&path)).expect("valid URI");
+    let doc = |uri: &lsp_types::Uri| lsp_types::OptionalVersionedTextDocumentIdentifier {
+        uri: uri.clone(),
+        version: None,
+    };
+    let te = |sc: u32, ec: u32, text: &str| {
+        lsp_types::OneOf::Left(lsp_types::TextEdit {
+            range: lsp_types::Range::new(
+                lsp_types::Position::new(0, sc),
+                lsp_types::Position::new(0, ec),
+            ),
+            new_text: text.to_string(),
+        })
+    };
+
+    // Entry order matters: the LEFTMOST edit comes FIRST, so applying entry
+    // by entry shrinks "hello" -> "hi" before entry 2's range 6..11 is
+    // resolved, and that range then names "ld fo" instead of "world".
+    let edit = lsp_types::WorkspaceEdit {
+        changes: None,
+        document_changes: Some(lsp_types::DocumentChanges::Edits(vec![
+            lsp_types::TextDocumentEdit {
+                text_document: doc(&uri),
+                edits: vec![te(0, 5, "hi")],
+            },
+            lsp_types::TextDocumentEdit {
+                text_document: doc(&uri),
+                edits: vec![te(6, 11, "earth")],
+            },
+        ])),
+        change_annotations: None,
+    };
+
+    let count = app
+        .apply_workspace_edit(edit, hjkl_lsp::PositionEncoding::Utf8)
+        .expect("apply failed");
+    let lines = app
+        .active_editor()
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines[0], "hi earth foo",
+        "both entries' ranges are relative to the ORIGINAL document"
+    );
+    assert_eq!(
+        count, 1,
+        "two entries naming one file are ONE changed file, not two"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn rename_response_null_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
