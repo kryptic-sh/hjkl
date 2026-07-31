@@ -29,7 +29,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use hjkl_xdg::{cache_home, data_home};
 use thiserror::Error;
@@ -54,12 +54,11 @@ pub enum StoreError {
 /// escape `packages/` when joined — e.g. `:Anvil uninstall ../../foo` or an
 /// absolute path, which `Path::join` would treat as the whole target — and
 /// reach `remove_dir_all` / install writes on an arbitrary directory.
+///
+/// The predicate itself lives in [`hjkl_fs::is_safe_component`]; this is the
+/// store's mapping of it onto [`StoreError::InvalidName`].
 fn validate_name(name: &str) -> Result<(), StoreError> {
-    use std::path::Component;
-    let mut comps = Path::new(name).components();
-    let single_normal =
-        matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none();
-    if single_normal {
+    if hjkl_fs::is_safe_component(name) {
         Ok(())
     } else {
         Err(StoreError::InvalidName(name.to_string()))
@@ -461,6 +460,11 @@ mod tests {
 
     // ── Name validation (no I/O, parallel-safe) ─────────────────────────────
 
+    // The predicate's own case table lives with the implementation, in
+    // `hjkl_fs::path`. What is asserted here is the store's mapping of it:
+    // accepted names pass through, rejected ones surface as `InvalidName`
+    // carrying the offending name rather than as any other error.
+
     #[test]
     fn validate_name_accepts_plain_names() {
         for n in ["rust-analyzer", "gopls", "foo_bar", "a.b"] {
@@ -470,21 +474,11 @@ mod tests {
 
     #[test]
     fn validate_name_rejects_traversal_and_absolute() {
-        for n in [
-            "",
-            ".",
-            "..",
-            "../foo",
-            "../../etc",
-            "foo/bar",
-            "foo/../bar",
-            "/etc/passwd",
-            "/",
-        ] {
-            assert!(
-                validate_name(n).is_err(),
-                "{n:?} must be rejected as an unsafe package name"
-            );
+        for n in ["", ".", "..", "../../etc", "foo/bar", "/etc/passwd"] {
+            match validate_name(n) {
+                Err(StoreError::InvalidName(reported)) => assert_eq!(reported, n),
+                other => panic!("{n:?} must be rejected as InvalidName, got {other:?}"),
+            }
         }
     }
 

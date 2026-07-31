@@ -23,6 +23,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context, Result, bail};
+// Grammar names and `; inherits:` targets are joined into cache and query-repo
+// paths, so the same "exactly one path segment" guard the anvil store and
+// installer use applies here — one implementation, in `hjkl-fs`.
+pub use hjkl_fs::is_safe_component;
 
 use super::manifest::{LangSpec, ManifestMeta, QuerySource};
 use super::xdg;
@@ -176,15 +180,11 @@ impl SourceCache {
     }
 }
 
-/// True if `s` is a single, safe path component: non-empty, not `.`/`..`, and
-/// free of path separators or a root/prefix. Grammar names and `; inherits:`
-/// targets are joined into cache and query-repo paths, so a value like
-/// `../../etc` or `foo/bar` must be rejected before it can escape those dirs.
-pub fn is_safe_component(s: &str) -> bool {
-    let mut comps = Path::new(s).components();
-    matches!(comps.next(), Some(std::path::Component::Normal(_))) && comps.next().is_none()
-}
-
+/// True if `s` may contain more than one component but still cannot leave the
+/// directory it is joined onto: no `..`, no root, no drive prefix.
+///
+/// Weaker than [`is_safe_component`], deliberately — a query `subpath` is a
+/// path into a repo (`queries/rust`), not a single name.
 pub fn is_safe_relative_path(s: &str) -> bool {
     !s.is_empty()
         && !Path::new(s).components().any(|component| {
@@ -706,18 +706,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn is_safe_component_accepts_names_rejects_traversal() {
-        for ok in ["rust", "c-sharp", "lua_ls", "_typescript", "ecma", "c++"] {
-            assert!(is_safe_component(ok), "{ok:?} should be safe");
-        }
-        // Note: `\` is only a separator on Windows, so it's intentionally not
-        // asserted here — `Path::components` handles that per-platform.
-        for bad in ["", ".", "..", "a/b", "../evil", "/abs", "foo/.."] {
-            assert!(!is_safe_component(bad), "{bad:?} must be rejected");
-        }
-    }
-
+    // The predicate's own case table lives with the implementation, in
+    // `hjkl_fs::path`. What is asserted here is this crate's use of it: an
+    // unsafe grammar name must be refused before any clone or I/O happens.
     #[test]
     fn acquire_rejects_unsafe_name() {
         let cache = SourceCache::new(PathBuf::from("/tmp/cache"));

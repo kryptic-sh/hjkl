@@ -25,8 +25,9 @@
 //! - [`read`] — reads that are bounded by an explicit cap.
 //! - [`open`] — owner-only [`std::fs::OpenOptions`] for callers that keep a
 //!   handle and append, which a whole-file atomic write cannot serve.
-//! - [`path`] — normalization that cannot be fooled by an unresolved `..`, and
-//!   the confinement check built on it.
+//! - [`path`] — normalization that cannot be fooled by an unresolved `..`, the
+//!   confinement check built on it, and [`is_safe_component`] for the narrower
+//!   "this untrusted string must be exactly one path segment" guard.
 //! - [`identity`] — [`guard_not_swapped`] proves an open handle is still the
 //!   object a path names, and [`hardlink_count`] reports how many names share
 //!   that object.
@@ -132,7 +133,7 @@ pub use dirs::{ensure_private_dir, private_cache_subdir, private_state_subdir};
 pub use identity::{guard_not_swapped, hardlink_count};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
 pub use open::{owner_only_options, owner_only_options_no_follow};
-pub use path::{canonicalize_nearest, resolve_under};
+pub use path::{canonicalize_nearest, is_safe_component, resolve_under};
 pub use read::{
     read_capped, read_capped_from, read_to_string_capped, read_to_string_capped_from,
     read_to_string_unbounded,

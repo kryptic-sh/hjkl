@@ -31,6 +31,7 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use hjkl_fs::is_safe_component;
 use sha2::{Digest, Sha256};
 
 use crate::manifest::{GithubMethod, InstallMethod, ToolSpec};
@@ -157,19 +158,6 @@ pub fn install_blocking(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Returns `Ok(joined_path)` if joined_path stays inside `root`. Rejects
-/// parent-dir traversal, root prefixes, and absolute paths.
-///
-/// Neither `root` nor `entry` is required to exist on disk — this is a
-/// pure-path check.
-/// True if `name` is exactly one normal path component — no separators, `..`,
-/// `.`, or absolute/root prefix. Used to keep an untrusted `bin` name from
-/// escaping the extract dir or the flat `bin/` symlink dir.
-fn is_safe_component(name: &str) -> bool {
-    let mut comps = Path::new(name).components();
-    matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none()
-}
-
 /// Reject a package/crate/module identifier that the spawned package manager
 /// would parse as an option flag (e.g. `cargo install --path=…`,
 /// `npm install -g`), plus empty identifiers which would silently shift argv.
@@ -252,6 +240,11 @@ fn package_backup_path(final_pkg: &Path) -> PathBuf {
     }
 }
 
+/// Returns `Ok(joined_path)` if joined_path stays inside `root`. Rejects
+/// parent-dir traversal, root prefixes, and absolute paths.
+///
+/// Neither `root` nor `entry` is required to exist on disk — this is a
+/// pure-path check.
 pub fn safe_join(root: &Path, entry: &Path) -> Result<PathBuf, InstallError> {
     let mut out = root.to_path_buf();
     for comp in entry.components() {

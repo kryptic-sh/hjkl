@@ -179,6 +179,35 @@ pub fn resolve_under(root: &Path, path: &Path) -> io::Result<PathBuf> {
     }
 }
 
+/// True if `name` is exactly one *normal* path component: non-empty, not `.` or
+/// `..`, and free of any separator, root or drive prefix.
+///
+/// This is the guard for the very common shape "an untrusted string is about to
+/// become one directory or file name under a root we own" — a tool name joined
+/// into `packages/<name>`, a binary name joined into `bin/<bin>`, a grammar name
+/// joined into `<cache>/<lang>`. Left unchecked, such a name escapes the root it
+/// was supposed to stay under, and does so in two distinct ways:
+///
+/// - traversal — `../../etc` walks out of the root, and the caller then reads,
+///   writes or `remove_dir_all`s a directory that was never in scope;
+/// - re-rooting — [`Path::join`] *replaces* the whole path when given an
+///   absolute one, so `/etc` as a "name" makes `root.join(name)` simply `/etc`,
+///   with no traversal to spot.
+///
+/// [`resolve_under`] answers the more general question ("does this path, however
+/// spelled, land inside that root"). This answers the narrower one, and is the
+/// right check when the value is meant to be a single segment: it rejects
+/// `a/b` — which resolves inside the root perfectly well — because a name that
+/// grew a separator is already not the thing the caller thought it had.
+///
+/// Separator handling is per-platform, via [`Path::components`]: `a\b` is one
+/// component on unix and two on Windows, and is accepted or rejected
+/// accordingly.
+pub fn is_safe_component(name: &str) -> bool {
+    let mut comps = Path::new(name).components();
+    matches!(comps.next(), Some(Component::Normal(_))) && comps.next().is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +457,74 @@ mod tests {
         // even though the leaf below it does not exist yet.
         let err = resolve_under(&root, Path::new("escape/f.txt")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    // ── is_safe_component ─────────────────────────────────────────────────────
+    //
+    // The union of the case tables the anvil store, the anvil installer and the
+    // bonsai grammar cache each used to carry privately. They live here now so
+    // the one implementation owns its own coverage.
+
+    #[test]
+    fn is_safe_component_accepts_a_single_ordinary_name() {
+        for ok in [
+            "rust-analyzer",
+            "gopls",
+            "foo_bar",
+            "a.b",
+            "c-sharp",
+            "lua_ls",
+            "_typescript",
+            "ecma",
+            "c++",
+            // Three dots is an ordinary name, not a traversal — only `.` and
+            // `..` exactly are components in their own right.
+            "...",
+            // A trailing separator normalizes away, leaving one component.
+            "foo/",
+        ] {
+            assert!(is_safe_component(ok), "{ok:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn is_safe_component_rejects_empty_dots_separators_and_roots() {
+        for bad in [
+            "",           // no component at all
+            ".",          // CurDir, not a name
+            "..",         // the traversal itself
+            "../foo",     // traversal then a name
+            "foo/..",     // a name then traversal
+            "../../etc",  // repeated traversal
+            "a/b",        // more than one component
+            "foo/bar",    //
+            "foo/../bar", // resolves inside, still not one segment
+            "/",          // RootDir alone
+            "/abs",       // absolute: `join` would re-root onto it
+            "/etc/passwd",
+            "./foo", // CurDir prefix
+            "a/b/c", //
+            "a//b",  // collapsed by `components`, still two of them
+        ] {
+            assert!(!is_safe_component(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    /// `\` is a separator on Windows only, and [`Path::components`] is the thing
+    /// that knows it — which is exactly why this check delegates to it instead
+    /// of scanning for characters itself.
+    #[test]
+    fn is_safe_component_treats_backslash_per_platform() {
+        #[cfg(windows)]
+        {
+            assert!(!is_safe_component(r"a\b"));
+            assert!(!is_safe_component(r"..\evil"));
+            assert!(!is_safe_component(r"C:\x"));
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(is_safe_component(r"a\b"));
+            assert!(is_safe_component(r"..\evil"));
+        }
     }
 }
