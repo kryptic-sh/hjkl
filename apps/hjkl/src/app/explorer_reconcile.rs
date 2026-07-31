@@ -310,87 +310,48 @@ pub enum AppliedOp {
 
 // ── Filesystem application ────────────────────────────────────────────────────
 
-/// Move a file across device boundaries: `fs::rename` first; on `CrossesDevices`
-/// fall back to `fs::copy` + `fs::remove_file`.
-fn move_file(src: &Path, dst: &Path) -> std::io::Result<()> {
-    match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            std::fs::copy(src, dst)?;
-            std::fs::remove_file(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Move a directory tree across filesystem boundaries: `fs::rename` first; on
-/// `CrossesDevices` fall back to a recursive copy followed by `remove_dir_all`.
-fn move_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            copy_dir_recursive(src, dst)?;
-            std::fs::remove_dir_all(src)?;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Recursive copy used by the cross-device fallback of [`move_dir`].
+/// Move whatever is at `src` to `dst`, through the disk-I/O seam
+/// ([`hjkl_fs::move_atomic`]: `rename`, and across a filesystem boundary a
+/// staged copy-then-delete).
 ///
-/// Entries are classified with `symlink_metadata` (lstat — does NOT follow
-/// symlinks): a symlink is recreated as a symlink at the destination, never
-/// followed. Following would (a) recurse unboundedly on a symlink loop and
-/// (b) materialize the link target's tree as a copy, after which the
-/// `remove_dir_all(src)` in [`move_dir`] would delete through the real tree.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let mut stack = vec![src.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let rel = dir
-            .strip_prefix(src)
-            .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
-        let dst_dir = dst.join(rel);
-        std::fs::create_dir_all(&dst_dir)?;
-        for entry in std::fs::read_dir(&dir)?.flatten() {
-            let path = entry.path();
-            let rel_entry = path
-                .strip_prefix(src)
-                .map_err(|_| std::io::Error::other("strip_prefix failed"))?;
-            let dst_path = dst.join(rel_entry);
-            let ft = std::fs::symlink_metadata(&path)?.file_type();
-            if ft.is_symlink() {
-                copy_symlink(&path, &dst_path)?;
-            } else if ft.is_dir() {
-                stack.push(path);
-            } else {
-                std::fs::copy(&path, &dst_path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Recreate the symlink at `src` as an identical symlink at `dst` — never
-/// follows it and never touches the link target.
-#[cfg(unix)]
-fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(std::fs::read_link(src)?, dst)
-}
-
-/// Recreate the symlink at `src` as an identical symlink at `dst` — never
-/// follows it and never touches the link target.
-#[cfg(windows)]
-fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let target = std::fs::read_link(src)?;
-    // Windows distinguishes file and directory symlinks; probe the (followed)
-    // metadata to pick, defaulting to a file symlink for dangling links.
-    if std::fs::metadata(src).is_ok_and(|m| m.is_dir()) {
-        std::os::windows::fs::symlink_dir(target, dst)
-    } else {
-        std::os::windows::fs::symlink_file(target, dst)
-    }
+/// This replaces the explorer's own pair of movers — `move_file` / `move_dir`,
+/// picked at each call site from `from.is_dir()`, with a hand-rolled recursive
+/// copy behind `move_dir`'s `CrossesDevices` arm. Every difference bites on
+/// that fallback: the path that runs when the entry being moved and the trash
+/// under `$XDG_CACHE_HOME` (or the destination of a rename) sit on different
+/// filesystems.
+///
+/// - The fallback copy is **staged** beside its destination and swapped in only
+///   once it is complete, so a move that dies partway leaves the destination
+///   exactly as it was. The old walk copied in place, so a failure left a
+///   half-populated directory that reads as a finished one.
+/// - A **fifo, socket or device node** anywhere in the tree is an error rather
+///   than a hang. The old walk classified with `symlink_metadata` but had only
+///   three branches: anything that was not a symlink or a directory went to
+///   `std::fs::copy`, which blocks forever on a fifo waiting for a writer — the
+///   editor wedged with no way to cancel it.
+/// - **All three shapes** — file, directory tree, symlink — are handled here,
+///   so the call sites no longer choose a mover from `is_dir()`, which follows
+///   symlinks. A symlink to a directory used to be walked as if it were the
+///   tree it points at and then `remove_dir_all`-ed, which copied the target's
+///   contents and then failed on the removal. Now the link's *target string* is
+///   moved and the data it points at is neither copied nor deleted.
+///
+/// Destination semantics are deliberately unchanged: the fast path is literally
+/// `std::fs::rename`, so exactly the same moves succeed and fail as before. The
+/// refusal to overwrite an occupied destination lives in [`apply_ops`], above
+/// this function, and stays the only thing standing between a rename and a
+/// clobber.
+fn move_entry(src: &Path, dst: &Path) -> std::io::Result<()> {
+    // `WriteOptions::default()`: durable, and a copied file carries the
+    // source's mode. Durability for the same reason `hjkl_app::trash` uses the
+    // default — this is the inverse of `move_to_trash`, and an entry the user
+    // renamed, or pulled back out of the trash, must still be where they put it
+    // after a crash.
+    //
+    // Not `preserve_mode`: for a file that means "keep the DESTINATION's mode",
+    // which is the wrong answer for a move — the entry must keep its own bits.
+    hjkl_fs::move_atomic(src, dst, &hjkl_fs::WriteOptions::default())
 }
 
 /// True when `a` and `b` resolve to the same existing file — e.g. a pure
@@ -476,12 +437,7 @@ pub fn apply_ops(
                         // Park `from` under a temp sibling; finish after the
                         // batch. Journal the hop so undo replays it exactly.
                         let temp = temp_sibling_path(from);
-                        let parked = if from.is_dir() {
-                            move_dir(from, &temp)
-                        } else {
-                            move_file(from, &temp)
-                        };
-                        match parked {
+                        match move_entry(from, &temp) {
                             Ok(()) => {
                                 applied.push(AppliedOp::Renamed {
                                     from: from.clone(),
@@ -508,12 +464,7 @@ pub fn apply_ops(
                     errors.push(format!("rename: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let result = if from.is_dir() {
-                    move_dir(from, to)
-                } else {
-                    move_file(from, to)
-                };
-                match result {
+                match move_entry(from, to) {
                     Ok(()) => {
                         applied.push(AppliedOp::Renamed {
                             from: from.clone(),
@@ -584,7 +535,7 @@ pub fn apply_ops(
 
                 if let Some(idx) = restore_idx {
                     let (_, trash_dest) = trashed.remove(idx);
-                    match move_dir(&trash_dest, path) {
+                    match move_entry(&trash_dest, path) {
                         Ok(()) => {
                             applied.push(AppliedOp::Restored {
                                 from_trash: trash_dest,
@@ -627,7 +578,7 @@ pub fn apply_ops(
                 if let Some(idx) = restore_idx {
                     let (_, trash_dest) = trashed.remove(idx);
                     // Restore from trash.
-                    match move_file(&trash_dest, path) {
+                    match move_entry(&trash_dest, path) {
                         Ok(()) => {
                             applied.push(AppliedOp::Restored {
                                 from_trash: trash_dest,
@@ -662,12 +613,7 @@ pub fn apply_ops(
             errors.push(format!(
                 "rename {orig_from:?} → {to:?}: destination still exists — keeping original name"
             ));
-            let back = if temp.is_dir() {
-                move_dir(&temp, &orig_from)
-            } else {
-                move_file(&temp, &orig_from)
-            };
-            match back {
+            match move_entry(&temp, &orig_from) {
                 Ok(()) => {
                     // Drop the park journal entry — the disk is back to where
                     // it started, so undo must not replay the hop.
@@ -684,12 +630,7 @@ pub fn apply_ops(
             }
             continue;
         }
-        let result = if temp.is_dir() {
-            move_dir(&temp, &to)
-        } else {
-            move_file(&temp, &to)
-        };
-        match result {
+        match move_entry(&temp, &to) {
             Ok(()) => {
                 applied.push(AppliedOp::Renamed {
                     from: temp.clone(),
@@ -762,12 +703,7 @@ pub fn revert_ops(
                     errors.push(format!("revert trashed: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let result = if dest.is_dir() {
-                    move_dir(dest, original)
-                } else {
-                    move_file(dest, original)
-                };
-                match result {
+                match move_entry(dest, original) {
                     Ok(()) => {
                         // Remove the now-restored entry from the trashed registry
                         // (it's back on disk).
@@ -796,12 +732,7 @@ pub fn revert_ops(
                     errors.push(format!("revert renamed: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let result = if to.is_dir() {
-                    move_dir(to, from)
-                } else {
-                    move_file(to, from)
-                };
-                match result {
+                match move_entry(to, from) {
                     Ok(()) => {
                         // Redo = rename from→to again.
                         redo_journal.push(AppliedOp::Renamed {
@@ -928,12 +859,7 @@ pub fn apply_applied(
                     errors.push(format!("redo renamed: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let result = if from.is_dir() {
-                    move_dir(from, to)
-                } else {
-                    move_file(from, to)
-                };
-                match result {
+                match move_entry(from, to) {
                     Ok(()) => {
                         new_applied.push(AppliedOp::Renamed {
                             from: from.clone(),
@@ -953,13 +879,7 @@ pub fn apply_applied(
                     errors.push(format!("redo restored: create_dir_all({parent:?}): {e}"));
                     continue;
                 }
-                let is_dir = std::fs::symlink_metadata(from_trash).is_ok_and(|m| m.is_dir());
-                let result = if is_dir {
-                    move_dir(from_trash, to)
-                } else {
-                    move_file(from_trash, to)
-                };
-                match result {
+                match move_entry(from_trash, to) {
                     Ok(()) => {
                         // Remove from the trashed registry.
                         if let Some(pos) = trashed.iter().position(|(_, d)| d == from_trash) {
@@ -2189,11 +2109,11 @@ mod tests {
         assert!(dir.join("inner.txt").exists(), "contents must survive redo");
     }
 
-    /// The cross-device fallback of [`move_dir`] (`copy_dir_recursive` +
-    /// `remove_dir_all`) for a directory restore must preserve the full
-    /// subtree including nested files.  The existing redo test above only
-    /// exercises the same-device `rename` path; this test directly exercises
-    /// the copy+remove fallback body on a directory with content.
+    /// The cross-device fallback of [`move_entry`] for a directory restore must
+    /// preserve the full subtree including nested files.  The existing redo
+    /// test above only exercises the same-device `rename` path; this test
+    /// directly exercises the copy+remove fallback body on a directory with
+    /// content.
     #[test]
     fn restore_dir_cross_device_fallback_preserves_contents() {
         let td = tempfile::tempdir().unwrap();
@@ -2208,14 +2128,14 @@ mod tests {
         // Restore target (simulating the original path being re-created).
         let restored = td.path().join("restored_dir");
 
-        // Exercise the cross-device fallback body directly:
-        // `move_dir` does `rename` first, then on CrossesDevices falls back to
-        // `copy_dir_recursive` + `remove_dir_all`.  We can't force a
-        // CrossesDevices error inside one tempdir, but we can exercise the
-        // fallback body itself — which is the path that was previously
-        // untested for directory restores.
-        copy_dir_recursive(&src, &restored).unwrap();
-        std::fs::remove_dir_all(&src).unwrap();
+        // Exercise the cross-device fallback body directly: `move_entry` does
+        // `rename` first, and on `CrossesDevices` hands a directory to
+        // `hjkl_fs::copy_dir_atomic` followed by the removal of the source.  We
+        // can't force a `CrossesDevices` error inside one tempdir, so call that
+        // body — which is the path that was previously untested for directory
+        // restores.
+        hjkl_fs::copy_dir_atomic(&src, &restored, &hjkl_fs::WriteOptions::default()).unwrap();
+        hjkl_fs::remove_path_all(&src).unwrap();
 
         // Verify the restored directory has the full subtree.
         assert!(restored.is_dir(), "restored dir must exist");
@@ -2237,13 +2157,13 @@ mod tests {
 
     // ── cross-device copy fallback: symlink safety ────────────────────────────
 
-    /// The recursive-copy fallback of `move_dir` must NOT follow symlinks:
-    /// a directory symlink inside the moved tree is recreated as a symlink at
+    /// The copy fallback of [`move_entry`] must NOT follow symlinks: a
+    /// directory symlink inside the moved tree is recreated as a symlink at
     /// the destination, and the tree it points at is left untouched (the old
     /// `is_dir()`-based walk recursed into it and later deleted through it).
     #[cfg(unix)]
     #[test]
-    fn copy_dir_recursive_preserves_symlinks_without_following() {
+    fn cross_device_copy_preserves_symlinks_without_following() {
         let td = tempfile::tempdir().unwrap();
 
         // A "real" tree that the symlink points at — must survive untouched.
@@ -2261,10 +2181,10 @@ mod tests {
 
         // Exercise the fallback body directly (rename can't be forced to
         // fail with CrossesDevices inside one tempdir), then the removal
-        // step exactly as `move_dir` performs it.
+        // step exactly as the seam performs it.
         let dst = td.path().join("moved");
-        copy_dir_recursive(&src, &dst).unwrap();
-        std::fs::remove_dir_all(&src).unwrap();
+        hjkl_fs::copy_dir_atomic(&src, &dst, &hjkl_fs::WriteOptions::default()).unwrap();
+        hjkl_fs::remove_path_all(&src).unwrap();
 
         // Regular content copied.
         assert_eq!(
@@ -2288,5 +2208,102 @@ mod tests {
             std::fs::read_to_string(real.join("inner/keep.txt")).unwrap(),
             "keep"
         );
+    }
+
+    // ── cross-device copy fallback: fifo must error, never hang ───────────────
+
+    /// A fifo in a tree the explorer moves across a filesystem boundary must
+    /// **error**. The hand-rolled walk this replaced had three branches —
+    /// symlink, directory, everything-else — so a fifo went to `std::fs::copy`,
+    /// which opens it and blocks forever waiting for a writer. That hung the
+    /// editor inside a `dd` or a rename, with no way to cancel.
+    ///
+    /// A genuine `EXDEV` needs two real filesystems and a unit test cannot mount
+    /// one, so this follows what `hjkl-fs` does for its own cross-device tests:
+    /// take the real thing via `/dev/shm` when the machine offers it (a separate
+    /// tmpfs on essentially every Linux box), and otherwise call the staged copy
+    /// that `move_atomic`'s `CrossesDevices` arm delegates to. The fifo is
+    /// classified by the same code on both routes.
+    ///
+    /// The move runs on a worker thread behind a `recv_timeout`, so a regression
+    /// **fails** this test rather than wedging the whole suite.
+    #[cfg(unix)]
+    #[test]
+    fn cross_device_move_of_a_tree_with_a_fifo_errors_instead_of_hanging() {
+        let td = tempfile::tempdir().unwrap();
+        let src = td.path().join("tree");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/file.txt"), "data").unwrap();
+        let fifo = std::ffi::CString::new(src.join("pipe").to_str().unwrap()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) },
+            0,
+            "mkfifo failed"
+        );
+
+        // A second filesystem, when there is one to be had.
+        #[cfg(target_os = "linux")]
+        let shm: Option<tempfile::TempDir> = {
+            use std::os::unix::fs::MetadataExt;
+            let same_dev =
+                |m: &std::fs::Metadata| m.dev() == std::fs::metadata(td.path()).unwrap().dev();
+            match std::fs::metadata("/dev/shm") {
+                Ok(m) if !same_dev(&m) => tempfile::tempdir_in("/dev/shm").ok(),
+                _ => None,
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let shm: Option<tempfile::TempDir> = None;
+
+        let real_exdev = shm.is_some();
+        let dst = match &shm {
+            Some(d) => d.path().join("moved"),
+            None => td.path().join("moved"),
+        };
+
+        if real_exdev {
+            // Proof that this run exercises the fallback and does not silently
+            // take the `rename` fast path. A failed rename changes nothing.
+            assert_eq!(
+                std::fs::rename(&src, &dst).unwrap_err().kind(),
+                std::io::ErrorKind::CrossesDevices,
+                "expected a genuine cross-device boundary"
+            );
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (thread_src, thread_dst) = (src.clone(), dst.clone());
+        std::thread::spawn(move || {
+            let opts = hjkl_fs::WriteOptions::default();
+            let result = if real_exdev {
+                // `rename` fails with `CrossesDevices` here, so this really does
+                // take the fallback arm.
+                hjkl_fs::move_atomic(&thread_src, &thread_dst, &opts)
+            } else {
+                hjkl_fs::copy_dir_atomic(&thread_src, &thread_dst, &opts)
+            };
+            let _ = tx.send(result.map_err(|e| e.kind()));
+        });
+
+        let outcome = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("moving a tree containing a fifo hung — `fs::copy` blocks on a fifo forever");
+        assert_eq!(
+            outcome,
+            Err(std::io::ErrorKind::Unsupported),
+            "a fifo in the tree must be refused, not copied"
+        );
+
+        // A refused move loses nothing and leaves no partial destination.
+        assert_eq!(
+            std::fs::read_to_string(src.join("sub/file.txt")).unwrap(),
+            "data",
+            "source must survive a refused move"
+        );
+        assert!(
+            std::fs::symlink_metadata(src.join("pipe")).is_ok(),
+            "the fifo itself must still be there"
+        );
+        assert!(!dst.exists(), "no partial destination may be left behind");
     }
 }
