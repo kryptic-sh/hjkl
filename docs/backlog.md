@@ -115,6 +115,16 @@ file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
 bash/python/html/toml fixtures. Go, C, C++, Java, PHP, Ruby, C#, JS and TS fold
 queries were NOT compared against neovim.
 
+### 1.4c Intermittent explorer test (2026-08-02)
+
+`app::explorer::tests::ddu_restores_file` failed once in a full `cargo test` run
+with "dd must trash victim.txt", then passed on re-run alone, with the explorer
+suite, and in the next full run. Not investigated. It takes `CwdGuard`, which
+serializes chdir + env under a global mutex, so the obvious cwd race is already
+covered — the cause is something else (env visible to unguarded tests, or the
+trash path resolution). Left as a known flake rather than a guess; re-check
+before treating any future failure as new.
+
 ### 1.5 Remaining differential-oracle and code-review fixes
 
 Fixed by `9a156885`, `b97e9bce`, `76cfb459`, and earlier commits. Detailed

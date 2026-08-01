@@ -773,3 +773,97 @@ fn tab_cfile_on_whitespace_leaves_token() {
         "off-token <cfile> must be left in place"
     );
 }
+
+// ── Enter over an ARGUMENT completion ───────────────────────────────────
+
+/// Enter must accept the highlighted argument candidate, exactly like it does
+/// for a command name. It used to run the half-typed line instead: the
+/// "line is already runnable → execute" exit is there so `:w<Enter>` writes
+/// rather than accepting `wall`, but an argument's leading word (`set`,
+/// `colorscheme`, `e`) is runnable by construction, so that exit fired for
+/// every argument popup and threw the selection away.
+#[test]
+fn enter_accepts_the_selected_option_argument() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "set foldmet");
+    assert_eq!(
+        app.completion
+            .as_ref()
+            .and_then(|p| p.selected_item().map(|i| i.label.clone())),
+        Some("foldmethod".to_string()),
+        "precondition: the popup must offer `foldmethod`"
+    );
+    assert_eq!(
+        app.completion.as_ref().map(|p| p.selected),
+        Some(0),
+        "precondition: the first item is selected — the case that was broken"
+    );
+
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.command_field.as_ref().map(|f| f.text()),
+        Some("set foldmethod".to_string()),
+        "Enter must accept the candidate and keep the prompt open"
+    );
+    assert!(app.completion.is_none(), "accepting consumes the popup");
+
+    // The second Enter runs it, as with command-name completion.
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert!(app.command_field.is_none(), "second Enter executes");
+}
+
+/// Same for a value argument sourced from the app (`:colorscheme <name>`).
+#[test]
+fn enter_accepts_the_selected_colorscheme_argument() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "colorscheme drac");
+    assert_eq!(
+        app.completion
+            .as_ref()
+            .and_then(|p| p.selected_item().map(|i| i.label.clone())),
+        Some("dracula".to_string()),
+        "precondition: the popup must offer `dracula`"
+    );
+
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.command_field.as_ref().map(|f| f.text()),
+        Some("colorscheme dracula".to_string())
+    );
+}
+
+/// The command-name rule is unchanged: a runnable line executes on the first
+/// Enter instead of accepting a longer candidate off the popup.
+#[test]
+fn enter_still_runs_a_runnable_command_name_instead_of_accepting() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    // `w` is an alias for `write`; the popup lists `wall`, `wq`, … but Enter
+    // must run `:w`, not accept one of them.
+    type_str(&mut app, "w");
+    assert!(app.completion.is_some(), "precondition: popup is open");
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert!(
+        app.command_field.is_none(),
+        "a runnable command name executes on the first Enter"
+    );
+}
+
+/// `command_completion_is_arg` keys off the replace range, so it must not be
+/// fooled by a leading range prefix: `:8,3d` completes a command NAME.
+#[test]
+fn command_completion_is_arg_is_false_for_a_ranged_command_name() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "8,3d");
+    assert!(
+        app.completion.is_some(),
+        "precondition: ranged command names complete"
+    );
+    assert!(
+        !app.command_completion_is_arg(),
+        "the token after a range prefix is still the command name"
+    );
+}

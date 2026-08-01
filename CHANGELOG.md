@@ -29,6 +29,16 @@ patch bumps.
   span of their own. A bg span in any other colour still paints there, so a
   hex-colour swatch does not vanish when the cursor lands on its line.
 
+- **Enter discarded the selected argument in the command bar.** With the popup
+  open on an argument — `:set foldmet`, `:colorscheme drac`, `:e src/ma` — Enter
+  ran the half-typed line instead of accepting the highlighted candidate. The
+  "line is already runnable → execute" rule exists so `:w<Enter>` writes rather
+  than accepting `wall`, but an argument's leading word (`set`, `colorscheme`,
+  `e`) is runnable by construction, so the rule fired for every argument popup
+  unless the user had first moved off the first item. It is now limited to
+  command-name completion; argument completion accepts on Enter and runs on the
+  second, as it always did for command names.
+
 - **Auto-folds in markdown covered the wrong lines.** Every fold ran past its
   own content: a `## Section` fold hid the NEXT section's heading, a fenced code
   block swallowed the blank line under it, a list ate the heading below it, and

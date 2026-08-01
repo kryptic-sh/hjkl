@@ -361,6 +361,38 @@ impl App {
         host_reg.resolve(&token).is_some() || editor_reg.resolve(&token).is_some()
     }
 
+    /// `true` when the open popup is completing an ARGUMENT rather than the
+    /// command name — its replace range starts past the leading command word.
+    ///
+    /// Enter treats the two differently. For a command name, a runnable line
+    /// executes instead of accepting, so `:w<Enter>` writes rather than
+    /// accepting `wall` (see [`Self::command_line_is_runnable`]). That rule
+    /// must not reach argument completion: `:set foldmet`, `:colorscheme drac`
+    /// and `:e src/ma` all have a runnable leading word (`set`, `colorscheme`,
+    /// `e`), so Enter ran the half-typed line and the popup's selection was
+    /// simply discarded unless the user had first moved off item 0.
+    pub(crate) fn command_completion_is_arg(&self) -> bool {
+        let (Some(range), Some(field)) = (
+            self.command_completion_range.as_ref(),
+            self.command_field.as_ref(),
+        ) else {
+            return false;
+        };
+        let line = field.text();
+        // Skip a leading range/count prefix (`%`, `2`, `.,$`) the same way
+        // `command_line_is_runnable` does, then the whitespace and the command
+        // word itself. Both are ASCII, so byte and char lengths agree.
+        let prefix = hjkl_ex::range_prefix_len(&line).min(line.len());
+        let after = &line[prefix..];
+        let ws = after.len() - after.trim_start().len();
+        let word = after
+            .trim_start()
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            .count();
+        range.start > prefix + ws + word
+    }
+
     pub(crate) fn accept_command_completion(&mut self) {
         let new_text = self.computed_command_accept_text();
         // Clear popup state regardless (accept consumes it).
@@ -527,13 +559,19 @@ impl App {
         // Enter accepts the selected item (then a second Enter runs) — UNLESS:
         //   - accepting would be a no-op because the line already equals the
         //     selected candidate (an exact match like `:wq`), OR
-        //   - the typed line is itself a runnable command (by name or alias,
-        //     e.g. `:w` → `write`) and the user hasn't navigated the popup,
+        //   - the popup is completing the COMMAND NAME, the typed line is
+        //     itself a runnable command (by name or alias, e.g. `:w` →
+        //     `write`), and the user hasn't navigated the popup,
         // in which case we execute directly instead of accepting `:wall`.
+        // Argument completion never takes that second exit: its leading word
+        // is runnable by construction (`:set …`, `:e …`), so applying it there
+        // threw the selection away on every Enter.
         let user_navigated = self.completion.as_ref().is_some_and(|p| p.selected != 0);
         let enter_should_accept = self.completion.is_some()
             && self.command_accept_would_change_line()
-            && (user_navigated || !self.command_line_is_runnable());
+            && (self.command_completion_is_arg()
+                || user_navigated
+                || !self.command_line_is_runnable());
 
         let Some(field) = self.command_field.as_mut() else {
             return;
