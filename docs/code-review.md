@@ -55,30 +55,12 @@ and the nvim differential oracle at 70/70.
 | `find_bin` ordering    | fixed  | `fix(anvil): make find_bin's choice deterministic` |
 | `:s///c` slice         | fixed  | `fix(ex): guard the :s///c cursor jump…`           |
 
-**Still open — needs an owner decision, not more work:**
-
-- **S1 deletion.** The bug is fixed and the function documents its own status,
-  but `to_path_within` still has no callers. Deleting it is a public API removal
-  on a published crate, which the project policy says must be asked about rather
-  than inferred from a workspace grep. Decide: delete, or wire it in somewhere.
-- **S3 anvil sidecar on uninstall.** `:Anvil uninstall` leaves the TOFU checksum
-  behind. Keeping it is arguably safer (a changed artifact still trips
-  `ChecksumMismatch`) but a user uninstalling to recover from a bad install has
-  no way to clear it. Needs a product call: delete on uninstall, or add
-  `:Anvil forget`.
-- **D3 width truncators.** Four hand-rolled truncate-to-width loops across
-  `hjkl-statusline`, `hjkl-prompt-tui`, `hjkl-editor-tui`, `hjkl-which-key`.
-  Consolidating them is a cross-crate UI refactor with real regression surface
-  and no bug attached; deliberately not bundled with the correctness work.
-- **D4 / `is_safe_relative_path` vs `safe_join`.** Same underlying invariant,
-  different contracts. The clean unification is reworking both onto
-  `hjkl_fs::resolve_under`, which also catches a symlink in the prefix — a
-  behaviour change, so it belongs in its own change.
-- **Y5 module sizes.** Recording only; no correctness payoff.
-
-Two corrections to this document were made during the work, both noted inline:
-the C5 claim about control-character width was wrong, and C6's fix landed as
-subset-and-warn rather than refuse-the-whole-list.
+**Still open.** All of it is now tracked in `docs/backlog.md` §1.8 (owner
+decisions, deferred refactors, the `char_col_to_visual_col` wide-character gap
+found while fixing cursorcolumn, and the smaller unclaimed items) and §1.7 (the
+`hjkl-clipboard` CI flake and the Cron-workflow gap). `backlog.md` is the single
+source for open findings; this document is the snapshot of the review that
+produced them.
 
 ---
 

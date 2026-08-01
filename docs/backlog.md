@@ -76,6 +76,75 @@ compatibility corpus and verify it against nvim before changing expectations.
 5. Report counts by `Move` variant and justify every `Move::Raw` site. Keep the
    compat oracle and PTY e2e behavior unchanged.
 
+### 1.8 Open from the 2026-08-01 review and the 0.40.0 cut
+
+Full findings in `docs/code-review.md`; everything actionable there was fixed
+and shipped in 0.40.0. What follows is what was NOT tackled.
+
+#### Needs an owner decision, not more work
+
+| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `to_path_within` has no callers                     | `hjkl-lsp/src/uri.rs`                                  | The bug is fixed and the fn documents its own status, but it is dead. Deleting it is a public API removal on a published crate — ask, do not infer from grep.                                                                 |
+| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                   |
+| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build. |
+
+#### Deferred refactors
+
+| Item                                           | Where                                                                                                         | Why deferred                                                                                                                                                                                                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Four hand-rolled width truncators              | `hjkl-statusline`, `hjkl-prompt-tui`, `hjkl-editor-tui`, `hjkl-which-key`, `hjkl-buffer-tui`                  | Each re-implements "accumulate `UnicodeWidthChar::width` until the budget runs out" with different tab handling. Cross-crate UI refactor, real regression surface, no bug attached.                                                                         |
+| `is_safe_relative_path` vs `safe_join`         | `hjkl-bonsai/src/runtime/source.rs`, `hjkl-anvil/src/installer.rs`                                            | Same invariant, different contracts. The clean unification is reworking both onto `hjkl_fs::resolve_under`, which also catches a symlink in the prefix — a behaviour change, so its own change.                                                             |
+| `Options` / `OptionsConfig` still hand-written | `hjkl-engine/src/types.rs`, `hjkl-app/src/config.rs`                                                          | The option registry drives every `:set` table and the config key mapping, but not these two structs — both need compile-time fields (engine snapshot, serde schema). Pinned by tests instead. A generating macro was considered and declined as too opaque. |
+| Oversized modules                              | `nvim_api.rs` (5.7k), `explorer.rs` (4.4k), `render.rs` (3.8k), `lsp_glue.rs` (3.2k), `ex_dispatch.rs` (3.2k) | Recording only; splitting has no correctness payoff. Noted because the duplicate-`WorkspaceEdit` bug lived in `lsp_glue.rs` and survived precisely because the file is that size.                                                                           |
+
+#### `char_col_to_visual_col` is not wide-character aware
+
+`crates/hjkl-buffer/src/geom.rs`. It counts every non-tab character as **one**
+cell:
+
+```rust
+visual += if ch == '\t' { tab_w - (visual % tab_w) } else { 1 };
+```
+
+The renderer does not. `paint_row` advances by `ch.width().unwrap_or(1)`, the
+real `unicode-width` value. So on any line containing CJK, emoji, or a combining
+mark, the engine's idea of a visual column and the column the glyph was actually
+painted at diverge — by one cell per wide character.
+
+This is load-bearing in more places than it looks: `motions.rs` (`$`, sticky
+column), `cursor_move.rs` (`Move::Vertical`), `editor.rs` (`cursor_screen_pos`),
+and `hjkl-buffer-tui`'s cursorcolumn pass all key off it. The cursorcolumn fix
+in 0.40.0 deliberately routed through this helper so the bar stays consistent
+with where the _cursor_ is drawn — consistency was the requirement there — but
+both are then wrong together against the painted text.
+
+Fix by teaching `char_col_to_visual_col` / `visual_col_to_char_col` the
+`unicode-width` table, which `hjkl-buffer` already depends on. Expect fallout:
+this is the same class as the `listchars` approximation fixed in 0.40.0, and
+several column assertions across the engine were written against the naive
+behaviour. Verify against nvim, which is wide-char correct.
+
+#### Smaller, unclaimed
+
+- **`:set` write-through is TUI-only.** `--headless` and `--embed` call
+  `hjkl_ex::try_dispatch` directly rather than going through `App::dispatch_ex`,
+  so a `:set` in those modes applies to the session and is never persisted.
+  Defensible for non-interactive modes, but it was an implementation call, not a
+  stated decision.
+- **Bare `:!cmd` gives the child no tty.** It runs under `Command::output()`,
+  which captures stdout and hands the child a null stdin, so `:!git commit` or
+  `:!less` cannot work. Vim suspends the TUI and passes the terminal through.
+  Either implement the suspend or document the limitation on `:!`.
+- **The trash directory has no reaper.** `$XDG_CACHE_HOME/hjkl/trash/` grows
+  without bound and `MAX_RETRIES = 1000` means the 1001st deletion of a
+  same-named file fails rather than recycling a slot. 0.40.0 documented this;
+  nothing reclaims it.
+- **Mutex-poisoning policy is documented, not enforced.** `buffer.rs` now states
+  that `lock().unwrap()` on buffer state is deliberate and a poisoned lock is
+  fatal. The ~110 call sites are unchanged, so one panic while any of those
+  locks is held still takes down every later access, including the save path.
+
 ### 1.7 Harness, coverage, and hardening
 
 - Clear nvim undo history after fixture seeding, then fuzz undo/redo. Extend
@@ -106,6 +175,16 @@ compatibility corpus and verify it against nvim before changing expectations.
   not help `cargo test` at all. Audit the other `CwdGuard` users for the same
   shape while there.
 
+- **`hjkl-clipboard`'s `mock_available_lists_mimes` flakes in CI.** Failed once
+  on `test ubuntu-latest` during the 0.40.0 cut ("should have Text"), passed on
+  re-run and 5/5 locally. `nextest.toml` already caps `hjkl-clipboard` to one
+  process via the `clipboard-display` group because the Wayland/X11 mock binds a
+  fixed display name — something still raced past that. Diagnose from the mock's
+  own state, not by widening the group.
+- **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
+  run on a separate weekly schedule and are not checked by a release. They were
+  not checked for 0.40.0. Either fold the cheap ones into the release gate or
+  add an explicit pre-release step that reads the last Cron result.
 - Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
 - Rename undo-tree `depth` to `depth_for_keyframe`.
 - Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
@@ -162,6 +241,16 @@ crates pulling tree-sitter, mimalloc, or aws-lc-sys require CI runners.
   binary.
 - Workspace grep cannot prove a published crate or public API has no external
   consumers.
+- **A green local run is not a green CI run.** Local checks are Linux-only, so
+  anything platform-shaped passes locally and fails on the matrix. A
+  `#[cfg(unix)]` test that created a non-UTF-8 filename sat red on macOS (APFS
+  rejects the name with `EILSEQ`) across ~15 commits during the 0.40.0 work,
+  because every slice was verified locally and pushed without checking the run.
+  Check `gh run list` after pushing, not only before releasing.
+- macOS and Windows are the two platforms local work never exercises: filename
+  encoding, path separators, and symlink permissions all differ there. Gate on
+  the capability (probe and skip) rather than on `cfg(unix)`, which includes
+  macOS.
 
 ## 5. Supporting evidence
 
