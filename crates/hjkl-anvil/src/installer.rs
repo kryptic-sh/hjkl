@@ -294,16 +294,46 @@ fn asset_ext(asset_name: &str) -> &'static str {
     }
 }
 
-/// Recursively search `dir` for a file named `bin_name`.  Returns the path
-/// relative to `dir` on success.
+/// Search `dir` for a file named `bin_name`.  Returns the path relative to
+/// `dir` on success.
+///
+/// The probe is ordered, not first-hit-wins: `bin/<name>` first, then `<name>`
+/// at the tree root, then a recursive search. An archive is free to ship both a
+/// real `bin/rg` and, say, a `docs/examples/rg`, and the recursive walk is
+/// driven by `read_dir`, whose order the platform does not define — so picking
+/// the first match found meant the same archive could symlink a different file
+/// on a different machine, or on the same machine twice.
+///
+/// The recursive fallback stays because real archives do nest the binary (under
+/// a versioned top-level directory, most often), but its candidates are sorted
+/// before one is chosen so the answer is at least stable for a given tree.
 fn find_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
-    for entry in walkdir(dir) {
-        if entry.file_name().is_some_and(|fname| fname == bin_name) {
-            // Return path relative to dir
-            return entry.strip_prefix(dir).ok().map(|p| p.to_path_buf());
-        }
+    // 1. The conventional location.
+    let conventional = Path::new("bin").join(bin_name);
+    if dir.join(&conventional).is_file() {
+        return Some(conventional);
     }
-    None
+
+    // 2. Flat archives put the binary straight at the root.
+    let at_root = PathBuf::from(bin_name);
+    if dir.join(&at_root).is_file() {
+        return Some(at_root);
+    }
+
+    // 3. Anywhere else in the tree — shallowest first, then lexicographic, so
+    //    the choice does not depend on `read_dir` order.
+    let mut candidates: Vec<PathBuf> = walkdir(dir)
+        .into_iter()
+        .filter(|entry| entry.file_name().is_some_and(|fname| fname == bin_name))
+        .filter_map(|entry| entry.strip_prefix(dir).ok().map(Path::to_path_buf))
+        .collect();
+    candidates.sort_by(|a, b| {
+        a.components()
+            .count()
+            .cmp(&b.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    candidates.into_iter().next()
 }
 
 /// Simple recursive directory walker that yields `PathBuf` for every file.
@@ -1241,6 +1271,80 @@ mod tests {
             cache_root: tmp.path().join("cache").join("anvil"),
         };
         (tmp, paths)
+    }
+
+    /// An archive that ships the binary at two depths must always resolve to
+    /// the shallow / `bin/` one, whatever order `read_dir` happens to yield.
+    #[test]
+    fn find_bin_prefers_bin_dir_over_a_deeper_namesake() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Archive shape: the real binary under `bin/`, a decoy of the same name
+        // buried in the docs tree.
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("docs").join("examples")).unwrap();
+        std::fs::write(root.join("bin").join("rg"), b"real").unwrap();
+        std::fs::write(root.join("docs").join("examples").join("rg"), b"decoy").unwrap();
+
+        assert_eq!(
+            find_bin(root, "rg"),
+            Some(PathBuf::from("bin").join("rg")),
+            "bin/<name> must win over a deeper namesake"
+        );
+
+        // Same tree, but the binary sits flat at the root instead: that beats
+        // the nested decoy too.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let root2 = tmp2.path();
+        std::fs::create_dir_all(root2.join("docs").join("examples")).unwrap();
+        std::fs::write(root2.join("rg"), b"real").unwrap();
+        std::fs::write(root2.join("docs").join("examples").join("rg"), b"decoy").unwrap();
+
+        assert_eq!(
+            find_bin(root2, "rg"),
+            Some(PathBuf::from("rg")),
+            "<name> at the tree root must win over a deeper namesake"
+        );
+    }
+
+    /// The recursive fallback still has to find a nested binary — real archives
+    /// wrap everything in a versioned top-level directory — and must pick the
+    /// same one every time when several match.
+    #[test]
+    fn find_bin_recursive_fallback_is_shallowest_then_lexicographic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // No `bin/rg` and no `rg` at the root: only nested candidates.
+        std::fs::create_dir_all(root.join("rg-14.0.0").join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("zz-extra")).unwrap();
+        std::fs::write(root.join("rg-14.0.0").join("bin").join("rg"), b"deep").unwrap();
+        std::fs::write(root.join("zz-extra").join("rg"), b"shallower").unwrap();
+
+        // Depth 2 beats depth 3 regardless of name ordering.
+        assert_eq!(
+            find_bin(root, "rg"),
+            Some(PathBuf::from("zz-extra").join("rg")),
+            "the shallowest nested candidate must win"
+        );
+
+        // Two candidates at equal depth tie-break lexicographically, so the
+        // answer does not depend on read_dir order.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let root2 = tmp2.path();
+        std::fs::create_dir_all(root2.join("aaa")).unwrap();
+        std::fs::create_dir_all(root2.join("zzz")).unwrap();
+        std::fs::write(root2.join("aaa").join("rg"), b"a").unwrap();
+        std::fs::write(root2.join("zzz").join("rg"), b"z").unwrap();
+
+        assert_eq!(
+            find_bin(root2, "rg"),
+            Some(PathBuf::from("aaa").join("rg")),
+            "equal-depth candidates must tie-break lexicographically"
+        );
+
+        assert_eq!(find_bin(root2, "nope"), None, "no match must stay None");
     }
 
     #[test]
