@@ -27,8 +27,8 @@ can cheap-skip frames when it hasn't advanced.
 
 ## Usage
 
-```toml
-hjkl-form = "0.3"
+```bash
+cargo add hjkl-form
 ```
 
 ```rust,no_run

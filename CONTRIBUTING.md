@@ -1,8 +1,9 @@
 # Contributing to hjkl
 
-`hjkl` is a Cargo workspace (monorepo) of ~60 `hjkl-*` crates plus the `hjkl`
-and `hjkl-gui` apps. Everything lives in this one repository — the crates are no
-longer separate repos, though each still publishes independently to crates.io.
+`hjkl` is a Cargo workspace (monorepo) of the `hjkl-*` crates under `crates/`
+plus the `hjkl` app under `apps/`. Everything lives in this one repository — the
+crates are no longer separate repos, though each still publishes independently
+to crates.io.
 
 Most crates are pre-1.0 and their public APIs are still in motion — please open
 an issue before starting any non-trivial PR so the design can be sanity-checked
@@ -18,7 +19,7 @@ first.
 ```bash
 git clone git@github.com:kryptic-sh/hjkl.git
 cd hjkl
-rustup toolchain install stable   # rust-toolchain.toml pins the exact version
+rustup toolchain install stable   # rust-toolchain.toml selects this channel
 cargo test --workspace
 ```
 

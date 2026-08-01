@@ -19,9 +19,8 @@ outcomes via a stateful `feed` API.
 
 ## Usage
 
-```toml
-[dependencies]
-hjkl-keymap = "0.1"
+```bash
+cargo add hjkl-keymap
 ```
 
 ```rust

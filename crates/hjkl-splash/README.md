@@ -25,8 +25,8 @@ bumps. Breaking changes may land on minor bumps per Cargo SemVer for `0.x`.
 
 ## Usage
 
-```toml
-hjkl-splash = "0.1"
+```bash
+cargo add hjkl-splash
 ```
 
 ```rust

@@ -20,9 +20,8 @@ state machine (`PendingState`, `step`), and engine commands (`EngineCmd`).
 
 ## Usage
 
-```toml
-[dependencies]
-hjkl-vim = "0.33"
+```bash
+cargo add hjkl-vim
 ```
 
 ```rust

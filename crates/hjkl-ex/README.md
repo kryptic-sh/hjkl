@@ -31,8 +31,8 @@ the host's own handling.
 
 ## Usage
 
-```toml
-hjkl-ex = "0.1"
+```bash
+cargo add hjkl-ex
 ```
 
 ```rust,no_run

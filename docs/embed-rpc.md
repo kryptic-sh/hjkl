@@ -117,28 +117,144 @@ Messages are bare msgpack values (no length-prefix framing):
 The server reads messages from stdin in a loop. Responses are written to stdout
 and flushed after each one. EOF on stdin → server exits with code `0`.
 
-### Buffer and window ext-type handles
+### Buffer, window, and tabpage ext-type handles
 
-`nvim-rs` expects buffer handles as `Value::Ext(0, bytes)` and window handles as
-`Value::Ext(1, bytes)`. hjkl is single-buffer; both handles carry id=1 encoded
-as a msgpack positive fixint (`0x01`).
+`nvim-rs` expects handles as `Value::Ext(tag, bytes)`. hjkl uses tag `0` for
+buffers, `1` for windows, and `2` for tabpages. The payload is the msgpack
+encoding of the id integer itself (id 1 is the positive fixint `0x01`).
+
+- **Buffer** ids start at 1 and increment per buffer. A `Nil`, missing, or `0`
+  handle means "current buffer".
+- **Window** ids are 0-based indices into the window table, so id `0` is a real
+  window and is _not_ remapped to "current"; only `Nil`/missing means current.
+- **Tabpage** ids are 0-based indices into the tab list. They are indices, not
+  stable handles — they shift when a tab is closed.
+
+Raw integers are accepted anywhere a handle is expected.
 
 ### Supported nvim\_\* methods
 
-| Method                                               | Params                                        | Result                                                    |
-| ---------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------- |
-| `nvim_get_current_buf()`                             | —                                             | Ext(0, 1) buffer handle                                   |
-| `nvim_get_current_win()`                             | —                                             | Ext(1, 1) window handle                                   |
-| `nvim_buf_set_lines(buf, start, end, strict, lines)` | 0-based start/end; end=-1 means end of buffer | Nil                                                       |
-| `nvim_buf_get_lines(buf, start, end, strict)`        | 0-based start/end; end=-1 means end of buffer | `String[]`                                                |
-| `nvim_win_set_cursor(win, [row, col])`               | row is 1-based; col is byte-col               | Nil                                                       |
-| `nvim_win_get_cursor(win)`                           | —                                             | `[row: i64, col: i64]` (1-based row, byte-col)            |
-| `nvim_input(keys)`                                   | vim-key notation: `iHello<Esc>`, `dd`         | i64 (bytes consumed)                                      |
-| `nvim_command(cmd)`                                  | ex command with or without leading `:`        | Nil on success; msgpack-rpc error on failure              |
-| `nvim_get_mode()`                                    | —                                             | Map `{mode: "n"\|"i"\|"v"\|"V"\|"\x16", blocking: false}` |
-| `nvim_call_function("getreg", [reg])`                | only `"getreg"` supported                     | String register contents                                  |
+Methods not listed here respond with a msgpack-rpc error
+(`method not implemented: …`).
 
-Methods not in this list respond with a msgpack-rpc error.
+Index conventions: `nvim_buf_{get,set}_lines` take 0-based `start`/`end` where
+`end = -1` means end of buffer and `strict_indexing` is honoured (a missing or
+non-boolean value reads as `false`). `nvim_buf_{get,set}_text` rows and cols are
+0-based with negatives clamped to `0` — hjkl does not implement nvim's
+negative-index addressing there. Cursor rows are 1-based and cursor cols are
+byte-cols.
+
+**Buffers**
+
+| Method                                               | Params                                                     | Result           |
+| ---------------------------------------------------- | ---------------------------------------------------------- | ---------------- |
+| `nvim_get_current_buf()`                             | —                                                          | `Ext(0, id)`     |
+| `nvim_list_bufs()`                                   | —                                                          | `Ext(0, id)[]`   |
+| `nvim_set_current_buf(buf)`                          | buffer handle                                              | Nil              |
+| `nvim_create_buf(listed, scratch)`                   | both arguments are **ignored**; always makes a real buffer | `Ext(0, new_id)` |
+| `nvim_buf_get_name(buf)`                             | —                                                          | `String`         |
+| `nvim_buf_set_name(buf, name)`                       | —                                                          | Nil              |
+| `nvim_buf_line_count(buf)`                           | —                                                          | `i64`            |
+| `nvim_buf_get_lines(buf, start, end, strict)`        | —                                                          | `String[]`       |
+| `nvim_buf_set_lines(buf, start, end, strict, lines)` | rebuilds the buffer; **resets undo history**               | Nil              |
+| `nvim_buf_get_text(buf, srow, scol, erow, ecol, {})` | byte cols; the opts dict is **ignored**                    | `String[]`       |
+| `nvim_buf_set_text(buf, srow, scol, erow, ecol, r)`  | byte cols; **resets undo history**                         | Nil              |
+| `nvim_get_current_line()`                            | takes no params; always the active buffer                  | `String`         |
+| `nvim_set_current_line(line)`                        | active buffer only                                         | Nil              |
+
+**Windows and tabpages**
+
+| Method                            | Params                                            | Result                      |
+| --------------------------------- | ------------------------------------------------- | --------------------------- |
+| `nvim_get_current_win()`          | —                                                 | `Ext(1, id)`                |
+| `nvim_list_wins()`                | —                                                 | `Ext(1, id)[]`              |
+| `nvim_set_current_win(win)`       | —                                                 | Nil                         |
+| `nvim_win_get_buf(win)`           | —                                                 | `Ext(0, id)`                |
+| `nvim_win_set_buf(win, buf)`      | —                                                 | Nil                         |
+| `nvim_win_close(win, force)`      | `force` **ignored**; no-op if only one window     | Nil                         |
+| `nvim_win_get_cursor(win)`        | —                                                 | `[row (1-based), byte-col]` |
+| `nvim_win_set_cursor(win, [r,c])` | 1-based row, byte-col                             | Nil                         |
+| `nvim_win_get_height(win)`        | measured against a fixed headless 80×24 area      | `i64`                       |
+| `nvim_win_get_width(win)`         | same                                              | `i64`                       |
+| `nvim_win_set_height(win, h)`     | best-effort split-ratio nudge; no-op if no parent | Nil                         |
+| `nvim_win_set_width(win, w)`      | same                                              | Nil                         |
+| `nvim_list_tabpages()`            | —                                                 | `Ext(2, i)[]`               |
+| `nvim_get_current_tabpage()`      | —                                                 | `Ext(2, i)`                 |
+| `nvim_set_current_tabpage(tab)`   | —                                                 | Nil                         |
+| `nvim_tabpage_list_wins(tab)`     | —                                                 | `Ext(1, id)[]`              |
+| `nvim_tabpage_is_valid(tab)`      | —                                                 | `bool`                      |
+
+There is no `nvim_open_win` and no tabpage-creation method: new windows and tabs
+come from `:split` / `:vsplit` / `:tabnew` via `nvim_command` or `nvim_exec2`.
+
+**Input, commands, and mode**
+
+| Method                                 | Params                                                      | Result                        |
+| -------------------------------------- | ----------------------------------------------------------- | ----------------------------- |
+| `nvim_input(keys)`                     | vim-key notation: `iHello<Esc>`, `dd`                       | `i64` — byte length of `keys` |
+| `nvim_feedkeys(keys, mode, escape_ks)` | same execution path as `nvim_input`; both flags **ignored** | Nil                           |
+| `nvim_command(cmd)`                    | ex command, leading `:` optional                            | Nil                           |
+| `nvim_exec2(src, opts)`                | see below                                                   | Map                           |
+| `nvim_get_mode()`                      | —                                                           | Map `{mode, blocking: false}` |
+| `nvim_replace_termcodes(src, ...)`     | trailing three args accepted but **ignored**                | `String`                      |
+
+`nvim_get_mode` emits only the five modes the engine has: `"n"`, `"i"`, `"v"`,
+`"V"`, and `"\x16"` (visual block). `blocking` is always `false`.
+
+`nvim_replace_termcodes` handles a subset: `<CR>`/`<Enter>`/`<Return>`, `<Esc>`,
+`<Tab>`, `<BS>`, `<Space>`, `<Nul>`, `<lt>`, `<Bar>`, `<Bslash>`, and `<C-x>`
+for a single ASCII letter or digit. Anything else — function keys, `<M-…>`,
+`<A-…>`, mouse codes — passes through verbatim.
+
+`nvim_exec2` is **not a vimscript interpreter**. It splits `src` on newlines and
+runs each non-empty line as one standalone ex command (leading `:` optional);
+there is no `function`/`if`/`let` handling and no line continuation. Output
+capture is unimplemented: with `opts.output == true` it returns
+`{"output": ""}`, otherwise an empty map.
+
+**Options, variables, and keymaps**
+
+| Method                                     | Params                                | Result      |
+| ------------------------------------------ | ------------------------------------- | ----------- |
+| `nvim_get_option_value(name, opts)`        | `opts` (scope/buf/win) is **ignored** | scalar      |
+| `nvim_set_option_value(name, value, {})`   | `opts` **ignored**                    | Nil         |
+| `nvim_set_var` / `get_var` / `del_var`     | global variables                      | Nil / value |
+| `nvim_buf_set_var` / `get_var` / `del_var` | keyed by buffer id                    | Nil / value |
+| `nvim_win_set_var` / `get_var` / `del_var` | keyed by window id                    | Nil / value |
+| `nvim_set_keymap(mode, lhs, rhs, opts)`    | only `opts.noremap` is read           | Nil         |
+| `nvim_del_keymap(mode, lhs)`               | —                                     | Nil         |
+
+Option access is gated on hjkl's own option registry (the same set `:set`
+accepts, aliases included); any other name errors with `unknown option: {name}`.
+Both calls always act on the **active** editor regardless of the `opts` dict.
+Values map onto `:set` tokens: `true` → `name`, `false` → `noname`, an integer →
+`name=n`, a string → `name=s`.
+
+`nvim_set_keymap` honours `noremap` only — `silent`, `expr`, `desc`, `nowait`,
+`unique`, and `callback` are ignored. Modes `n`, `i`, `v`, `x`, `o` map to their
+ex-command prefixes; every other mode string (including `s`, `t`, `c`, and
+multi-char forms like `"nv"`) falls back to the unprefixed `map` / `noremap`.
+Both keymap calls return Nil unconditionally — a rejected mapping is not visible
+in the return value.
+
+**`nvim_call_function`**
+
+Eleven function names are supported; anything else errors with
+`nvim_call_function: unsupported function: {name}`.
+
+| Function                | Behaviour                                                                                               |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `getreg(reg)`           | register contents as `String`; unset register → `""`                                                    |
+| `getqflist()`           | `{bufnr, lnum, col, text, valid}` maps; the `{what}` dict form is not supported                         |
+| `getloclist(win)`       | `win` **ignored** — there is one global location list                                                   |
+| `setqflist(list, ...)`  | always a full replace; `action` and `what` **ignored**; returns `0`                                     |
+| `setloclist(win, list)` | `win` **ignored**; returns `0`                                                                          |
+| `bufnr(expr)`           | `""`/`"%"`/absent → current; `"$"` → highest buffer id; other strings substring-match a name; else `-1` |
+| `bufname(expr)`         | as above, returning the name or `""`                                                                    |
+| `expand(expr)`          | only `%`, `%:p`, `%:t`, `%:h`, `%:e`, `%:r`; everything else (incl. `<cword>`, `#`, `$VAR`) → `""`      |
+| `line(expr)`            | `"."`, `"$"`, `"v"` only; any other expression → `0`                                                    |
+| `col(expr)`             | `"."`, `"$"`, `"v"` only; any other expression → `0`. Returns a **char**-col, unlike vim's byte-col     |
+| `getpos(expr)`          | `[0, lnum, col, 0]`; only `"v"` is special-cased, everything else falls back to the cursor position     |
 
 ### Usage with nvim-rs
 

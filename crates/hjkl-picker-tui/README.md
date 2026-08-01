@@ -30,8 +30,8 @@ preview pane widget; the picker state and fuzzy scoring stay in `hjkl-picker`.
 
 ## Usage
 
-```toml
-hjkl-picker-tui = "0.1"
+```bash
+cargo add hjkl-picker-tui
 ```
 
 ```rust,no_run

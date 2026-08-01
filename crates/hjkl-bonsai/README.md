@@ -73,8 +73,8 @@ deduplicates concurrent requests for the same grammar name.
 
 ## Usage
 
-```toml
-hjkl-bonsai = "0.3"
+```bash
+cargo add hjkl-bonsai
 ```
 
 ```rust

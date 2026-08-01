@@ -60,8 +60,8 @@ should fall back to their own register/history (see
 
 Add to `Cargo.toml`:
 
-```toml
-hjkl-clipboard = "0.4"
+```bash
+cargo add hjkl-clipboard
 ```
 
 ### Sync API

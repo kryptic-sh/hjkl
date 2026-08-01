@@ -40,9 +40,8 @@ version tracking.
 
 ## Usage
 
-```toml
-[dependencies]
-hjkl-anvil = "0.1"
+```bash
+cargo add hjkl-anvil
 ```
 
 ```rust

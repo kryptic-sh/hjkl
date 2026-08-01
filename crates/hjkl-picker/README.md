@@ -29,8 +29,8 @@ trait is unlikely to gain mandatory methods without a major bump.
 
 ## Usage
 
-```toml
-hjkl-picker = "0.3"
+```bash
+cargo add hjkl-picker
 ```
 
 ```rust,no_run

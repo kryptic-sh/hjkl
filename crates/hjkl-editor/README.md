@@ -15,13 +15,13 @@ editor in Rust.
 Re-exports the working parts of
 [`hjkl-engine`](https://crates.io/crates/hjkl-engine) and
 [`hjkl-buffer`](https://crates.io/crates/hjkl-buffer) under a curated namespace
-so consumers (sqeel, buffr, hjkl binary) add one dependency instead of three and
-don't need to know the crate-split.
+so consumers (inbx, the `hjkl` binary, and others in the kryptic-sh stack) add
+one dependency instead of three and don't need to know the crate-split.
 
 ## Status
 
-`0.3` — stable facade over engine + buffer. Two surfaces coexist during the 0.x
-churn: the legacy [`runtime`] module and the [`spec`] module.
+Pre-1.0 — a stable facade over engine + buffer. Two surfaces coexist during the
+0.x churn: the legacy [`runtime`] module and the [`spec`] module.
 
 ## Modules
 
@@ -33,8 +33,8 @@ churn: the legacy [`runtime`] module and the [`spec`] module.
 
 ## Usage
 
-```toml
-hjkl-editor = "0.3"
+```bash
+cargo add hjkl-editor
 ```
 
 ```rust,no_run

@@ -35,8 +35,8 @@ feature flags so wasm/no_std consumers can opt out.
 
 ## Usage
 
-```toml
-hjkl-engine = "0.3"
+```bash
+cargo add hjkl-engine
 ```
 
 ```rust,no_run

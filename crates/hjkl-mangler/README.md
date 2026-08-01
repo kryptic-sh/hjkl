@@ -38,8 +38,8 @@ editors; new formatter impls land additively.
 
 ## Usage
 
-```toml
-hjkl-mangler = "0.1"
+```bash
+cargo add hjkl-mangler
 ```
 
 ```rust

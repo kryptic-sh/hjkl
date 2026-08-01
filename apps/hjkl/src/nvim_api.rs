@@ -10,11 +10,16 @@
 //! The server reads requests off stdin in a loop; responses are written to
 //! stdout and flushed after each one.
 //!
-//! ## View/window ext-type handles
+//! ## Buffer/window/tabpage ext-type handles
 //!
-//! nvim-rs expects buffer handles as `Value::Ext(BUFFER_EXT, bytes)` and window
-//! handles as `Value::Ext(WINDOW_EXT, bytes)`. The single supported buffer has
-//! id=1, encoded as a msgpack positive fixint (0x01). Window id=1 likewise.
+//! nvim-rs expects handles as `Value::Ext(tag, bytes)` — [`BUFFER_EXT`],
+//! [`WINDOW_EXT`], and [`TABPAGE_EXT`]. The payload is the msgpack encoding of
+//! the id integer itself, so id 1 is a positive fixint (0x01).
+//!
+//! Buffer ids start at 1 and increment; a Nil, missing, or 0 handle means the
+//! current buffer. Window and tabpage ids are 0-based indices into the window
+//! table and tab list respectively, so 0 is a real id there and only
+//! Nil/missing selects the current one.
 //!
 //! ## Supported methods
 //!
@@ -2324,7 +2329,8 @@ fn dispatch(
 
 /// Run in nvim-api mode: msgpack-rpc server over stdin/stdout.
 ///
-/// `files` — files to open. Only the first is loaded (single-buffer for now).
+/// `files` — files to open. Only the first is loaded at startup; further
+/// buffers can be created over the wire (`nvim_create_buf`, `:e`).
 pub fn run(files: Vec<PathBuf>) -> Result<i32> {
     // Stdout is the rpc channel here — keep the clipboard off so an OSC 52
     // fallback can't write escapes into the protocol stream (#264).

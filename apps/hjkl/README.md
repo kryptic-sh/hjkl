@@ -49,11 +49,17 @@ Or grab a pre-built tarball for any platform from the
 
 ## Status
 
-`0.12.2` — full LSP client (5 phases: diagnostics, goto/hover, completion, code
+Pre-1.0 and moving — see the
+[releases page](https://github.com/kryptic-sh/hjkl/releases) for the current
+version and
+[CHANGELOG.md](https://github.com/kryptic-sh/hjkl/blob/main/CHANGELOG.md) for
+the release arc.
+
+Working today: full LSP client (diagnostics, goto/hover, completion, code
 actions/rename/format), window splits (`:sp`/`:vsp`, `Ctrl-w` nav, resize),
 tabs, tmux-navigator handoff, mouse scroll, line numbers, multi-buffer editing,
 fuzzy file/buffer/grep pickers with syntax-highlighted preview, tree-sitter
-highlighting, smart indent, `.editorconfig`, and clipboard via
+highlighting, folds, smart indent, `.editorconfig`, and clipboard via
 [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard).
 
 ## Usage
@@ -162,6 +168,16 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
 - `~` tilde markers on rows past end-of-buffer (vim `NonText` style)
 - `:w` save, `:q` quit, `:wq` / `:x` write-quit, `:e` open file
 - `:set` options, `:%s` search-and-replace with confirmation prompt
+- **`:set` round-trips to your config** — every global option has a matching key
+  in the `[options]` table of `config.toml`, named exactly as `:set` names it,
+  and a successful `:set` writes the resulting value back to the file in place
+  (comments, key order, and quoting preserved). Rejected sets and queries
+  (`:set nu?`) write nothing. Buffer-local options (`filetype`, `commentstring`,
+  `readonly`, `modifiable`, `endofline`) stay session-scoped. This is a
+  deliberate divergence from vim, where `:set` is transient.
+- **Colorschemes** — `:colorscheme <name>` / `theme.name` over the bundled
+  `dark`, `light`, `tokyonight`, `catppuccin`, `gruvbox`, `nord`, `dracula`, and
+  `onedark`
 - `:!cmd` shell exec, `:r !cmd` / `:r file` read-into-buffer
 - `:reg`, `:marks`, `:jumps`, `:changes` — output shown as a centered info popup
 - `/` / `?` incremental search with match highlighting

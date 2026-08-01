@@ -25,8 +25,8 @@ overlay, CLI merge helpers, `notify`-based reload watcher) on minor bumps.
 
 ## Usage
 
-```toml
-hjkl-config = "0.1"
+```bash
+cargo add hjkl-config
 ```
 
 ```rust,no_run

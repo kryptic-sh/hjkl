@@ -31,8 +31,8 @@ for the `Buffer` API invariants and implementer contract.
 
 ## Usage
 
-```toml
-hjkl-buffer = "0.3"
+```bash
+cargo add hjkl-buffer
 ```
 
 ```rust
