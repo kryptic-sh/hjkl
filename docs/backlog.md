@@ -88,6 +88,24 @@ compatibility corpus and verify it against nvim before changing expectations.
   exploring, so the trash's own `hjkl/` directory appeared as a tree entry and,
   sorting before files, absorbed the `j` that was meant to land on the file
   under test. Unspecified PTY flakes may remain.
+- **`cargo test` must stay usable — `ddu_then_redo_retrashes` races under it.**
+  `app::explorer::tests::ddu_then_redo_retrashes` mutates two pieces of
+  process-global state (the working directory via `CwdGuard::enter`, and
+  `XDG_CACHE_HOME`). Under nextest each test is its own process, so nothing can
+  race and it passes; under `cargo test`'s thread pool a concurrent test can
+  change the cwd out from under it, so the explorer enumerates a different
+  directory and `dd` trashes nothing — the failure reads as "dd must trash".
+  Measured at roughly 2 failures in 30 runs of `cargo test -p hjkl` (0 in 14 on
+  the unmodified tree at the time, so the rate is low, not zero).
+
+  `cargo nextest run` is canonical in CI, but `cargo test` is documented in
+  CONTRIBUTING as working too, and a test that fails ~7% of local runs trains
+  people to re-run rather than read. Fix by removing the global-state dependency
+  (thread an explicit root through, the way `AnvilPaths` did for the anvil tests
+  in audit-r2 fix 4) rather than by adding a nextest test-group — a group would
+  not help `cargo test` at all. Audit the other `CwdGuard` users for the same
+  shape while there.
+
 - Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
 - Rename undo-tree `depth` to `depth_for_keyframe`.
 - Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
