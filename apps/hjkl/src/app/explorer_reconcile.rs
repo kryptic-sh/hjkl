@@ -398,9 +398,15 @@ fn temp_sibling_path(from: &Path) -> PathBuf {
 /// - `trashed`: mutable registry of `(original_file_name, trash_dest)` pairs
 ///   built up by this call and carried across reconcile cycles so that a
 ///   `Trash` on tick N and a `CreateFile` on tick N+1 correctly restores.
+/// - `trash_root`: where trashed entries go. Production passes
+///   [`hjkl_app::trash::TrashRoot::Xdg`] (via `ExplorerPane::trash_root`);
+///   tests pass an explicit directory so they never have to override
+///   `XDG_CACHE_HOME`, which is process-global and therefore visible to every
+///   other thread in the test binary.
 pub fn apply_ops(
     ops: &[FsOp],
     trashed: &mut Vec<(String, PathBuf)>,
+    trash_root: &hjkl_app::trash::TrashRoot,
 ) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
     let mut created: Vec<PathBuf> = Vec::new();
     let mut applied: Vec<AppliedOp> = Vec::new();
@@ -479,7 +485,7 @@ pub fn apply_ops(
 
             FsOp::Trash(path) => {
                 let is_dir = path.is_dir();
-                let dest = match hjkl_app::trash::trash_path(path, is_dir) {
+                let dest = match hjkl_app::trash::trash_path_in(trash_root, path, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("trash_path({path:?}): {e}"));
@@ -653,10 +659,12 @@ pub fn apply_ops(
 /// re-performs the original forward actions (i.e. the redo journal).
 ///
 /// `trashed` is the pane's trash registry; it is updated as new trash
-/// destinations are created during the reversal.
+/// destinations are created during the reversal. `trash_root` is where new
+/// trash destinations are reserved — see [`apply_ops`].
 pub fn revert_ops(
     applied: &[AppliedOp],
     trashed: &mut Vec<(String, PathBuf)>,
+    trash_root: &hjkl_app::trash::TrashRoot,
 ) -> (Vec<AppliedOp>, Vec<String>) {
     let mut redo_journal: Vec<AppliedOp> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
@@ -668,7 +676,7 @@ pub fn revert_ops(
             // A file/dir was created → trash it to undo.
             AppliedOp::Created(path) => {
                 let is_dir = path.is_dir();
-                let dest = match hjkl_app::trash::trash_path(path, is_dir) {
+                let dest = match hjkl_app::trash::trash_path_in(trash_root, path, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("revert created: trash_path({path:?}): {e}"));
@@ -749,7 +757,7 @@ pub fn revert_ops(
             // A trashed entry was restored to `to` → trash `to` again.
             AppliedOp::Restored { from_trash: _, to } => {
                 let is_dir = to.is_dir();
-                let new_dest = match hjkl_app::trash::trash_path(to, is_dir) {
+                let new_dest = match hjkl_app::trash::trash_path_in(trash_root, to, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("revert restored: trash_path({to:?}): {e}"));
@@ -789,9 +797,11 @@ pub fn revert_ops(
 /// "redo" journal. This is the forward direction of redo.
 ///
 /// Returns the newly-created file paths (for opening) and any errors.
+/// `trash_root` is where re-trashed entries are reserved — see [`apply_ops`].
 pub fn apply_applied(
     ops: &[AppliedOp],
     trashed: &mut Vec<(String, PathBuf)>,
+    trash_root: &hjkl_app::trash::TrashRoot,
 ) -> (Vec<PathBuf>, Vec<AppliedOp>, Vec<String>) {
     let mut created: Vec<PathBuf> = Vec::new();
     let mut new_applied: Vec<AppliedOp> = Vec::new();
@@ -826,7 +836,7 @@ pub fn apply_applied(
                 // Re-trash: original should be back on disk (from the undo).
                 // Compute a fresh trash dest.
                 let is_dir = original.is_dir();
-                let new_dest = match hjkl_app::trash::trash_path(original, is_dir) {
+                let new_dest = match hjkl_app::trash::trash_path_in(trash_root, original, is_dir) {
                     Ok(d) => d,
                     Err(e) => {
                         errors.push(format!("redo trashed: trash_path({original:?}): {e}"));
@@ -1596,23 +1606,27 @@ mod tests {
 
     // ── apply_ops integration tests ───────────────────────────────────────────
 
-    /// Override `XDG_CACHE_HOME` to a temp dir for trash isolation. Returns a
-    /// guard that serializes env-mutating tests (so this is race-free under
-    /// `cargo test`'s thread pool, not only under nextest's process isolation)
-    /// and restores the prior value on drop. Callers must bind it for the whole
-    /// test: `let _trash = isolated_trash(&td);`.
-    #[must_use]
-    fn isolated_trash(td: &tempfile::TempDir) -> crate::test_cwd::EnvVarGuard {
-        crate::test_cwd::EnvVarGuard::set("XDG_CACHE_HOME", td.path())
+    /// A trash root under `td`, for the `apply_ops` / `revert_ops` /
+    /// `apply_applied` calls below.
+    ///
+    /// This used to override `XDG_CACHE_HOME` behind a mutex. The variable is
+    /// process-global, so the override was visible to every other thread in the
+    /// binary — including all the tests that never took that mutex and merely
+    /// *read* the environment (any that construct an `App` resolve a swap
+    /// directory under it). Naming the directory outright removes the shared
+    /// resource instead of taking a lock on it, and leaves the environment
+    /// untouched. Same location as before: `<td>/hjkl/trash`.
+    fn isolated_trash(td: &tempfile::TempDir) -> hjkl_app::trash::TrashRoot {
+        hjkl_app::trash::TrashRoot::At(td.path().join("hjkl").join("trash"))
     }
 
     #[test]
     fn apply_create_file_makes_empty_file() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let target = td.path().join("new.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
-        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
         assert_eq!(applied.len(), 1, "one AppliedOp must be recorded");
@@ -1631,10 +1645,10 @@ mod tests {
     #[test]
     fn apply_create_nested_makes_parents() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let target = td.path().join("a").join("b").join("c.rs");
         let ops = vec![FsOp::CreateFile(target.clone())];
-        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
         assert_eq!(applied.len(), 1);
@@ -1644,13 +1658,13 @@ mod tests {
     #[test]
     fn apply_trash_moves_into_trash_not_deleted() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         // Create the source file.
         let src = td.path().join("source.txt");
         std::fs::write(&src, b"hello").unwrap();
         let ops = vec![FsOp::Trash(src.clone())];
         let mut trashed = Vec::new();
-        let (created, applied, errors) = apply_ops(&ops, &mut trashed);
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert!(created.is_empty());
         assert_eq!(applied.len(), 1, "one AppliedOp must be recorded");
@@ -1674,7 +1688,7 @@ mod tests {
     #[test]
     fn apply_rename_preserves_content() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let foo = td.path().join("foo.rs");
         std::fs::write(&foo, b"hi").unwrap();
         let bar = td.path().join("bar.rs");
@@ -1682,7 +1696,7 @@ mod tests {
             from: foo.clone(),
             to: bar.clone(),
         }];
-        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert!(created.is_empty());
         assert_eq!(applied.len(), 1);
@@ -1706,7 +1720,7 @@ mod tests {
     #[test]
     fn apply_rename_onto_existing_file_is_refused() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let a = td.path().join("a.txt");
         let b = td.path().join("b.txt");
         std::fs::write(&a, b"AAA").unwrap();
@@ -1715,7 +1729,7 @@ mod tests {
             from: a.clone(),
             to: b.clone(),
         }];
-        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(created.is_empty());
         assert!(
             applied.is_empty(),
@@ -1742,7 +1756,7 @@ mod tests {
     #[test]
     fn apply_swap_two_files_in_one_batch() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let a = td.path().join("a.txt");
         let b = td.path().join("b.txt");
         std::fs::write(&a, b"AAA").unwrap();
@@ -1758,7 +1772,7 @@ mod tests {
             },
         ];
         let mut trashed = Vec::new();
-        let (created, applied, errors) = apply_ops(&ops, &mut trashed);
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty(), "swap must succeed, got {errors:?}");
         assert!(created.is_empty());
         assert_eq!(
@@ -1784,7 +1798,7 @@ mod tests {
             "no temp-hop files may remain, got {names:?}"
         );
         // Undo must restore the original contents.
-        let (_redo, errs) = revert_ops(&applied, &mut trashed);
+        let (_redo, errs) = revert_ops(&applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "undo of swap: {errs:?}");
         assert_eq!(std::fs::read(&a).unwrap(), b"AAA", "undo restores a");
         assert_eq!(std::fs::read(&b).unwrap(), b"BBB", "undo restores b");
@@ -1797,7 +1811,7 @@ mod tests {
     #[test]
     fn apply_rename_onto_trashed_target_in_one_batch() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let a = td.path().join("a.txt");
         let b = td.path().join("b.txt");
         std::fs::write(&a, b"AAA").unwrap();
@@ -1810,7 +1824,7 @@ mod tests {
             FsOp::Trash(b.clone()),
         ];
         let mut trashed = Vec::new();
-        let (_, _, errors) = apply_ops(&ops, &mut trashed);
+        let (_, _, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty(), "must succeed, got {errors:?}");
         assert!(!a.exists(), "a was renamed away");
         assert_eq!(
@@ -1832,7 +1846,7 @@ mod tests {
     #[test]
     fn apply_ancestor_rename_skip_still_works() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let olddir = td.path().join("olddir");
         std::fs::create_dir_all(&olddir).unwrap();
         std::fs::write(olddir.join("child.txt"), b"C").unwrap();
@@ -1847,7 +1861,7 @@ mod tests {
                 to: newdir.join("child.txt"),
             },
         ];
-        let (_, applied, errors) = apply_ops(&ops, &mut Vec::new());
+        let (_, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(
             errors.is_empty(),
             "ancestor skip must not error: {errors:?}"
@@ -1867,7 +1881,7 @@ mod tests {
     #[test]
     fn apply_move_via_trash_then_create_restores_content() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         // Set up: foo.rs in src_dir with content "x".
         let src_dir = td.path().join("src_dir");
         std::fs::create_dir_all(&src_dir).unwrap();
@@ -1877,7 +1891,7 @@ mod tests {
         // Step 1: Trash foo.rs.
         let mut trashed: Vec<(String, PathBuf)> = Vec::new();
         let trash_ops = vec![FsOp::Trash(foo.clone())];
-        let (c, _a1, e) = apply_ops(&trash_ops, &mut trashed);
+        let (c, _a1, e) = apply_ops(&trash_ops, &mut trashed, &trash);
         assert!(e.is_empty(), "trash must succeed: {e:?}");
         assert!(c.is_empty());
         assert_eq!(trashed.len(), 1);
@@ -1887,7 +1901,7 @@ mod tests {
         let dir2 = td.path().join("dir2");
         let dest = dir2.join("foo.rs");
         let create_ops = vec![FsOp::CreateFile(dest.clone())];
-        let (created, applied, errors) = apply_ops(&create_ops, &mut trashed);
+        let (created, applied, errors) = apply_ops(&create_ops, &mut trashed, &trash);
         assert!(errors.is_empty(), "restore must succeed: {errors:?}");
         // Restored from trash → NOT in the "created" list.
         assert!(
@@ -1916,7 +1930,7 @@ mod tests {
     #[test]
     fn apply_create_dir_restores_trashed_subtree() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         // src/mover/inner.txt — `mover` is the dir being moved while collapsed.
         let mover = td.path().join("mover");
         std::fs::create_dir_all(&mover).unwrap();
@@ -1924,14 +1938,15 @@ mod tests {
 
         let mut trashed: Vec<(String, PathBuf)> = Vec::new();
         // Trash the dir (its contents go to trash with it).
-        let (_, _, e) = apply_ops(&[FsOp::Trash(mover.clone())], &mut trashed);
+        let (_, _, e) = apply_ops(&[FsOp::Trash(mover.clone())], &mut trashed, &trash);
         assert!(e.is_empty(), "trash dir: {e:?}");
         assert!(!mover.exists());
         assert_eq!(trashed.len(), 1);
 
         // CreateDir at a new parent — must restore the trashed `mover` wholesale.
         let dest = td.path().join("target").join("mover");
-        let (created, applied, errors) = apply_ops(&[FsOp::CreateDir(dest.clone())], &mut trashed);
+        let (created, applied, errors) =
+            apply_ops(&[FsOp::CreateDir(dest.clone())], &mut trashed, &trash);
         assert!(errors.is_empty(), "restore dir: {errors:?}");
         assert!(created.is_empty(), "restored dir is not a fresh create");
         assert!(trashed.is_empty(), "trashed registry drained");
@@ -1952,23 +1967,23 @@ mod tests {
     #[test]
     fn revert_create_removes_file_redo_recreates() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let target = td.path().join("round.rs");
 
         // Apply: create
         let ops = vec![FsOp::CreateFile(target.clone())];
         let mut trashed = Vec::new();
-        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty());
         assert!(target.exists(), "file must exist before revert");
 
         // Revert (undo)
-        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "revert errors: {errs:?}");
         assert!(!target.exists(), "file must be gone after revert");
 
         // Redo: re-apply the redo journal
-        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed);
+        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed, &trash);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(target.exists(), "file must exist again after redo");
     }
@@ -1976,19 +1991,19 @@ mod tests {
     #[test]
     fn revert_trash_restores_file_redo_retrashes() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let src = td.path().join("restore_me.txt");
         std::fs::write(&src, b"data").unwrap();
 
         // Apply: trash
         let ops = vec![FsOp::Trash(src.clone())];
         let mut trashed = Vec::new();
-        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty());
         assert!(!src.exists(), "must be trashed");
 
         // Revert (undo): restore from trash
-        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "revert errors: {errs:?}");
         assert!(src.exists(), "file must be back on disk after revert");
         assert_eq!(
@@ -1998,7 +2013,7 @@ mod tests {
         );
 
         // Redo: re-trash
-        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed);
+        let (_, _redo_applied, errs2) = apply_applied(&redo_journal, &mut trashed, &trash);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(!src.exists(), "file must be trashed again after redo");
     }
@@ -2006,7 +2021,7 @@ mod tests {
     #[test]
     fn revert_rename_swaps_back_redo_renames_again() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let foo = td.path().join("orig.rs");
         let bar = td.path().join("renamed.rs");
         std::fs::write(&foo, b"content").unwrap();
@@ -2017,12 +2032,12 @@ mod tests {
             to: bar.clone(),
         }];
         let mut trashed = Vec::new();
-        let (_, applied, errors) = apply_ops(&ops, &mut trashed);
+        let (_, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty());
         assert!(!foo.exists() && bar.exists(), "rename must have happened");
 
         // Revert (undo)
-        let (redo_journal, errs) = revert_ops(&applied, &mut trashed);
+        let (redo_journal, errs) = revert_ops(&applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "revert errors: {errs:?}");
         assert!(
             foo.exists() && !bar.exists(),
@@ -2030,7 +2045,7 @@ mod tests {
         );
 
         // Redo
-        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
+        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed, &trash);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(!foo.exists() && bar.exists(), "redo must rename again");
     }
@@ -2038,19 +2053,20 @@ mod tests {
     #[test]
     fn revert_restore_retrashes_redo_restores() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let src = td.path().join("moved.txt");
         std::fs::write(&src, b"hello").unwrap();
 
         // Step 1: trash it
         let mut trashed: Vec<(String, PathBuf)> = Vec::new();
-        let (_, applied_trash, e) = apply_ops(&[FsOp::Trash(src.clone())], &mut trashed);
+        let (_, applied_trash, e) = apply_ops(&[FsOp::Trash(src.clone())], &mut trashed, &trash);
         assert!(e.is_empty());
         assert!(!src.exists());
 
         // Step 2: restore to a new location (simulate dd + p move)
         let dest = td.path().join("dest_dir").join("moved.txt");
-        let (_, applied_restore, e2) = apply_ops(&[FsOp::CreateFile(dest.clone())], &mut trashed);
+        let (_, applied_restore, e2) =
+            apply_ops(&[FsOp::CreateFile(dest.clone())], &mut trashed, &trash);
         assert!(e2.is_empty());
         assert!(dest.exists(), "restored file must exist at dest");
 
@@ -2059,12 +2075,12 @@ mod tests {
         all_applied.extend(applied_restore);
 
         // Revert (undo): dest must be trashed, src does NOT come back (only dest→trash)
-        let (redo_journal, errs) = revert_ops(&all_applied, &mut trashed);
+        let (redo_journal, errs) = revert_ops(&all_applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "revert errors: {errs:?}");
         assert!(!dest.exists(), "dest must be trashed after revert");
 
         // Redo: restore dest from trash again
-        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed);
+        let (_, _, errs2) = apply_applied(&redo_journal, &mut trashed, &trash);
         assert!(errs2.is_empty(), "redo errors: {errs2:?}");
         assert!(dest.exists(), "dest must be restored again after redo");
     }
@@ -2072,14 +2088,14 @@ mod tests {
     #[test]
     fn revert_restore_dir_retrashes_redo_restores() {
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
+        let trash = isolated_trash(&td);
         let dir = td.path().join("mydir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("inner.txt"), b"deep").unwrap();
 
         // Step 1: trash the dir.
         let mut trashed: Vec<(String, PathBuf)> = Vec::new();
-        let (_, _trash_applied, e) = apply_ops(&[FsOp::Trash(dir.clone())], &mut trashed);
+        let (_, _trash_applied, e) = apply_ops(&[FsOp::Trash(dir.clone())], &mut trashed, &trash);
         assert!(e.is_empty(), "trash dir: {e:?}");
         assert!(!dir.exists());
         assert_eq!(trashed.len(), 1);
@@ -2092,18 +2108,18 @@ mod tests {
         };
 
         // Step 2: apply_applied (redo) — restore dir from trash.
-        let (_, redo_applied, errs) = apply_applied(&[restored], &mut trashed);
+        let (_, redo_applied, errs) = apply_applied(&[restored], &mut trashed, &trash);
         assert!(errs.is_empty(), "apply_applied dir: {errs:?}");
         assert!(dir.is_dir(), "dir must be restored after apply_applied");
         assert!(dir.join("inner.txt").exists(), "contents must survive");
 
         // Step 3: revert_ops (undo) — trash dir again.
-        let (redo_journal, errs) = revert_ops(&redo_applied, &mut trashed);
+        let (redo_journal, errs) = revert_ops(&redo_applied, &mut trashed, &trash);
         assert!(errs.is_empty(), "revert dir: {errs:?}");
         assert!(!dir.exists(), "dir must be trashed again after revert");
 
         // Step 4: apply_applied (redo again) — restore from the new trash path.
-        let (_, _, errs) = apply_applied(&redo_journal, &mut trashed);
+        let (_, _, errs) = apply_applied(&redo_journal, &mut trashed, &trash);
         assert!(errs.is_empty(), "redo dir: {errs:?}");
         assert!(dir.is_dir(), "dir must be restored again after redo");
         assert!(dir.join("inner.txt").exists(), "contents must survive redo");
@@ -2116,8 +2132,9 @@ mod tests {
     /// content.
     #[test]
     fn restore_dir_cross_device_fallback_preserves_contents() {
+        // No trash root: this test calls the `hjkl_fs` move primitives directly
+        // and never reaches `trash_path_in`.
         let td = tempfile::tempdir().unwrap();
-        let _trash = isolated_trash(&td);
 
         // Create a directory tree (simulating a trashed dir).
         let src = td.path().join("trashed_dir");

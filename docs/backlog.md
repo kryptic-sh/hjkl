@@ -115,32 +115,31 @@ file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
 bash/python/html/toml fixtures. Go, C, C++, Java, PHP, Ruby, C#, JS and TS fold
 queries were NOT compared against neovim.
 
-### 1.4c Explorer trash tests are flaky under parallel test runs (2026-08-02)
+### 1.4c Swap still derives its directory from the environment (2026-08-02)
 
-The `dd` → trash → `u` / `<C-r>` family in `apps/hjkl/src/app/explorer.rs` fails
-intermittently in a full `cargo test`: `ddu_restores_file`,
-`ddu_then_redo_retrashes` and `dd_u_then_ctrl_r_retrashes` each failed once
-across four runs, on their first assertion ("dd must trash"). Measured, not
-guessed:
+The trash half of this is done: `hjkl_app::trash::TrashRoot` carries an explicit
+root through `trash_path_in`, the explorer pane owns one
+(`ExplorerPane:: trash_root`), and no explorer test touches `XDG_CACHE_HOME` any
+more. `CwdGuard::set_env` is gone with them.
 
-- `cargo test -p hjkl --bin hjkl -- --test-threads=1`: 1320 passed, twice, no
-  failures.
-- Default (parallel): one failure per run, different test each time, always in
-  this family. The explorer suite ALONE (`-- app::explorer::tests`) passes.
+`hjkl_app::swap` was NOT converted and still resolves
+`$XDG_CACHE_HOME/hjkl/ swap` on every call (`swap_dir`, `swap_path_for`,
+`scratch_swap_path`). One test still overrides the variable for it:
+`scratch_buffer_writes_swap_when_dirty` in `apps/hjkl/src/app/tests/ex.rs`, via
+`EnvVarGuard` — the only remaining `EnvVarGuard` user in the `hjkl` binary.
 
-Every test in the family already isolates itself — `CwdGuard::enter` (a global
-mutex + chdir) plus `cwd.set_env("XDG_CACHE_HOME", tmp)` for a private trash dir
-— and `trash_dir()` re-reads the env on every call, so nothing is cached across
-tests. What the guard does NOT cover is the rest of the binary: the mutex
-serializes guarded tests against each other, while every other test thread keeps
-running, and the env mutation is process-global (this is why `std::env::set_var`
-is `unsafe` in Rust 2024). Any concurrent `getenv` can observe the wrong value.
+It is the same shape and the same fix (a `SwapRoot` beside `TrashRoot`), but a
+wider one: the swap directory is resolved from `App::build_slot`,
+`write_swap_for_slot`, `arm_swap_on_open`, `recover_orphan_scratch_buffers` and
+`main`'s `-r` handler, so the root has to reach `App` itself rather than one
+pane. Deliberately left out of the trash change to keep its blast radius to the
+explorer.
 
-Fixing it properly means not deriving the trash/swap directory from the
-environment in tests — thread an explicit root through `hjkl_app::trash` /
-`swap` — rather than adding more env juggling. Left undone: it is a test-harness
-design change, and it was found incidentally while fixing the command-bar
-completion.
+Not currently known to cause a flake: unlike the trash case, the swap override
+points at a `TempDir` that is not also an explorer root, so the directory a
+concurrent test creates inside it is never enumerated by anything. The hazard is
+the reverse direction — while that test holds the override, any other test's
+swap is written under its `TempDir` and vanishes when it drops.
 
 ### 1.5 Remaining differential-oracle and code-review fixes
 
@@ -255,6 +254,17 @@ behaviour. Verify against nvim, which is wide-char correct.
 
 - Clear nvim undo history after fixture seeding, then fuzz undo/redo. Extend
   cursor comparison beyond ASCII and add ex/search, fold, and `gq` coverage.
+- **The Wayland mock's `reset()` does not tell the client anything
+  (2026-08-02).** `MockState::reset` clears `offer_payloads` and the pending
+  offers, but sends no `data_offer` teardown and no null selection, so the
+  client keeps the previous test's `current_clipboard_offer` id. A `receive` on
+  that id finds no payload and `dispatch_pending_receives` answers with zero
+  bytes and a closed fd — the client then correctly reports `Ok([])`.
+  Surprising, not a product bug: a real compositor destroys the offer it is
+  replacing. The `get` tests are now written to poll for the bytes they expect
+  rather than for `Ok`, so they ride through it. Making the mock send a null
+  selection on `reset` would remove the state entirely; not done, because it
+  changes the mock's protocol behaviour and the tests no longer depend on it.
 - **Review coverage gap.** The 2026-07-29 pass covered `hjkl-vim`,
   `hjkl-engine`, `hjkl-buffer`; the 2026-08-01 pass covered `apps/hjkl`,
   `hjkl-lsp`, `hjkl-ex`, `hjkl-editor(-tui)`, `hjkl-completion`, `hjkl-prompt`,
@@ -270,28 +280,23 @@ behaviour. Verify against nvim, which is wide-char correct.
   `hjkl-vim-types`, `hjkl-xdg`, and the remaining `-tui` siblings. Stated as a
   gap, not a plan.
 - Stabilize flaky PTY e2e cases. Cache/CWD/color isolation landed in `ca3852b2`;
-  the two explorer `dd` tests that still failed under `cargo test`'s thread pool
-  are fixed — they pointed `XDG_CACHE_HOME` at the very directory they were
-  exploring, so the trash's own `hjkl/` directory appeared as a tree entry and,
-  sorting before files, absorbed the `j` that was meant to land on the file
-  under test. Unspecified PTY flakes may remain.
-- **`cargo test` must stay usable — `ddu_then_redo_retrashes` races under it.**
-  `app::explorer::tests::ddu_then_redo_retrashes` mutates two pieces of
-  process-global state (the working directory via `CwdGuard::enter`, and
-  `XDG_CACHE_HOME`). Under nextest each test is its own process, so nothing can
-  race and it passes; under `cargo test`'s thread pool a concurrent test can
-  change the cwd out from under it, so the explorer enumerates a different
-  directory and `dd` trashes nothing — the failure reads as "dd must trash".
-  Measured at roughly 2 failures in 30 runs of `cargo test -p hjkl` (0 in 14 on
-  the unmodified tree at the time, so the rate is low, not zero).
+  the explorer `dd` tests that failed under `cargo test`'s thread pool are fixed
+  (see below). Unspecified PTY flakes may remain.
+- **`CwdGuard` users audited (2026-08-02) — left as they are, with reasons.**
+  After the trash fix the guard only ever `chdir`s; every remaining caller is a
+  test whose subject genuinely IS the working directory:
+  `apps/hjkl/src/app/explorer.rs` (the explorer roots at the cwd),
+  `apps/hjkl/src/render.rs`, `apps/hjkl/src/app/tests/ex.rs` and
+  `apps/hjkl/src/app/tests/splits_windows.rs`. Removing the dependency there
+  means letting `App::new` take a root instead of calling `current_dir`, which
+  is a real API change and not a test-harness one. The lock does not isolate
+  them from unguarded readers, so a residual cwd race is possible in principle —
+  none observed in 30 post-fix runs.
 
-  `cargo nextest run` is canonical in CI, but `cargo test` is documented in
-  CONTRIBUTING as working too, and a test that fails ~7% of local runs trains
-  people to re-run rather than read. Fix by removing the global-state dependency
-  (thread an explicit root through, the way `AnvilPaths` did for the anvil tests
-  in audit-r2 fix 4) rather than by adding a nextest test-group — a group would
-  not help `cargo test` at all. Audit the other `CwdGuard` users for the same
-  shape while there.
+  Not audited: `crates/hjkl-ex/tests/fs_policy.rs` calls
+  `std::env::set_current_dir` directly with no guard at all. It is a separate
+  test binary, so it cannot race the `hjkl` binary's tests, but it can race
+  other tests in its own.
 
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were

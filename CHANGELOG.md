@@ -8,7 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **`hjkl_app::trash::TrashRoot` and `trash_path_in`** — the trash directory can
+  now be named explicitly instead of always resolving `$XDG_CACHE_HOME`.
+  `TrashRoot::Xdg` (the default) is the previous behaviour exactly;
+  `TrashRoot::At(dir)` puts the trash where the caller says, created owner-only
+  like the XDG one. `trash_dir()` and `trash_path()` are unchanged and now
+  delegate to the `Xdg` variant. Mirrors `hjkl_anvil::store::AnvilPaths`.
+
 ### Fixed
+
+- **The explorer's `dd` / `u` / `<C-r>` tests no longer fail at random under a
+  parallel `cargo test`.** They overrode `XDG_CACHE_HOME` to isolate the trash,
+  and an environment variable is process-global: while the override was in
+  effect, any _other_ test thread constructing an `App` resolved
+  `$XDG_CACHE_HOME/hjkl/swap` and so created an `hjkl/` directory inside the
+  overriding test's own explorer root. Directories sort first, so `j` then `dd`
+  deleted that stray row instead of the file under test and the victim survived
+  ("dd must trash"). The explorer pane now carries a `TrashRoot`, tests inject a
+  `TempDir` outside the explored tree, and no explorer test touches the
+  environment. Measured on the `hjkl` binary: 5 failures in 30 full runs before,
+  0 in 30 after.
 
 - **A markdown code block's background now covers whole lines, and the
   cursorline shows through it.** The tint stopped at each line's last character,

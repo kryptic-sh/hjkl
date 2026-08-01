@@ -437,6 +437,18 @@ pub struct ExplorerPane {
     /// [`super::explorer_reconcile::revert_ops`], ready to be re-applied by
     /// [`App::explorer_redo`].
     pub redo_stack: Vec<Vec<super::explorer_reconcile::AppliedOp>>,
+    /// Where `dd` moves entries. Always [`hjkl_app::trash::TrashRoot::Xdg`] in
+    /// production — the injectable variant exists so a test can point the trash
+    /// at its own `TempDir` instead of overriding `XDG_CACHE_HOME`.
+    ///
+    /// That override is what made the `dd`/`u`/`<C-r>` tests flaky: the
+    /// environment is process-global, so while one of them held the override,
+    /// any *other* test thread constructing an `App` resolved
+    /// `$XDG_CACHE_HOME/hjkl/swap` — creating an `hjkl/` directory inside the
+    /// overriding test's own explorer root. A stray directory sorts above the
+    /// file the test meant to delete, so `j` then `dd` targeted `hjkl/` and the
+    /// victim survived ("dd must trash"). An explicit root has no such reach.
+    pub trash_root: hjkl_app::trash::TrashRoot,
 }
 
 // ── Render-derivation cache ────────────────────────────────────────────────────
@@ -918,6 +930,7 @@ impl super::App {
             baseline: initial_baseline,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            trash_root: hjkl_app::trash::TrashRoot::Xdg,
         });
 
         // Overlay any already-dirty open buffers onto the freshly-built tree
@@ -1130,15 +1143,16 @@ impl super::App {
             return;
         }
 
-        // Take the trashed registry out of the pane so we can mutate it.
-        let mut trashed = self.tabs[self.active_tab]
+        // Take the trashed registry out of the pane so we can mutate it, and
+        // copy the trash root out with it (the pane is borrowed again below).
+        let (mut trashed, trash_root) = self.tabs[self.active_tab]
             .explorer
             .as_mut()
-            .map(|ep| std::mem::take(&mut ep.trashed))
+            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
             .unwrap_or_default();
 
         let (newly_created, applied, errors) =
-            super::explorer_reconcile::apply_ops(&ops, &mut trashed);
+            super::explorer_reconcile::apply_ops(&ops, &mut trashed, &trash_root);
 
         // Paths produced by this transaction (created / pasted-moved / renamed
         // destinations) — used below to land the cursor on the result (the
@@ -1392,14 +1406,15 @@ impl super::App {
             }
         };
 
-        // Take the trashed registry.
-        let mut trashed = self.tabs[self.active_tab]
+        // Take the trashed registry (and the trash root alongside it).
+        let (mut trashed, trash_root) = self.tabs[self.active_tab]
             .explorer
             .as_mut()
-            .map(|ep| std::mem::take(&mut ep.trashed))
+            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
             .unwrap_or_default();
 
-        let (redo_journal, errors) = super::explorer_reconcile::revert_ops(&txn, &mut trashed);
+        let (redo_journal, errors) =
+            super::explorer_reconcile::revert_ops(&txn, &mut trashed, &trash_root);
 
         // Put the trashed registry back and push to redo stack.
         if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
@@ -1438,15 +1453,15 @@ impl super::App {
             }
         };
 
-        // Take the trashed registry.
-        let mut trashed = self.tabs[self.active_tab]
+        // Take the trashed registry (and the trash root alongside it).
+        let (mut trashed, trash_root) = self.tabs[self.active_tab]
             .explorer
             .as_mut()
-            .map(|ep| std::mem::take(&mut ep.trashed))
+            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
             .unwrap_or_default();
 
         let (_newly_created, new_applied, errors) =
-            super::explorer_reconcile::apply_applied(&redo_txn, &mut trashed);
+            super::explorer_reconcile::apply_applied(&redo_txn, &mut trashed, &trash_root);
 
         // Put the trashed registry back and push to undo stack.
         if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
@@ -2503,14 +2518,13 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "bye").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
@@ -2552,11 +2566,9 @@ mod tests {
         use crate::app::explorer_reconcile::ID_SEP;
         use crate::keymap_actions::AppAction;
         use hjkl_engine::BufferEdit;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "alpha\n").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit a.txt");
@@ -2567,6 +2579,7 @@ mod tests {
             .expect("a.txt must be open in a slot");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
         let idx = app.explorer_slot_idx().unwrap();
         let cur = app.slots[idx].buffer().as_string();
         let renamed = cur.replace(&format!("a.txt{ID_SEP}"), &format!("b.txt{ID_SEP}"));
@@ -2609,15 +2622,13 @@ mod tests {
         use crate::app::explorer_reconcile::ID_SEP;
         use crate::keymap_actions::AppAction;
         use hjkl_engine::BufferEdit;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("d").join("inner.txt"), "nested").unwrap();
         // A sibling whose name merely string-starts with "d" must NOT be
         // rebased by the dir rename.
         std::fs::write(tmp.path().join("dx.txt"), "decoy").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit d/inner.txt");
@@ -2638,6 +2649,7 @@ mod tests {
             .expect("dx.txt open");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
         let idx = app.explorer_slot_idx().unwrap();
         let cur = app.slots[idx].buffer().as_string();
         let renamed = cur.replace(&format!("d/{ID_SEP}"), &format!("e/{ID_SEP}"));
@@ -2669,11 +2681,9 @@ mod tests {
     fn explorer_trash_flags_open_buffer_deleted_keeps_content() {
         use crate::keymap_actions::AppAction;
         use hjkl_engine::BufferEdit;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "alpha").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_ex("edit a.txt");
@@ -2684,6 +2694,7 @@ mod tests {
             .expect("a.txt open");
 
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
         let idx = app.explorer_slot_idx().unwrap();
         let cur = app.slots[idx].buffer().as_string();
         let without: String = cur
@@ -2770,16 +2781,15 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
         let tmp = tempfile::tempdir().unwrap();
-        // Use a separate cache dir so trash files don't appear in the explorer
-        // tree (full-tree walk now includes the hjkl/trash/ subtree).
-        let cache_tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
         std::fs::write(tmp.path().join("z.txt"), "z").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        // The trash lives in its own directory outside the explored tree, so
+        // trashed entries never appear as rows (the walk covers the whole tree).
+        let _trash = isolate_trash(&mut app);
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
@@ -3291,19 +3301,18 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("d").join("a.rs"), b"a").unwrap();
         std::fs::write(tmp.path().join("d").join("b.rs"), b"b").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
         // The explorer roots at the canonicalized cwd; build expected paths from
         // it (tempdirs are symlinked on macOS/CI, so raw `tmp.path()` mismatches).
         let base = std::env::current_dir().unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
         let _win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
@@ -3357,18 +3366,17 @@ mod tests {
         use crate::keymap_actions::AppAction;
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
-        let cache_tmp = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("mover")).unwrap();
         std::fs::write(tmp.path().join("mover").join("inner.txt"), b"CONTENT").unwrap();
         std::fs::create_dir(tmp.path().join("target")).unwrap();
         std::fs::write(tmp.path().join("target").join("keep.txt"), b"k").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache_tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
         let base = std::env::current_dir().unwrap();
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
         let _win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
@@ -3820,6 +3828,36 @@ mod tests {
 
     // ── Shared helpers ─────────────────────────────────────────────────────
 
+    /// Point the open explorer pane's trash at a fresh `TempDir` and return it.
+    /// Bind it for the whole test — dropping it deletes the trash.
+    ///
+    /// Replaces `cwd.set_env("XDG_CACHE_HOME", …)` in every explorer test that
+    /// deletes something. The env override reached the entire process: any
+    /// concurrently-running test that constructed an `App` resolved
+    /// `$XDG_CACHE_HOME/hjkl/swap` and so created an `hjkl/` directory inside
+    /// whatever the overriding test had pointed the variable at. Where that was
+    /// the test's own explorer root, `hjkl/` appeared as a tree row, sorted
+    /// above the file (directories first), and `j` + `dd` deleted it instead —
+    /// leaving the victim on disk and failing "dd must trash". That is the
+    /// whole of the `ddu_restores_file` / `ddu_then_redo_retrashes` /
+    /// `dd_u_then_ctrl_r_retrashes` flake, reproduced deterministically by
+    /// pre-creating `<root>/hjkl/swap`.
+    ///
+    /// The root here is a directory of its own, outside the explored tree, so
+    /// nothing the trash creates can ever be a row; and because it is named
+    /// rather than resolved, no other test can reach it and it cannot reach
+    /// any other test.
+    #[must_use]
+    fn isolate_trash(app: &mut super::super::App) -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        app.tabs[app.active_tab]
+            .explorer
+            .as_mut()
+            .expect("the explorer pane must be open before isolating its trash")
+            .trash_root = hjkl_app::trash::TrashRoot::At(td.path().join("trash"));
+        td
+    }
+
     /// Returns `true` when any DIRECT CHILD (depth 1) of the explorer root has
     /// the given filename. Use this instead of `buf.contains(name)` to avoid
     /// false positives from nested paths (e.g. trash/ subdir containing the name).
@@ -3867,13 +3905,14 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
-        // Isolate the trash directory so the restore doesn't pick up stale
-        // entries from parallel tests.
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        // Private trash, so the restore cannot pick up a stale entry from a
+        // parallel test — and no `XDG_CACHE_HOME` override, so no parallel test
+        // can create anything inside this test's explorer root.
+        let _trash = isolate_trash(&mut app);
 
         // j → move onto victim.txt; dd → delete the line.
         press(&mut app, KeyCode::Char('j'));
@@ -3907,6 +3946,51 @@ mod tests {
         );
     }
 
+    /// `dd` puts the entry in the pane's own `trash_root` and nowhere else.
+    ///
+    /// Every other test in this family would pass identically if the injected
+    /// root were ignored and `TrashRoot::Xdg` used instead — they only assert
+    /// that the victim left its original path, which is true either way. This
+    /// one reads the destination, so it fails if the injection is a no-op, and
+    /// it is what makes the rest of the family's isolation a fact rather than
+    /// an assumption.
+    #[test]
+    fn dd_trashes_into_the_injected_root_only() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let trash = isolate_trash(&mut app);
+        let root = trash.path().join("trash");
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Char('d'));
+
+        assert!(
+            !tmp.path().join("victim.txt").exists(),
+            "dd must trash victim.txt"
+        );
+
+        let entries: Vec<String> = std::fs::read_dir(&root)
+            .unwrap_or_else(|e| panic!("injected trash root {root:?} must exist: {e}"))
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.iter().any(|n| n.starts_with("victim.txt.")),
+            "the trashed entry must be in the injected root {root:?}, found {entries:?}"
+        );
+        assert!(
+            !tmp.path().join("hjkl").exists(),
+            "the trash must not create anything inside the explorer root"
+        );
+    }
+
     /// `o` + name + `<Esc>` creates a file; `u` removes it again.
     #[test]
     fn create_then_undo_removes_file() {
@@ -3914,11 +3998,11 @@ mod tests {
         use crossterm::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         // o → insert line below; type "fresh.rs"; Esc → reconcile.
         press(&mut app, KeyCode::Char('o'));
@@ -3995,14 +4079,12 @@ mod tests {
         run(&["add", "tracked.txt"], tmp.path());
         run(&["commit", "-m", "init"], tmp.path());
 
-        // Keep the cache outside the explored tree — see the note in
-        // `non_git_dd_vanishes`.
-        let cache = tempfile::tempdir().unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        // Trash outside the explored tree — see the note in `non_git_dd_vanishes`.
+        let _trash = isolate_trash(&mut app);
 
         // Navigate to tracked.txt and delete it (dd).
         press(&mut app, KeyCode::Char('j'));
@@ -4045,16 +4127,15 @@ mod tests {
         // Temp dir that is NOT a git repo.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("untracked.txt"), "bye").unwrap();
-        // The cache must live *outside* the explored tree: pointing
-        // XDG_CACHE_HOME at `tmp` makes the trash's own `hjkl/` directory show
-        // up as a tree entry, and since directories sort first the `j` below
-        // would land on it instead of the file under test.
-        let cache = tempfile::tempdir().unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", cache.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        // The trash must live *outside* the explored tree: a trash root inside
+        // it puts the trash's own directory in the tree, and since directories
+        // sort first the `j` below would land on it instead of the file under
+        // test. `isolate_trash` gives it a `TempDir` of its own.
+        let _trash = isolate_trash(&mut app);
 
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('d'));
@@ -4080,11 +4161,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("recover.txt"), "restore_me").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         // dd
         press(&mut app, KeyCode::Char('j'));
@@ -4133,11 +4214,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("trashable.txt"), "yo").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('d'));
@@ -4177,11 +4258,11 @@ mod tests {
         use crossterm::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         press(&mut app, KeyCode::Char('o'));
         for c in "newborn.rs".chars() {
@@ -4221,11 +4302,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "data").unwrap();
-        let mut cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
-        cwd.set_env("XDG_CACHE_HOME", tmp.path());
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
 
         let mut app = super::super::App::new(None, false, None, None).unwrap();
         app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
 
         // j, dd → trash.
         press(&mut app, KeyCode::Char('j'));

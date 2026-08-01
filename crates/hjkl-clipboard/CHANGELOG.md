@@ -19,12 +19,36 @@ project adheres to [Semantic Versioning](https://semver.org/).
     sent to a client with nothing to receive it.
   - Even with the device bound, a one-shot advertise could be drained by the
     mock and still not register client-side, losing it permanently.
-    `advertise_until_visible` re-advertises until the client actually reports
-    the mimes, which a compositor is free to do; the test's own assertions are
-    unchanged, so a real regression still fails on its own message.
+    `advertise_until` re-advertises until the client actually reports what the
+    test is waiting for, which a compositor is free to do; the test's own
+    assertions are unchanged, so a real regression still fails on its own
+    message.
 
   Reproduced by running the suite with every core busy: 1/12 failures before,
   0/30 after (and 0/30 for the whole crate at 4x load).
+
+  The retry initially covered only the `available()` test, leaving
+  `mock_get_clipboard_text` / `mock_get_clipboard_html` /
+  `mock_get_unowned_returns_unsupported` / `mock_primary_advertise_then_get` on
+  a one-shot advertise plus a bare poll — the same shape, and
+  `mock_get_clipboard_html` then failed once in a full parallel run. Every test
+  that advertises now goes through `advertise_until`; the poll-only helper it
+  replaced is gone, since polling cannot recover an offer the mock has already
+  drained.
+
+  Chasing that turned up a third cause, and the one those `get` tests were
+  actually failing on: the poll stopped at `Result::is_ok`, which accepts
+  `Ok([])`. An empty successful read is a state the shared mock reaches on its
+  own — `MockState::reset()` clears `offer_payloads` while the client still
+  holds the previous test's offer id, so a `receive` racing the new selection
+  event finds no payload for that id and `dispatch_pending_receives` writes zero
+  bytes and closes the fd. The poll now waits for the bytes the test is about to
+  assert on, so it polls through the empty read instead of handing it to the
+  assertion. Measured with the crate's Wayland tests run 8-way concurrent under
+  16 spinners: 4 failures in 160 process runs before (every one
+  `mock_get_clipboard_text`, `get returned wrong bytes`, `left: []`), 0 in 320
+  after. The assertions are untouched — a deliberately wrong payload still fails
+  with the same message once the deadline expires.
 
 ## [0.40.0] - 2026-08-01
 
