@@ -706,6 +706,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         indent_guide_tabstop,
         diagnostics_inline_mode,
         blame_inline,
+        fold_enabled,
     ) = {
         let st = app
             .window_editors
@@ -723,6 +724,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             st.tabstop,
             st.diagnostics_inline,
             st.blame_inline,
+            st.foldenable,
         )
     };
 
@@ -1202,6 +1204,24 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // the diff-band overlay so all three agree on screen rows.
     let diff_filler_plan = app.diff_filler_plan(win_id);
 
+    // `:set nofoldenable` (vim's `zn`) shows every line while KEEPING each
+    // fold's closed state, so `zi` restores exactly what was folded. Render an
+    // all-open copy of this window's folds; the stored folds are untouched.
+    // Only allocated while foldenable is off — normally this is an empty Vec.
+    let open_folds: Vec<hjkl_buffer::Fold> = if fold_enabled {
+        Vec::new()
+    } else {
+        let mut fs = if is_focused {
+            app.slots()[slot_idx].buffer().folds()
+        } else {
+            app.window_folds.get(&win_id).cloned().unwrap_or_default()
+        };
+        for f in &mut fs {
+            f.closed = false;
+        }
+        fs
+    };
+
     let view = BufferView {
         buffer: app.slots()[slot_idx].buffer(),
         viewport: viewport_ref,
@@ -1233,8 +1253,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         },
         // Unfocused windows render their OWN fold snapshot (window-level folds);
         // the shared buffer holds only the focused window's set. Focused window:
-        // `None` reads the live `buffer.folds()`.
-        folds_override: if is_focused {
+        // `None` reads the live `buffer.folds()`. Under `:set nofoldenable`
+        // both go through `open_folds` instead — see its definition.
+        folds_override: if !fold_enabled {
+            Some(open_folds.as_slice())
+        } else if is_focused {
             None
         } else {
             app.window_folds.get(&win_id).map(Vec::as_slice)
@@ -3628,6 +3651,67 @@ mod tests {
         assert!(
             close.modifier.contains(Modifier::BOLD),
             "the partner stays bold so it is still easy to spot"
+        );
+    }
+
+    /// `:set nofoldenable` shows every line again while the folds keep their
+    /// closed state, so `:set foldenable` puts them back exactly as they were.
+    /// The render path read the fold list directly, so `nofoldenable` changed
+    /// nothing on screen — the only way out of a fold was to open it.
+    #[test]
+    fn nofoldenable_renders_folded_lines_without_discarding_the_fold() {
+        use crate::app::App;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("fold.txt");
+        std::fs::write(&path, "region {{{\nhidden body\nend }}}\ntail\n").unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        app.dispatch_ex("set foldmethod=marker foldlevelstart=0");
+        app.recompute_and_install();
+        let folds = app.active_editor().buffer().folds();
+        assert_eq!(folds.len(), 1, "precondition: one marker fold");
+        assert!(folds[0].closed, "precondition: it starts closed");
+
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let screen = |t: &Terminal<TestBackend>| {
+            let b = t.backend().buffer().clone();
+            (0..8u16)
+                .map(|y| {
+                    (0..40u16)
+                        .map(|x| b.cell((x, y)).unwrap().symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        assert!(
+            !screen(&terminal).contains("hidden body"),
+            "precondition: the closed fold hides its body"
+        );
+
+        app.dispatch_ex("set nofoldenable");
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        assert!(
+            screen(&terminal).contains("hidden body"),
+            "nofoldenable must show the folded lines"
+        );
+        assert!(
+            app.active_editor().buffer().folds()[0].closed,
+            "the fold itself stays closed, so `set foldenable` restores it"
+        );
+
+        app.dispatch_ex("set foldenable");
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        assert!(
+            !screen(&terminal).contains("hidden body"),
+            "re-enabling folds hides the body again"
         );
     }
 

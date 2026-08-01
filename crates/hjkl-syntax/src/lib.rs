@@ -1798,6 +1798,61 @@ mod tests {
         assert_eq!(inc.spans, cold.spans);
     }
 
+    /// Markdown fold ranges, pinned against neovim's treesitter folds for the
+    /// same document (`vim.treesitter.foldexpr`, folds enumerated with
+    /// `foldclosed`/`foldclosedend`). Every range below was produced by nvim
+    /// on this exact text.
+    ///
+    /// Before the fix hjkl returned `4..14`, `14..23`, `16..19`, `19..23`,
+    /// `23..26` and `8..11` — each one row or more too long, so a closed
+    /// section hid the NEXT section's heading and the last fold ran past the
+    /// end of the buffer.
+    #[test]
+    #[ignore = "network + compiler: fetches the markdown grammar"]
+    fn markdown_fold_ranges_match_neovim() {
+        let src = concat!(
+            "# Title\n\nIntro paragraph.\n\n",
+            "## Section A\n\nText in A.\n\n```bash\nls -la\n```\n\nMore A text.\n\n",
+            "## Section B\n\n- item one\n- item two\n\n",
+            "### Nested B1\n\nDeep text.\n\n",
+            "## Section C\n\nLast.\n",
+        );
+        let buf = View::from_str(src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.md"));
+        let _ = layer.render_viewport(TID, &buf, 0, 40);
+        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        assert_eq!(
+            ranges,
+            vec![
+                (0, 25),  // # Title — to the last line, not one past it
+                (4, 12),  // ## Section A — ends on "More A text.", not on "## Section B"
+                (8, 10),  // the fenced block — ends on its closing fence
+                (14, 21), // ## Section B
+                (16, 17), // the list
+                (19, 21), // ### Nested B1
+                (23, 25), // ## Section C
+            ]
+        );
+    }
+
+    /// YAML folds are anchored on the pair / sequence item, matching neovim.
+    /// Capturing `(block_mapping)` instead put the fold on the container,
+    /// which starts at its FIRST CHILD: `top:` never got a fold of its own,
+    /// and the document-level mapping produced one fold starting at the first
+    /// key that swallowed every sibling below it (`0..7` here).
+    #[test]
+    #[ignore = "network + compiler: fetches the yaml grammar"]
+    fn yaml_fold_ranges_match_neovim() {
+        let src = "top:\n  a: 1\n  b:\n    - one\n    - two\n\nother:\n  c: 3\n";
+        let buf = View::from_str(src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.yaml"));
+        let _ = layer.render_viewport(TID, &buf, 0, 40);
+        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        assert_eq!(ranges, vec![(0, 4), (2, 4), (6, 7)]);
+    }
+
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn forget_drops_buffer_state() {

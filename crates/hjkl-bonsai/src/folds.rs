@@ -69,6 +69,9 @@ static FOLD_QUERY_CACHE: LazyLock<RwLock<HashMap<String, Option<CompiledFolds>>>
 struct CompiledFolds {
     query: Query,
     fold_idx: u32,
+    /// Per pattern index: does it carry `(#trim! @fold)`? See
+    /// [`fold_end_row`] for what trimming does and why it is opt-in.
+    trim_patterns: Box<[bool]>,
 }
 
 // SAFETY: tree_sitter::Query has unsafe Send+Sync impls.
@@ -92,10 +95,27 @@ fn get_or_compile(grammar: &Grammar) -> Option<()> {
             let names = q.capture_names();
             let fold_idx = names.iter().position(|n| *n == "fold").map(|i| i as u32);
             match fold_idx {
-                Some(fi) => Some(CompiledFolds {
-                    query: q,
-                    fold_idx: fi,
-                }),
+                Some(fi) => {
+                    // `(#trim! @fold)` is a directive, so tree-sitter reports
+                    // it as a general predicate rather than applying it.
+                    // Record which patterns asked for it; `fold_end_row` does
+                    // the trimming for matches of those patterns only.
+                    let trim_patterns: Box<[bool]> = (0..q.pattern_count())
+                        .map(|pi| {
+                            q.general_predicates(pi).iter().any(|p| {
+                                &*p.operator == "trim!"
+                                    && p.args.iter().any(|a| {
+                                        matches!(a, tree_sitter::QueryPredicateArg::Capture(c) if *c == fi)
+                                    })
+                            })
+                        })
+                        .collect();
+                    Some(CompiledFolds {
+                        query: q,
+                        fold_idx: fi,
+                        trim_patterns,
+                    })
+                }
                 None => {
                     tracing::warn!(
                         grammar = grammar.name(),
@@ -121,6 +141,53 @@ fn get_or_compile(grammar: &Grammar) -> Option<()> {
         .unwrap()
         .insert(grammar.name().to_string(), compiled);
     if present { Some(()) } else { None }
+}
+
+// ---------------------------------------------------------------------------
+// Fold range end adjustment
+// ---------------------------------------------------------------------------
+
+/// Last row a fold should hide, given the captured node's end position.
+///
+/// A node's `end_position` is exclusive, so two adjustments are needed before
+/// it names a row to hide. Both only bite on grammars whose blocks are
+/// delimited by line structure rather than a closing token — markdown is the
+/// visible case; C-like grammars end their nodes ON the `}` and come through
+/// unchanged.
+///
+/// - **End at column 0 covers nothing on that row.** The node stopped at the
+///   previous row's newline. tree-sitter-markdown's `(section)` ends at the
+///   start of the NEXT heading, so without this every section fold hid the
+///   following section's heading line, and the last one ran one row past the
+///   end of the buffer.
+/// - **Trailing blank rows are trimmed when `trim` is set**, which the caller
+///   takes from `(#trim! @fold)` on the matched pattern. Markdown's query
+///   asks for it, so a section ending with a blank line before the next
+///   heading folds to its last line of text and the blank separator stays
+///   visible. Queries that do NOT ask keep the blank rows, matching vim: a
+///   TOML table folds through the blank line before the next `[table]`.
+///
+/// `is_blank(row)` reports whether that row is empty or all whitespace.
+/// Trimming stops at `start_row`, which is never trimmed away — the caller
+/// still drops the fold when the result is not past `start_row`.
+fn fold_end_row(
+    start_row: usize,
+    end_row: usize,
+    end_col: usize,
+    trim: bool,
+    is_blank: impl Fn(usize) -> bool,
+) -> usize {
+    let mut end = if end_col == 0 && end_row > 0 {
+        end_row - 1
+    } else {
+        end_row
+    };
+    if trim {
+        while end > start_row && is_blank(end) {
+            end -= 1;
+        }
+    }
+    end
 }
 
 // ---------------------------------------------------------------------------
@@ -159,18 +226,37 @@ pub fn extract_fold_ranges(
     let root = tree.root_node();
     let mut matches = cursor.matches(&compiled.query, root, source);
 
+    // Row → is-blank lookup for `fold_end_row`. One pass over the source,
+    // same order of cost as the query itself, and only on reparse.
+    let blank_rows: Vec<bool> = source
+        .split(|&b| b == b'\n')
+        .map(|line| line.iter().all(u8::is_ascii_whitespace))
+        .collect();
+    let is_blank = |row: usize| blank_rows.get(row).copied().unwrap_or(true);
+
     let fold_idx = compiled.fold_idx;
     // Keyed by start_row; value = largest end_row seen for that start row.
     let mut by_start: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
 
     while let Some(m) = matches.next() {
+        let trim = compiled
+            .trim_patterns
+            .get(m.pattern_index)
+            .copied()
+            .unwrap_or(false);
         for cap in m.captures {
             if cap.index != fold_idx {
                 continue;
             }
             let node = cap.node;
             let start_row = node.start_position().row;
-            let end_row = node.end_position().row;
+            let end_row = fold_end_row(
+                start_row,
+                node.end_position().row,
+                node.end_position().column,
+                trim,
+                is_blank,
+            );
             // Skip single-line nodes — no meaningful fold.
             if end_row <= start_row {
                 continue;
@@ -231,14 +317,32 @@ pub fn extract_fold_ranges_rope(
     let fold_idx = compiled.fold_idx;
     let mut matches = cursor.matches(&compiled.query, root, source);
 
+    // Row → is-blank lookup for `fold_end_row`, off the materialised text.
+    let blank_rows: Vec<bool> = text
+        .split('\n')
+        .map(|line| line.chars().all(char::is_whitespace))
+        .collect();
+    let is_blank = |row: usize| blank_rows.get(row).copied().unwrap_or(true);
+
     while let Some(m) = matches.next() {
+        let trim = compiled
+            .trim_patterns
+            .get(m.pattern_index)
+            .copied()
+            .unwrap_or(false);
         for cap in m.captures {
             if cap.index != fold_idx {
                 continue;
             }
             let node = cap.node;
             let start_row = node.start_position().row;
-            let end_row = node.end_position().row;
+            let end_row = fold_end_row(
+                start_row,
+                node.end_position().row,
+                node.end_position().column,
+                trim,
+                is_blank,
+            );
             if end_row <= start_row {
                 continue;
             }
@@ -382,6 +486,46 @@ pub fn extract_marker_fold_ranges_rope_multi(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── fold_end_row ────────────────────────────────────────────────────
+
+    /// A node ending at column 0 covers nothing on that row. Markdown's
+    /// `(section)` ends at the start of the NEXT heading, so without this
+    /// every section fold hid the following heading line.
+    #[test]
+    fn fold_end_row_drops_a_row_the_node_only_touches_at_column_0() {
+        let never_blank = |_| false;
+        assert_eq!(fold_end_row(4, 14, 0, false, never_blank), 13);
+        // Ending mid-row (a `}` at column 0 is still column 0; a `}` indented
+        // is not) keeps the row — that is the C-like case.
+        assert_eq!(fold_end_row(4, 14, 1, false, never_blank), 14);
+        assert_eq!(fold_end_row(4, 14, 12, false, never_blank), 14);
+    }
+
+    /// Trailing blank rows come off only when the pattern asked for it with
+    /// `(#trim! @fold)`. Markdown asks; TOML does not, and vim folds a TOML
+    /// table through the blank line before the next `[table]`.
+    #[test]
+    fn fold_end_row_trims_trailing_blanks_only_when_asked() {
+        // rows 12 and 13 blank, 11 is text.
+        let blank = |row: usize| row == 12 || row == 13;
+        assert_eq!(fold_end_row(4, 14, 0, true, blank), 11, "trim requested");
+        assert_eq!(fold_end_row(4, 14, 0, false, blank), 13, "no trim");
+    }
+
+    /// Trimming never eats the fold's own header row: a section whose body is
+    /// entirely blank collapses to `start == end`, which the callers drop.
+    #[test]
+    fn fold_end_row_trim_stops_at_the_start_row() {
+        let all_blank = |_| true;
+        assert_eq!(fold_end_row(7, 10, 0, true, all_blank), 7);
+    }
+
+    /// Row 0 has no previous row to fall back to.
+    #[test]
+    fn fold_end_row_handles_row_zero() {
+        assert_eq!(fold_end_row(0, 0, 0, true, |_| false), 0);
+    }
 
     #[test]
     fn builtin_folds_rust_is_some() {

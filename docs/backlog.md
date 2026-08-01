@@ -84,6 +84,37 @@ Consequences that were accepted rather than fixed:
   `hjkl-markdown-tui` and `qf_dock_spans` (`apps/hjkl/src/app/quickfix.rs`)
   build their own span tables and were not touched or examined.
 
+### 1.4b Fold gaps left after the 2026-08-02 autofold audit
+
+Fold ranges were diffed against neovim's `vim.treesitter.foldexpr` (folds
+enumerated with `foldclosed` / `foldclosedend`, not foldlevels — levels merge
+adjacent siblings and read as false differences). After the fixes, every fold
+hjkl emits for markdown, yaml, html, json, lua, css, bash, python and toml is
+exactly one of neovim's. What neovim still has that hjkl does not:
+
+- **No folds inside injected languages.** `extract_fold_ranges_rope` queries
+  only the top-level tree with the top-level grammar, so a
+  ```rust block inside markdown, or an embedded shell script in a GitHub workflow, folds as one opaque block. neovim folds their internals. Needs the fold query run per injection region with row offsets applied — the injection machinery already exists in `highlight_range_with_injections_rope`.
+- **One fold per start row.** `View::add_fold` / `set_auto_folds` key folds by
+  `start_row`, so where two nested folds legitimately share one (markdown's
+  `(list)` and the `(list_item (list))` inside it), hjkl keeps the outer and
+  drops the inner — one nesting level fewer than vim. Changing this touches the
+  fold model, `remove_fold_at`, and every toggle path, so it was left alone.
+- **`foldlevelstart` is treated as a boolean.** `syntax_glue` computes
+  `default_closed = foldlevelstart == 0`, so only "all closed" and "all open"
+  exist; vim closes folds deeper than the level. Per-range depth is derivable
+  from containment, but `set_auto_folds` takes one `default_closed` flag for the
+  whole set, so it needs an API change.
+- **Language fold queries are hjkl's own, not neovim's.** They fold a subset
+  (e.g. rust also folds bare blocks that neovim leaves alone; toml folds
+  tables). This is deliberate, and the ranges are correct — noted so the next
+  differential run does not read it as a regression.
+
+Coverage note: the fold comparison was run over this repo's markdown, one rust
+file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
+bash/python/html/toml fixtures. Go, C, C++, Java, PHP, Ruby, C#, JS and TS fold
+queries were NOT compared against neovim.
+
 ### 1.5 Remaining differential-oracle and code-review fixes
 
 Fixed by `9a156885`, `b97e9bce`, `76cfb459`, and earlier commits. Detailed

@@ -528,15 +528,16 @@ impl App {
                         self.syntax.extract_fold_ranges(buffer_id, buf)
                     };
                     if let Some(ranges) = ranges_opt {
-                        if !ranges.is_empty() {
-                            // set_auto_folds preserves open/closed state for
-                            // folds at the same start_row; new folds default
-                            // open (fls >= 99) or closed (fls == 0); manual
-                            // folds are never touched.
-                            self.slots[active_idx]
-                                .buffer_mut()
-                                .set_auto_folds(&ranges, default_closed);
-                        }
+                        // set_auto_folds preserves open/closed state for
+                        // folds at the same start_row; new folds default
+                        // open (fls >= 99) or closed (fls == 0); manual
+                        // folds are never touched. Called even when `ranges`
+                        // is EMPTY: deleting the last foldable construct in a
+                        // file has to remove its fold, and skipping the call
+                        // left the stale one behind.
+                        self.slots[active_idx]
+                            .buffer_mut()
+                            .set_auto_folds(&ranges, default_closed);
                         // Grammar was ready and extraction ran (even if no
                         // folds found). Mark this dirty_gen as processed.
                         self.slots[active_idx].last_fold_dirty_gen = Some(dg);
@@ -582,7 +583,16 @@ impl App {
                         .set_auto_folds(&ranges, default_closed);
                     self.slots[active_idx].last_fold_dirty_gen = Some(dg);
                 }
-                FoldMethod::Manual => {}
+                FoldMethod::Manual => {
+                    // Drop folds the auto engine created under a previous
+                    // foldmethod — vim recomputes folds when foldmethod
+                    // changes, and `manual` starts from none. Manual (`zf`)
+                    // folds are kept: they are exactly what this mode owns.
+                    self.slots[active_idx]
+                        .buffer_mut()
+                        .set_auto_folds(&[], default_closed);
+                    self.slots[active_idx].last_fold_dirty_gen = Some(dg);
+                }
             }
         }
     }

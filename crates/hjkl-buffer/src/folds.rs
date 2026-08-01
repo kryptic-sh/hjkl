@@ -166,6 +166,15 @@ impl crate::View {
     ///   TS query ranges are already deduplicated.
     /// - Empty / inverted ranges (end_row < start_row) are silently skipped.
     /// - `end_row` is clamped to the last valid row, same as `add_fold`.
+    /// - A MANUAL fold's start_row is never taken over: the auto range for
+    ///   that row is dropped instead. `zf` is an explicit choice of extent,
+    ///   and converting it to an auto fold both changed it and handed it to
+    ///   the auto engine to overwrite on the next reparse.
+    /// - When the resulting fold set is identical to the current one, nothing
+    ///   is written and NO generation bumps — [`Self::fold_gen`] promises to
+    ///   move only on a real change, and `dirty_gen` moving every pass made
+    ///   the caller's "recompute once per edit" guard fire every frame (and
+    ///   with it a full re-highlight, since `dirty_gen` keys that cache).
     pub fn set_auto_folds(&mut self, ranges: &[(usize, usize)], default_closed: bool) {
         // 1. Snapshot closed state of existing auto folds by start_row.
         let prev_closed: std::collections::HashMap<usize, bool> = self
@@ -176,11 +185,15 @@ impl crate::View {
             .map(|f| (f.start_row, f.closed))
             .collect();
 
-        // 2. Retain manual folds only.
-        {
-            let mut c = self.content_lock_mut();
-            c.folds.retain(|f| !f.auto_generated);
-        }
+        // 2. Start from the manual folds — they survive untouched, and their
+        //    start rows are off-limits to the ranges below.
+        let mut next: Vec<Fold> = self
+            .content_lock()
+            .folds
+            .iter()
+            .filter(|f| !f.auto_generated)
+            .copied()
+            .collect();
 
         // 3. Insert new auto folds in sorted order.
         let last = self.row_count().saturating_sub(1);
@@ -204,20 +217,25 @@ impl crate::View {
                 closed,
                 auto_generated: true,
             };
-            let mut c = self.content_lock_mut();
-            // Replace any existing fold at this start_row (manual or auto).
-            if let Some(idx) = c.folds.iter().position(|f| f.start_row == start_row) {
-                c.folds[idx] = fold;
-            } else {
-                let pos = c
-                    .folds
-                    .iter()
-                    .position(|f| f.start_row > start_row)
-                    .unwrap_or(c.folds.len());
-                c.folds.insert(pos, fold);
+            match next.iter().position(|f| f.start_row == start_row) {
+                // A manual fold owns this row — leave it alone.
+                Some(idx) if !next[idx].auto_generated => continue,
+                Some(idx) => next[idx] = fold,
+                None => {
+                    let pos = next
+                        .iter()
+                        .position(|f| f.start_row > start_row)
+                        .unwrap_or(next.len());
+                    next.insert(pos, fold);
+                }
             }
         }
 
+        // 4. No-op when nothing actually changed — see the invariant above.
+        if self.content_lock().folds == next {
+            return;
+        }
+        self.content_lock_mut().folds = next;
         self.folds_changed();
     }
 

@@ -1769,6 +1769,83 @@ fn foldmethod_manual_ignores_markers() {
     );
 }
 
+/// Switching to `foldmethod=manual` drops folds the auto engine created under
+/// the previous method. Vim recomputes folds when foldmethod changes, and
+/// `manual` starts from none; the arm used to do nothing at all, so marker or
+/// expr folds stayed on screen and `zR`/`zM` still operated on them.
+#[test]
+fn foldmethod_manual_clears_auto_folds_from_the_previous_method() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "region {{{\nbody\nend }}}\ntail");
+    app.dispatch_ex("set foldmethod=marker");
+    app.recompute_and_install();
+    assert_eq!(
+        app.active_editor().buffer().folds().len(),
+        1,
+        "precondition: marker mode must have produced the fold"
+    );
+
+    app.dispatch_ex("set foldmethod=manual");
+    app.recompute_and_install();
+    assert!(
+        app.active_editor().buffer().folds().is_empty(),
+        "auto folds must not survive the switch to manual"
+    );
+}
+
+/// A `zf` fold must survive the auto-fold pass, even when the auto engine
+/// wants the same start row: `set_auto_folds` used to overwrite it, which both
+/// changed the user's extent and handed the fold to the engine to wipe on the
+/// next reparse.
+#[test]
+fn manual_fold_survives_an_auto_fold_at_the_same_start_row() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "region {{{\nbody\nend }}}\ntail");
+    // `zf`-style fold covering one row MORE than the marker pair would.
+    app.active_editor_mut().buffer_mut().add_fold(0, 3, false);
+    app.dispatch_ex("set foldmethod=marker");
+    app.recompute_and_install();
+
+    let folds = app.active_editor().buffer().folds();
+    assert_eq!(folds.len(), 1, "no second fold on the same row: {folds:?}");
+    assert_eq!(folds[0].end_row, 3, "the manual extent must be kept");
+    assert!(!folds[0].auto_generated, "it must still be a manual fold");
+}
+
+/// The auto-fold pass must settle: with no edits, repeated recomputes must not
+/// keep bumping `dirty_gen`. `set_auto_folds` bumped unconditionally, so the
+/// caller's "once per edit" guard saw a new generation every frame and re-ran
+/// the whole extraction — and `dirty_gen` also keys the syntax render cache,
+/// so every frame re-highlighted the viewport too.
+#[test]
+fn auto_fold_pass_settles_instead_of_bumping_every_frame() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "region {{{\nbody\nend }}}\ntail");
+    app.dispatch_ex("set foldmethod=marker");
+    app.recompute_and_install();
+    let settled = app.active_editor().buffer().dirty_gen();
+    let fold_gen = app.active_editor().buffer().fold_gen();
+    assert_eq!(
+        app.active_editor().buffer().folds().len(),
+        1,
+        "precondition: a fold must exist, or nothing is being re-derived"
+    );
+
+    for _ in 0..5 {
+        app.recompute_and_install();
+    }
+    assert_eq!(
+        app.active_editor().buffer().dirty_gen(),
+        settled,
+        "an unchanged fold set must not bump dirty_gen"
+    );
+    assert_eq!(
+        app.active_editor().buffer().fold_gen(),
+        fold_gen,
+        "an unchanged fold set must not bump fold_gen"
+    );
+}
+
 /// `foldmethod=marker` also recognizes the universal `#region` / `#endregion`
 /// convention, alongside the configured `foldmarker` pair — no extra config.
 #[test]

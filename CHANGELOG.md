@@ -29,6 +29,51 @@ patch bumps.
   span of their own. A bg span in any other colour still paints there, so a
   hex-colour swatch does not vanish when the cursor lands on its line.
 
+- **Auto-folds in markdown covered the wrong lines.** Every fold ran past its
+  own content: a `## Section` fold hid the NEXT section's heading, a fenced code
+  block swallowed the blank line under it, a list ate the heading below it, and
+  the last section of a file folded one row past the end of the buffer. Fold
+  ranges now drop a trailing row the node only touches at column 0 (which is
+  where markdown's block nodes end), and honour `(#trim! @fold)` so a section
+  stops at its last line of text. Verified against neovim's
+  `vim.treesitter.foldexpr` on this repo's own markdown: every fold hjkl
+  produces is now byte-for-byte one of neovim's.
+
+- **YAML folds were anchored on the wrong line.** The query captured
+  `(block_mapping)` / `(block_sequence)`, and a container starts at its first
+  child — so `key:` never got a fold of its own, and the document-level mapping
+  produced one fold starting at the first key that swallowed every sibling below
+  it. Now captures `(block_mapping_pair)` / `(block_sequence_item)`, as neovim
+  does.
+
+- **A `zf` fold was silently taken over by the auto-fold engine** when a
+  tree-sitter fold started on the same row: the manual fold's extent was
+  replaced and the fold became auto-generated, so the next reparse wiped it.
+  Manual folds now keep their row.
+
+- **`:set foldmethod=manual` left the previous method's folds on screen.** The
+  `manual` arm did nothing at all, so marker/expr folds stayed and `zR` / `zM`
+  still operated on them. Vim recomputes when foldmethod changes; `manual` now
+  starts from none, keeping only `zf` folds.
+
+- **Deleting the last foldable construct left its fold behind** under
+  `foldmethod=expr` — the auto-fold pass skipped the update whenever the new
+  range list was empty.
+
+- **`:set nofoldenable` did nothing.** The render path read the fold list
+  directly, so folded lines stayed hidden and the only way out of a fold was to
+  open it. Folded lines now show while each fold keeps its closed state, so
+  `:set foldenable` restores exactly what was folded.
+
+### Performance
+
+- **The auto-fold pass ran every frame instead of once per edit.**
+  `set_auto_folds` bumped the buffer's generations even when the fold set was
+  unchanged, so the caller's "recompute once per edit" guard never matched — and
+  because `dirty_gen` also keys the syntax render cache, every frame paid a full
+  fold extraction (`rope.to_string()` + a whole-tree query) AND a viewport
+  re-highlight. An unchanged fold set is now a no-op.
+
 ### Changed
 
 - **The matchparen partner no longer looks like a second cursor.** Both the
