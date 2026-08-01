@@ -674,11 +674,24 @@ impl App {
                 }
                 let len = matches.len();
                 // Jump cursor to the first match so it is visible.
-                let first_row = matches[0].row as usize;
-                let first_col = {
+                //
+                // `row` / `byte_start` were recorded when the match set was
+                // collected, and nothing structurally prevents the buffer from
+                // having changed since. A stale row would panic in
+                // `rope.line()` and a stale (or non-boundary) byte offset would
+                // panic slicing the line, so both are treated as untrusted:
+                // clamp the row, and fall back to the line's char count when
+                // the offset does not name a real prefix. Landing the cursor in
+                // the wrong place is recoverable; taking down the editor over a
+                // `:s///c` prompt is not.
+                let (first_row, first_col) = {
                     let rope = hjkl_engine::Query::rope(self.active_editor().buffer());
-                    let line = rope_line_str(&rope, first_row);
-                    line[..matches[0].byte_start as usize].chars().count()
+                    let row = (matches[0].row as usize).min(rope.len_lines().saturating_sub(1));
+                    let line = rope_line_str(&rope, row);
+                    let col = line
+                        .get(..matches[0].byte_start as usize)
+                        .map_or_else(|| line.chars().count(), |p| p.chars().count());
+                    (row, col)
                 };
                 self.active_editor_mut().jump_cursor(first_row, first_col);
                 self.sync_after_engine_mutation();
