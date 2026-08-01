@@ -18,7 +18,7 @@ sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
 `0.33.4` — full LSP client (diagnostics, goto, hover, completion, code actions,
 rename, format), window splits, tabs, tmux-navigator handoff, mouse scroll, line
 numbers, and a consumer-agnostic picker `PreviewHighlighter` trait. See
-[CHANGELOG.md](CHANGELOG.md) for the full release arc and
+[CHANGELOG.md](./CHANGELOG.md) for the full release arc and
 [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the trait reference.
 
 ## Crates
