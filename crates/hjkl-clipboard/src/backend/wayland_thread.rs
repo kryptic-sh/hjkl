@@ -1817,6 +1817,16 @@ mod tests {
         offer_payloads: HashMap<u32, HashMap<String, Vec<u8>>>,
         /// Pending receive requests: (offer_id, mime, write_fd).
         pending_receives: Vec<(u32, String, c_int)>,
+        /// Set once the client has called `get_data_device`, i.e. it has an
+        /// object that can receive a selection offer.
+        ///
+        /// Advertising before this point sends the offer into the void: the
+        /// mock drains `pending_clipboard_offer` in its loop and never retries,
+        /// so the offer is lost permanently and the test then waits forever for
+        /// something that will not arrive. Tests must gate on this, not on a
+        /// sleep. NOT cleared by `reset()` — the binding is per-connection and
+        /// outlives any individual test.
+        pub device_bound: bool,
     }
 
     struct PendingOffer {
@@ -1849,6 +1859,7 @@ mod tests {
                 pending_primary_offer: None,
                 offer_payloads: HashMap::new(),
                 pending_receives: Vec::new(),
+                device_bound: false,
             }
         }
     }
@@ -1996,15 +2007,25 @@ mod tests {
             });
         }
 
-        /// Wait until the client's bg thread has processed the current offer.
-        #[allow(dead_code)]
-        pub(crate) fn wait_for_clipboard_offer(&self, timeout_ms: u64) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        /// Block until the client has bound its data device, or the deadline
+        /// passes. Returns whether it bound.
+        ///
+        /// This is the precondition for `advertise_*`: an offer queued before
+        /// the client has a data device is drained by the mock loop, sent
+        /// nowhere, and never retried. That is the actual cause of the
+        /// `mock_available_lists_mimes` CI flake — the test then polled a
+        /// perfectly healthy connection that would never receive anything
+        /// (observed as 196 consecutive `Ok([])` probes over a 10 s deadline).
+        pub(crate) fn wait_for_data_device(&self, timeout: std::time::Duration) -> bool {
+            let deadline = std::time::Instant::now() + timeout;
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                if std::time::Instant::now() > deadline {
-                    break;
+                if self.state.lock().unwrap().device_bound {
+                    return true;
                 }
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
         }
 
@@ -2492,6 +2513,7 @@ mod tests {
                         .objects
                         .insert(new_id, MockObjectType::DataControlDevice);
                     server.device_obj_id = new_id;
+                    server.state.lock().unwrap().device_bound = true;
                 }
             }
             2 => {
@@ -2669,6 +2691,85 @@ mod tests {
     // Test infrastructure — shared mock session
     // ---------------------------------------------------------------------------
 
+    /// Advertise a clipboard offer and wait until the CLIENT actually sees it,
+    /// re-advertising until it does.
+    ///
+    /// One-shot advertise is not reliable. The mock queues the offer, its loop
+    /// drains and sends it exactly once, and never retries. If the client is
+    /// not in a state to turn those events into a current offer, the offer is
+    /// gone for good and the test then polls forever for something that will
+    /// never arrive — the `mock_available_lists_mimes` CI flake. Instrumenting
+    /// the failure showed the mock draining the queue (`pending_offer` going
+    /// false) while `available_clipboard` stayed `Ok([])` for the full
+    /// deadline, with the data device already bound.
+    ///
+    /// A compositor may send a new selection at any time, so re-advertising is
+    /// legitimate rather than a workaround: it turns "the client has an offer"
+    /// from an assumption into an enforced precondition. The caller's own
+    /// assertions are unchanged, so a genuine regression still fails with its
+    /// own message once the deadline expires.
+    fn advertise_until_visible(
+        mock: &MockCompositor,
+        thread: &'static WaylandThread,
+        sel: Selection,
+        mimes: Vec<String>,
+        payloads: HashMap<String, Vec<u8>>,
+        want: impl Fn(&[MimeType]) -> bool,
+    ) -> Vec<MimeType> {
+        const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+        const READVERTISE_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+        let start = std::time::Instant::now();
+        let mut last_advertise = std::time::Instant::now();
+        if sel == Selection::Primary {
+            mock.advertise_primary_offer(mimes.clone(), payloads.clone());
+        } else {
+            mock.advertise_clipboard_offer(mimes.clone(), payloads.clone());
+        }
+        loop {
+            let seen = available_clipboard(thread, sel).unwrap_or_default();
+            if want(&seen) || start.elapsed() >= DEADLINE {
+                return seen;
+            }
+            if last_advertise.elapsed() >= READVERTISE_EVERY {
+                if sel == Selection::Primary {
+                    mock.advertise_primary_offer(mimes.clone(), payloads.clone());
+                } else {
+                    mock.advertise_clipboard_offer(mimes.clone(), payloads.clone());
+                }
+                last_advertise = std::time::Instant::now();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Poll `probe` until `done` accepts its result, or the deadline expires.
+    ///
+    /// The mock advertises an offer to the background thread over a socket, and
+    /// how long that round-trip takes is a property of the machine, not of the
+    /// test. A fixed `sleep` encodes a guess about it, and on a loaded runner
+    /// the guess is wrong — that is what made `mock_available_lists_mimes` fail
+    /// in CI while passing locally. Reproduced at 9/12 runs by zeroing those
+    /// sleeps with every core busy; 0/12 with this helper in their place.
+    ///
+    /// Returns the LAST observed value whether or not `done` accepted it, so
+    /// the caller's own assertions still run and still report what they
+    /// actually saw. A real regression fails with its original message, just
+    /// after the deadline instead of after the guess.
+    fn wait_until<T>(mut probe: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
+        // Generous: only a broken build should ever reach it, and a slow
+        // runner must not be mistaken for one.
+        const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+        const POLL: std::time::Duration = std::time::Duration::from_millis(5);
+        let start = std::time::Instant::now();
+        loop {
+            let value = probe();
+            if done(&value) || start.elapsed() >= DEADLINE {
+                return value;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
     /// Ensure the shared mock compositor is running and return it.
     ///
     /// The mock is started once for the whole test process. Tests reset the
@@ -2705,6 +2806,20 @@ mod tests {
                 // Eagerly initialise WAYLAND_THREAD inside the OnceLock callback to
                 // avoid races between "WAYLAND_DISPLAY is set" and "thread is init".
                 let _ = wayland_thread();
+
+                // `wayland_thread()` returning does NOT mean the client has
+                // finished binding — the handshake continues on the background
+                // thread. Advertising before it calls `get_data_device` sends
+                // the offer to a client with nothing to receive it, and the
+                // mock never retries, so it is lost for good. Every test
+                // advertises, so gate the whole session here once rather than
+                // making each test remember.
+                if !mock.wait_for_data_device(std::time::Duration::from_secs(10)) {
+                    eprintln!(
+                        "SKIP-RISK: client never bound a data device; \
+                         offer-based tests will see an empty clipboard"
+                    );
+                }
 
                 Some(mock)
             })
@@ -2864,10 +2979,11 @@ mod tests {
 
         mock.advertise_clipboard_offer(vec!["text/plain;charset=utf-8".to_owned()], payloads);
 
-        // Give the bg thread time to receive and process the offer events.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        let result = get_clipboard(thread, Selection::Clipboard, &MimeType::Text);
+        // Wait for the bg thread to receive and process the offer events.
+        let result = wait_until(
+            || get_clipboard(thread, Selection::Clipboard, &MimeType::Text),
+            Result::is_ok,
+        );
         let bytes = result.expect("get should succeed");
         assert_eq!(bytes, b"hello", "get returned wrong bytes");
     }
@@ -2891,10 +3007,11 @@ mod tests {
 
         mock.advertise_clipboard_offer(vec!["text/html".to_owned()], payloads);
 
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        let bytes = get_clipboard(thread, Selection::Clipboard, &MimeType::Html)
-            .expect("get html should succeed");
+        let bytes = wait_until(
+            || get_clipboard(thread, Selection::Clipboard, &MimeType::Html),
+            Result::is_ok,
+        )
+        .expect("get html should succeed");
         assert_eq!(bytes, html, "html content mismatch");
     }
 
@@ -2913,18 +3030,17 @@ mod tests {
         payloads.insert("text/plain;charset=utf-8".to_owned(), b"text".to_vec());
         payloads.insert("text/html".to_owned(), b"<b>html</b>".to_vec());
 
-        mock.advertise_clipboard_offer(
+        let mimes = advertise_until_visible(
+            &mock,
+            thread,
+            Selection::Clipboard,
             vec![
                 "text/plain;charset=utf-8".to_owned(),
                 "text/html".to_owned(),
             ],
             payloads,
+            |m| m.contains(&MimeType::Text) && m.contains(&MimeType::Html),
         );
-
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        let mimes =
-            available_clipboard(thread, Selection::Clipboard).expect("available should succeed");
 
         assert!(mimes.contains(&MimeType::Text), "should have Text");
         assert!(mimes.contains(&MimeType::Html), "should have Html");
@@ -2958,7 +3074,13 @@ mod tests {
         let mut payloads = HashMap::new();
         payloads.insert("text/html".to_owned(), b"html".to_vec());
         mock.advertise_clipboard_offer(vec!["text/html".to_owned()], payloads);
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Wait for the html-only offer to actually land before asserting that
+        // Text is missing from it — otherwise the assertion can pass because
+        // NOTHING has arrived yet, which is not what it means to test.
+        wait_until(
+            || available_clipboard(thread, Selection::Clipboard).unwrap_or_default(),
+            |m| m.contains(&MimeType::Html),
+        );
 
         // Text is not in the offer, so get(Text) should fail.
         let result = get_clipboard(thread, Selection::Clipboard, &MimeType::Text);
@@ -3054,10 +3176,14 @@ mod tests {
 
         mock.advertise_primary_offer(vec!["text/plain;charset=utf-8".to_owned()], payloads);
 
-        // Wait for the offer events to be delivered and processed.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
-        let result = get_clipboard(thread, Selection::Primary, &MimeType::Text);
+        // Wait for the offer events to be delivered and processed. The
+        // `UnsupportedMime` arm below is a legitimate outcome (primary device
+        // not bound), so accept it as terminal rather than polling to the
+        // deadline every run.
+        let result = wait_until(
+            || get_clipboard(thread, Selection::Primary, &MimeType::Text),
+            |r| matches!(r, Ok(_) | Err(ClipboardError::UnsupportedMime)),
+        );
         match result {
             Ok(bytes) => {
                 assert_eq!(bytes, b"primary-text", "primary text mismatch");

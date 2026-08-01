@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Wayland mock-compositor tests no longer depend on timing.** They waited
+  a fixed 200–300 ms for an advertised offer to reach the client, which is a
+  guess about the machine rather than a property of the code — on a loaded CI
+  runner the guess was wrong and `mock_available_lists_mimes` failed. Two
+  distinct causes, both now closed:
+  - The client could still be mid-handshake when a test advertised. `MockState`
+    now records `device_bound` (set when the client calls `get_data_device`) and
+    the shared session waits on it before any test runs, so an offer is never
+    sent to a client with nothing to receive it.
+  - Even with the device bound, a one-shot advertise could be drained by the
+    mock and still not register client-side, losing it permanently.
+    `advertise_until_visible` re-advertises until the client actually reports
+    the mimes, which a compositor is free to do; the test's own assertions are
+    unchanged, so a real regression still fails on its own message.
+
+  Reproduced by running the suite with every core busy: 1/12 failures before,
+  0/30 after (and 0/30 for the whole crate at 4x load).
+
 ## [0.40.0] - 2026-08-01
 
 ### Added

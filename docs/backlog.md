@@ -175,12 +175,6 @@ behaviour. Verify against nvim, which is wide-char correct.
   not help `cargo test` at all. Audit the other `CwdGuard` users for the same
   shape while there.
 
-- **`hjkl-clipboard`'s `mock_available_lists_mimes` flakes in CI.** Failed once
-  on `test ubuntu-latest` during the 0.40.0 cut ("should have Text"), passed on
-  re-run and 5/5 locally. `nextest.toml` already caps `hjkl-clipboard` to one
-  process via the `clipboard-display` group because the Wayland/X11 mock binds a
-  fixed display name — something still raced past that. Diagnose from the mock's
-  own state, not by widening the group.
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
   not checked for 0.40.0. Either fold the cheap ones into the release gate or
