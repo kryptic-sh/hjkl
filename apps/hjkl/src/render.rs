@@ -1733,14 +1733,26 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     };
 
+    // Matchparen partner style: the matchparen bg, BOLD, and deliberately NOT
+    // `REVERSED`. Reversed video is what paints the cursor cell, so a reversed
+    // partner rendered as a second cursor block — with `%` jumping between two
+    // identical blocks, there was no way to see which one you were on. Keeping
+    // the cell's own fg over the muted bg reads as "related to the cursor",
+    // one step quieter than the cursor itself.
+    let match_paren_style = Style::default()
+        .bg(app.theme.ui.match_paren_bg)
+        .add_modifier(Modifier::BOLD);
+
     // ── matchparen bracket highlight (focused window only) ─────────────────
     if is_focused && let Some(pairs) = app.matchparen_cells() {
-        let match_paren_style = Style::default()
-            .bg(app.theme.ui.match_paren_bg)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let right = area.x + area.width;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in pairs {
+            // Skip the cursor's own cell so it keeps the cursor block. The
+            // partner is the one that has to look different.
+            if (pair_row, pair_col) == (w_cursor_row, w_cursor_col) {
+                continue;
+            }
             if let Some((screen_col, screen_row)) = map_doc_to_screen(pair_row, pair_col)
                 && screen_col < right
                 && let Some(cell) = buf.cell_mut((screen_col, screen_row))
@@ -1752,12 +1764,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     // ── matchparen tag highlight ──────────────────────────────────────────
     if is_focused && let Some(tag_cells) = app.matchparen_tag_cells() {
-        let match_paren_style = Style::default()
-            .bg(app.theme.ui.match_paren_bg)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let right = area.x + area.width;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in tag_cells {
+            // Same rule as the bracket pair: the cursor cell keeps its block,
+            // every other cell of both tag names gets the muted highlight.
+            if (pair_row, pair_col) == (w_cursor_row, w_cursor_col) {
+                continue;
+            }
             if let Some((screen_col, screen_row)) = map_doc_to_screen(pair_row, pair_col)
                 && screen_col < right
                 && let Some(cell) = buf.cell_mut((screen_col, screen_row))
@@ -3555,6 +3569,66 @@ mod tests {
         // Neighbouring block rows keep the tint.
         assert_eq!(buf.cell((79, 2)).unwrap().bg, block_bg);
         assert_eq!(buf.cell((79, 4)).unwrap().bg, block_bg);
+    }
+
+    /// The matchparen partner must not look like a second cursor: the cursor
+    /// cell keeps its reversed block, the partner gets the muted matchparen
+    /// bg with no `REVERSED`. Before, both cells were painted
+    /// `BOLD | REVERSED` and `%` jumped between two identical blocks.
+    #[test]
+    fn matchparen_partner_is_muted_next_to_the_cursor_block() {
+        use crate::app::App;
+        use hjkl_buffer::Position;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pair.txt");
+        std::fs::write(&path, "foo(bar)baz\n").unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        // Cursor on the `(` at col 3; its partner is the `)` at col 7.
+        app.active_editor_mut()
+            .buffer_mut()
+            .set_cursor(Position::new(0, 3));
+        app.sync_after_engine_mutation();
+        assert_eq!(
+            app.matchparen_cells(),
+            Some([(0, 3), (0, 7)]),
+            "precondition: the pair must resolve, or this test asserts nothing"
+        );
+
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Locate both cells by their glyphs on the buffer's first screen row.
+        let col_of = |ch: &str| {
+            (0..60u16)
+                .find(|&x| buf.cell((x, 0)).unwrap().symbol() == ch)
+                .unwrap_or_else(|| panic!("no `{ch}` on row 0"))
+        };
+        let open = buf.cell((col_of("("), 0)).unwrap();
+        let close = buf.cell((col_of(")"), 0)).unwrap();
+
+        assert!(
+            open.modifier.contains(Modifier::REVERSED),
+            "the cursor's own cell keeps the reversed cursor block"
+        );
+        assert!(
+            !close.modifier.contains(Modifier::REVERSED),
+            "the partner must NOT be reversed — that is what made it read as a \
+             second cursor"
+        );
+        assert_eq!(
+            close.bg, app.theme.ui.match_paren_bg,
+            "the partner carries the muted matchparen bg"
+        );
+        assert!(
+            close.modifier.contains(Modifier::BOLD),
+            "the partner stays bold so it is still easy to spot"
+        );
     }
 
     // ── Fix 2: screen_rect derived from the focused window's viewport ──────

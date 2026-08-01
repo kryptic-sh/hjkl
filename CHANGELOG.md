@@ -29,6 +29,15 @@ patch bumps.
   span of their own. A bg span in any other colour still paints there, so a
   hex-colour swatch does not vanish when the cursor lands on its line.
 
+### Changed
+
+- **The matchparen partner no longer looks like a second cursor.** Both the
+  cursor's bracket and its match were painted `BOLD | REVERSED`, and reversed
+  video is what draws the cursor cell — so `%` jumped between two identical
+  blocks with nothing saying which one you were on. The cursor cell now keeps
+  its block and the partner gets the muted `match_paren` bg with its own
+  foreground, one step quieter. Same rule for the open/close tag-name highlight.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed
