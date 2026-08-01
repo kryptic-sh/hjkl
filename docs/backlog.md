@@ -78,16 +78,27 @@ compatibility corpus and verify it against nvim before changing expectations.
 
 ### 1.8 Open from the 2026-08-01 review and the 0.40.0 cut
 
-Full findings in `docs/code-review.md`; everything actionable there was fixed
-and shipped in 0.40.0. What follows is what was NOT tackled.
+The 2026-08-01 pass was a read-only full-codebase review targeting the areas the
+2026-07-29 pass had listed as uncovered: `apps/hjkl`, `hjkl-lsp`, `hjkl-ex`,
+`hjkl-editor(-tui)`, `hjkl-completion`, `hjkl-prompt`, `hjkl-menu`,
+`hjkl-picker`, plus `hjkl-anvil`, `hjkl-app`, `hjkl-fs`, `hjkl-clipboard`, and
+`hjkl-bonsai`. Everything actionable it found was fixed and shipped in 0.40.0 —
+the git non-UTF-8 pathspec, duplicate-`WorkspaceEdit` groups, both modeline
+parser bugs plus the marker-ordering divergence, the `listchars` width
+approximation, silently-literal `errorformat` specifiers, the anvil `.bak`
+collision and unvalidated release-URL fields, `pid_is_alive(0)`, the explorer's
+re-implemented filesystem seam (and with it the fifo hang), the triplicated
+`is_safe_component`, `find_bin`'s traversal-order pick, and the `:s///c` byte
+slice. Each of those was re-verified as still fixed on 2026-08-02. What follows
+is what was NOT tackled.
 
 #### Needs an owner decision, not more work
 
-| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                               |
-| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `to_path_within` has no callers                     | `hjkl-lsp/src/uri.rs`                                  | The bug is fixed and the fn documents its own status, but it is dead. Deleting it is a public API removal on a published crate — ask, do not infer from grep.                                                                 |
-| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                   |
-| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build. |
+| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `to_path_within` has no callers                     | `hjkl-lsp/src/uri.rs`                                  | The bug is fixed and the fn documents its own status, but it is dead — every consumer in `lsp_glue.rs` uses the unchecked `to_path`, and `apply_workspace_edit` does its own inline containment check that deliberately warns rather than refuses. If it is kept instead of deleted, prefer reworking it onto `hjkl_fs::resolve_under`: its own `normalize_lexical` folds `..` lexically, which is not how the kernel resolves a `..` through a symlinked component. Deleting it is a public API removal on a published crate — ask, do not infer from grep. |
+| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                                                                                                                                                                                                                                                                                                                                                  |
+| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build.                                                                                                                                                                                                                                                                                                                                |
 
 #### Deferred refactors
 
@@ -132,10 +143,11 @@ behaviour. Verify against nvim, which is wide-char correct.
   so a `:set` in those modes applies to the session and is never persisted.
   Defensible for non-interactive modes, but it was an implementation call, not a
   stated decision.
-- **Bare `:!cmd` gives the child no tty.** It runs under `Command::output()`,
-  which captures stdout and hands the child a null stdin, so `:!git commit` or
-  `:!less` cannot work. Vim suspends the TUI and passes the terminal through.
-  Either implement the suspend or document the limitation on `:!`.
+- **Bare `:!cmd` gives the child no tty.** `hjkl-ex/src/shell.rs` runs it under
+  `Command::output()`, which captures stdout and hands the child a null stdin,
+  so `:!git commit` or `:!less` cannot work. Vim suspends the TUI and passes the
+  terminal through. Either implement the suspend or document the limitation on
+  `:!`.
 - **The trash directory has no reaper.** `$XDG_CACHE_HOME/hjkl/trash/` grows
   without bound and `MAX_RETRIES = 1000` means the 1001st deletion of a
   same-named file fails rather than recycling a slot. 0.40.0 documented this;
@@ -149,8 +161,20 @@ behaviour. Verify against nvim, which is wide-char correct.
 
 - Clear nvim undo history after fixture seeding, then fuzz undo/redo. Extend
   cursor comparison beyond ASCII and add ex/search, fold, and `gq` coverage.
-- Complete review coverage for app, LSP, editor/TUI, ex/completion,
-  prompt/menu/picker, and remaining non-core crates.
+- **Review coverage gap.** The 2026-07-29 pass covered `hjkl-vim`,
+  `hjkl-engine`, `hjkl-buffer`; the 2026-08-01 pass covered `apps/hjkl`,
+  `hjkl-lsp`, `hjkl-ex`, `hjkl-editor(-tui)`, `hjkl-completion`, `hjkl-prompt`,
+  `hjkl-menu`, `hjkl-picker`, `hjkl-anvil`, `hjkl-app`, `hjkl-fs`,
+  `hjkl-clipboard`, `hjkl-bonsai`, and touched `hjkl-quickfix`,
+  `hjkl-buffer-tui`, `hjkl-statusline`, `hjkl-which-key`, `hjkl-prompt-tui`,
+  `hjkl-css` only where a finding led there. Everything else in `crates/` has
+  never been reviewed — including `hjkl-config`, `hjkl-keymap(-tui)`,
+  `hjkl-layout`, `hjkl-syntax(-tui)`, `hjkl-markdown(-tui)`, `hjkl-theme(-tui)`,
+  `hjkl-tabs(-tui)`, `hjkl-hover(-tui)`, `hjkl-holler(-tui)`, `hjkl-form`,
+  `hjkl-fs-watch`, `hjkl-fuzzy`, `hjkl-mangler`, `hjkl-kitty`, `hjkl-lang`,
+  `hjkl-icons`, `hjkl-splash(-tui)`, `hjkl-info-popup(-tui)`, `hjkl-vim-tui`,
+  `hjkl-vim-types`, `hjkl-xdg`, and the remaining `-tui` siblings. Stated as a
+  gap, not a plan.
 - Stabilize flaky PTY e2e cases. Cache/CWD/color isolation landed in `ca3852b2`;
   the two explorer `dd` tests that still failed under `cargo test`'s thread pool
   are fixed — they pointed `XDG_CACHE_HOME` at the very directory they were
@@ -202,6 +226,10 @@ manifest pins `git_url`/`git_rev` but has no signature or artifact-hash
 verification. This is not remotely reachable today because the manifest is
 `include_str!` bundled. A signature/hash-pinning design is required before code
 changes.
+
+The 2026-08-01 review read `compile_into` and confirmed its path validation
+(`runtime/compile.rs`) is correct for the traversal case — the outstanding risk
+is the design one above, not a missing check.
 
 ## 4. Process reference
 
@@ -565,15 +593,6 @@ case mappings. Fixed by `9a156885`.
   now set to `cursor.row.min(last_row)`, which pulls it back into the live rope.
   The other `None` path — the cursor's row hidden inside a closed fold — is
   covered by the same assignment, and both paths now have a regression test.
-
-#### Remaining review coverage
-
-- `apps/hjkl/` — app layer, PTY harness, e2e tests.
-- `crates/hjkl-lsp/` — LSP runtime, codec, manager.
-- `crates/hjkl-editor/`, `crates/hjkl-editor-tui/`, and sibling TUI crates.
-- `crates/hjkl-ex/`, `crates/hjkl-completion/` — ex commands, completion.
-- `crates/hjkl-prompt/`, `crates/hjkl-menu/`, `crates/hjkl-picker/`.
-- All remaining TUI and non-core crates.
 
 ### Code review — pending changes (2026-07-29)
 
