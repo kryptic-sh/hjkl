@@ -1556,10 +1556,26 @@ mod tests {
         // Disable autocrlf so checkout doesn't rewrite `\n` → `\r\n`.
         git(tmp.path(), &["config", "core.autocrlf", "false"]);
 
-        // Latin-1 "café.txt" — valid on a unix filesystem, but not valid UTF-8,
+        // Latin-1 "café.txt" — a valid filename on Linux, but not valid UTF-8,
         // so `Path::to_str` returns None for it.
+        //
+        // Not every unix filesystem will store it: APFS enforces UTF-8 and
+        // fails the create with EILSEQ, so macOS cannot host this case at all.
+        // Skip there rather than gating on `target_os`, so any filesystem that
+        // *does* allow it still gets the coverage. Mirrors the `sh_available()`
+        // guard the hjkl-ex shell tests use.
         let weird = tmp.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt"));
-        std::fs::write(&weird, "original\n").unwrap();
+        if let Err(e) = std::fs::write(&weird, "original\n") {
+            // Only EILSEQ means "this filesystem will not store that name".
+            // Anything else (ENOSPC, EACCES, …) is a real failure and must not
+            // be swallowed into a green test.
+            assert_eq!(
+                e.raw_os_error(),
+                Some(libc::EILSEQ),
+                "unexpected error creating the non-UTF-8 fixture: {e}"
+            );
+            return;
+        }
         let bystander = tmp.path().join("bystander.txt");
         std::fs::write(&bystander, "bystander-original\n").unwrap();
 
