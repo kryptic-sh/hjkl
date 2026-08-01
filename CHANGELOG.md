@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **The cursor-highlight defaults are swapped: `cursorline` is now on and
+  `cursorcolumn` off.** A fresh session highlights the cursor's row and leaves
+  its column alone. `cursorline` is the deliberate divergence from vim now
+  (`:set nocul` turns it off); `cursorcolumn` returns to vim's `nocursorcolumn`,
+  reverting the 0.39.1 change below. Both `Settings::default` and
+  `Options::default` moved together — they are the pair a regression test pins,
+  because when they disagreed the `Options` side silently won for every shipped
+  session.
+
 ## [0.39.1] - 2026-07-31
 
 ### Changed

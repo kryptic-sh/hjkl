@@ -373,25 +373,25 @@ fn config_load_from_disk_validation_failure_surfaces() {
 #[test]
 fn set_cursorline_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // vim parity: `nocursorline`. Until the Options/Settings default
-    // reconciliation this read `true` — `build_slot` seeds the slot with
-    // `Settings::default()` (`cursorline: false`) and then immediately
-    // `apply_options(&ec_opts)` where `ec_opts` was `Options::default()`
-    // (`cursorline: true`), so the Options side silently won for every
-    // shipped TUI session.
-    assert!(
-        !app.active_editor().settings().cursorline,
-        "cursorline must default to false (vim nocursorline)"
-    );
-    app.dispatch_ex("set cursorline");
+    // On by default in hjkl (vim defaults to `nocursorline`), so this
+    // exercises the off-then-on direction. The seeding path this pins:
+    // `build_slot` seeds the slot from `Settings::default()` and then
+    // immediately `apply_options(&ec_opts)`, so the two defaults have to
+    // agree — they disagreed once and the Options side silently won for
+    // every shipped TUI session.
     assert!(
         app.active_editor().settings().cursorline,
-        ":set cursorline must enable cursorline"
+        "cursorline must default to true (hjkl divergence from vim)"
     );
     app.dispatch_ex("set nocursorline");
     assert!(
         !app.active_editor().settings().cursorline,
         ":set nocursorline must disable cursorline"
+    );
+    app.dispatch_ex("set cursorline");
+    assert!(
+        app.active_editor().settings().cursorline,
+        ":set cursorline must enable cursorline"
     );
 }
 
@@ -408,13 +408,15 @@ fn set_cul_alias_works() {
 #[test]
 fn set_cursorcolumn_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // On by default in hjkl (vim defaults to `nocursorcolumn`), so this
-    // exercises the off-then-on direction.
+    // vim parity: `nocursorcolumn`.
+    assert!(
+        !app.active_editor().settings().cursorcolumn,
+        "cursorcolumn must default to false (vim nocursorcolumn)"
+    );
+    app.dispatch_ex("set cuc");
     assert!(app.active_editor().settings().cursorcolumn);
     app.dispatch_ex("set nocuc");
     assert!(!app.active_editor().settings().cursorcolumn);
-    app.dispatch_ex("set cuc");
-    assert!(app.active_editor().settings().cursorcolumn);
 }
 
 #[test]

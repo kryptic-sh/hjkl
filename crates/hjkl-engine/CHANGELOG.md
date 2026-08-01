@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `Settings::default()` and `Options::default()` now carry `cursorline: true`
+  and `cursorcolumn: false`, swapping both from the previous pair. `cursorline`
+  is the deliberate divergence from vim; `cursorcolumn` returns to vim's
+  `nocursorcolumn`. The two defaults move together — the test that pins them in
+  lockstep is what keeps a fresh session from showing a value `:set cul?`
+  denies.
+
 ### Removed
 
 - Dropped the `crossterm` feature, the `crossterm_to_input` free fn, the

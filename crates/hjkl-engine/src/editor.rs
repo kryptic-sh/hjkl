@@ -1097,13 +1097,13 @@ pub struct Settings {
     /// Range 1..=20.
     pub numberwidth: usize,
     /// Highlight the row where the cursor sits. Matches vim's `:set cursorline`.
-    /// Default `false`.
-    pub cursorline: bool,
-    /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
     ///
     /// Default `true` — a deliberate hjkl divergence from vim, which defaults
-    /// to `nocursorcolumn`. Must stay in lockstep with
-    /// [`crate::types::Settings::default`].
+    /// to `nocursorline`. Must stay in lockstep with
+    /// [`crate::types::Options::default`].
+    pub cursorline: bool,
+    /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
+    /// Default `false` — vim parity (`nocursorcolumn`).
     pub cursorcolumn: bool,
     /// Sign-column display mode. Matches vim's `:set signcolumn`.
     /// Default [`crate::types::SignColumnMode::Auto`].
@@ -1309,8 +1309,8 @@ impl Default for Settings {
             number: true,
             relativenumber: false,
             numberwidth: 4,
-            cursorline: false,
-            cursorcolumn: true,
+            cursorline: true,
+            cursorcolumn: false,
             signcolumn: crate::types::SignColumnMode::Auto,
             foldcolumn: 0,
             foldmethod: crate::types::FoldMethod::Expr,
@@ -7190,11 +7190,17 @@ mod options_conversion_tests {
         );
     }
 
-    /// vim's default is `nocursorline`; the nvim oracle is the contract.
+    /// The cursor-highlight pair is a deliberate hjkl divergence from vim:
+    /// `cursorline` on, `cursorcolumn` off. What this test really guards is
+    /// that the two sides agree — they disagreed once and the `Options` side
+    /// silently won in a fresh session, so a fresh buffer showed a setting
+    /// `:set cursorline?` denied.
     #[test]
-    fn cursorline_defaults_off_on_both_sides() {
-        assert!(!Settings::default().cursorline);
-        assert!(!Options::default().cursorline);
+    fn cursor_highlight_defaults_agree_on_both_sides() {
+        assert!(Settings::default().cursorline);
+        assert!(Options::default().cursorline);
+        assert!(!Settings::default().cursorcolumn);
+        assert!(!Options::default().cursorcolumn);
     }
 
     /// `settings_from_options` (the `Editor::new` path) must agree with
