@@ -545,6 +545,17 @@ fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
 /// otherwise a `bg`-only style using the theme's editor background. Threaded
 /// into [`hjkl_buffer_tui::BufferView::background`], which layers it under
 /// syntax / cursorline / selection styling.
+/// Base background for the whole terminal, not just the editor pane.
+///
+/// Same rule as [`buffer_background_style`] — `Style::default()` (transparent)
+/// under `theme.transparent`, else the theme's editor background — but applied
+/// frame-wide so chrome that paints no background of its own (the splash
+/// screen, gaps beside the tabline and explorer rows, separator cells) shows
+/// the theme instead of the terminal's own colour.
+pub fn frame_background_style(app: &App) -> Style {
+    buffer_background_style(app)
+}
+
 pub fn buffer_background_style(app: &App) -> Style {
     if app.theme_transparent {
         Style::default()
@@ -564,9 +575,13 @@ fn draw_separator(
     sep_rect: Rect,
     dir: window::SplitDir,
     border_color: ratatui::style::Color,
+    background: Style,
 ) {
     use ratatui::buffer::Cell;
-    let style = Style::default().fg(border_color);
+    // The cell is reset before the glyph goes down (so no window content bleeds
+    // through a wide character), which also drops the frame's base background —
+    // hence painting it back here rather than relying on what was underneath.
+    let style = background.patch(Style::default().fg(border_color));
     let (glyph, glyph_width) = match dir.axis() {
         window::Axis::Col => ("│", 1u16),
         window::Axis::Row => ("─", 1u16),
@@ -641,7 +656,7 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
             // Draw separator on top of both children after they render so
             // that no window content bleeds into the separator cell.
             if let Some(sep) = sep_rect {
-                draw_separator(frame, sep, *dir, border_color);
+                draw_separator(frame, sep, *dir, border_color, frame_background_style(app));
             }
         }
         // `LayoutTree` is `#[non_exhaustive]`; unknown variant → skip rendering.
@@ -2012,6 +2027,17 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // the one place that unconditionally sees the full frame every draw.
     app.last_frame_rect = Some(area);
 
+    // Base background for the WHOLE terminal (#303 follow-up). Every widget
+    // that paints its own bg covers this; what it fixes is everything that
+    // does NOT — the splash screen, the gaps around the tabline and explorer
+    // rows, and popup interiors — which otherwise showed the terminal's own
+    // background and read as holes in the theme. Skipped under
+    // `theme.transparent`, where showing the terminal through IS the point.
+    let base = frame_background_style(app);
+    if base != Style::default() {
+        frame.buffer_mut().set_style(area, base);
+    }
+
     // Special-pane slots (explorer, bottom qf/loclist dock, cmdline history)
     // don't count as additional user buffers for the top-bar visibility
     // decision — otherwise opening the explorer or `:copen` alone would show
@@ -2132,8 +2158,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         hjkl_hover_tui::render(frame, popup, &hover_theme, frame.area());
     }
 
-    // Toast notifications — float top-right, newest on top.
-    let holler_layout = HollerLayout::default();
+    // Toast notifications — float top-right, newest on top. They clear their
+    // rect before drawing, so without an explicit background they punch a
+    // terminal-coloured hole in the theme.
+    let mut holler_layout = HollerLayout::default();
+    if !app.theme_transparent {
+        holler_layout = holler_layout.with_bg(app.theme.ui.panel_bg);
+    }
     render_active(
         frame,
         area,
@@ -3712,6 +3743,167 @@ mod tests {
         assert!(
             !screen(&terminal).contains("hidden body"),
             "re-enabling folds hides the body again"
+        );
+    }
+
+    /// Render `app` at 60x12 and return the drawn buffer.
+    fn draw_frame(app: &mut App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        // Twice: the first frame settles window rects / viewports.
+        terminal.draw(|f| frame(f, app)).unwrap();
+        terminal.draw(|f| frame(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// Cells left on the TERMINAL's own background — the holes a theme is
+    /// supposed to cover.
+    fn reset_bg_cells(buf: &ratatui::buffer::Buffer, w: u16, h: u16) -> usize {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.bg == Color::Reset))
+            .count()
+    }
+
+    fn themed_app(path: Option<std::path::PathBuf>) -> App {
+        let mut app = App::new(path, false, None, None).unwrap();
+        // A scheme whose background is nothing like the terminal default, so a
+        // missed region shows up as `Color::Reset` rather than a lucky match.
+        assert!(app.apply_named_theme("dracula"), "dracula must be bundled");
+        app
+    }
+
+    /// The theme's background belongs to the WHOLE terminal, not just the
+    /// editor pane. The splash screen is the clearest case: it paints no
+    /// background of its own, so every cell used to be the terminal's colour
+    /// and the theme visibly stopped at the editor.
+    #[test]
+    fn splash_screen_is_painted_on_the_theme_background() {
+        let mut app = themed_app(None);
+        let buf = draw_frame(&mut app, 60, 12);
+        assert_eq!(
+            reset_bg_cells(&buf, 60, 12),
+            0,
+            "no cell may fall back to the terminal background"
+        );
+        assert_eq!(
+            buf.cell((0, 1)).unwrap().bg,
+            app.theme.ui.background,
+            "the splash area carries the theme background"
+        );
+    }
+
+    /// Same for every layout that mixes chrome with buffers — tabline row,
+    /// explorer pane, split separator, quickfix dock, floating overlays.
+    #[test]
+    fn no_layout_leaves_terminal_background_showing() {
+        use crate::keymap_actions::AppAction;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bg.txt");
+        std::fs::write(&path, "hello\nworld\n").unwrap();
+
+        let mut with_explorer = themed_app(Some(path.clone()));
+        with_explorer.dispatch_action(AppAction::ToggleExplorer, 1);
+
+        let mut with_split = themed_app(Some(path.clone()));
+        with_split.dispatch_ex("vsp");
+
+        let mut with_tabs = themed_app(Some(path.clone()));
+        with_tabs.dispatch_ex("tabnew");
+
+        let mut with_dock = themed_app(Some(path.clone()));
+        with_dock.dispatch_ex("copen");
+
+        let mut with_picker = themed_app(Some(path.clone()));
+        with_picker.dispatch_ex("Files");
+
+        let mut with_cmdline = themed_app(Some(path));
+        with_cmdline.open_command_prompt();
+
+        for (name, app) in [
+            ("explorer", &mut with_explorer),
+            ("vsplit", &mut with_split),
+            ("tabs", &mut with_tabs),
+            ("quickfix", &mut with_dock),
+            ("picker", &mut with_picker),
+            ("cmdline", &mut with_cmdline),
+        ] {
+            let buf = draw_frame(app, 60, 12);
+            assert_eq!(
+                reset_bg_cells(&buf, 60, 12),
+                0,
+                "{name}: cells still on the terminal background"
+            );
+        }
+    }
+
+    /// The split separator resets its cell before drawing the glyph (so no
+    /// wide character bleeds through), which also dropped the frame's base
+    /// background — it has to paint it back.
+    #[test]
+    fn split_separator_cell_carries_the_theme_background() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sep.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        let mut app = themed_app(Some(path));
+        app.dispatch_ex("vsp");
+        let buf = draw_frame(&mut app, 60, 12);
+
+        let sep = (0..60u16)
+            .find(|&x| buf.cell((x, 0)).is_some_and(|c| c.symbol() == "│"))
+            .expect("a vertical split draws a `│` separator on row 0");
+        assert_eq!(
+            buf.cell((sep, 0)).unwrap().bg,
+            app.theme.ui.background,
+            "the separator column must be on the theme background"
+        );
+    }
+
+    /// Toasts clear their rect before drawing, so they need an explicit
+    /// background or they punch a terminal-coloured hole in the theme.
+    #[test]
+    fn toast_popup_is_painted_on_the_panel_background() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("toast.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        let mut app = themed_app(Some(path));
+        // `:colorscheme` reports what it applied — a real toast from a real
+        // command, rather than a hand-pushed one that could drift from how
+        // the app actually notifies.
+        app.dispatch_ex("colorscheme dracula");
+        let buf = draw_frame(&mut app, 60, 12);
+
+        // Find the toast's top-left border corner.
+        let corner = (0..12u16)
+            .flat_map(|y| (0..60u16).map(move |x| (x, y)))
+            .find(|&(x, y)| buf.cell((x, y)).is_some_and(|c| c.symbol() == "┌"))
+            .expect("an active toast draws a bordered box");
+        assert_eq!(
+            buf.cell(corner).unwrap().bg,
+            app.theme.ui.panel_bg,
+            "the toast border sits on the panel background"
+        );
+        // A cell inside the box too, not just the frame.
+        let inside = (corner.0 + 1, corner.1 + 1);
+        assert_eq!(
+            buf.cell(inside).unwrap().bg,
+            app.theme.ui.panel_bg,
+            "the toast interior is filled, not left transparent"
+        );
+    }
+
+    /// `theme.transparent` keeps the terminal's own background — the frame
+    /// fill must not defeat it.
+    #[test]
+    fn transparent_theme_still_shows_the_terminal_background() {
+        let mut cfg = hjkl_app::config::Config::default();
+        cfg.theme.transparent = true;
+        let mut app = App::new(None, false, None, None).unwrap().with_config(cfg);
+        assert!(app.theme_transparent, "precondition: transparency is on");
+        let buf = draw_frame(&mut app, 60, 12);
+        assert!(
+            reset_bg_cells(&buf, 60, 12) > 400,
+            "most of the screen must still be the terminal background"
         );
     }
 

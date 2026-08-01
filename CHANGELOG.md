@@ -84,6 +84,17 @@ patch bumps.
   fold extraction (`rope.to_string()` + a whole-tree query) AND a viewport
   re-highlight. An unchanged fold set is now a no-op.
 
+### Fixed
+
+- **The theme's background now covers the whole TUI, not just the editor pane.**
+  Anything that painted no background of its own fell through to the terminal's
+  colour and read as a hole in the theme: the splash screen (every cell of it),
+  the gaps beside the tabline and the explorer rows, the split separator column,
+  and toast popups, which clear their rect before drawing. The frame now starts
+  with a base fill in `theme.ui.background`, the separator repaints it under its
+  glyph, and toasts take `theme.ui.panel_bg` like the other floating panels.
+  `theme.transparent` is unchanged — it still shows the terminal through.
+
 ### Added
 
 - **`:colorscheme` previews live.** Moving through the completion popup with the

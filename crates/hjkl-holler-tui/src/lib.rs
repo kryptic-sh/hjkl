@@ -38,16 +38,29 @@ pub struct HollerLayout {
     pub max_visible: usize,
     /// `(top, right)` margin from the terminal edge in terminal cells.
     pub margin: (u16, u16),
+    /// Background painted behind a toast. `None` (the default) leaves the
+    /// terminal's own background showing through — the toast rect is cleared
+    /// before it is drawn, so without a colour here it is a hole in whatever
+    /// the host has themed around it.
+    pub bg: Option<Color>,
 }
 
 impl HollerLayout {
-    /// Construct with explicit values.
+    /// Construct with explicit values and no background.
     pub fn new(max_width: u16, max_visible: usize, margin: (u16, u16)) -> Self {
         Self {
             max_width,
             max_visible,
             margin,
+            bg: None,
         }
+    }
+
+    /// Paint toasts on `bg` instead of leaving the terminal background.
+    #[must_use]
+    pub fn with_bg(mut self, bg: Color) -> Self {
+        self.bg = Some(bg);
+        self
     }
 }
 
@@ -57,6 +70,7 @@ impl Default for HollerLayout {
             max_width: 48,
             max_visible: 5,
             margin: (1, 1),
+            bg: None,
         }
     }
 }
@@ -137,11 +151,14 @@ pub fn render_active(
         };
 
         // Dim modifier in last 500 ms.
-        let base_style = if toast.is_fading(now) {
+        let mut base_style = if toast.is_fading(now) {
             Style::default().add_modifier(Modifier::DIM)
         } else {
             Style::default()
         };
+        if let Some(bg) = layout.bg {
+            base_style = base_style.bg(bg);
+        }
 
         let border_color = severity_color(toast.severity);
         let border_style = base_style.fg(border_color);
@@ -150,6 +167,7 @@ pub fn render_active(
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
+            .style(base_style)
             .title(Span::styled(title, border_style));
 
         let inner = block.inner(rect);
