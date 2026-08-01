@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.40.0] - 2026-08-01
+
+### Added
+
+- `is_safe_component` — the single-path-component guard (rejects separators,
+  `.`/`..`, and absolute/root prefixes) that `hjkl-anvil` and `hjkl-bonsai` each
+  carried privately. Re-exported flat from the crate root alongside
+  `resolve_under`.
+
 ## [0.37.0] - 2026-07-26
 
 ### Added

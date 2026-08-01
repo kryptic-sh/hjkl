@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Fixed
 
 - `wrap::wrap_segments` no longer loops forever (growing an unbounded `Vec`

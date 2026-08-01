@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
+### Fixed
+
+- `uri::to_path_within` returned the RAW path after validating the normalized
+  one, so a caller could act on a spelling the containment check never saw. It
+  now returns the normalized path. The doc also records that the check is
+  lexical and symlink-unaware (`hjkl_fs::resolve_under` is the stronger one),
+  and that nothing in the workspace calls it — so its existence is not evidence
+  that containment is enforced on the LSP edit path.
+
+## [Unreleased]
+
 ## [0.1.1] - 2026-05-17
 
 ### Removed

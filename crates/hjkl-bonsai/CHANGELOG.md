@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
+### Changed
+
+- `runtime::source::is_safe_component` is now a re-export of
+  `hjkl_fs::is_safe_component` rather than a private copy. Same predicate, same
+  import path for in-crate callers.
+
+## [Unreleased]
+
 ## [0.7.5] - 2026-05-18
 
 ### Changed

@@ -5,6 +5,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Removed
 
 - Dropped the `ratatui` feature and `start_screen::render`. The ratatui adapter

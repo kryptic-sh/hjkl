@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Fixed
 
 - `write_key_at` now writes atomically (temp-file + `fsync` + `rename`) so a

@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Security
 
 - The live-grep source passes the user query after a `--` separator for both the

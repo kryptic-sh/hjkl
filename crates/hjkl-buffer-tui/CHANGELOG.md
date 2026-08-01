@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
+### Breaking
+
+- `BufferView` gained a required `cursor_column: Option<usize>` field. It is the
+  counterpart of `cursor_line_row`: a host with per-window cursors must pass the
+  window's column, because `BufferView.buffer` is the shared buffer whose cursor
+  is a different object. `None` keeps the old behaviour (read the buffer's own
+  cursor), which is correct for a single-cursor host.
+
+### Fixed
+
+- `cursorcolumn` painted column 0 rather than the cursor's column, for any host
+  whose real cursor lives outside `BufferView.buffer` — see the new field above.
+  The pass also used the cursor's CHAR column directly as a screen offset, so a
+  tab earlier in the line shifted the bar one cell left per tab; it now goes
+  through `char_col_to_visual_col`, the same expansion `paint_row` applies.
+
 ### Security
 
 - Control characters in rendered buffer text are neutralized: C0/C1 controls and

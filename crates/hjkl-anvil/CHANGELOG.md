@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Security
 
 - `store::package_dir` rejects any tool name that is not a single safe path

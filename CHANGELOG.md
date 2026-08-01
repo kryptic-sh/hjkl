@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Fixed
 
 - **`cursorcolumn` painted column 0 instead of the cursor's column.** The

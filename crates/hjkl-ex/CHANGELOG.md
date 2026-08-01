@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Fixed
 
 - Parsing a `'<mark>` range address no longer panics on a multibyte mark

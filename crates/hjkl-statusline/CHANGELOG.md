@@ -6,6 +6,8 @@ workspace lockstep version.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Changed
 
 - `Segment::Text.content` changed from `String` to `Cow<'static, str>`. Static

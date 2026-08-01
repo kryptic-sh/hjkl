@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-08-01
+
 ### Fixed
 
 - Linewise operator motions at a buffer edge no longer delete the current line;
