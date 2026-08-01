@@ -1354,6 +1354,7 @@ dependencies = [
  "similar",
  "tempfile",
  "toml",
+ "toml_edit",
  "tracing",
  "windows-sys 0.61.2",
 ]

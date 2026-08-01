@@ -452,6 +452,161 @@ pub fn options_key_for_setting(name: &str) -> Option<&'static str> {
     })
 }
 
+/// Strip a `:set` token down to the option name it addresses, or `None` when
+/// the token must not trigger a write-back.
+///
+/// `None` for the query form (`name?`), which reads rather than writes, and
+/// for `formatoptions+=`/`-=`, whose *result* is persisted under the plain
+/// `formatoptions` name by the caller reading the post-set value.
+pub fn setting_name_from_token(token: &str) -> Option<&str> {
+    if token.ends_with('?') {
+        return None;
+    }
+    // `fo+=r` / `formatoptions-=o` — the name is everything before the sign.
+    if let Some(i) = token.find("+=").or_else(|| token.find("-=")) {
+        return Some(&token[..i]);
+    }
+    let token = token.strip_suffix('!').unwrap_or(token);
+    let name = token.split_once('=').map_or(token, |(n, _)| n);
+    // A bare `nofoo` addresses `foo`. Try the whole name first, exactly as
+    // `parse_token` in the modeline parser learned to: `number` starts with
+    // `no` and is not the negation of `umber`.
+    if options_key_for_setting(name).is_some() {
+        return Some(name);
+    }
+    name.strip_prefix("no")
+}
+
+/// Write the live value of `set_name` into the `[options]` table of the config
+/// file at `path`.
+///
+/// Reads the value back off `settings` rather than re-parsing the `:set`
+/// token, so what lands in the file is exactly what the editor ended up with —
+/// clamped, normalised, and with `+=`/`-=` already folded in.
+///
+/// A name that is not persistable ([`options_key_for_setting`] returns `None`)
+/// is a silent no-op: buffer-local options are session-scoped by design.
+pub fn persist_option(
+    path: &Path,
+    set_name: &str,
+    settings: &hjkl_engine::Settings,
+) -> Result<(), ConfigError> {
+    use hjkl_config::write_key_at;
+    use hjkl_engine::types::{DiagInlineMode, FoldMethod, SignColumnMode};
+
+    let Some(key) = options_key_for_setting(set_name) else {
+        return Ok(());
+    };
+    let dotted = format!("options.{key}");
+    let p = path;
+    let s = settings;
+
+    match key {
+        // ── integers ─────────────────────────────────────────────────────
+        "shiftwidth" => write_key_at(p, &dotted, s.shiftwidth as i64),
+        "tabstop" => write_key_at(p, &dotted, s.tabstop as i64),
+        "softtabstop" => write_key_at(p, &dotted, s.softtabstop as i64),
+        "textwidth" => write_key_at(p, &dotted, s.textwidth as i64),
+        "numberwidth" => write_key_at(p, &dotted, s.numberwidth as i64),
+        "scrolloff" => write_key_at(p, &dotted, s.scrolloff as i64),
+        "sidescrolloff" => write_key_at(p, &dotted, s.sidescrolloff as i64),
+        "scroll_duration_ms" => write_key_at(p, &dotted, i64::from(s.scroll_duration_ms)),
+        "foldcolumn" => write_key_at(p, &dotted, i64::from(s.foldcolumn)),
+        "foldlevelstart" => write_key_at(p, &dotted, i64::from(s.foldlevelstart)),
+        "undolevels" => write_key_at(p, &dotted, i64::from(s.undo_levels)),
+        "updatetime" => write_key_at(p, &dotted, i64::from(s.updatetime)),
+        "timeoutlen" => write_key_at(p, &dotted, s.timeout_len.as_millis() as i64),
+        // ── booleans ─────────────────────────────────────────────────────
+        "expandtab" => write_key_at(p, &dotted, s.expandtab),
+        "autoindent" => write_key_at(p, &dotted, s.autoindent),
+        "smartindent" => write_key_at(p, &dotted, s.smartindent),
+        "ignorecase" => write_key_at(p, &dotted, s.ignore_case),
+        "smartcase" => write_key_at(p, &dotted, s.smartcase),
+        "wrapscan" => write_key_at(p, &dotted, s.wrapscan),
+        "number" => write_key_at(p, &dotted, s.number),
+        "relativenumber" => write_key_at(p, &dotted, s.relativenumber),
+        "cursorline" => write_key_at(p, &dotted, s.cursorline),
+        "cursorcolumn" => write_key_at(p, &dotted, s.cursorcolumn),
+        "foldenable" => write_key_at(p, &dotted, s.foldenable),
+        "list" => write_key_at(p, &dotted, s.list),
+        "indent_guides" => write_key_at(p, &dotted, s.indent_guides),
+        "autopair" => write_key_at(p, &dotted, s.autopair),
+        "autoclose-tag" => write_key_at(p, &dotted, s.autoclose_tag),
+        "motion_sneak" => write_key_at(p, &dotted, s.motion_sneak),
+        "matchparen" => write_key_at(p, &dotted, s.matchparen),
+        "undobreak" => write_key_at(p, &dotted, s.undo_break_on_motion),
+        "format_on_save" => write_key_at(p, &dotted, s.format_on_save),
+        "trim_trailing_whitespace" => write_key_at(p, &dotted, s.trim_trailing_whitespace),
+        "fixendofline" => write_key_at(p, &dotted, s.fixendofline),
+        "autoreload" => write_key_at(p, &dotted, s.autoreload),
+        "rainbow_brackets" => write_key_at(p, &dotted, s.rainbow_brackets),
+        "colorizer" => write_key_at(p, &dotted, s.colorizer),
+        "tabline_icons" => write_key_at(p, &dotted, s.tabline_icons),
+        "blame_inline" => write_key_at(p, &dotted, s.blame_inline),
+        // ── strings ──────────────────────────────────────────────────────
+        "colorcolumn" => write_key_at(p, &dotted, s.colorcolumn.clone()),
+        "foldmarker" => write_key_at(p, &dotted, s.foldmarker.clone()),
+        "iskeyword" => write_key_at(p, &dotted, s.iskeyword.clone()),
+        "formatoptions" => write_key_at(p, &dotted, s.formatoptions.clone()),
+        "makeprg" => write_key_at(p, &dotted, s.makeprg.clone()),
+        "errorformat" => write_key_at(p, &dotted, s.errorformat.clone()),
+        "listchars" => write_key_at(p, &dotted, s.listchars.to_canonical_string()),
+        "indent_guide_char" => write_key_at(p, &dotted, s.indent_guide_char.to_string()),
+        // ── enums, written as the spelling `:set` accepts back ───────────
+        "signcolumn" => write_key_at(
+            p,
+            &dotted,
+            match s.signcolumn {
+                SignColumnMode::Yes => "yes",
+                SignColumnMode::No => "no",
+                SignColumnMode::Auto => "auto",
+            },
+        ),
+        "foldmethod" => write_key_at(
+            p,
+            &dotted,
+            match s.foldmethod {
+                FoldMethod::Manual => "manual",
+                FoldMethod::Expr => "expr",
+                FoldMethod::Marker => "marker",
+            },
+        ),
+        "diagnostics_inline" => write_key_at(
+            p,
+            &dotted,
+            match s.diagnostics_inline {
+                DiagInlineMode::Off => "off",
+                DiagInlineMode::Current => "current",
+                DiagInlineMode::All => "all",
+            },
+        ),
+        // `wrap` and `linebreak` both land here — one tri-state key.
+        "wrap" => write_key_at(
+            p,
+            &dotted,
+            match s.wrap {
+                hjkl_buffer::Wrap::None => "off",
+                hjkl_buffer::Wrap::Char => "char",
+                hjkl_buffer::Wrap::Word => "word",
+            },
+        ),
+        // ── list ─────────────────────────────────────────────────────────
+        "colorizer_filetypes" => {
+            let arr: toml_edit::Array = s.colorizer_filetypes.iter().collect();
+            write_key_at(p, &dotted, arr)
+        }
+        // `options_key_for_setting` and this match are kept in step by
+        // `every_persistable_key_has_a_writer`.
+        other => Err(ConfigError::Invalid {
+            path: p.to_path_buf(),
+            message: format!(
+                "no writer for options.{other} — options_key_for_setting and \
+                 persist_option have drifted"
+            ),
+        }),
+    }
+}
+
 fn default_icons() -> String {
     "auto".to_string()
 }
@@ -662,6 +817,43 @@ mod tests {
         assert_eq!(seeded.blame_inline, dflt.blame_inline);
         assert_eq!(seeded.scroll_duration_ms, dflt.scroll_duration_ms);
         assert_eq!(seeded.diagnostics_inline, dflt.diagnostics_inline);
+    }
+
+    /// Every key `options_key_for_setting` can name must have a writer arm in
+    /// `persist_option`.
+    ///
+    /// The fallback arm exists so a drift is an error rather than a silent
+    /// no-op, but an error only surfaces when a user happens to `:set` that
+    /// option. This drives every key through the writer so the drift is caught
+    /// here instead.
+    #[test]
+    fn every_persistable_key_has_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let settings = hjkl_engine::Settings::default();
+
+        let doc: toml::Value = toml::from_str(DEFAULTS_TOML).unwrap();
+        for key in doc["options"].as_table().unwrap().keys() {
+            // Reached via the key's own name, which is always a valid `:set`
+            // name for a persistable option (that is the 1:1 rule).
+            if options_key_for_setting(key).is_none() {
+                continue; // config-only key — nothing to write.
+            }
+            persist_option(&path, key, &settings)
+                .unwrap_or_else(|e| panic!("no writer for `options.{key}`: {e}"));
+        }
+
+        // And the file it produced must still load.
+        let written = std::fs::read_to_string(&path).unwrap();
+        if let Err(e) = toml::from_str::<Config>(&written) {
+            // A partial file is expected (only [options] was written), so a
+            // missing-section error is fine; a bad *key* is not.
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("unknown field"),
+                "persist_option wrote a key the schema rejects: {msg}"
+            );
+        }
     }
 
     /// The buffer-local options must map to nothing, or `:set filetype=rust`

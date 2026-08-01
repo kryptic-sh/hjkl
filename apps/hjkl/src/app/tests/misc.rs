@@ -1232,3 +1232,152 @@ fn every_options_key_is_reachable_from_set() {
         );
     }
 }
+
+// ── `:set` write-back to config.toml ────────────────────────────────────────
+
+/// `:set` persists to the user's config file, so the session and the file
+/// never disagree. Covers the three value shapes (bool, integer, enum) plus
+/// the `no` prefix, since each takes a different arm of `persist_option`.
+#[test]
+fn set_writes_options_back_to_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set scrolloff=11");
+    app.dispatch_ex("set nonumber");
+    app.dispatch_ex("set signcolumn=no");
+    app.dispatch_ex("set list");
+
+    let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
+    assert!(text.contains("[options]"), "got: {text}");
+    assert!(text.contains("scrolloff = 11"), "got: {text}");
+    assert!(text.contains("number = false"), "got: {text}");
+    assert!(text.contains(r#"signcolumn = "no""#), "got: {text}");
+    assert!(text.contains("list = true"), "got: {text}");
+}
+
+/// The written file must load back cleanly and reproduce the same values —
+/// the round trip is the whole point, and a key written under the wrong name
+/// or type would be rejected by `deny_unknown_fields` on the next launch.
+#[test]
+fn set_written_config_reloads_to_the_same_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set scrolloff=9 nocursorline foldmethod=marker listchars=tab:>-,eol:$");
+
+    let cfg = hjkl_app::config::load_from(&cfg_path).expect("written config must reload");
+    use hjkl_config::Validate;
+    cfg.validate().expect("written config must validate");
+    assert_eq!(cfg.options.scrolloff, 9);
+    assert!(!cfg.options.cursorline);
+    assert_eq!(cfg.options.foldmethod, "marker");
+    assert_eq!(cfg.options.listchars, "tab:>-,eol:$");
+}
+
+/// Buffer-local options describe one buffer, not a preference, so they apply
+/// to the session and are never written. A `filetype = "rust"` in the config
+/// would misapply to every file opened afterwards.
+#[test]
+fn set_does_not_persist_buffer_local_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set filetype=rust");
+    app.dispatch_ex("set readonly");
+    assert_eq!(
+        app.active_editor().settings().filetype,
+        "rust",
+        "the session must still see the change"
+    );
+
+    match std::fs::read_to_string(&cfg_path) {
+        Err(_) => {}
+        Ok(text) => {
+            assert!(!text.contains("filetype"), "got: {text}");
+            assert!(!text.contains("readonly"), "got: {text}");
+        }
+    }
+}
+
+/// A query (`:set nu?`) reads; it must not rewrite the key it names.
+#[test]
+fn set_query_form_does_not_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set number?");
+    assert!(
+        !cfg_path.exists(),
+        "a query must not create or touch the config file"
+    );
+}
+
+/// A rejected `:set` must leave the file alone — persisting a value the
+/// editor refused would make the config disagree with the session in the one
+/// direction that survives a restart.
+#[test]
+fn set_rejected_value_is_not_persisted() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set signcolumn=bogus");
+    match std::fs::read_to_string(&cfg_path) {
+        Err(_) => {}
+        Ok(text) => assert!(!text.contains("signcolumn"), "got: {text}"),
+    }
+}
+
+/// `formatoptions+=` is folded in before the write, because the value is read
+/// off the live settings rather than parsed from the token.
+#[test]
+fn set_formatoptions_append_persists_the_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set formatoptions=r");
+    app.dispatch_ex("set formatoptions+=o");
+
+    let cfg = hjkl_app::config::load_from(&cfg_path).unwrap();
+    assert_eq!(cfg.options.formatoptions, "ro");
+}
+
+/// Comments and unrelated keys in a hand-written config survive a `:set` —
+/// the file stays human-owned.
+#[test]
+fn set_preserves_comments_and_unrelated_keys() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut f = std::fs::File::create(&cfg_path).unwrap();
+    writeln!(f, "# my hand-written config\n[editor]\nleader = \" \"\n").unwrap();
+    drop(f);
+
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+    app.dispatch_ex("set scrolloff=7");
+
+    let text = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(text.contains("# my hand-written config"), "got: {text}");
+    assert!(text.contains("leader"), "got: {text}");
+    assert!(text.contains("scrolloff = 7"), "got: {text}");
+}

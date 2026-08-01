@@ -467,6 +467,14 @@ impl App {
             }
         }
 
+        // Remember the `:set` body so a successful apply can be written back
+        // to the user's config file below. Captured before dispatch because
+        // `cmd` borrows a buffer that the dispatch consumes.
+        let set_body: Option<String> = cmd
+            .strip_prefix("set ")
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty());
+
         // hjkl-ex is the sole dispatcher — no legacy fallback. Runs against the
         // focused window's editor (#151 Phase D) so `:set`, `:42`, `:s`, register
         // ex commands, etc. mutate the per-window editor that render reads.
@@ -499,7 +507,52 @@ impl App {
         // appears stuck at its pre-`:` position even though the engine
         // moved it.
         self.sync_viewport_from_editor();
+        // A `:set` that applied cleanly is written back to the user's config
+        // file, so the session and the file never disagree. Runs before
+        // `handle_ex_effect` only because that consumes `effect`; the guard is
+        // on `effect` either way — a rejected `:set` must not persist.
+        if let Some(body) = set_body
+            && !matches!(effect, ExEffect::Error(_) | ExEffect::Unknown(_))
+        {
+            self.persist_set_options(&body);
+        }
         self.handle_ex_effect(effect);
+    }
+
+    /// Write every persistable option named in a `:set` line back to the
+    /// user's config file.
+    ///
+    /// Values are read off the live settings rather than re-parsed from the
+    /// tokens, so what lands in the file is what the editor actually ended up
+    /// with — clamped, normalised, and with `formatoptions+=`/`-=` folded in.
+    ///
+    /// Buffer-local options (`filetype`, `readonly`, …) and query tokens
+    /// (`name?`) resolve to no config key and are skipped silently: they are
+    /// session-scoped by design, so there is nothing to write and nothing to
+    /// warn about.
+    ///
+    /// A failure to write is reported once per `:set` line, not once per
+    /// token — a read-only config file would otherwise emit a wall of
+    /// identical warnings for `:set nu rnu cul`.
+    fn persist_set_options(&mut self, body: &str) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let mut first_error: Option<String> = None;
+        for token in body.split_whitespace() {
+            let Some(name) = hjkl_app::config::setting_name_from_token(token) else {
+                continue;
+            };
+            let settings = self.active_editor().settings().clone();
+            if let Err(e) = hjkl_app::config::persist_option(&path, name, &settings)
+                && first_error.is_none()
+            {
+                first_error = Some(e.to_string());
+            }
+        }
+        if let Some(e) = first_error {
+            self.bus.warn(format!("couldn't save :set to config: {e}"));
+        }
     }
 
     /// Apply the side-effects encoded in an [`ExEffect`] value.

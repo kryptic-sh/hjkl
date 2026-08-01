@@ -35,6 +35,7 @@ similar = "3"
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
+toml_edit = "0.25"
 tracing = "0.1"
 
 [target.'cfg(windows)'.dependencies]

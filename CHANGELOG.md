@@ -10,6 +10,21 @@ patch bumps.
 
 ### Added
 
+- **`:set` now writes itself back to your config file.** Any global option set
+  from the command bar is persisted to `~/.config/hjkl/config.toml` immediately,
+  so a session and the file never disagree. The write is format-preserving —
+  comments, key order and quoting all survive — and is the value the editor
+  actually ended up with, so clamped numbers and `formatoptions+=` land already
+  folded in. A `:set` the editor rejected writes nothing, and a query
+  (`:set nu?`) writes nothing.
+
+  Buffer-local options are session-scoped and never written: `filetype`,
+  `commentstring`, `readonly`, `modifiable`, `endofline`. Each describes one
+  buffer rather than a preference.
+
+  This is a deliberate divergence from vim, where `:set` is transient and the
+  config file is the only persistence mechanism.
+
 - **Every global `:set` option now has a config key.** A new `[options]` table
   in `config.toml` carries all of them, named exactly as `:set` names them, so
   `:set scrolloff=8` and `options.scrolloff = 8` are the same knob.
