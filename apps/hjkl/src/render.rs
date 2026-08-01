@@ -959,9 +959,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .window_editors
         .get(&win_id)
         .map_or(&[][..], |e| e.buffer_spans());
+    // `:set nohlsearch` suppresses the highlight while leaving the pattern
+    // ARMED, so `n` / `N` keep working — that is what distinguishes the option
+    // from the `:nohlsearch` command, which disarms the pattern itself.
+    // Dropping the pattern here (rather than downstream) turns off both the
+    // per-row range cache and the match style in one place.
     let search_pattern_owned = app
         .window_editors
         .get(&win_id)
+        .filter(|e| e.settings().hlsearch)
         .and_then(|e| e.search_state().pattern.clone());
     let search_pattern = search_pattern_owned.as_ref();
     // Engine-computed per-row match cache. Only expose the rows repopulated

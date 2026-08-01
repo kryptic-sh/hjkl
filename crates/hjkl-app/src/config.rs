@@ -383,10 +383,6 @@ impl OptionsConfig {
 ///   `wrap` key, so it maps to `"wrap"` rather than a key of its own.
 /// - **host-intercepted names** — `background`, `mouse`. They are not engine
 ///   settings and are handled before `:set` reaches the engine.
-/// - **`hlsearch`, `incsearch`, `modeline`, `modelines`** — config-only. They
-///   live on `Options` with no `Settings` counterpart to flip mid-session (the
-///   modeline scan is finished before a buffer exists), so `:set` cannot reach
-///   them and there is nothing to write back.
 ///
 /// A name this returns `Some` for is guaranteed to be a real key of
 /// [`OptionsConfig`]; `every_options_key_is_reachable_from_set` pins that in
@@ -404,6 +400,10 @@ pub fn options_key_for_setting(name: &str) -> Option<&'static str> {
         "ignorecase" | "ic" => "ignorecase",
         "smartcase" | "scs" => "smartcase",
         "wrapscan" | "ws" => "wrapscan",
+        "hlsearch" | "hls" => "hlsearch",
+        "incsearch" | "is" => "incsearch",
+        "modeline" | "ml" => "modeline",
+        "modelines" | "mls" => "modelines",
         "number" | "nu" => "number",
         "relativenumber" | "rnu" => "relativenumber",
         "numberwidth" | "nuw" => "numberwidth",
@@ -515,6 +515,7 @@ pub fn persist_option(
         "foldlevelstart" => write_key_at(p, &dotted, i64::from(s.foldlevelstart)),
         "undolevels" => write_key_at(p, &dotted, i64::from(s.undo_levels)),
         "updatetime" => write_key_at(p, &dotted, i64::from(s.updatetime)),
+        "modelines" => write_key_at(p, &dotted, i64::from(s.modelines)),
         "timeoutlen" => write_key_at(p, &dotted, s.timeout_len.as_millis() as i64),
         // ── booleans ─────────────────────────────────────────────────────
         "expandtab" => write_key_at(p, &dotted, s.expandtab),
@@ -523,6 +524,9 @@ pub fn persist_option(
         "ignorecase" => write_key_at(p, &dotted, s.ignore_case),
         "smartcase" => write_key_at(p, &dotted, s.smartcase),
         "wrapscan" => write_key_at(p, &dotted, s.wrapscan),
+        "hlsearch" => write_key_at(p, &dotted, s.hlsearch),
+        "incsearch" => write_key_at(p, &dotted, s.incsearch),
+        "modeline" => write_key_at(p, &dotted, s.modeline),
         "number" => write_key_at(p, &dotted, s.number),
         "relativenumber" => write_key_at(p, &dotted, s.relativenumber),
         "cursorline" => write_key_at(p, &dotted, s.cursorline),

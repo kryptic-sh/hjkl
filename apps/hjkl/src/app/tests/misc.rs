@@ -1202,14 +1202,10 @@ fn every_options_key_is_reachable_from_set() {
         }
     }
 
-    // Four keys are read once at startup and have no `Settings` counterpart to
-    // flip mid-session: the modeline scan is finished by the time a buffer
-    // exists, and `hlsearch` / `incsearch` live only on `Options`. They are
-    // config-only on purpose. Anything else showing up here means a key was
-    // added without a `:set` name, so it could be configured but never
-    // persisted.
-    const CONFIG_ONLY: &[&str] = &["hlsearch", "incsearch", "modeline", "modelines"];
-
+    // Every key must now be reachable — there are no config-only keys left.
+    // A new one appearing here means it was added without a `:set` name, so it
+    // could be configured but never persisted.
+    //
     // Reverse: every key is reachable. `all_setting_names` carries both
     // canonical names and aliases, so a key reachable only by alias still
     // counts — that is genuinely settable.
@@ -1218,13 +1214,6 @@ fn every_options_key_is_reachable_from_set() {
         .filter_map(|n| hjkl_app::config::options_key_for_setting(n))
         .collect();
     for key in &keys {
-        if CONFIG_ONLY.contains(&key.as_str()) {
-            assert!(
-                hjkl_app::config::options_key_for_setting(key).is_none(),
-                "`options.{key}` is documented config-only but maps to a `:set` name"
-            );
-            continue;
-        }
         assert!(
             reachable.contains(key.as_str()),
             "`options.{key}` is not reachable from any `:set` name — it would be \
@@ -1390,4 +1379,162 @@ fn set_preserves_comments_and_unrelated_keys() {
     cfg.validate().expect("amended config must validate");
     assert_eq!(cfg.options.scrolloff, 7);
     assert_eq!(cfg.editor.leader, ' ', "the user's own key must survive");
+}
+
+// ── the four formerly config-only options ───────────────────────────────────
+
+/// `:set nohlsearch` suppresses the highlight but leaves the pattern ARMED,
+/// which is what separates the option from the `:nohlsearch` command. If the
+/// pattern were disarmed too, `n` / `N` would stop working.
+#[test]
+fn set_nohlsearch_keeps_the_pattern_armed() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set nohlsearch");
+    assert!(!app.active_editor().settings().hlsearch);
+
+    app.commit_search("foo");
+    assert!(
+        app.active_editor().search_state().pattern.is_some(),
+        "the option must not disarm the pattern — only `:nohlsearch` does that"
+    );
+
+    app.dispatch_ex("set hlsearch");
+    assert!(app.active_editor().settings().hlsearch);
+}
+
+/// `:set noincsearch` stops the live preview from arming a pattern while the
+/// user is still typing it.
+#[test]
+fn set_noincsearch_suppresses_the_live_preview() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_buffer::{Edit, Position};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: "alpha beta".to_string(),
+    });
+    app.dispatch_ex("set noincsearch");
+
+    app.open_search_prompt(crate::keymap_actions::SearchDir::Forward);
+    for c in "beta".chars() {
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert!(
+        app.active_editor().search_state().pattern.is_none(),
+        "noincsearch must not arm a pattern before the search is submitted"
+    );
+
+    // Submitting still works — only the preview was suppressed.
+    app.handle_search_field_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.active_editor().search_state().pattern.is_some());
+}
+
+/// With `incsearch` on (the default) the preview arms the pattern as it is
+/// typed — the control case for the test above.
+#[test]
+fn incsearch_on_arms_the_pattern_while_typing() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_buffer::{Edit, Position};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: "alpha beta".to_string(),
+    });
+    assert!(app.active_editor().settings().incsearch);
+
+    app.open_search_prompt(crate::keymap_actions::SearchDir::Forward);
+    for c in "beta".chars() {
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert!(
+        app.active_editor().search_state().pattern.is_some(),
+        "incsearch must arm the pattern live"
+    );
+}
+
+/// `modeline` and `modelines` are global options in vim but per-slot settings
+/// here, so a `:set nomodeline` has to reach the NEXT file opened or the
+/// option looks broken the moment you `:e` something.
+#[test]
+fn set_nomodeline_applies_to_subsequently_opened_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("m.rs");
+    std::fs::write(&path, "// vim: ts=2\nfn main() {}\n").unwrap();
+
+    // Control: with modeline on (the default) the file's own `ts=2` wins.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let idx = app.open_new_slot(path.clone()).unwrap();
+    assert_eq!(
+        app.slots[idx].settings().tabstop,
+        2,
+        "precondition: the modeline is honoured by default"
+    );
+
+    // With it off, the same file opens at the configured width.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set nomodeline");
+    let idx = app.open_new_slot(path.clone()).unwrap();
+    assert_eq!(
+        app.slots[idx].settings().tabstop,
+        4,
+        "`:set nomodeline` must reach the next file opened"
+    );
+}
+
+/// `modelines` bounds the scan depth. The scan covers the first N lines AND
+/// the last N (vim does the same), so the marker has to sit outside both ends
+/// for a narrow depth to miss it.
+#[test]
+fn set_modelines_bounds_the_scan_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("deep.rs");
+    // 11 lines, marker on line 5 — outside the first 2 and the last 2, but
+    // inside the first 9.
+    let mut body = String::new();
+    for _ in 0..4 {
+        body.push_str("filler\n");
+    }
+    body.push_str("// vim: ts=2\n");
+    for _ in 0..6 {
+        body.push_str("filler\n");
+    }
+    std::fs::write(&path, &body).unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set modelines=2");
+    let idx = app.open_new_slot(path.clone()).unwrap();
+    assert_eq!(
+        app.slots[idx].settings().tabstop,
+        4,
+        "a marker outside the scan depth at both ends must not apply"
+    );
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set modelines=9");
+    let idx = app.open_new_slot(path).unwrap();
+    assert_eq!(
+        app.slots[idx].settings().tabstop,
+        2,
+        "widening the scan depth must find the same marker"
+    );
+}
+
+/// All four persist to the config file now — the point of the change.
+#[test]
+fn formerly_config_only_options_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set nohlsearch noincsearch nomodeline modelines=3");
+
+    let cfg = hjkl_app::config::load_from(&cfg_path).expect("written config must reload");
+    assert!(!cfg.options.hlsearch);
+    assert!(!cfg.options.incsearch);
+    assert!(!cfg.options.modeline);
+    assert_eq!(cfg.options.modelines, 3);
 }

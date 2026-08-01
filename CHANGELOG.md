@@ -29,6 +29,14 @@ patch bumps.
   in `config.toml` carries all of them, named exactly as `:set` names them, so
   `:set scrolloff=8` and `options.scrolloff = 8` are the same knob.
   `.editorconfig` and a file's own modeline still layer on top, in that order.
+- `:set hlsearch`, `:set incsearch`, `:set modeline` and `:set modelines`. All
+  four existed as config keys but had no `Settings` storage, so nothing could
+  move them at runtime. They are real settings now and are wired to behaviour:
+  `nohlsearch` suppresses the highlight while leaving the pattern armed (so
+  `n`/`N` still work — that is what separates it from the `:nohlsearch`
+  command), `noincsearch` stops the search prompt previewing before submit, and
+  `modeline`/`modelines` apply to files opened after they change, matching vim's
+  global-option semantics over hjkl's per-slot settings.
 - `:set updatetime`, `:set colorizer` and `:set colorizer_filetypes` — three
   engine settings that had no `:set` name, so they could only be reached
   programmatically. `colorizer_filetypes` takes a comma-separated list.

@@ -578,12 +578,32 @@ impl App {
         buffer_id
     }
 
+    /// The session's live `('modeline', 'modelines')` pair, read off the
+    /// focused editor.
+    ///
+    /// Both are global options in vim but per-slot settings here, so opening a
+    /// file has to carry them forward explicitly or a `:set nomodeline` would
+    /// silently stop applying at the next `:e`.
+    pub(crate) fn live_modeline_settings(&self) -> Option<(bool, u32)> {
+        let s = self.active_editor().settings();
+        Some((s.modeline, s.modelines))
+    }
+
     /// Allocate a fresh `BufferId` and load `path` into a new slot.
     /// Returns the index of the newly pushed slot (does NOT switch).
     pub(crate) fn open_new_slot(&mut self, path: PathBuf) -> Result<usize, String> {
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let slot = super::build_slot(&mut self.syntax, buffer_id, Some(path), &self.config)?;
+        // Carry the session's live modeline settings into the new slot — see
+        // `build_slot`'s doc for why they cannot come from the config alone.
+        let live_modeline = self.live_modeline_settings();
+        let slot = super::build_slot(
+            &mut self.syntax,
+            buffer_id,
+            Some(path),
+            &self.config,
+            live_modeline,
+        )?;
         self.slots.push(slot);
         let idx = self.slots.len() - 1;
         self.lsp_attach_buffer(idx);

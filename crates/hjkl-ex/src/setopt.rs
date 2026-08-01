@@ -38,6 +38,8 @@ pub fn all_setting_names() -> Vec<String> {
         "scroll_duration_ms".into(),
         "updatetime".into(),
         "ut".into(),
+        "modelines".into(),
+        "mls".into(),
         // string (fold-related)
         "foldmethod".into(),
         "fdm".into(),
@@ -78,6 +80,12 @@ pub fn all_setting_names() -> Vec<String> {
         "scs".into(),
         "wrapscan".into(),
         "ws".into(),
+        "hlsearch".into(),
+        "hls".into(),
+        "incsearch".into(),
+        "is".into(),
+        "modeline".into(),
+        "ml".into(),
         "expandtab".into(),
         "et".into(),
         "autoindent".into(),
@@ -142,6 +150,9 @@ const BOOLEAN_CANONICAL_NAMES: &[&str] = &[
     "ignorecase",
     "smartcase",
     "wrapscan",
+    "hlsearch",
+    "incsearch",
+    "modeline",
     "expandtab",
     "autoindent",
     "autoreload",
@@ -358,6 +369,10 @@ pub fn query_option_value<H: Host>(
         "ignorecase" | "ic" => on_off(s.ignore_case),
         "smartcase" | "scs" => on_off(s.smartcase),
         "wrapscan" | "ws" => on_off(s.wrapscan),
+        "hlsearch" | "hls" => on_off(s.hlsearch),
+        "incsearch" | "is" => on_off(s.incsearch),
+        "modeline" | "ml" => on_off(s.modeline),
+        "modelines" | "mls" => s.modelines.to_string(),
         "autoindent" | "ai" => on_off(s.autoindent),
         "autoreload" | "ar" => on_off(s.autoreload),
         "smartindent" | "si" => on_off(s.smartindent),
@@ -599,6 +614,9 @@ pub fn apply_set_token<H: Host>(
             "updatetime" | "ut" => {
                 editor.settings_mut().updatetime = parsed.min(u32::MAX as usize) as u32;
             }
+            "modelines" | "mls" => {
+                editor.settings_mut().modelines = parsed.min(u32::MAX as usize) as u32;
+            }
             other => return Err(format!("unknown :set option `{other}`")),
         }
         return Ok(());
@@ -657,6 +675,9 @@ fn apply_bool_option<H: Host>(
         "ignorecase" | "ic" => editor.settings_mut().ignore_case = value,
         "smartcase" | "scs" => editor.settings_mut().smartcase = value,
         "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
+        "hlsearch" | "hls" => editor.settings_mut().hlsearch = value,
+        "incsearch" | "is" => editor.settings_mut().incsearch = value,
+        "modeline" | "ml" => editor.settings_mut().modeline = value,
         "expandtab" | "et" => editor.settings_mut().expandtab = value,
         "autoindent" | "ai" => editor.settings_mut().autoindent = value,
         "autoreload" | "ar" => editor.settings_mut().autoreload = value,

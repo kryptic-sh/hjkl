@@ -806,11 +806,20 @@ fn is_path_writable(path: &std::path::Path) -> bool {
     }
 }
 
+/// `live_modeline` is the running session's `('modeline', 'modelines')` pair,
+/// or `None` to take them from `config`.
+///
+/// They are global options in vim, but settings here are per-slot, so a
+/// `:set nomodeline` typed in one buffer has to be carried explicitly to the
+/// next file opened — otherwise every new buffer would silently revert to the
+/// config value and the option would look broken. Nothing carries it for the
+/// FIRST slot (there is no editor yet), which is why this is an `Option`.
 pub fn build_slot(
     syntax: &mut SyntaxLayer,
     buffer_id: BufferId,
     path: Option<PathBuf>,
     config: &hjkl_app::config::Config,
+    live_modeline: Option<(bool, u32)>,
 ) -> Result<BufferSlot, String> {
     let mut buffer = View::new();
     let mut is_new_file = false;
@@ -851,6 +860,13 @@ pub fn build_slot(
     // win for the files they cover.
     let mut ec_opts = Options::default();
     config.options.apply_to_options(&mut ec_opts);
+    // A live `:set [no]modeline` / `:set modelines=N` wins over the config
+    // value for every file opened after it — vim's global-option semantics,
+    // reconstructed over per-slot settings.
+    if let Some((modeline, modelines)) = live_modeline {
+        ec_opts.modeline = modeline;
+        ec_opts.modelines = modelines;
+    }
     if let Some(ref p) = path {
         hjkl_app::editorconfig::overlay_for_path(&mut ec_opts, p);
     }
@@ -2197,7 +2213,9 @@ impl App {
         // `apply_options` after `with_config`.
         let bootstrap_config = hjkl_app::config::Config::default();
         let no_file = filename.is_none();
-        let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
+        // No editor exists yet, so there is no live value to carry — the
+        // config's own is the right seed for the first slot.
+        let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config, None)
             .map_err(|s| anyhow::anyhow!(s))?;
 
         // App-wide shared banks — one `Arc` for the whole session, wired

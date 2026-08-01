@@ -735,6 +735,12 @@ impl App {
     }
 
     pub(crate) fn live_preview_search(&mut self) {
+        // `:set noincsearch` — no preview while typing. The pattern is armed
+        // only on submit (`commit_search`), which is vim's behaviour: the
+        // buffer stays exactly as it was until Enter.
+        if !self.active_editor().settings().incsearch {
+            return;
+        }
         let pattern = match self.search_field.as_ref() {
             Some(f) => f.text(),
             None => return,

@@ -1024,6 +1024,28 @@ pub struct Settings {
     /// the pattern flips that search back to case-sensitive. Matches
     /// vim's `:set smartcase`. Default `false`.
     pub smartcase: bool,
+    /// Highlight every match of the armed search pattern. Matches vim's
+    /// `:set hlsearch`. Default `true`.
+    ///
+    /// Distinct from `:nohlsearch`, which disarms the *pattern* for this
+    /// search; this suppresses the highlight while leaving the pattern armed,
+    /// so `n` / `N` keep working. The host reads it when building the render
+    /// frame.
+    pub hlsearch: bool,
+    /// Highlight matches as the search pattern is typed, before it is
+    /// submitted. Matches vim's `:set incsearch`. Default `true`. The host
+    /// reads it in its search-prompt live-preview path.
+    pub incsearch: bool,
+    /// Honour a `vim:` / `ex:` / `vi:` modeline in files as they are opened.
+    /// Matches vim's `:set modeline`. Default `true`.
+    ///
+    /// Read by the host when it opens a buffer, so changing it affects
+    /// **subsequently** opened files — vim's behaviour, since the scan has
+    /// already happened for a file that is open.
+    pub modeline: bool,
+    /// How many lines at each end of a file are scanned for a modeline.
+    /// Matches vim's `:set modelines`. Default `5`.
+    pub modelines: u32,
     /// Wrap searches past buffer ends. Matches vim's `:set wrapscan`.
     /// Default `true`.
     pub wrapscan: bool,
@@ -1294,6 +1316,10 @@ impl Default for Settings {
             softtabstop: 4,
             ignore_case: true,
             smartcase: true,
+            hlsearch: true,
+            incsearch: true,
+            modeline: true,
+            modelines: 5,
             wrapscan: true,
             textwidth: 79,
             expandtab: true,
@@ -1378,9 +1404,6 @@ impl Settings {
     /// a field to one without the other breaks the round trip pinned by
     /// `settings_options_round_trip_is_identity`.
     ///
-    /// Four `Options` fields (`hlsearch`, `incsearch`, `modeline`,
-    /// `modelines`) have no `Settings` counterpart — see the comment at their
-    /// site below.
     pub fn to_options(&self) -> crate::types::Options {
         crate::types::Options {
             tabstop: self.tabstop as u32,
@@ -1390,20 +1413,8 @@ impl Settings {
             iskeyword: self.iskeyword.clone(),
             ignorecase: self.ignore_case,
             smartcase: self.smartcase,
-            // ---- Options-only: no live `Settings` storage ----------------
-            // `hlsearch` / `incsearch` are not engine state: search
-            // highlighting is driven by the buffer's armed pattern (cleared
-            // by `:nohlsearch`) and the live `search_prompt`, not by a flag.
-            // `modeline` / `modelines` are host-side knobs — `hjkl_app`
-            // reads them off its own `Options` value before the buffer even
-            // reaches the engine. None of the four has a `:set` entry in
-            // `hjkl_ex::setopt`, so nothing can move them off the SPEC
-            // default at runtime. Echoed as the SPEC default (pinned against
-            // drift by `to_options_options_only_fields_match_spec_default`)
-            // until the 0.1.0 Settings/Options collapse gives them storage.
-            hlsearch: true,
-            incsearch: true,
-            // --------------------------------------------------------------
+            hlsearch: self.hlsearch,
+            incsearch: self.incsearch,
             wrapscan: self.wrapscan,
             autoindent: self.autoindent,
             smartindent: self.smartindent,
@@ -1430,9 +1441,8 @@ impl Settings {
             filetype: self.filetype.clone(),
             scrolloff: self.scrolloff,
             sidescrolloff: self.sidescrolloff,
-            // Options-only — see the `hlsearch` comment above.
-            modeline: true,
-            modelines: 5,
+            modeline: self.modeline,
+            modelines: self.modelines,
             autoreload: self.autoreload,
             motion_sneak: self.motion_sneak,
             list: self.list,
@@ -1468,6 +1478,10 @@ impl Settings {
         self.expandtab = opts.expandtab;
         self.ignore_case = opts.ignorecase;
         self.smartcase = opts.smartcase;
+        self.hlsearch = opts.hlsearch;
+        self.incsearch = opts.incsearch;
+        self.modeline = opts.modeline;
+        self.modelines = opts.modelines;
         self.wrapscan = opts.wrapscan;
         self.wrap = wrap_from_mode(opts.wrap);
         self.readonly = opts.readonly;
@@ -1526,6 +1540,10 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         softtabstop: o.softtabstop as usize,
         ignore_case: o.ignorecase,
         smartcase: o.smartcase,
+        hlsearch: o.hlsearch,
+        incsearch: o.incsearch,
+        modeline: o.modeline,
+        modelines: o.modelines,
         wrapscan: o.wrapscan,
         textwidth: o.textwidth as usize,
         expandtab: o.expandtab,
@@ -7115,16 +7133,6 @@ mod options_conversion_tests {
         o
     }
 
-    /// The four `Options` fields with no `Settings` storage. `to_options`
-    /// echoes the SPEC default for these; the round-trip test excludes them.
-    fn clear_options_only_fields(o: &mut Options) {
-        let d = Options::default();
-        o.hlsearch = d.hlsearch;
-        o.incsearch = d.incsearch;
-        o.modeline = d.modeline;
-        o.modelines = d.modelines;
-    }
-
     /// `apply_options` then `current_options` must be the IDENTITY on every
     /// field the engine stores. Fails today for `number`, `cursorline`,
     /// `signcolumn`, the fold options, `listchars`, `colorizer*`, … — the
@@ -7135,15 +7143,9 @@ mod options_conversion_tests {
         let want = all_non_default_options();
         ed.apply_options(&want);
 
-        let mut got = ed.current_options();
-        // `hlsearch`/`incsearch`/`modeline`/`modelines` have no live storage:
-        // normalize both sides to the SPEC default before comparing so the
-        // assertion covers exactly the fields the engine actually backs.
-        let mut want_norm = want.clone();
-        clear_options_only_fields(&mut got);
-        clear_options_only_fields(&mut want_norm);
+        let got = ed.current_options();
         assert_eq!(
-            got, want_norm,
+            got, want,
             "current_options() must echo apply_options() field-for-field"
         );
     }
@@ -7158,19 +7160,28 @@ mod options_conversion_tests {
         assert_eq!(ed.current_options(), first);
     }
 
-    /// The four host-side fields are echoed as the SPEC default, not as
-    /// whatever a caller last passed. Pins the documented carve-out so it
-    /// can't rot into a silent lie.
+    /// `hlsearch`, `incsearch`, `modeline` and `modelines` used to have no
+    /// `Settings` storage, so `to_options` echoed the SPEC default and a
+    /// caller could not move them. They are real fields now — this pins the
+    /// direction of that change, so a regression that drops the storage again
+    /// shows up as "echoed the default" rather than silently ignoring `:set`.
     #[test]
-    fn to_options_options_only_fields_match_spec_default() {
+    fn search_and_modeline_options_round_trip_through_settings() {
         let mut ed = Editor::new(View::new(), DefaultHost::new(), Options::default());
-        ed.apply_options(&all_non_default_options());
+        let want = all_non_default_options();
+        ed.apply_options(&want);
         let got = ed.current_options();
+        assert_eq!(got.hlsearch, want.hlsearch);
+        assert_eq!(got.incsearch, want.incsearch);
+        assert_eq!(got.modeline, want.modeline);
+        assert_eq!(got.modelines, want.modelines);
+        // …and they must differ from the SPEC default, or the assertions
+        // above would pass on a `to_options` that still echoed it.
         let d = Options::default();
-        assert_eq!(got.hlsearch, d.hlsearch);
-        assert_eq!(got.incsearch, d.incsearch);
-        assert_eq!(got.modeline, d.modeline);
-        assert_eq!(got.modelines, d.modelines);
+        assert_ne!(want.hlsearch, d.hlsearch);
+        assert_ne!(want.incsearch, d.incsearch);
+        assert_ne!(want.modeline, d.modeline);
+        assert_ne!(want.modelines, d.modelines);
     }
 
     /// `Settings::default()` and `Options::default()` must agree on every
@@ -7180,10 +7191,8 @@ mod options_conversion_tests {
     /// `Settings::default()` + `apply_options`.
     #[test]
     fn settings_default_matches_options_default() {
-        let mut from_settings = Settings::default().to_options();
-        let mut spec = Options::default();
-        clear_options_only_fields(&mut from_settings);
-        clear_options_only_fields(&mut spec);
+        let from_settings = Settings::default().to_options();
+        let spec = Options::default();
         assert_eq!(
             from_settings, spec,
             "Settings::default() and Options::default() must not diverge"

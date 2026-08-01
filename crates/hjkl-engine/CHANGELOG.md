@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Settings` gains `hlsearch`, `incsearch`, `modeline` and `modelines`. All four
+  were `Options`-only, so `to_options` echoed the SPEC default and no caller
+  could move them; they now round-trip through `apply_options` /
+  `current_options` like every other shared field, and the carve-out those four
+  had in the round-trip test is gone.
+
 ### Changed
 
 - `Settings::default()` and `Options::default()` now carry `cursorline: true`
