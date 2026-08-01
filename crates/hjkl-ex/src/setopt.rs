@@ -36,6 +36,8 @@ pub fn all_setting_names() -> Vec<String> {
         "sidescrolloff".into(),
         "siso".into(),
         "scroll_duration_ms".into(),
+        "updatetime".into(),
+        "ut".into(),
         // string (fold-related)
         "foldmethod".into(),
         "fdm".into(),
@@ -60,6 +62,7 @@ pub fn all_setting_names() -> Vec<String> {
         "mp".into(),
         "errorformat".into(),
         "efm".into(),
+        "colorizer_filetypes".into(),
         // completion-only (handled by host in ex_dispatch.rs)
         "background".into(),
         "bg".into(),
@@ -84,6 +87,10 @@ pub fn all_setting_names() -> Vec<String> {
         "undobreak".into(),
         "readonly".into(),
         "ro".into(),
+        // Buffer-local, like `readonly` — offered for completion, never
+        // written back to the config file.
+        "modifiable".into(),
+        "ma".into(),
         "number".into(),
         "nu".into(),
         "relativenumber".into(),
@@ -99,6 +106,8 @@ pub fn all_setting_names() -> Vec<String> {
         "fen".into(),
         "autopair".into(),
         "ap".into(),
+        "motion_sneak".into(),
+        "snk".into(),
         "autoclose-tag".into(),
         "act".into(),
         "autoreload".into(),
@@ -113,6 +122,7 @@ pub fn all_setting_names() -> Vec<String> {
         "tts".into(),
         "rainbow_brackets".into(),
         "rb".into(),
+        "colorizer".into(),
         "matchparen".into(),
         "mps".into(),
         "fixendofline".into(),
@@ -155,6 +165,7 @@ const BOOLEAN_CANONICAL_NAMES: &[&str] = &[
     "format_on_save",
     "trim_trailing_whitespace",
     "rainbow_brackets",
+    "colorizer",
     "matchparen",
     "foldenable",
     "fixendofline",
@@ -325,6 +336,7 @@ pub fn query_option_value<H: Host>(
         "scrolloff" | "so" => s.scrolloff.to_string(),
         "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
         "scroll_duration_ms" => s.scroll_duration_ms.to_string(),
+        "updatetime" | "ut" => s.updatetime.to_string(),
         "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
         "colorcolumn" | "cc" => format!("\"{}\"", s.colorcolumn),
         "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
@@ -371,6 +383,8 @@ pub fn query_option_value<H: Host>(
         "format_on_save" | "fos" => on_off(s.format_on_save),
         "trim_trailing_whitespace" | "tts" => on_off(s.trim_trailing_whitespace),
         "rainbow_brackets" | "rb" => on_off(s.rainbow_brackets),
+        "colorizer" => on_off(s.colorizer),
+        "colorizer_filetypes" => format!("\"{}\"", s.colorizer_filetypes.join(",")),
         "matchparen" | "mps" => on_off(s.matchparen),
         "fixendofline" | "fixeol" => on_off(s.fixendofline),
         // `endofline`/`eol` is deliberately absent — it is host-owned
@@ -496,6 +510,18 @@ pub fn apply_set_token<H: Host>(
             editor.settings_mut().errorformat = value.to_string();
             return Ok(());
         }
+        if matches!(name, "colorizer_filetypes") {
+            // Comma-separated, like `iskeyword`. Empty entries are dropped so
+            // a trailing comma is harmless rather than creating a filetype
+            // named "" that matches nothing.
+            editor.settings_mut().colorizer_filetypes = value
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            return Ok(());
+        }
         if matches!(name, "indent_guide_char" | "igc") {
             let mut chars = value.chars();
             let (Some(ch), None) = (chars.next(), chars.next()) else {
@@ -569,6 +595,9 @@ pub fn apply_set_token<H: Host>(
             }
             "scroll_duration_ms" => {
                 editor.settings_mut().scroll_duration_ms = parsed.min(u16::MAX as usize) as u16;
+            }
+            "updatetime" | "ut" => {
+                editor.settings_mut().updatetime = parsed.min(u32::MAX as usize) as u32;
             }
             other => return Err(format!("unknown :set option `{other}`")),
         }
@@ -679,6 +708,7 @@ fn apply_bool_option<H: Host>(
             editor.settings_mut().trim_trailing_whitespace = value
         }
         "rainbow_brackets" | "rb" => editor.settings_mut().rainbow_brackets = value,
+        "colorizer" => editor.settings_mut().colorizer = value,
         "matchparen" | "mps" => editor.settings_mut().matchparen = value,
         "foldenable" | "fen" => editor.settings_mut().foldenable = value,
         "fixendofline" | "fixeol" => editor.settings_mut().fixendofline = value,

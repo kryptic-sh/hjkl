@@ -287,11 +287,11 @@ fn with_config_updates_leader_and_reapplies_to_existing_slot() {
 
     let mut cfg = hjkl_app::config::Config::default();
     cfg.editor.leader = '\\';
-    cfg.editor.tab_width = 2;
+    cfg.options.tabstop = 2;
     let app = app.with_config(cfg);
 
     assert_eq!(app.config.editor.leader, '\\');
-    assert_eq!(app.config.editor.tab_width, 2);
+    assert_eq!(app.config.options.tabstop, 2);
     assert_eq!(
         app.slots.len(),
         1,
@@ -328,7 +328,9 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
         r#"
         [editor]
         leader = "\\"
-        tab_width = 2
+
+        [options]
+        tabstop = 2
 
         [theme]
         name = "dark"
@@ -338,10 +340,10 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
 
     let cfg = hjkl_app::config::load_from(tmp.path()).expect("load_from must succeed");
     // Bundled defaults survived for fields the user file omitted:
-    assert!(cfg.editor.expandtab);
+    assert!(cfg.options.expandtab);
     // User overrides won where present:
     assert_eq!(cfg.editor.leader, '\\');
-    assert_eq!(cfg.editor.tab_width, 2);
+    assert_eq!(cfg.options.tabstop, 2);
 
     use hjkl_config::Validate;
     cfg.validate()
@@ -349,7 +351,7 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
 
     let app = App::new(None, false, None, None).unwrap().with_config(cfg);
     assert_eq!(app.config.editor.leader, '\\');
-    assert_eq!(app.config.editor.tab_width, 2);
+    assert_eq!(app.config.options.tabstop, 2);
 }
 
 #[test]
@@ -359,13 +361,13 @@ fn config_load_from_disk_validation_failure_surfaces() {
     // identify the offending key.
     use std::io::Write as _;
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    writeln!(tmp, "[editor]\ntab_width = 0").unwrap();
+    writeln!(tmp, "[options]\ntabstop = 0").unwrap();
 
     let cfg = hjkl_app::config::load_from(tmp.path()).expect("parse must succeed");
 
     use hjkl_config::Validate;
     let err = cfg.validate().unwrap_err();
-    assert_eq!(err.field, "editor.tab_width");
+    assert_eq!(err.field, "options.tabstop");
 }
 
 // ── Render-level :set option tests ──────────────────────────────────────────
@@ -1165,5 +1167,68 @@ fn insert_multibyte_does_not_panic_on_completion_prefix() {
     // Backspace through the multibyte content too (the other slice site).
     for _ in 0..4 {
         app.handle_keypress(key(KeyCode::Backspace));
+    }
+}
+
+// ── `[options]` <-> `:set` coverage ─────────────────────────────────────────
+//
+// Lives here rather than in `hjkl-app` because it needs BOTH the config schema
+// and `hjkl-ex`'s option tables, and `hjkl-app` deliberately does not depend on
+// `hjkl-ex` (adding it would drag a published crate into the other's publish
+// order for a test-only reason). `apps/hjkl` already has both and is not
+// published.
+/// Every key of `[options]` must be reachable from some `:set` name, and
+/// every name `options_key_for_setting` returns must be a real key.
+///
+/// Without this, a field added to `OptionsConfig` would be configurable
+/// but never persistable (`:set` would silently not write it), and a typo
+/// in the mapping would send a write to a key that does not exist — which
+/// `write_key_at` would happily create, leaving a config the loader then
+/// rejects as an unknown field.
+#[test]
+fn every_options_key_is_reachable_from_set() {
+    // The bundled TOML is the authoritative key list: `deny_unknown_fields`
+    // means it and the struct already agree.
+    let doc: toml::Value = toml::from_str(hjkl_app::config::DEFAULTS_TOML).unwrap();
+    let keys: Vec<String> = doc["options"].as_table().unwrap().keys().cloned().collect();
+
+    // Forward: every mapped name lands on a real key.
+    for name in hjkl_ex::all_setting_names() {
+        if let Some(key) = hjkl_app::config::options_key_for_setting(&name) {
+            assert!(
+                keys.iter().any(|k| k == key),
+                "`:set {name}` maps to `options.{key}`, which is not a key of [options]"
+            );
+        }
+    }
+
+    // Four keys are read once at startup and have no `Settings` counterpart to
+    // flip mid-session: the modeline scan is finished by the time a buffer
+    // exists, and `hlsearch` / `incsearch` live only on `Options`. They are
+    // config-only on purpose. Anything else showing up here means a key was
+    // added without a `:set` name, so it could be configured but never
+    // persisted.
+    const CONFIG_ONLY: &[&str] = &["hlsearch", "incsearch", "modeline", "modelines"];
+
+    // Reverse: every key is reachable. `all_setting_names` carries both
+    // canonical names and aliases, so a key reachable only by alias still
+    // counts — that is genuinely settable.
+    let reachable: std::collections::HashSet<&str> = hjkl_ex::all_setting_names()
+        .iter()
+        .filter_map(|n| hjkl_app::config::options_key_for_setting(n))
+        .collect();
+    for key in &keys {
+        if CONFIG_ONLY.contains(&key.as_str()) {
+            assert!(
+                hjkl_app::config::options_key_for_setting(key).is_none(),
+                "`options.{key}` is documented config-only but maps to a `:set` name"
+            );
+            continue;
+        }
+        assert!(
+            reachable.contains(key.as_str()),
+            "`options.{key}` is not reachable from any `:set` name — it would be \
+             configurable but never persistable"
+        );
     }
 }

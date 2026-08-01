@@ -14,7 +14,7 @@ use std::path::Path;
 
 use hjkl_config::{
     AppConfig, ConfigError, ConfigSource, Validate, ValidationError, ensure_non_empty_str,
-    ensure_range, load_layered, load_layered_from,
+    ensure_one_of, ensure_range, load_layered, load_layered_from,
 };
 use serde::Deserialize;
 
@@ -25,6 +25,13 @@ pub const DEFAULTS_TOML: &str = include_str!("config.toml");
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub editor: EditorConfig,
+    /// Every global `:set` option, named exactly as `:set` names it.
+    ///
+    /// The 1:1 naming is load-bearing in both directions: it is how a config
+    /// key is found for a `:set` token when the value is written back
+    /// ([`options_key_for_setting`]), and how a reader knows which key to edit
+    /// after discovering an option interactively.
+    pub options: OptionsConfig,
     pub theme: ThemeConfig,
     #[serde(default)]
     pub lsp: hjkl_lsp::LspConfig,
@@ -109,10 +116,6 @@ impl Default for WhichKeyConfig {
 pub struct EditorConfig {
     /// Leader key in normal mode. Single character.
     pub leader: char,
-    /// Fallback indent width when no `.editorconfig` covers the open file.
-    pub tab_width: u8,
-    /// Fallback for spaces-vs-tabs when no `.editorconfig` covers the file.
-    pub expandtab: bool,
     /// Whether mouse capture (and wheel-scrolls-viewport) is on at startup.
     /// Runtime-togglable via `:set [no]mouse`.
     pub mouse: bool,
@@ -150,6 +153,303 @@ pub struct EditorConfig {
     /// still parse.
     #[serde(default)]
     pub undodir: Option<String>,
+}
+
+/// Startup values for every **global** `:set` option.
+///
+/// Field names match the canonical `:set` name exactly (`:set scrolloff=8` ↔
+/// `options.scrolloff = 8`), which is what lets `:set` write itself back to the
+/// user's file without a hand-maintained name table — see
+/// [`options_key_for_setting`].
+///
+/// # What is deliberately absent
+///
+/// The **buffer-local** options are not here and never persist:
+/// `filetype`, `commentstring`, `readonly`, `modifiable`, and `endofline`.
+/// Each describes one buffer, not a preference — `filetype` is redetected per
+/// file, `endofline` is derived from the bytes a file was loaded with. Writing
+/// `filetype = "rust"` into a global config would misapply it to every file
+/// opened afterwards, so `:set filetype=…` stays session-scoped.
+///
+/// Values are seeded from the bundled `config.toml`, so this struct carries no
+/// Rust-side defaults; `options_defaults_match_engine_defaults` pins the
+/// bundled values against `hjkl_engine::types::Options::default()` so the two
+/// sources of truth cannot drift.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionsConfig {
+    // ── indentation ──────────────────────────────────────────────────────
+    pub shiftwidth: u32,
+    pub tabstop: u32,
+    pub softtabstop: u32,
+    pub expandtab: bool,
+    pub autoindent: bool,
+    pub smartindent: bool,
+    // ── search ───────────────────────────────────────────────────────────
+    pub ignorecase: bool,
+    pub smartcase: bool,
+    pub wrapscan: bool,
+    pub hlsearch: bool,
+    pub incsearch: bool,
+    // ── gutter and cursor highlights ─────────────────────────────────────
+    pub number: bool,
+    pub relativenumber: bool,
+    pub numberwidth: usize,
+    pub cursorline: bool,
+    pub cursorcolumn: bool,
+    /// `"yes"`, `"no"`, or `"auto"`.
+    pub signcolumn: String,
+    pub colorcolumn: String,
+    // ── wrapping and scrolling ───────────────────────────────────────────
+    /// `"off"`, `"char"`, or `"word"`. `:set wrap` selects `char` (or keeps
+    /// `word` if `linebreak` already chose it); `:set linebreak` selects
+    /// `word`. One tri-state key beats two bools that can contradict.
+    pub wrap: String,
+    pub textwidth: u32,
+    pub scrolloff: usize,
+    pub sidescrolloff: usize,
+    pub scroll_duration_ms: u16,
+    // ── folding ──────────────────────────────────────────────────────────
+    /// `"manual"`, `"expr"`, or `"marker"` (`"syntax"` is accepted by `:set`
+    /// as an alias for `"expr"` and normalises to it here).
+    pub foldmethod: String,
+    pub foldenable: bool,
+    pub foldcolumn: u32,
+    pub foldlevelstart: u32,
+    pub foldmarker: String,
+    // ── invisibles and guides ────────────────────────────────────────────
+    pub list: bool,
+    pub listchars: String,
+    pub indent_guides: bool,
+    pub indent_guide_char: char,
+    // ── editing behaviour ────────────────────────────────────────────────
+    pub iskeyword: String,
+    pub formatoptions: String,
+    pub autopair: bool,
+    #[serde(rename = "autoclose-tag")]
+    pub autoclose_tag: bool,
+    pub motion_sneak: bool,
+    pub matchparen: bool,
+    pub undolevels: u32,
+    pub undobreak: bool,
+    /// Milliseconds; `:set timeoutlen`.
+    pub timeoutlen: u64,
+    pub updatetime: u32,
+    // ── save behaviour ───────────────────────────────────────────────────
+    pub format_on_save: bool,
+    pub trim_trailing_whitespace: bool,
+    pub fixendofline: bool,
+    pub autoreload: bool,
+    // ── external tooling ─────────────────────────────────────────────────
+    pub makeprg: String,
+    pub errorformat: String,
+    // ── visual extras ────────────────────────────────────────────────────
+    pub rainbow_brackets: bool,
+    pub colorizer: bool,
+    pub colorizer_filetypes: Vec<String>,
+    pub tabline_icons: bool,
+    pub blame_inline: bool,
+    /// `"off"`, `"current"`, or `"all"`.
+    pub diagnostics_inline: String,
+    // ── modelines ────────────────────────────────────────────────────────
+    pub modeline: bool,
+    pub modelines: u32,
+}
+
+impl OptionsConfig {
+    /// Overlay these values onto `o`.
+    ///
+    /// Only the fields [`hjkl_engine::types::Options`] actually carries are
+    /// written here; the rest of the `:set` surface lives on `Settings` and is
+    /// applied by [`Self::apply_to_settings`]. Splitting it this way keeps the
+    /// precedence chain intact: the caller layers `.editorconfig` and then the
+    /// file's modeline on top of the `Options` snapshot, and both only ever
+    /// touch fields in this half.
+    ///
+    /// Unparseable enum strings fall back to the engine default rather than
+    /// failing the load — [`Validate`] rejects them at startup with a pointer
+    /// to the offending key, so reaching a fallback here means validation was
+    /// bypassed (a programmatic caller), not that a user typo went unnoticed.
+    pub fn apply_to_options(&self, o: &mut hjkl_engine::types::Options) {
+        use hjkl_engine::types::{FoldMethod, SignColumnMode, WrapMode};
+
+        o.shiftwidth = self.shiftwidth;
+        o.tabstop = self.tabstop;
+        o.softtabstop = self.softtabstop;
+        o.expandtab = self.expandtab;
+        o.autoindent = self.autoindent;
+        o.smartindent = self.smartindent;
+
+        o.ignorecase = self.ignorecase;
+        o.smartcase = self.smartcase;
+        o.wrapscan = self.wrapscan;
+        o.hlsearch = self.hlsearch;
+        o.incsearch = self.incsearch;
+
+        o.number = self.number;
+        o.relativenumber = self.relativenumber;
+        o.numberwidth = self.numberwidth;
+        o.cursorline = self.cursorline;
+        o.cursorcolumn = self.cursorcolumn;
+        o.signcolumn = match self.signcolumn.as_str() {
+            "yes" => SignColumnMode::Yes,
+            "no" => SignColumnMode::No,
+            _ => SignColumnMode::Auto,
+        };
+        o.colorcolumn.clone_from(&self.colorcolumn);
+
+        o.wrap = match self.wrap.as_str() {
+            "char" => WrapMode::Char,
+            "word" => WrapMode::Word,
+            _ => WrapMode::None,
+        };
+        o.textwidth = self.textwidth;
+        o.scrolloff = self.scrolloff;
+        o.sidescrolloff = self.sidescrolloff;
+
+        o.foldmethod = match self.foldmethod.as_str() {
+            "manual" => FoldMethod::Manual,
+            "marker" => FoldMethod::Marker,
+            _ => FoldMethod::Expr,
+        };
+        o.foldenable = self.foldenable;
+        o.foldcolumn = self.foldcolumn;
+        o.foldlevelstart = self.foldlevelstart;
+        o.foldmarker.clone_from(&self.foldmarker);
+
+        o.list = self.list;
+        if let Ok(lc) = hjkl_buffer::ListChars::parse(&self.listchars) {
+            o.listchars = lc;
+        }
+        o.indent_guides = self.indent_guides;
+        o.indent_guide_char = self.indent_guide_char;
+
+        o.iskeyword.clone_from(&self.iskeyword);
+        o.formatoptions.clone_from(&self.formatoptions);
+        o.motion_sneak = self.motion_sneak;
+        o.matchparen = self.matchparen;
+        o.undo_levels = self.undolevels;
+        o.undo_break_on_motion = self.undobreak;
+        o.timeout_len = core::time::Duration::from_millis(self.timeoutlen);
+        o.updatetime = self.updatetime;
+
+        o.format_on_save = self.format_on_save;
+        o.trim_trailing_whitespace = self.trim_trailing_whitespace;
+        o.fixendofline = self.fixendofline;
+        o.autoreload = self.autoreload;
+
+        o.rainbow_brackets = self.rainbow_brackets;
+        o.colorizer = self.colorizer;
+        o.colorizer_filetypes.clone_from(&self.colorizer_filetypes);
+
+        o.modeline = self.modeline;
+        o.modelines = self.modelines;
+    }
+
+    /// Apply the `:set` options that have **no** [`hjkl_engine::types::Options`]
+    /// counterpart directly onto `s`.
+    ///
+    /// Must run AFTER `Settings::apply_options`, which would otherwise
+    /// overwrite these from a stale snapshot. Neither `.editorconfig` nor a
+    /// modeline can express any of them, so applying them after the overlay
+    /// costs no precedence.
+    pub fn apply_to_settings(&self, s: &mut hjkl_engine::Settings) {
+        use hjkl_engine::types::DiagInlineMode;
+
+        s.makeprg.clone_from(&self.makeprg);
+        s.errorformat.clone_from(&self.errorformat);
+        s.autopair = self.autopair;
+        s.autoclose_tag = self.autoclose_tag;
+        s.tabline_icons = self.tabline_icons;
+        s.blame_inline = self.blame_inline;
+        s.scroll_duration_ms = self.scroll_duration_ms;
+        s.diagnostics_inline = match self.diagnostics_inline.as_str() {
+            "off" => DiagInlineMode::Off,
+            "current" => DiagInlineMode::Current,
+            _ => DiagInlineMode::All,
+        };
+    }
+}
+
+/// Map a `:set` option name (canonical **or** alias) to its key inside the
+/// `[options]` table, or `None` when the option must not be persisted.
+///
+/// `None` covers three cases, all deliberate:
+///
+/// - **buffer-local options** — `filetype`, `commentstring`, `readonly`,
+///   `modifiable`, `endofline`. They describe one buffer, not a preference;
+///   see [`OptionsConfig`].
+/// - **`linebreak`** — it is one of two spellings that drive the tri-state
+///   `wrap` key, so it maps to `"wrap"` rather than a key of its own.
+/// - **host-intercepted names** — `background`, `mouse`. They are not engine
+///   settings and are handled before `:set` reaches the engine.
+/// - **`hlsearch`, `incsearch`, `modeline`, `modelines`** — config-only. They
+///   live on `Options` with no `Settings` counterpart to flip mid-session (the
+///   modeline scan is finished before a buffer exists), so `:set` cannot reach
+///   them and there is nothing to write back.
+///
+/// A name this returns `Some` for is guaranteed to be a real key of
+/// [`OptionsConfig`]; `every_options_key_is_reachable_from_set` pins that in
+/// both directions, so a field added to the struct without a `:set` name (or
+/// the reverse) fails the build's test run rather than silently never
+/// persisting.
+pub fn options_key_for_setting(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "shiftwidth" | "sw" => "shiftwidth",
+        "tabstop" | "ts" => "tabstop",
+        "softtabstop" | "sts" => "softtabstop",
+        "expandtab" | "et" => "expandtab",
+        "autoindent" | "ai" => "autoindent",
+        "smartindent" | "si" => "smartindent",
+        "ignorecase" | "ic" => "ignorecase",
+        "smartcase" | "scs" => "smartcase",
+        "wrapscan" | "ws" => "wrapscan",
+        "number" | "nu" => "number",
+        "relativenumber" | "rnu" => "relativenumber",
+        "numberwidth" | "nuw" => "numberwidth",
+        "cursorline" | "cul" => "cursorline",
+        "cursorcolumn" | "cuc" => "cursorcolumn",
+        "signcolumn" | "scl" => "signcolumn",
+        "colorcolumn" | "cc" => "colorcolumn",
+        // Both spellings land on the tri-state key.
+        "wrap" | "linebreak" | "lbr" => "wrap",
+        "textwidth" | "tw" => "textwidth",
+        "scrolloff" | "so" => "scrolloff",
+        "sidescrolloff" | "siso" => "sidescrolloff",
+        "scroll_duration_ms" => "scroll_duration_ms",
+        "foldmethod" | "fdm" => "foldmethod",
+        "foldenable" | "fen" => "foldenable",
+        "foldcolumn" | "fdc" => "foldcolumn",
+        "foldlevelstart" | "fls" => "foldlevelstart",
+        "foldmarker" | "fmr" => "foldmarker",
+        "list" => "list",
+        "listchars" | "lcs" => "listchars",
+        "indent_guides" | "ig" => "indent_guides",
+        "indent_guide_char" | "igc" => "indent_guide_char",
+        "iskeyword" | "isk" => "iskeyword",
+        "formatoptions" | "fo" => "formatoptions",
+        "autopair" | "ap" => "autopair",
+        "autoclose-tag" | "act" => "autoclose-tag",
+        "motion_sneak" | "snk" => "motion_sneak",
+        "matchparen" | "mps" => "matchparen",
+        "undolevels" | "ul" => "undolevels",
+        "undobreak" => "undobreak",
+        "timeoutlen" | "tm" => "timeoutlen",
+        "updatetime" | "ut" => "updatetime",
+        "format_on_save" | "fos" => "format_on_save",
+        "trim_trailing_whitespace" | "tts" => "trim_trailing_whitespace",
+        "fixendofline" | "fixeol" => "fixendofline",
+        "autoreload" | "ar" => "autoreload",
+        "makeprg" | "mp" => "makeprg",
+        "errorformat" | "efm" => "errorformat",
+        "rainbow_brackets" | "rb" => "rainbow_brackets",
+        "colorizer" => "colorizer",
+        "colorizer_filetypes" => "colorizer_filetypes",
+        "tabline_icons" => "tabline_icons",
+        "blame_inline" => "blame_inline",
+        "diagnostics_inline" | "diaginline" => "diagnostics_inline",
+        _ => return None,
+    })
 }
 
 fn default_icons() -> String {
@@ -222,7 +522,44 @@ impl Validate for Config {
                 ),
             ));
         }
-        ensure_range(self.editor.tab_width, 1, 16, "editor.tab_width")?;
+        // Indentation widths. `shiftwidth`/`tabstop` must be non-zero — a zero
+        // shift step is what `:set shiftwidth=0` already refuses at runtime, so
+        // a config file must not be able to smuggle it in behind that check.
+        ensure_range(self.options.shiftwidth, 1, 16, "options.shiftwidth")?;
+        ensure_range(self.options.tabstop, 1, 16, "options.tabstop")?;
+        ensure_range(self.options.softtabstop, 0, 16, "options.softtabstop")?;
+        ensure_range(self.options.textwidth, 1, 10_000, "options.textwidth")?;
+        // Same bounds `:set` enforces, so the two entry points agree.
+        ensure_range(self.options.numberwidth, 1, 20, "options.numberwidth")?;
+        ensure_range(self.options.foldcolumn, 0, 12, "options.foldcolumn")?;
+        // Enum-valued keys: reject a typo at startup rather than silently
+        // falling back to the default deep inside `apply_to_options`.
+        ensure_one_of(
+            &self.options.signcolumn.as_str(),
+            &["yes", "no", "auto"],
+            "options.signcolumn",
+        )?;
+        ensure_one_of(
+            &self.options.wrap.as_str(),
+            &["off", "char", "word"],
+            "options.wrap",
+        )?;
+        ensure_one_of(
+            &self.options.foldmethod.as_str(),
+            &["manual", "expr", "syntax", "marker"],
+            "options.foldmethod",
+        )?;
+        ensure_one_of(
+            &self.options.diagnostics_inline.as_str(),
+            &["off", "current", "all"],
+            "options.diagnostics_inline",
+        )?;
+        // `listchars` has its own grammar; surface a parse failure as a
+        // validation error naming the key instead of silently keeping the
+        // default the first time the editor renders invisibles.
+        if let Err(e) = hjkl_buffer::ListChars::parse(&self.options.listchars) {
+            return Err(ValidationError::new("options.listchars", e));
+        }
         // Static sanity bounds; the runtime clamp against the live terminal
         // width (`dock::clamp_dock_width`) is a separate, dynamic check.
         ensure_range(self.explorer.width, 12, 400, "explorer.width")?;
@@ -247,8 +584,8 @@ mod tests {
         let cfg: Config = toml::from_str(DEFAULTS_TOML).expect("bundled config.toml must parse");
         // Sanity-check field shape — guards against silent schema drift.
         assert_eq!(cfg.editor.leader, ' ');
-        assert_eq!(cfg.editor.tab_width, 4);
-        assert!(cfg.editor.expandtab);
+        assert_eq!(cfg.options.tabstop, 4);
+        assert!(cfg.options.expandtab);
         assert!(cfg.editor.mouse, "mouse defaults on");
         assert_eq!(cfg.theme.name, "tokyonight");
         assert!(!cfg.theme.transparent, "transparent defaults off");
@@ -259,7 +596,7 @@ mod tests {
         let parsed: Config = toml::from_str(DEFAULTS_TOML).unwrap();
         let dflt = Config::default();
         assert_eq!(parsed.editor.leader, dflt.editor.leader);
-        assert_eq!(parsed.editor.tab_width, dflt.editor.tab_width);
+        assert_eq!(parsed.options.tabstop, dflt.options.tabstop);
         assert_eq!(parsed.theme.name, dflt.theme.name);
         assert_eq!(parsed.theme.transparent, dflt.theme.transparent);
     }
@@ -272,8 +609,8 @@ mod tests {
         let cfg = load_from(f.path()).unwrap();
         assert_eq!(cfg.editor.leader, '\\');
         assert_eq!(
-            cfg.editor.tab_width, 4,
-            "non-overridden field keeps default"
+            cfg.options.tabstop, 4,
+            "non-overridden section keeps default"
         );
         assert_eq!(
             cfg.theme.name, "tokyonight",
@@ -289,6 +626,67 @@ mod tests {
         assert!(load_from(f.path()).is_err());
     }
 
+    /// The bundled `[options]` table and the engine's own defaults are two
+    /// spellings of the same thing, and nothing but this test keeps them
+    /// saying it the same way.
+    ///
+    /// Applying the bundled table to a default `Options` must be a no-op. If
+    /// it isn't, a fresh session silently disagrees with `Options::default()`
+    /// — which is exactly the class of bug that made `cursorline` report one
+    /// value and render another.
+    #[test]
+    fn options_defaults_match_engine_defaults() {
+        let cfg = Config::default();
+        let mut seeded = hjkl_engine::types::Options::default();
+        cfg.options.apply_to_options(&mut seeded);
+        assert_eq!(
+            seeded,
+            hjkl_engine::types::Options::default(),
+            "bundled [options] drifted from Options::default()"
+        );
+    }
+
+    /// Same contract for the half of the `:set` surface that lives on
+    /// `Settings` rather than `Options`.
+    #[test]
+    fn options_defaults_match_engine_settings_defaults() {
+        let cfg = Config::default();
+        let mut seeded = hjkl_engine::Settings::default();
+        cfg.options.apply_to_settings(&mut seeded);
+        let dflt = hjkl_engine::Settings::default();
+        assert_eq!(seeded.makeprg, dflt.makeprg);
+        assert_eq!(seeded.errorformat, dflt.errorformat);
+        assert_eq!(seeded.autopair, dflt.autopair);
+        assert_eq!(seeded.autoclose_tag, dflt.autoclose_tag);
+        assert_eq!(seeded.tabline_icons, dflt.tabline_icons);
+        assert_eq!(seeded.blame_inline, dflt.blame_inline);
+        assert_eq!(seeded.scroll_duration_ms, dflt.scroll_duration_ms);
+        assert_eq!(seeded.diagnostics_inline, dflt.diagnostics_inline);
+    }
+
+    /// The buffer-local options must map to nothing, or `:set filetype=rust`
+    /// would write a global default that misapplies to every later file.
+    #[test]
+    fn buffer_local_options_are_never_persistable() {
+        for name in [
+            "filetype",
+            "ft",
+            "commentstring",
+            "cms",
+            "readonly",
+            "ro",
+            "modifiable",
+            "ma",
+            "endofline",
+            "eol",
+        ] {
+            assert!(
+                options_key_for_setting(name).is_none(),
+                "`:set {name}` is buffer-local and must not be persistable"
+            );
+        }
+    }
+
     #[test]
     fn defaults_pass_validation() {
         Config::default()
@@ -299,26 +697,26 @@ mod tests {
     #[test]
     fn validate_rejects_zero_tab_width() {
         let mut cfg = Config::default();
-        cfg.editor.tab_width = 0;
+        cfg.options.tabstop = 0;
         let err = cfg.validate().unwrap_err();
-        assert_eq!(err.field, "editor.tab_width");
+        assert_eq!(err.field, "options.tabstop");
     }
 
     #[test]
     fn validate_rejects_huge_tab_width() {
         let mut cfg = Config::default();
-        cfg.editor.tab_width = 64;
+        cfg.options.tabstop = 64;
         let err = cfg.validate().unwrap_err();
-        assert_eq!(err.field, "editor.tab_width");
+        assert_eq!(err.field, "options.tabstop");
         assert!(err.message.contains("64"));
     }
 
     #[test]
     fn validate_accepts_tab_width_boundary() {
         let mut cfg = Config::default();
-        cfg.editor.tab_width = 1;
+        cfg.options.tabstop = 1;
         assert!(cfg.validate().is_ok());
-        cfg.editor.tab_width = 16;
+        cfg.options.tabstop = 16;
         assert!(cfg.validate().is_ok());
     }
 
@@ -398,7 +796,7 @@ mod tests {
         let cfg = load_from(f.path()).unwrap();
         assert_eq!(cfg.editor.chord_timeout_ms, 250);
         // Non-overridden fields must keep their bundled defaults.
-        assert_eq!(cfg.editor.tab_width, 4, "tab_width must keep default");
+        assert_eq!(cfg.options.tabstop, 4, "tabstop must keep default");
     }
 
     /// A user config that omits chord_timeout_ms must inherit the bundled default.

@@ -8,6 +8,27 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Every global `:set` option now has a config key.** A new `[options]` table
+  in `config.toml` carries all of them, named exactly as `:set` names them, so
+  `:set scrolloff=8` and `options.scrolloff = 8` are the same knob.
+  `.editorconfig` and a file's own modeline still layer on top, in that order.
+- `:set updatetime`, `:set colorizer` and `:set colorizer_filetypes` — three
+  engine settings that had no `:set` name, so they could only be reached
+  programmatically. `colorizer_filetypes` takes a comma-separated list.
+- `modifiable` / `ma` and `motion_sneak` / `snk` are now offered by `:set`
+  completion. Both were settable already; neither appeared in the candidate
+  list.
+
+### Changed
+
+- **`editor.tab_width` and `editor.expandtab` are gone**, superseded by
+  `options.tabstop`, `options.shiftwidth`, `options.softtabstop` and
+  `options.expandtab`. `tab_width` set all three widths at once; the new keys
+  let them differ. A config still carrying the old keys fails to load with the
+  offending key named — pre-1.0, no shim.
+
 ### Changed
 
 - **The cursor-highlight defaults are swapped: `cursorline` is now on and

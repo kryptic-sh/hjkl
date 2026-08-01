@@ -845,15 +845,12 @@ pub fn build_slot(
         }
     }
 
-    // Seed Options from user config — editorconfig overlay (if any) takes
-    // precedence over the user-config fallback values.
-    let mut ec_opts = Options {
-        expandtab: config.editor.expandtab,
-        tabstop: config.editor.tab_width as u32,
-        shiftwidth: config.editor.tab_width as u32,
-        softtabstop: config.editor.tab_width as u32,
-        ..Options::default()
-    };
+    // Seed Options from the user's `[options]` table — every global `:set`
+    // option, not just the indent ones. `.editorconfig` (below) and then the
+    // file's own modeline are layered on top, so a project's settings still
+    // win for the files they cover.
+    let mut ec_opts = Options::default();
+    config.options.apply_to_options(&mut ec_opts);
     if let Some(ref p) = path {
         hjkl_app::editorconfig::overlay_for_path(&mut ec_opts, p);
     }
@@ -867,6 +864,12 @@ pub fn build_slot(
     }
     let mut settings = hjkl_engine::Settings::default();
     settings.apply_options(&ec_opts);
+    // The `:set` options with no `Options` counterpart (makeprg, autopair,
+    // diagnostics_inline, …) go straight onto Settings, after `apply_options`
+    // so it can't overwrite them from the snapshot. Neither editorconfig nor a
+    // modeline can express any of them, so applying them here costs no
+    // precedence.
+    config.options.apply_to_settings(&mut settings);
     // Non-blocking: returns immediately; Loading case is handled by
     // poll_grammar_loads each tick.
     if let Some(ref p) = path {
@@ -2564,10 +2567,9 @@ impl App {
             // `filetype`, and `Settings::apply_options` writes every field it
             // is handed. Seeding from the default would reset all of that.
             let mut opts = slot.settings().to_options();
-            opts.expandtab = self.config.editor.expandtab;
-            opts.tabstop = self.config.editor.tab_width as u32;
-            opts.shiftwidth = self.config.editor.tab_width as u32;
-            opts.softtabstop = self.config.editor.tab_width as u32;
+            self.config.options.apply_to_options(&mut opts);
+            // `readonly` is buffer-local and not part of `[options]`, so it is
+            // restored from the live slot rather than the config.
             opts.readonly = was_readonly;
             if let Some(p) = slot.filename.as_ref() {
                 hjkl_app::editorconfig::overlay_for_path(&mut opts, p);
@@ -2576,12 +2578,16 @@ impl App {
             // this slot inherits the re-applied config (#151 Stage 2b — no
             // slot bridge editor to hold this anymore).
             slot.settings_mut().apply_options(&opts);
+            // The `:set` options with no `Options` counterpart travel
+            // separately — `apply_options` above cannot carry them.
+            self.config.options.apply_to_settings(slot.settings_mut());
             // Also push it into every window ALREADY showing this slot, for
             // immediate effect (mirrors the readonly-swap-lock dual-write in
             // `ex_dispatch::check_recovery_on_open`).
             for wid in self.windows_for_slot(idx) {
                 if let Some(ed) = self.window_editors.get_mut(&wid) {
                     ed.apply_options(&opts);
+                    self.config.options.apply_to_settings(ed.settings_mut());
                 }
             }
         }

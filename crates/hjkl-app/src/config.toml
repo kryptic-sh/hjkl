@@ -14,12 +14,6 @@
 # Leader key in normal mode. Single character. Common alts: "\\", ",".
 leader = " "
 
-# Fallback indent width when no .editorconfig covers the open file.
-tab_width = 4
-
-# Fallback for spaces-vs-tabs when no .editorconfig covers the file.
-expandtab = true
-
 # Mouse support. When true, wheel scrolls the viewport (with scrolloff)
 # and the terminal's native text-selection requires Shift to bypass
 # capture (vim/nvim/helix convention). Toggle at runtime with
@@ -54,6 +48,124 @@ undofile = true
 # `$XDG_STATE_HOME/hjkl/undo/` (e.g. ~/.local/state/hjkl/undo/). Uncomment to
 # redirect, e.g. undodir = "/home/you/.hjkl-undo".
 # undodir = ""
+
+[options]
+# Startup values for every GLOBAL `:set` option. Key names are exactly the
+# `:set` names, so `:set scrolloff=8` and `options.scrolloff = 8` are the same
+# knob — and running `:set scrolloff=8` writes that key back here for you, in
+# place, leaving the rest of this file (comments included) untouched.
+#
+# The buffer-local options are deliberately absent and never persist:
+# `filetype`, `commentstring`, `readonly`, `modifiable`, `endofline`. Each
+# describes one buffer rather than a preference — `filetype` is redetected for
+# every file — so `:set filetype=rust` applies to the session only.
+#
+# `.editorconfig` and a file's own modeline are layered ON TOP of these, in
+# that order, so a project's settings still win for the files it covers.
+
+# ── indentation ──────────────────────────────────────────────────────────────
+shiftwidth = 4
+tabstop = 4
+softtabstop = 4
+expandtab = true
+autoindent = true
+smartindent = true
+
+# ── search ───────────────────────────────────────────────────────────────────
+ignorecase = true
+smartcase = true
+wrapscan = true
+hlsearch = true
+incsearch = true
+
+# ── gutter and cursor highlights ─────────────────────────────────────────────
+number = true
+relativenumber = false
+numberwidth = 4
+cursorline = true
+cursorcolumn = false
+# "yes" (always reserve), "no" (never), or "auto" (reserve when a sign exists).
+signcolumn = "auto"
+# Comma-separated 1-based columns to rule, e.g. "80,120". Empty = none.
+colorcolumn = ""
+
+# ── wrapping and scrolling ───────────────────────────────────────────────────
+# "off" (long lines run past the right edge), "char" (break anywhere), or
+# "word" (break at word boundaries — what `:set linebreak` selects).
+wrap = "off"
+textwidth = 79
+scrolloff = 5
+sidescrolloff = 0
+# Smooth-scroll animation for page/recenter motions, ms. 0 = instant.
+scroll_duration_ms = 0
+
+# ── folding ──────────────────────────────────────────────────────────────────
+# "manual", "expr" (tree-sitter), or "marker".
+foldmethod = "expr"
+foldenable = true
+foldcolumn = 0
+foldlevelstart = 99
+foldmarker = "{{{,}}}"
+
+# ── invisibles and guides ────────────────────────────────────────────────────
+list = false
+listchars = "tab:^I,eol:$"
+indent_guides = true
+indent_guide_char = "│"
+
+# ── editing behaviour ────────────────────────────────────────────────────────
+iskeyword = "@,48-57,_,192-255"
+# "r" continues line comments on Enter, "o" continues them on o/O.
+formatoptions = "ro"
+autopair = true
+autoclose-tag = true
+# `s`/`S` are vim-sneak two-char jumps rather than substitute-char/line.
+motion_sneak = true
+matchparen = true
+undolevels = 1000
+undobreak = true
+# Milliseconds to wait for a multi-key sequence (`gg`, `dd`) to complete.
+timeoutlen = 1000
+# Milliseconds of inactivity before the swap file is written.
+updatetime = 4000
+
+# ── save behaviour ───────────────────────────────────────────────────────────
+format_on_save = true
+trim_trailing_whitespace = false
+# Add the missing final newline on write (vim's 'fixendofline').
+fixendofline = true
+# Reload a clean buffer when its file changes on disk (vim's 'autoread').
+autoreload = true
+
+# ── external tooling ─────────────────────────────────────────────────────────
+makeprg = "cargo check"
+errorformat = "%f:%l:%c:%m,%f:%l:%m,%l:%c:%m"
+
+# ── visual extras ────────────────────────────────────────────────────────────
+rainbow_brackets = true
+colorizer = true
+colorizer_filetypes = [
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "html",
+  "vue",
+  "svelte",
+  "tailwindcss",
+  "toml",
+  "lua",
+  "vim",
+]
+tabline_icons = true
+blame_inline = true
+# "off", "current" (cursor line only), or "all".
+diagnostics_inline = "all"
+
+# ── modelines ────────────────────────────────────────────────────────────────
+# Honour a `vim:`/`ex:`/`vi:` modeline in the first/last `modelines` lines.
+modeline = true
+modelines = 5
 
 [theme]
 # Theme name. Bundled schemes: "tokyonight" (default), "dark", "light".

@@ -720,16 +720,13 @@ fn build_scratch_slot(
     // `switch_to` (the only caller's next step) runs `recompute_and_install`
     // synchronously before the first paint.
 
-    let opts = Options {
-        expandtab: config.editor.expandtab,
-        tabstop: config.editor.tab_width as u32,
-        shiftwidth: config.editor.tab_width as u32,
-        softtabstop: config.editor.tab_width as u32,
-        readonly: true,
-        ..Options::default()
-    };
+    let mut opts = Options::default();
+    config.options.apply_to_options(&mut opts);
+    // This slot is a read-only preview regardless of what the config says.
+    opts.readonly = true;
     let mut settings = Settings::default();
     settings.apply_options(&opts);
+    config.options.apply_to_settings(&mut settings);
 
     let mut slot = BufferSlot::new(buffer_id, buffer, settings);
     slot.snapshot_saved();
