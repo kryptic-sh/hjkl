@@ -115,15 +115,32 @@ file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
 bash/python/html/toml fixtures. Go, C, C++, Java, PHP, Ruby, C#, JS and TS fold
 queries were NOT compared against neovim.
 
-### 1.4c Intermittent explorer test (2026-08-02)
+### 1.4c Explorer trash tests are flaky under parallel test runs (2026-08-02)
 
-`app::explorer::tests::ddu_restores_file` failed once in a full `cargo test` run
-with "dd must trash victim.txt", then passed on re-run alone, with the explorer
-suite, and in the next full run. Not investigated. It takes `CwdGuard`, which
-serializes chdir + env under a global mutex, so the obvious cwd race is already
-covered — the cause is something else (env visible to unguarded tests, or the
-trash path resolution). Left as a known flake rather than a guess; re-check
-before treating any future failure as new.
+The `dd` → trash → `u` / `<C-r>` family in `apps/hjkl/src/app/explorer.rs` fails
+intermittently in a full `cargo test`: `ddu_restores_file`,
+`ddu_then_redo_retrashes` and `dd_u_then_ctrl_r_retrashes` each failed once
+across four runs, on their first assertion ("dd must trash"). Measured, not
+guessed:
+
+- `cargo test -p hjkl --bin hjkl -- --test-threads=1`: 1320 passed, twice, no
+  failures.
+- Default (parallel): one failure per run, different test each time, always in
+  this family. The explorer suite ALONE (`-- app::explorer::tests`) passes.
+
+Every test in the family already isolates itself — `CwdGuard::enter` (a global
+mutex + chdir) plus `cwd.set_env("XDG_CACHE_HOME", tmp)` for a private trash dir
+— and `trash_dir()` re-reads the env on every call, so nothing is cached across
+tests. What the guard does NOT cover is the rest of the binary: the mutex
+serializes guarded tests against each other, while every other test thread keeps
+running, and the env mutation is process-global (this is why `std::env::set_var`
+is `unsafe` in Rust 2024). Any concurrent `getenv` can observe the wrong value.
+
+Fixing it properly means not deriving the trash/swap directory from the
+environment in tests — thread an explicit root through `hjkl_app::trash` /
+`swap` — rather than adding more env juggling. Left undone: it is a test-harness
+design change, and it was found incidentally while fixing the command-bar
+completion.
 
 ### 1.5 Remaining differential-oracle and code-review fixes
 
