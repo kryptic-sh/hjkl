@@ -441,6 +441,9 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if self.command_field.is_some() {
                 self.command_field = None;
+                self.completion = None;
+                self.command_completion_range = None;
+                self.restore_previewed_theme();
                 return KeyOutcome::Continue;
             }
             if self.search_field.is_some() {

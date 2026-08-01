@@ -248,6 +248,10 @@ pub struct App {
     /// closes or the popup is dismissed. The accept path uses this to know
     /// which token to replace in the field text.
     pub(crate) command_completion_range: Option<std::ops::Range<usize>>,
+    /// Colorscheme in effect before the `:colorscheme` completion popup began
+    /// previewing, so leaving the prompt without running the command puts it
+    /// back. `Some` only while a preview is applied.
+    pub(crate) theme_preview_restore: Option<String>,
     /// Active `!` filter prompt. `Some` while the user is typing a shell
     /// command after a `!{motion}` or `!!` operator. Paired with
     /// `filter_pending_range` which holds the row range to filter.
@@ -2317,6 +2321,7 @@ impl App {
             info_popup: None,
             command_field: None,
             command_completion_range: None,
+            theme_preview_restore: None,
             filter_field: None,
             filter_pending_range: None,
             search_field: None,

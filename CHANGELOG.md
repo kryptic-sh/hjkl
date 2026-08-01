@@ -84,6 +84,17 @@ patch bumps.
   fold extraction (`rope.to_string()` + a whole-tree query) AND a viewport
   re-highlight. An unchanged fold set is now a no-op.
 
+### Added
+
+- **`:colorscheme` previews live.** Moving through the completion popup with the
+  arrow keys, `<C-n>`/`<C-p>` or `<Tab>` applies each scheme as it is
+  highlighted — UI chrome and syntax both — so a theme is judged on the actual
+  buffer instead of by its name. Leaving the prompt any way that does not run
+  the command (`<Esc>`, `<C-c>`, backspacing it away, `<C-f>`, or running some
+  other command) puts the previous scheme back; running `:colorscheme <name>`
+  keeps it. Preview happens on navigation only, so typing does not churn the
+  theme on every keystroke.
+
 ### Changed
 
 - **The matchparen partner no longer looks like a second cursor.** Both the

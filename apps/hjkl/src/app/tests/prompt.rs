@@ -867,3 +867,172 @@ fn command_completion_is_arg_is_false_for_a_ranged_command_name() {
         "the token after a range prefix is still the command name"
     );
 }
+
+// ── `:colorscheme` live preview ─────────────────────────────────────────
+
+/// Open `:colorscheme ` and walk the popup until the highlighted candidate is
+/// a scheme other than the active one, so the assertions do not depend on
+/// where the current theme happens to sit in the alphabetical list. Returns
+/// the scheme now highlighted.
+fn preview_a_different_scheme(app: &mut App) -> String {
+    let before = app.colorscheme.clone();
+    app.open_command_prompt();
+    type_str(app, "colorscheme ");
+    assert!(
+        app.completion.is_some(),
+        "precondition: the popup must list the bundled schemes"
+    );
+    for _ in 0..16 {
+        app.handle_command_field_key(key(KeyCode::Down));
+        let sel = app
+            .completion
+            .as_ref()
+            .and_then(|p| p.selected_item().map(|i| i.label.clone()))
+            .expect("popup stays open while navigating");
+        if sel != before {
+            return sel;
+        }
+    }
+    panic!("popup never highlighted a scheme other than {before}");
+}
+
+/// Moving through the `:colorscheme` popup applies each theme, so it can be
+/// judged on the real buffer rather than by its name.
+#[test]
+fn colorscheme_popup_navigation_previews_the_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    let previewed = preview_a_different_scheme(&mut app);
+
+    assert_ne!(previewed, before, "sanity: a different scheme is selected");
+    assert_eq!(
+        app.colorscheme, previewed,
+        "the highlighted candidate must be the applied theme"
+    );
+    // The chrome follows too, not just the recorded name.
+    assert_eq!(
+        app.theme.ui.background,
+        crate::theme::load_named(&previewed).unwrap().ui.background,
+        "the UI theme must be the previewed scheme's"
+    );
+}
+
+/// Leaving the prompt without running the command puts the original theme
+/// back — a preview must never become permanent by accident.
+#[test]
+fn escaping_the_prompt_restores_the_pre_preview_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    preview_a_different_scheme(&mut app);
+    assert_ne!(app.colorscheme, before, "precondition: preview applied");
+
+    // First Esc dismisses the popup and leaves Insert; second closes the prompt.
+    app.handle_command_field_key(key(KeyCode::Esc));
+    app.handle_command_field_key(key(KeyCode::Esc));
+    assert!(app.command_field.is_none(), "prompt must be closed");
+    assert_eq!(app.colorscheme, before, "the original theme is restored");
+    assert_eq!(
+        app.theme.ui.background,
+        crate::theme::load_named(&before).unwrap().ui.background,
+        "the UI theme is restored too, not just the recorded name"
+    );
+    assert!(
+        app.theme_preview_restore.is_none(),
+        "the saved scheme is consumed"
+    );
+}
+
+/// Running the command keeps the previewed theme — the accepted candidate is
+/// what `:colorscheme` then applies for real.
+#[test]
+fn running_colorscheme_keeps_the_previewed_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let picked = preview_a_different_scheme(&mut app);
+    assert_eq!(
+        app.colorscheme, picked,
+        "precondition: the preview is applied before anything is run"
+    );
+
+    // Enter accepts the candidate into the line, the second Enter runs it.
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.command_field.as_ref().map(|f| f.text()),
+        Some(format!("colorscheme {picked}"))
+    );
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert!(app.command_field.is_none(), "second Enter runs it");
+    assert_eq!(app.colorscheme, picked, "the chosen scheme stays applied");
+    assert!(app.theme_preview_restore.is_none());
+}
+
+/// Typing a DIFFERENT command after previewing must not leave the preview
+/// applied: the theme goes back before the typed command runs.
+#[test]
+fn running_another_command_after_a_preview_restores_the_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    preview_a_different_scheme(&mut app);
+    assert_ne!(app.colorscheme, before, "precondition: preview applied");
+
+    // Replace the line with an unrelated command and run it.
+    app.handle_command_field_key(key(KeyCode::Esc)); // dismiss popup, leave Insert
+    app.command_field
+        .as_mut()
+        .expect("prompt still open")
+        .set_text("nohlsearch");
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert!(app.command_field.is_none());
+    assert_eq!(
+        app.colorscheme, before,
+        "a preview must not survive an unrelated command"
+    );
+}
+
+/// <C-c> abandons the prompt outright; the preview goes with it.
+#[test]
+fn ctrl_c_on_the_prompt_restores_the_pre_preview_theme() {
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    preview_a_different_scheme(&mut app);
+    assert_ne!(app.colorscheme, before, "precondition: preview applied");
+
+    app.handle_keypress(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app.command_field.is_none(), "<C-c> closes the prompt");
+    assert_eq!(app.colorscheme, before, "the original theme is restored");
+}
+
+/// The abbreviation vim users actually type (`:colo`) resolves to the same
+/// command, so it previews too.
+#[test]
+fn colo_abbreviation_previews_as_well() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    app.open_command_prompt();
+    type_str(&mut app, "colo ");
+    assert!(app.completion.is_some(), "precondition: popup is open");
+    for _ in 0..16 {
+        app.handle_command_field_key(key(KeyCode::Down));
+        if app.colorscheme != before {
+            return;
+        }
+    }
+    panic!("`:colo ` never previewed a scheme (current {before})");
+}
+
+/// Only `:colorscheme` arguments preview. A `:set` value popup must not touch
+/// the theme, however its candidates are named.
+#[test]
+fn other_argument_popups_do_not_preview_a_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.colorscheme.clone();
+    app.open_command_prompt();
+    type_str(&mut app, "set foldm");
+    assert!(app.completion.is_some(), "precondition: popup is open");
+    app.handle_command_field_key(key(KeyCode::Down));
+    assert_eq!(
+        app.colorscheme, before,
+        "no theme change from a `:set` popup"
+    );
+    assert!(app.theme_preview_restore.is_none());
+}

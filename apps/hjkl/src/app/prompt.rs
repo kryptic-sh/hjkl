@@ -361,6 +361,25 @@ impl App {
         host_reg.resolve(&token).is_some() || editor_reg.resolve(&token).is_some()
     }
 
+    /// Byte range of the leading command word — what
+    /// [`Self::command_line_is_runnable`] resolves — after any range/count
+    /// prefix (`%`, `2`, `.,$`). `None` when the field is closed.
+    fn command_word_range(&self) -> Option<std::ops::Range<usize>> {
+        let line = self.command_field.as_ref()?.text();
+        // Both the prefix and the word are ASCII, so byte and char lengths
+        // agree and these offsets index the line safely.
+        let prefix = hjkl_ex::range_prefix_len(&line).min(line.len());
+        let after = &line[prefix..];
+        let ws = after.len() - after.trim_start().len();
+        let word = after
+            .trim_start()
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            .count();
+        let start = prefix + ws;
+        Some(start..start + word)
+    }
+
     /// `true` when the open popup is completing an ARGUMENT rather than the
     /// command name — its replace range starts past the leading command word.
     ///
@@ -378,19 +397,72 @@ impl App {
         ) else {
             return false;
         };
+        let _ = field;
+        self.command_word_range()
+            .is_some_and(|word| range.start > word.end)
+    }
+
+    /// `true` when the open popup is offering colorscheme names — the argument
+    /// of `:colorscheme` / `:colo`. Drives the live theme preview.
+    pub(crate) fn command_completion_is_colorscheme(&self) -> bool {
+        if !self.command_completion_is_arg() {
+            return false;
+        }
+        let Some(field) = self.command_field.as_ref() else {
+            return false;
+        };
         let line = field.text();
-        // Skip a leading range/count prefix (`%`, `2`, `.,$`) the same way
-        // `command_line_is_runnable` does, then the whitespace and the command
-        // word itself. Both are ASCII, so byte and char lengths agree.
-        let prefix = hjkl_ex::range_prefix_len(&line).min(line.len());
-        let after = &line[prefix..];
-        let ws = after.len() - after.trim_start().len();
-        let word = after
-            .trim_start()
-            .bytes()
-            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
-            .count();
-        range.start > prefix + ws + word
+        let Some(word) = self.command_word_range() else {
+            return false;
+        };
+        super::ex_host_cmds::host_registry()
+            .resolve(&line[word])
+            .is_some_and(|c| c.name() == "colorscheme")
+    }
+
+    /// Apply the highlighted colorscheme candidate so moving through the popup
+    /// shows the theme instead of just its name. The scheme in effect when the
+    /// preview started is remembered once, and
+    /// [`Self::restore_previewed_theme`] puts it back if the user leaves
+    /// without running the command.
+    ///
+    /// No-op unless the popup is colorscheme completion and the selected label
+    /// is a real bundled scheme, so a stale or partial candidate can't leave
+    /// the editor in a theme the user never chose.
+    pub(crate) fn preview_selected_colorscheme(&mut self) {
+        if !self.command_completion_is_colorscheme() {
+            return;
+        }
+        let Some(name) = self
+            .completion
+            .as_ref()
+            .and_then(|p| p.selected_item().map(|i| i.label.clone()))
+        else {
+            return;
+        };
+        if name == self.colorscheme {
+            return;
+        }
+        if crate::theme::load_named(&name).is_none() {
+            return;
+        }
+        if self.theme_preview_restore.is_none() {
+            self.theme_preview_restore = Some(self.colorscheme.clone());
+        }
+        self.apply_named_theme(&name);
+    }
+
+    /// Put back the colorscheme that was active before the preview started.
+    /// Called on every path that leaves the `:` prompt, including the one that
+    /// runs the command — the command then applies its own theme, so a
+    /// previewed scheme never becomes permanent by accident.
+    pub(crate) fn restore_previewed_theme(&mut self) {
+        let Some(name) = self.theme_preview_restore.take() else {
+            return;
+        };
+        if name != self.colorscheme {
+            self.apply_named_theme(&name);
+        }
     }
 
     pub(crate) fn accept_command_completion(&mut self) {
@@ -443,6 +515,7 @@ impl App {
             }
             if let Some(ref mut popup) = self.completion {
                 popup.cycle_down();
+                self.preview_selected_colorscheme();
                 return;
             }
             // No popup — refresh (may open one) then no-op.
@@ -452,6 +525,7 @@ impl App {
         if key.code == KeyCode::BackTab {
             if let Some(ref mut popup) = self.completion {
                 popup.cycle_up();
+                self.preview_selected_colorscheme();
                 return;
             }
             return;
@@ -471,6 +545,9 @@ impl App {
                 } else {
                     popup.cycle_down();
                 }
+                // Moving through `:colorscheme` candidates applies the theme
+                // so it can be judged on the real buffer, not by its name.
+                self.preview_selected_colorscheme();
                 return;
             }
             // Otherwise, history navigation.
@@ -510,6 +587,7 @@ impl App {
                 let (_, col) = field.cursor();
                 self.completion = None;
                 self.command_completion_range = None;
+                self.restore_previewed_theme();
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
                 let prefill = Some((text, col));
@@ -544,12 +622,14 @@ impl App {
                 self.command_field = None;
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
+                self.restore_previewed_theme();
             } else if field.coarse_mode() == hjkl_form::CoarseMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
+                self.restore_previewed_theme();
             }
             return;
         }
@@ -589,6 +669,10 @@ impl App {
             self.command_completion_range = None;
             self.prompt_history_index = None;
             self.prompt_user_input = None;
+            // Undo the preview BEFORE dispatching: the command about to run
+            // decides the theme. `:colorscheme dracula` re-applies dracula a
+            // line later; anything else gets the scheme the user came in with.
+            self.restore_previewed_theme();
             self.dispatch_ex(text.trim());
             return;
         }
@@ -605,6 +689,7 @@ impl App {
             self.command_completion_range = None;
             self.prompt_history_index = None;
             self.prompt_user_input = None;
+            self.restore_previewed_theme();
             return;
         }
 
