@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `options_registry` — a public module holding one `OptionDesc` per `:set`-able
+  option: canonical name, aliases, `OptKind` (bool / int with bounds / string /
+  enum / string-list), `OptScope` (global vs buffer-local), and a getter/setter
+  pair against `Settings`. `hjkl-ex` derives its whole `:set` surface from it
+  and `hjkl-app` derives its config-key mapping, replacing about twenty
+  hand-maintained tables that had already drifted apart.
 - `Settings` gains `hlsearch`, `incsearch`, `modeline` and `modelines`. All four
   were `Options`-only, so `to_options` echoed the SPEC default and no caller
   could move them; they now round-trip through `apply_options` /

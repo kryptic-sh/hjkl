@@ -1,223 +1,76 @@
-//! `:set [option ...]` command — verbatim port from `hjkl-editor::ex::apply_set`
-//! (lines 891–1085).  Bit-for-bit parity with legacy: same option list, same
-//! aliases, same error strings.
+//! `:set [option ...]` command.
+//!
+//! Every form — `name`, `noname`, `invname`, `name!`, `name?`, `name=value` —
+//! resolves through [`hjkl_engine::options_registry`], so the set of options
+//! each accepts is one table rather than seven that could disagree. This module
+//! owns only the *syntax*: which suffix means what, and how a value is spelled
+//! on the command line.
 
 use crate::effect::ExEffect;
 use hjkl_engine::Host;
+use hjkl_engine::options_registry::{OPTIONS, OptKind, OptionDesc, lookup};
+use hjkl_engine::types::OptionValue;
 
-/// All `:set` option names and their short aliases.
+/// Names the host intercepts before `:set` reaches the engine.
 ///
-/// Used by Phase 6's `Setting` arg completer to populate the candidate list.
-/// Includes both canonical names and aliases; no dedup needed (they're all
-/// distinct strings).
+/// None is a `Settings` field, so none is in the registry: `background` reloads
+/// the theme, `mouse` drives terminal capture, and `endofline` is buffer-local
+/// state derived from the bytes a file was loaded with. They are listed here so
+/// completion still offers them and so a token that slips through to the engine
+/// is accepted rather than reported as unknown.
+pub const HOST_OWNED_NAMES: &[&str] = &["background", "bg", "mouse", "endofline", "eol"];
+
+/// Host-owned names that behave like booleans for `:set no…` / `inv…`
+/// completion. `background` is an enum, so it is excluded.
+const HOST_OWNED_BOOLS: &[&str] = &["mouse", "endofline"];
+
+/// Every `:set` option name and short alias, for the `Setting` arg completer.
+///
+/// Derived from [`OPTIONS`] plus [`HOST_OWNED_NAMES`] — the hand-maintained
+/// list this replaces had drifted, offering `inv…` forms the parser rejected
+/// and omitting `modifiable`, `motion_sneak`, `updatetime` and `colorizer`
+/// entirely.
 pub fn all_setting_names() -> Vec<String> {
-    vec![
-        // numeric
-        "shiftwidth".into(),
-        "sw".into(),
-        "tabstop".into(),
-        "ts".into(),
-        "softtabstop".into(),
-        "sts".into(),
-        "textwidth".into(),
-        "tw".into(),
-        "undolevels".into(),
-        "ul".into(),
-        "timeoutlen".into(),
-        "tm".into(),
-        "numberwidth".into(),
-        "nuw".into(),
-        "foldcolumn".into(),
-        "fdc".into(),
-        "foldlevelstart".into(),
-        "fls".into(),
-        "scrolloff".into(),
-        "so".into(),
-        "sidescrolloff".into(),
-        "siso".into(),
-        "scroll_duration_ms".into(),
-        "updatetime".into(),
-        "ut".into(),
-        "modelines".into(),
-        "mls".into(),
-        // string (fold-related)
-        "foldmethod".into(),
-        "fdm".into(),
-        "foldmarker".into(),
-        "fmr".into(),
-        // string
-        "listchars".into(),
-        "lcs".into(),
-        "iskeyword".into(),
-        "isk".into(),
-        "signcolumn".into(),
-        "scl".into(),
-        "colorcolumn".into(),
-        "cc".into(),
-        "formatoptions".into(),
-        "fo".into(),
-        "filetype".into(),
-        "ft".into(),
-        "commentstring".into(),
-        "cms".into(),
-        "makeprg".into(),
-        "mp".into(),
-        "errorformat".into(),
-        "efm".into(),
-        "colorizer_filetypes".into(),
-        // completion-only (handled by host in ex_dispatch.rs)
-        "background".into(),
-        "bg".into(),
-        "list".into(),
-        "tabline_icons".into(),
-        "blame_inline".into(),
-        "diagnostics_inline".into(),
-        "diaginline".into(),
-        // boolean
-        "ignorecase".into(),
-        "ic".into(),
-        "smartcase".into(),
-        "scs".into(),
-        "wrapscan".into(),
-        "ws".into(),
-        "hlsearch".into(),
-        "hls".into(),
-        "incsearch".into(),
-        "is".into(),
-        "modeline".into(),
-        "ml".into(),
-        "expandtab".into(),
-        "et".into(),
-        "autoindent".into(),
-        "ai".into(),
-        "smartindent".into(),
-        "si".into(),
-        "undobreak".into(),
-        "readonly".into(),
-        "ro".into(),
-        // Buffer-local, like `readonly` — offered for completion, never
-        // written back to the config file.
-        "modifiable".into(),
-        "ma".into(),
-        "number".into(),
-        "nu".into(),
-        "relativenumber".into(),
-        "rnu".into(),
-        "cursorline".into(),
-        "cul".into(),
-        "cursorcolumn".into(),
-        "cuc".into(),
-        "wrap".into(),
-        "linebreak".into(),
-        "lbr".into(),
-        "foldenable".into(),
-        "fen".into(),
-        "autopair".into(),
-        "ap".into(),
-        "motion_sneak".into(),
-        "snk".into(),
-        "autoclose-tag".into(),
-        "act".into(),
-        "autoreload".into(),
-        "ar".into(),
-        "indent_guides".into(),
-        "ig".into(),
-        "indent_guide_char".into(),
-        "igc".into(),
-        "format_on_save".into(),
-        "fos".into(),
-        "trim_trailing_whitespace".into(),
-        "tts".into(),
-        "rainbow_brackets".into(),
-        "rb".into(),
-        "colorizer".into(),
-        "matchparen".into(),
-        "mps".into(),
-        "fixendofline".into(),
-        "fixeol".into(),
-        "endofline".into(),
-        "eol".into(),
-    ]
-}
-
-/// Canonical names of every boolean `:set` option — exactly the arms of
-/// [`apply_bool_option`] that flip a `bool` (excluding `background`, which is an
-/// enum handled by the host). This is the single source of truth for the
-/// `:set no…` / `:set inv…` completion so the completer can't offer a `no`
-/// prefix on a non-boolean option. The `boolean_names_are_applyable` test keeps
-/// it honest against the parser.
-const BOOLEAN_CANONICAL_NAMES: &[&str] = &[
-    "ignorecase",
-    "smartcase",
-    "wrapscan",
-    "hlsearch",
-    "incsearch",
-    "modeline",
-    "expandtab",
-    "autoindent",
-    "autoreload",
-    "smartindent",
-    "undobreak",
-    "readonly",
-    "modifiable",
-    "number",
-    "relativenumber",
-    "cursorline",
-    "cursorcolumn",
-    "wrap",
-    "linebreak",
-    "autopair",
-    "autoclose-tag",
-    "motion_sneak",
-    "list",
-    "tabline_icons",
-    "blame_inline",
-    "indent_guides",
-    "format_on_save",
-    "trim_trailing_whitespace",
-    "rainbow_brackets",
-    "colorizer",
-    "matchparen",
-    "foldenable",
-    "fixendofline",
-    "endofline",
-];
-
-/// Canonical names of the boolean `:set` options, for the `:set no…`/`inv…`
-/// completion arm. Names only (no aliases) — vim lists the long forms.
-pub fn boolean_setting_names() -> Vec<String> {
-    BOOLEAN_CANONICAL_NAMES
+    OPTIONS
         .iter()
-        .map(|s| s.to_string())
+        .flat_map(OptionDesc::all_names)
+        .chain(HOST_OWNED_NAMES.iter().copied())
+        .map(str::to_string)
         .collect()
 }
 
-/// The valid completion values for an ENUM-valued `:set` option, keyed by
-/// canonical name or alias. Derived directly from the `name=value` arms of
-/// [`apply_set_token`] so the candidates can't drift from what the parser
-/// actually accepts:
+/// Canonical names of the boolean options, for the `:set no…` / `inv…`
+/// completion arm. Names only (no aliases) — vim lists the long forms.
+pub fn boolean_setting_names() -> Vec<String> {
+    OPTIONS
+        .iter()
+        .filter(|d| d.kind == OptKind::Bool)
+        .map(|d| d.name)
+        .chain(HOST_OWNED_BOOLS.iter().copied())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Completion values for an enum-valued option, keyed by canonical name or
+/// alias. Empty for every other kind and for unknown names.
 ///
-/// - `signcolumn`/`scl` → `yes`/`no`/`auto`
-/// - `foldmethod`/`fdm` → `manual`/`expr`/`syntax`/`marker` (all four are
-///   accepted; `syntax` is an alias for `expr`)
-/// - `diagnostics_inline`/`diaginline` → the canonical `off`/`current`/`all`
-/// - `background`/`bg` → `dark`/`light` (completion-only; the host intercepts
-///   the actual apply — see the NOTE in `apply_bool_option`)
-///
-/// Returns an empty vec for non-enum options (numeric / free-string / boolean)
-/// and unknown names.
+/// Comes straight off [`OptKind::Enum`], which the setter also validates
+/// against, so a candidate can never be offered and then rejected.
 pub fn setting_value_candidates(name: &str) -> Vec<&'static str> {
-    match name {
-        "signcolumn" | "scl" => vec!["auto", "no", "yes"],
-        "foldmethod" | "fdm" => vec!["expr", "manual", "marker", "syntax"],
-        "diagnostics_inline" | "diaginline" => vec!["all", "current", "off"],
-        "background" | "bg" => vec!["dark", "light"],
+    if matches!(name, "background" | "bg") {
+        // Host-owned; the theme reload happens in the app.
+        return vec!["dark", "light"];
+    }
+    match lookup(name).map(|d| d.kind) {
+        Some(OptKind::Enum(values)) => {
+            let mut v = values.to_vec();
+            v.sort_unstable();
+            v
+        }
         _ => Vec::new(),
     }
 }
 
-/// `:set [opt ...]` body. Splits on whitespace and applies each token.
-/// Bare `:set` reports the current values for the supported options.
 pub fn apply_set<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     body: &str,
@@ -321,335 +174,23 @@ pub fn apply_set<H: Host>(
 /// form and by the nvim-api `nvim_get_option_value` handler. Names
 /// accepted match those in [`apply_set_token`] (both the long and short
 /// aliases).
+/// Display-form value for `:set name?`, or `None` when `name` is not a known
+/// option. Also serves the nvim-api `nvim_get_option_value` handler.
+///
+/// String-valued options are quoted, matching vim's `:set` echo.
 pub fn query_option_value<H: Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
     name: &str,
 ) -> Option<String> {
-    let s = editor.settings();
-    let on_off = |b: bool| if b { "on" } else { "off" }.to_string();
-    Some(match name {
-        "shiftwidth" | "sw" => s.shiftwidth.to_string(),
-        "tabstop" | "ts" => s.tabstop.to_string(),
-        "softtabstop" | "sts" => s.softtabstop.to_string(),
-        "textwidth" | "tw" => s.textwidth.to_string(),
-        "undolevels" | "ul" => s.undo_levels.to_string(),
-        "timeoutlen" | "tm" => s.timeout_len.as_millis().to_string(),
-        "numberwidth" | "nuw" => s.numberwidth.to_string(),
-        "foldcolumn" | "fdc" => s.foldcolumn.to_string(),
-        "foldmethod" | "fdm" => match s.foldmethod {
-            hjkl_engine::types::FoldMethod::Manual => "manual".to_string(),
-            hjkl_engine::types::FoldMethod::Expr => "expr".to_string(),
-            hjkl_engine::types::FoldMethod::Marker => "marker".to_string(),
+    let desc = lookup(name)?;
+    Some(match (desc.get)(editor.settings()) {
+        OptionValue::Bool(b) => if b { "on" } else { "off" }.to_string(),
+        OptionValue::Int(n) => n.to_string(),
+        OptionValue::String(s) => match desc.kind {
+            OptKind::Str | OptKind::StrList => format!("\"{s}\""),
+            _ => s,
         },
-        "foldenable" | "fen" => on_off(s.foldenable),
-        "foldmarker" | "fmr" => format!("\"{}\"", s.foldmarker),
-        "foldlevelstart" | "fls" => s.foldlevelstart.to_string(),
-        "scrolloff" | "so" => s.scrolloff.to_string(),
-        "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
-        "scroll_duration_ms" => s.scroll_duration_ms.to_string(),
-        "updatetime" | "ut" => s.updatetime.to_string(),
-        "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
-        "colorcolumn" | "cc" => format!("\"{}\"", s.colorcolumn),
-        "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
-        "filetype" | "ft" => format!("\"{}\"", s.filetype),
-        "commentstring" | "cms" => format!("\"{}\"", s.commentstring),
-        "makeprg" | "mp" => format!("\"{}\"", s.makeprg),
-        "errorformat" | "efm" => format!("\"{}\"", s.errorformat),
-        "signcolumn" | "scl" => match s.signcolumn {
-            hjkl_engine::types::SignColumnMode::Yes => "yes".into(),
-            hjkl_engine::types::SignColumnMode::No => "no".into(),
-            hjkl_engine::types::SignColumnMode::Auto => "auto".into(),
-        },
-        "wrap" => match s.wrap {
-            hjkl_buffer::Wrap::None => "off".into(),
-            hjkl_buffer::Wrap::Char => "char".into(),
-            hjkl_buffer::Wrap::Word => "word".into(),
-        },
-        "expandtab" | "et" => on_off(s.expandtab),
-        "ignorecase" | "ic" => on_off(s.ignore_case),
-        "smartcase" | "scs" => on_off(s.smartcase),
-        "wrapscan" | "ws" => on_off(s.wrapscan),
-        "hlsearch" | "hls" => on_off(s.hlsearch),
-        "incsearch" | "is" => on_off(s.incsearch),
-        "modeline" | "ml" => on_off(s.modeline),
-        "modelines" | "mls" => s.modelines.to_string(),
-        "autoindent" | "ai" => on_off(s.autoindent),
-        "autoreload" | "ar" => on_off(s.autoreload),
-        "smartindent" | "si" => on_off(s.smartindent),
-        "undobreak" => on_off(s.undo_break_on_motion),
-        "readonly" | "ro" => on_off(s.readonly),
-        "number" | "nu" => on_off(s.number),
-        "relativenumber" | "rnu" => on_off(s.relativenumber),
-        "cursorline" | "cul" => on_off(s.cursorline),
-        "cursorcolumn" | "cuc" => on_off(s.cursorcolumn),
-        "autopair" | "ap" => on_off(s.autopair),
-        "autoclose-tag" | "act" => on_off(s.autoclose_tag),
-        "list" => on_off(s.list),
-        "tabline_icons" => on_off(s.tabline_icons),
-        "blame_inline" => on_off(s.blame_inline),
-        "diagnostics_inline" | "diaginline" => match s.diagnostics_inline {
-            hjkl_engine::types::DiagInlineMode::Off => "off".into(),
-            hjkl_engine::types::DiagInlineMode::Current => "current".into(),
-            hjkl_engine::types::DiagInlineMode::All => "all".into(),
-        },
-        "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
-        "indent_guides" | "ig" => on_off(s.indent_guides),
-        "indent_guide_char" | "igc" => s.indent_guide_char.to_string(),
-        "format_on_save" | "fos" => on_off(s.format_on_save),
-        "trim_trailing_whitespace" | "tts" => on_off(s.trim_trailing_whitespace),
-        "rainbow_brackets" | "rb" => on_off(s.rainbow_brackets),
-        "colorizer" => on_off(s.colorizer),
-        "colorizer_filetypes" => format!("\"{}\"", s.colorizer_filetypes.join(",")),
-        "matchparen" | "mps" => on_off(s.matchparen),
-        "fixendofline" | "fixeol" => on_off(s.fixendofline),
-        // `endofline`/`eol` is deliberately absent — it is host-owned
-        // buffer-local state (see `apply_bool_option`), so the host answers
-        // `:set eol?` before this function is reached.
-        _ => return None,
     })
-}
-
-/// Apply a single `:set` token. Supports `name=value`, `name+=flags`,
-/// `name-=flags`, bare `name` (turns booleans on), and `noname`
-/// (turns booleans off).
-///
-/// Exposed as `pub` so the nvim-api layer can call it directly with a
-/// pre-constructed token (e.g. `makeprg=cargo build`) without going through
-/// `apply_set`'s whitespace-splitting loop.
-pub fn apply_set_token<H: Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
-    token: &str,
-) -> Result<(), String> {
-    // `formatoptions+=flags` — append flags.
-    if let Some(rest) = token
-        .strip_prefix("formatoptions+=")
-        .or_else(|| token.strip_prefix("fo+="))
-    {
-        for ch in rest.chars() {
-            if !editor.settings().formatoptions.contains(ch) {
-                editor.settings_mut().formatoptions.push(ch);
-            }
-        }
-        return Ok(());
-    }
-    // `formatoptions-=flags` — remove flags.
-    if let Some(rest) = token
-        .strip_prefix("formatoptions-=")
-        .or_else(|| token.strip_prefix("fo-="))
-    {
-        for ch in rest.chars() {
-            let fo = editor.settings().formatoptions.clone();
-            editor.settings_mut().formatoptions = fo.chars().filter(|&c| c != ch).collect();
-        }
-        return Ok(());
-    }
-
-    if let Some((name, value)) = token.split_once('=') {
-        // String-valued options short-circuit the numeric parse.
-        if matches!(name, "iskeyword" | "isk") {
-            editor.set_iskeyword(value);
-            return Ok(());
-        }
-        if matches!(name, "listchars" | "lcs") {
-            let lc = hjkl_buffer::ListChars::parse(value)?;
-            editor.settings_mut().listchars = lc;
-            return Ok(());
-        }
-        if matches!(name, "signcolumn" | "scl") {
-            editor.settings_mut().signcolumn = match value {
-                "yes" => hjkl_engine::types::SignColumnMode::Yes,
-                "no" => hjkl_engine::types::SignColumnMode::No,
-                "auto" => hjkl_engine::types::SignColumnMode::Auto,
-                other => {
-                    return Err(format!(
-                        "signcolumn must be `yes`, `no`, or `auto`, got `{other}`"
-                    ));
-                }
-            };
-            return Ok(());
-        }
-        if matches!(name, "diagnostics_inline" | "diaginline") {
-            editor.settings_mut().diagnostics_inline = match value {
-                "off" | "no" | "disable" | "disabled" => hjkl_engine::types::DiagInlineMode::Off,
-                "current" | "cursor" | "line" => hjkl_engine::types::DiagInlineMode::Current,
-                "all" | "on" | "enable" | "enabled" => hjkl_engine::types::DiagInlineMode::All,
-                other => {
-                    return Err(format!(
-                        "diagnostics_inline must be `off`, `current`, or `all`, got `{other}`"
-                    ));
-                }
-            };
-            return Ok(());
-        }
-        if matches!(name, "foldmethod" | "fdm") {
-            editor.settings_mut().foldmethod = match value {
-                "manual" => hjkl_engine::types::FoldMethod::Manual,
-                "expr" | "syntax" => hjkl_engine::types::FoldMethod::Expr,
-                "marker" => hjkl_engine::types::FoldMethod::Marker,
-                other => {
-                    return Err(format!(
-                        "foldmethod must be `manual`, `expr`, `syntax`, or `marker`, got `{other}`"
-                    ));
-                }
-            };
-            return Ok(());
-        }
-        if matches!(name, "colorcolumn" | "cc") {
-            editor.settings_mut().colorcolumn = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "foldmarker" | "fmr") {
-            // Stored verbatim as `open,close`; validated (comma-separated,
-            // both sides non-empty) at fold-extraction time, falling back to
-            // the vim default `{{{,}}}` when malformed.
-            editor.settings_mut().foldmarker = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "formatoptions" | "fo") {
-            editor.settings_mut().formatoptions = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "filetype" | "ft") {
-            editor.settings_mut().filetype = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "commentstring" | "cms") {
-            editor.settings_mut().commentstring = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "makeprg" | "mp") {
-            editor.settings_mut().makeprg = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "errorformat" | "efm") {
-            editor.settings_mut().errorformat = value.to_string();
-            return Ok(());
-        }
-        if matches!(name, "colorizer_filetypes") {
-            // Comma-separated, like `iskeyword`. Empty entries are dropped so
-            // a trailing comma is harmless rather than creating a filetype
-            // named "" that matches nothing.
-            editor.settings_mut().colorizer_filetypes = value
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect();
-            return Ok(());
-        }
-        if matches!(name, "indent_guide_char" | "igc") {
-            let mut chars = value.chars();
-            let (Some(ch), None) = (chars.next(), chars.next()) else {
-                return Err(format!(
-                    "indent_guide_char expects exactly one character, got {value:?}"
-                ));
-            };
-            editor.settings_mut().indent_guide_char = ch;
-            return Ok(());
-        }
-        // Boolean options accept `name=on|off|true|false|yes|no|1|0`. Try this
-        // before the numeric parse so `:set format_on_save=off` works (vim sets
-        // booleans via `:set name`/`:set noname`, but `=value` is a common
-        // expectation). A non-boolean name falls through to the numeric parse,
-        // and `0`/`1` on a numeric option (e.g. `tabstop=1`) isn't a bool option
-        // so it falls through too.
-        if let Some(b) = parse_bool_word(value)
-            && apply_bool_option(editor, name, b)
-        {
-            return Ok(());
-        }
-        let parsed: usize = value
-            .parse()
-            .map_err(|_| format!("bad value `{value}` for :set {name}"))?;
-        match name {
-            "shiftwidth" | "sw" => {
-                if parsed == 0 {
-                    return Err("shiftwidth must be > 0".into());
-                }
-                editor.settings_mut().shiftwidth = parsed;
-            }
-            "tabstop" | "ts" => {
-                if parsed == 0 {
-                    return Err("tabstop must be > 0".into());
-                }
-                editor.settings_mut().tabstop = parsed;
-            }
-            "textwidth" | "tw" => {
-                if parsed == 0 {
-                    return Err("textwidth must be > 0".into());
-                }
-                editor.settings_mut().textwidth = parsed;
-            }
-            "undolevels" | "ul" => {
-                editor.settings_mut().undo_levels = parsed.min(u32::MAX as usize) as u32;
-            }
-            "timeoutlen" | "tm" => {
-                editor.settings_mut().timeout_len =
-                    core::time::Duration::from_millis(parsed as u64);
-            }
-            "numberwidth" | "nuw" => {
-                if !(1..=20).contains(&parsed) {
-                    return Err(format!("numberwidth must be in range 1..=20, got {parsed}"));
-                }
-                editor.settings_mut().numberwidth = parsed;
-            }
-            "foldcolumn" | "fdc" => {
-                if parsed > 12 {
-                    return Err(format!("foldcolumn must be in range 0..=12, got {parsed}"));
-                }
-                editor.settings_mut().foldcolumn = parsed as u32;
-            }
-            "foldlevelstart" | "fls" => {
-                editor.settings_mut().foldlevelstart = parsed.min(u32::MAX as usize) as u32;
-            }
-            "scrolloff" | "so" => {
-                editor.settings_mut().scrolloff = parsed;
-            }
-            "sidescrolloff" | "siso" => {
-                editor.settings_mut().sidescrolloff = parsed;
-            }
-            "scroll_duration_ms" => {
-                editor.settings_mut().scroll_duration_ms = parsed.min(u16::MAX as usize) as u16;
-            }
-            "updatetime" | "ut" => {
-                editor.settings_mut().updatetime = parsed.min(u32::MAX as usize) as u32;
-            }
-            "modelines" | "mls" => {
-                editor.settings_mut().modelines = parsed.min(u32::MAX as usize) as u32;
-            }
-            other => return Err(format!("unknown :set option `{other}`")),
-        }
-        return Ok(());
-    }
-    // Handle toggle (name!) — must check before the `no` strip.
-    if let Some(name) = token.strip_suffix('!') {
-        match name {
-            "number" | "nu" => {
-                editor.settings_mut().number = !editor.settings().number;
-            }
-            "relativenumber" | "rnu" => {
-                editor.settings_mut().relativenumber = !editor.settings().relativenumber;
-            }
-            "cursorline" | "cul" => {
-                editor.settings_mut().cursorline = !editor.settings().cursorline;
-            }
-            "cursorcolumn" | "cuc" => {
-                editor.settings_mut().cursorcolumn = !editor.settings().cursorcolumn;
-            }
-            other => return Err(format!("unknown :set option `{other}`")),
-        }
-        return Ok(());
-    }
-    let (name, value) = if let Some(rest) = token.strip_prefix("no") {
-        (rest, false)
-    } else {
-        (token, true)
-    };
-    if apply_bool_option(editor, name, value) {
-        Ok(())
-    } else {
-        Err(format!("unknown :set option `{name}`"))
-    }
 }
 
 /// Parse a vim-ish boolean keyword used on the right of `name=value` for a
@@ -663,86 +204,107 @@ fn parse_bool_word(s: &str) -> Option<bool> {
     }
 }
 
-/// Set boolean option `name` to `value`. Returns `true` when `name` is a known
-/// boolean option (and was applied), `false` otherwise. Shared by the bare
-/// `name`/`noname` path and the `name=on|off|true|false|yes|no|1|0` path.
-fn apply_bool_option<H: Host>(
+/// Apply a single `:set` token. Supports `name=value`, `name+=flags`,
+/// `name-=flags`, bare `name` (turns booleans on), `noname`, `invname`, and
+/// `name!`.
+///
+/// Every form resolves through [`lookup`], so the set of options each one
+/// accepts is the registry — not a per-form list. The `!` and `inv` forms used
+/// to have their own match arms: `!` named four options and errored on the
+/// other thirty, and `inv` had no arm at all despite completion offering it.
+///
+/// Exposed as `pub` so the nvim-api layer can call it directly with a
+/// pre-constructed token (e.g. `makeprg=cargo build`) without going through
+/// `apply_set`'s whitespace-splitting loop.
+pub fn apply_set_token<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
-    name: &str,
-    value: bool,
-) -> bool {
-    match name {
-        "ignorecase" | "ic" => editor.settings_mut().ignore_case = value,
-        "smartcase" | "scs" => editor.settings_mut().smartcase = value,
-        "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
-        "hlsearch" | "hls" => editor.settings_mut().hlsearch = value,
-        "incsearch" | "is" => editor.settings_mut().incsearch = value,
-        "modeline" | "ml" => editor.settings_mut().modeline = value,
-        "expandtab" | "et" => editor.settings_mut().expandtab = value,
-        "autoindent" | "ai" => editor.settings_mut().autoindent = value,
-        "autoreload" | "ar" => editor.settings_mut().autoreload = value,
-        "smartindent" | "si" => editor.settings_mut().smartindent = value,
-        "undobreak" => editor.settings_mut().undo_break_on_motion = value,
-        "readonly" | "ro" => editor.settings_mut().readonly = value,
-        "modifiable" | "ma" => editor.settings_mut().modifiable = value,
-        "number" | "nu" => editor.settings_mut().number = value,
-        "relativenumber" | "rnu" => editor.settings_mut().relativenumber = value,
-        "cursorline" | "cul" => editor.settings_mut().cursorline = value,
-        "cursorcolumn" | "cuc" => editor.settings_mut().cursorcolumn = value,
-        "wrap" => {
-            editor.settings_mut().wrap = if value {
-                // Preserve `Wrap::Word` if `linebreak` already flipped
-                // word-mode on; otherwise default `set wrap` to char.
-                match editor.settings().wrap {
-                    hjkl_buffer::Wrap::Word => hjkl_buffer::Wrap::Word,
-                    _ => hjkl_buffer::Wrap::Char,
+    token: &str,
+) -> Result<(), String> {
+    // `formatoptions+=flags` / `-=flags` — the one option with accumulating
+    // syntax, so it stays a special case ahead of the table.
+    for (suffix, add) in [("+=", true), ("-=", false)] {
+        let stripped = token
+            .strip_prefix(&format!("formatoptions{suffix}"))
+            .or_else(|| token.strip_prefix(&format!("fo{suffix}")));
+        if let Some(rest) = stripped {
+            let mut fo = editor.settings().formatoptions.clone();
+            for ch in rest.chars() {
+                if add {
+                    if !fo.contains(ch) {
+                        fo.push(ch);
+                    }
+                } else {
+                    fo = fo.chars().filter(|&c| c != ch).collect();
                 }
-            } else {
-                hjkl_buffer::Wrap::None
-            };
+            }
+            editor.settings_mut().formatoptions = fo;
+            return Ok(());
         }
-        "linebreak" | "lbr" => {
-            editor.settings_mut().wrap = if value {
-                hjkl_buffer::Wrap::Word
-            } else {
-                // `nolinebreak` drops back to char wrap when wrap is on,
-                // otherwise stays off.
-                match editor.settings().wrap {
-                    hjkl_buffer::Wrap::None => hjkl_buffer::Wrap::None,
-                    _ => hjkl_buffer::Wrap::Char,
-                }
-            };
-        }
-        // NOTE: `background` is completion-only — the host intercepts it in
-        // ex_dispatch.rs before hjkl-ex is consulted. Accept silently here so
-        // hjkl-ex never emits an "unknown option" error if the token somehow
-        // reaches this path.
-        "autopair" | "ap" => editor.settings_mut().autopair = value,
-        "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
-        "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
-        "list" => editor.settings_mut().list = value,
-        "tabline_icons" => editor.settings_mut().tabline_icons = value,
-        "blame_inline" => editor.settings_mut().blame_inline = value,
-        "indent_guides" | "ig" => editor.settings_mut().indent_guides = value,
-        "format_on_save" | "fos" => editor.settings_mut().format_on_save = value,
-        "trim_trailing_whitespace" | "tts" => {
-            editor.settings_mut().trim_trailing_whitespace = value
-        }
-        "rainbow_brackets" | "rb" => editor.settings_mut().rainbow_brackets = value,
-        "colorizer" => editor.settings_mut().colorizer = value,
-        "matchparen" | "mps" => editor.settings_mut().matchparen = value,
-        "foldenable" | "fen" => editor.settings_mut().foldenable = value,
-        "fixendofline" | "fixeol" => editor.settings_mut().fixendofline = value,
-        // NOTE: `endofline` is buffer-local state derived from the bytes the
-        // file was loaded with, not a `Settings` field — the host owns it and
-        // intercepts these tokens before hjkl-ex is consulted (same shape as
-        // `background` below; see `hjkl`'s `save::EolState`). Accept silently
-        // here so a token that reaches this path never errors.
-        "endofline" | "eol" => {}
-        "background" | "bg" => {}
-        _ => return false,
     }
-    true
+
+    if let Some((name, value)) = token.split_once('=') {
+        if HOST_OWNED_NAMES.contains(&name) {
+            // Applied by the host before we are reached; accept silently.
+            return Ok(());
+        }
+        let desc = lookup(name).ok_or_else(|| format!("unknown :set option `{name}`"))?;
+        let parsed = match desc.kind {
+            OptKind::Bool => OptionValue::Bool(
+                parse_bool_word(value)
+                    .ok_or_else(|| format!("bad value `{value}` for :set {name}"))?,
+            ),
+            OptKind::Int { .. } => OptionValue::Int(
+                value
+                    .parse::<i64>()
+                    .map_err(|_| format!("bad value `{value}` for :set {name}"))?,
+            ),
+            OptKind::Str | OptKind::StrList | OptKind::Enum(_) => {
+                OptionValue::String(value.to_string())
+            }
+        };
+        return (desc.set)(editor.settings_mut(), parsed);
+    }
+
+    // `name!` and `invname` both flip a boolean; `noname` clears it; a bare
+    // `name` sets it.
+    let (name, action) = if let Some(rest) = token.strip_suffix('!') {
+        (rest, None)
+    } else if let Some(rest) = token.strip_prefix("inv") {
+        // Only treat `inv` as a prefix when what follows is a real boolean —
+        // otherwise an option whose own name starts with `inv` would be
+        // unreachable, the same trap `no` sets for `number`.
+        match lookup(rest) {
+            Some(d) if d.kind == OptKind::Bool => (rest, None),
+            _ => (token, Some(true)),
+        }
+    } else if let Some(rest) = token.strip_prefix("no") {
+        // `number` starts with `no`; try the whole name first.
+        match lookup(token) {
+            Some(_) => (token, Some(true)),
+            None => (rest, Some(false)),
+        }
+    } else {
+        (token, Some(true))
+    };
+
+    if HOST_OWNED_NAMES.contains(&name) {
+        return Ok(());
+    }
+    let desc = lookup(name).ok_or_else(|| format!("unknown :set option `{name}`"))?;
+    if desc.kind != OptKind::Bool {
+        return Err(format!(
+            "option `{name}` requires a value (`:set {name}=…`)"
+        ));
+    }
+    let value = match action {
+        Some(v) => v,
+        // Toggle: read the live value through the same getter `?` uses.
+        None => match (desc.get)(editor.settings()) {
+            OptionValue::Bool(b) => !b,
+            _ => return Err(format!("option `{name}` is not a boolean")),
+        },
+    };
+    (desc.set)(editor.settings_mut(), OptionValue::Bool(value))
 }
 
 #[cfg(test)]
@@ -1722,5 +1284,128 @@ mod tests {
             }
             other => panic!("expected Info(_), got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod registry_derived {
+    use super::*;
+    use hjkl_engine::options_registry::OptScope;
+
+    /// Regression: `:set inv<name>` was offered by completion (there is a
+    /// passing test for that in `complete.rs`) and rejected by the parser for
+    /// EVERY boolean — the `inv` prefix had no arm at all. Driving all of them
+    /// through the registry is what makes the two agree by construction.
+    #[test]
+    fn inv_prefix_toggles_every_boolean() {
+        for d in OPTIONS.iter().filter(|d| d.kind == OptKind::Bool) {
+            let mut ed = crate::test_util::make_editor();
+            let OptionValue::Bool(before) = (d.get)(ed.settings()) else {
+                unreachable!()
+            };
+            apply_set_token(&mut ed, &format!("inv{}", d.name))
+                .unwrap_or_else(|e| panic!("`:set inv{}` failed: {e}", d.name));
+            let OptionValue::Bool(after) = (d.get)(ed.settings()) else {
+                unreachable!()
+            };
+            assert_eq!(after, !before, "`:set inv{}` did not toggle", d.name);
+        }
+    }
+
+    /// Regression: `:set <name>!` was implemented for `number`,
+    /// `relativenumber`, `cursorline` and `cursorcolumn`, and errored with
+    /// "unknown :set option" for the other thirty booleans.
+    #[test]
+    fn bang_suffix_toggles_every_boolean() {
+        for d in OPTIONS.iter().filter(|d| d.kind == OptKind::Bool) {
+            let mut ed = crate::test_util::make_editor();
+            let OptionValue::Bool(before) = (d.get)(ed.settings()) else {
+                unreachable!()
+            };
+            apply_set_token(&mut ed, &format!("{}!", d.name))
+                .unwrap_or_else(|e| panic!("`:set {}!` failed: {e}", d.name));
+            let OptionValue::Bool(after) = (d.get)(ed.settings()) else {
+                unreachable!()
+            };
+            assert_eq!(after, !before, "`:set {}!` did not toggle", d.name);
+        }
+    }
+
+    /// Regression: `modifiable`, `linebreak` and `motion_sneak` had no `?`
+    /// query arm, so `:set modifiable?` reported "unknown :set option".
+    #[test]
+    fn every_option_answers_a_query() {
+        let ed = crate::test_util::make_editor();
+        for d in OPTIONS {
+            for name in d.all_names() {
+                assert!(
+                    query_option_value(&ed, name).is_some(),
+                    "`:set {name}?` has no answer"
+                );
+            }
+        }
+    }
+
+    /// `no` must not shadow an option whose own name starts with it —
+    /// `number` is the trap, and the modeline parser fell into the same one.
+    #[test]
+    fn no_prefix_does_not_shadow_an_option_named_no_something() {
+        let mut ed = crate::test_util::make_editor();
+        ed.settings_mut().number = false;
+        apply_set_token(&mut ed, "number").unwrap();
+        assert!(ed.settings().number, "`:set number` must set, not clear");
+        apply_set_token(&mut ed, "nonumber").unwrap();
+        assert!(!ed.settings().number, "`:set nonumber` must clear");
+    }
+
+    /// A non-boolean given without a value gets a message naming the fix,
+    /// rather than "unknown option" (which it is not).
+    #[test]
+    fn bare_non_boolean_reports_that_it_needs_a_value() {
+        let mut ed = crate::test_util::make_editor();
+        let err = apply_set_token(&mut ed, "scrolloff").unwrap_err();
+        assert!(err.contains("requires a value"), "got: {err}");
+    }
+
+    /// Completion candidates for an enum come from the same slice the setter
+    /// validates against, so nothing offered can be rejected.
+    #[test]
+    fn every_offered_enum_value_applies() {
+        for d in OPTIONS {
+            for name in d.all_names() {
+                for v in setting_value_candidates(name) {
+                    let mut ed = crate::test_util::make_editor();
+                    apply_set_token(&mut ed, &format!("{name}={v}")).unwrap_or_else(|e| {
+                        panic!("completion offers `:set {name}={v}` but it fails: {e}")
+                    });
+                }
+            }
+        }
+    }
+
+    /// The host-owned names must stay out of the registry — each is applied by
+    /// the app before `:set` reaches the engine, and a `Settings` field for one
+    /// would mean two owners for the same value.
+    #[test]
+    fn host_owned_names_are_not_in_the_registry() {
+        for name in HOST_OWNED_NAMES {
+            assert!(
+                lookup(name).is_none(),
+                "`{name}` is host-owned but also registered"
+            );
+        }
+    }
+
+    /// Buffer-local options are still settable — they just never persist.
+    #[test]
+    fn buffer_local_options_remain_settable() {
+        let mut ed = crate::test_util::make_editor();
+        apply_set_token(&mut ed, "filetype=rust").unwrap();
+        assert_eq!(ed.settings().filetype, "rust");
+        assert!(
+            OPTIONS
+                .iter()
+                .any(|d| d.name == "filetype" && d.scope == OptScope::BufferLocal)
+        );
     }
 }

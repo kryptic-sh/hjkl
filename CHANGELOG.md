@@ -10,6 +10,15 @@ patch bumps.
 
 ### Added
 
+- **`:set inv<name>` now works.** Completion has always offered it, and the
+  parser has always rejected it — for every one of the 34 boolean options.
+- **`:set <name>!` now works for every boolean.** It was implemented for
+  `number`, `relativenumber`, `cursorline` and `cursorcolumn`, and reported
+  "unknown :set option" for the other thirty.
+- **`:set modifiable?`, `:set linebreak?` and `:set motion_sneak?` answer.** All
+  three were settable but had no query arm.
+- `:set mouse` is now offered by completion (it was always applyable).
+
 - **`:set` now writes itself back to your config file.** Any global option set
   from the command bar is persisted to `~/.config/hjkl/config.toml` immediately,
   so a session and the file never disagree. The write is format-preserving —
@@ -54,6 +63,16 @@ patch bumps.
 
 ### Changed
 
+- **`:set` is now driven by one option table.** An option's name used to appear
+  in ~20 hand-maintained places — seven tables inside the `:set` implementation
+  alone — and nothing kept them in step. The three bugs above are each a table
+  that was updated while its siblings were not. `hjkl_engine::options_registry`
+  now holds one entry per option (name, aliases, kind, scope, getter, setter);
+  the completion lists, the enum candidates, the `?` query, and the `name` /
+  `noname` / `invname` / `name!` / `name=value` forms are all derived from it,
+  as are the host's config-key mapping and TOML writer. The `no…` / `inv…` / `!`
+  forms are properties of the option's kind rather than four independent lists,
+  so they can no longer disagree. Net −867 lines in the `:set` module.
 - **The cursor-highlight defaults are swapped: `cursorline` is now on and
   `cursorcolumn` off.** A fresh session highlights the cursor's row and leaves
   its column alone. `cursorline` is the deliberate divergence from vim now

@@ -1538,3 +1538,29 @@ fn formerly_config_only_options_persist() {
     assert!(!cfg.options.modeline);
     assert_eq!(cfg.options.modelines, 3);
 }
+
+/// The toggle spellings persist like any other `:set`. `invlist` and `list!`
+/// address the same key as `nolist`, and the token parser has to resolve all
+/// three or a toggle would apply to the session and silently not be saved.
+#[test]
+fn toggle_and_inv_forms_persist_like_plain_set() {
+    for token in ["invlist", "list!"] {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        let mut app = App::new(None, false, None, None)
+            .unwrap()
+            .with_config_path(cfg_path.clone());
+
+        // `list` defaults off, so one toggle turns it on.
+        assert!(!app.active_editor().settings().list);
+        app.dispatch_ex(&format!("set {token}"));
+        assert!(
+            app.active_editor().settings().list,
+            "`:set {token}` must toggle the session value"
+        );
+
+        let cfg = hjkl_app::config::load_from(&cfg_path)
+            .unwrap_or_else(|e| panic!("`:set {token}` wrote an unloadable config: {e}"));
+        assert!(cfg.options.list, "`:set {token}` must persist");
+    }
+}

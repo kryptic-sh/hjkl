@@ -371,118 +371,73 @@ impl OptionsConfig {
     }
 }
 
-/// Map a `:set` option name (canonical **or** alias) to its key inside the
-/// `[options]` table, or `None` when the option must not be persisted.
-///
-/// `None` covers three cases, all deliberate:
-///
-/// - **buffer-local options** — `filetype`, `commentstring`, `readonly`,
-///   `modifiable`, `endofline`. They describe one buffer, not a preference;
-///   see [`OptionsConfig`].
-/// - **`linebreak`** — it is one of two spellings that drive the tri-state
-///   `wrap` key, so it maps to `"wrap"` rather than a key of its own.
-/// - **host-intercepted names** — `background`, `mouse`. They are not engine
-///   settings and are handled before `:set` reaches the engine.
-///
-/// A name this returns `Some` for is guaranteed to be a real key of
-/// [`OptionsConfig`]; `every_options_key_is_reachable_from_set` pins that in
-/// both directions, so a field added to the struct without a `:set` name (or
-/// the reverse) fails the build's test run rather than silently never
-/// persisting.
-pub fn options_key_for_setting(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "shiftwidth" | "sw" => "shiftwidth",
-        "tabstop" | "ts" => "tabstop",
-        "softtabstop" | "sts" => "softtabstop",
-        "expandtab" | "et" => "expandtab",
-        "autoindent" | "ai" => "autoindent",
-        "smartindent" | "si" => "smartindent",
-        "ignorecase" | "ic" => "ignorecase",
-        "smartcase" | "scs" => "smartcase",
-        "wrapscan" | "ws" => "wrapscan",
-        "hlsearch" | "hls" => "hlsearch",
-        "incsearch" | "is" => "incsearch",
-        "modeline" | "ml" => "modeline",
-        "modelines" | "mls" => "modelines",
-        "number" | "nu" => "number",
-        "relativenumber" | "rnu" => "relativenumber",
-        "numberwidth" | "nuw" => "numberwidth",
-        "cursorline" | "cul" => "cursorline",
-        "cursorcolumn" | "cuc" => "cursorcolumn",
-        "signcolumn" | "scl" => "signcolumn",
-        "colorcolumn" | "cc" => "colorcolumn",
-        // Both spellings land on the tri-state key.
-        "wrap" | "linebreak" | "lbr" => "wrap",
-        "textwidth" | "tw" => "textwidth",
-        "scrolloff" | "so" => "scrolloff",
-        "sidescrolloff" | "siso" => "sidescrolloff",
-        "scroll_duration_ms" => "scroll_duration_ms",
-        "foldmethod" | "fdm" => "foldmethod",
-        "foldenable" | "fen" => "foldenable",
-        "foldcolumn" | "fdc" => "foldcolumn",
-        "foldlevelstart" | "fls" => "foldlevelstart",
-        "foldmarker" | "fmr" => "foldmarker",
-        "list" => "list",
-        "listchars" | "lcs" => "listchars",
-        "indent_guides" | "ig" => "indent_guides",
-        "indent_guide_char" | "igc" => "indent_guide_char",
-        "iskeyword" | "isk" => "iskeyword",
-        "formatoptions" | "fo" => "formatoptions",
-        "autopair" | "ap" => "autopair",
-        "autoclose-tag" | "act" => "autoclose-tag",
-        "motion_sneak" | "snk" => "motion_sneak",
-        "matchparen" | "mps" => "matchparen",
-        "undolevels" | "ul" => "undolevels",
-        "undobreak" => "undobreak",
-        "timeoutlen" | "tm" => "timeoutlen",
-        "updatetime" | "ut" => "updatetime",
-        "format_on_save" | "fos" => "format_on_save",
-        "trim_trailing_whitespace" | "tts" => "trim_trailing_whitespace",
-        "fixendofline" | "fixeol" => "fixendofline",
-        "autoreload" | "ar" => "autoreload",
-        "makeprg" | "mp" => "makeprg",
-        "errorformat" | "efm" => "errorformat",
-        "rainbow_brackets" | "rb" => "rainbow_brackets",
-        "colorizer" => "colorizer",
-        "colorizer_filetypes" => "colorizer_filetypes",
-        "tabline_icons" => "tabline_icons",
-        "blame_inline" => "blame_inline",
-        "diagnostics_inline" | "diaginline" => "diagnostics_inline",
-        _ => return None,
-    })
-}
-
 /// Strip a `:set` token down to the option name it addresses, or `None` when
 /// the token must not trigger a write-back.
 ///
-/// `None` for the query form (`name?`), which reads rather than writes, and
-/// for `formatoptions+=`/`-=`, whose *result* is persisted under the plain
-/// `formatoptions` name by the caller reading the post-set value.
+/// `None` for the query form (`name?`), which reads rather than writes.
+/// `formatoptions+=`/`-=` resolve to plain `formatoptions`, whose *result* the
+/// caller then persists by reading the post-set value.
+///
+/// The negation and toggle prefixes are recognised here because they name the
+/// same option: `:set nolist`, `:set invlist` and `:set list!` all have to
+/// write `options.list`. Resolution tries the WHOLE token first, so an option
+/// whose name merely starts with `no` or `inv` is not mistaken for a prefixed
+/// form — `number` is the live example.
 pub fn setting_name_from_token(token: &str) -> Option<&str> {
     if token.ends_with('?') {
         return None;
     }
-    // `fo+=r` / `formatoptions-=o` — the name is everything before the sign.
     if let Some(i) = token.find("+=").or_else(|| token.find("-=")) {
         return Some(&token[..i]);
     }
     let token = token.strip_suffix('!').unwrap_or(token);
     let name = token.split_once('=').map_or(token, |(n, _)| n);
-    // A bare `nofoo` addresses `foo`. Try the whole name first, exactly as
-    // `parse_token` in the modeline parser learned to: `number` starts with
-    // `no` and is not the negation of `umber`.
     if options_key_for_setting(name).is_some() {
         return Some(name);
     }
     name.strip_prefix("no")
+        .filter(|rest| options_key_for_setting(rest).is_some())
+        .or_else(|| {
+            name.strip_prefix("inv")
+                .filter(|rest| options_key_for_setting(rest).is_some())
+        })
+}
+
+/// Map a `:set` option name (canonical **or** alias) to its key inside the
+/// `[options]` table, or `None` when the option must not be persisted.
+///
+/// Derived from [`hjkl_engine::options_registry`], so the config surface and
+/// the `:set` surface cannot disagree about what exists or what it is called.
+/// `None` means one of:
+///
+/// - **buffer-local** ([`OptScope::BufferLocal`]) — `filetype`,
+///   `commentstring`, `readonly`, `modifiable`. Each describes one buffer, not
+///   a preference; see [`OptionsConfig`].
+/// - **host-owned** — `background`, `mouse`, `endofline`. Not engine settings;
+///   the host applies them before `:set` reaches the engine, so they have no
+///   registry entry.
+///
+/// `linebreak` is the one name that does not map to a key of its own: it is a
+/// second spelling over the same tri-state as `wrap`, so both land on `"wrap"`.
+pub fn options_key_for_setting(name: &str) -> Option<&'static str> {
+    if name == "linebreak" || name == "lbr" {
+        return Some("wrap");
+    }
+    let desc = hjkl_engine::options_registry::lookup(name)?;
+    (desc.scope == hjkl_engine::options_registry::OptScope::Global).then_some(desc.name)
 }
 
 /// Write the live value of `set_name` into the `[options]` table of the config
 /// file at `path`.
 ///
-/// Reads the value back off `settings` rather than re-parsing the `:set`
-/// token, so what lands in the file is exactly what the editor ended up with —
-/// clamped, normalised, and with `+=`/`-=` already folded in.
+/// The value is read back off `settings` through the registry's own getter
+/// rather than re-parsed from the `:set` token, so what lands in the file is
+/// exactly what the editor ended up with — clamped, normalised, and with
+/// `formatoptions+=` already folded in.
+///
+/// The TOML type follows [`OptKind`], so there is no per-option writer to keep
+/// in step: booleans write booleans, `Int` writes an integer, `StrList` writes
+/// an array, and everything else writes a string.
 ///
 /// A name that is not persistable ([`options_key_for_setting`] returns `None`)
 /// is a silent no-op: buffer-local options are session-scoped by design.
@@ -492,122 +447,41 @@ pub fn persist_option(
     settings: &hjkl_engine::Settings,
 ) -> Result<(), ConfigError> {
     use hjkl_config::write_key_at;
-    use hjkl_engine::types::{DiagInlineMode, FoldMethod, SignColumnMode};
+    use hjkl_engine::options_registry::{OptKind, lookup};
+    use hjkl_engine::types::OptionValue;
 
     let Some(key) = options_key_for_setting(set_name) else {
         return Ok(());
     };
     let dotted = format!("options.{key}");
-    let p = path;
-    let s = settings;
 
-    match key {
-        // ── integers ─────────────────────────────────────────────────────
-        "shiftwidth" => write_key_at(p, &dotted, s.shiftwidth as i64),
-        "tabstop" => write_key_at(p, &dotted, s.tabstop as i64),
-        "softtabstop" => write_key_at(p, &dotted, s.softtabstop as i64),
-        "textwidth" => write_key_at(p, &dotted, s.textwidth as i64),
-        "numberwidth" => write_key_at(p, &dotted, s.numberwidth as i64),
-        "scrolloff" => write_key_at(p, &dotted, s.scrolloff as i64),
-        "sidescrolloff" => write_key_at(p, &dotted, s.sidescrolloff as i64),
-        "scroll_duration_ms" => write_key_at(p, &dotted, i64::from(s.scroll_duration_ms)),
-        "foldcolumn" => write_key_at(p, &dotted, i64::from(s.foldcolumn)),
-        "foldlevelstart" => write_key_at(p, &dotted, i64::from(s.foldlevelstart)),
-        "undolevels" => write_key_at(p, &dotted, i64::from(s.undo_levels)),
-        "updatetime" => write_key_at(p, &dotted, i64::from(s.updatetime)),
-        "modelines" => write_key_at(p, &dotted, i64::from(s.modelines)),
-        "timeoutlen" => write_key_at(p, &dotted, s.timeout_len.as_millis() as i64),
-        // ── booleans ─────────────────────────────────────────────────────
-        "expandtab" => write_key_at(p, &dotted, s.expandtab),
-        "autoindent" => write_key_at(p, &dotted, s.autoindent),
-        "smartindent" => write_key_at(p, &dotted, s.smartindent),
-        "ignorecase" => write_key_at(p, &dotted, s.ignore_case),
-        "smartcase" => write_key_at(p, &dotted, s.smartcase),
-        "wrapscan" => write_key_at(p, &dotted, s.wrapscan),
-        "hlsearch" => write_key_at(p, &dotted, s.hlsearch),
-        "incsearch" => write_key_at(p, &dotted, s.incsearch),
-        "modeline" => write_key_at(p, &dotted, s.modeline),
-        "number" => write_key_at(p, &dotted, s.number),
-        "relativenumber" => write_key_at(p, &dotted, s.relativenumber),
-        "cursorline" => write_key_at(p, &dotted, s.cursorline),
-        "cursorcolumn" => write_key_at(p, &dotted, s.cursorcolumn),
-        "foldenable" => write_key_at(p, &dotted, s.foldenable),
-        "list" => write_key_at(p, &dotted, s.list),
-        "indent_guides" => write_key_at(p, &dotted, s.indent_guides),
-        "autopair" => write_key_at(p, &dotted, s.autopair),
-        "autoclose-tag" => write_key_at(p, &dotted, s.autoclose_tag),
-        "motion_sneak" => write_key_at(p, &dotted, s.motion_sneak),
-        "matchparen" => write_key_at(p, &dotted, s.matchparen),
-        "undobreak" => write_key_at(p, &dotted, s.undo_break_on_motion),
-        "format_on_save" => write_key_at(p, &dotted, s.format_on_save),
-        "trim_trailing_whitespace" => write_key_at(p, &dotted, s.trim_trailing_whitespace),
-        "fixendofline" => write_key_at(p, &dotted, s.fixendofline),
-        "autoreload" => write_key_at(p, &dotted, s.autoreload),
-        "rainbow_brackets" => write_key_at(p, &dotted, s.rainbow_brackets),
-        "colorizer" => write_key_at(p, &dotted, s.colorizer),
-        "tabline_icons" => write_key_at(p, &dotted, s.tabline_icons),
-        "blame_inline" => write_key_at(p, &dotted, s.blame_inline),
-        // ── strings ──────────────────────────────────────────────────────
-        "colorcolumn" => write_key_at(p, &dotted, s.colorcolumn.clone()),
-        "foldmarker" => write_key_at(p, &dotted, s.foldmarker.clone()),
-        "iskeyword" => write_key_at(p, &dotted, s.iskeyword.clone()),
-        "formatoptions" => write_key_at(p, &dotted, s.formatoptions.clone()),
-        "makeprg" => write_key_at(p, &dotted, s.makeprg.clone()),
-        "errorformat" => write_key_at(p, &dotted, s.errorformat.clone()),
-        "listchars" => write_key_at(p, &dotted, s.listchars.to_canonical_string()),
-        "indent_guide_char" => write_key_at(p, &dotted, s.indent_guide_char.to_string()),
-        // ── enums, written as the spelling `:set` accepts back ───────────
-        "signcolumn" => write_key_at(
-            p,
-            &dotted,
-            match s.signcolumn {
-                SignColumnMode::Yes => "yes",
-                SignColumnMode::No => "no",
-                SignColumnMode::Auto => "auto",
-            },
-        ),
-        "foldmethod" => write_key_at(
-            p,
-            &dotted,
-            match s.foldmethod {
-                FoldMethod::Manual => "manual",
-                FoldMethod::Expr => "expr",
-                FoldMethod::Marker => "marker",
-            },
-        ),
-        "diagnostics_inline" => write_key_at(
-            p,
-            &dotted,
-            match s.diagnostics_inline {
-                DiagInlineMode::Off => "off",
-                DiagInlineMode::Current => "current",
-                DiagInlineMode::All => "all",
-            },
-        ),
-        // `wrap` and `linebreak` both land here — one tri-state key.
-        "wrap" => write_key_at(
-            p,
-            &dotted,
-            match s.wrap {
-                hjkl_buffer::Wrap::None => "off",
-                hjkl_buffer::Wrap::Char => "char",
-                hjkl_buffer::Wrap::Word => "word",
-            },
-        ),
-        // ── list ─────────────────────────────────────────────────────────
-        "colorizer_filetypes" => {
-            let arr: toml_edit::Array = s.colorizer_filetypes.iter().collect();
-            write_key_at(p, &dotted, arr)
+    // `wrap` is the one key whose config spelling is richer than its `:set`
+    // one: `:set wrap` / `:set linebreak` are two booleans over a tri-state,
+    // and the file stores the tri-state so a reader can tell char-break from
+    // word-break.
+    if key == "wrap" {
+        let mode = match settings.wrap {
+            hjkl_buffer::Wrap::None => "off",
+            hjkl_buffer::Wrap::Char => "char",
+            hjkl_buffer::Wrap::Word => "word",
+        };
+        return write_key_at(path, &dotted, mode);
+    }
+
+    // Look up by the CANONICAL name — `key` is `desc.name` by construction.
+    let desc = lookup(key).ok_or_else(|| ConfigError::Invalid {
+        path: path.to_path_buf(),
+        message: format!("`{key}` is persistable but has no registry entry"),
+    })?;
+
+    match ((desc.get)(settings), desc.kind) {
+        (OptionValue::Bool(b), _) => write_key_at(path, &dotted, b),
+        (OptionValue::Int(n), _) => write_key_at(path, &dotted, n),
+        (OptionValue::String(s), OptKind::StrList) => {
+            let arr: toml_edit::Array = s.split(',').filter(|p| !p.is_empty()).collect();
+            write_key_at(path, &dotted, arr)
         }
-        // `options_key_for_setting` and this match are kept in step by
-        // `every_persistable_key_has_a_writer`.
-        other => Err(ConfigError::Invalid {
-            path: p.to_path_buf(),
-            message: format!(
-                "no writer for options.{other} — options_key_for_setting and \
-                 persist_option have drifted"
-            ),
-        }),
+        (OptionValue::String(s), _) => write_key_at(path, &dotted, s),
     }
 }
 
