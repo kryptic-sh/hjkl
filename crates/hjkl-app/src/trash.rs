@@ -3,6 +3,21 @@
 //! Deleted filesystem entries are moved to `<XDG_CACHE_HOME>/hjkl/trash/`
 //! rather than permanently removed, matching the swap-dir pattern from
 //! [`crate::swap`].
+//!
+//! # Growth
+//!
+//! Nothing here ever reclaims the trash directory. There is no reaper, no
+//! age-based expiry and no size cap: every explorer deletion adds an entry
+//! under a fresh monotonic `.N` suffix and leaves it there forever. Clearing
+//! `<XDG_CACHE_HOME>/hjkl/trash/` is the user's to do — deliberately, since the
+//! whole point of trashing rather than deleting is that the editor does not get
+//! to decide when the data is gone.
+//!
+//! The one consequence to be aware of: [`trash_path`] probes at most
+//! `MAX_RETRIES` (1000) counter slots. Slots are never reused, so the 1001st
+//! deletion of a same-named file fails with an error rather than recycling an
+//! older entry. That is the intended failure mode — a full trash surfaces as a
+//! failed delete, not as a silent overwrite of something the user still has.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};

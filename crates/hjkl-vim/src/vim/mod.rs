@@ -17,59 +17,6 @@
 //!
 //! The most recent mutating command is stored in
 //! [`VimState::last_change`] so `.` can replay it.
-//!
-//! # Roadmap
-//!
-//! Tracked in the original plan at
-//! `~/.claude/plans/look-at-the-vim-curried-fern.md`. Phases still
-//! outstanding — each one can land as an isolated PR.
-//!
-//! ## P3 — Registers & marks
-//!
-//! - TODO: `RegisterBank` indexed by char:
-//!     - unnamed `""`, last-yank `"0`, small-delete `"-`
-//!     - named `"a-"z` (uppercase `"A-"Z` appends instead of overwriting)
-//!     - blackhole `"_`
-//!     - system clipboard `"+` / `"*` (wire to `crate::clipboard::Clipboard`)
-//!     - read-only `":`, `".`, `"%` — surface in `:reg` output
-//! - TODO: route every yank / cut / paste through the bank. Parser needs
-//!   a `"{reg}` prefix state that captures the target register before a
-//!   count / operator.
-//! - TODO: `m{a-z}` sets a mark in a `HashMap<char, (buffer_id, row, col)>`;
-//!   `'x` jumps to the line (FirstNonBlank), `` `x `` to the exact cell.
-//!   Uppercase marks are global across tabs; lowercase are per-buffer.
-//! - TODO: `''` and `` `` `` jump to the last-jump position; `'[` `']`
-//!   `'<` `'>` bound the last change / visual region.
-//! - TODO: `:reg` and `:marks` ex commands.
-//!
-//! ## P4 — Macros
-//!
-//! - TODO: `q{a-z}` starts recording raw `Input`s into the register;
-//!   next `q` stops.
-//! - TODO: `@{a-z}` replays the register by re-feeding inputs through
-//!   `step`. `@@` repeats the last macro. Nested macros need a sane
-//!   depth cap (e.g. 100) to avoid runaway loops.
-//! - TODO: ensure recording doesn't capture the initial `q{a-z}` itself.
-//!
-//! ## P6 — Polish (still outstanding)
-//!
-//! - TODO: indent operators `>` / `<` (with line + text-object targets).
-//! - TODO: format operator `=` — map to whatever SQL formatter we wire
-//!   up; for now stub that returns the range unchanged with a toast.
-//! - TODO: case operators `gU` / `gu` / `g~` on a range (already have
-//!   single-char `~`).
-//! - TODO: screen motions `H` / `M` / `L` once we track the render
-//!   viewport height inside Editor.
-//! - TODO: scroll-to-cursor motions `zz` / `zt` / `zb`.
-//!
-//! ## Known substrate / divergence notes
-//!
-//! - TODO: insert-mode indent helpers — `Ctrl-t` / `Ctrl-d` (increase /
-//!   decrease indent on current line) and `Ctrl-r <reg>` (paste from a
-//!   register). `Ctrl-r` needs the `RegisterBank` from P3 to be useful.
-//! - TODO: `/` and `?` search prompts still live in `the host/src/lib.rs`.
-//!   The plan calls for moving them into the editor (so the editor owns
-//!   `last_search_pattern` rather than the TUI loop). Safe to defer.
 
 pub(crate) mod bridges;
 pub(crate) mod command;

@@ -24,6 +24,23 @@ use crate::{Position, Viewport};
 /// contended in normal operation (single-threaded app loop), so the
 /// lock cost is negligible (~5 ns uncontested).
 ///
+/// ## Mutex-poisoning policy
+///
+/// Every `content` lock here — and the same for `registers`, `global_marks`,
+/// `change_bank`, `search` and `abbrevs` on `hjkl_engine::Editor` — is taken
+/// with `lock().unwrap()`. That is deliberate, not an oversight: a poisoned
+/// lock means a panic unwound while the buffer state was mid-mutation, so the
+/// rope may be torn between an `Edit` and its cursor fixup. There is no
+/// meaningful recovery from that — continuing would hand the user a document
+/// the editor cannot vouch for, including on the save path — so poisoning is
+/// treated as a fatal, unrecoverable state and the panic is allowed to
+/// propagate.
+///
+/// The `unwrap_or_else(|e| e.into_inner())` recovery shape does appear in the
+/// codebase (e.g. `hjkl-app`'s `trash.rs` test helper, guarding an env-var
+/// lock that carries no data). That is not the policy for buffer state: for
+/// anything reachable from a `View`, poisoned means fatal.
+///
 /// ## 0.8.0 migration notes
 ///
 /// The existing constructors ([`View::new`], [`View::from_str`],

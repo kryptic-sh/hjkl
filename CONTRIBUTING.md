@@ -8,6 +8,11 @@ Most crates are pre-1.0 and their public APIs are still in motion — please ope
 an issue before starting any non-trivial PR so the design can be sanity-checked
 early.
 
+Not every crate here has a caller inside the workspace. `hjkl-css` in particular
+is published for external consumers and nothing in this repository depends on
+it; "grep finds no call site" is not grounds for deleting a published crate. Ask
+first.
+
 ## Development setup
 
 ```bash

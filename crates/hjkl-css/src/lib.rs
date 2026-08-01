@@ -5,6 +5,11 @@
 //! adapter crate (e.g. `hjkl-css-floem`) to map onto a specific UI
 //! framework's style builder.
 //!
+//! **Status:** published for external consumers; nothing inside this
+//! workspace depends on it. The editor itself does not style anything with
+//! CSS, so the absence of a call site is expected and is not evidence the
+//! crate is dead — do not remove it on that basis.
+//!
 //! Supported:
 //! - Type selectors (`label`, `row`), class selectors (`.prompt`),
 //!   pseudo-class selectors (`:hover`, `:focus`, `:active`, `:disabled`,
