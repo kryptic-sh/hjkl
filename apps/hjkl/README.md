@@ -67,7 +67,7 @@ highlighting, folds, smart indent, `.editorconfig`, and clipboard via
 ```bash
 hjkl                  # empty buffer
 hjkl file.txt         # open file
-hjkl a.rs b.rs c.rs  # open multiple files
+hjkl a.rs b.rs c.rs   # open multiple files
 hjkl -R file.txt      # read-only
 hjkl +42 file.txt     # jump to line 42
 hjkl +/foo file.txt   # search for "foo" on open
