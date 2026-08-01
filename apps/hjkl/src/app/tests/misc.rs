@@ -1380,4 +1380,14 @@ fn set_preserves_comments_and_unrelated_keys() {
     assert!(text.contains("# my hand-written config"), "got: {text}");
     assert!(text.contains("leader"), "got: {text}");
     assert!(text.contains("scrolloff = 7"), "got: {text}");
+
+    // …and the amended file must still load and validate. Appending a new
+    // `[options]` table to a file that only had `[editor]` is the exact shape
+    // a first-ever `:set` produces on a hand-written config, so if the write
+    // could ever produce something the loader rejects, it would be here.
+    use hjkl_config::Validate;
+    let cfg = hjkl_app::config::load_from(&cfg_path).expect("amended config must reload");
+    cfg.validate().expect("amended config must validate");
+    assert_eq!(cfg.options.scrolloff, 7);
+    assert_eq!(cfg.editor.leader, ' ', "the user's own key must survive");
 }
