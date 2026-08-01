@@ -679,9 +679,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // `is_blame` has no slot-level counterpart (#151 Stage 2b — it's
     // transient per-window UI state, never meant to persist beyond a
     // window's life); default it off in the (should-not-happen) fallback.
-    let (w_cursor_row, w_is_blame) = app.window_editors.get(&win_id).map_or_else(
-        || (app.slots()[slot_idx].buffer().cursor().row, false),
-        |e| (e.buffer().cursor().row, e.is_blame()),
+    let (w_cursor_row, w_cursor_col, w_is_blame) = app.window_editors.get(&win_id).map_or_else(
+        || {
+            let c = app.slots()[slot_idx].buffer().cursor();
+            (c.row, c.col, false)
+        },
+        |e| {
+            let c = e.buffer().cursor();
+            (c.row, c.col, e.is_blame())
+        },
     );
     // Scalar (Copy) settings copied out of THIS window's editor (or the slot
     // fallback) without cloning the whole `Settings` struct (#312). The owned
@@ -1215,6 +1221,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // window editor's cursor; the two can diverge, and the fallback would
         // then paint the cursorline on the wrong row.
         cursor_line_row: Some(w_cursor_row),
+        // Same reason as `cursor_line_row` directly above, for the other axis.
+        // Without it the bar reads the shared slot buffer's cursor, which no
+        // window moves — so `:set cuc` painted column 0 for the whole session.
+        cursor_column: Some(w_cursor_col),
         // The explorer is a tree, not code — don't tint folded directory rows.
         fold_line_bg: if is_explorer_slot {
             Style::default()

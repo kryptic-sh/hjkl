@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cursorcolumn` painted column 0 instead of the cursor's column.** The
+  renderer read the cursor off `BufferView.buffer`, which is the SHARED slot
+  buffer — a different object from the focused window's editor, and one that
+  nothing moves. `cursorline` had been given an explicit row override for
+  exactly this reason; the column never got the matching one, so the bar sat at
+  column 0 for the whole session.
+
+  The same pass also used the cursor's CHAR column directly as a screen offset,
+  so even with the right column a line containing a tab would have put the bar
+  one cell left per tab. It now goes through `char_col_to_visual_col`, the same
+  expansion `paint_row` applies.
+
 ### Added
 
 - **`:set inv<name>` now works.** Completion has always offered it, and the

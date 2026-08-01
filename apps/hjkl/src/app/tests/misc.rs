@@ -1564,3 +1564,38 @@ fn toggle_and_inv_forms_persist_like_plain_set() {
         assert!(cfg.options.list, "`:set {token}` must persist");
     }
 }
+
+/// The premise of the cursorcolumn bug: a window editor's cursor and the
+/// shared slot buffer's cursor are different objects and DO diverge.
+///
+/// The renderer's `BufferView.buffer` is the slot buffer, so anything that
+/// reads a cursor off it — as the `cursorcolumn` pass did — tracks a value no
+/// window moves. `cursor_line_row` was given an explicit override for this
+/// reason; `cursor_column` now has the matching one.
+#[test]
+fn window_cursor_column_diverges_from_the_slot_buffer_cursor() {
+    use hjkl_buffer::{Edit, Position};
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_editor_mut().mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: "alpha bravo charlie".to_string(),
+    });
+    app.active_editor_mut().jump_cursor(0, 8);
+    app.sync_viewport_to_editor();
+
+    let win_col = app
+        .window_editors
+        .get(&app.focused_window())
+        .expect("focused window has an editor")
+        .buffer()
+        .cursor()
+        .col;
+    let slot_col = app.slots()[app.focused_slot_idx()].buffer().cursor().col;
+
+    assert_eq!(win_col, 8, "the window editor carries the real cursor");
+    assert_ne!(
+        slot_col, win_col,
+        "if these ever agree this test has stopped proving anything — the \
+         renderer would then paint the right column by accident"
+    );
+}
