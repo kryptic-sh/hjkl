@@ -297,9 +297,6 @@ behaviour. Verify against nvim, which is wide-char correct.
   run on a separate weekly schedule and are not checked by a release. They were
   not checked for 0.40.0. Either fold the cheap ones into the release gate or
   add an explicit pre-release step that reads the last Cron result.
-- Use `checked_add` in `SnapshotFoldProvider::next_visible_row`.
-- Rename undo-tree `depth` to `depth_for_keyframe`.
-- Bounds-check public `rope_line_char_count` / `rope_line_bytes` helpers.
 
 ## 2. Blocked on platform access
 
@@ -655,12 +652,6 @@ Minor — affects users whose text contains precomposed characters with multi-ch
 case mappings. Fixed by `9a156885`.
 
 #### Hardening evidence
-
-- **`SnapshotFoldProvider::next_visible_row` uses unbounded `+= 1`**
-  (`buffer_impl.rs:608`): `r += 1` in while loop without `checked_add`.
-  `prev_visible_row` uses `checked_sub`. Risk only at `last == usize::MAX`,
-  unreachable with realistic buffers. Remediation is tracked in the ranked
-  backlog above.
 
 - **`Move::Vertical` bootstrap path** (`cursor_move.rs:89`): when `sticky_col`
   is `None`, the bootstrap uses `self.cursor().1` (char column) as `want`, but

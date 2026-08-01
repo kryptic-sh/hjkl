@@ -661,8 +661,12 @@ impl UndoTree {
         self.get(self.current).last_child.is_some()
     }
 
-    /// `undo_stack.len()` == number of ancestors of `current` (depth from root).
-    pub(crate) fn depth(&self) -> usize {
+    /// Number of ancestors of `current`, i.e. its distance from the root.
+    ///
+    /// Walked rather than read off `Node::depth` so it stays right after a
+    /// prune or a load has renumbered the tree. Backs `View::undo_stack_len`,
+    /// which is the `undo_stack.len()` of the pre-tree implementation.
+    pub(crate) fn depth_from_root(&self) -> usize {
         let mut d = 0;
         let mut n = self.get(self.current).parent;
         while let Some(p) = n {
@@ -1441,7 +1445,7 @@ mod tree_tests {
         let t = UndoTree::new(ropey::Rope::from_str("hello"));
         assert!(t.is_at_root());
         assert!(!t.has_redo());
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
         assert_eq!(t.root, t.current);
     }
 
@@ -1454,7 +1458,7 @@ mod tree_tests {
         assert_eq!(t.get(t.current).parent, Some(root));
         assert_eq!(t.get(root).last_child, Some(t.current));
         assert_eq!(t.get(root).children, vec![t.current]);
-        assert_eq!(t.depth(), 1);
+        assert_eq!(t.depth_from_root(), 1);
         assert!(!t.has_redo());
         assert!(!t.is_at_root());
     }
@@ -1487,7 +1491,7 @@ mod tree_tests {
         assert!(t.undo_step(r, c, m).is_none());
         let (r, c, m) = live("x");
         assert!(t.redo_step(r, c, m).is_none());
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
     }
 
     #[test]
@@ -1605,9 +1609,9 @@ mod tree_tests {
         for _ in 0..5 {
             t.push(entry("s"));
         }
-        assert_eq!(t.depth(), 5);
+        assert_eq!(t.depth_from_root(), 5);
         t.cap(3);
-        assert_eq!(t.depth(), 3);
+        assert_eq!(t.depth_from_root(), 3);
         // Redo side untouched (there is none), current unchanged.
         assert!(!t.has_redo());
         // Two oldest slots were reclaimed.
@@ -1647,10 +1651,10 @@ mod tree_tests {
     fn pop_committed_reverses_last_push() {
         let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
         t.push(entry("s0")); // depth 1, current = fresh leaf
-        assert_eq!(t.depth(), 1);
+        assert_eq!(t.depth_from_root(), 1);
         assert!(t.pop_committed());
         // The just-pushed leaf is gone; current stepped back to the root.
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
         assert!(t.is_at_root());
         assert_eq!(t.free.len(), 1);
         // Seq reclaimed so the next push is gapless.
@@ -1691,10 +1695,10 @@ mod tree_tests {
         let (r, c, m) = live("s1");
         t.undo_step(r, c, m);
         assert!(t.has_redo());
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
         t.clear_redo();
         assert!(!t.has_redo());
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
     }
 
     #[test]
@@ -1706,8 +1710,33 @@ mod tree_tests {
         t.clear_all();
         assert!(t.is_at_root());
         assert!(!t.has_redo());
-        assert_eq!(t.depth(), 0);
+        assert_eq!(t.depth_from_root(), 0);
         assert_eq!(t.root, t.current);
+    }
+
+    /// The depth measures where `current` sits, not how many nodes exist: an
+    /// undo walks it back down while the branch it came from stays live, and a
+    /// redo climbs the same steps again.
+    #[test]
+    fn depth_from_root_follows_current_not_tree_size() {
+        let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
+        t.push(entry("s0"));
+        t.push(entry("s1"));
+        t.push(entry("s2"));
+        assert_eq!(t.depth_from_root(), 3);
+
+        let (r, c, m) = live("s3");
+        assert!(t.undo_step(r, c, m).is_some());
+        let (r, c, m) = live("s2");
+        assert!(t.undo_step(r, c, m).is_some());
+        assert_eq!(t.depth_from_root(), 1);
+        // Nothing was pruned — the three pushed nodes are still reachable.
+        assert!(t.has_redo());
+        assert_eq!(t.live_count(), 4);
+
+        let (r, c, m) = live("s1");
+        assert!(t.redo_step(r, c, m).is_some());
+        assert_eq!(t.depth_from_root(), 2);
     }
 }
 
@@ -2148,7 +2177,7 @@ mod delta_tests {
             // Structural predicates stay in lockstep with the reference.
             assert_eq!(real.is_at_root(), refr.is_at_root(), "is_at_root @ {step}");
             assert_eq!(real.has_redo(), refr.has_redo(), "has_redo @ {step}");
-            assert_eq!(real.depth(), refr.depth(), "depth @ {step}");
+            assert_eq!(real.depth_from_root(), refr.depth(), "depth @ {step}");
 
             match rng.below(6) {
                 0 | 1 => {

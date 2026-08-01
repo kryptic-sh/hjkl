@@ -474,7 +474,7 @@ impl View {
     }
 
     pub fn undo_stack_len(&self) -> usize {
-        self.content.lock().unwrap().undo.depth()
+        self.content.lock().unwrap().undo.depth_from_root()
     }
 
     /// Commit the pre-edit LIVE state `entry` as an undo boundary: the current
@@ -823,7 +823,14 @@ pub fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
 }
 
 /// Byte length of logical line `row` (excluding the trailing `\n`).
+///
+/// A `row` at or past `len_lines()` answers 0 rather than panicking: this is
+/// `pub`, so the row can arrive from a caller holding a position that went
+/// stale against a shrunken rope, and `ropey::Rope::line` panics on one.
 pub fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
+    if row >= rope.len_lines() {
+        return 0;
+    }
     let slice = rope.line(row);
     let bytes = slice.len_bytes();
     // ropey includes the '\n' byte for non-final lines; subtract it.
@@ -835,7 +842,13 @@ pub fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
 }
 
 /// Char count of logical line `row` (excluding the trailing `\n`).
+///
+/// Out of range (`row >= len_lines()`) answers 0, for the same reason as
+/// [`rope_line_bytes`]: a stale row from a `pub` caller must not panic ropey.
 pub fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
+    if row >= rope.len_lines() {
+        return 0;
+    }
     let slice = rope.line(row);
     let chars = slice.len_chars();
     // ropey includes the '\n' char for non-final lines; subtract it.
@@ -1334,6 +1347,30 @@ mod tests {
 
         assert_eq!(rope_line_str(&view_a.rope(), 0), "foobar");
         assert_eq!(rope_line_str(&view_b.rope(), 0), "foobar");
+    }
+
+    /// The line-measuring helpers are `pub`, so a stale row can reach them from
+    /// outside; ropey would panic on it. Multi-byte content keeps the two
+    /// answers distinguishable — a byte count silently used as a char count is
+    /// the bug the separate helpers exist to prevent.
+    #[test]
+    fn line_measures_answer_zero_past_the_last_row() {
+        let rope = ropey::Rope::from_str("café\nx");
+        assert_eq!(rope.len_lines(), 2);
+
+        // Non-final line: the '\n' is excluded from both measures.
+        assert_eq!(rope_line_bytes(&rope, 0), 5);
+        assert_eq!(rope_line_char_count(&rope, 0), 4);
+
+        // Last line, no trailing newline: nothing to subtract.
+        assert_eq!(rope_line_bytes(&rope, 1), 1);
+        assert_eq!(rope_line_char_count(&rope, 1), 1);
+
+        // Out of range: 0, not a panic.
+        assert_eq!(rope_line_bytes(&rope, 2), 0);
+        assert_eq!(rope_line_char_count(&rope, 2), 0);
+        assert_eq!(rope_line_bytes(&rope, usize::MAX), 0);
+        assert_eq!(rope_line_char_count(&rope, usize::MAX), 0);
     }
 }
 
