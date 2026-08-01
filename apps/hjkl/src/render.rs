@@ -2073,13 +2073,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         (buf, stat, tb_area)
     };
 
-    // Splash screen path — skip all buffer rendering while active.
+    // Splash screen path — skip all buffer rendering while active, and take
+    // the WHOLE terminal: the start screen is a title card, so a tabline or
+    // status line poking out under it reads as a half-drawn editor. `area`,
+    // not `buf_area`, is what makes it full-bleed (and re-centres the art on
+    // the true middle of the screen).
     if let Some(ref screen) = app.start_screen {
-        if let Some(tb) = top_bar_area {
-            top_bar(frame, app, tb);
-        }
-        crate::start_screen::render(frame, buf_area, screen, &app.theme);
-        status_line(frame, app, status_area);
+        crate::start_screen::render(frame, area, screen, &app.theme);
         return;
     }
 
@@ -3904,6 +3904,56 @@ mod tests {
         assert!(
             reset_bg_cells(&buf, 60, 12) > 400,
             "most of the screen must still be the terminal background"
+        );
+    }
+
+    /// The start screen is a title card: it takes the whole terminal. The
+    /// status line used to be drawn underneath it, so the splash read as a
+    /// half-drawn editor with a mode badge under the art.
+    #[test]
+    fn start_screen_covers_the_whole_terminal() {
+        let mut app = themed_app(None);
+        assert!(app.start_screen.is_some(), "precondition: splash is up");
+        let buf = draw_frame(&mut app, 60, 12);
+
+        let screen: String = (0..12u16)
+            .map(|y| {
+                (0..60u16)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !screen.contains("NORMAL") && !screen.contains("START"),
+            "no mode badge may show while the splash is up:\n{screen}"
+        );
+        // The last row belongs to the splash too — nothing painted a status
+        // line there.
+        let last_row: String = (0..60u16)
+            .map(|x| buf.cell((x, 11)).unwrap().symbol().to_string())
+            .collect();
+        assert!(
+            last_row.trim().is_empty(),
+            "the bottom row must be part of the splash, got {last_row:?}"
+        );
+    }
+
+    /// Opening a file means no splash at all, so the status line is back.
+    #[test]
+    fn status_line_returns_once_the_splash_is_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("s.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        let mut app = themed_app(Some(path));
+        assert!(app.start_screen.is_none(), "precondition: no splash");
+        let buf = draw_frame(&mut app, 60, 12);
+        let last_row: String = (0..60u16)
+            .map(|x| buf.cell((x, 11)).unwrap().symbol().to_string())
+            .collect();
+        assert!(
+            last_row.contains("NORMAL"),
+            "the status line must be drawn without a splash, got {last_row:?}"
         );
     }
 

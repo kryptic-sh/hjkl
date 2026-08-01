@@ -399,6 +399,12 @@ impl App {
         if self.scroll_anim.is_some() {
             t = t.min(std::time::Duration::from_millis(16));
         }
+        // While the start screen is up, wake for its animation (it redraws
+        // every frame) and land exactly on its expiry rather than up to one
+        // base tick late.
+        if let Some(remaining) = self.start_screen_remaining() {
+            t = t.min(remaining).min(std::time::Duration::from_millis(33));
+        }
         t
     }
 
@@ -1968,6 +1974,8 @@ impl App {
             // (source-agnostic) before drawing so the blame ghost engages only
             // after the cursor has settled for `BLAME_IDLE_DELAY`.
             self.note_blame_cursor_motion();
+            // Retire the start screen on time even with no input at all.
+            self.expire_start_screen();
             let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(

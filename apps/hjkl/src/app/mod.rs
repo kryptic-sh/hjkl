@@ -13,6 +13,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
+/// How long the animated start screen stays up when nothing is typed.
+///
+/// Long enough to read the version and the `:e <file>` hint, short enough that
+/// it is out of the way before anyone reaches for a key. A keypress still
+/// dismisses it at once — this only bounds the do-nothing case.
+pub const START_SCREEN_TTL: Duration = Duration::from_secs(2);
+
 use crate::keymap_actions::AppAction;
 
 use crate::host::TuiHost;
@@ -370,7 +377,8 @@ pub struct App {
     /// event loop.
     pub config: hjkl_app::config::Config,
     /// Animated start screen shown when no file argument was given.
-    /// Cleared (set to `None`) on the first keypress.
+    /// Cleared (set to `None`) on the first keypress, or by
+    /// [`Self::expire_start_screen`] once [`START_SCREEN_TTL`] has passed.
     pub start_screen: Option<crate::start_screen::StartScreen>,
     /// LSP subsystem handle. `None` when `config.lsp.enabled = false` (default).
     pub lsp: Option<hjkl_lsp::LspManager>,
@@ -2643,6 +2651,34 @@ impl App {
             self.lsp_attach_buffer(idx);
         }
         self
+    }
+
+    /// Drop the start screen once it has been up for [`START_SCREEN_TTL`].
+    ///
+    /// The event loop calls this before each draw. A keypress still dismisses
+    /// it immediately (`handle_keypress`); this is the path for someone who
+    /// starts `hjkl` and just looks at it. The clock is the screen's own
+    /// animation anchor, captured when it was built, so there is no second
+    /// timestamp to keep in sync.
+    pub(crate) fn expire_start_screen(&mut self) {
+        if self
+            .start_screen
+            .as_ref()
+            .is_some_and(|s| s.anchor.elapsed() >= START_SCREEN_TTL)
+        {
+            self.start_screen = None;
+        }
+    }
+
+    /// How long the start screen stays up with no input.
+    ///
+    /// Remaining time until it expires, or `None` when no start screen is
+    /// showing. The event loop folds this into its poll timeout so the splash
+    /// disappears on time instead of waiting for the next idle wake.
+    pub(crate) fn start_screen_remaining(&self) -> Option<std::time::Duration> {
+        self.start_screen
+            .as_ref()
+            .map(|s| START_SCREEN_TTL.saturating_sub(s.anchor.elapsed()))
     }
 
     /// Mode label for the status line.

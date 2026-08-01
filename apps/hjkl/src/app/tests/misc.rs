@@ -269,6 +269,59 @@ fn mode_label_returns_start_during_splash() {
     assert_eq!(app.mode_label(), "START");
 }
 
+/// The start screen retires itself after `START_SCREEN_TTL` even if nothing is
+/// typed — the event loop calls `expire_start_screen` before each draw.
+#[test]
+fn start_screen_expires_after_its_ttl() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.start_screen.is_some(), "precondition: splash is up");
+
+    // Not yet: a fresh screen must survive its first frames, or the animation
+    // would never be seen.
+    app.expire_start_screen();
+    assert!(
+        app.start_screen.is_some(),
+        "the splash must not vanish on the very first draw"
+    );
+
+    // Backdate the animation anchor past the TTL — the same clock the expiry
+    // reads, so there is no second timestamp to drift.
+    let screen = app.start_screen.as_mut().expect("splash is up");
+    screen.anchor = std::time::Instant::now() - crate::app::START_SCREEN_TTL;
+    app.expire_start_screen();
+    assert!(
+        app.start_screen.is_none(),
+        "the splash must be gone once its TTL has passed"
+    );
+}
+
+/// While the splash is up the loop must keep waking — for the animation, and
+/// to retire it on time rather than at the next idle tick.
+#[test]
+fn poll_timeout_tracks_the_start_screen() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let with_splash = app.compute_poll_timeout();
+    assert!(
+        with_splash <= std::time::Duration::from_millis(33),
+        "splash frames need a short wake, got {with_splash:?}"
+    );
+
+    // Close to expiry, the wake shortens to what is left.
+    let screen = app.start_screen.as_mut().expect("splash is up");
+    screen.anchor = std::time::Instant::now() - crate::app::START_SCREEN_TTL
+        + std::time::Duration::from_millis(5);
+    assert!(
+        app.compute_poll_timeout() <= std::time::Duration::from_millis(5),
+        "the last wake must land on the expiry"
+    );
+
+    app.start_screen = None;
+    assert!(
+        app.compute_poll_timeout() > std::time::Duration::from_millis(33),
+        "with no splash the loop goes back to its idle cadence"
+    );
+}
+
 // Splash tick advancement is now wall-clock driven inside `hjkl-splash`
 // (see its own unit tests); apps/hjkl just constructs the splash and
 // renders it. No tick assertions live here.

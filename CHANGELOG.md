@@ -95,6 +95,14 @@ patch bumps.
   glyph, and toasts take `theme.ui.panel_bg` like the other floating panels.
   `theme.transparent` is unchanged — it still shows the terminal through.
 
+- **The start screen now retires itself and takes the whole terminal.** It
+  stayed up until the first keypress, and the status line was drawn underneath
+  it — so a fresh `hjkl` with no file showed art with a `START` badge stuck to
+  the bottom. It now covers the full frame (nothing else drawn) and disappears
+  on its own after two seconds; any keypress still dismisses it immediately. The
+  event loop shortens its poll wait while the splash is up, so it animates
+  smoothly and expires on time instead of at the next idle wake.
+
 ### Added
 
 - **`:colorscheme` previews live.** Moving through the completion popup with the
