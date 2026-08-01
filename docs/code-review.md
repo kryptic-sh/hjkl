@@ -25,6 +25,61 @@ findings below are real but none is a critical break; the two worth doing first
 are C1 (silent data-loss shape in `git.rs`) and C2 (duplicate-file
 `WorkspaceEdit` corruption).
 
+## Status (2026-08-01)
+
+Everything actionable without an owner decision has been fixed and pushed.
+Workspace is green: `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, 5 646 tests passing,
+and the nvim differential oracle at 70/70.
+
+| Finding                | Status | Commit                                             |
+| ---------------------- | ------ | -------------------------------------------------- |
+| C1 git pathspec        | fixed  | `fix(git): pass pathspecs as OsStr…`               |
+| C2 WorkspaceEdit       | fixed  | `fix(lsp): merge workspace-edit groups…`           |
+| C3 modeline `no`       | fixed  | `fix(modeline): parse bare no-prefixed options…`   |
+| C4 modeline colon      | fixed  | same commit                                        |
+| C5 listchars width     | fixed  | `fix(buffer): measure listchars columns…`          |
+| C6 errorformat         | fixed  | `fix(quickfix): refuse unsupported specifiers`     |
+| C7 anvil `.bak`        | fixed  | `fix(anvil): isolate rollback backups…`            |
+| C8 `pid_is_alive(0)`   | fixed  | `fix(swap): treat pid 0 as dead…`                  |
+| S1 `to_path_within`    | fixed  | `fix(lsp): return the path…` (bug only, see below) |
+| S2 anvil URL           | fixed  | `fix(anvil): isolate rollback backups…`            |
+| S4 explorer fifo       | fixed  | `fix(explorer): move entries through the seam`     |
+| D1 explorer movers     | fixed  | same commit                                        |
+| D2 `is_safe_component` | fixed  | `refactor(fs): host is_safe_component once…`       |
+| D4 `normalize_lexical` | n/a    | folded into S1's doc, not merged — see below       |
+| Y1 stale roadmap       | fixed  | `docs: drop the shipped vim roadmap…`              |
+| Y2 hjkl-css status     | fixed  | same commit                                        |
+| Y3 trash growth        | fixed  | same commit (documented, no reaper added)          |
+| Y4 poisoning policy    | fixed  | same commit (documented, call sites unchanged)     |
+| `find_bin` ordering    | fixed  | `fix(anvil): make find_bin's choice deterministic` |
+| `:s///c` slice         | fixed  | `fix(ex): guard the :s///c cursor jump…`           |
+
+**Still open — needs an owner decision, not more work:**
+
+- **S1 deletion.** The bug is fixed and the function documents its own status,
+  but `to_path_within` still has no callers. Deleting it is a public API removal
+  on a published crate, which the project policy says must be asked about rather
+  than inferred from a workspace grep. Decide: delete, or wire it in somewhere.
+- **S3 anvil sidecar on uninstall.** `:Anvil uninstall` leaves the TOFU checksum
+  behind. Keeping it is arguably safer (a changed artifact still trips
+  `ChecksumMismatch`) but a user uninstalling to recover from a bad install has
+  no way to clear it. Needs a product call: delete on uninstall, or add
+  `:Anvil forget`.
+- **D3 width truncators.** Four hand-rolled truncate-to-width loops across
+  `hjkl-statusline`, `hjkl-prompt-tui`, `hjkl-editor-tui`, `hjkl-which-key`.
+  Consolidating them is a cross-crate UI refactor with real regression surface
+  and no bug attached; deliberately not bundled with the correctness work.
+- **D4 / `is_safe_relative_path` vs `safe_join`.** Same underlying invariant,
+  different contracts. The clean unification is reworking both onto
+  `hjkl_fs::resolve_under`, which also catches a symlink in the prefix — a
+  behaviour change, so it belongs in its own change.
+- **Y5 module sizes.** Recording only; no correctness payoff.
+
+Two corrections to this document were made during the work, both noted inline:
+the C5 claim about control-character width was wrong, and C6's fix landed as
+subset-and-warn rather than refuse-the-whole-list.
+
 ---
 
 ## 1. Correctness
