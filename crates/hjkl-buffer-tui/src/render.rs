@@ -1429,6 +1429,27 @@ impl<R: StyleResolver> BufferView<'_, R> {
         // Reused across every cell in this row so `resolve_span_style` refills
         // and sorts the SAME allocation instead of allocating a Vec per cell.
         let mut span_scratch: Vec<&hjkl_buffer::Span> = Vec::new();
+
+        // The bg a block span paints across this row: a MULTI-ROW span
+        // covering the row's end (a markdown fenced code block, a multi-line
+        // string), which the span table marks by ending one byte past the
+        // row's content — so resolving at `line.len()` finds exactly those.
+        // `None` when this row is not inside one.
+        let block_bg = self
+            .resolve_span_style(row_spans, line.len(), &mut span_scratch, None)
+            .and_then(|s| s.bg);
+        // On the cursor row the cursorline owns the row, so that colour is
+        // dropped from every span carrying it — including NARROW ones. A
+        // fence line needs this: markdown captures its ``` as
+        // `@markup.raw.block` a second time, as a span covering just those
+        // three characters, so without this they keep painting the block tint
+        // over the cursorline. A bg span in any OTHER colour — a hex-colour
+        // swatch, a TODO marker — is untouched and still paints.
+        let drop_bg = if is_cursor_row && self.cursor_line_bg.bg.is_some() {
+            block_bg
+        } else {
+            None
+        };
         let mut chars_iter = line.chars().enumerate();
         while let Some((col_idx, ch)) = chars_iter.next() {
             let ch_byte_len = ch.len_utf8();
@@ -1447,7 +1468,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                         self.background
                     };
                     if let Some(span_style) =
-                        self.resolve_span_style(row_spans, byte_offset, &mut span_scratch)
+                        self.resolve_span_style(row_spans, byte_offset, &mut span_scratch, drop_bg)
                     {
                         style = style.patch(span_style);
                     }
@@ -1506,7 +1527,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 self.background
             };
             if let Some(span_style) =
-                self.resolve_span_style(row_spans, byte_offset, &mut span_scratch)
+                self.resolve_span_style(row_spans, byte_offset, &mut span_scratch, drop_bg)
             {
                 style = style.patch(span_style);
             }
@@ -1584,6 +1605,27 @@ impl<R: StyleResolver> BufferView<'_, R> {
             screen_x += width;
             line_col += visible_width;
             byte_offset += ch_byte_len;
+        }
+
+        // Block-bg fill: a block span tints the REST of the row, not just
+        // its text. Span tables mark a MULTI-ROW span covering this row's end
+        // by recording one byte past the row's content (see
+        // `hjkl_syntax::row_local_end`), which is what resolving at
+        // `line.len()` picks out — a span confined to this row does not
+        // contain that byte and does not fill. Without this a markdown code
+        // block's tint stops at each line's last char (and skips blank lines
+        // inside the block entirely) instead of reading as one block. Skipped
+        // on the cursor row, where the cursorline bg painted above owns it.
+        if drop_bg.is_none()
+            && screen_x < row_end_x
+            && let Some(bg) = block_bg
+        {
+            let fill = Style::default().bg(bg);
+            for x in screen_x..row_end_x {
+                if let Some(cell) = term_buf.cell_mut((x, y)) {
+                    cell.set_style(cell.style().patch(fill));
+                }
+            }
         }
 
         // When `:set list` is on and `eol` is configured, paint the EOL marker
@@ -1682,11 +1724,18 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// stable sort preserving `row_spans` order among equal widths), and the
     /// resulting layered style are identical to the old
     /// collect-into-fresh-Vec form.
+    /// `drop_bg` suppresses one colour: every span resolving to that `bg`
+    /// contributes only its other fields. The cursor row passes the row's
+    /// block-tint colour so the cursorline bg wins over it, whatever span
+    /// carries it — the wide code-block span AND the narrow one markdown puts
+    /// on the fence's ``` — while a bg span in another colour (a hex-colour
+    /// swatch, a TODO marker) still paints.
     fn resolve_span_style<'s>(
         &self,
         row_spans: &'s [hjkl_buffer::Span],
         byte_offset: usize,
         scratch: &mut Vec<&'s hjkl_buffer::Span>,
+        drop_bg: Option<ratatui::style::Color>,
     ) -> Option<Style> {
         // Collect every span containing this byte, sorted broadest first.
         scratch.clear();
@@ -1699,9 +1748,16 @@ impl<R: StyleResolver> BufferView<'_, R> {
             return None;
         }
         scratch.sort_by_key(|s| std::cmp::Reverse(s.end_byte.saturating_sub(s.start_byte)));
-        let mut style = self.resolver.resolve(scratch[0].style);
+        let resolve = |s: &hjkl_buffer::Span| {
+            let mut style = self.resolver.resolve(s.style);
+            if drop_bg.is_some() && style.bg == drop_bg {
+                style.bg = None;
+            }
+            style
+        };
+        let mut style = resolve(scratch[0]);
         for s in &scratch[1..] {
-            style = style.patch(self.resolver.resolve(s.style));
+            style = style.patch(resolve(s));
         }
         Some(style)
     }
@@ -2522,6 +2578,179 @@ mod tests {
                 term.cell((x, 0)).unwrap().bg,
                 Color::Red,
                 "col {x}: narrow span's bg overrides broad bg"
+            );
+        }
+    }
+
+    /// Style table for the block-bg tests: id 1 = block tint (the
+    /// `@markup.raw.block` shape), id 2 = a narrow bg (hex-colour swatch).
+    fn block_bg_styles(id: u32) -> Style {
+        match id {
+            1 => Style::default().bg(Color::DarkGray),
+            2 => Style::default().bg(Color::Red),
+            _ => Style::default(),
+        }
+    }
+
+    #[test]
+    fn block_bg_span_fills_the_rest_of_the_row() {
+        // A block span (a multi-row span covering the row's end, recorded as
+        // one byte past the content — see `hjkl_syntax::row_local_end`) tints
+        // the whole row, not just the text. Without this a markdown code block's
+        // bg is a ragged shape ending at each line's last character.
+        use hjkl_buffer::Span;
+        let b = View::from_str("ls -la\n\necho hi\n");
+        let v = vp(20, 4);
+        // Row 0 and row 2 have text; row 1 is blank INSIDE the block, so its
+        // only span is the zero-content `0..1` marker.
+        let spans = vec![
+            vec![Span::new(0, 7, 1)], // "ls -la" is 6 bytes → 7 crosses eol
+            vec![Span::new(0, 1, 1)], // blank row inside the block
+            vec![Span::new(0, 8, 1)], // "echo hi" is 7 bytes → 8 crosses eol
+        ];
+        let resolver = block_bg_styles as fn(u32) -> Style;
+        let view = BufferView {
+            resolver: &resolver,
+            spans: &spans,
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 4);
+        for y in 0u16..3 {
+            for x in 0u16..20 {
+                assert_eq!(
+                    term.cell((x, y)).unwrap().bg,
+                    Color::DarkGray,
+                    "row {y} col {x}: block tint must span the full row"
+                );
+            }
+        }
+        // Row 3 is past the block — untouched.
+        assert_eq!(term.cell((0, 3)).unwrap().bg, Color::Reset);
+    }
+
+    #[test]
+    fn span_ending_at_the_last_char_does_not_fill_the_row() {
+        // The counterpart: a single-row bg span (a hex-colour swatch, a TODO
+        // marker) ends AT the content and must not bleed past the text.
+        use hjkl_buffer::Span;
+        let b = View::from_str("ls -la\n");
+        let v = vp(20, 2);
+        let spans = vec![vec![Span::new(0, 6, 1)]]; // exactly the 6 content bytes
+        let resolver = block_bg_styles as fn(u32) -> Style;
+        let view = BufferView {
+            resolver: &resolver,
+            spans: &spans,
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 2);
+        for x in 0u16..6 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::DarkGray, "col {x}");
+        }
+        for x in 6u16..20 {
+            assert_eq!(
+                term.cell((x, 0)).unwrap().bg,
+                Color::Reset,
+                "col {x}: a span ending at the last char must not fill past it"
+            );
+        }
+    }
+
+    #[test]
+    fn cursorline_bg_wins_over_a_block_bg_span() {
+        // The cursor row's highlight must stay visible inside a code block:
+        // the block tint is suppressed there, across text AND trailing cells.
+        use hjkl_buffer::Span;
+        let b = View::from_str("ls -la\necho hi\n");
+        let v = vp(20, 3);
+        let spans = vec![vec![Span::new(0, 7, 1)], vec![Span::new(0, 8, 1)]];
+        let resolver = block_bg_styles as fn(u32) -> Style;
+        let view = BufferView {
+            resolver: &resolver,
+            spans: &spans,
+            cursor_line_bg: Style::default().bg(Color::Blue),
+            cursor_line_row: Some(1),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 3);
+        // Row 0: block tint, full row.
+        for x in 0u16..20 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::DarkGray, "col {x}");
+        }
+        // Row 1 (cursor row): cursorline bg over text and trailing cells.
+        for x in 0u16..20 {
+            assert_eq!(
+                term.cell((x, 1)).unwrap().bg,
+                Color::Blue,
+                "col {x}: cursorline bg must override the block tint"
+            );
+        }
+    }
+
+    #[test]
+    fn cursorline_keeps_a_bg_span_in_another_colour_on_the_cursor_row() {
+        // Only the block's own colour yields to the cursorline. A bg span in
+        // a different colour inside the row — a hex-colour swatch — still
+        // paints, so the swatch does not vanish when the cursor lands on it.
+        use hjkl_buffer::Span;
+        let b = View::from_str("bg: #ff0000\n");
+        let v = vp(20, 2);
+        let spans = vec![vec![
+            Span::new(0, 12, 1), // block span (crosses eol), DarkGray
+            Span::new(4, 11, 2), // "#ff0000" swatch, Red
+        ]];
+        let resolver = block_bg_styles as fn(u32) -> Style;
+        let view = BufferView {
+            resolver: &resolver,
+            spans: &spans,
+            cursor_line_bg: Style::default().bg(Color::Blue),
+            cursor_line_row: Some(0),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 2);
+        for x in 0u16..4 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::Blue, "col {x}");
+        }
+        for x in 4u16..11 {
+            assert_eq!(
+                term.cell((x, 0)).unwrap().bg,
+                Color::Red,
+                "col {x}: a bg span in another colour keeps it on the cursor row"
+            );
+        }
+        for x in 11u16..20 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::Blue, "col {x}");
+        }
+    }
+
+    #[test]
+    fn cursorline_also_drops_a_narrow_span_carrying_the_block_colour() {
+        // Regression: a fence line. markdown captures the ``` as
+        // `@markup.raw.block` a SECOND time, as a narrow span covering just
+        // those three characters, on top of the wide block span. Suppressing
+        // only the wide one left the ``` glyphs painting the block tint over
+        // the cursorline — the cursor row read as three tinted cells followed
+        // by cursorline.
+        use hjkl_buffer::Span;
+        let b = View::from_str("```bash\nls -la\n");
+        let v = vp(20, 2);
+        let spans = vec![vec![
+            Span::new(0, 8, 1), // wide block span, crosses eol
+            Span::new(0, 3, 1), // the fence's ```, same style, single row
+        ]];
+        let resolver = block_bg_styles as fn(u32) -> Style;
+        let view = BufferView {
+            resolver: &resolver,
+            spans: &spans,
+            cursor_line_bg: Style::default().bg(Color::Blue),
+            cursor_line_row: Some(0),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 2);
+        for x in 0u16..20 {
+            assert_eq!(
+                term.cell((x, 0)).unwrap().bg,
+                Color::Blue,
+                "col {x}: the ``` cells must yield to the cursorline too"
             );
         }
     }

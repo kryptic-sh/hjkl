@@ -1163,7 +1163,7 @@ fn build_by_row_range(
             }
 
             let local_start = span_start.saturating_sub(row_byte_start);
-            let local_end = span_end.min(row_byte_end) - row_byte_start;
+            let local_end = row_local_end(span_start, span_end, row_byte_start, row_byte_end);
 
             if local_end > local_start {
                 by_row[row - seg_start].push((local_start, local_end, style));
@@ -1174,6 +1174,33 @@ fn build_by_row_range(
     }
 
     by_row
+}
+
+/// Row-local end offset for a span clipped to one row.
+///
+/// A MULTI-ROW span that covers this row's end — markdown's fenced code
+/// block, a multi-line string — records one byte PAST the row's content (the
+/// newline slot) instead of stopping at the last character. That is how the
+/// renderer tells a block from a span that merely happens to reach
+/// end-of-line, and it paints the block's bg across the whole row. An empty
+/// row inside such a span gets `0..1`; without it the row produces no span
+/// at all and shows as an untinted gap mid-block.
+///
+/// A span confined to ONE row keeps its exact end even when it reaches
+/// end-of-line, so a hex-colour swatch or TODO marker never bleeds its bg
+/// across the row.
+fn row_local_end(
+    span_start: usize,
+    span_end: usize,
+    row_byte_start: usize,
+    row_byte_end: usize,
+) -> usize {
+    let multi_row = span_start < row_byte_start || span_end > row_byte_end;
+    if multi_row && span_end >= row_byte_end {
+        row_byte_end - row_byte_start + 1
+    } else {
+        span_end.min(row_byte_end) - row_byte_start
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,7 +1280,7 @@ pub fn build_by_row(
             }
 
             let local_start = span_start.saturating_sub(row_byte_start);
-            let local_end = span_end.min(row_byte_end) - row_byte_start;
+            let local_end = row_local_end(span_start, span_end, row_byte_start, row_byte_end);
 
             if local_end > local_start {
                 by_row[row].push((local_start, local_end, *style));
@@ -1430,6 +1457,83 @@ mod tests {
         );
         assert_eq!(by_row.len(), 2);
         assert!(by_row[0].is_empty());
+        assert!(by_row[1].is_empty());
+    }
+
+    #[test]
+    fn build_by_row_marks_every_full_row_of_a_multi_row_span() {
+        // A multi-row span (markdown's fenced code block, a multi-line
+        // string) records one byte PAST the content of every row it covers
+        // to the end — including the row it ENDS on, so a code block renders
+        // as a rectangle rather than a ragged shape with a short last line.
+        //
+        //   row 0 "aaa"  bytes 0..3   covered to eol      → 0..4
+        //   row 1 ""     byte  4      blank, covered      → 0..1
+        //   row 2 "bb"   bytes 5..7   ends AT this eol    → 0..3
+        //   row 3 "cc"   bytes 8..10  past the span       → none
+        let bytes = b"aaa\n\nbb\ncc\n";
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 0..7,
+            capture: Arc::from("string"),
+            metadata: None,
+        };
+        let by_row = build_by_row(
+            &[span],
+            bytes,
+            &[0, 4, 5, 8, 11],
+            4,
+            &DotFallbackTheme::dark(),
+        );
+        assert_eq!(by_row[0].len(), 1);
+        assert_eq!((by_row[0][0].0, by_row[0][0].1), (0, 4));
+        assert_eq!(
+            by_row[1].len(),
+            1,
+            "a blank row inside the span must still get one, or it renders as an untinted gap"
+        );
+        assert_eq!((by_row[1][0].0, by_row[1][0].1), (0, 1));
+        assert_eq!(by_row[2].len(), 1);
+        assert_eq!(
+            (by_row[2][0].0, by_row[2][0].1),
+            (0, 3),
+            "the last row of the span reaches its eol, so it is marked too"
+        );
+        assert!(by_row[3].is_empty());
+    }
+
+    #[test]
+    fn build_by_row_multi_row_span_ending_mid_row_stops_there() {
+        // A multi-row span that ends BEFORE the last row's eol marks only the
+        // rows it covers to the end — the final partial row keeps its exact
+        // offset, so no bg spills past the text it actually covers.
+        //
+        //   row 0 "aaa" bytes 0..3  covered to eol → 0..4
+        //   row 1 "bbb" bytes 4..7  ends at byte 6 → 0..2
+        let bytes = b"aaa\nbbb\n";
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 0..6,
+            capture: Arc::from("string"),
+            metadata: None,
+        };
+        let by_row = build_by_row(&[span], bytes, &[0, 4, 8], 2, &DotFallbackTheme::dark());
+        assert_eq!((by_row[0][0].0, by_row[0][0].1), (0, 4));
+        assert_eq!((by_row[1][0].0, by_row[1][0].1), (0, 2));
+    }
+
+    #[test]
+    fn build_by_row_single_row_span_ends_at_its_content() {
+        // The counterpart: a span confined to one row is never marked, even
+        // when it reaches end-of-line — a hex-colour swatch or TODO marker
+        // must not bleed its bg across the rest of the row.
+        let bytes = b"aaa\nbbb\n";
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 0..3,
+            capture: Arc::from("string"),
+            metadata: None,
+        };
+        let by_row = build_by_row(&[span], bytes, &[0, 4, 8], 2, &DotFallbackTheme::dark());
+        assert_eq!(by_row[0].len(), 1);
+        assert_eq!((by_row[0][0].0, by_row[0][0].1), (0, 3));
         assert!(by_row[1].is_empty());
     }
 

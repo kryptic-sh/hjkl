@@ -308,6 +308,24 @@ mod tests {
     }
 
     #[test]
+    fn install_ratatui_syntax_spans_keeps_the_block_row_marker() {
+        // `len + 1` — one byte past the row's content — is how a span table
+        // marks a multi-row span (a markdown code block) covering this row's
+        // end; the renderer fills the rest of the row with its bg. Clamping
+        // it away is what left code-block tints ending at the last char.
+        use ratatui::style::{Color, Style};
+        let mut e = fresh_editor("hello");
+        e.install_ratatui_syntax_spans(&[vec![(0, 6, Style::default().bg(Color::Blue))]]);
+        assert_eq!(e.buffer_spans()[0][0].end_byte, 6);
+
+        // And a blank row's marker survives, instead of being dropped as an
+        // empty span — that is the untinted-gap case inside a block.
+        let mut e = fresh_editor("");
+        e.install_ratatui_syntax_spans(&[vec![(0, 1, Style::default().bg(Color::Blue))]]);
+        assert_eq!(e.buffer_spans()[0][0].end_byte, 1);
+    }
+
+    #[test]
     fn install_ratatui_syntax_spans_drops_zero_width() {
         use ratatui::style::{Color, Style};
         let mut e = fresh_editor("abc");

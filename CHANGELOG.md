@@ -8,6 +8,27 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A markdown code block's background now covers whole lines, and the
+  cursorline shows through it.** The tint stopped at each line's last character,
+  so a block rendered as a ragged shape with untinted gaps on its blank lines;
+  and on the cursor row the block's background painted over the `cursorline`
+  highlight, hiding where the cursor was.
+
+  Span tables (`hjkl_syntax::build_by_row`, `hjkl_picker::preview`) now mark a
+  multi-row span that covers a row's end by recording one byte past that row's
+  content, `Editor::install_syntax_spans` keeps that byte instead of clamping it
+  away, and `BufferView::paint_row` fills the rest of such a row with the span's
+  bg. Spans confined to a single row are untouched, so a hex-colour swatch or
+  TODO marker never bleeds across the row.
+
+  On the cursor row the block's colour is dropped from every span carrying it,
+  so the whole row reads as `cursorline` — including a fence line, whose
+  backticks markdown captures as `@markup.raw.block` a second time in a narrow
+  span of their own. A bg span in any other colour still paints there, so a
+  hex-colour swatch does not vanish when the cursor lands on its line.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed

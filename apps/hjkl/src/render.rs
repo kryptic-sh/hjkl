@@ -3455,6 +3455,108 @@ mod tests {
         );
     }
 
+    /// End-to-end: a markdown fenced code block's tint must cover whole
+    /// lines, and the cursorline must show through it on the cursor's row.
+    /// Exercises the real chain — markdown grammar → `hjkl_syntax` span table
+    /// → `BufferView::paint_row` — which the unit tests either side of it
+    /// only cover with synthetic spans.
+    #[test]
+    #[ignore = "network + compiler: fetches the markdown grammar"]
+    fn markdown_code_block_tint_covers_whole_lines_and_yields_to_cursorline() {
+        use crate::app::App;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("block.md");
+        // Cursor starts on row 0 ("# Title"), so the block rows below it are
+        // all non-cursor rows; row 3 ("ls -la") is the one we then move to.
+        std::fs::write(&path, "# Title\n\n```bash\nls -la\n\necho hi\n```\n").unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Draw until the grammar has loaded and spans are installed (the
+        // first frames settle window rects and kick off the parse).
+        let mut buf = None;
+        for _ in 0..200 {
+            app.poll_grammar_loads();
+            app.recompute_and_install();
+            terminal.draw(|f| frame(f, &mut app)).unwrap();
+            let b = terminal.backend().buffer().clone();
+            // Settled when the code-block row's TEXT is tinted differently
+            // from a row outside the block. Comparing trailing cells instead
+            // would also match a half-painted first frame.
+            let block_text = b.cell((6, 3)).map(|c| c.bg);
+            if block_text != b.cell((6, 0)).map(|c| c.bg) {
+                buf = Some(b);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let buf = buf.expect("markdown code-block spans never reached the screen buffer");
+
+        // Text starts after the number gutter; find it from the block's own
+        // line so the assertions never straddle a gutter cell.
+        let text_x = (0u16..80)
+            .find(|&x| buf.cell((x, 3)).unwrap().symbol() == "l")
+            .expect("row 3 renders `ls -la`");
+        // Rows 2..=6 are the block (both fences included). Every cell on each
+        // of them — text, trailing, and the blank row inside the block —
+        // carries the same tint, and it is not the plain editor bg.
+        let plain_bg = buf.cell((79, 0)).unwrap().bg;
+        let block_bg = buf.cell((79, 3)).unwrap().bg;
+        assert_ne!(block_bg, plain_bg, "code block must be tinted");
+        for y in 2u16..=6 {
+            for x in text_x..80 {
+                assert_eq!(
+                    buf.cell((x, y)).unwrap().bg,
+                    block_bg,
+                    "row {y} col {x}: block tint must cover the whole line"
+                );
+            }
+        }
+
+        // Move the cursor onto the OPENING FENCE row: the cursorline owns it
+        // whole, including the ``` characters (markdown captures those as
+        // `@markup.raw.block` a second time, as their own narrow span).
+        app.dispatch_ex("3");
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let fence_buf = terminal.backend().buffer().clone();
+        let fence_bg = fence_buf.cell((79, 2)).unwrap().bg;
+        assert_ne!(fence_bg, block_bg, "cursorline must own the fence row too");
+        for x in (text_x + 1)..80 {
+            assert_eq!(
+                fence_buf.cell((x, 2)).unwrap().bg,
+                fence_bg,
+                "col {x}: the ``` cells must yield to the cursorline"
+            );
+        }
+
+        // Move the cursor onto a block row: the cursorline now owns it.
+        app.dispatch_ex("4");
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let cursor_bg = buf.cell((79, 3)).unwrap().bg;
+        assert_ne!(
+            cursor_bg, block_bg,
+            "cursorline bg must override the block tint"
+        );
+        // From `text_x + 1`: the first text cell holds the cursor itself,
+        // painted reversed.
+        for x in (text_x + 1)..80 {
+            let cell = buf.cell((x, 3)).unwrap();
+            assert_eq!(
+                cell.bg, cursor_bg,
+                "col {x}: the whole cursor row carries the cursorline bg"
+            );
+        }
+        // Neighbouring block rows keep the tint.
+        assert_eq!(buf.cell((79, 2)).unwrap().bg, block_bg);
+        assert_eq!(buf.cell((79, 4)).unwrap().bg, block_bg);
+    }
+
     // ── Fix 2: screen_rect derived from the focused window's viewport ──────
 
     /// `App::screen_rect()` must return the real terminal size even with a

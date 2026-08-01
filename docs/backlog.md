@@ -48,6 +48,42 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 | `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                               |
 | `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | No readers. Removal wins ~27% on full installation and nothing per keystroke, but it is a public API removal on a published crate.                                                  |
 
+**The block-row marker is a convention, not a type (2026-08-02).** A span whose
+`end_byte` is exactly one byte past its row's content means "multi-row span
+covering this row's end — paint its bg across the whole row". It is produced by
+`row_local_end` (duplicated in `hjkl_syntax` and `hjkl_picker::preview`),
+preserved by `Editor::translate_row_spans`, and consumed by
+`BufferView::paint_row` and `resolve_span_style`. Nothing in the type system
+says so, and the two copies of `row_local_end` can drift. A `Span` flag (or a
+newtype) would state it once; not done because `hjkl-picker` deliberately has no
+dependency on `hjkl-syntax` and `Span` is public API on a published crate.
+
+Consequences that were accepted rather than fixed:
+
+- The fill applies to ANY multi-row span carrying a `bg`, not just markdown code
+  blocks. Shipped themes only give a bg to `@markup.raw.block`, so today it is
+  exactly the code-block case; a theme that gave `@string` a bg would tint whole
+  rows of a multi-line string.
+- On the cursor row the block bg is dropped entirely rather than blended, unlike
+  the fold-header row, which blends `fold_line_bg` with `cursor_line_bg`
+  (`mix_colors` in `render.rs`). Blending would read as a third colour on every
+  code-block line the cursor visits; suppression was chosen deliberately.
+- Suppression matches on the block's COLOUR, not on which span carries it, so
+  any span resolving to that bg yields on the cursor row. That is what covers a
+  fence line, where markdown emits `@markup.raw.block` twice — once for the
+  block, once as a narrow span over the ``` itself. A theme that gave some
+  unrelated capture the identical bg would see it yield there too; the two are
+  indistinguishable on screen anyway.
+- **An indented code block's opening fence keeps an untinted prefix.** In
+  `- item` / `  ```rust`, the fence row's span starts at the backticks, so the
+  two leading indent spaces stay untinted while the block's other rows are
+  tinted edge to edge (verified in a real render, 2026-08-02). Filling leftward
+  from a span's start would be a guess about where the block begins; fixing it
+  properly needs the block's own start column from the grammar.
+- Not reviewed: whether other span-consuming renderers want the same fill.
+  `hjkl-markdown-tui` and `qf_dock_spans` (`apps/hjkl/src/app/quickfix.rs`)
+  build their own span tables and were not touched or examined.
+
 ### 1.5 Remaining differential-oracle and code-review fixes
 
 Fixed by `9a156885`, `b97e9bce`, `76cfb459`, and earlier commits. Detailed

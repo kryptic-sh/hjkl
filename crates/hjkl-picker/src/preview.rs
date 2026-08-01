@@ -67,7 +67,7 @@ impl PreviewSpans {
                     break;
                 }
                 let local_start = span_start.saturating_sub(row_byte_start);
-                let local_end = span_end.min(row_byte_end).saturating_sub(row_byte_start);
+                let local_end = row_local_end(span_start, span_end, row_byte_start, row_byte_end);
                 if local_end > local_start {
                     by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
                 }
@@ -76,6 +76,28 @@ impl PreviewSpans {
         }
 
         Self { by_row, styles }
+    }
+}
+
+/// Row-local end offset for a span clipped to one row.
+///
+/// A MULTI-ROW span that covers this row's end — a markdown fenced code
+/// block, a multi-line string — records one byte PAST the row's content (the
+/// newline slot), which the renderer reads as "paint this bg across the whole
+/// row". A span confined to one row keeps its exact end even at end-of-line.
+/// Mirrors `hjkl_syntax::row_local_end`; duplicated rather than shared so
+/// `hjkl-picker` keeps no syntax dependency.
+fn row_local_end(
+    span_start: usize,
+    span_end: usize,
+    row_byte_start: usize,
+    row_byte_end: usize,
+) -> usize {
+    let multi_row = span_start < row_byte_start || span_end > row_byte_end;
+    if multi_row && span_end >= row_byte_end {
+        row_byte_end.saturating_sub(row_byte_start) + 1
+    } else {
+        span_end.min(row_byte_end).saturating_sub(row_byte_start)
     }
 }
 
@@ -131,7 +153,7 @@ where
                 break;
             }
             let local_start = span_start.saturating_sub(row_byte_start);
-            let local_end = span_end.min(row_byte_end).saturating_sub(row_byte_start);
+            let local_end = row_local_end(span_start, span_end, row_byte_start, row_byte_end);
             if local_end > local_start {
                 by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
             }
@@ -166,4 +188,57 @@ pub fn load_preview(abs: &Path) -> (String, String) {
     // and the viewport only renders what fits on screen. Truncating by line
     // count would silently drop grep matches that fall past the cap.
     (text.to_owned(), String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A multi-row span covering a row's end is recorded one byte past that
+    /// row's content — the marker `BufferView` reads to paint the span's bg
+    /// across the whole row (a markdown code block in the preview pane).
+    /// A span confined to one row keeps its exact end.
+    #[test]
+    fn multi_row_span_marks_the_rows_it_covers_to_eol() {
+        let bytes = b"aaa\n\nbb\ncc\n";
+        let style = EngineStyle::default();
+        let spans = PreviewSpans::from_byte_ranges(&[(0..7, style)], bytes);
+        assert_eq!(
+            (spans.by_row[0][0].start_byte, spans.by_row[0][0].end_byte),
+            (0, 4)
+        );
+        assert_eq!(
+            (spans.by_row[1][0].start_byte, spans.by_row[1][0].end_byte),
+            (0, 1),
+            "a blank row inside the span still gets one"
+        );
+        assert_eq!(
+            (spans.by_row[2][0].start_byte, spans.by_row[2][0].end_byte),
+            (0, 3)
+        );
+        assert!(spans.by_row[3].is_empty());
+
+        let single = PreviewSpans::from_byte_ranges(&[(0..3, style)], bytes);
+        assert_eq!(
+            (single.by_row[0][0].start_byte, single.by_row[0][0].end_byte),
+            (0, 3),
+            "a single-row span keeps its exact end even at end-of-line"
+        );
+    }
+
+    /// Same rule through the capture-name builder.
+    #[test]
+    fn build_preview_spans_marks_multi_row_spans_too() {
+        let bytes = b"aaa\nbbb\n";
+        let spans =
+            build_preview_spans(&[(0..7, "string")], bytes, |_| Some(EngineStyle::default()));
+        assert_eq!(
+            (spans.by_row[0][0].start_byte, spans.by_row[0][0].end_byte),
+            (0, 4)
+        );
+        assert_eq!(
+            (spans.by_row[1][0].start_byte, spans.by_row[1][0].end_byte),
+            (0, 4)
+        );
+    }
 }

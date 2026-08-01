@@ -2199,7 +2199,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                     l
                 }
             };
-            let end_clamped = end.min(len);
+            // `len + 1` is admitted, anything past it still clamps to `len`.
+            // Exactly `len + 1` is how a span table marks a multi-row span
+            // covering this row's end (a markdown fenced code block, a
+            // multi-line string): the renderer reads that one extra byte —
+            // the newline slot — as "paint this bg across the rest of the
+            // row" instead of stopping at the last character, and a blank
+            // row inside such a span carries `0..1` and nothing else.
+            // Clamping it to `len` erased both, so a block's tint ended at
+            // each line's last char and skipped blank lines outright.
+            // Larger ends stay clamped, so a `usize::MAX` "to end of line"
+            // sentinel does not accidentally read as a block row.
+            let end_clamped = if end == len + 1 { end } else { end.min(len) };
             if end_clamped <= start {
                 continue;
             }
@@ -5644,8 +5655,14 @@ mod shift_syntax_spans_tests {
             10,
             "byte-length clamp must not truncate to the char count"
         );
-        // One byte past the row is clamped back to the byte length.
+        // Exactly one byte past the row survives — that is the marker for a
+        // multi-row span covering this row's end (a markdown code block),
+        // which the renderer paints across the whole row.
         e.install_syntax_spans(vec![vec![(0usize, 11usize, style)], vec![]]);
+        assert_eq!(e.buffer_spans()[0][0].end_byte, 11);
+        // Anything beyond that is still clamped to the byte length, so a
+        // `usize::MAX`-style "to end of line" end never reads as the marker.
+        e.install_syntax_spans(vec![vec![(0usize, 12usize, style)], vec![]]);
         assert_eq!(e.buffer_spans()[0][0].end_byte, 10);
     }
 
