@@ -16,11 +16,9 @@
 //! of `git` (prefer HTTPS/SSH) are part of the crate's trust boundary. See
 //! the crate-root docs for the full model.
 
-use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context, Result, bail};
 // Grammar names and `; inherits:` targets are joined into cache and query-repo
@@ -31,21 +29,76 @@ pub use hjkl_fs::is_safe_component;
 use super::manifest::{LangSpec, ManifestMeta, QuerySource};
 use super::xdg;
 
-/// Lazily-allocated per-key mutex map. Used by [`SourceCache`] and
-/// [`QuerySourceCache`] to serialise concurrent `acquire_*` calls for the
-/// same `(name, rev)` / `(label, rev)` so two threads never race on the
-/// same staging directory or git working tree. Different keys still run
-/// in parallel.
-type KeyLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+/// Populate a private staging directory and publish it to `dest`, with the
+/// whole sequence serialised against every other thread *and process* by an
+/// exclusive lock on `dest`.
+///
+/// Both caches in this module live in one shared directory that any number of
+/// hjkl processes reach at the same moment — two editors opening different
+/// file types on a cold cache, or (how this was found) every test binary
+/// `cargo nextest` runs in parallel. Getting that wrong is not theoretical:
+/// the caches used to stage every clone at one fixed `<base>/<key>.tmp` and
+/// guard it with an in-process mutex, which peers cannot see. The second
+/// process to arrive ran `remove_dir_all` on the first one's half-finished
+/// clone, and the first one's next `git` invocation died inside a working
+/// directory that no longer existed:
+///
+/// ```text
+/// error: cannot open '.git/FETCH_HEAD': No such file or directory
+/// fatal: Unable to read current working directory: No such file or directory
+/// ```
+///
+/// Two things close it, and both are needed. The lock is what makes the
+/// decide → clone → publish sequence atomic across processes. The
+/// pid-suffixed staging name is the belt to its braces: on a filesystem where
+/// the advisory lock does not hold (a network mount), two processes still
+/// clone into directories they own outright rather than into each other's.
+///
+/// `populate` is called with the staging path and must fill it; it is only
+/// called when `dest` is still missing once the lock is held, so a peer that
+/// published while we waited costs nothing but the wait.
+fn stage_and_publish<F>(base: &Path, dest: &Path, key: &str, populate: F) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    std::fs::create_dir_all(base)
+        .with_context(|| format!("create cache base {}", base.display()))?;
 
-/// Look up (or insert) the per-key mutex for `key` and return an `Arc`.
-/// The outer mutex is held only for the duration of the map lookup.
-fn key_lock(locks: &KeyLocks, key: &str) -> Arc<Mutex<()>> {
-    let mut map = locks.lock().unwrap_or_else(PoisonError::into_inner);
-    Arc::clone(
-        map.entry(key.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(()))),
-    )
+    // `with_lock_exclusive` is io::Result-shaped, so the body's own
+    // anyhow::Result comes back nested — hence the two `?`.
+    hjkl_fs::with_lock_exclusive(dest, || {
+        Ok(stage_and_publish_locked(base, dest, key, populate))
+    })
+    .with_context(|| format!("lock cache entry {}", dest.display()))?
+}
+
+/// The body of [`stage_and_publish`], run while holding the lock on `dest`.
+fn stage_and_publish_locked<F>(base: &Path, dest: &Path, key: &str, populate: F) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    // Re-check under the lock: a peer may have published between our caller's
+    // miss and our acquiring the lock, and re-cloning on top of it buys
+    // nothing.
+    if dest.exists() {
+        return Ok(());
+    }
+
+    let staging = base.join(format!("{key}.tmp-{}", std::process::id()));
+    // Only ever our own pid's leftovers, from a run that died mid-clone.
+    let _ = std::fs::remove_dir_all(&staging);
+
+    match populate(&staging) {
+        Ok(()) => {}
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    }
+
+    super::publish::publish_path(&staging, dest)
+        .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -56,20 +109,13 @@ fn key_lock(locks: &KeyLocks, key: &str) -> Arc<Mutex<()>> {
 #[derive(Debug, Clone)]
 pub struct SourceCache {
     base: PathBuf,
-    /// Per-key locks keyed on `<name>-<short-rev>`. Threads acquiring the
-    /// same grammar version serialise on this; distinct grammars run in
-    /// parallel.
-    locks: KeyLocks,
 }
 
 impl SourceCache {
     /// Wrap an arbitrary base directory. Sources land at
     /// `<base>/<name>-<short-rev>/`. Useful for tests.
     pub fn new(base: PathBuf) -> Self {
-        Self {
-            base,
-            locks: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { base }
     }
 
     /// User-default cache rooted at `$XDG_CACHE_HOME/bonsai/grammars/`,
@@ -130,10 +176,12 @@ impl SourceCache {
     /// the (possibly nested via `subpath`) grammar directory ready for
     /// compilation.
     ///
-    /// Thread-safe: concurrent calls for the same `(name, rev)` serialise on
-    /// a per-key mutex so only one clone runs; later callers re-check
-    /// `dest.exists()` and return the winner's result with no duplicate
-    /// work. Calls for different grammars still run in parallel.
+    /// Concurrency-safe across threads *and processes*: calls for the same
+    /// `(name, rev)` serialise on an exclusive lock on the destination
+    /// directory (see [`stage_and_publish`]), so only one clone runs; later
+    /// callers re-check `dest.exists()` under the lock and return the
+    /// winner's result with no duplicate work. Calls for different grammars
+    /// still run in parallel.
     pub fn acquire(&self, name: &str, spec: &LangSpec) -> Result<PathBuf> {
         // `name` is joined into the cache path (`<base>/<name>-<rev>`); reject
         // anything that isn't a single safe component so it can't escape.
@@ -151,31 +199,9 @@ impl SourceCache {
         }
 
         let key = format!("{name}-{}", spec.git_rev);
-        let lock = key_lock(&self.locks, &key);
-        let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-
-        // Recheck after acquiring the per-key lock — another thread may
-        // have completed the clone while we were waiting.
-        if dest.exists() {
-            return Ok(grammar_root(&dest, spec));
-        }
-
-        std::fs::create_dir_all(&self.base)
-            .with_context(|| format!("create cache base {}", self.base.display()))?;
-
-        let staging = self.base.join(format!("{name}-{}.tmp", spec.git_rev));
-        let _ = std::fs::remove_dir_all(&staging);
-
-        match clone_into(&staging, &spec.git_url, &spec.git_rev) {
-            Ok(()) => {}
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(e);
-            }
-        }
-
-        super::publish::publish_path(&staging, &dest)
-            .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+        stage_and_publish(&self.base, &dest, &key, |staging| {
+            clone_into(staging, &spec.git_url, &spec.git_rev)
+        })?;
         Ok(grammar_root(&dest, spec))
     }
 }
@@ -225,18 +251,11 @@ fn grammar_root(clone_dir: &Path, spec: &LangSpec) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct QuerySourceCache {
     base: PathBuf,
-    /// Per-key locks keyed on `<label>-<short-rev>`. Two grammar builds
-    /// resolving queries from the same Helix / nvim-treesitter rev
-    /// serialise here; distinct revs run in parallel.
-    locks: KeyLocks,
 }
 
 impl QuerySourceCache {
     pub fn new(base: PathBuf) -> Self {
-        Self {
-            base,
-            locks: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { base }
     }
 
     pub fn user_default() -> Result<Self> {
@@ -248,10 +267,14 @@ impl QuerySourceCache {
     /// root of the sparse checkout (the repo root — subdirectories inside are
     /// accessed by callers with the right prefix).
     ///
-    /// Thread-safe: concurrent calls for the same `(label, rev)` serialise on
-    /// a per-key mutex so two grammar builds racing on the shared Helix /
-    /// nvim-treesitter clone never collide on the staging dir or git
-    /// working tree.
+    /// Concurrency-safe across threads *and processes*: this clone is shared
+    /// by every grammar that draws queries from the same Helix /
+    /// nvim-treesitter rev, so it is the one path in the cache that unrelated
+    /// grammar builds contend on — including builds in *other* hjkl
+    /// processes, which the grammar-install lock in
+    /// [`super::loader::GrammarLoader::load`] does not cover because that one
+    /// is keyed per grammar. [`stage_and_publish`] serialises it on the
+    /// destination directory.
     pub fn acquire_source(&self, source: QuerySource, meta: &ManifestMeta) -> Result<PathBuf> {
         let (url, rev) = match source {
             QuerySource::Helix => (meta.helix_repo.as_str(), meta.helix_rev.as_str()),
@@ -270,32 +293,10 @@ impl QuerySourceCache {
         }
 
         let key = format!("{label}-{rev}");
-        let lock = key_lock(&self.locks, &key);
-        let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-
-        // Recheck after acquiring the per-key lock — another thread may
-        // have completed the clone while we were waiting.
-        if dest.exists() {
-            return Ok(dest);
-        }
-
-        std::fs::create_dir_all(&self.base)
-            .with_context(|| format!("create query-source base {}", self.base.display()))?;
-
-        let staging = self.base.join(format!("{label}-{rev}.tmp"));
-        let _ = std::fs::remove_dir_all(&staging);
-
         let sparse_prefix = source.query_prefix();
-        match sparse_clone_into(&staging, url, rev, sparse_prefix) {
-            Ok(()) => {}
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(e);
-            }
-        }
-
-        super::publish::publish_path(&staging, &dest)
-            .with_context(|| format!("rename {} -> {}", staging.display(), dest.display()))?;
+        stage_and_publish(&self.base, &dest, &key, |staging| {
+            sparse_clone_into(staging, url, rev, sparse_prefix)
+        })?;
         Ok(dest)
     }
 
@@ -587,6 +588,84 @@ mod tests {
         assert!(validate_clone_args("", "deadbeef").is_err());
         assert!(validate_clone_args("https://example/repo", "").is_err());
         assert!(validate_clone_args("https://example/repo", "deadbeef").is_ok());
+    }
+
+    /// Regression, `grammar tests` CI lane: the caches are reached
+    /// concurrently by unrelated *processes* (two editors on a cold cache;
+    /// every binary `cargo nextest` runs in parallel), and the staging dance
+    /// used to be guarded only by an in-process mutex that peers cannot see.
+    ///
+    /// Two things must hold, and this asserts both:
+    ///
+    /// 1. **Mutual exclusion.** `populate` never runs concurrently for one
+    ///    `dest` — `peak` is the observable. Without the lock the two threads
+    ///    overlap inside the 200ms body and `peak` reaches 2. (The lock in
+    ///    `hjkl_fs` is a `flock` plus an in-process wait set, so one process
+    ///    with two threads exercises the same gate two processes hit.)
+    /// 2. **Private staging.** The two callers are handed *different*
+    ///    staging paths, so neither can `remove_dir_all` the other's clone
+    ///    even if the lock is not honoured. The old fixed `<key>.tmp` handed
+    ///    both the same path, which is what left git running in a directory
+    ///    that no longer existed.
+    #[test]
+    fn stage_and_publish_never_runs_two_populates_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("cache");
+        let dest = base.join("nvim-treesitter-deadbeef");
+
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let staged = Arc::new(Mutex::new(Vec::new()));
+
+        // Both threads must find `dest` missing when they start, so both
+        // actually reach `populate` — a test where the second one short-
+        // circuits on the re-check would assert nothing.
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let (base, dest) = (base.clone(), dest.clone());
+            let (live, peak, staged, barrier) = (
+                Arc::clone(&live),
+                Arc::clone(&peak),
+                Arc::clone(&staged),
+                Arc::clone(&barrier),
+            );
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                stage_and_publish(&base, &dest, "nvim-treesitter-deadbeef", |staging| {
+                    staged.lock().unwrap().push(staging.to_path_buf());
+                    let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    std::fs::create_dir_all(staging)?;
+                    std::fs::write(staging.join("marker"), b"ok")?;
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }));
+        }
+        for h in handles {
+            h.join().unwrap().expect("both publishes succeed");
+        }
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "two populates ran against one destination at the same time"
+        );
+        let staged = staged.lock().unwrap();
+        assert_eq!(staged.len(), 1, "loser must short-circuit on the re-check");
+        assert!(
+            !staged[0].ends_with("nvim-treesitter-deadbeef.tmp"),
+            "staging must be process-private, got {:?}",
+            staged[0]
+        );
+        assert_eq!(std::fs::read(dest.join("marker")).unwrap(), b"ok");
+        assert!(!staged[0].exists(), "staging must not survive the publish");
     }
 
     #[test]

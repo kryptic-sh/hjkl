@@ -36,6 +36,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Two processes warming a cold grammar cache no longer destroy each other's
+  clone.** `SourceCache::acquire` and `QuerySourceCache::acquire_source` staged
+  every clone at one fixed `<base>/<key>.tmp` and guarded it with an in-process
+  mutex, which a second process cannot see. The second arrival ran
+  `remove_dir_all` on the first one's half-finished clone, and the first one's
+  next `git` invocation died inside a working directory that no longer existed
+  (`fatal: Unable to read current working directory`, or
+  `No such file or directory (os error 2)` from the spawn itself). The window is
+  the whole clone, so it is a first-run hazard for anyone who opens two files of
+  different types in two hjkl instances at once — and the query-source clone is
+  the worse half, because every grammar drawing queries from the same Helix /
+  nvim-treesitter rev contends on that one directory, which the per-grammar
+  install lock in `GrammarLoader::load` does not cover. Both caches now
+  serialise the whole decide → clone → publish sequence on an exclusive
+  `hjkl_fs` lock on the destination, and stage into a pid-private directory so a
+  filesystem that ignores the advisory lock still cannot cross the two clones.
+  The in-process per-key mutex is gone — it was the same invariant enforced
+  twice, once incompletely.
+
 - `folds::builtin_folds` now also answers to the grammar name `c-sharp`, not
   just `c_sharp`. `bonsai.toml` carries both entries for the same C# grammar and
   `GrammarRegistry` resolves `.cs` to the alphabetically first one (`c-sharp`),

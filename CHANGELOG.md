@@ -38,6 +38,16 @@ patch bumps.
 
 ### Fixed
 
+- **Grammars no longer fail to install when two hjkl instances warm a cold cache
+  at once.** On a machine with no `~/.cache/bonsai` yet, two instances opening
+  files of different types both cloned the shared nvim-treesitter / Helix query
+  repository into the same staging directory, and whichever got there second
+  deleted the first one's half-finished clone out from under its own `git`
+  process. The affected buffer stayed plain text for the rest of the session,
+  since a failed grammar load is never retried. Both grammar-source caches now
+  take a cross-process lock on the destination and stage into a pid-private
+  directory. Details in `crates/hjkl-bonsai/CHANGELOG.md`.
+
 - **`}`, `{`, `b`/`B` and `(`/`)` landings match neovim.** Four vim-parity
   defects found by the differential oracle, all verified case by case against
   neovim 0.12.4 and now pinned in `crates/hjkl-compat-oracle/corpus` (812 → 832

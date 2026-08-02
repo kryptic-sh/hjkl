@@ -1835,8 +1835,17 @@ mod tests {
     /// these tests shipped red.
     ///
     /// Polls `poll_pending_loads` until extraction answers, then returns the
-    /// ranges. Panics with what it was still waiting for if the deadline
-    /// passes, so a genuinely broken load fails loudly rather than hanging.
+    /// ranges.
+    ///
+    /// The events `poll_pending_loads` returns are the whole point of reading
+    /// them rather than discarding them: a load that *fails* removes itself
+    /// from the pending list and emits `LoadEvent::Failed`, after which
+    /// nothing is in flight and `extract_fold_ranges` answers `None`
+    /// forever. Dropping the events made a hard failure look exactly like
+    /// slow progress — the first version of this helper spun to a 300s
+    /// deadline and reported "the load either failed or is not being polled",
+    /// which is a confession that it could not tell, and it threw away the
+    /// error text that says which. Fail on `Failed`, with the cause.
     fn fold_ranges_when_ready(
         layer: &mut SyntaxLayer,
         buf: &View,
@@ -1857,19 +1866,28 @@ mod tests {
         path: &str,
         rows: usize,
     ) -> Vec<(usize, usize)> {
-        layer.set_language_for_path(id, Path::new(path));
+        let outcome = layer.set_language_for_path(id, Path::new(path));
+        assert!(
+            outcome.is_known(),
+            "no grammar is registered for {path} — the test can never succeed"
+        );
         let deadline = std::time::Duration::from_secs(300);
         let start = std::time::Instant::now();
         loop {
-            layer.poll_pending_loads();
+            for event in layer.poll_pending_loads() {
+                if let LoadEvent::Failed { name, error, .. } = event {
+                    panic!("grammar load for `{name}` ({path}) failed: {error}");
+                }
+            }
             let _ = layer.render_viewport(id, buf, 0, rows);
             if let Some(ranges) = layer.extract_fold_ranges(id, buf) {
                 return ranges;
             }
             assert!(
                 start.elapsed() < deadline,
-                "grammar for {path} never became ready within {deadline:?} — \
-                 the load either failed or is not being polled"
+                "grammar for {path} never became ready within {deadline:?}, \
+                 and no load reported a failure — it is still building, or \
+                 nothing was ever queued"
             );
             std::thread::sleep(std::time::Duration::from_millis(100));
         }

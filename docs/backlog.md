@@ -558,6 +558,43 @@ unknown.
   test binary, so it cannot race the `hjkl` binary's tests, but it can race
   other tests in its own.
 
+- **Left open by the 2026-08-02 cold-cache grammar-race fix.** The fix itself
+  (`stage_and_publish` in `hjkl-bonsai/src/runtime/source.rs`) is verified: the
+  `grammar tests` filter against an empty `XDG_CACHE_HOME` went from 13 failures
+  to 70/70 twice. What it did not settle:
+  - **A failed grammar load is never retried.**
+    `SyntaxLayer::poll_pending_loads` drops the `PendingLoad` on
+    `LoadEvent::Failed` and nothing re-requests, so one transient failure leaves
+    the buffer plain text until the file is reopened. That is what turned a
+    momentary clone collision into a session-long symptom. A retry (or a
+    user-visible "grammar failed, `:e` to retry") is unimplemented — decide
+    whether the retry is automatic, and how it avoids hammering a genuinely
+    broken manifest entry.
+  - **`QuerySourceCache::resolve_highlights` was not given the same lock.** Its
+    staging file is pid-suffixed, so it is safe across processes, but two
+    _threads_ in one process resolving the same language would collide on that
+    name. They cannot today: the only callers reach it under
+    `GrammarLoader::load`'s per-grammar install lock, and the async pool dedups
+    by name. It is safe by the callers' structure rather than by its own, which
+    is worth closing if another caller appears.
+  - **macOS and Windows were not exercised.** Everything was verified on Linux.
+    `hjkl_fs::with_lock_exclusive` is `LockFileEx` on Windows and `flock`
+    elsewhere; the mutual-exclusion regression test
+    (`stage_and_publish_never_runs_two_populates_at_once`) uses two threads, so
+    on every platform it proves the in-process wait set, and only the CI matrix
+    proves the OS lock.
+  - **The `grammar tests` lane has no grammar cache.** `Swatinem/rust-cache`
+    covers `~/.cargo` and `target/` only, so every run re-clones and re-compiles
+    every grammar from scratch — which is exactly why the lane is the place this
+    class of bug surfaces, and also why it is the slowest job. Caching
+    `~/.cache/bonsai` would make it faster and blind to cold-start races.
+    Deliberately not done.
+  - **`crates/hjkl-bonsai/CHANGELOG.md` has a second, empty `## [Unreleased]`
+    heading** stranded between the `0.40.0` and `0.7.5` sections — noticed while
+    adding an entry, left alone because deleting a heading in a released file is
+    the release step's call, not a bug fix's. BCTP step 2 will move entries into
+    the _first_ one and leave the stray behind.
+
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
   not checked for 0.40.0. Either fold the cheap ones into the release gate or
