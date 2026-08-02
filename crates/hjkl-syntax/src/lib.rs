@@ -1853,6 +1853,169 @@ mod tests {
         assert_eq!(ranges, vec![(0, 4), (2, 4), (6, 7)]);
     }
 
+    // ── Fold ranges pinned against neovim, per language ──────────────────
+    //
+    // Every expectation below was measured on neovim 0.12.4 with
+    // `vim.treesitter.foldexpr()` over these exact fixtures, enumerating the
+    // real folds with `foldclosed`/`foldclosedend` at each `foldlevel` (a
+    // `foldlevel()` array merges adjacent siblings into one run and reads as
+    // a false difference). Rows are 0-based inclusive, like hjkl's.
+    //
+    // Where hjkl emits ranges neovim does not, it is because hjkl's bundled
+    // query captures a different SET of node types on purpose — the comment
+    // on each test says which. The ranges themselves agree everywhere.
+
+    /// Extract hjkl's fold ranges for `src`, using `name` only to pick the
+    /// grammar by extension.
+    fn folds_for(name: &str, src: &str) -> Vec<(usize, usize)> {
+        let buf = View::from_str(src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new(name));
+        let _ = layer.render_viewport(TID, &buf, 0, 80);
+        layer.extract_fold_ranges(TID, &buf).expect("grammar ready")
+    }
+
+    /// nvim on this fixture: `(2, 4)`, `(6, 10)`, `(7, 9)` — identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the go grammar"]
+    fn go_fold_ranges_match_neovim() {
+        let src = concat!(
+            "package main\n\n",
+            "import (\n  \"fmt\"\n)\n\n",
+            "func main() {\n  if true {\n    fmt.Println(\"x\")\n  }\n}\n",
+        );
+        assert_eq!(folds_for("a.go", src), vec![(2, 4), (6, 10), (7, 9)]);
+    }
+
+    /// nvim on this fixture: `(0, 2)`, `(4, 9)`, `(5, 7)` — identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the c grammar"]
+    fn c_fold_ranges_match_neovim() {
+        let src = concat!(
+            "struct P {\n  int x;\n};\n\n",
+            "int main(void) {\n  for (int i = 0; i < 2; i++) {\n    i++;\n  }\n  return 0;\n}\n",
+        );
+        assert_eq!(folds_for("a.c", src), vec![(0, 2), (4, 9), (5, 7)]);
+    }
+
+    /// nvim on this fixture: `(0, 9)`, `(2, 7)`, `(4, 6)` — identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the cpp grammar"]
+    fn cpp_fold_ranges_match_neovim() {
+        let src = concat!(
+            "namespace n {\n\n",
+            "class B {\npublic:\n  int get() {\n    return 1;\n  }\n};\n\n",
+            "}\n",
+        );
+        assert_eq!(folds_for("a.cpp", src), vec![(0, 9), (2, 7), (4, 6)]);
+    }
+
+    /// nvim on this fixture: `(0, 7)`, `(1, 6)`, `(2, 4)` — identical.
+    ///
+    /// The anchors agree only because the braces are K&R. neovim folds Java's
+    /// `(class_body)` / `(block)`, which start ON the `{`; hjkl folds
+    /// `(class_declaration)` / `(method_declaration)`, which start on the
+    /// signature — and, when annotations precede it, on the FIRST annotation.
+    /// See `docs/backlog.md` §1.4b.
+    #[test]
+    #[ignore = "network + compiler: fetches the java grammar"]
+    fn java_fold_ranges_match_neovim() {
+        let src = concat!(
+            "public class A {\n",
+            "  public int run(int x) {\n",
+            "    if (x > 0) {\n      return x;\n    }\n",
+            "    return 0;\n  }\n}\n",
+        );
+        assert_eq!(folds_for("A.java", src), vec![(0, 7), (1, 6), (2, 4)]);
+    }
+
+    /// nvim on this fixture: `(2, 8)`, `(4, 7)`. hjkl adds `(5, 7)` — the
+    /// Allman-braced `(compound_statement)` body, which neovim's PHP query
+    /// does not capture at all. The two shared ranges are identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the php grammar"]
+    fn php_fold_ranges_match_neovim() {
+        let src = concat!(
+            "<?php\n\n",
+            "class R\n{\n",
+            "  public function area(): float\n  {\n    return 1.0;\n  }\n}\n",
+        );
+        assert_eq!(folds_for("a.php", src), vec![(2, 8), (4, 7), (5, 7)]);
+    }
+
+    /// nvim on this fixture: `(0, 6)`, `(1, 5)`, `(2, 4)` — identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the ruby grammar"]
+    fn ruby_fold_ranges_match_neovim() {
+        let src = "module M\n  class R\n    def area\n      1\n    end\n  end\nend\n";
+        assert_eq!(folds_for("a.rb", src), vec![(0, 6), (1, 5), (2, 4)]);
+    }
+
+    /// Regression: C# used to fold NOTHING.
+    ///
+    /// `bonsai.toml` has both `[language.c-sharp]` and `[language.c_sharp]`
+    /// for the same grammar, and `GrammarRegistry` resolves an extension to
+    /// the alphabetically first entry — so a `.cs` buffer loads under the name
+    /// `c-sharp`, while `builtin_folds` was keyed only on `c_sharp` and
+    /// returned `None`. This assertion was `[]` before the fix, against
+    /// neovim's four folds below.
+    ///
+    /// nvim on this fixture: `(1, 13)`, `(3, 12)`, `(5, 11)`, `(7, 9)` — it
+    /// anchors on the Allman `{` because its C# query captures
+    /// `body: (declaration_list)` and `(block)`. hjkl also captures the
+    /// declaration nodes, so it anchors one row earlier on the `namespace` /
+    /// `class` / method signature and keeps neovim's brace-anchored ranges
+    /// too. Every neovim range appears here.
+    #[test]
+    #[ignore = "network + compiler: fetches the c-sharp grammar"]
+    fn c_sharp_fold_ranges_match_neovim() {
+        let src = concat!(
+            "namespace Demo\n{\n",
+            "  public class R\n  {\n",
+            "    public int Area()\n    {\n",
+            "      if (true)\n      {\n        return 1;\n      }\n",
+            "      return 0;\n    }\n  }\n}\n",
+        );
+        assert_eq!(
+            folds_for("P.cs", src),
+            vec![(0, 13), (2, 12), (4, 11), (5, 11), (6, 9), (7, 9)]
+        );
+    }
+
+    /// nvim on this fixture: `(0, 4)`, `(1, 3)`, `(6, 11)`, `(7, 9)` —
+    /// identical.
+    #[test]
+    #[ignore = "network + compiler: fetches the javascript grammar"]
+    fn javascript_fold_ranges_match_neovim() {
+        let src = concat!(
+            "class R {\n  area() {\n    return 1;\n  }\n}\n\n",
+            "function run(xs) {\n  const t = {\n    a: 1,\n  };\n  return t;\n}\n",
+        );
+        assert_eq!(
+            folds_for("a.js", src),
+            vec![(0, 4), (1, 3), (6, 11), (7, 9)]
+        );
+    }
+
+    /// nvim on this fixture: `(0, 2)`, `(4, 6)`, `(8, 10)`, `(12, 14)` —
+    /// identical. Covers the TypeScript-only nodes: `(interface_declaration)`,
+    /// `(type_alias_declaration)` with an `(object_type)` body, and
+    /// `(enum_declaration)`.
+    #[test]
+    #[ignore = "network + compiler: fetches the typescript grammar"]
+    fn typescript_fold_ranges_match_neovim() {
+        let src = concat!(
+            "interface S {\n  area(): number;\n}\n\n",
+            "type H = {\n  name: string;\n};\n\n",
+            "enum C {\n  Red,\n}\n\n",
+            "function run(): number {\n  return 1;\n}\n",
+        );
+        assert_eq!(
+            folds_for("a.ts", src),
+            vec![(0, 2), (4, 6), (8, 10), (12, 14)]
+        );
+    }
+
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn forget_drops_buffer_state() {

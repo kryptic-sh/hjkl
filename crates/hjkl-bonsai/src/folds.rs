@@ -49,7 +49,12 @@ pub fn builtin_folds(lang: &str) -> Option<&'static str> {
         "toml" => Some(include_str!("../queries/folds/toml.scm")),
         "ruby" => Some(include_str!("../queries/folds/ruby.scm")),
         "php" => Some(include_str!("../queries/folds/php.scm")),
-        "c_sharp" => Some(include_str!("../queries/folds/c_sharp.scm")),
+        // `bonsai.toml` carries BOTH `[language.c-sharp]` (helix queries) and
+        // `[language.c_sharp]` (nvim-treesitter queries) for the same grammar,
+        // and `GrammarRegistry` resolves an extension to the alphabetically
+        // first entry — so `.cs` loads under the name `c-sharp`. Keying only
+        // `c_sharp` here left every C# buffer with zero folds.
+        "c_sharp" | "c-sharp" => Some(include_str!("../queries/folds/c_sharp.scm")),
         "markdown" => Some(include_str!("../queries/folds/markdown.scm")),
         _ => None,
     }
@@ -540,6 +545,51 @@ mod tests {
         assert!(builtin_folds("nope_unknown_lang_xyz").is_none());
     }
 
+    /// Every bundled fold query must be REACHABLE from a file extension.
+    ///
+    /// `builtin_folds` is keyed by the name `GrammarRegistry` resolved the
+    /// buffer's extension to — not by the file name of the `.scm`. When two
+    /// manifest entries claim the same extension the registry keeps the
+    /// alphabetically first, so a query keyed on the other name is dead: `.cs`
+    /// resolves to `c-sharp`, and `folds/c_sharp.scm` was keyed only on
+    /// `c_sharp`, leaving every C# buffer with zero folds and nothing to
+    /// notice it. This walks the real embedded manifest, so a future manifest
+    /// entry that steals an extension reds the build instead.
+    ///
+    /// Needs no grammar or network — the registry is a parse of `bonsai.toml`.
+    #[test]
+    fn every_bundled_fold_query_is_reachable_by_extension() {
+        use crate::runtime::GrammarRegistry;
+
+        let registry = GrammarRegistry::embedded().expect("embedded registry");
+        let mut dead = Vec::new();
+        for (name, spec) in registry.manifest().iter() {
+            if builtin_folds(name).is_none() {
+                continue;
+            }
+            // At least one of this language's own extensions must resolve to a
+            // name that still has a fold query.
+            let reachable = spec.extensions.iter().any(|ext| {
+                registry
+                    .name_for_ext(ext)
+                    .is_some_and(|resolved| builtin_folds(resolved).is_some())
+            });
+            if !reachable {
+                let stolen: Vec<_> = spec
+                    .extensions
+                    .iter()
+                    .map(|e| (e.clone(), registry.name_for_ext(e).unwrap_or("<none>")))
+                    .collect();
+                dead.push(format!("{name}: {stolen:?}"));
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "bundled fold queries unreachable from any extension \
+             (ext -> the language the registry actually resolves it to): {dead:?}"
+        );
+    }
+
     /// Verify that the bundled rust folds.scm compiles against the tree-sitter
     /// Rust language grammar and that a simple multi-line `fn` yields at least
     /// one fold range. Requires the tree-sitter-rust grammar to be available
@@ -640,6 +690,9 @@ mod tests {
             "ruby",
             "php",
             "c_sharp",
+            // The name `.cs` actually resolves to — see
+            // `every_bundled_fold_query_is_reachable_by_extension`.
+            "c-sharp",
             "markdown",
         ];
 

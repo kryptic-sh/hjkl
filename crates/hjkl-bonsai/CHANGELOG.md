@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `folds::builtin_folds` now also answers to the grammar name `c-sharp`, not
+  just `c_sharp`. `bonsai.toml` carries both entries for the same C# grammar and
+  `GrammarRegistry` resolves `.cs` to the alphabetically first one (`c-sharp`),
+  so the bundled `queries/folds/c_sharp.scm` was unreachable and every C# buffer
+  got an empty fold list. A new grammar-free test,
+  `every_bundled_fold_query_is_reachable_by_extension`, walks the embedded
+  manifest and fails if any bundled fold query stops being reachable from one of
+  its own extensions.
+
 ## [0.40.0] - 2026-08-01
 
 ### Changed

@@ -89,13 +89,14 @@ Consequences that were accepted rather than fixed:
 Fold ranges were diffed against neovim's `vim.treesitter.foldexpr` (folds
 enumerated with `foldclosed` / `foldclosedend`, not foldlevels — levels merge
 adjacent siblings and read as false differences). After the fixes, every fold
-hjkl emits for markdown, yaml, html, json, lua, css, bash, python and toml is
-exactly one of neovim's. What neovim still has that hjkl does not:
+hjkl emits for markdown, yaml, html, json, lua, css, bash, python, toml, Go, C,
+C++, Java, PHP, Ruby, C#, JavaScript and TypeScript is exactly one of neovim's.
+What neovim still has that hjkl does not:
 
 - **No folds inside injected languages.** `extract_fold_ranges_rope` queries
-  only the top-level tree with the top-level grammar, so a ```rust block inside
-  markdown, or an embedded shell script in a GitHub workflow, folds as one
-  opaque block. neovim folds their internals. Needs the fold query run per
+  only the top-level tree with the top-level grammar, so a ` ```rust ` block
+  inside markdown, or an embedded shell script in a GitHub workflow, folds as
+  one opaque block. neovim folds their internals. Needs the fold query run per
   injection region with row offsets applied — the injection machinery already
   exists in `highlight_range_with_injections_rope`.
 - **One fold per start row.** `View::add_fold` / `set_auto_folds` key folds by
@@ -115,8 +116,86 @@ exactly one of neovim's. What neovim still has that hjkl does not:
 
 Coverage note: the fold comparison was run over this repo's markdown, one rust
 file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
-bash/python/html/toml fixtures. Go, C, C++, Java, PHP, Ruby, C#, JS and TS fold
-queries were NOT compared against neovim.
+bash/python/html/toml fixtures, plus (2026-08-02, second pass) hand-written
+Go/C/C++/Java/PHP/Ruby/C#/JS/TS fixtures — a "representative" one per language
+(~40-77 lines, covering every node type each query captures) and an adversarial
+"edge" one for Java annotations, Ruby `elsif`/heredoc/`=begin`, Go `const`/`var`
+blocks, PHP `match` and alternative `if:`/`endif` syntax, and C preprocessor
+conditionals. Both passes were re-measured against neovim 0.12.4 with
+nvim-treesitter's own fold queries. The compact fixtures are pinned as
+`<lang>_fold_ranges_match_neovim` in `hjkl_syntax`'s test module (all
+`#[ignore]`d — CI has no grammars; run with
+`cargo test -p hjkl-syntax --lib -- --ignored`).
+
+Only one range bug was found in that second pass, and it was total rather than
+off-by-one: **C# folded nothing at all** (fixed — see the CHANGELOG; guarded by
+`folds::every_bundled_fold_query_is_reachable_by_extension`, which is
+grammar-free and runs in the normal lane). The lesson generalises: a bundled
+fold query is keyed by the name `GrammarRegistry` resolves the _extension_ to,
+which is not necessarily the `.scm`'s file name, and a query that never runs
+looks exactly like a language with nothing foldable.
+
+Granularity differences found in the second pass — all deliberate, ranges on
+both sides correct, recorded so the next differential run does not read them as
+regressions:
+
+- **hjkl anchors on the declaration, neovim on the body.** For Java, C# and
+  (partly) PHP, neovim's queries capture `(class_body)`,
+  `body: (declaration_list)`, `(block)` — nodes that start on the `{`. hjkl
+  captures `(class_declaration)`, `(method_declaration)`,
+  `(namespace_declaration)`, which start on the signature. With K&R braces the
+  two agree exactly; with Allman braces (idiomatic C#) hjkl's fold starts one
+  row earlier, and with leading annotations it starts on the FIRST annotation —
+  measured on Java `@Deprecated`/`@SuppressWarnings` above `public class B`:
+  hjkl `(2, 9)`, neovim `(4, 9)`. hjkl's range is the true span of the node it
+  captured, but the visible header row is then `@Deprecated` and the `class B {`
+  line is hidden inside the fold. Whether to switch these queries to body nodes
+  is a UX decision, not a correctness one — left for the user to call.
+- **Node types neovim folds and hjkl does not**, per language: Go
+  `(const_declaration)`, `(var_declaration)`, `(expression_case)`,
+  `(default_case)`, `(literal_element)`; C/C++ `(comment)`, `(preproc_if)`,
+  `(preproc_ifdef)`, `(preproc_else)`, `(case_statement)`; Java
+  `(import_declaration)+`, `(argument_list)`, `(annotation_argument_list)`; C#
+  `(using_directive)+`, `(accessor_list)`, `(initializer_expression)`; PHP
+  `(array_creation_expression)`, `(match_expression)`,
+  `(namespace_use_declaration)+`; Ruby `(else)`, `(singleton_class)`,
+  `(lambda)`; JS/TS `(switch_case)`, `(switch_default)`, `(arguments)`,
+  `(do_statement)`, `(with_statement)`, `(catch_clause)`, `(import_statement)+`.
+  Note the `+` ones: neovim folds a _run_ of consecutive imports/usings as one
+  fold, which hjkl's one-node-per-capture extractor has no way to express at
+  all.
+- **Node types hjkl folds and neovim does not**: C/C++/PHP
+  `(compound_statement)` (so an Allman-braced function body, and every `else` /
+  `catch` block, gets its own fold), Java `(array_initializer)`, Ruby `(block)`
+  (the `{ |x| … }` form) and `(begin)`, JS/TS `(statement_block)`. Ranges
+  verified correct in every case.
+- **C++ `try`/`catch` folds shorter in hjkl.** `folds/cpp.scm` has no
+  `(try_statement)` or `(catch_clause)`, so the fold anchored on `try {` covers
+  only the try body: measured `(30, 34)` where neovim gives `(30, 36)`. Same
+  anchor, shorter span. Both are true node spans, so this is a missing node type
+  rather than a wrong range — but it is also an inconsistency inside hjkl's own
+  query set, since `java.scm`, `php.scm`, `c_sharp.scm`, `javascript.scm` and
+  `typescript.scm` all do capture `(try_statement)`. Adding the two node types
+  to `cpp.scm` is a one-line change; deliberately not taken in a pass scoped to
+  range correctness.
+- **vim's fold model truncates siblings; hjkl's does not.** Where two folds
+  would abut (a consequence block ending on the same row an `else` block
+  begins), vim ends the first one row early: neovim reports `(26, 27)` for a Go
+  block hjkl reports as `(26, 28)`. This is the line-based fold model, not the
+  query, and it shows up in the raw diff for every language with `else`
+  branches. Not a difference worth chasing.
+
+Not verified in either pass: fold behaviour for these nine languages at
+non-trivial scale (all fixtures are hand-written and under 80 lines), and any
+language outside the 20 with a bundled `folds.scm`.
+
+Unrelated pre-existing failure noticed while running the grammar-backed lane:
+`hjkl_syntax`'s `incremental_path_matches_cold_for_small_edit` fails at HEAD
+(confirmed against a pristine checkout of `crates/hjkl-syntax/src/lib.rs`, so it
+is not from the fold work). The incremental reparse and the cold reparse
+disagree on highlight spans after a one-character insert — the incremental run
+loses the `type` capture on the edited identifier and reports byte ranges one
+short. It is a highlighting bug, not a fold one, and was left alone.
 
 ### 1.4c Swap still derives its directory from the environment (2026-08-02)
 

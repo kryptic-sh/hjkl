@@ -19,6 +19,16 @@ patch bumps.
 
 ### Fixed
 
+- **C# files now auto-fold.** `.cs` buffers produced no tree-sitter folds at
+  all. `bonsai.toml` declares the same C# grammar twice — `[language.c-sharp]`
+  (helix queries) and `[language.c_sharp]` (nvim-treesitter queries) — and
+  `GrammarRegistry` resolves an extension to the alphabetically first entry, so
+  a `.cs` buffer loads under the name `c-sharp`, while
+  `hjkl_bonsai::folds::builtin_folds` was keyed only on `c_sharp` and returned
+  `None`. The bundled `folds/c_sharp.scm` had never run against a real buffer.
+  Measured on a 77-line C# fixture: 0 folds before, 20 after, covering every
+  fold neovim produces for the same file.
+
 - **The cursor no longer drifts left of its own glyph on lines containing CJK,
   emoji or combining marks.** `hjkl_buffer::char_col_to_visual_col` and
   `visual_col_to_char_col` counted every non-tab character as one screen cell,
