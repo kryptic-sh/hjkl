@@ -12,15 +12,18 @@
 //! nodes bounds a jump at O(K) and — since `materialize` also caches the
 //! intermediates it replays — a full walk at O(N).
 //!
-//! The two benches below measure the two shapes that matter:
+//! The benches below measure the two shapes that matter:
 //!
 //! - `cold_jump_back` — hold `g-` / `:earlier 9999`: walk tip → root.
 //! - `single_deep_jump` — ONE `g-` deep inside the history (see [`WALKBACK`]
-//!   for what that isolates before and after keyframes).
+//!   for what that isolates before and after keyframes), plus
+//!   `single_deep_jump_no_drop`, the same jump with the history's teardown
+//!   outside the timed region — see [`bench_single_deep_jump_no_drop`] for why
+//!   that is a different number and not a smaller one.
 //!
-//! Both are parameterized over history depth N so the scaling curve is visible.
-//! History construction always happens in `iter_batched`'s SETUP closure, so it
-//! is never inside the timed region; the timed closure only makes jump calls.
+//! All are parameterized over history depth N so the scaling curve is visible.
+//! History construction always happens in the SETUP closure, so it is never
+//! inside the timed region; the timed closure only makes jump calls.
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use hjkl_buffer::{Edit, MarkSnapshot, Position, UndoEntry, View};
@@ -168,5 +171,51 @@ fn bench_single_deep_jump(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(undo, bench_cold_jump_back, bench_single_deep_jump);
+/// The same single deep `g-` as [`bench_single_deep_jump`], with the history's
+/// TEARDOWN moved out of the timed region.
+///
+/// `iter_batched` hands the routine its input BY VALUE, so the input's
+/// destructor runs between `Measurement::start` and `end` (criterion 0.8.2,
+/// `bencher.rs`: `outputs.extend(inputs.into_iter().map(&mut routine))` sits
+/// inside the timed span, while `outputs` is dropped after it). Freeing an
+/// N-node `UndoTree` — two `String`s and a rope handle per node — is O(N), so
+/// `single_deep_jump` charges an O(depth) teardown to a jump that is not
+/// O(depth), and reads as depth-scaling however cheap the jump gets.
+/// `iter_batched_ref` is criterion's documented answer: it lends the routine
+/// `&mut I` and drops the batch after `end`.
+///
+/// Kept as a SEPARATE case rather than a fix to `single_deep_jump`, whose
+/// numbers are the recorded history of this bench and stay comparable.
+fn bench_single_deep_jump_no_drop(c: &mut Criterion) {
+    let text = base_text();
+    let mut group = c.benchmark_group("undo");
+    for n in DEPTHS.into_iter().filter(|&n| n > WALKBACK) {
+        group.bench_with_input(
+            BenchmarkId::new("single_deep_jump_no_drop", n),
+            &n,
+            |b, &n| {
+                b.iter_batched_ref(
+                    || {
+                        let view = build_history(&text, n);
+                        let mut live = view.rope();
+                        for _ in 0..WALKBACK {
+                            live = earlier(&view, live).expect("history deeper than WALKBACK");
+                        }
+                        (view, live)
+                    },
+                    |(view, live)| black_box(earlier(view, live.clone()).is_some()),
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    undo,
+    bench_cold_jump_back,
+    bench_single_deep_jump,
+    bench_single_deep_jump_no_drop
+);
 criterion_main!(undo);

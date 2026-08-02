@@ -22,9 +22,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
     A `BTreeMap` seq index answers both directions in O(log N): 4.378 ms ->
     3.968 ms.
 
-  Single deep jumps (`single_deep_jump`) are unchanged at ~51 us for depth 1024
-  and still scale with depth — `retarget_current` remains O(depth) per step, and
-  an early exit for it is not sound (see its doc comment).
+- A single history step (`g-` / `g+` / `:earlier` / `:later`) no longer scales
+  with history depth at all. `UndoTree::retarget_current` rewrote `last_child`
+  down the entire root→target chain on every landing; it now walks only from the
+  landing target up to the fork with the path it was already on, which is one
+  node for a step along a branch. Measured with the history teardown outside the
+  timed region (`benches/undo.rs`, `single_deep_jump_no_drop`): 190.80 ns ->
+  92.058 ns at depth 64, 744.73 ns -> 97.974 ns at 256, and 2.5387 us -> 101.29
+  ns at 1024 — i.e. flat in depth instead of linear. Holding `g-` over a
+  1024-state history (`cold_jump_back/1024`) drops from 1.5507 ms to 552.55 us
+  as a result.
+
+  What makes the shortcut sound — an early exit on a local "this ancestor
+  already points the right way" test is NOT, and was tried — is that
+  `UndoNode::on_path` now marks exactly the root→`current` chain as a maintained
+  invariant, so every ancestor above the fork is correct by construction rather
+  than by inspection. `path_flags_track_the_root_to_current_walk` pins that
+  against a brute-force parent walk after every operation that moves `current`,
+  allocates or frees, and the two random-op stress tests check it every step.
+
+- New bench case `single_deep_jump_no_drop`. The existing `single_deep_jump`
+  passes its `View` to the timed closure by value, so criterion runs the
+  destructor of the whole N-node history inside the measurement; that O(N)
+  teardown dominates the jump and made the case read as depth-scaling regardless
+  of the jump's own cost. The new case uses `iter_batched_ref` so the batch is
+  dropped after the timer stops. `single_deep_jump` itself is unchanged, so its
+  recorded numbers stay comparable.
 
 ### Breaking
 

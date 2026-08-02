@@ -5,41 +5,48 @@ use symbol names rather than line numbers so references survive refactors.
 
 ## 1. Open work — ranked
 
-### 1.1 Undo-tree step cost — partly fixed 2026-08-02
+### 1.1 Undo-tree step cost — resolved 2026-08-02
 
-`crates/hjkl-buffer/src/undo.rs`. Two of the three costs are gone; holding `g-`
-over 1024 states went 4.378 ms -> 1.659 ms (`benches/undo.rs`,
-`cold_jump_back/1024`). Details in the `hjkl-buffer` changelog.
+All three costs named by this item are gone. Holding `g-` over 1024 states went
+4.378 ms -> ~555 us, and a single step no longer scales with depth at all (2.206
+us -> 101.7 ns at depth 1024, verified by an independent A/B of the new bench
+against the pre-change code). Details in the `hjkl-buffer` changelog.
 
-The measured attribution is worth keeping, because it inverts what this entry
-used to assume. The arena scan was named first and mattered least:
+Two findings worth keeping, because both inverted an assumption in this entry:
 
-| version                               | cold_jump_back/1024 |
-| ------------------------------------- | ------------------- |
-| before                                | 4.378 ms            |
-| + `BTreeMap` seq index (scan removed) | 3.968 ms (-9%)      |
-| + `Rope::is_instance` fast path       | 1.659 ms (-62%)     |
+- **The arena scan was named first and mattered least.** Measured attribution on
+  `cold_jump_back/1024`: the `BTreeMap` seq index bought -9% (4.378 -> 3.968
+  ms), the `Rope::is_instance` fast path in `set_node_state` bought -62% (3.968
+  -> 1.659 ms). A full-document `PartialEq` on every history step dwarfed an
+  O(N) scan over a slab of small structs.
+- **`single_deep_jump` was never measuring the jump.** criterion 0.8.2's
+  `iter_batched` hands the routine its input BY VALUE, and
+  `outputs.extend(inputs.into_iter().map(&mut routine))` sits between
+  `Measurement::start` and `end` (confirmed by reading `bencher.rs`), so the
+  O(N) teardown of the whole `UndoTree` is charged to the jump. That is what
+  made the case look depth-scaling however cheap the jump got.
+  `single_deep_jump_no_drop` uses `iter_batched_ref` and measures the jump;
+  `single_deep_jump` was deliberately left alone so its recorded history stays
+  comparable. **Any future undo bench that takes the tree by value has the same
+  defect.**
 
-The full-document `Rope` `PartialEq` in `set_node_state` was the real cost. The
-lesson generalises: an O(N) scan over a slab of small structs is cheap next to
-one comparison that walks the document.
+Left open, small:
 
-What is still open:
-
-- **`retarget_current` is still O(depth) per step**, and it is now the floor:
-  `single_deep_jump` is unchanged at ~51 us for depth 1024 and still grows with
-  depth. The obvious fix — stop at the first ancestor already naming the child
-  on this path — is **unsound and was tried**. `last_child` is also written by
-  `push` (immediate parent only) and by leaf removal, so an ancestor can point
-  the right way while ITS ancestors still point down an abandoned branch; the
-  early exit leaves those stale and a later `<C-r>` walks into the wrong
-  subtree. `tree_matches_full_snapshot_reference_over_random_ops` catches it as
-  a redo returning another branch's text. A real fix has to maintain the
-  root->current path incrementally rather than test a local condition. The
-  reason is recorded on the function so it is not re-attempted blind.
+- `lowest_offpath_leaf` / `prune_root_side` still test path membership with
+  `current_path().contains(..)` rather than the `UndoNode::on_path` flag that
+  now exists, which would make `cap` O(N) instead of O(N\*depth). `cap` is not
+  benched, so this was left out to keep the change confined.
+- `retarget_current` is O(tree distance), not O(1): a `g-` crossing to a far
+  branch still walks to the fork. Those ancestors genuinely have to change, so
+  the worst case stays O(depth) for an adversarial branch layout. Every benched
+  case, and `u` / `<C-r>`, are distance 1.
 - **A freshly deserialized undofile still has no keyframes**, so its first deep
   jump remains O(depth). Eager construction may waste work and memory; not
   measured, unchanged by this pass.
+- `from_serializable` now normalises `last_child` along the loaded root->current
+  chain. A file written by `to_serializable` already agrees, so it is a no-op
+  there — but a hand-edited or truncated undofile used to be repaired by the
+  next full-chain rewrite, and nothing repairs it now.
 
 ### 1.2 Swap `SerTree.base` duplicates the document
 

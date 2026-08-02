@@ -395,6 +395,22 @@ pub struct UndoNode {
     /// Global monotonic order across the whole tree — the change number that
     /// `g-`/`g+`, `:earlier`/`:later`, and `:undolist` traverse and display.
     pub seq: u64,
+    /// Is this node on the root→`current` path (inclusive of both ends)?
+    ///
+    /// A maintained INVARIANT, not a hint, and the whole reason
+    /// [`UndoTree::retarget_current`] no longer walks the chain: the set of
+    /// flagged nodes is exactly the chain, so the first flagged node found
+    /// walking up from a landing target is the fork point, and every ancestor
+    /// above it already names its on-path child. Every site that moves
+    /// `current` — `push`, `undo_step`, `redo_step`, `retarget_current`,
+    /// `pop_committed` — maintains it, and the bulk paths (`new`,
+    /// `clear_all`, `from_serializable`) establish it outright.
+    /// `path_flags_track_the_root_to_current_walk` pins it against a
+    /// brute-force parent walk after each of those.
+    ///
+    /// Runtime-only and derivable, so — like `depth` and `rope_cache` — it is
+    /// not part of the [`SerTree`] projection.
+    pub on_path: bool,
 }
 
 /// Arena tree of [`UndoNode`]s. Replaces the old `undo_stack`/`redo_stack`
@@ -470,6 +486,8 @@ impl UndoTree {
             timestamp: SystemTime::now(),
             marks: Arc::default(),
             seq: 0,
+            // The root is `current`, so it is the whole path.
+            on_path: true,
         };
         Self {
             nodes: vec![Some(root)],
@@ -765,6 +783,8 @@ impl UndoTree {
             timestamp: entry.timestamp,
             marks,
             seq,
+            // The fresh child becomes `current`, extending the path by one.
+            on_path: true,
         });
         let cur_node = self.get_mut(cur);
         // Append (retain old branches); the freshest child is the redo target.
@@ -791,6 +811,9 @@ impl UndoTree {
         self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
         // Redo from the parent must return to the node we just left.
         self.get_mut(par).last_child = Some(cur);
+        // The path shortens by one: `cur` drops off its tip, `par` is the new
+        // tip and was already on it.
+        self.get_mut(cur).on_path = false;
         self.current = par;
         // Hot-path materialization: derive the (possibly cold) parent from the
         // just-finalized child by one inverse delta apply, so `u` never walks the
@@ -821,6 +844,9 @@ impl UndoTree {
         let child = self.get(cur).last_child?;
         let dest_ts = self.get(child).timestamp;
         self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
+        // The path extends by one onto `child`; `cur.last_child` already names
+        // it (it is what we followed), so the ancestor chain stays correct.
+        self.get_mut(child).on_path = true;
         self.current = child;
         // `cur` is now warm, so materializing the child is one forward apply.
         Some(self.entry_of(child))
@@ -858,26 +884,60 @@ impl UndoTree {
             .map(|(_, &id)| id)
     }
 
-    /// Point `current` at `target` and rewrite `last_child` down the whole
-    /// root→target path, so a later `<C-r>` retraces the branch just landed on
+    /// Point `current` at `target`, re-establishing the invariant that every
+    /// ancestor of `current` names the child on the root→`current` path as its
+    /// `last_child`, so a later `<C-r>` retraces the branch just landed on
     /// (nvim parity: landing on a node updates its ancestors' redo direction).
     ///
-    /// This walks the full path every time, which is O(depth) per history step.
-    /// Breaking early at the first ancestor already naming the child on this
-    /// path is NOT sound and was tried: `last_child` is also written by `push`
-    /// (immediate parent only) and by leaf removal, so an ancestor can point the
-    /// right way while ITS ancestors still point down an abandoned branch. The
-    /// early exit then leaves them stale and a later `<C-r>` walks into the
-    /// wrong subtree — caught by `tree_matches_full_snapshot_reference_over_random_ops`
-    /// as a redo returning another branch's text. Making this cheap needs the
-    /// path itself to be maintained incrementally, not a local test.
+    /// Costs O(tree distance from the old `current` to `target`) — 1 for a step
+    /// along a branch — not O(depth). It used to rewrite the whole root→target
+    /// chain on every landing, which was the remaining per-step floor under
+    /// `g-`/`g+` once keyframes had bounded the materialization.
+    ///
+    /// What makes that sound is [`UndoNode::on_path`] being a maintained
+    /// invariant rather than a local test: the flagged nodes are EXACTLY the
+    /// root→`current` chain, and every flagged non-tip node already names its
+    /// on-path child. So the first flagged node found walking up from `target`
+    /// is the fork of the two paths, everything above it is already correct by
+    /// that invariant, and only the segment below it can be wrong.
+    ///
+    /// Do NOT replace this with an early exit out of the old full-chain walk at
+    /// the first ancestor that already names the right child. That is unsound
+    /// and was tried: `last_child` is also written by [`Self::push`] (immediate
+    /// parent only) and by leaf removal, so an ancestor can point the right way
+    /// while ITS ancestors still point down an abandoned branch; the early exit
+    /// leaves those stale and a later `<C-r>` walks into the wrong subtree —
+    /// caught by `tree_matches_full_snapshot_reference_over_random_ops` as a
+    /// redo returning another branch's text. The fix has to come from the path
+    /// being known, which is what `on_path` supplies.
     fn retarget_current(&mut self, target: NodeId) {
-        self.current = target;
+        // Walk up from `target`, linking each node as its parent's `last_child`,
+        // until a node already on the path: the fork. The root is always on the
+        // path, so this terminates there at the latest.
         let mut node = target;
-        while let Some(p) = self.get(node).parent {
+        while !self.get(node).on_path {
+            let p = self
+                .get(node)
+                .parent
+                .expect("the root is always on the path, so the walk stops there");
             self.get_mut(p).last_child = Some(node);
+            self.get_mut(node).on_path = true;
             node = p;
         }
+        let fork = node;
+        // Everything from the old `current` up to (not including) the fork
+        // leaves the path. Their stored `last_child` is deliberately left alone:
+        // an off-path node remembers the branch last taken through it, which is
+        // what lets `<C-r>` retrace that branch if the user lands back on it.
+        let mut leaving = self.current;
+        while leaving != fork {
+            self.get_mut(leaving).on_path = false;
+            leaving = self
+                .get(leaving)
+                .parent
+                .expect("the fork is on the path, hence an ancestor of `current`");
+        }
+        self.current = target;
     }
 
     /// Stash the live buffer state into the node being left (it may be a fresh,
@@ -984,6 +1044,9 @@ impl UndoTree {
         par_node.children.retain(|&c| c != cur);
         // The freshest surviving sibling (if any) becomes the redo target again.
         par_node.last_child = par_node.children.last().copied();
+        // The path shortens onto `par` (already on it); `cur` is about to be
+        // freed, but clear its flag so the invariant holds at every point.
+        self.get_mut(cur).on_path = false;
         self.current = par;
         // The popped leaf always holds the highest seq (push assigns it last),
         // so reclaim the seq to keep numbering gapless.
@@ -1098,6 +1161,9 @@ impl UndoTree {
         }
         self.warm.retain(|&n| n != child);
         self.keyframes.retain(|&n| n != child);
+        // `child` was already on the path (it is the on-path child) and is now
+        // its root end; the old root drops off it as it is freed.
+        self.get_mut(root).on_path = false;
         self.root = child;
         self.free(root);
         true
@@ -1141,6 +1207,8 @@ impl UndoTree {
         // The survivor is the new root: restart the depth numbering under it so
         // its descendants land on the keyframe ladder from 0 again.
         node.depth = 0;
+        // Sole survivor ⇒ root == current ⇒ it is the whole path.
+        node.on_path = true;
         self.root = cur;
     }
 }
@@ -1315,7 +1383,7 @@ impl UndoTree {
         }
         let base = ropey::Rope::from_str(&s.base);
         let depths = depths_from_root(s);
-        let nodes: Vec<Option<UndoNode>> = s
+        let mut nodes: Vec<Option<UndoNode>> = s
             .nodes
             .iter()
             .enumerate()
@@ -1333,9 +1401,31 @@ impl UndoTree {
                     timestamp: unix_ms_to_system_time(n.timestamp_unix_ms),
                     marks: Arc::new(n.marks.clone()),
                     seq: n.seq,
+                    // Set below, once the whole arena exists to walk.
+                    on_path: false,
                 })
             })
             .collect();
+        // Establish the root→`current` path invariant on the loaded tree: flag
+        // the chain, and make each ancestor name its on-path child. A projection
+        // written by `to_serializable` already agrees (it came from a tree
+        // holding the invariant), so this is a no-op on any file we produced —
+        // doing it unconditionally is what stops a hand-edited or truncated one
+        // from loading into a tree whose `<C-r>` direction contradicts its own
+        // `current`, which `retarget_current` would no longer repair on the way
+        // past. Bounded by `len` because a malformed file's parent links can
+        // cycle (`depths_from_root` guards the same way).
+        let mut node = s.current as NodeId;
+        for _ in 0..len {
+            let n = nodes[node].as_mut().expect("the projection is dense");
+            n.on_path = true;
+            let Some(p) = n.parent else { break };
+            nodes[p]
+                .as_mut()
+                .expect("the projection is dense")
+                .last_child = Some(node);
+            node = p;
+        }
         let by_seq = nodes
             .iter()
             .enumerate()
@@ -1431,6 +1521,62 @@ impl UndoTree {
                 Some(p) => cur = p,
                 None => return n,
             }
+        }
+    }
+
+    /// The root→`current` path, by brute force: walk `parent` links up from
+    /// `current` and reverse. Deliberately consults NEITHER `on_path` nor
+    /// `last_child`, so it is an independent oracle for both.
+    fn brute_force_path(&self) -> Vec<NodeId> {
+        let mut walk = Vec::new();
+        let mut n = Some(self.current);
+        while let Some(id) = n {
+            walk.push(id);
+            n = self.get(id).parent;
+        }
+        walk.reverse();
+        walk
+    }
+
+    /// The two halves of the path invariant `retarget_current` now relies on,
+    /// checked against [`Self::brute_force_path`]:
+    ///
+    /// 1. `on_path` is set on EXACTLY the nodes of the root→`current` walk.
+    /// 2. every node on that walk except the tip names its successor as
+    ///    `last_child` — the observable property (`<C-r>` retraces the branch
+    ///    landed on) that the old full-chain rewrite established directly.
+    ///
+    /// (1) is the maintenance; (2) is what the maintenance buys. Checking only
+    /// (2) would pass on a tree whose flags had drifted but whose links happened
+    /// to be right; checking only (1) would pass on a tree that had stopped
+    /// linking. Both must hold after every operation that moves `current`,
+    /// allocates, or frees.
+    #[track_caller]
+    fn assert_path_invariant(&self, when: &str) {
+        let walk = self.brute_force_path();
+        assert_eq!(
+            walk.first().copied(),
+            Some(self.root),
+            "the root→current walk does not start at the root after {when}"
+        );
+        let mut want = walk.clone();
+        want.sort_unstable();
+        let flagged: Vec<NodeId> = (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].as_ref().is_some_and(|n| n.on_path))
+            .collect();
+        assert_eq!(
+            flagged, want,
+            "on_path flags name {flagged:?}, the root→current walk is {want:?}, after {when}"
+        );
+        for w in walk.windows(2) {
+            assert_eq!(
+                self.get(w[0]).last_child,
+                Some(w[1]),
+                "node {} last_child is {:?}, not its on-path child {}, after {when}",
+                w[0],
+                self.get(w[0]).last_child,
+                w[1]
+            );
         }
     }
 
@@ -1777,6 +1923,89 @@ mod tree_tests {
         let (r, c, m) = live("s1");
         assert!(t.redo_step(r, c, m).is_some());
         assert_eq!(t.depth_from_root(), 2);
+    }
+
+    /// `on_path` and the ancestors' `last_child` chain must agree with a
+    /// brute-force root→`current` walk after EVERY operation that moves
+    /// `current`, allocates, or frees — that invariant is the only thing making
+    /// `retarget_current`'s fork-point shortcut sound, and a drift in it is
+    /// silent (a later `<C-r>` restores another branch's text, no error).
+    ///
+    /// One tree walked through every such site in turn: `new`, `push`,
+    /// `undo_step`, `redo_step`, `seq_earlier_step`/`seq_later_step` (i.e.
+    /// `retarget_current`, including a landing that crosses to a sibling
+    /// branch), `clear_redo`, `cap` (both the off-path-leaf and the
+    /// root-promotion prune), `pop_committed`, `from_serializable` and
+    /// `clear_all`.
+    #[test]
+    fn path_flags_track_the_root_to_current_walk() {
+        let mut t = UndoTree::new(ropey::Rope::from_str("R"));
+        t.assert_path_invariant("new");
+
+        // Main line: R -> A -> B -> C.
+        for s in ["R", "A", "B"] {
+            t.push(entry(s));
+            t.assert_path_invariant("push");
+        }
+        // Back down two, forking a sibling branch off the middle.
+        let (r, c, m) = live("C");
+        assert!(t.undo_step(r, c, m).is_some());
+        t.assert_path_invariant("undo_step");
+        let (r, c, m) = live("B");
+        assert!(t.undo_step(r, c, m).is_some());
+        t.assert_path_invariant("undo_step");
+        let (r, c, m) = live("A");
+        assert!(t.redo_step(r, c, m).is_some());
+        t.assert_path_invariant("redo_step");
+        let (r, c, m) = live("B");
+        assert!(t.undo_step(r, c, m).is_some());
+        t.push(entry("A")); // A -> X, a second branch under A
+        t.assert_path_invariant("push forking a branch");
+
+        // `g-` / `g+` walk the whole tree by seq, so they land on nodes in the
+        // OTHER branch — the case that actually exercises the fork point rather
+        // than a parent/child step.
+        let mut cur = String::from("X");
+        for _ in 0..6 {
+            if let Some(e) =
+                t.seq_earlier_step(ropey::Rope::from_str(&cur), (0, 0), MarkSnapshot::default())
+            {
+                cur = e.rope.to_string();
+            }
+            t.assert_path_invariant("seq_earlier_step");
+        }
+        for _ in 0..6 {
+            if let Some(e) =
+                t.seq_later_step(ropey::Rope::from_str(&cur), (0, 0), MarkSnapshot::default())
+            {
+                cur = e.rope.to_string();
+            }
+            t.assert_path_invariant("seq_later_step");
+        }
+
+        // A serialize round trip has to rebuild the flags from scratch.
+        let round = UndoTree::from_serializable(&t.to_serializable()).expect("round trip");
+        round.assert_path_invariant("from_serializable");
+
+        // Deepen, then prune: `cap` drops off-path leaves first and only then
+        // promotes the root's on-path child, so both prune shapes run.
+        for s in ["P", "Q", "S", "T"] {
+            t.push(entry(s));
+        }
+        t.assert_path_invariant("pushes before cap");
+        assert!(t.live_count() > 3, "cap has something to prune");
+        t.cap(2);
+        t.assert_path_invariant("cap");
+
+        assert!(t.pop_committed());
+        t.assert_path_invariant("pop_committed");
+
+        t.push(entry("Z"));
+        t.clear_redo();
+        t.assert_path_invariant("clear_redo");
+
+        t.clear_all();
+        t.assert_path_invariant("clear_all");
     }
 }
 
@@ -2286,6 +2515,13 @@ mod delta_tests {
                 }
             }
 
+            // The reference model still rewrites the whole root→target chain on
+            // every landing, so the two agreeing above already says the shortcut
+            // reproduces it. Check the structure it relies on directly too: an
+            // `on_path` drift is what would let the shortcut skip a stale
+            // ancestor, and it is cheap to catch here at every step.
+            real.assert_path_invariant(&format!("op @ {step}"));
+
             // (ii) Every so often, assert warm and cold materialization agree
             // for every node — a cold-reconstructed node must equal the rope the
             // full-snapshot model would have held.
@@ -2573,11 +2809,13 @@ mod delta_tests {
                 t.materialize_naive(cur).to_string(),
                 "current node diverged @ {step}"
             );
+            t.assert_path_invariant(&format!("op @ {step}"));
             if step % 250 == 0 {
                 assert_materialize_matches_naive(&mut t);
             }
             if step % 700 == 0 {
                 t.cap(60);
+                t.assert_path_invariant(&format!("cap @ {step}"));
             }
         }
         assert_materialize_matches_naive(&mut t);
