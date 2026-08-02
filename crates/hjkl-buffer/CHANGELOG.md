@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Performance
+
+- Holding `g-` / `:earlier 9999` over a deep history is ~2.6x faster: a
+  1024-state walk drops from 4.378 ms to 1.659 ms (`benches/undo.rs`,
+  `cold_jump_back/1024`). Two costs, both paid once per history step:
+  - `UndoTree::set_node_state` compared the stashed rope against the node's
+    cached one with `Rope`'s `PartialEq`, which walks the whole document. It now
+    tries `Rope::is_instance` (an `Arc::ptr_eq`, O(1)) first, which is the case
+    that actually arises — the caller hands back the very rope the previous step
+    gave it. An unrelated-but-equal rope still falls through to the full
+    compare, so the result is unchanged. This is the larger share: 3.968 ms ->
+    1.659 ms on its own.
+  - `g-` / `g+` targets came from a full arena scan for the neighbouring `seq`.
+    A `BTreeMap` seq index answers both directions in O(log N): 4.378 ms ->
+    3.968 ms.
+
+  Single deep jumps (`single_deep_jump`) are unchanged at ~51 us for depth 1024
+  and still scale with depth — `retarget_current` remains O(depth) per step, and
+  an early exit for it is not sound (see its doc comment).
+
 ### Breaking
 
 - **`View::set_auto_folds` takes `foldlevelstart: u32` instead of

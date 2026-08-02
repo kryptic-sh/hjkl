@@ -5,18 +5,41 @@ use symbol names rather than line numbers so references survive refactors.
 
 ## 1. Open work — ranked
 
-### 1.1 Undo-tree step cost after keyframes
+### 1.1 Undo-tree step cost — partly fixed 2026-08-02
 
-`crates/hjkl-buffer/src/undo.rs`. Keyframes reduced `:earlier 9999` at depth
-1024 from 212 ms to 5.4 ms, exposing a different bottleneck:
+`crates/hjkl-buffer/src/undo.rs`. Two of the three costs are gone; holding `g-`
+over 1024 states went 4.378 ms -> 1.659 ms (`benches/undo.rs`,
+`cold_jump_back/1024`). Details in the `hjkl-buffer` changelog.
 
-- `node_below` / `node_above` linear-scan the whole arena on every history step.
-- `retarget_current` rewrites the entire root→target path per step.
-- `set_node_state`'s `unchanged` check compares full rope content on every step.
+The measured attribution is worth keeping, because it inverts what this entry
+used to assume. The arena scan was named first and mattered least:
 
-Together these impose an O(N)-per-step floor: 75 µs at depth 1024 despite ≤ 15
-delta applies. A freshly deserialized undofile also has no keyframes, so its
-first deep jump remains O(depth); eager construction may waste work and memory.
+| version                               | cold_jump_back/1024 |
+| ------------------------------------- | ------------------- |
+| before                                | 4.378 ms            |
+| + `BTreeMap` seq index (scan removed) | 3.968 ms (-9%)      |
+| + `Rope::is_instance` fast path       | 1.659 ms (-62%)     |
+
+The full-document `Rope` `PartialEq` in `set_node_state` was the real cost. The
+lesson generalises: an O(N) scan over a slab of small structs is cheap next to
+one comparison that walks the document.
+
+What is still open:
+
+- **`retarget_current` is still O(depth) per step**, and it is now the floor:
+  `single_deep_jump` is unchanged at ~51 us for depth 1024 and still grows with
+  depth. The obvious fix — stop at the first ancestor already naming the child
+  on this path — is **unsound and was tried**. `last_child` is also written by
+  `push` (immediate parent only) and by leaf removal, so an ancestor can point
+  the right way while ITS ancestors still point down an abandoned branch; the
+  early exit leaves those stale and a later `<C-r>` walks into the wrong
+  subtree. `tree_matches_full_snapshot_reference_over_random_ops` catches it as
+  a redo returning another branch's text. A real fix has to maintain the
+  root->current path incrementally rather than test a local condition. The
+  reason is recorded on the function so it is not re-attempted blind.
+- **A freshly deserialized undofile still has no keyframes**, so its first deep
+  jump remains O(depth). Eager construction may waste work and memory; not
+  measured, unchanged by this pass.
 
 ### 1.2 Swap `SerTree.base` duplicates the document
 

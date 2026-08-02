@@ -415,6 +415,21 @@ pub struct UndoTree {
     /// anchors that bound `materialize` at [`KEYFRAME_INTERVAL`] applies.
     /// Most-recently-touched last, bounded by [`KEYFRAME_CAP`].
     keyframes: Vec<NodeId>,
+    /// `seq` → node id for every LIVE node, ordered.
+    ///
+    /// `g-` / `g+` / `:earlier` / `:later` need the neighbouring node in seq
+    /// order tree-wide, which was a full arena scan per step — an O(N) floor
+    /// under every history step, so holding `g-` over a deep history was
+    /// O(N * depth) in the lookup alone, dwarfing the bounded delta replay
+    /// keyframes had already achieved. A `BTreeMap` answers both directions in
+    /// O(log N) via `range`.
+    ///
+    /// Every live node appears exactly once. `seq` is assigned at creation and
+    /// never mutated, so the only maintenance points are `alloc` and `free`
+    /// (plus the two bulk paths, `clear_all` and `from_serializable`, which
+    /// rebuild it). `seq_index_matches_the_arena` pins that invariant against a
+    /// brute-force scan.
+    by_seq: std::collections::BTreeMap<u64, NodeId>,
     root: NodeId,
     current: NodeId,
     next_seq: u64,
@@ -461,6 +476,7 @@ impl UndoTree {
             free: Vec::new(),
             warm: Vec::new(),
             keyframes: Vec::new(),
+            by_seq: std::iter::once((0, 0)).collect(),
             root: 0,
             current: 0,
             next_seq: 1,
@@ -478,19 +494,25 @@ impl UndoTree {
     }
 
     fn alloc(&mut self, node: UndoNode) -> NodeId {
-        if let Some(id) = self.free.pop() {
+        let seq = node.seq;
+        let id = if let Some(id) = self.free.pop() {
             self.nodes[id] = Some(node);
             id
         } else {
             self.nodes.push(Some(node));
             self.nodes.len() - 1
-        }
+        };
+        self.by_seq.insert(seq, id);
+        id
     }
 
     /// Free a single slot (does NOT recurse into children — callers detach
     /// links first). Drops the node's delta + materialized cache and purges it
     /// from both cache LRUs.
     fn free(&mut self, id: NodeId) {
+        if let Some(n) = self.nodes[id].as_ref() {
+            self.by_seq.remove(&n.seq);
+        }
         self.nodes[id] = None;
         self.free.push(id);
         self.warm.retain(|&n| n != id);
@@ -610,8 +632,16 @@ impl UndoTree {
         marks: Arc<MarkSnapshot>,
     ) {
         let is_root = self.get(id).parent.is_none();
-        let unchanged = self.get(id).rope_cache.as_ref() == Some(&rope)
-            || (is_root && self.get(id).base.as_ref() == Some(&rope));
+        // `Rope`'s `PartialEq` walks both ropes, so this comparison alone was
+        // O(document) on every history step. `is_instance` is an `Arc::ptr_eq`
+        // on the shared root and answers the case that actually occurs here —
+        // the caller stashes back the very rope it was handed by the previous
+        // step, still a clone of what the node cached. It is only a sufficient
+        // test for equality, never a necessary one, so an unrelated-but-equal
+        // rope still falls through to the full compare and is found unchanged.
+        let same = |a: Option<&ropey::Rope>| a.is_some_and(|a| a.is_instance(&rope) || *a == rope);
+        let unchanged =
+            same(self.get(id).rope_cache.as_ref()) || (is_root && same(self.get(id).base.as_ref()));
         {
             let node = self.get_mut(id);
             node.cursor = cursor;
@@ -810,36 +840,37 @@ impl UndoTree {
     }
 
     /// Live node with the greatest `seq` strictly below `s` (the `g-` target).
+    ///
+    /// O(log N) through [`Self::by_seq`]; this used to scan the whole arena on
+    /// every history step.
     fn node_below(&self, s: u64) -> Option<NodeId> {
-        let mut best: Option<(u64, NodeId)> = None;
-        for (id, slot) in self.nodes.iter().enumerate() {
-            if let Some(n) = slot
-                && n.seq < s
-                && best.is_none_or(|(bs, _)| n.seq > bs)
-            {
-                best = Some((n.seq, id));
-            }
-        }
-        best.map(|(_, id)| id)
+        self.by_seq.range(..s).next_back().map(|(_, &id)| id)
     }
 
     /// Live node with the least `seq` strictly above `s` (the `g+` target).
+    ///
+    /// O(log N) through [`Self::by_seq`]; see [`Self::node_below`].
     fn node_above(&self, s: u64) -> Option<NodeId> {
-        let mut best: Option<(u64, NodeId)> = None;
-        for (id, slot) in self.nodes.iter().enumerate() {
-            if let Some(n) = slot
-                && n.seq > s
-                && best.is_none_or(|(bs, _)| n.seq < bs)
-            {
-                best = Some((n.seq, id));
-            }
-        }
-        best.map(|(_, id)| id)
+        use std::ops::Bound;
+        self.by_seq
+            .range((Bound::Excluded(s), Bound::Unbounded))
+            .next()
+            .map(|(_, &id)| id)
     }
 
     /// Point `current` at `target` and rewrite `last_child` down the whole
     /// root→target path, so a later `<C-r>` retraces the branch just landed on
     /// (nvim parity: landing on a node updates its ancestors' redo direction).
+    ///
+    /// This walks the full path every time, which is O(depth) per history step.
+    /// Breaking early at the first ancestor already naming the child on this
+    /// path is NOT sound and was tried: `last_child` is also written by `push`
+    /// (immediate parent only) and by leaf removal, so an ancestor can point the
+    /// right way while ITS ancestors still point down an abandoned branch. The
+    /// early exit then leaves them stale and a later `<C-r>` walks into the
+    /// wrong subtree — caught by `tree_matches_full_snapshot_reference_over_random_ops`
+    /// as a redo returning another branch's text. Making this cheap needs the
+    /// path itself to be maintained incrementally, not a local test.
     fn retarget_current(&mut self, target: NodeId) {
         self.current = target;
         let mut node = target;
@@ -1097,6 +1128,9 @@ impl UndoTree {
         }
         self.warm.clear();
         self.keyframes.clear();
+        // Bulk free bypassed `free`, so rebuild the index around the survivor.
+        self.by_seq.clear();
+        self.by_seq.insert(self.get(cur).seq, cur);
         let node = self.get_mut(cur);
         node.parent = None;
         node.children.clear();
@@ -1302,11 +1336,17 @@ impl UndoTree {
                 })
             })
             .collect();
+        let by_seq = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(id, slot)| slot.as_ref().map(|n| (n.seq, id)))
+            .collect();
         Some(Self {
             nodes,
             free: Vec::new(),
             warm: Vec::new(),
             keyframes: Vec::new(),
+            by_seq,
             root: s.root as NodeId,
             current: s.current as NodeId,
             next_seq: s.next_seq,
@@ -2349,6 +2389,90 @@ mod delta_tests {
         }
         assert_materialize_matches_naive(&mut t);
         assert_warm_equals_cold(&mut t);
+    }
+
+    /// `by_seq` must name exactly the live nodes, with the right ids. It is a
+    /// second source of truth for `g-`/`g+` targets, so drift here silently
+    /// sends history steps to the wrong state (or reports the end of history
+    /// early) rather than failing loudly.
+    ///
+    /// Checked against a brute-force arena scan — the code `node_below` /
+    /// `node_above` used before the index existed — after pushes, branch
+    /// creation, undo/redo, pruning to a node budget, `clear_all`, and a
+    /// serialize round trip, since those are the paths that allocate and free.
+    #[test]
+    fn seq_index_matches_the_arena() {
+        fn brute(t: &UndoTree) -> std::collections::BTreeMap<u64, NodeId> {
+            t.nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(id, slot)| slot.as_ref().map(|n| (n.seq, id)))
+                .collect()
+        }
+        fn check(t: &UndoTree, when: &str) {
+            assert_eq!(t.by_seq, brute(t), "seq index drifted after {when}");
+            // Every step target agrees with a scan of the arena, which is what
+            // the index replaced.
+            for probe in 0..t.next_seq + 1 {
+                let below = t
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, s)| s.as_ref().map(|n| (n.seq, id)))
+                    .filter(|&(sq, _)| sq < probe)
+                    .max_by_key(|&(sq, _)| sq)
+                    .map(|(_, id)| id);
+                let above = t
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, s)| s.as_ref().map(|n| (n.seq, id)))
+                    .filter(|&(sq, _)| sq > probe)
+                    .min_by_key(|&(sq, _)| sq)
+                    .map(|(_, id)| id);
+                assert_eq!(
+                    t.node_below(probe),
+                    below,
+                    "node_below({probe}) after {when}"
+                );
+                assert_eq!(
+                    t.node_above(probe),
+                    above,
+                    "node_above({probe}) after {when}"
+                );
+            }
+        }
+
+        let mk = |text: &str| UndoEntry {
+            rope: ropey::Rope::from_str(text),
+            cursor: (0, 0),
+            timestamp: SystemTime::now(),
+            marks: MarkSnapshot::default(),
+        };
+
+        let mut t = UndoTree::new(ropey::Rope::from_str("s0"));
+        check(&t, "new");
+
+        for i in 1..=8 {
+            t.push(mk(&format!("s{i}")));
+        }
+        check(&t, "pushes");
+
+        // Undo twice then push: forks a branch, frees nothing.
+        t.undo_step(ropey::Rope::from_str("s8"), (0, 0), MarkSnapshot::default());
+        t.undo_step(ropey::Rope::from_str("s7"), (0, 0), MarkSnapshot::default());
+        t.push(mk("branch"));
+        check(&t, "branch");
+
+        // Enforcing a node budget frees through `free` / `free_subtree`.
+        t.cap(3);
+        check(&t, "cap");
+
+        let round = UndoTree::from_serializable(&t.to_serializable()).expect("round trip");
+        check(&round, "from_serializable");
+
+        t.clear_all();
+        check(&t, "clear_all");
     }
 
     #[test]
