@@ -72,8 +72,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `hjkl_fs::is_safe_component` rather than a private copy. Same predicate, same
   import path for in-crate callers.
 
-## [Unreleased]
-
 ## [0.7.5] - 2026-05-18
 
 ### Changed
@@ -527,7 +525,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.40.0
 [0.7.5]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.2...v0.7.3
