@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Removed
+
+- **Breaking:** `uri::to_path_within` is gone, together with its private
+  `normalize_lexical` helper. Nothing in this workspace or in any sibling
+  kryptic-sh project called it — the crate's own code and the app both use
+  `uri::to_path`, and the containment decision for workspace edits is made in
+  the app's `apply_workspace_edit`, which deliberately warns rather than
+  refuses. Its existence was never evidence that containment is enforced on the
+  LSP edit path. Callers wanting a real containment check should use
+  `hjkl_fs::resolve_under`, which canonicalizes before comparing and so catches
+  the symlinked-prefix case `to_path_within` could not.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed

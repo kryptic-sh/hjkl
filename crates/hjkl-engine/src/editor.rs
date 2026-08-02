@@ -846,6 +846,20 @@ pub struct Editor<
     /// Per-row syntax styling in engine-native form. Always present —
     /// populated by [`Editor::install_syntax_spans`]. Ratatui hosts use
     /// `hjkl_engine_tui::EditorRatatuiExt::install_ratatui_syntax_spans`.
+    ///
+    /// # Nothing in this workspace reads it — `sqeel` does
+    ///
+    /// Every reference in this crate is a write: the install, the per-row
+    /// patch, and the row-index shift on edit. That makes the field look
+    /// removable, and it is not. `sqeel-tui` (`kryptic-sh/sqeel`) depends on
+    /// published `hjkl-engine` and reads it directly —
+    /// `std::mem::take(&mut editor.styled_spans)` in its `syntax.rs`, plus two
+    /// `.clone()` sites in its `lib.rs`. Deleting the field breaks that crate
+    /// the moment it upgrades its pin.
+    ///
+    /// So do not act on a workspace-only grep here. If this should go, give
+    /// `sqeel` a supported accessor first, land that, and only then remove the
+    /// public field.
     pub styled_spans: Vec<Vec<(usize, usize, crate::types::Style)>>,
     /// Per-editor settings tweakable via `:set`. Exposed by reference
     /// so handlers (indent, search) read the live value rather than a
