@@ -19,6 +19,31 @@ patch bumps.
 
 ### Fixed
 
+- **The cursor no longer drifts left of its own glyph on lines containing CJK,
+  emoji or combining marks.** `hjkl_buffer::char_col_to_visual_col` and
+  `visual_col_to_char_col` counted every non-tab character as one screen cell,
+  while the renderer's `paint_row` advanced by the real `unicode-width` value.
+  Both now measure with the renderer's rule: `unicode-width` per char, tab stops
+  computed from the visual column (so a wide char before a tab shifts the stop),
+  and zero-width chars (combining marks, `U+FE0F`) folded into the preceding
+  cell instead of counted as one.
+
+  Everything keyed off those two helpers moves with them: `j` / `k` sticky
+  column (`Move::Vertical`, `apply_sticky_col`, `motions::move_vertical`), `$`,
+  mouse click and drag translation, the terminal cursor block
+  (`Editor::cursor_screen_pos` — its private `visual_col_for_char` was a second
+  naive copy and now delegates), and the `cursorcolumn` bar. Landing inside a
+  double-width glyph's second cell now snaps to that glyph, as in vim; a
+  combining mark is never a cursor landing site. Expectations were taken from
+  neovim 0.12.4 (`virtcol()`, `getcurpos()`, `j` between wide and narrow lines).
+
+  Two divergences from vim are deliberate and documented on `hjkl_buffer::geom`:
+  control characters measure one cell (matching `sanitize_control`'s
+  single-width Control Pictures substitution, not vim's two-cell `^X`), and
+  emoji presentation sequences such as `U+2764 U+FE0F` measure one cell rather
+  than vim's two, because widths are resolved per `char` on both sides rather
+  than per grapheme cluster.
+
 - **The explorer's `dd` / `u` / `<C-r>` tests no longer fail at random under a
   parallel `cargo test`.** They overrode `XDG_CACHE_HOME` to isolate the trash,
   and an environment variable is process-global: while the override was in

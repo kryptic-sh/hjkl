@@ -3168,6 +3168,38 @@ mod tests {
         );
     }
 
+    /// Same requirement for double-width chars: `paint_row` advances by
+    /// `ch.width()`, so the cursorcolumn bar has to as well or it drifts one
+    /// cell left per wide char before the cursor. `ab世界cd` paints as
+    /// `a b 世 世 界 界 c d`, so char index 4 (`c`) is screen cell 6.
+    #[test]
+    fn cursorcolumn_follows_wide_char_width() {
+        let mut b = View::from_str("ab世界cd");
+        let v = vp(20, 1);
+        b.set_cursor(hjkl_buffer::Position::new(0, 0));
+        let view = BufferView {
+            cursor_column: Some(4), // the `c`
+            cursor_column_bg: Style::default().bg(Color::DarkGray),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 1);
+        assert_eq!(
+            term.cell((6, 0)).unwrap().bg,
+            Color::DarkGray,
+            "char col 4 sits at cell 6 once 世 and 界 take two cells each"
+        );
+        assert_eq!(
+            term.cell((6, 0)).unwrap().symbol(),
+            "c",
+            "cell 6 IS the `c`"
+        );
+        assert_ne!(
+            term.cell((4, 0)).unwrap().bg,
+            Color::DarkGray,
+            "cell 4 is the leading cell of 界, not the cursor"
+        );
+    }
+
     #[test]
     fn search_bg_survives_cursorcolumn_overlay() {
         use regex::Regex;

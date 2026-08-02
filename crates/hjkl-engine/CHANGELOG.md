@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Column math is wide-character correct. `Editor::cursor_screen_pos` had its own
+  naive copy of the char→visual-column conversion and now delegates to
+  `hjkl_buffer::char_col_to_visual_col`, which measures with `unicode-width`.
+  Every consumer of that helper moves with it: `Move::Vertical` /
+  `motions::move_vertical` (the `j` / `k` sticky column) now land on the glyph
+  whose painted cells hold the wanted column rather than on the Nth character,
+  and a combining mark is never a landing site. Matches neovim 0.12.4.
+
 ## [0.40.0] - 2026-08-01
 
 ### Added

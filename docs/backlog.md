@@ -93,8 +93,11 @@ hjkl emits for markdown, yaml, html, json, lua, css, bash, python and toml is
 exactly one of neovim's. What neovim still has that hjkl does not:
 
 - **No folds inside injected languages.** `extract_fold_ranges_rope` queries
-  only the top-level tree with the top-level grammar, so a
-  ```rust block inside markdown, or an embedded shell script in a GitHub workflow, folds as one opaque block. neovim folds their internals. Needs the fold query run per injection region with row offsets applied — the injection machinery already exists in `highlight_range_with_injections_rope`.
+  only the top-level tree with the top-level grammar, so a ```rust block inside
+  markdown, or an embedded shell script in a GitHub workflow, folds as one
+  opaque block. neovim folds their internals. Needs the fold query run per
+  injection region with row offsets applied — the injection machinery already
+  exists in `highlight_range_with_injections_rope`.
 - **One fold per start row.** `View::add_fold` / `set_auto_folds` key folds by
   `start_row`, so where two nested folds legitimately share one (markdown's
   `(list)` and the `(list_item (list))` inside it), hjkl keeps the outer and
@@ -202,32 +205,44 @@ is what was NOT tackled.
 | `Options` / `OptionsConfig` still hand-written | `hjkl-engine/src/types.rs`, `hjkl-app/src/config.rs`                                                          | The option registry drives every `:set` table and the config key mapping, but not these two structs — both need compile-time fields (engine snapshot, serde schema). Pinned by tests instead. A generating macro was considered and declined as too opaque. |
 | Oversized modules                              | `nvim_api.rs` (5.7k), `explorer.rs` (4.4k), `render.rs` (3.8k), `lsp_glue.rs` (3.2k), `ex_dispatch.rs` (3.2k) | Recording only; splitting has no correctness payoff. Noted because the duplicate-`WorkspaceEdit` bug lived in `lsp_glue.rs` and survived precisely because the file is that size.                                                                           |
 
-#### `char_col_to_visual_col` is not wide-character aware
+#### Wide-char column math: what the fix left open (2026-08-02)
 
-`crates/hjkl-buffer/src/geom.rs`. It counts every non-tab character as **one**
-cell:
+`hjkl_buffer::geom` is now `unicode-width`-aware and `Editor`'s duplicate
+`visual_col_for_char` delegates to it. Three things were deliberately NOT done.
 
-```rust
-visual += if ch == '\t' { tab_w - (visual % tab_w) } else { 1 };
-```
+- **The compat oracle cannot express a wide-char cursor case.**
+  `hjkl-compat-oracle/src/diff.rs` compares hjkl's cursor column (a **char**
+  index) against nvim's (a **byte** index) directly — the comment there already
+  admits it and says the two are "equivalent for ASCII-only cases". So every
+  corpus case is confined to ASCII, and the strongest available oracle cannot
+  guard the behaviour this fix establishes. Fixing it means converting one side
+  in `diff.rs` (nvim byte col → char col via the buffer line it just read) and
+  then adding CJK/emoji/combining cases to `tier1.toml`. Not attempted here
+  because it changes the harness, not the engine. Until then wide-char coverage
+  is unit tests in `geom.rs`, `cursor_move.rs`, `editor.rs` and `render.rs`,
+  each with its nvim-derived expectation written into the test.
 
-The renderer does not. `paint_row` advances by `ch.width().unwrap_or(1)`, the
-real `unicode-width` value. So on any line containing CJK, emoji, or a combining
-mark, the engine's idea of a visual column and the column the glyph was actually
-painted at diverge — by one cell per wide character.
+- **Emoji presentation sequences are one cell narrower than vim's.** vim widens
+  `U+2764 U+FE0F` ("❤️") to two cells because it segments graphemes;
+  `unicode-width` is consulted per `char` in both `geom::cell_width` and
+  `paint_row`, giving 1 + 0. The two sides of hjkl agree, so the cursor stays on
+  its glyph — but a terminal that renders the sequence two cells wide will show
+  the text one cell right of where hjkl thinks it is. Fixing it needs grapheme
+  segmentation in `paint_row` first (`unicode-segmentation` is not currently a
+  dependency of `hjkl-buffer-tui`), then in `cell_width`. Declined as its own
+  change: it is a renderer change with a real regression surface, not a
+  column-math change.
 
-This is load-bearing in more places than it looks: `motions.rs` (`$`, sticky
-column), `cursor_move.rs` (`Move::Vertical`), `editor.rs` (`cursor_screen_pos`),
-and `hjkl-buffer-tui`'s cursorcolumn pass all key off it. The cursorcolumn fix
-in 0.40.0 deliberately routed through this helper so the bar stays consistent
-with where the _cursor_ is drawn — consistency was the requirement there — but
-both are then wrong together against the painted text.
+- **Control characters measure one cell, not vim's two.** `paint_row` maps them
+  through `sanitize_control` to single-width Control Pictures glyphs (`U+0001` →
+  `␁`), so vim's `^A` notation was never what hjkl paints. Matching the painted
+  glyph was chosen over matching vim. Revisit only if `sanitize_control` is
+  changed to emit two-cell `^X`.
 
-Fix by teaching `char_col_to_visual_col` / `visual_col_to_char_col` the
-`unicode-width` table, which `hjkl-buffer` already depends on. Expect fallout:
-this is the same class as the `listchars` approximation fixed in 0.40.0, and
-several column assertions across the engine were written against the naive
-behaviour. Verify against nvim, which is wide-char correct.
+Not re-checked after the fix: `hjkl-picker`'s preview column math and the four
+hand-rolled width truncators listed above. They do their own width accounting
+and were out of scope; whether any of them also disagrees with `paint_row` is
+unknown.
 
 #### Smaller, unclaimed
 

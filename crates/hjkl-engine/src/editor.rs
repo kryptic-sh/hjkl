@@ -5489,23 +5489,68 @@ fn first_diff_pos(a: &ropey::Rope, b: &ropey::Rope) -> Option<(usize, usize)> {
     None
 }
 
-/// Visual column of the character at `char_col` in `line`, treating `\t`
-/// as expansion to the next `tab_width` stop and every other char as
-/// 1 cell wide. Wide-char support (CJK, emoji) is a separate concern —
-/// the cursor math elsewhere also assumes single-cell chars.
+/// Visual column of the character at `char_col` in `line`.
+///
+/// Thin alias for [`hjkl_buffer::char_col_to_visual_col`], which owns the
+/// tab-stop and `unicode-width` rules the renderer's `paint_row` uses. This
+/// used to be a second, naive copy that counted every non-tab char as one
+/// cell; it drifted from the painted glyph on any line containing CJK, emoji
+/// or a combining mark, so `cursor_screen_pos` drew the cursor block left of
+/// the character it was on.
 fn visual_col_for_char(line: &str, char_col: usize, tab_width: usize) -> usize {
-    let mut visual = 0usize;
-    for (i, ch) in line.chars().enumerate() {
-        if i >= char_col {
-            break;
-        }
-        if ch == '\t' {
-            visual += tab_width - (visual % tab_width);
-        } else {
-            visual += 1;
+    char_col_to_visual_col(line, char_col, tab_width)
+}
+
+#[cfg(test)]
+mod cursor_screen_pos_width_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Host, Options};
+    use hjkl_buffer::View;
+
+    /// The terminal cursor block must be placed at the cell the glyph is
+    /// painted in. `paint_row` gives `世` and `界` two cells each, so on
+    /// `ab世界cd` the `c` (char index 4) is at screen x 6, not 4.
+    #[test]
+    fn cursor_x_accounts_for_double_width_chars() {
+        for (char_col, expected_x) in [(0usize, 0u16), (1, 1), (2, 2), (3, 4), (4, 6), (5, 7)] {
+            let mut e = Editor::new(
+                View::from_str("ab世界cd"),
+                DefaultHost::new(),
+                Options::default(),
+            );
+            {
+                let vp = e.host_mut().viewport_mut();
+                vp.top_row = 0;
+                vp.top_col = 0;
+                vp.width = 80;
+                vp.height = 10;
+                vp.tab_width = 4;
+            }
+            e.jump_cursor(0, char_col);
+            let (x, _y) = e
+                .cursor_screen_pos(0, 0, 80, 10, 0)
+                .expect("cursor is inside the viewport");
+            // `lnum_width()` reserves a gutter; measure relative to char 0.
+            let base = {
+                let mut e0 = Editor::new(
+                    View::from_str("ab世界cd"),
+                    DefaultHost::new(),
+                    Options::default(),
+                );
+                {
+                    let vp = e0.host_mut().viewport_mut();
+                    vp.top_row = 0;
+                    vp.top_col = 0;
+                    vp.width = 80;
+                    vp.height = 10;
+                    vp.tab_width = 4;
+                }
+                e0.jump_cursor(0, 0);
+                e0.cursor_screen_pos(0, 0, 80, 10, 0).unwrap().0
+            };
+            assert_eq!(x - base, expected_x, "char col {char_col}");
         }
     }
-    visual
 }
 
 #[cfg(test)]

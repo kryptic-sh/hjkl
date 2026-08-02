@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The `cursorcolumn` bar lands on the cursor's cell on lines with CJK, emoji or
+  combining marks. It routes through `hjkl_buffer::char_col_to_visual_col`,
+  which now measures with `unicode-width` like `paint_row` does; previously the
+  two disagreed by one cell per wide char.
+
 ## [0.40.0] - 2026-08-01
 
 ### Breaking

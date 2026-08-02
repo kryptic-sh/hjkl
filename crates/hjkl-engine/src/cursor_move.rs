@@ -249,4 +249,65 @@ mod tests {
             assert_eq!(e.sticky_col(), Some(want), "want {want} must survive");
         }
     }
+
+    /// `Vertical` onto a line containing double-width chars must land on the
+    /// char whose PAINTED cells contain the wanted column, not on the Nth
+    /// char. Oracle: neovim 0.12.4, buffer `abcdefgh` / `ab世界cd`, `j` from
+    /// each byte column of row 0 (1-based cols → 0-based here):
+    ///
+    /// ```text
+    ///   col 1 -> bytecol 1 (a)    col 5 -> bytecol 6 (界)
+    ///   col 2 -> bytecol 2 (b)    col 6 -> bytecol 6 (界)
+    ///   col 3 -> bytecol 3 (世)   col 7 -> bytecol 9 (c)
+    ///   col 4 -> bytecol 3 (世)   col 8 -> bytecol 10 (d)
+    /// ```
+    #[test]
+    fn vertical_onto_wide_chars_matches_nvim() {
+        // 0-based (want, char index on `ab世界cd`)
+        for (want, expected) in [
+            (0usize, 0usize), // a
+            (1, 1),           // b
+            (2, 2),           // 世, leading cell
+            (3, 2),           // 世, trailing cell
+            (4, 3),           // 界, leading cell
+            (5, 3),           // 界, trailing cell
+            (6, 4),           // c
+            (7, 5),           // d
+        ] {
+            let mut e = editor("abcdefgh\nab世界cd");
+            e.move_cursor(Move::Horizontal { col: want });
+            assert_eq!(e.sticky_col(), Some(want));
+            e.move_cursor(Move::Vertical { row: 1 });
+            assert_eq!(e.cursor(), (1, expected), "want {want} onto the wide row");
+        }
+    }
+
+    /// The other direction: leaving a wide line carries the char's LEADING
+    /// visual cell as `curswant`. nvim, `ab世界cd` / `abcdefgh`: with the
+    /// cursor on `界` (bytecol 6) `getcurpos()[4]` is 5 and `j` lands on
+    /// bytecol 5 of the ASCII row — 0-based column 4.
+    #[test]
+    fn vertical_off_a_wide_line_uses_the_leading_cell() {
+        for (start_char, expected_ascii) in [(2usize, 2usize), (3, 4), (4, 6), (5, 7)] {
+            let mut e = editor("ab世界cd\nabcdefgh");
+            e.move_cursor(Move::Horizontal { col: start_char });
+            e.move_cursor(Move::Vertical { row: 1 });
+            assert_eq!(
+                e.cursor(),
+                (1, expected_ascii),
+                "from wide char {start_char}"
+            );
+        }
+    }
+
+    /// A combining mark is never a landing site. nvim, `abcdefgh` /
+    /// `ae\u{301}b`: `j` from col 3 (0-based 2) lands on bytecol 5 — the `b`,
+    /// char index 3 — skipping the mark at char index 2.
+    #[test]
+    fn vertical_onto_a_combining_mark_lands_on_the_next_char() {
+        let mut e = editor("abcdefgh\nae\u{301}b");
+        e.move_cursor(Move::Horizontal { col: 2 });
+        e.move_cursor(Move::Vertical { row: 1 });
+        assert_eq!(e.cursor(), (1, 3));
+    }
 }

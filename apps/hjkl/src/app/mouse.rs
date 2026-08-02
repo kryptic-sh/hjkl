@@ -13,10 +13,13 @@
 //! primitives added in `hjkl-engine` 0.8.0 (`mouse_click_doc`,
 //! `mouse_extend_drag_doc`, etc.). All cell-geometry knowledge lives here.
 //!
-//! **Wide-char note**: `hjkl_buffer::visual_col_to_char_col` (and the engine's
-//! matching `visual_col_for_char`) treat every non-tab character as 1 visual
-//! cell. That matches the buffer renderer. Wide-char (CJK/emoji) support is a
-//! separate concern deferred to a later phase.
+//! **Wide-char note**: `hjkl_buffer::visual_col_to_char_col` /
+//! `char_col_to_visual_col` measure each char with the same rule the buffer
+//! renderer's `paint_row` uses — `unicode-width` per char, tab stops from the
+//! visual column, zero-width combining marks folded into the preceding cell.
+//! Clicking either cell of a double-width glyph therefore lands on that glyph,
+//! as in vim. See the `hjkl_buffer::geom` module docs for the two deliberate
+//! divergences from vim (control chars, emoji presentation sequences).
 
 use hjkl_engine::{Host, Query};
 use hjkl_vim::VimEditorExt;

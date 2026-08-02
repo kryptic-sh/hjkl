@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `geom::char_col_to_visual_col` and `geom::visual_col_to_char_col` are now
+  wide-character aware. They counted every non-tab char as one cell; both now
+  measure with `unicode-width`, exactly as `hjkl-buffer-tui`'s `paint_row` does.
+  Consequences for callers: a tab's stop is computed from the visual column (so
+  a preceding CJK char shifts it), a visual column falling in the trailing cell
+  of a double-width glyph maps back to that glyph, and zero-width chars
+  (combining marks, `U+FE0F`) contribute nothing and are never returned by
+  `visual_col_to_char_col`. Verified against neovim 0.12.4. Control chars
+  measure one cell and emoji presentation sequences measure per-`char`, both
+  deliberate divergences from vim documented on the `geom` module.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed
