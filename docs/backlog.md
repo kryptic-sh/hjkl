@@ -42,11 +42,11 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 
 ### 1.4 LSP and span follow-ups
 
-| Item                                        | Where                                       | Note                                                                                                                                                                                |
-| ------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| LSP full-sync still copies once             | `hjkl-lsp/src/runtime.rs`, `server.rs`      | `Buffer::content_joined()` caches the `Arc`, so `Arc::unwrap_or_clone` cannot move. Avoiding the copy requires direct serialization instead of an intermediate `serde_json::Value`. |
-| `attach_buffer` copies at the boundary      | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                               |
-| `styled_spans` is a write-only public field | `hjkl-engine/src/editor.rs`                 | No readers. Removal wins ~27% on full installation and nothing per keystroke, but it is a public API removal on a published crate.                                                  |
+| Item                                                | Where                                       | Note                                                                                                                                                                                                                                |
+| --------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LSP full-sync still copies once                     | `hjkl-lsp/src/runtime.rs`, `server.rs`      | `Buffer::content_joined()` caches the `Arc`, so `Arc::unwrap_or_clone` cannot move. Avoiding the copy requires direct serialization instead of an intermediate `serde_json::Value`.                                                 |
+| `attach_buffer` copies at the boundary              | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                                                                               |
+| `styled_spans` cannot be removed — `sqeel` reads it | `hjkl-engine/src/editor.rs`                 | RESOLVED 2026-08-02: not write-only after all. `sqeel-tui` pins published `hjkl-engine` and reads the field (one `mem::take`, two `clone`s). Removing it needs a supported accessor in `sqeel` first. The field documents this now. |
 
 **The block-row marker is a convention, not a type (2026-08-02).** A span whose
 `end_byte` is exactly one byte past its row's content means "multi-row span
@@ -463,11 +463,10 @@ is what was NOT tackled.
 
 #### Needs an owner decision, not more work
 
-| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `to_path_within` has no callers                     | `hjkl-lsp/src/uri.rs`                                  | The bug is fixed and the fn documents its own status, but it is dead — every consumer in `lsp_glue.rs` uses the unchecked `to_path`, and `apply_workspace_edit` does its own inline containment check that deliberately warns rather than refuses. If it is kept instead of deleted, prefer reworking it onto `hjkl_fs::resolve_under`: its own `normalize_lexical` folds `..` lexically, which is not how the kernel resolves a `..` through a symlinked component. Deleting it is a public API removal on a published crate — ask, do not infer from grep. |
-| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                                                                                                                                                                                                                                                                                                                                                  |
-| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build.                                                                                                                                                                                                                                                                                                                                |
+| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                   |
+| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build. |
 
 #### Deferred refactors
 
@@ -682,8 +681,13 @@ crates pulling tree-sitter, mimalloc, or aws-lc-sys require CI runners.
 - Read an `Edit`'s semantics before applying its inverse through `apply_edit`.
 - `hjkl_driver` cannot replay `:` keys, and `cargo test -p hjkl` skips the e2e
   binary.
-- Workspace grep cannot prove a published crate or public API has no external
-  consumers.
+- **Workspace grep cannot prove a published crate or public API has no external
+  consumers — grep the sibling projects too.** `styled_spans` read as write-only
+  across all of `hjkl` and was queued for deletion on that basis; `sqeel-tui`
+  pins published `hjkl-engine` and reads it in three places. The check that
+  settles it is `grep -rn <symbol> ~/Projects/kryptic-sh/ --include=*.rs`
+  excluding this repo, and even that only covers what is checked out locally.
+  Same class as the `hjkl-css` revert.
 - **A green local run is not a green CI run.** Local checks are Linux-only, so
   anything platform-shaped passes locally and fails on the matrix. A
   `#[cfg(unix)]` test that created a non-UTF-8 filename sat red on macOS (APFS
