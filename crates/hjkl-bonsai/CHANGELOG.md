@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `folds::extract_fold_ranges_rope_with_injections` — fold extraction that also
+  descends into injected regions. For every region the host's `injections.scm`
+  reports, the region is parsed with its own grammar, that language's bundled
+  `folds.scm` runs over it, and the resulting rows are shifted into the host
+  document's coordinates. A region whose language has no bundled fold query is
+  skipped before its grammar is resolved, and a grammar that cannot be resolved
+  is skipped too — neither aborts the host's folds. One level of injection is
+  descended, not nested ones. `extract_fold_ranges_rope` is unchanged (it is now
+  this function with no injection query).
+- `folds::InjectedFoldCache` — the per-buffer memo the above takes, keyed by
+  `(language, content hash)` and holding region-relative rows so a region that
+  merely moved still hits. Without it a Rust file (whose `injections.scm`
+  injects Rust into every macro body) paid a full reparse of every macro on
+  every edit: 9.0 ms → 19.7 ms for the whole fold pass on
+  `hjkl-engine/src/editor.rs`, against 10.0 ms with the memo warm.
+- `Highlighter::injection_query` — read accessor for the grammar's compiled
+  `injections.scm`, so fold extraction reuses the query the highlighter already
+  compiled instead of compiling a second copy.
+- `injected_parse_counter` — test hook counting injected-region parses (memo
+  misses), mirroring `parse_counter`.
+- `(#offset! @injection.content …)` is now applied when discovering injected
+  regions for folds. nvim-treesitter's YAML query uses it to drop the `|` of a
+  `run: |` block scalar out of the injected text; feeding that `|` to the child
+  parser makes the whole script one ERROR node with no folds in it. The
+  highlighting path still ignores the directive.
+
 ### Fixed
 
 - `folds::builtin_folds` now also answers to the grammar name `c-sharp`, not

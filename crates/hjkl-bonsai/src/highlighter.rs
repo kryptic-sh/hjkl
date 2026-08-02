@@ -24,9 +24,9 @@ use crate::query_sanitize::{
 use crate::runtime::Grammar;
 
 /// Index for `@injection.language` capture.
-const INJ_LANG_CAPTURE: &str = "injection.language";
+pub(crate) const INJ_LANG_CAPTURE: &str = "injection.language";
 /// Index for `@injection.content` capture.
-const INJ_CONTENT_CAPTURE: &str = "injection.content";
+pub(crate) const INJ_CONTENT_CAPTURE: &str = "injection.content";
 
 /// Global set of unknown predicate names that have already been warned about.
 /// Using `OnceLock<std::sync::Mutex<HashSet<String>>>` so we warn exactly once
@@ -133,7 +133,7 @@ fn sort_by_start_then_depth(spans: &mut [HighlightSpan]) {
 /// FNV-1a-inspired fast hash of a byte slice.  Standard library's
 /// `DefaultHasher` is good enough — all we need is collision resistance across
 /// typical code-block content, not cryptographic security.
-fn hash_bytes(b: &[u8]) -> u64 {
+pub(crate) fn hash_bytes(b: &[u8]) -> u64 {
     let mut h = DefaultHasher::new();
     b.hash(&mut h);
     h.finish()
@@ -979,6 +979,17 @@ impl Highlighter {
     /// Read accessor for the grammar used by this highlighter.
     pub fn grammar(&self) -> Option<&Grammar> {
         Some(&self._grammar)
+    }
+
+    /// Read accessor for this grammar's compiled `injections.scm` query, or
+    /// `None` when the grammar ships none / it failed to compile.
+    ///
+    /// Exposed so [`crate::folds::extract_fold_ranges_rope_with_injections`]
+    /// can find injected regions using the SAME compiled query the highlighter
+    /// uses — compiled once per grammar into the shared compiled artifacts,
+    /// never twice.
+    pub fn injection_query(&self) -> Option<&Query> {
+        self.compiled.injection_query.as_ref()
     }
 
     /// Override the parser timeout used by `parse_incremental`. `0` disables

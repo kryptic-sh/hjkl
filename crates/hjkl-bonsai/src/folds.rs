@@ -10,17 +10,25 @@
 //! - The compiled `Query` is cached in a process-global map keyed by
 //!   grammar name (cheap — at most N entries for bundled grammars).
 //! - Fold extraction runs over the FULL tree (not viewport-bounded), once
-//!   per reparse — this is cheap: one query pass, no per-frame cost.
+//!   per reparse — one query pass, no per-frame cost.
 //! - Only nodes spanning more than one row produce folds; single-row nodes
 //!   are silently skipped.
 //! - Vim convention: `start_row` is the visible "header" line;
 //!   `start_row+1..=end_row` are hidden when the fold is closed.
+//! - Injected languages fold too, via
+//!   [`extract_fold_ranges_rope_with_injections`]: each region the host's
+//!   `injections.scm` reports is parsed with its own grammar and folded with
+//!   that language's query, and the rows are offset into the host document.
+//!   Regions are memoised by content ([`InjectedFoldCache`]) so an edit
+//!   re-parses only the region it touched.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, RwLock};
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use tree_sitter::{Query, QueryCursor, StreamingIterator as _};
 
+use crate::highlighter::{INJ_CONTENT_CAPTURE, INJ_LANG_CAPTURE};
 use crate::runtime::Grammar;
 
 // ---------------------------------------------------------------------------
@@ -217,13 +225,42 @@ pub fn extract_fold_ranges(
     grammar: &Grammar,
     source: &[u8],
 ) -> Vec<(usize, usize)> {
+    let mut by_start: BTreeMap<usize, usize> = BTreeMap::new();
+    collect_folds_into(&mut by_start, tree, grammar, source, 0);
+    by_start.into_iter().collect()
+}
+
+/// Run `grammar`'s bundled fold query over `tree` (parsed from `source`) and
+/// merge the results into `by_start`, shifting every row by `row_offset`.
+///
+/// `row_offset` is what makes injected regions land in the host document's
+/// coordinates: a region that begins on host row 42 passes `row_offset = 42`,
+/// so a fold at region-relative row 3 is recorded at host row 45.
+///
+/// Everything else — the `end_col == 0` rule and `(#trim! @fold)`'s blank-row
+/// walk — is evaluated in `source`'s OWN coordinates, which for an injected
+/// region means the injected text's rows and columns. That is deliberate:
+/// column 0 of a region row is column 0 of the corresponding host row for
+/// every row after the first (a region is a contiguous byte slice, so each of
+/// its rows past the first starts exactly where the host's row starts), and
+/// no multi-row fold can END on region row 0.
+///
+/// Rows are deduplicated by start row, largest span winning — see
+/// [`extract_fold_ranges`].
+fn collect_folds_into(
+    by_start: &mut BTreeMap<usize, usize>,
+    tree: &tree_sitter::Tree,
+    grammar: &Grammar,
+    source: &[u8],
+    row_offset: usize,
+) {
     if get_or_compile(grammar).is_none() {
-        return Vec::new();
+        return;
     }
 
     let cache = FOLD_QUERY_CACHE.read().unwrap();
     let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
-        return Vec::new();
+        return;
     };
 
     let mut cursor = QueryCursor::new();
@@ -235,13 +272,14 @@ pub fn extract_fold_ranges(
     // same order of cost as the query itself, and only on reparse.
     let blank_rows: Vec<bool> = source
         .split(|&b| b == b'\n')
-        .map(|line| line.iter().all(u8::is_ascii_whitespace))
+        .map(|line| match std::str::from_utf8(line) {
+            Ok(s) => s.chars().all(char::is_whitespace),
+            Err(_) => line.iter().all(u8::is_ascii_whitespace),
+        })
         .collect();
     let is_blank = |row: usize| blank_rows.get(row).copied().unwrap_or(true);
 
     let fold_idx = compiled.fold_idx;
-    // Keyed by start_row; value = largest end_row seen for that start row.
-    let mut by_start: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
 
     while let Some(m) = matches.next() {
         let trim = compiled
@@ -266,6 +304,7 @@ pub fn extract_fold_ranges(
             if end_row <= start_row {
                 continue;
             }
+            let (start_row, end_row) = (start_row + row_offset, end_row + row_offset);
             by_start
                 .entry(start_row)
                 .and_modify(|e| {
@@ -276,97 +315,395 @@ pub fn extract_fold_ranges(
                 .or_insert(end_row);
         }
     }
-
-    by_start.into_iter().collect()
 }
 
 /// Rope-backed variant of [`extract_fold_ranges`].
 ///
-/// Avoids building a contiguous `&[u8]` from the rope; reads chunk-by-chunk
-/// via `chunk_at_byte`. Same semantics as `extract_fold_ranges`.
+/// Same semantics as `extract_fold_ranges`, and — like it — folds only the
+/// TOP-LEVEL tree with the top-level grammar. Use
+/// [`extract_fold_ranges_rope_with_injections`] to also fold embedded
+/// languages.
 pub fn extract_fold_ranges_rope(
     tree: &tree_sitter::Tree,
     grammar: &Grammar,
     rope: &ropey::Rope,
 ) -> Vec<(usize, usize)> {
-    if get_or_compile(grammar).is_none() {
-        return Vec::new();
+    let mut cache = InjectedFoldCache::default();
+    extract_fold_ranges_rope_with_injections(tree, grammar, rope, None, &mut cache, |_| None)
+}
+
+/// Per-buffer memo of the folds an injected region produced, keyed by
+/// `(language, content hash)` and holding **region-relative** rows.
+///
+/// Fold extraction runs once per reparse, i.e. once per edit. Without this,
+/// every edit re-parses every injected region in the document — for a Rust
+/// file, whose `injections.scm` injects Rust into each multi-line macro body,
+/// that measured as a doubling of the whole fold pass (37.5 ms → 77.0 ms on
+/// `hjkl-engine/src/editor.rs`) for two extra folds. Keying on the content
+/// hash means an edit only re-parses the ONE region it touched; keying on the
+/// content rather than the byte range means text that merely moved (rows
+/// inserted above it) still hits.
+///
+/// After each extraction the map is pruned to the keys that extraction
+/// actually used, so it cannot outgrow the document's live injection set.
+#[derive(Default)]
+pub struct InjectedFoldCache {
+    entries: HashMap<(String, u64), Vec<(usize, usize)>>,
+}
+
+impl InjectedFoldCache {
+    /// Number of memoised regions. Test/instrumentation hook.
+    #[doc(hidden)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 
-    let cache = FOLD_QUERY_CACHE.read().unwrap();
-    let Some(compiled) = cache.get(grammar.name()).and_then(|v| v.as_ref()) else {
-        return Vec::new();
-    };
+    /// True when nothing is memoised.
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
-    let total_bytes = rope.len_bytes();
-    let mut cursor = QueryCursor::new();
-    let root = tree.root_node();
+/// Thread-local count of injected regions actually PARSED (i.e. memo misses).
+///
+/// Test instrumentation, like [`crate::parse_counter`]: it is the only way to
+/// tell a memo hit from a silent recompute, since both produce identical fold
+/// ranges. Compiled in all modes, hidden from the docs.
+#[doc(hidden)]
+pub mod injected_parse_counter {
+    use std::cell::Cell;
 
-    // Rope-backed source callback — same pattern as parse_initial_rope.
-    let mut by_start: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
 
-    // Build a contiguous slice only if small (< 1 MB); otherwise use the rope
-    // chunk callback. For fold extraction we need to run over the full tree
-    // anyway, so the cost is proportional to parse time (already paid).
-    //
-    // We use the rope text() iterator approach: collect all chunks into a
-    // scratch buffer only if needed. In practice bonsai's source callback
-    // approach is cleaner here — but QueryCursor::matches requires a
-    // `TextProvider` which for rope requires the full-document approach.
-    // We replicate the same contiguous-str materialisation that ropey already
-    // uses internally (it's O(N) but only on fold extraction, once per
-    // reparse, not per frame).
+    pub(super) fn increment() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Read the current counter value.
+    pub fn get() -> u64 {
+        COUNT.with(Cell::get)
+    }
+
+    /// Reset the counter to zero.
+    pub fn reset() {
+        COUNT.with(|c| c.set(0));
+    }
+}
+
+/// [`extract_fold_ranges_rope`] plus folds from every injected region.
+///
+/// For each region `injection_query` reports (a ` ```rust ` block in markdown,
+/// a `run: |` shell script in a workflow YAML), the region's own grammar is
+/// resolved through `resolve`, the region text is parsed with it, THAT
+/// language's fold query runs over the region, and the resulting rows are
+/// shifted into the host document's coordinates before being merged with the
+/// host's own folds.
+///
+/// Degradation is per-region and silent, matching "no folds for this
+/// language": a region whose language has no bundled fold query is skipped
+/// **before** `resolve` is called (so an uninstalled grammar is never fetched
+/// just to find out we could not have folded it), and a region whose grammar
+/// `resolve` cannot produce is skipped too. Neither aborts the host's folds.
+///
+/// Merging is the same `by_start` map the host path uses, so a host fold and
+/// an injected fold that share a start row collapse to the widest of the two.
+/// That is deliberate and matches what the consumer can represent:
+/// `View::set_auto_folds` keys folds by start row as well, so a second fold on
+/// the same row would be dropped downstream regardless (`docs/backlog.md`
+/// §1.4b).
+///
+/// Only ONE level of injection is descended — an injection inside an injected
+/// region (bash inside YAML inside a markdown fence) is not folded.
+///
+/// **Cost**, once per reparse and never per frame: one extra query pass over
+/// the host tree to find the regions, plus — for each region that is not
+/// already in `cache` — one parse of that region's bytes. See
+/// [`InjectedFoldCache`] for the measured numbers.
+pub fn extract_fold_ranges_rope_with_injections<F>(
+    tree: &tree_sitter::Tree,
+    grammar: &Grammar,
+    rope: &ropey::Rope,
+    injection_query: Option<&Query>,
+    cache: &mut InjectedFoldCache,
+    mut resolve: F,
+) -> Vec<(usize, usize)>
+where
+    F: FnMut(&str) -> Option<Arc<Grammar>>,
+{
+    // `QueryCursor::matches` needs a `TextProvider`; for a rope that means one
+    // contiguous materialisation. O(N) once per reparse (not per frame), and
+    // the same buffer is reused for the injection query and every region
+    // slice below.
     let text = rope.to_string();
     let source = text.as_bytes();
 
-    let fold_idx = compiled.fold_idx;
-    let mut matches = cursor.matches(&compiled.query, root, source);
+    let mut by_start: BTreeMap<usize, usize> = BTreeMap::new();
+    collect_folds_into(&mut by_start, tree, grammar, source, 0);
 
-    // Row → is-blank lookup for `fold_end_row`, off the materialised text.
-    let blank_rows: Vec<bool> = text
-        .split('\n')
-        .map(|line| line.chars().all(char::is_whitespace))
-        .collect();
-    let is_blank = |row: usize| blank_rows.get(row).copied().unwrap_or(true);
+    let Some(inj_query) = injection_query else {
+        return by_start.into_iter().collect();
+    };
 
-    while let Some(m) = matches.next() {
-        let trim = compiled
-            .trim_patterns
-            .get(m.pattern_index)
-            .copied()
-            .unwrap_or(false);
-        for cap in m.captures {
-            if cap.index != fold_idx {
-                continue;
-            }
-            let node = cap.node;
-            let start_row = node.start_position().row;
-            let end_row = fold_end_row(
-                start_row,
-                node.end_position().row,
-                node.end_position().column,
-                trim,
-                is_blank,
-            );
-            if end_row <= start_row {
-                continue;
-            }
-            by_start
-                .entry(start_row)
-                .and_modify(|e| {
-                    if end_row > *e {
-                        *e = end_row;
+    // One parser + grammar handle per injected language, reused across that
+    // language's regions. The `Arc<Grammar>` must be kept alive alongside the
+    // parser: it owns the dlopen'd shared library the parser's `Language`
+    // points into.
+    let mut parsers: HashMap<String, (Arc<Grammar>, tree_sitter::Parser)> = HashMap::new();
+
+    // Keys this extraction actually used — everything else is evicted below.
+    let mut live: std::collections::HashSet<(String, u64)> = std::collections::HashSet::new();
+
+    for (lang, range) in injection_regions(tree, inj_query, source) {
+        // Two cheap gates before anything expensive runs.
+        //
+        // A single-row region cannot produce a fold at all — `collect_folds_into`
+        // drops every capture whose `end_row <= start_row`. Skipping those here
+        // is not an optimisation of a rare case: Rust injects itself into every
+        // `macro_invocation`'s token tree, so a normal Rust file has hundreds of
+        // one-line `println!(…)` / `vec![…]` regions, and parsing each one cost
+        // more than the whole host extraction (measured: 37.5 ms → 77.0 ms on
+        // `hjkl-engine/src/editor.rs`, for two extra folds).
+        if rope.byte_to_line(range.start) == rope.byte_to_line(range.end.saturating_sub(1)) {
+            continue;
+        }
+        // No bundled fold query for this language means the region can produce
+        // nothing either, so do not pay `resolve` (which may clone + compile a
+        // grammar) for it.
+        if builtin_folds(&lang).is_none() {
+            continue;
+        }
+        let sub = &source[range.clone()];
+        let key = (lang, crate::highlighter::hash_bytes(sub));
+        // Region-relative row 0 is this host row. THIS is what puts an
+        // injected fold in the host document's coordinates — the cached rows
+        // below are region-relative, so the same block of code memoised once
+        // still lands correctly after rows are inserted above it.
+        let row_offset = rope.byte_to_line(range.start);
+
+        if !cache.entries.contains_key(&key) {
+            let entry = match parsers.get_mut(&key.0) {
+                Some(e) => e,
+                None => {
+                    let Some(child) = resolve(&key.0) else {
+                        continue;
+                    };
+                    let mut parser = tree_sitter::Parser::new();
+                    if parser.set_language(child.language()).is_err() {
+                        continue;
                     }
-                })
-                .or_insert(end_row);
+                    parsers.entry(key.0.clone()).or_insert((child, parser))
+                }
+            };
+            let (child, parser) = (&entry.0, &mut entry.1);
+            injected_parse_counter::increment();
+            let Some(sub_tree) = parser.parse(sub, None) else {
+                continue;
+            };
+            let mut region_folds: BTreeMap<usize, usize> = BTreeMap::new();
+            collect_folds_into(&mut region_folds, &sub_tree, child, sub, 0);
+            cache
+                .entries
+                .insert(key.clone(), region_folds.into_iter().collect());
+        }
+
+        // Unwrap-free: just inserted above when it was missing.
+        if let Some(region_folds) = cache.entries.get(&key) {
+            for &(s, e) in region_folds {
+                let (s, e) = (s + row_offset, e + row_offset);
+                by_start
+                    .entry(s)
+                    .and_modify(|prev| {
+                        if e > *prev {
+                            *prev = e;
+                        }
+                    })
+                    .or_insert(e);
+            }
+            live.insert(key);
         }
     }
 
-    // Suppress unused-variable warning; `total_bytes` isn't used in the
-    // current implementation because we materialise the full string above.
-    let _ = total_bytes;
+    // Bound the memo at this document's live injection set.
+    cache.entries.retain(|k, _| live.contains(k));
 
     by_start.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Injected regions
+// ---------------------------------------------------------------------------
+
+/// Discover every injected region in `tree` as `(language, byte_range)`.
+///
+/// Mirrors the region discovery in
+/// [`Highlighter::highlight_range_with_injections_rope`][hl], with two
+/// differences: it runs over the WHOLE document (folds are not viewport
+/// bounded), and it applies `(#offset! @injection.content …)`, which the
+/// highlight path ignores. That directive is load-bearing here — a YAML
+/// `run: |` block scalar's node starts ON the `|`, and nvim-treesitter's YAML
+/// injections shift the content start one column right to drop it. Feeding
+/// the `|` to the bash parser makes the whole script one ERROR node with no
+/// folds inside it.
+///
+/// [hl]: crate::Highlighter::highlight_range_with_injections_rope
+fn injection_regions(
+    tree: &tree_sitter::Tree,
+    inj_query: &Query,
+    source: &[u8],
+) -> Vec<(String, Range<usize>)> {
+    let names = inj_query.capture_names();
+    let lang_idx = names
+        .iter()
+        .position(|n| *n == INJ_LANG_CAPTURE)
+        .map(|i| i as u32);
+    let Some(content_idx) = names.iter().position(|n| *n == INJ_CONTENT_CAPTURE) else {
+        return Vec::new();
+    };
+    let content_idx = content_idx as u32;
+
+    let mut out: Vec<(String, Range<usize>)> = Vec::new();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(inj_query, tree.root_node(), source);
+
+    while let Some(m) = matches.next() {
+        let mut lang_name: Option<String> = None;
+        let mut content_range: Option<Range<usize>> = None;
+
+        for cap in m.captures {
+            if Some(cap.index) == lang_idx {
+                let (s, e) = (cap.node.start_byte(), cap.node.end_byte());
+                if s < e && e <= source.len() {
+                    lang_name = std::str::from_utf8(&source[s..e])
+                        .ok()
+                        .map(|s| s.trim().to_string());
+                }
+            } else if cap.index == content_idx {
+                let (s, e) = (cap.node.start_byte(), cap.node.end_byte());
+                if s < e && e <= source.len() {
+                    content_range = Some(s..e);
+                }
+            }
+        }
+
+        // Pattern-level `(#set! injection.language "foo")`.
+        if lang_name.is_none() {
+            for prop in inj_query.property_settings(m.pattern_index) {
+                if prop.key.as_ref() == INJ_LANG_CAPTURE
+                    && let Some(v) = prop.value.as_deref()
+                {
+                    lang_name = Some(v.trim().to_string());
+                    break;
+                }
+            }
+        }
+
+        let (Some(name), Some(range)) = (lang_name, content_range) else {
+            continue;
+        };
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            continue;
+        }
+        let range = apply_offset_directive(inj_query, m.pattern_index, content_idx, source, range);
+        if range.start < range.end {
+            out.push((name, range));
+        }
+    }
+    out
+}
+
+/// Apply `(#offset! @injection.content srow scol erow ecol)` to `range`.
+///
+/// The four arguments are row/column DELTAS on the capture's start and end
+/// positions, in tree-sitter's own units (columns are byte columns). Returns
+/// `range` unchanged when the pattern carries no `#offset!` for this capture,
+/// when the argument list is not the expected shape, or when applying it would
+/// invert or escape the range.
+fn apply_offset_directive(
+    query: &Query,
+    pattern_index: usize,
+    capture_idx: u32,
+    source: &[u8],
+    range: Range<usize>,
+) -> Range<usize> {
+    use tree_sitter::QueryPredicateArg;
+
+    for pred in query.general_predicates(pattern_index) {
+        if &*pred.operator != "offset!" {
+            continue;
+        }
+        let mut args = pred.args.iter();
+        match args.next() {
+            Some(QueryPredicateArg::Capture(c)) if *c == capture_idx => {}
+            _ => continue,
+        }
+        let deltas: Vec<i64> = args
+            .filter_map(|a| match a {
+                QueryPredicateArg::String(s) => s.parse::<i64>().ok(),
+                _ => None,
+            })
+            .collect();
+        let [srow, scol, erow, ecol] = deltas[..] else {
+            continue;
+        };
+        let start = shift_byte(source, range.start, srow, scol);
+        let end = shift_byte(source, range.end, erow, ecol);
+        if start < end {
+            return start..end;
+        }
+        return range;
+    }
+    range
+}
+
+/// Move `byte` by `drow` lines and `dcol` byte-columns within `source`.
+///
+/// Rows move by scanning for newlines; the column delta is then applied to the
+/// resulting offset. The result is clamped into `0..=source.len()` and nudged
+/// forward to the next UTF-8 char boundary so the caller can slice with it.
+fn shift_byte(source: &[u8], byte: usize, drow: i64, dcol: i64) -> usize {
+    let mut pos = byte.min(source.len());
+    // Row deltas: forward to the byte after the next newline, backward to the
+    // byte after the previous one.
+    for _ in 0..drow.unsigned_abs() {
+        if drow > 0 {
+            match source[pos..].iter().position(|&b| b == b'\n') {
+                Some(off) => pos += off + 1,
+                None => {
+                    pos = source.len();
+                    break;
+                }
+            }
+        } else {
+            // Step back over the newline that ends the previous row, then to
+            // the start of that row.
+            let before = &source[..pos.saturating_sub(1)];
+            match before.iter().rposition(|&b| b == b'\n') {
+                Some(off) => pos = off + 1,
+                None => {
+                    pos = 0;
+                    break;
+                }
+            }
+        }
+    }
+    pos = if dcol >= 0 {
+        pos.saturating_add(dcol as usize).min(source.len())
+    } else {
+        pos.saturating_sub(dcol.unsigned_abs() as usize)
+    };
+    // Never land inside a multi-byte char.
+    while pos < source.len() && (source[pos] & 0xC0) == 0x80 {
+        pos += 1;
+    }
+    pos
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +869,49 @@ mod tests {
         assert_eq!(fold_end_row(0, 0, 0, true, |_| false), 0);
     }
 
+    // ── shift_byte (the `#offset!` primitive) ───────────────────────────
+
+    #[test]
+    fn shift_byte_applies_a_column_delta() {
+        // "ab\ncd\n": +1 from the start of row 1 lands on `d`.
+        let src = b"ab\ncd\n";
+        assert_eq!(shift_byte(src, 3, 0, 1), 4);
+        assert_eq!(shift_byte(src, 3, 0, -1), 2);
+    }
+
+    #[test]
+    fn shift_byte_applies_a_row_delta() {
+        let src = b"ab\ncd\nef\n";
+        // From the start of row 0, +1 row is the start of row 1 (`c` at 3).
+        assert_eq!(shift_byte(src, 0, 1, 0), 3);
+        assert_eq!(shift_byte(src, 0, 2, 0), 6);
+        // Back from row 2 to row 1, and combined with a column delta.
+        assert_eq!(shift_byte(src, 6, -1, 0), 3);
+        assert_eq!(shift_byte(src, 6, -1, 1), 4);
+    }
+
+    #[test]
+    fn shift_byte_clamps_at_both_ends() {
+        let src = b"ab\ncd\n";
+        assert_eq!(shift_byte(src, 3, 9, 0), src.len(), "past EOF clamps");
+        assert_eq!(shift_byte(src, 3, -9, 0), 0, "before BOF clamps");
+        assert_eq!(shift_byte(src, 5, 0, 99), src.len());
+        assert_eq!(shift_byte(src, 1, 0, -99), 0);
+    }
+
+    /// A column delta must never leave the offset inside a multi-byte char —
+    /// the caller slices `source[range]` with it.
+    #[test]
+    fn shift_byte_never_lands_inside_a_multibyte_char() {
+        let src = "aé\n".as_bytes(); // a=1 byte, é=2 bytes at 1..3
+        assert_eq!(
+            shift_byte(src, 1, 0, 1),
+            3,
+            "skips past é rather than into it"
+        );
+        assert!(std::str::from_utf8(&src[shift_byte(src, 1, 0, 1)..]).is_ok());
+    }
+
     #[test]
     fn builtin_folds_rust_is_some() {
         assert!(
@@ -628,6 +1008,57 @@ mod tests {
         assert!(
             ranges.iter().any(|&(s, e)| s == 0 && e == 3),
             "expected fold (0, 3) for a 4-line fn, got: {ranges:?}"
+        );
+    }
+
+    /// `injection_regions` must report the fenced block's content, and must
+    /// apply `(#offset! @injection.content …)` when the pattern carries one.
+    ///
+    /// Nothing in the currently installed query set uses `#offset!` on
+    /// `@injection.content` (javascript's is on a different capture), so
+    /// without this test the offset branch would never run — and the day a
+    /// grammar repo adds one (nvim-treesitter's YAML query offsets the `|` of
+    /// a `run: |` block scalar out of the injected text) it would be feeding
+    /// the child parser a leading delimiter with nothing to notice it.
+    #[test]
+    #[ignore = "network + compiler: clones tree-sitter-markdown then builds it"]
+    fn injection_regions_apply_the_offset_directive() {
+        use crate::runtime::{GrammarLoader, GrammarRegistry};
+
+        let registry = GrammarRegistry::embedded().expect("embedded registry");
+        let loader = GrammarLoader::user_default(registry.meta()).expect("user loader");
+        let spec = registry.by_name("markdown").expect("markdown in manifest");
+        let grammar = crate::runtime::Grammar::load("markdown", spec, &loader, registry.meta())
+            .expect("load markdown grammar");
+
+        // Byte 8 is the `f` of `fn` — right after "```rust\n".
+        let source = b"```rust\nfn f() {}\n```\n";
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(grammar.language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let base = r#"(fenced_code_block (code_fence_content) @injection.content
+                        (#set! injection.language "rust"))"#;
+        let offset = r#"(fenced_code_block (code_fence_content) @injection.content
+                        (#set! injection.language "rust")
+                        (#offset! @injection.content 0 1 0 0))"#;
+        let plain = Query::new(grammar.language(), base).expect("compile plain query");
+        let regions = injection_regions(&tree, &plain, source);
+        assert_eq!(regions.len(), 1, "one fenced block, got {regions:?}");
+        assert_eq!(regions[0].0, "rust");
+        assert_eq!(regions[0].1.start, 8, "content starts after the info line");
+
+        let with_offset = Query::new(grammar.language(), offset).expect("compile offset query");
+        let shifted = injection_regions(&tree, &with_offset, source);
+        assert_eq!(shifted.len(), 1);
+        assert_eq!(
+            shifted[0].1.start,
+            regions[0].1.start + 1,
+            "a `0 1 0 0` offset must move the content start one column right"
+        );
+        assert_eq!(
+            shifted[0].1.end, regions[0].1.end,
+            "a zero end-delta must leave the end alone"
         );
     }
 

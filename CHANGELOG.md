@@ -10,6 +10,25 @@ patch bumps.
 
 ### Added
 
+- **Code inside embedded languages folds now.** `foldmethod=expr` ran the fold
+  query against the top-level tree only, so a ` ```rust ` block in a markdown
+  file, or a `<script>` / `<style>` block in an HTML page, folded as one opaque
+  unit. Each injected region is now parsed with its own grammar and folded with
+  that language's query, with the rows offset into the host document. Measured
+  against neovim 0.12.4: a markdown fixture with a ` ```rust ` and a ` ```bash `
+  block went from 4 folds to neovim's 7, and an HTML page with a `<style>` and a
+  `<script>` from 6 to neovim's 9 — exact matches in both cases. A region whose
+  language has no bundled fold query, or whose grammar is not installed, is
+  skipped silently; the host's own folds are never affected. Costs one extra
+  query pass over the tree per reparse plus a parse of each region that changed
+  (regions are memoised by content), measured at 9.0 ms → 10.0 ms for the whole
+  fold pass on a 7334-line Rust file.
+
+  Not covered: workflow-YAML `run: |` scripts, which neovim does fold. hjkl
+  takes injection queries from the grammar's own repository and
+  `tree-sitter-grammars/tree-sitter-yaml` ships none, so a YAML buffer has no
+  injections at all — see `docs/backlog.md` §1.4b.
+
 - **`hjkl_app::trash::TrashRoot` and `trash_path_in`** — the trash directory can
   now be named explicitly instead of always resolving `$XDG_CACHE_HOME`.
   `TrashRoot::Xdg` (the default) is the previous behaviour exactly;

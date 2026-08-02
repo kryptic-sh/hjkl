@@ -93,12 +93,32 @@ hjkl emits for markdown, yaml, html, json, lua, css, bash, python, toml, Go, C,
 C++, Java, PHP, Ruby, C#, JavaScript and TypeScript is exactly one of neovim's.
 What neovim still has that hjkl does not:
 
-- **No folds inside injected languages.** `extract_fold_ranges_rope` queries
-  only the top-level tree with the top-level grammar, so a ` ```rust ` block
-  inside markdown, or an embedded shell script in a GitHub workflow, folds as
-  one opaque block. neovim folds their internals. Needs the fold query run per
-  injection region with row offsets applied — the injection machinery already
-  exists in `highlight_range_with_injections_rope`.
+- **No folds inside a workflow YAML's `run: |` scripts** — and the reason is not
+  the fold code. Folds inside injected regions now work in general
+  (`folds::extract_fold_ranges_rope_with_injections`, 2026-08-03: markdown
+  fences and HTML `<script>` / `<style>` match neovim exactly), but a YAML
+  buffer has **no injections at all** in hjkl:
+  `GrammarLoader::build_and_install` takes `injections.scm` from the grammar's
+  own repository — deliberately, since the curated query repos "use non-standard
+  predicates" — and `tree-sitter-grammars/tree-sitter-yaml` @1805917 ships only
+  `queries/highlights.scm`. So `.github/workflows/ci.yml` is unchanged at 152
+  folds against neovim's 173 (verified after the injection work; the 21 missing
+  are all inside embedded bash). This also means YAML `run:` blocks are not
+  syntax-highlighted as bash today.
+
+  Closing it needs a decision, not just code:
+  1. Bundle injection queries the way `folds.scm` is bundled
+     (`builtin_injections(lang)`, falling back when the grammar repo ships
+     none). Changes highlighting too, not just folds.
+  2. **Blocker if we do:** injection discovery evaluates NO predicates — not in
+     `folds::injection_regions` and not in
+     `highlight_range_with_injections_rope`. nvim-treesitter's YAML query gates
+     the bash injection on `(#any-of? @_run "run" "script" …)`, so without
+     predicate evaluation every block scalar in every YAML file — including
+     `description: |` prose — would be parsed as bash. Predicate evaluation for
+     injection matches (`#eq?`, `#any-of?`, `#match?`) is the prerequisite.
+  3. Or keep taking injections from grammar repos and accept the gap.
+
 - **One fold per start row.** `View::add_fold` / `set_auto_folds` key folds by
   `start_row`, so where two nested folds legitimately share one (markdown's
   `(list)` and the `(list_item (list))` inside it), hjkl keeps the outer and
@@ -114,6 +134,40 @@ What neovim still has that hjkl does not:
   tables). This is deliberate, and the ranges are correct — noted so the next
   differential run does not read it as a regression.
 
+Left undone by the injected-folds work (2026-08-03), all in
+`folds::extract_fold_ranges_rope_with_injections`:
+
+- **One level of injection only.** A region inside a region — bash inside a
+  `run: |` inside a ` ```yaml ` markdown fence — is not folded. Recursing needs
+  a depth cap and a story for the cost below; nothing measured needs it yet.
+- **The region-discovery query pass cannot be memoised, and it is the whole
+  remaining cost.** Every extraction runs the host's `injections.scm` over the
+  full tree; region byte ranges move with every edit, so there is nothing stable
+  to key a memo on. Measured on `hjkl-engine/src/editor.rs` (7334 lines,
+  release, best of 20): 9.0 ms host-only, 19.7 ms with injections and no memo,
+  10.0 ms with `InjectedFoldCache` warm — i.e. the parses are now ~free and the
+  ~1 ms that remains is discovery. Only languages whose grammar ships an
+  `injections.scm` pay it (locally: cpp, html, javascript, jinja, lua, markdown,
+  rust, vue). Rust is the worst ratio in the set — it injects itself into every
+  macro body and yielded 2 extra folds on that file. If this ever shows up in a
+  keystroke profile, the cheap lever is a setting to disable injected folds, or
+  skipping regions whose language equals the host's.
+- **`resolve` can block.** `SyntaxLayer::extract_fold_ranges` passes
+  `LanguageDirectory::by_name`, which clones + compiles a grammar on first use.
+  Same exposure the highlight path already has (`walk_rows` passes the same
+  closure), and it is gated behind `builtin_folds(lang).is_some()` so only
+  foldable languages can trigger it — but a fold pass CAN now be what fetches a
+  grammar. A cache-only lookup would need a new `LanguageDirectory` method.
+- **An injected fold that starts on a host fold's start row is dropped.** The
+  `by_start` map keeps the widest span, unchanged from before. Deliberate:
+  `View::set_auto_folds` keys folds by start row too, so the second one could
+  not survive downstream anyway. Fixing it is the "One fold per start row" item
+  above.
+- **Not verified:** whether hjkl's injection discovery ignoring `#offset!` in
+  the HIGHLIGHT path (`highlight_range_with_injections_rope`) mis-highlights
+  anything today. The fold path applies the directive; the highlight path still
+  does not, and nothing installed locally uses it on `@injection.content`.
+
 Coverage note: the fold comparison was run over this repo's markdown, one rust
 file, `.github/workflows/ci.yml`, and small hand-written yaml/json/lua/css/
 bash/python/html/toml fixtures, plus (2026-08-02, second pass) hand-written
@@ -126,6 +180,13 @@ nvim-treesitter's own fold queries. The compact fixtures are pinned as
 `<lang>_fold_ranges_match_neovim` in `hjkl_syntax`'s test module (all
 `#[ignore]`d — CI has no grammars; run with
 `cargo test -p hjkl-syntax --lib -- --ignored`).
+
+Measuring neovim's folds has one trap worth writing down: a headless nvim parses
+injections **lazily**, so the enumeration script must call
+`vim.treesitter.get_parser(0):parse(true)` before reading `foldclosed`. Without
+it nvim reports only the host language's folds — 152 on
+`.github/workflows/ci.yml` instead of 173 — which reads as agreement with hjkl
+rather than as the measurement being wrong.
 
 Coverage gap left by the `foldlevelstart` fix (2026-08-02): the LEVEL rule was
 checked, the level-to-grammar wiring was not, end to end. `set_auto_folds`'s

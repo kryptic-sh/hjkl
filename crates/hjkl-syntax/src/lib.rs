@@ -17,8 +17,8 @@ use std::sync::Arc;
 use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{
     CommentMarkerPass, DotFallbackTheme, HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass,
-    Highlighter, InputEdit, MetaValue, Point, RAINBOW_BRACKET_CAPTURE, RAINBOW_DEPTH_KEY, Theme,
-    extract_fold_ranges_rope, rainbow_spans_rope,
+    Highlighter, InjectedFoldCache, InputEdit, MetaValue, Point, RAINBOW_BRACKET_CAPTURE,
+    RAINBOW_DEPTH_KEY, Theme, extract_fold_ranges_rope_with_injections, rainbow_spans_rope,
 };
 use hjkl_engine::Query;
 use hjkl_lang::{GrammarRequest, LanguageDirectory};
@@ -362,6 +362,10 @@ struct BufferClient {
     parsed_dirty_gen: Option<u64>,
     /// Cached diag signs keyed by `(dirty_gen, vp_top, vp_end)`.
     cache_signs: Option<(u64, usize, usize, Vec<DiagSign>)>,
+    /// Memo of the folds each injected region produced, so one edit re-parses
+    /// only the region it touched. Content-hash keyed, so it survives
+    /// invalidation of everything else here.
+    fold_injections: InjectedFoldCache,
 }
 
 impl Default for BufferClient {
@@ -376,6 +380,7 @@ impl Default for BufferClient {
             cache_row_starts: None,
             parsed_dirty_gen: None,
             cache_signs: None,
+            fold_injections: InjectedFoldCache::default(),
         }
     }
 }
@@ -686,11 +691,20 @@ impl SyntaxLayer {
     }
 
     /// Extract fold ranges from the buffer's retained tree using the bundled
-    /// `folds.scm` for this grammar.
+    /// `folds.scm` for this grammar, plus one for each injected region using
+    /// ITS language's query.
     ///
     /// Returns `Some(ranges)` when the grammar is attached and the tree has
     /// been parsed — `ranges` may be empty when the grammar has no bundled
     /// `folds.scm` or the file contains no foldable nodes.
+    ///
+    /// Injected regions (a ` ```rust ` block in markdown, a `<script>` body in
+    /// HTML) are parsed with their own grammar, folded with that language's
+    /// query, and their rows offset into this document — see
+    /// [`hjkl_bonsai::extract_fold_ranges_rope_with_injections`]. Resolving an
+    /// injected grammar goes through the shared [`LanguageDirectory`], which
+    /// may build one on first use; only languages with a bundled fold query
+    /// can trigger that.
     ///
     /// Returns `None` when:
     /// - No grammar is attached yet (grammar still loading or unknown extension).
@@ -709,19 +723,31 @@ impl SyntaxLayer {
         id: BufferId,
         buffer: &impl hjkl_engine::Query,
     ) -> Option<Vec<(usize, usize)>> {
+        let directory = Arc::clone(&self.directory);
         let client = match self.clients.get_mut(&id) {
             Some(c) if c.has_language => c,
             // Grammar not yet attached (loading or unknown) — signal "not ready".
             _ => return None,
         };
         // Highlighter creation failed — signal "not ready".
-        let highlighter = client.highlighter.as_mut()?;
+        let highlighter = client.highlighter.as_ref()?;
         // Tree not yet parsed — signal "not ready".
         let tree = highlighter.tree()?;
         let grammar = highlighter.grammar()?;
+        let injections = highlighter.injection_query();
         let rope = buffer.rope();
         // Grammar is ready and tree is parsed — return Some even if empty.
-        Some(extract_fold_ranges_rope(tree, grammar, &rope))
+        // Injected regions (a ```rust block in markdown, the `<script>` body of
+        // an HTML page) are folded with their own grammar; a language whose
+        // grammar is not installed simply contributes nothing.
+        Some(extract_fold_ranges_rope_with_injections(
+            tree,
+            grammar,
+            &rope,
+            injections,
+            &mut client.fold_injections,
+            |name| directory.by_name(name),
+        ))
     }
 
     /// Render spans for the visible viewport, returning an owned span table.
@@ -1832,6 +1858,158 @@ mod tests {
                 (16, 17), // the list
                 (19, 21), // ### Nested B1
                 (23, 25), // ## Section C
+            ]
+        );
+    }
+
+    // ── Folds inside injected languages ─────────────────────────────────
+    //
+    // The fixtures below are the ones the 2026-08-03 injection work was
+    // measured on. neovim's side was enumerated the same way as every other
+    // fold test here (`vim.treesitter.foldexpr`, `foldclosed`/`foldclosedend`
+    // per `foldlevel`), with one addition that is easy to get wrong: a
+    // headless nvim parses injections LAZILY, so the run must force
+    // `vim.treesitter.get_parser(0):parse(true)` before enumerating. Without
+    // it nvim reports only the host language's folds (152 instead of 173 on
+    // `.github/workflows/ci.yml`) and reads as agreement.
+
+    /// A markdown document with ` ```rust ` and ` ```bash ` blocks.
+    ///
+    /// nvim on this fixture: `0,20`  `4,10`  `5,9`  `6,8`  `12,20`  `14,18`
+    /// `15,17` — identical to the assertion below.
+    ///
+    /// Three of those seven are inside the fenced blocks and come from the
+    /// INJECTED grammars: `(5, 9)` is `fn main()`, `(6, 8)` its `if`, and
+    /// `(15, 17)` the bash `for … done`. Before injected folds hjkl emitted
+    /// only the other four (`(0, 20)`, `(4, 10)`, `(12, 20)`, `(14, 18)`).
+    ///
+    /// The rows are also the proof that the region → host row offset is
+    /// applied: the rust block's own tree puts those folds at rows 0..4 and
+    /// 1..3, and the bash block's at 0..2. Drop the offset and the expected
+    /// vector below cannot be produced.
+    #[test]
+    #[ignore = "network + compiler: fetches the markdown, rust and bash grammars"]
+    fn markdown_injected_fold_ranges_match_neovim() {
+        let src = concat!(
+            "# Title\n\nIntro text.\n\n",
+            "```rust\nfn main() {\n    if true {\n        println!(\"hi\");\n    }\n}\n```\n\n",
+            "## Shell\n\n",
+            "```bash\nfor f in a b; do\n  echo \"$f\"\ndone\n```\n\n",
+            "Trailing text.\n",
+        );
+        let buf = View::from_str(src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.md"));
+        let _ = layer.render_viewport(TID, &buf, 0, 40);
+        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        assert_eq!(
+            ranges,
+            vec![
+                (0, 20),  // # Title
+                (4, 10),  // the ```rust fence
+                (5, 9),   // injected: fn main()
+                (6, 8),   // injected: the if
+                (12, 20), // ## Shell
+                (14, 18), // the ```bash fence
+                (15, 17), // injected: for … done
+            ]
+        );
+    }
+
+    /// Injected folds must follow their region when rows move above it.
+    ///
+    /// The memo behind injected folds (`InjectedFoldCache`) is keyed by the
+    /// region's CONTENT, and stores region-relative rows. Inserting a line at
+    /// the top of the document leaves every region's bytes identical — so the
+    /// memo hits — while every host row shifts by one. If the memo stored host
+    /// rows, or the offset were applied before storing instead of after
+    /// reading, the second extraction below would return the FIRST document's
+    /// rows for the injected folds and only the host's would move.
+    #[test]
+    #[ignore = "network + compiler: fetches the markdown, rust and bash grammars"]
+    fn injected_folds_shift_with_the_region_on_a_memo_hit() {
+        let body = concat!(
+            "# Title\n\nIntro text.\n\n",
+            "```rust\nfn main() {\n    if true {\n        println!(\"hi\");\n    }\n}\n```\n\n",
+            "## Shell\n\n",
+            "```bash\nfor f in a b; do\n  echo \"$f\"\ndone\n```\n\n",
+            "Trailing text.\n",
+        );
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.md"));
+
+        let before = View::from_str(body);
+        let _ = layer.render_viewport(TID, &before, 0, 40);
+        hjkl_bonsai::injected_parse_counter::reset();
+        let first = layer
+            .extract_fold_ranges(TID, &before)
+            .expect("grammar ready");
+        assert_eq!(
+            hjkl_bonsai::injected_parse_counter::get(),
+            2,
+            "cold extraction must parse both injected regions (rust + bash)"
+        );
+
+        // Same document with one extra line on top. Same buffer id, same
+        // layer — the injected-region memo is live and every region's content
+        // is byte-identical, so this must be the memo-hit path.
+        let shifted = View::from_str(&format!("Added line.\n{body}"));
+        layer.reset(TID);
+        let _ = layer.render_viewport(TID, &shifted, 0, 40);
+        hjkl_bonsai::injected_parse_counter::reset();
+        let second = layer
+            .extract_fold_ranges(TID, &shifted)
+            .expect("grammar ready");
+        assert_eq!(
+            hjkl_bonsai::injected_parse_counter::get(),
+            0,
+            "moved-but-unchanged regions must come from the memo, not a reparse"
+        );
+
+        let expected: Vec<(usize, usize)> = first.iter().map(|&(s, e)| (s + 1, e + 1)).collect();
+        assert_eq!(
+            second, expected,
+            "every fold, injected ones included, must move down exactly one row"
+        );
+    }
+
+    /// An HTML page with a `<style>` and a `<script>` block.
+    ///
+    /// nvim on this fixture: `1,23`  `2,9`  `3,8`  `4,7`  `10,22`  `11,13`
+    /// `14,21`  `15,20`  `16,18` — identical to the assertion below.
+    ///
+    /// `(4, 7)` is the CSS rule inside `<style>`; `(15, 20)` and `(16, 18)`
+    /// are the JS function and its `if` inside `<script>`. hjkl emitted none
+    /// of the three before injected folds.
+    #[test]
+    #[ignore = "network + compiler: fetches the html, css and javascript grammars"]
+    fn html_injected_fold_ranges_match_neovim() {
+        let src = concat!(
+            "<!DOCTYPE html>\n<html>\n  <head>\n",
+            "    <style>\n      body {\n        color: red;\n        margin: 0;\n      }\n",
+            "    </style>\n  </head>\n  <body>\n",
+            "    <div>\n      <p>hi</p>\n    </div>\n",
+            "    <script>\n      function go(x) {\n        if (x) {\n",
+            "          return 1;\n        }\n        return 0;\n      }\n",
+            "    </script>\n  </body>\n</html>\n",
+        );
+        let buf = View::from_str(src);
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.html"));
+        let _ = layer.render_viewport(TID, &buf, 0, 40);
+        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        assert_eq!(
+            ranges,
+            vec![
+                (1, 23),  // <html>
+                (2, 9),   // <head>
+                (3, 8),   // <style>
+                (4, 7),   // injected css: the body rule
+                (10, 22), // <body>
+                (11, 13), // <div>
+                (14, 21), // <script>
+                (15, 20), // injected js: function go()
+                (16, 18), // injected js: the if
             ]
         );
     }
