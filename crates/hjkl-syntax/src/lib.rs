@@ -1824,6 +1824,57 @@ mod tests {
         assert_eq!(inc.spans, cold.spans);
     }
 
+    /// Fold ranges for `buf`, waiting for the grammar to become available.
+    ///
+    /// `set_language_for_path` may only START a grammar load: on a machine with
+    /// a warm `~/.cache/bonsai` the grammar is ready by the first
+    /// `render_viewport`, but on a cold one — CI, which fetches and compiles it
+    /// — `extract_fold_ranges` answers `None` for as long as the load is in
+    /// flight. A single call plus `.expect("grammar ready")` therefore passes
+    /// locally and panics in the `grammar tests` lane, which is exactly how
+    /// these tests shipped red.
+    ///
+    /// Polls `poll_pending_loads` until extraction answers, then returns the
+    /// ranges. Panics with what it was still waiting for if the deadline
+    /// passes, so a genuinely broken load fails loudly rather than hanging.
+    fn fold_ranges_when_ready(
+        layer: &mut SyntaxLayer,
+        buf: &View,
+        path: &str,
+        rows: usize,
+    ) -> Vec<(usize, usize)> {
+        fold_ranges_when_ready_for(layer, TID, buf, path, rows)
+    }
+
+    /// [`fold_ranges_when_ready`] against an explicit buffer id, for a test
+    /// that needs the grammar warmed WITHOUT touching the client state of the
+    /// id it measures — the injected-fold memo is per buffer client, so
+    /// warming on the same id would leave nothing for a cold pass to parse.
+    fn fold_ranges_when_ready_for(
+        layer: &mut SyntaxLayer,
+        id: BufferId,
+        buf: &View,
+        path: &str,
+        rows: usize,
+    ) -> Vec<(usize, usize)> {
+        layer.set_language_for_path(id, Path::new(path));
+        let deadline = std::time::Duration::from_secs(300);
+        let start = std::time::Instant::now();
+        loop {
+            layer.poll_pending_loads();
+            let _ = layer.render_viewport(id, buf, 0, rows);
+            if let Some(ranges) = layer.extract_fold_ranges(id, buf) {
+                return ranges;
+            }
+            assert!(
+                start.elapsed() < deadline,
+                "grammar for {path} never became ready within {deadline:?} — \
+                 the load either failed or is not being polled"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     /// Markdown fold ranges, pinned against neovim's treesitter folds for the
     /// same document (`vim.treesitter.foldexpr`, folds enumerated with
     /// `foldclosed`/`foldclosedend`). Every range below was produced by nvim
@@ -1845,9 +1896,7 @@ mod tests {
         );
         let buf = View::from_str(src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.md"));
-        let _ = layer.render_viewport(TID, &buf, 0, 40);
-        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        let ranges = fold_ranges_when_ready(&mut layer, &buf, "a.md", 40);
         assert_eq!(
             ranges,
             vec![
@@ -1899,9 +1948,7 @@ mod tests {
         );
         let buf = View::from_str(src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.md"));
-        let _ = layer.render_viewport(TID, &buf, 0, 40);
-        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        let ranges = fold_ranges_when_ready(&mut layer, &buf, "a.md", 40);
         assert_eq!(
             ranges,
             vec![
@@ -1936,14 +1983,21 @@ mod tests {
             "Trailing text.\n",
         );
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.md"));
-
         let before = View::from_str(body);
+        // Warm the markdown/rust/bash grammars on a DIFFERENT buffer id: on a
+        // cold cache (CI) the first extraction answers None until the loads
+        // finish, but warming on TID would also fill TID's injected-fold memo
+        // and leave the "cold" count below at zero.
+        const WARM: BufferId = TID + 1;
+        let _ = fold_ranges_when_ready_for(&mut layer, WARM, &before, "a.md", 40);
+        layer.forget(WARM);
+
+        layer.set_language_for_path(TID, Path::new("a.md"));
         let _ = layer.render_viewport(TID, &before, 0, 40);
         hjkl_bonsai::injected_parse_counter::reset();
         let first = layer
             .extract_fold_ranges(TID, &before)
-            .expect("grammar ready");
+            .expect("grammar ready after the wait above");
         assert_eq!(
             hjkl_bonsai::injected_parse_counter::get(),
             2,
@@ -1959,7 +2013,7 @@ mod tests {
         hjkl_bonsai::injected_parse_counter::reset();
         let second = layer
             .extract_fold_ranges(TID, &shifted)
-            .expect("grammar ready");
+            .expect("grammar ready after the wait above");
         assert_eq!(
             hjkl_bonsai::injected_parse_counter::get(),
             0,
@@ -1995,9 +2049,7 @@ mod tests {
         );
         let buf = View::from_str(src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.html"));
-        let _ = layer.render_viewport(TID, &buf, 0, 40);
-        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        let ranges = fold_ranges_when_ready(&mut layer, &buf, "a.html", 40);
         assert_eq!(
             ranges,
             vec![
@@ -2025,9 +2077,7 @@ mod tests {
         let src = "top:\n  a: 1\n  b:\n    - one\n    - two\n\nother:\n  c: 3\n";
         let buf = View::from_str(src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.yaml"));
-        let _ = layer.render_viewport(TID, &buf, 0, 40);
-        let ranges = layer.extract_fold_ranges(TID, &buf).expect("grammar ready");
+        let ranges = fold_ranges_when_ready(&mut layer, &buf, "a.yaml", 40);
         assert_eq!(ranges, vec![(0, 4), (2, 4), (6, 7)]);
     }
 
@@ -2048,9 +2098,7 @@ mod tests {
     fn folds_for(name: &str, src: &str) -> Vec<(usize, usize)> {
         let buf = View::from_str(src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new(name));
-        let _ = layer.render_viewport(TID, &buf, 0, 80);
-        layer.extract_fold_ranges(TID, &buf).expect("grammar ready")
+        fold_ranges_when_ready(&mut layer, &buf, name, 80)
     }
 
     /// nvim on this fixture: `(2, 4)`, `(6, 10)`, `(7, 9)` — identical.
