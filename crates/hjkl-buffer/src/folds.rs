@@ -151,13 +151,52 @@ impl crate::View {
     /// Replace all auto-generated folds with a new set derived from
     /// `ranges`, while leaving manual folds untouched.
     ///
-    /// ## Algorithm (O(N) — bounded by `ranges.len()`, no unbounded growth)
+    /// ## `foldlevelstart`, not a boolean
+    ///
+    /// The second parameter is vim's `'foldlevelstart'` verbatim, and the rule
+    /// it implements is vim's: **a fold whose (1-based) nesting level is
+    /// greater than `foldlevelstart` starts closed**, everything at or above
+    /// that level starts open. So `0` closes everything, `1` leaves top-level
+    /// folds open and closes what is inside them, `99` (hjkl's default) opens
+    /// everything.
+    ///
+    /// It takes the raw option rather than a `default_closed: bool` — the
+    /// shape it replaced, which could only express "all closed" / "all open" —
+    /// and rather than a per-range level supplied by the caller, because:
+    ///
+    /// - **Nesting level is derivable from the ranges alone** (a fold's level
+    ///   is one more than the number of other ranges that strictly contain
+    ///   it), so a caller passing levels would be passing information this
+    ///   function can compute — and would have to recompute identically at
+    ///   every call site, marker scan and tree-sitter query alike.
+    /// - **Only this function knows the final set.** Levels have to be counted
+    ///   over the ranges that actually become folds, and that is decided
+    ///   *here*: single-row, inverted and out-of-range entries are dropped,
+    ///   `end_row` is clamped, duplicate start rows collapse, and rows owned
+    ///   by a manual fold are skipped. A level computed by the caller over the
+    ///   raw ranges would be counting folds that do not exist.
+    ///
+    /// Levels are counted over the **auto** folds only: a `zf` fold enclosing
+    /// an auto one is the user's own structure, and letting it push the auto
+    /// fold a level deeper would make the auto fold's start state depend on
+    /// unrelated manual folding.
+    ///
+    /// vim's own default for the option is `-1`, meaning "do nothing, leave
+    /// `'foldlevel'` alone" (which, with `'foldlevel'` at its own default of
+    /// `0`, ends up closing everything). hjkl's `foldlevelstart` is a `u32`
+    /// defaulting to `99`, so that mode does not exist here and no value is
+    /// reserved for it — every value is a real level.
+    ///
+    /// ## Algorithm (O(N log N) — bounded by `ranges.len()`, no unbounded growth)
     ///
     /// 1. Snapshot `start_row → closed` for every existing auto fold so
     ///    open/closed state survives a reparse.
     /// 2. Retain only manual folds (`auto_generated == false`).
-    /// 3. Insert one new `Fold` per range, re-using the snapshotted closed
-    ///    state when the start_row existed before, else `default_closed`.
+    /// 3. Normalise `ranges` into the set that will actually become folds.
+    /// 4. Assign each of those a nesting level by a containment sweep.
+    /// 5. Insert one new `Fold` per surviving range, re-using the snapshotted
+    ///    closed state when the start_row existed before, else
+    ///    `level > foldlevelstart`.
     ///
     /// Invariants preserved:
     /// - Folds stay sorted by `start_row` (same ordering as `add_fold`).
@@ -170,12 +209,16 @@ impl crate::View {
     ///   that row is dropped instead. `zf` is an explicit choice of extent,
     ///   and converting it to an auto fold both changed it and handed it to
     ///   the auto engine to overwrite on the next reparse.
+    /// - An auto fold at a start_row that already had one keeps its open /
+    ///   closed state: `foldlevelstart` decides how a fold *starts*, so it
+    ///   applies to newly-appearing rows only and never re-closes a fold the
+    ///   user opened.
     /// - When the resulting fold set is identical to the current one, nothing
     ///   is written and NO generation bumps — [`Self::fold_gen`] promises to
     ///   move only on a real change, and `dirty_gen` moving every pass made
     ///   the caller's "recompute once per edit" guard fire every frame (and
     ///   with it a full re-highlight, since `dirty_gen` keys that cache).
-    pub fn set_auto_folds(&mut self, ranges: &[(usize, usize)], default_closed: bool) {
+    pub fn set_auto_folds(&mut self, ranges: &[(usize, usize)], foldlevelstart: u32) {
         // 1. Snapshot closed state of existing auto folds by start_row.
         let prev_closed: std::collections::HashMap<usize, bool> = self
             .content_lock()
@@ -194,9 +237,13 @@ impl crate::View {
             .filter(|f| !f.auto_generated)
             .copied()
             .collect();
+        let manual_starts: std::collections::HashSet<usize> =
+            next.iter().map(|f| f.start_row).collect();
 
-        // 3. Insert new auto folds in sorted order.
+        // 3. Normalise: drop what will never become a fold, so the level
+        //    sweep below counts only real folds. Start rows end up unique.
         let last = self.row_count().saturating_sub(1);
+        let mut accepted: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
         for &(start_row, end_row) in ranges {
             // Skip empty/inverted and out-of-bounds ranges.
             if end_row < start_row || start_row > last {
@@ -207,10 +254,45 @@ impl crate::View {
             if end_row == start_row {
                 continue;
             }
+            // A manual fold owns this row — leave it alone.
+            if manual_starts.contains(&start_row) {
+                continue;
+            }
+            match accepted.iter().position(|r| r.0 == start_row) {
+                Some(idx) => accepted[idx] = (start_row, end_row),
+                None => accepted.push((start_row, end_row)),
+            }
+        }
+
+        // 4. Nesting level per accepted range, by a single containment sweep.
+        //    Visiting outermost-first (start ascending, end descending) makes
+        //    `stack` the chain of enclosing folds: pop everything that ends
+        //    before this range does — that covers both a sibling that already
+        //    closed and a partial overlap, neither of which encloses it — and
+        //    what is left is exactly the enclosing chain.
+        let levels = {
+            let mut order: Vec<usize> = (0..accepted.len()).collect();
+            order.sort_by_key(|&i| (accepted[i].0, std::cmp::Reverse(accepted[i].1)));
+            let mut levels = vec![0u32; accepted.len()];
+            let mut stack: Vec<usize> = Vec::new();
+            for i in order {
+                let end_row = accepted[i].1;
+                while stack.last().is_some_and(|&open_end| open_end < end_row) {
+                    stack.pop();
+                }
+                // 1-based, matching vim: an unnested fold is level 1.
+                levels[i] = stack.len() as u32 + 1;
+                stack.push(end_row);
+            }
+            levels
+        };
+
+        // 5. Insert new auto folds in sorted order.
+        for (i, &(start_row, end_row)) in accepted.iter().enumerate() {
             let closed = prev_closed
                 .get(&start_row)
                 .copied()
-                .unwrap_or(default_closed);
+                .unwrap_or(levels[i] > foldlevelstart);
             let fold = Fold {
                 start_row,
                 end_row,
@@ -218,8 +300,6 @@ impl crate::View {
                 auto_generated: true,
             };
             match next.iter().position(|f| f.start_row == start_row) {
-                // A manual fold owns this row — leave it alone.
-                Some(idx) if !next[idx].auto_generated => continue,
                 Some(idx) => next[idx] = fold,
                 None => {
                     let pos = next
@@ -231,7 +311,7 @@ impl crate::View {
             }
         }
 
-        // 4. No-op when nothing actually changed — see the invariant above.
+        // 6. No-op when nothing actually changed — see the invariant above.
         if self.content_lock().folds == next {
             return;
         }
@@ -780,7 +860,7 @@ mod tests {
     #[test]
     fn set_auto_folds_adds_auto_folds() {
         let mut buf = b();
-        buf.set_auto_folds(&[(0, 2), (3, 4)], false);
+        buf.set_auto_folds(&[(0, 2), (3, 4)], 99);
         let folds = buf.folds();
         assert_eq!(folds.len(), 2);
         assert!(folds[0].auto_generated);
@@ -792,10 +872,10 @@ mod tests {
     #[test]
     fn set_auto_folds_second_call_replaces_first() {
         let mut buf = b();
-        buf.set_auto_folds(&[(0, 2), (3, 4)], false);
+        buf.set_auto_folds(&[(0, 2), (3, 4)], 99);
         assert_eq!(buf.folds().len(), 2);
         // Replace with a different set.
-        buf.set_auto_folds(&[(1, 4)], false);
+        buf.set_auto_folds(&[(1, 4)], 99);
         let folds = buf.folds();
         assert_eq!(folds.len(), 1, "second call must replace first set");
         assert_eq!(folds[0].start_row, 1);
@@ -808,7 +888,7 @@ mod tests {
         // Add a manual fold.
         buf.add_fold(0, 1, true);
         // Auto-fold the remaining range.
-        buf.set_auto_folds(&[(2, 4)], false);
+        buf.set_auto_folds(&[(2, 4)], 99);
         let folds = buf.folds();
         assert_eq!(folds.len(), 2, "manual fold must survive set_auto_folds");
         let manual = folds.iter().find(|f| f.start_row == 0).unwrap();
@@ -821,7 +901,7 @@ mod tests {
     fn set_auto_folds_preserves_open_closed_state_by_start_row() {
         let mut buf = b();
         // First auto-fold pass: create a closed fold at row 0.
-        buf.set_auto_folds(&[(0, 2)], true); // default_closed=true → starts closed
+        buf.set_auto_folds(&[(0, 2)], 0); // foldlevelstart=0 → starts closed
         assert!(buf.folds()[0].closed, "fold must start closed per default");
 
         // User opens the fold (simulated by toggle).
@@ -829,7 +909,7 @@ mod tests {
         assert!(!buf.folds()[0].closed, "fold must now be open");
 
         // Second auto-fold pass with same start_row — must preserve open state.
-        buf.set_auto_folds(&[(0, 2)], true); // default_closed=true but prev was open
+        buf.set_auto_folds(&[(0, 2)], 0); // foldlevelstart=0 but prev was open
         assert!(
             !buf.folds()[0].closed,
             "open/closed state must be preserved across set_auto_folds"
@@ -839,7 +919,7 @@ mod tests {
     #[test]
     fn set_auto_folds_skips_single_row_and_inverted_ranges() {
         let mut buf = b();
-        buf.set_auto_folds(&[(1, 1), (3, 2)], false);
+        buf.set_auto_folds(&[(1, 1), (3, 2)], 99);
         assert!(
             buf.folds().is_empty(),
             "single-row and inverted ranges must be skipped"
@@ -847,26 +927,162 @@ mod tests {
     }
 
     #[test]
-    fn set_auto_folds_new_folds_use_default_closed() {
+    fn set_auto_folds_new_folds_start_per_foldlevelstart() {
         let mut buf = b();
-        buf.set_auto_folds(&[(0, 4)], true);
+        buf.set_auto_folds(&[(0, 4)], 0);
         assert!(
             buf.folds()[0].closed,
-            "new auto fold must use default_closed=true"
+            "new auto fold must start closed at foldlevelstart=0"
         );
 
-        // Clear and re-run with default_closed=false.
-        buf.set_auto_folds(&[(0, 4)], false);
-        // This is a *new* start_row (it was removed + re-added), BUT the
-        // snapshot preserved the previous state (closed=true from above)
-        // because the start_row is the same.
-        // Wait — the test verifies the preservation path, not the default path.
-        // Let's use a fresh start_row to test the default path:
+        // Re-running the same start_row at foldlevelstart=99 must NOT reopen
+        // it: the snapshot preserves the state the fold already has, and
+        // `foldlevelstart` only decides how a fold *starts*.
+        buf.set_auto_folds(&[(0, 4)], 99);
+        assert!(
+            buf.folds()[0].closed,
+            "an existing fold keeps its state — foldlevelstart is start-only"
+        );
+
+        // A brand-new start row takes the option: level 1 <= 99 → open.
         let mut buf2 = b();
-        buf2.set_auto_folds(&[(2, 4)], false);
+        buf2.set_auto_folds(&[(2, 4)], 99);
         assert!(
             !buf2.folds()[0].closed,
-            "brand-new auto fold must start open when default_closed=false"
+            "brand-new level-1 auto fold must start open at foldlevelstart=99"
+        );
+    }
+
+    // ── foldlevelstart: level semantics, not a boolean ────────────────────
+    //
+    // The expectations below are neovim 0.12.4's, measured rather than
+    // reasoned: the same nesting opened with `foldmethod=expr` +
+    // `v:lua.vim.treesitter.foldexpr()` and `foldlevelstart` set to each
+    // value, with the closed folds enumerated via `foldclosed` /
+    // `foldclosedend` (`foldlevel()` merges adjacent siblings and reads as a
+    // false difference). Converted from vim's 1-based lines to 0-based rows.
+    //
+    //  row  source                        fold        level
+    //    2  function M.outer(a, b)        2..16         1
+    //    3    if a > b then               3..14         2
+    //    4      local t = {               4..7          3
+    //   10      for i = 1, 10 do         10..13         3
+    //   18  function M.second(c)         18..23         1
+    //   19    while c > 0 do             19..21         2
+    const NVIM_LUA_RANGES: &[(usize, usize)] =
+        &[(2, 16), (3, 14), (4, 7), (10, 13), (18, 23), (19, 21)];
+
+    /// Closed auto folds, as `(start_row, end_row)`, after one pass at `fls`.
+    fn closed_at(ranges: &[(usize, usize)], fls: u32) -> Vec<(usize, usize)> {
+        let mut buf = View::from_str(&"x\n".repeat(26));
+        buf.set_auto_folds(ranges, fls);
+        buf.folds()
+            .iter()
+            .filter(|f| f.closed)
+            .map(|f| (f.start_row, f.end_row))
+            .collect()
+    }
+
+    #[test]
+    fn set_auto_folds_closes_folds_deeper_than_foldlevelstart() {
+        // fls=0 → every fold closed (vim: level 1 > 0).
+        assert_eq!(
+            closed_at(NVIM_LUA_RANGES, 0),
+            vec![(2, 16), (3, 14), (4, 7), (10, 13), (18, 23), (19, 21)],
+            "foldlevelstart=0 must close every fold"
+        );
+        // fls=1 → level 1 open, levels 2+ closed. nvim closed 4..15 / 20..22
+        // (1-based), i.e. the level-2 folds became the outermost closed ones.
+        assert_eq!(
+            closed_at(NVIM_LUA_RANGES, 1),
+            vec![(3, 14), (4, 7), (10, 13), (19, 21)],
+            "foldlevelstart=1 must open level 1 and close levels 2+"
+        );
+        // fls=2 → nvim closed 5..8 / 11..14 (1-based): the level-3 folds only.
+        assert_eq!(
+            closed_at(NVIM_LUA_RANGES, 2),
+            vec![(4, 7), (10, 13)],
+            "foldlevelstart=2 must close only level 3 and deeper"
+        );
+        // fls=3 and fls=99 → nvim closed nothing (max level here is 3).
+        assert!(
+            closed_at(NVIM_LUA_RANGES, 3).is_empty(),
+            "foldlevelstart=3 must leave a 3-level nesting fully open"
+        );
+        assert!(
+            closed_at(NVIM_LUA_RANGES, 99).is_empty(),
+            "foldlevelstart=99 (hjkl's default) must open everything"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_levels_are_independent_of_range_order() {
+        // Tree-sitter query order is capture order, not document order: the
+        // level sweep must sort, not trust the caller.
+        let mut shuffled = NVIM_LUA_RANGES.to_vec();
+        shuffled.reverse();
+        assert_eq!(
+            closed_at(&shuffled, 1),
+            closed_at(NVIM_LUA_RANGES, 1),
+            "nesting level must come from containment, not from range order"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_levels_ignore_dropped_ranges() {
+        // A single-row range never becomes a fold, so it must not push the
+        // ranges around it a level deeper.
+        let mut with_noise = NVIM_LUA_RANGES.to_vec();
+        with_noise.push((5, 5)); // single row → dropped
+        with_noise.push((9, 8)); // inverted → dropped
+        assert_eq!(
+            closed_at(&with_noise, 1),
+            closed_at(NVIM_LUA_RANGES, 1),
+            "ranges that never become folds must not count as a nesting level"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_manual_folds_do_not_add_a_nesting_level() {
+        // A `zf` fold wrapping the whole file must not make every auto fold
+        // one level deeper — the auto set's levels are its own.
+        let mut buf = View::from_str(&"x\n".repeat(26));
+        buf.add_fold(0, 25, false);
+        buf.set_auto_folds(NVIM_LUA_RANGES, 1);
+        let closed: Vec<(usize, usize)> = buf
+            .folds()
+            .iter()
+            .filter(|f| f.auto_generated && f.closed)
+            .map(|f| (f.start_row, f.end_row))
+            .collect();
+        assert_eq!(
+            closed,
+            vec![(3, 14), (4, 7), (10, 13), (19, 21)],
+            "an enclosing manual fold must not shift auto fold levels"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_at_a_level_settles_without_bumping_generations() {
+        // The mixed open/closed set a non-zero `foldlevelstart` produces has
+        // to compare equal on the next pass, or the caller's once-per-edit
+        // guard fires every frame.
+        let mut buf = View::from_str(&"x\n".repeat(26));
+        buf.set_auto_folds(NVIM_LUA_RANGES, 1);
+        let fg = buf.fold_gen();
+        let dg = buf.dirty_gen();
+        for _ in 0..5 {
+            buf.set_auto_folds(NVIM_LUA_RANGES, 1);
+        }
+        assert_eq!(
+            buf.fold_gen(),
+            fg,
+            "unchanged fold set must not bump fold_gen"
+        );
+        assert_eq!(
+            buf.dirty_gen(),
+            dg,
+            "unchanged fold set must not bump dirty_gen"
         );
     }
 
@@ -1007,9 +1223,7 @@ mod tests {
         type Case = (&'static str, fn(&mut View), fn(&mut View));
         let cases: [Case; 13] = [
             ("add_fold", none, |b| b.add_fold(1, 3, false)),
-            ("set_auto_folds", none, |b| {
-                b.set_auto_folds(&[(1, 3)], false)
-            }),
+            ("set_auto_folds", none, |b| b.set_auto_folds(&[(1, 3)], 99)),
             ("remove_fold_at", open_fold, |b| {
                 assert!(b.remove_fold_at(2));
             }),

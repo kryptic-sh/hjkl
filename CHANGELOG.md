@@ -19,6 +19,22 @@ patch bumps.
 
 ### Fixed
 
+- **`foldlevelstart` is a level again, not a boolean.** The auto-fold pass
+  computed `default_closed = foldlevelstart == 0` and handed that one flag to
+  `View::set_auto_folds`, so only `0` (everything closed) and "anything else"
+  (everything open) existed. `:set foldlevelstart=1` — vim's "open the top
+  level, close what is nested inside it" — opened the whole file. Every value
+  now behaves as vim's: a fold whose 1-based nesting level exceeds
+  `foldlevelstart` starts closed. Levels are derived from the fold ranges'
+  containment, so `foldmethod=expr` and `foldmethod=marker` both get them with
+  no query change. Unchanged: `0` still closes everything, the default `99`
+  still opens everything, a fold the user opened is never re-closed by a
+  reparse, and `zf` folds neither take a level nor give one. Measured against
+  neovim 0.12.4 (`foldclosed` / `foldclosedend` at `foldlevelstart` 0/1/2/3/99).
+  Note that vim's own default for the option is `-1` ("leave `'foldlevel'`
+  alone", which ends up closing everything); hjkl's is a `u32` defaulting to
+  `99`, so that mode does not exist here.
+
 - **C# files now auto-fold.** `.cs` buffers produced no tree-sitter folds at
   all. `bonsai.toml` declares the same C# grammar twice — `[language.c-sharp]`
   (helix queries) and `[language.c_sharp]` (nvim-treesitter queries) — and

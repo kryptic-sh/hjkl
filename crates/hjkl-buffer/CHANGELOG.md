@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking
+
+- **`View::set_auto_folds` takes `foldlevelstart: u32` instead of
+  `default_closed: bool`.** The flag could only express "all closed" / "all
+  open", so vim's intermediate levels were unreachable. The new parameter is
+  vim's `'foldlevelstart'` verbatim: a fold whose 1-based nesting level exceeds
+  it starts closed. Levels are computed inside `set_auto_folds` from the ranges'
+  containment — the caller passes no per-range depth, because only this function
+  knows which ranges survive normalisation (single-row, inverted and
+  out-of-bounds entries dropped, `end_row` clamped, duplicate start rows
+  collapsed, rows owned by a manual fold skipped), and a level counted over the
+  raw ranges would be counting folds that do not exist. Migration:
+  `default_closed: true` → `0`, `default_closed: false` → `99`. Everything else
+  is unchanged — an existing auto fold still keeps its open/closed state across
+  a reparse (`foldlevelstart` decides how a fold _starts_), manual (`zf`) folds
+  are still never taken over and do not count as a nesting level, and an
+  unchanged fold set still writes nothing and bumps no generation. Level
+  semantics verified against neovim 0.12.4 at `foldlevelstart` 0/1/2/3/99,
+  enumerating closed folds with `foldclosed` / `foldclosedend`.
+
 ### Fixed
 
 - `geom::char_col_to_visual_col` and `geom::visual_col_to_char_col` are now

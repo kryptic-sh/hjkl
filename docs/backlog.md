@@ -103,12 +103,12 @@ What neovim still has that hjkl does not:
   `start_row`, so where two nested folds legitimately share one (markdown's
   `(list)` and the `(list_item (list))` inside it), hjkl keeps the outer and
   drops the inner — one nesting level fewer than vim. Changing this touches the
-  fold model, `remove_fold_at`, and every toggle path, so it was left alone.
-- **`foldlevelstart` is treated as a boolean.** `syntax_glue` computes
-  `default_closed = foldlevelstart == 0`, so only "all closed" and "all open"
-  exist; vim closes folds deeper than the level. Per-range depth is derivable
-  from containment, but `set_auto_folds` takes one `default_closed` flag for the
-  whole set, so it needs an API change.
+  fold model, `remove_fold_at`, and every toggle path, so it was left alone. Now
+  also a `foldlevelstart` divergence: `set_auto_folds` derives each fold's
+  nesting level by containment over the folds it actually keeps, so wherever a
+  start-row collision drops an inner fold, everything below it is one level
+  shallower than vim thinks it is and `foldlevelstart=N` opens one level too
+  much there. Same fix, same blast radius.
 - **Language fold queries are hjkl's own, not neovim's.** They fold a subset
   (e.g. rust also folds bare blocks that neovim leaves alone; toml folds
   tables). This is deliberate, and the ranges are correct — noted so the next
@@ -126,6 +126,19 @@ nvim-treesitter's own fold queries. The compact fixtures are pinned as
 `<lang>_fold_ranges_match_neovim` in `hjkl_syntax`'s test module (all
 `#[ignore]`d — CI has no grammars; run with
 `cargo test -p hjkl-syntax --lib -- --ignored`).
+
+Coverage gap left by the `foldlevelstart` fix (2026-08-02): the LEVEL rule was
+checked, the level-to-grammar wiring was not, end to end. `set_auto_folds`'s
+levels are pinned by `set_auto_folds_closes_folds_deeper_than_foldlevelstart` in
+`hjkl_buffer::folds`, whose expectations are neovim's measured output for a
+6-fold / 3-level lua file — but the ranges are typed into the test as a
+constant, not extracted from a live tree. The end-to-end test
+(`auto_fold_pass_applies_foldlevelstart_as_a_level` in `syntax_glue`) uses
+`foldmethod=marker` so it can run without grammars. Nothing runs the real
+`foldmethod=expr` path at a non-zero `foldlevelstart` and compares the closed
+set to neovim's. Cheapest close: add `foldlevelstart` to whatever the
+`<lang>_fold_ranges_match_neovim` fixtures already parse, asserting closed state
+rather than only ranges.
 
 Only one range bug was found in that second pass, and it was total rather than
 off-by-one: **C# folded nothing at all** (fixed — see the CHANGELOG; guarded by

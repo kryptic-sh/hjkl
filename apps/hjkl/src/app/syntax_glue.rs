@@ -513,7 +513,6 @@ impl App {
 
         if fen && last_fold_dg != Some(dg) {
             use hjkl_engine::types::FoldMethod;
-            let default_closed = fls == 0;
             match fdm {
                 FoldMethod::Expr => {
                     // Extract fold ranges from the (now fresh) tree.
@@ -529,15 +528,17 @@ impl App {
                     };
                     if let Some(ranges) = ranges_opt {
                         // set_auto_folds preserves open/closed state for
-                        // folds at the same start_row; new folds default
-                        // open (fls >= 99) or closed (fls == 0); manual
-                        // folds are never touched. Called even when `ranges`
-                        // is EMPTY: deleting the last foldable construct in a
+                        // folds at the same start_row; a NEW fold starts
+                        // closed when its nesting level exceeds `fls`
+                        // (vim's `foldlevelstart` rule — it derives the
+                        // levels from the ranges' containment); manual folds
+                        // are never touched. Called even when `ranges` is
+                        // EMPTY: deleting the last foldable construct in a
                         // file has to remove its fold, and skipping the call
                         // left the stale one behind.
                         self.slots[active_idx]
                             .buffer_mut()
-                            .set_auto_folds(&ranges, default_closed);
+                            .set_auto_folds(&ranges, fls);
                         // Grammar was ready and extraction ran (even if no
                         // folds found). Mark this dirty_gen as processed.
                         self.slots[active_idx].last_fold_dirty_gen = Some(dg);
@@ -580,7 +581,7 @@ impl App {
                     };
                     self.slots[active_idx]
                         .buffer_mut()
-                        .set_auto_folds(&ranges, default_closed);
+                        .set_auto_folds(&ranges, fls);
                     self.slots[active_idx].last_fold_dirty_gen = Some(dg);
                 }
                 FoldMethod::Manual => {
@@ -588,9 +589,7 @@ impl App {
                     // foldmethod — vim recomputes folds when foldmethod
                     // changes, and `manual` starts from none. Manual (`zf`)
                     // folds are kept: they are exactly what this mode owns.
-                    self.slots[active_idx]
-                        .buffer_mut()
-                        .set_auto_folds(&[], default_closed);
+                    self.slots[active_idx].buffer_mut().set_auto_folds(&[], fls);
                     self.slots[active_idx].last_fold_dirty_gen = Some(dg);
                 }
             }
@@ -874,6 +873,60 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// Run the auto-fold pass and report `(start_row, end_row, closed)`.
+    fn folds_after(app: &mut App) -> Vec<(usize, usize, bool)> {
+        app.recompute_and_install();
+        app.active_editor()
+            .buffer()
+            .folds()
+            .iter()
+            .map(|f| (f.start_row, f.end_row, f.closed))
+            .collect()
+    }
+
+    /// The auto-fold pass must apply `foldlevelstart` as a LEVEL, not as a
+    /// "closed / open" boolean: it used to compute `default_closed = fls == 0`
+    /// and hand that one flag to `set_auto_folds`, so `foldlevelstart=1` — the
+    /// value that in vim opens the top level and closes what is nested inside
+    /// it — opened everything.
+    ///
+    /// Grammar-free on purpose: `foldmethod=marker` reaches the same
+    /// `set_auto_folds` call with nested ranges and needs no tree-sitter
+    /// parser, so this runs in the normal lane.
+    #[test]
+    fn auto_fold_pass_applies_foldlevelstart_as_a_level() {
+        use hjkl_engine::BufferEdit;
+        // outer marker fold 0..4 (level 1) wrapping an inner one 1..3 (level 2).
+        const SRC: &str = "outer {{{\ninner {{{\nbody\nend }}}\nend }}}\ntail";
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), SRC);
+        app.dispatch_ex("set foldmethod=marker foldlevelstart=0");
+        assert_eq!(
+            folds_after(&mut app),
+            vec![(0, 4, true), (1, 3, true)],
+            "foldlevelstart=0 must close both levels"
+        );
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), SRC);
+        app.dispatch_ex("set foldmethod=marker foldlevelstart=1");
+        assert_eq!(
+            folds_after(&mut app),
+            vec![(0, 4, false), (1, 3, true)],
+            "foldlevelstart=1 must open the outer marker fold and close the nested one"
+        );
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), SRC);
+        app.dispatch_ex("set foldmethod=marker foldlevelstart=2");
+        assert_eq!(
+            folds_after(&mut app),
+            vec![(0, 4, false), (1, 3, false)],
+            "foldlevelstart=2 must open both levels"
+        );
     }
 
     /// Build an App with the rust grammar resolved, or `None` when it can't be
