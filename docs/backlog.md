@@ -325,6 +325,18 @@ Each entry below was reproduced through
 `cargo run -p hjkl-compat-oracle --release --example dfcase` against neovim
 0.12.4 and left unfixed on purpose.
 
+**Every edit clones its payload for the change log.** `editor::edit_to_editops`
+does `replacement: text.clone()` for `InsertStr` / `Replace`, so a paste holds
+the payload roughly three times at peak: the `yank.repeat(count)` (or the
+linewise `join` + `format!`), this clone, and the rope's own copy. That is the
+~3.1x charwise / ~4.1x linewise peak-RSS multiple measured on 2026-08-02 —
+linewise pays the extra copy because it builds the repeated text and then
+re-wraps it with a newline. `ContentEdit` fan-out is coordinates only and costs
+nothing, so this clone is the one lever worth pulling. Making the change log
+carry an `Arc<str>` (or borrow) would remove one whole payload copy from every
+edit, not just paste. Not attempted: it changes a type the change log's
+consumers read, so it is its own change rather than a paste fix.
+
 **Left open by the blockwise-paste rewrite (2026-08-02).** The rewrite itself
 shipped — see the `hjkl-vim` changelog for what changed and the measurements.
 
