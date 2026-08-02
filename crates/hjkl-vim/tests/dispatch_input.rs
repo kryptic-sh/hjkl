@@ -111,14 +111,17 @@ fn counted_linewise_paste_is_one_undoable_edit() {
     assert_eq!(e.content(), "base\n");
 }
 
+/// The budget counts the `count` prefix's multiplication, so it is driven here
+/// by a huge count over a one-byte register rather than by a huge register —
+/// same guard, without allocating the budget in the test.
 #[test]
 fn oversized_paste_is_rejected_without_mutation() {
     let mut e = editor_with("base");
-    e.with_registers_mut(|r| r.record_yank("x".repeat(1024 * 1024 + 1), false, None));
+    e.with_registers_mut(|r| r.record_yank("x".to_string(), false, None));
     let cursor = e.cursor();
     let undo_depth = e.undo_stack_len();
 
-    dispatch_keys(&mut e, "p");
+    dispatch_keys(&mut e, &format!("{}p", hjkl_vim::MAX_PASTE_BYTES + 1));
 
     assert_eq!(e.content(), "base\n");
     assert_eq!(e.cursor(), cursor);
@@ -128,7 +131,7 @@ fn oversized_paste_is_rejected_without_mutation() {
 #[test]
 fn oversized_block_paste_is_rejected_without_mutation() {
     let mut e = editor_with("tail");
-    e.record_yank_block("x".to_string(), 1024 * 1024 + 1, None);
+    e.record_yank_block("x".to_string(), hjkl_vim::MAX_PASTE_BYTES + 1, None);
     let cursor = e.cursor();
     let undo_depth = e.undo_stack_len();
 
@@ -143,9 +146,9 @@ fn oversized_block_paste_is_rejected_without_mutation() {
 fn rejected_paste_preserves_the_prior_dot_change() {
     let mut e = editor_with("abc");
     dispatch_keys(&mut e, "x");
-    e.with_registers_mut(|r| r.record_yank("x".repeat(1024 * 1024 + 1), false, None));
+    e.with_registers_mut(|r| r.record_yank("x".to_string(), false, None));
 
-    dispatch_keys(&mut e, "p.");
+    dispatch_keys(&mut e, &format!("{}p.", hjkl_vim::MAX_PASTE_BYTES + 1));
 
     assert_eq!(e.content(), "c\n");
 }
@@ -811,4 +814,154 @@ fn visual_sequential_increment_skips_numberless_rows() {
     let mut e = editor_with("1\nno digits here\n1\n1");
     dispatch_keys(&mut e, "VGg<C-a>");
     assert_eq!(e.content(), "2\nno digits here\n3\n4\n");
+}
+
+/// Blockwise paste geometry, pinned before `do_block_paste` was rewritten off
+/// the whole-document `Vec<String>` rebuild. Expectations are vim's semantics
+/// (`:h v_b_p`), not a snapshot of hjkl's output, so a divergence surfaces as a
+/// failure rather than being encoded.
+#[test]
+fn block_paste_geometry() {
+    // (buffer, cursor, register, width, keys, expected)
+    for (buf, cur, reg, width, keys, want) in [
+        // `P` inserts AT the cursor column, `p` after it.
+        (
+            "abcd\nefgh\nijkl",
+            (0, 1),
+            "XY\nZW",
+            2,
+            "P",
+            "aXYbcd\neZWfgh\nijkl\n",
+        ),
+        (
+            "abcd\nefgh\nijkl",
+            (0, 1),
+            "XY\nZW",
+            2,
+            "p",
+            "abXYcd\nefZWgh\nijkl\n",
+        ),
+        // Rows past the buffer end are created.
+        ("ab", (0, 0), "XY\nZW", 2, "P", "XYab\nZW\n"),
+        // A row shorter than the insert column is space-padded up to it.
+        (
+            "abcd\ne\nijkl",
+            (0, 2),
+            "XY\nZW",
+            2,
+            "P",
+            "abXYcd\ne ZW\nijkl\n",
+        ),
+        // At end-of-line vim adds no trailing padding to a short segment.
+        ("ab\ncd", (0, 1), "X\nY", 3, "p", "abX\ncdY\n"),
+        // A count repeats each segment horizontally.
+        (
+            "abcd\nefgh",
+            (0, 1),
+            "XY\nZW",
+            2,
+            "2P",
+            "aXYXYbcd\neZWZWfgh\n",
+        ),
+    ] {
+        let mut e = editor_with(buf);
+        e.jump_cursor(cur.0, cur.1);
+        e.record_yank_block(reg.to_string(), width, None);
+        dispatch_keys(&mut e, keys);
+        assert_eq!(e.content(), want, "{keys} on {buf:?} at {cur:?}");
+    }
+}
+
+/// A blockwise paste must undo to exactly the pre-paste buffer — including the
+/// space padding it inserted into ragged rows, which is carried by the
+/// `DeleteBlockChunks` inverse's `pads` field rather than recomputed.
+#[test]
+fn block_paste_undo_round_trips_including_padding() {
+    for (buf, cur, reg, width) in [
+        ("abcd\nefgh\nijkl", (0, 1), "XY\nZW", 2),
+        // Ragged: row 1 gets padded out to the insert column.
+        ("abcd\ne\nijkl", (0, 2), "XY\nZW", 2),
+        // Past EOF: rows are created by the paste.
+        ("ab", (0, 0), "XY\nZW", 2),
+    ] {
+        let mut e = editor_with(buf);
+        let before = e.content();
+        e.jump_cursor(cur.0, cur.1);
+        e.record_yank_block(reg.to_string(), width, None);
+        dispatch_keys(&mut e, "P");
+        assert_ne!(e.content(), before, "paste must change {buf:?}");
+        e.undo();
+        assert_eq!(e.content(), before, "undo must restore {buf:?}");
+    }
+}
+
+/// One blockwise paste is one undo step, matching the counted-linewise case.
+#[test]
+fn block_paste_is_one_undoable_edit() {
+    let mut e = editor_with("ab");
+    e.record_yank_block("XY\nZW".to_string(), 2, None);
+    dispatch_keys(&mut e, "P");
+    assert_eq!(e.content(), "XYab\nZW\n");
+    e.undo();
+    assert_eq!(e.content(), "ab\n");
+}
+
+/// `p` / `P` paste raw: the register's own leading whitespace is preserved
+/// verbatim and `autoindent` must not add to it. Vim only reindents for the
+/// explicit `]p` / `[p` forms.
+#[test]
+fn paste_is_raw_regardless_of_autoindent() {
+    for ai in [false, true] {
+        for keys in ["p", "P", "2p"] {
+            let mut e = editor_with("        fn outer() {");
+            e.settings_mut().autoindent = ai;
+            e.with_registers_mut(|r| {
+                r.record_yank("    let x = 1;\n\tlet y = 2;\n".to_string(), true, None)
+            });
+            dispatch_keys(&mut e, keys);
+            let body: String = e
+                .content()
+                .lines()
+                .filter(|l| l.contains("let"))
+                .collect::<Vec<_>>()
+                .join("|");
+            let want = if keys == "2p" {
+                "    let x = 1;|\tlet y = 2;|    let x = 1;|\tlet y = 2;"
+            } else {
+                "    let x = 1;|\tlet y = 2;"
+            };
+            assert_eq!(body, want, "autoindent={ai} keys={keys}");
+        }
+    }
+}
+
+/// A block paste must not change whether the buffer ends in a newline.
+///
+/// `content()` appends a trailing newline when the rope lacks one, so this is
+/// invisible through it — which is why the geometry cases above missed the
+/// regression. Read the rope directly.
+///
+/// Regression: opening rows past EOF spliced into ropey's phantom trailing
+/// line (the newline terminator) instead of past it, so a terminated buffer
+/// came back unterminated. Caught by the nvim oracle's
+/// `visual_block_paste_past_eof`, which also bypasses `content()`.
+#[test]
+fn block_paste_past_eof_preserves_the_trailing_newline() {
+    for seed in ["abcd\nefgh\nijkl\n", "abcd\nefgh\nijkl"] {
+        let mut e = editor_with(seed);
+        let before = hjkl_engine::types::Query::rope(e.buffer())
+            .to_string()
+            .ends_with('\n');
+        e.jump_cursor(2, 1);
+        e.record_yank_block("ab\n ef\n ij".to_string(), 3, None);
+
+        dispatch_keys(&mut e, "P");
+
+        let text = hjkl_engine::types::Query::rope(e.buffer()).to_string();
+        assert_eq!(
+            text.ends_with('\n'),
+            before,
+            "paste changed the terminator for seed {seed:?}: {text:?}"
+        );
+    }
 }

@@ -19,7 +19,7 @@
 //! [`VimState::last_change`] so `.` can replay it.
 
 pub(crate) mod bridges;
-pub(crate) mod command;
+pub mod command;
 pub(crate) mod comment;
 pub(crate) mod dot_repeat;
 pub(crate) mod entry;

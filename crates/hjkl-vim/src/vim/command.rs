@@ -631,6 +631,24 @@ pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::S
         .collect::<Vec<_>>()
         .join("\n")
 }
+/// Upper bound on the bytes one `p` / `P` may insert, counting the `count`
+/// prefix's multiplication. A count can request terabytes (`yy` then
+/// `999999999p`), so a bound has to exist; what it must not do is refuse an
+/// ordinary large yank.
+///
+/// Measured on the batched paste path (release, Linux; glibc and mimalloc
+/// within noise of each other): peak RSS is linear in payload at ~3.1x
+/// charwise, ~4.1x linewise and ~2.9x blockwise, and independent of document
+/// size. At this value a paste costs ~208 MiB peak and ~73 ms charwise, an
+/// order of magnitude under the 2 GiB ceiling the weekly cron fuzz job runs
+/// with — under that ceiling the batched path only aborts past a 448 MiB
+/// payload. It also matches `hjkl_fs::read::BODY`, so pasting is no longer
+/// stricter than opening a file of the same size.
+///
+/// The 1 MiB this replaced was derived from the pre-batching implementation,
+/// whose cost tracked iteration count rather than payload bytes.
+pub const MAX_PASTE_BYTES: usize = 64 * 1024 * 1024;
+
 pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
@@ -691,9 +709,6 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
         return false;
     }
     // Bound requested source bytes before allocating or opening an undo entry.
-    // The paste paths construct temporary strings, so this conservative limit
-    // leaves headroom beneath the fuzz worker's 2 GiB RSS ceiling.
-    const MAX_PASTE_BYTES: usize = 1024 * 1024;
     let Some(requested_bytes) = yank.len().checked_mul(count) else {
         return false;
     };
@@ -835,21 +850,13 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
     width: usize,
     yank: &str,
 ) {
+    use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> =
-        hjkl_engine::rope_util::rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    // Detach ropey's phantom trailing empty line (present iff the buffer
-    // ends with `\n`) so appending block rows past EOF doesn't consume the
-    // trailing newline. Re-added after the join below.
-    let trailing_nl = lines.len() > 1 && lines.last().is_some_and(String::is_empty);
-    if trailing_nl {
-        lines.pop();
-    }
     let cursor = buf_cursor_pos(ed.buffer());
     let start_row = cursor.row;
     // Insert column (char index). `P` inserts at the cursor; `p` after it.
     // On an empty line `p` has no char to sit after, so it inserts at col 0.
-    let cur_len = lines.get(start_row).map_or(0, |l| l.chars().count());
+    let cur_len = buf_line_chars(ed.buffer(), start_row);
     let insert_col = if before {
         cursor.col
     } else if cur_len == 0 {
@@ -858,39 +865,54 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
         cursor.col + 1
     };
     let segments: Vec<&str> = yank.split('\n').collect();
-    for (i, seg) in segments.iter().enumerate() {
-        let row = start_row + i;
-        // Rows past the buffer end are created as empty lines.
-        while row >= lines.len() {
-            lines.push(String::new());
-        }
-        let mut chars: Vec<char> = lines[row].chars().collect();
-        // Pad the target row up to the insert column with spaces.
-        if chars.len() < insert_col {
-            chars.resize(insert_col, ' ');
-        }
-        let head: String = chars[..insert_col].iter().collect();
-        let tail: String = chars[insert_col..].iter().collect();
-        // Pad the segment to the block width only when it is followed by
-        // text on this row — at EOL vim adds no trailing spaces.
-        let piece = if tail.is_empty() {
-            seg.repeat(count)
-        } else {
+    // `Edit::InsertBlock` splices into rows that already exist and skips any
+    // row past the end of the rope, so the rows a block paste extends the
+    // buffer by have to be opened first. One `InsertStr` of the bare line
+    // breaks does that; both edits sit inside the single undo entry
+    // `do_paste` already pushed, so the paste stays one undo step.
+    let last_row = start_row + segments.len().saturating_sub(1);
+    let raw_rows = buf_row_count(ed.buffer());
+    // ropey reports a phantom trailing empty line whenever the buffer ends in
+    // a newline. That line is the terminator, not a row a block may be pasted
+    // into: splicing a segment there consumes the final newline and the buffer
+    // silently stops ending in one. Anchor the new rows on the last row of
+    // real content instead, which leaves the terminator past them.
+    let trailing_nl = raw_rows > 1 && buf_line_chars(ed.buffer(), raw_rows - 1) == 0;
+    let content_rows = if trailing_nl { raw_rows - 1 } else { raw_rows };
+    if last_row >= content_rows {
+        let anchor = content_rows.saturating_sub(1);
+        let at = Position::new(anchor, buf_line_chars(ed.buffer(), anchor));
+        ed.mutate_edit(Edit::InsertStr {
+            at,
+            text: "\n".repeat(last_row + 1 - content_rows),
+        });
+    }
+    // Build one chunk per row. `do_insert_block` space-pads a row shorter
+    // than `insert_col` itself and records the pad width on the inverse, so
+    // the ragged-row case needs no rewriting of the row here.
+    let chunks: Vec<String> = segments
+        .iter()
+        .enumerate()
+        .map(|(i, seg)| {
+            // Pad the segment to the block width only when it is followed by
+            // text on this row — at EOL vim adds no trailing spaces.
+            let tail_is_empty = buf_line_chars(ed.buffer(), start_row + i) <= insert_col;
+            if tail_is_empty {
+                return seg.repeat(count);
+            }
             let seg_len = seg.chars().count();
-            let mut padded = seg.to_string();
+            let mut padded = String::with_capacity(seg.len() + width.saturating_sub(seg_len));
+            padded.push_str(seg);
             if seg_len < width {
                 padded.extend(std::iter::repeat_n(' ', width - seg_len));
             }
             padded.repeat(count)
-        };
-        lines[row] = format!("{head}{piece}{tail}");
-    }
-    let mut joined = lines.join("\n");
-    if trailing_nl {
-        joined.push('\n');
-    }
-    hjkl_engine::types::BufferEdit::replace_all(ed.buffer_mut(), &joined);
-    ed.mark_content_dirty();
+        })
+        .collect();
+    ed.mutate_edit(Edit::InsertBlock {
+        at: Position::new(start_row, insert_col),
+        chunks,
+    });
     // Cursor lands on the top-left cell of the pasted block.
     ed.jump_cursor(start_row, insert_col);
     // `[` / `]` span the pasted block's top-left .. bottom-left column.

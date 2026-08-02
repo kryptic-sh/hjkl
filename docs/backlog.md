@@ -325,6 +325,58 @@ Each entry below was reproduced through
 `cargo run -p hjkl-compat-oracle --release --example dfcase` against neovim
 0.12.4 and left unfixed on purpose.
 
+**`MAX_PASTE_BYTES` is a stale number, re-measured 2026-08-02.** The 1 MiB cap
+in `vim::command::do_paste` was set against the pre-batching cost model (see the
+appendix entry for finding 11) and its comment justifies itself by the fuzz
+worker's RSS ceiling, not by anything a user does. Measured on the batched path
+(release, Linux, glibc and mimalloc within noise of each other; 60-byte register
+line, document of 60-byte lines; harness drove `<count>p` through
+`dispatch_input` and asserted the buffer actually grew, so a rejected paste
+could not report a flattering number):
+
+| payload | charwise peak | linewise peak | charwise time | linewise time |
+| ------- | ------------- | ------------- | ------------- | ------------- |
+| 1 MiB   | 10.5 MiB      | 11.8 MiB      | 1 ms          | 2 ms          |
+| 16 MiB  | 57.3 MiB      | 73.4 MiB      | 16 ms         | 27 ms         |
+| 64 MiB  | 207.9 MiB     | 271.9 MiB     | 73 ms         | 130 ms        |
+| 256 MiB | 810.3 MiB     | 1066.6 MiB    | 274 ms        | 529 ms        |
+
+Peak RSS is linear in payload at ~3.1× (charwise) and ~4.1× (linewise) — not the
+~200× the old measurement showed — and it is **independent of document size**
+(16 MiB payload into 1-line vs 200 000-line documents moved the delta over
+baseline from 50.3 to 33.8 MiB). Under the fuzz worker's own condition
+(`ulimit -v 2 GiB`, glibc) a 448 MiB payload still completes at 1418.6 MiB peak;
+512 MiB is the first to abort (`memory allocation of 1032847360 bytes failed`).
+
+So the cap could rise ~64× and still leave an order of magnitude of headroom
+under the ceiling it was written for. 64 MiB is the suggested value: ~208 MiB
+peak, 73 ms, and no longer stricter than `hjkl_fs::read::BODY`, which is what
+governs how large a file may be opened in the first place. The cap must not be
+removed outright — `count` can request terabytes (`yy` then `999999999p`) and
+refusing that is correct — but refusing a 2 MiB yank is not.
+
+**The blockwise path ignored the byte budget entirely — fixed 2026-08-02.**
+`do_block_paste` materialized the whole document as a `Vec<String>`, rebuilt it
+with `join` and wrote it back through `BufferEdit::replace_all`, so its cost
+tracked the DOCUMENT (which no paste-payload budget constrains) and every block
+paste reached undo, the change log and any LSP as a whole-document replacement.
+Now one `Edit::InsertBlock`, plus one `Edit::InsertStr` when the block runs past
+the last row. See the `hjkl-vim` changelog; measurements are there too. What the
+fix left open:
+
+- **`visual_paste` was not examined.** Its blockwise branch may still carry the
+  whole-document shape that was just removed from `do_block_paste`; nothing was
+  measured or read there.
+- **`content()` hides trailing-newline bugs from unit tests.** It appends a
+  newline when the rope lacks one, so a paste that eats the buffer's terminator
+  compares equal through it. This is what let the first version of the rewrite
+  pass every hand-written geometry case while the nvim oracle failed —
+  `visual_block_paste_past_eof` reads the rope directly. Any future test about
+  buffer termination has to read the rope, as
+  `block_paste_past_eof_preserves_the_trailing_newline` now does. Whether other
+  buffer-shape assertions in the suite are blunted the same way was not audited.
+- **The budget is still enforced silently**, which the next item covers.
+
 **No message channel exists for the rejected-paste error.** `do_paste` bails out
 with `false` for an over-budget paste and nothing downstream can tell that apart
 from "empty register". There is no seam to hang the message on: the `Host`
@@ -758,6 +810,13 @@ rejection of over-budget pastes is tracked in the ranked backlog above.
 
 The weekly cron fuzz job runs with libFuzzer's default 2048 MB rss limit, so
 this remains reachable there.
+
+**Every number above predates the batching in `b97e9bce` and no longer describes
+the code.** They were measured against the per-iteration loop that commit
+deleted, which is why cost tracked iteration count rather than payload bytes.
+`b97e9bce` batched the edits AND lowered the cap to 1 MiB in one commit, and the
+cap was never re-derived from the batched path's real cost. Re-measured
+2026-08-02 — see below.
 
 ##### 5 (residual). Blockwise visual — non-delete operators
 

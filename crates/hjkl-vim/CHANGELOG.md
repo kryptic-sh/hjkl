@@ -8,8 +8,35 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `MAX_PASTE_BYTES` is public, so a host can report the paste budget it hit
+  rather than restating the number. `vim::command` is public to carry it.
+
+### Changed
+
+- The `p` / `P` byte budget is raised from 1 MiB to 64 MiB. The old value was
+  derived from a per-iteration paste implementation that no longer exists;
+  measured on the current batched path, peak RSS is linear in payload (~3.1x
+  charwise, ~4.1x linewise, ~2.9x blockwise) and independent of document size,
+  so 64 MiB costs ~208 MiB peak and ~73 ms. Pasting is no longer stricter than
+  opening a file of the same size. Over-budget pastes are still rejected, and
+  still rejected silently — a paste of a register larger than the budget does
+  nothing and says nothing.
+- Blockwise `p` / `P` no longer rebuilds the whole document. It applied its edit
+  by materializing every line into a `Vec<String>`, joining it back and
+  replacing the entire buffer, so cost scaled with the DOCUMENT rather than the
+  pasted block and every block paste reached the undo stack, the change log and
+  any LSP as a whole-document replacement. It now issues one `Edit::InsertBlock`
+  (plus one `Edit::InsertStr` when the block extends past the last row). A 1 MiB
+  block paste into a 1 000 000-line buffer drops from +128.5 MiB and 351 ms to
+  +0.2 MiB and 1 ms; it remains a single undo step.
+
 ### Fixed
 
+- A blockwise paste extending past the last row no longer strips the buffer's
+  trailing newline. Rows opened past EOF were spliced into ropey's phantom
+  trailing line — the newline terminator — instead of past it.
 - Operator ranges over `}` follow vim's three `findpar` / `:h exclusive` rules.
   A `}` that lands on the last character of the last line makes the motion
   inclusive, so `d}` in the final paragraph reaches end-of-buffer instead of

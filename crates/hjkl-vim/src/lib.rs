@@ -19,6 +19,9 @@ pub use count::CountAccumulator;
 pub use editor_ext::VimEditorExt;
 pub use operator::OperatorKind;
 pub use pending::{Key, Outcome, PendingState, step};
+/// The byte budget one `p` / `P` may insert. Public so a host can report the
+/// limit it just hit rather than restating the number.
+pub use vim::command::MAX_PASTE_BYTES;
 /// Build an `Editor` that interprets keys as vim, or retro-fit the discipline
 /// onto one that already exists.
 ///
