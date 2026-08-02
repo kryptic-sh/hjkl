@@ -4583,11 +4583,17 @@ fn zfap_folds_paragraph_with_trailing_blank() {
 fn zf_paragraph_motion_folds_to_blank() {
     let mut e = editor_with("alpha\nbeta\n\ngamma");
     e.jump_cursor(0, 0);
-    // `}` jumps to the blank-line boundary; fold spans rows 0..=2.
+    // `}` lands ON the blank line (row 2) but is EXCLUSIVE, and its end sits at
+    // column 0, so `:h exclusive` pulls the operated range back to the end of
+    // the previous line: the fold covers rows 0..=1 and the blank line stays
+    // visible. Measured in neovim 0.12.4 on this exact buffer —
+    // `normal! zf}` then `foldclosed`/`foldclosedend` report 0..1 (0-based),
+    // with `}` itself landing at (2,0). This test previously asserted 2, which
+    // is where the CURSOR goes, not where the operator stops.
     run_keys(&mut e, "zf}");
     let f = e.buffer().folds()[0];
     assert_eq!(f.start_row, 0);
-    assert_eq!(f.end_row, 2);
+    assert_eq!(f.end_row, 1);
 }
 
 #[test]

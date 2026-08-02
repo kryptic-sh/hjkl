@@ -304,12 +304,104 @@ reproductions for resolved entries are preserved in the supporting-evidence
 appendix below, marked as fixed. Preserve each fixed case in the tier-2
 compatibility corpus and verify it against nvim before changing expectations.
 
-| Priority | Task                                                                                                                                                     | Where / acceptance criterion                                                           |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| High     | Surface a user-visible error when a paste is rejected for exceeding the 1 MiB budget. Currently `do_paste` returns `false` silently — no `Host` channel. | `crates/hjkl-vim/src/vim/command.rs:657-685`; `hjkl-engine/src/types.rs` `Host` trait. |
-| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                       | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.        |
-| Medium   | Correct paragraph/WORD landings: `}` at EOF must reach the last character and `B` at column 0 of row 1 must remain on row 1.                             | Expected positions `(0,23)` and `(1,0)`.                                               |
-| Medium   | Triage `V}u2)1gUiW` and fix the state or cursor transition between individually-correct components.                                                      | `"'qux'  A-B"` must become `"'QUX'  a-b"`.                                             |
+| Priority | Task                                                                                                                                                                          | Where / acceptance criterion                                                           |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| High     | Surface a user-visible error when a paste is rejected for exceeding the 1 MiB budget. Currently `do_paste` returns `false` silently — there is no channel at all (see below). | `crates/hjkl-vim/src/vim/command.rs` `do_paste`; needs a new engine→host message seam. |
+| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                                            | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.        |
+
+The paragraph/WORD landings, and the `V}u2)1gUiW` composite, were fixed on
+2026-08-02 (`motions::move_paragraph_next` / `move_paragraph_prev` rewritten on
+vim's `findpar`, `motions::prev_word_start`'s empty-line stop, the operator
+adjustments in `vim::op_motion::apply_op_with_motion`, and the all-or-nothing
+counted `(`/`)` in `vim::motion` + `vim::text_object::sentence_step_forward`).
+Their cases live in `corpus/tier2_paragraph_word.toml` and
+`corpus/tier2_sentence.toml`. The backlog's recorded expectation for `B` had its
+two columns swapped: nvim moves to `(0,0)`, hjkl was the one that stayed on
+row 1. What those fixes deliberately left open is listed in §1.5b.
+
+### 1.5b Left open by the 2026-08-02 motion-parity pass
+
+Each entry below was reproduced through
+`cargo run -p hjkl-compat-oracle --release --example dfcase` against neovim
+0.12.4 and left unfixed on purpose.
+
+**No message channel exists for the rejected-paste error.** `do_paste` bails out
+with `false` for an over-budget paste and nothing downstream can tell that apart
+from "empty register". There is no seam to hang the message on: the `Host`
+trait's only host-facing hook is `emit_intent`, and every implementor in the
+workspace (`apps/hjkl/src/host.rs`, `hjkl-form/src/host.rs`, `DefaultHost`, all
+test hosts) sets `type Intent = ()`, so it carries nothing. Every user-visible
+`E…` message in the tree is raised in `apps/hjkl` itself (`self.bus.error(...)`
+into `hjkl_holler::HollerBus`) or returned as `ExEffect::Error` from `hjkl-ex`;
+neither is reachable from `hjkl-vim`, which does not depend on `hjkl-holler`.
+Landing this needs three coordinated pieces:
+
+1. an engine-side queue plus drain on `Editor` — the `take_lsp_intent` /
+   `take_fold_ops` / `take_last_indent_range` pattern is the precedent;
+2. `do_paste` pushing `"E342: Out of memory! (allocating N bytes)"` (vim's own
+   code for this) onto it before returning `false`;
+3. **an `apps/hjkl` change** to drain it after each key and call
+   `self.bus.error(...)` — without step 3 the queue is a channel with no
+   consumer, which is why the engine-side half was not landed on its own.
+
+Step 3 is outside the crates this pass owned, so the whole item is still open.
+
+**`b` / `B` walk backwards across a line break.** `motions::step_back` moves
+from column 0 of a row to `prev_len - 1` — the last character of the previous
+row — while vim's `dec()` moves to `prev_len`, the virtual end-of-line cell,
+whose `cls()` is whitespace. That cell is what stops vim's same-class run
+walk-back at the line boundary. Without it the run keeps going onto the previous
+line:
+
+```
+`B` on "'self.x'\n(foo) a, {xy}  ", cursor (1,1)
+hjkl: (0, 0)     ← walked back through the line break and across row 0
+nvim: (1, 0)     ← start of the WORD the cursor is inside
+```
+
+Also reproduces as `3B` on `"\"self.x\" a, (bar).'hello'\na.\"n1\"  'a' _id"`
+from `(1,1)`: hjkl `(0,0)`, nvim `(0,9)`. Pre-existing — the 2026-08-02 change
+to `prev_word_start` only touched the whitespace-skip loop, which this case
+never enters. Fixing it means giving `step_back` / `step_forward` vim's virtual
+EOL position, which every `w`/`b`/`e`/`ge` scan sits on top of; that is a
+word-motion-wide change with its own regression surface, not a `B` fix.
+
+**A zero-distance inclusive operator range is dropped.** vim's `}` sets `*pincl`
+even when it does not move, so `d}` with the cursor already on the last
+character of the last line deletes that character (`d}` on `"abc"` at `(0,2)` →
+nvim `"ab"`, hjkl unchanged). hjkl aborts on `start == end` twice — in
+`apply_op_with_motion` and again in `run_operator_over_range` — and both guards
+are correct for exclusive ranges. Relaxing them for `RangeKind::Inclusive` would
+also relax `d$` on an empty line, where the same shape must stay a no-op
+(`cut_vim_range`'s inclusive branch would wrap to the next row and eat the line
+break). Needs a distinct "successful zero-width inclusive" signal, not a
+loosened guard.
+
+**`2C` on a single-line buffer changes the line.** `2C` on `"self.x"` (any
+column) empties the buffer in hjkl; nvim leaves it untouched, because `c2$`
+needs a line below to extend onto and fails without one. Surfaced by the
+differential fuzzer (seed 777, case 115) once the `}` divergence in the same
+generated case was fixed and the shrinker moved on. Not related to the paragraph
+work — `C` is `Operator::Change` with `Motion::LineEnd`, an inclusive range on
+one row, which none of the 2026-08-02 operator adjustments touch.
+
+**A corpus case's `expected_cursor` / `expected_mode` / `expected_register` are
+never asserted.** `diff.rs::run_single` compares only `expected_buffer` against
+nvim (as an author-error guard) and then hjkl against nvim on all four fields.
+So those three fields document the intent but cannot fail on their own, and a
+case with a wrong `expected_cursor` still passes as long as the two engines
+agree. The differential assertion is the real guard and it does cover cursor,
+mode and register — but the corpus **cannot** pin a value when nvim is absent
+(every test skips wholesale then). Cheap to close: assert each `Some` field
+against the nvim outcome in `run_single`.
+
+**The differential fuzzer still reports 84 divergences at seed 777** (was 89
+before this pass). The bulk are the known-excluded classes named in §5 (`u` /
+undo against the seeded nvim fixture, blockwise `<C-v>` non-delete operators)
+plus the two entries above.
+`cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
+reproduces the list; build with `--examples`, not `--example difffuzz`, or the
+other binary goes stale.
 
 ### 1.6 Cursor-move API migration
 
@@ -644,17 +736,27 @@ nvim: "\t(x).[y]"   ← unchanged
 
 `<C-v>H>` also still diverges on cursor. Blockwise `~` is correct.
 
-##### 8 (residual). Two motion landings
+##### 8 (residual). Two motion landings — FIXED 2026-08-02
 
-| case                                            | hjkl   | nvim   |
-| ----------------------------------------------- | ------ | ------ |
-| `}` at EOF, buffer `"    it's.{foo}.A-B.{A-B}"` | (0,21) | (0,23) |
-| `B` at col 0 of row 1                           | (0,0)  | (1,0)  |
+Re-measured before fixing; the `B` row's two columns were swapped when this
+table was written.
 
-`}` no longer jumps to (0,0) but still does not reach the last character. `B`
-still overshoots to the previous line.
+| case                                                       | hjkl (was) | nvim   |
+| ---------------------------------------------------------- | ---------- | ------ |
+| `}` at EOF, buffer `"    it's.{foo}.A-B.{A-B}"` from (0,0) | (0,0)      | (0,23) |
+| `B` at col 0 of row 1, buffer `"\nabc"`                    | (1,0)      | (0,0)  |
 
-##### T1. Composite case-op sequence — unconfirmed cause
+`}` was landing on column 0 of whatever row it stopped on; vim's `findpar` puts
+the cursor on the **last character** of the last line when the scan ends there.
+`B` was failing outright (no move) whenever the backward whitespace skip hit an
+empty line or ran off the front of the buffer from a row other than row 0.
+
+Two further defects in the same two functions were found while fixing these and
+fixed with them: `}`/`{` stepped over a blank line adjacent to the cursor
+(skipping a whole paragraph), and a counted `9}` clamped to the edge row instead
+of failing. Cases: `corpus/tier2_paragraph_word.toml`.
+
+##### T1. Composite case-op sequence — FIXED 2026-08-02
 
 ```
 `V}u2)1gUiW` on "'qux'  A-B", cursor (0,9)
@@ -662,9 +764,16 @@ hjkl: "'qux'  A-B"   (unchanged)
 nvim: "'QUX'  a-b"
 ```
 
-New in the latest pass. Every component passes in isolation (`Vu`, `V}u`, `gUiW`
-all match), so the likely culprit is cursor placement after `2)` rather than the
-case operators — unconfirmed.
+Cause confirmed: the cursor placement after `2)`, as suspected. `V}u` lowercases
+the line and leaves the cursor at (0,0) in both engines; the line has no
+sentence terminator, so vim's `findsent` fails on the first repetition with a
+second still owed and leaves the cursor at (0,0), while hjkl moved as far as it
+could and landed on (0,9). `1gUiW` then uppercased the WORD under a cursor that
+had drifted to `A-B`, and `u` — read as undo of the case change rather than as
+part of the composite — reverted it. Minimal repro without the case operators:
+`2)` on `"'qux'  A-B"` from (0,0), hjkl (0,9) vs nvim (0,0). Counted `(` had the
+same defect in reverse (`3(` from (0,10) on `"One. Two. Three."`: hjkl (0,0),
+nvim (0,10)). Cases: `corpus/tier2_sentence.toml`.
 
 #### Watch items
 

@@ -127,3 +127,83 @@ keys = "("
 expected_buffer = "One. Two.\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# A counted `)` is all-or-nothing: when a repetition would have to walk off
+# the end of the buffer with repetitions still owed, vim's `findsent` FAILS
+# and the cursor does not move at all. Here the line holds no sentence
+# terminator, so even the first `)` is the run-off-the-end landing.
+[[cases]]
+name = "sentence_next_counted_overshoot_fails"
+initial_buffer = "'qux'  A-B\n"
+initial_cursor = [0, 0]
+keys = "2)"
+expected_buffer = "'qux'  A-B\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Same rule one repetition later: `2)` reaches the end legally (last
+# repetition), `3)` asks for one more and the whole motion fails.
+[[cases]]
+name = "sentence_next_count2_reaches_end_of_buffer"
+initial_buffer = "One. Two\n"
+initial_cursor = [0, 0]
+keys = "2)"
+expected_buffer = "One. Two\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+
+[[cases]]
+name = "sentence_next_count3_past_end_fails"
+initial_buffer = "One. Two\n"
+initial_cursor = [0, 0]
+keys = "3)"
+expected_buffer = "One. Two\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# A terminator that closes the buffer is a REAL boundary, so the same `3)`
+# succeeds here: repetition 2 lands on it and repetition 3 is a no-op at the
+# last cell rather than a failure.
+[[cases]]
+name = "sentence_next_count3_terminator_at_eof_succeeds"
+initial_buffer = "One. Two.\n"
+initial_cursor = [0, 0]
+keys = "3)"
+expected_buffer = "One. Two.\n"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+
+# `(` fails the same way: two sentences back from the second sentence start
+# leaves nothing to reach, so the cursor stays put instead of stopping at
+# (0, 0).
+[[cases]]
+name = "sentence_prev_counted_overshoot_fails"
+initial_buffer = "One. Two.\n"
+initial_cursor = [0, 5]
+keys = "2("
+expected_buffer = "One. Two.\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+
+# Operator form: a failed counted `)` aborts the operator, leaving the buffer
+# untouched (no partial delete to end-of-line).
+[[cases]]
+name = "operator_d_counted_sentence_overshoot_is_noop"
+initial_buffer = "One. Two\n"
+initial_cursor = [0, 0]
+keys = "d3)"
+expected_buffer = "One. Two\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# Composite regression (differential-fuzz T1): `V}u` lowercases the line and
+# parks the cursor at (0, 0); the failing `2)` must leave it there so `1gUiW`
+# uppercases the FIRST WORD rather than the one under a drifted cursor.
+[[cases]]
+name = "sentence_composite_visual_lower_then_failed_paren_then_gUiW"
+initial_buffer = "'qux'  A-B\n"
+initial_cursor = [0, 9]
+keys = "V}u2)1gUiW"
+expected_buffer = "'QUX'  a-b\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

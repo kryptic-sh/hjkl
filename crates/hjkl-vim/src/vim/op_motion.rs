@@ -15,7 +15,11 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     motion: &Motion,
     count: usize,
 ) {
-    let start = ed.cursor();
+    let mut start = ed.cursor();
+    // Where the cursor is parked before the operator runs. Held separately
+    // from `start` because the exclusive-motion adjustment below can move the
+    // range's *backward* endpoint, which must not drag the parked cursor.
+    let cursor_restore = start;
     // Tentatively apply motion to find the endpoint. Operator context
     // so `l` on the last char advances past-last (standard vim
     // exclusive-motion endpoint behaviour), enabling `dl` / `cl` /
@@ -41,6 +45,36 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // If the motion made no progress, abort the operator (vim behavior).
     // A charwise edge motion that cannot advance leaves the buffer unchanged.
     let mut kind = motion_kind(motion);
+    // Vim's `findpar` tail (`:h }`): a `}` that lands on the LAST line of the
+    // buffer sits on that line's last character and sets `*pincl`, making the
+    // motion inclusive — that is what lets `d}` in the final paragraph reach
+    // end-of-buffer instead of stopping one char short.
+    //
+    // Vim also applies this to the zero-distance form (cursor already on the
+    // last char of the last line: `d}` there deletes that one char). hjkl does
+    // not: the `start == end` abort below, and the matching guard in
+    // `run_operator_over_range`, treat every zero-length charwise range as a
+    // failed motion. Relaxing those for `Inclusive` would also relax `d$` on
+    // an empty line, which must stay a no-op — tracked in docs/backlog.md.
+    //
+    // `last_row` is the last *content* row: ropey synthesizes a phantom empty
+    // final row for a trailing `\n`, and the motion itself stops on the last
+    // real row (the `content_row_count` clamp `hjkl_engine::motions` shares
+    // with `G`), so this must use the same row or `d}` never sees the landing.
+    let raw_rows = buf_row_count(ed.buffer());
+    let last_row = if raw_rows > 1 && buf_line_chars(ed.buffer(), raw_rows - 1) == 0 {
+        raw_rows - 2
+    } else {
+        raw_rows.saturating_sub(1)
+    };
+    if matches!(motion, Motion::ParagraphNext)
+        && kind == RangeKind::Exclusive
+        && end.0 == last_row
+        && buf_line_chars(ed.buffer(), last_row) > 0
+        && end.1 + 1 == buf_line_chars(ed.buffer(), last_row)
+    {
+        kind = RangeKind::Inclusive;
+    }
     // Linewise motions always cover their row when successful even if
     // `start == end` (e.g. `d_` with count 1 on a single row deletes it).
     if start == end && !matches!(kind, RangeKind::Linewise) {
@@ -62,8 +96,74 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         end = word_end;
         kind = RangeKind::Inclusive;
     }
+    // Vim's exclusive-motion adjustment (`:h exclusive`), motion form — the
+    // same rule `apply_op_with_text_object` applies to inner bracket objects.
+    // When an exclusive charwise range ends in column 0 of a later row, the
+    // end pulls back to the end of the previous line and the motion becomes
+    // inclusive; when the start also sits at or before the first non-blank of
+    // its own line, the whole range promotes to linewise. This is what makes
+    // `d}` from column 0 delete its paragraph linewise (so `y}P` pastes above
+    // like nvim) while `d}` from mid-line stops at end-of-line instead of
+    // eating the line break.
+    if kind == RangeKind::Exclusive {
+        let forward = end.0 >= start.0;
+        let (top, bot) = if forward { (start, end) } else { (end, start) };
+        if bot.1 == 0 && bot.0 > top.0 {
+            let prev = bot.0 - 1;
+            let prev_len = buf_line_chars(ed.buffer(), prev);
+            let indent = buf_line(ed.buffer(), top.0)
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .count();
+            let new_bot = if top.1 <= indent {
+                kind = RangeKind::Linewise;
+                (prev, 0)
+            } else if prev_len > 0 {
+                kind = RangeKind::Inclusive;
+                (prev, prev_len - 1)
+            } else {
+                // Previous line is empty: nothing to include, stay exclusive.
+                (prev, 0)
+            };
+            if forward {
+                end = new_bot;
+            } else {
+                start = new_bot;
+            }
+        }
+    }
+    // Vim's "strange Vi behaviour" in `op_delete()`: a charwise DELETE that
+    // spans more than one line, whose range ends with nothing but whitespace
+    // left on the last line and whose start sits in the leading indent, is
+    // promoted to linewise — so `d}` over the final paragraph removes those
+    // rows outright instead of leaving an empty one behind, and the register
+    // gets linewise content. Delete only; `y}` / `c}` keep their charwise
+    // range, which is why this is not folded into the adjustment above.
+    if op == Operator::Delete && kind != RangeKind::Linewise {
+        let (top, bot) = order(start, end);
+        if bot.0 > top.0 {
+            let bot_line = buf_line(ed.buffer(), bot.0).unwrap_or_default();
+            let bot_chars: Vec<char> = bot_line.chars().collect();
+            let mut idx = bot.1;
+            if idx < bot_chars.len() && kind == RangeKind::Inclusive {
+                idx += 1;
+            }
+            let tail_blank = bot_chars[idx.min(bot_chars.len())..]
+                .iter()
+                .all(|c| *c == ' ' || *c == '\t');
+            let indent = buf_line(ed.buffer(), top.0)
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .count();
+            if tail_blank && top.1 <= indent {
+                kind = RangeKind::Linewise;
+            }
+        }
+    }
     // Restore cursor before selecting (so Yank leaves cursor at start).
-    ed.jump_cursor(start.0, start.1);
+    ed.jump_cursor(cursor_restore.0, cursor_restore.1);
 
     // Comment is always linewise regardless of motion kind — toggle rows.
     if op == Operator::Comment {

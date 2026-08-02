@@ -200,6 +200,76 @@ fn end_of_buffer_pos(lines: &[Vec<char>], n_lines: usize) -> (usize, usize) {
     let col = lines[last].len().saturating_sub(1);
     (last, col)
 }
+
+/// One repetition of `)`, classified the way vim's `findsent` classifies it.
+///
+/// `findsent` returns `FAIL` — and `nv_brace` then beeps and leaves the cursor
+/// exactly where it was — when a repetition has to walk off the end of the
+/// buffer while further repetitions are still owed. Landing at end-of-buffer
+/// is only a legal *final* landing. A repetition that starts already at the
+/// last cell is a no-op success, which is why `9)` at end-of-buffer neither
+/// moves nor beeps.
+pub enum SentenceStep {
+    /// A real boundary: a sentence terminator (possibly the one that closes
+    /// the buffer) or a blank-line transition.
+    Boundary((usize, usize)),
+    /// No boundary left. The landing is the buffer's last cell, and it counts
+    /// only when this is the last repetition.
+    EndOfBuffer((usize, usize)),
+    /// Cursor is already at (or past) the last cell — nothing to do.
+    AtEnd,
+}
+
+/// Classify the next `)` step from the cursor. See [`SentenceStep`].
+pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> SentenceStep {
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return SentenceStep::AtEnd;
+    }
+    let lines: Vec<Vec<char>> = (0..raw_n_lines)
+        .map(|r| rope_line_to_str(&rope, r).chars().collect())
+        .collect();
+    // Same phantom-trailing-row clamp as `sentence_boundary`.
+    let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+        raw_n_lines - 1
+    } else {
+        raw_n_lines
+    };
+    if n_lines == 0 {
+        return SentenceStep::AtEnd;
+    }
+    let cursor = ed.cursor();
+    let cursor = (cursor.0.min(n_lines - 1), cursor.1);
+    if let Some(&p) = sentence_boundaries(&lines, n_lines)
+        .iter()
+        .find(|&&p| p > cursor)
+    {
+        return SentenceStep::Boundary(p);
+    }
+    let end = end_of_buffer_pos(&lines, n_lines);
+    if end <= cursor {
+        return SentenceStep::AtEnd;
+    }
+    // A terminator (plus any closing run and trailing whitespace) that closes
+    // the buffer still ends a sentence in vim, so this landing is a real
+    // boundary rather than the run-off-the-end fallback: `3)` on
+    // `"One. Two."` stops at the last char, while `3)` on `"One. Two"` fails.
+    let mut tail = lines[n_lines - 1].as_slice();
+    while tail.last().is_some_and(|c| c.is_whitespace()) {
+        tail = &tail[..tail.len() - 1];
+    }
+    while tail.last().is_some_and(|c| is_sentence_closing(*c)) {
+        tail = &tail[..tail.len() - 1];
+    }
+    if tail.last().is_some_and(|c| is_sentence_terminator(*c)) {
+        SentenceStep::Boundary(end)
+    } else {
+        SentenceStep::EndOfBuffer(end)
+    }
+}
 /// `is` / `as` — sentence: text up to and including the next sentence
 /// terminator (`.`, `?`, `!`). Vim treats `.`/`?`/`!` followed by
 /// whitespace (or end-of-line) as a boundary; runs of consecutive

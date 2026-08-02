@@ -8,6 +8,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_paragraph_next` / `move_paragraph_prev` (`}` / `{`) are a
+  faithful port of vim's `findpar` instead of an approximation. Three behaviours
+  change: `}` in the final paragraph now lands on the **last character** of the
+  last line rather than column 0 (vim's "put the cursor on the last character in
+  the last line"), both motions now stop at the blank line **adjacent** to the
+  cursor instead of stepping over it (`}` on `"abc\n\ndef"` from row 0 went to
+  row 2, nvim goes to row 1), and a counted form that runs out of paragraphs
+  (`9}`) now **fails** and leaves the cursor put instead of clamping to the edge
+  row. Both also use `content_row_count`, so a buffer ending in `\n` no longer
+  parks the cursor on ropey's phantom trailing row. Verified against neovim
+  0.12.4 through the compat oracle.
+- `b` / `B` no longer fail when the previous word start is an empty or
+  whitespace-only line. `prev_word_start` returned `None` — leaving the cursor
+  untouched — whenever the backward whitespace skip ran into an empty line or
+  off the front of the buffer from a row other than row 0. Vim's `bck_word`
+  stops the skip on an empty line (an empty line is a word and a WORD for the
+  backward motions) and succeeds at `(0, 0)` when the skip runs out of buffer,
+  so `B` at column 0 of row 1 with a blank row 0 now lands on `(0, 0)` like nvim
+  instead of not moving.
 - Column math is wide-character correct. `Editor::cursor_screen_pos` had its own
   naive copy of the char→visual-column conversion and now delegates to
   `hjkl_buffer::char_col_to_visual_col`, which measures with `unicode-width`.

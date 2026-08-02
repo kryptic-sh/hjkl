@@ -38,6 +38,25 @@ patch bumps.
 
 ### Fixed
 
+- **`}`, `{`, `b`/`B` and `(`/`)` landings match neovim.** Four vim-parity
+  defects found by the differential oracle, all verified case by case against
+  neovim 0.12.4 and now pinned in `crates/hjkl-compat-oracle/corpus` (812 → 832
+  cases):
+  - `}` in the last paragraph stopped at column 0 of the last line; it now
+    reaches that line's last character (`}` on `"    it's.{foo}.A-B.{A-B}"` goes
+    to column 23, not 0), and `d}` there deletes through end-of-buffer.
+  - `}` and `{` stepped over a blank line that was directly next to the cursor,
+    skipping a whole paragraph — `}` on `"abc\n\ndef"` from row 0 landed on row
+    2 instead of row 1. A counted `9}` clamped to the last row instead of
+    failing, and a buffer ending in `\n` parked the cursor on a phantom row that
+    vim does not have.
+  - `b` / `B` did not move at all when the previous word start was an empty or
+    whitespace-only line (`B` at column 0 of row 1 above a blank row 0).
+  - `2)` on a line with no sentence terminator moved to end-of-line instead of
+    failing; vim's `(`/`)` are all-or-nothing under a count. This was the cause
+    of the composite `V}u2)1gUiW` divergence, which now produces neovim's
+    `"'QUX'  a-b"`.
+
 - **`foldlevelstart` is a level again, not a boolean.** The auto-fold pass
   computed `default_closed = foldlevelstart == 0` and handed that one flag to
   `View::set_auto_folds`, so only `0` (everything closed) and "anything else"

@@ -245,57 +245,95 @@ pub fn move_last_non_blank<B: Cursor + Query>(buf: &mut B) {
     write_cursor(buf, Position::new(row, col));
 }
 
-/// `{` — previous blank line above the cursor, or row 0.
+/// Vim's `findpar()` row scan, shared by `{` and `}` (`:h paragraph`).
+///
+/// Starting on the cursor's row, walk in `dir` until a paragraph boundary
+/// (an empty line) is reached, having passed at least one non-empty line
+/// on the way — so a boundary is never reported for the row the scan
+/// starts on, and a blank run the cursor already sits in is walked out of
+/// rather than counted as the boundary. Only truly empty lines are
+/// boundaries; a whitespace-only line is ordinary paragraph text, which is
+/// what vim's `startPS` does with no `'paragraphs'` macros in play.
+///
+/// Returns `None` when a *counted* motion runs off the buffer with
+/// repetitions still owed — vim's `findpar` returns `FAIL` there and the
+/// cursor does not move at all. A final repetition that runs off the end
+/// clamps to the edge row instead.
+fn find_paragraph<B: Query + ?Sized>(
+    buf: &B,
+    start_row: usize,
+    forward: bool,
+    count: usize,
+) -> Option<usize> {
+    // `content_row_count`, not `read_row_count`: a trailing `\n` synthesizes a
+    // phantom final row that vim does not have, and `}` must stop on the last
+    // *content* row like `G`/`j` do.
+    let last = content_row_count(buf).saturating_sub(1) as isize;
+    let dir: isize = if forward { 1 } else { -1 };
+    let mut curr = start_row as isize;
+    let mut remaining = count.max(1);
+    while remaining > 0 {
+        remaining -= 1;
+        // `did_skip`: a non-empty line has been seen this repetition.
+        let mut did_skip = false;
+        let mut first = true;
+        loop {
+            let empty = read_line(buf, curr as usize).is_empty();
+            if !empty {
+                did_skip = true;
+            }
+            if !first && did_skip && empty {
+                break;
+            }
+            curr += dir;
+            first = false;
+            if curr < 0 || curr > last {
+                if remaining > 0 {
+                    return None;
+                }
+                curr -= dir;
+                break;
+            }
+        }
+    }
+    Some(curr as usize)
+}
+
+/// `{` — previous paragraph boundary (empty line) above the cursor, or row 0.
 ///
 /// A run of consecutive blank lines counts as a single paragraph boundary
 /// (matching vim/neovim), so `{` steps over the blank run the cursor sits in
 /// before scanning up through the preceding paragraph to the next boundary.
 pub fn move_paragraph_prev<B: Cursor + Query>(buf: &mut B, count: usize) {
-    let mut row = read_cursor(buf).row;
-    for _ in 0..count.max(1) {
-        if row == 0 {
-            break;
-        }
-        // Step over any contiguous blank rows the cursor sits on
-        // so a single press doesn't stick.
-        let mut r = row.saturating_sub(1);
-        while r > 0 && read_line(buf, r).is_empty() {
-            r -= 1;
-        }
-        while r > 0 && !read_line(buf, r).is_empty() {
-            r -= 1;
-        }
-        row = r;
-    }
+    let cursor = read_cursor(buf);
+    let Some(row) = find_paragraph(buf, cursor.row, false, count) else {
+        return;
+    };
     write_cursor(buf, Position::new(row, 0));
 }
 
-/// `}` — next blank line below the cursor, or last row.
+/// `}` — next paragraph boundary (empty line) below the cursor, or last row.
 ///
 /// A run of consecutive blank lines counts as a single paragraph boundary
 /// (matching vim/neovim), so `}` steps over the blank run the cursor sits in
 /// before scanning down through the following paragraph to the next boundary.
+///
+/// Landing on the **last row** of the buffer puts the cursor on that row's
+/// last character rather than column 0 (vim's `findpar` tail: "put the
+/// cursor on the last character in the last line"), so `}` in the final
+/// paragraph reaches end-of-buffer. An empty last row keeps column 0.
 pub fn move_paragraph_next<B: Cursor + Query>(buf: &mut B, count: usize) {
-    let last = read_row_count(buf).saturating_sub(1);
     let cursor = read_cursor(buf);
-    let mut row = cursor.row;
-    for _ in 0..count.max(1) {
-        if row >= last {
-            break;
-        }
-        let mut r = row.saturating_add(1);
-        while r < last && read_line(buf, r).is_empty() {
-            r += 1;
-        }
-        while r < last && !read_line(buf, r).is_empty() {
-            r += 1;
-        }
-        row = r;
-    }
-    // Only move when a paragraph boundary was found (row changed).
-    if row != cursor.row {
-        write_cursor(buf, Position::new(row, 0));
-    }
+    let Some(row) = find_paragraph(buf, cursor.row, true, count) else {
+        return;
+    };
+    let last = content_row_count(buf).saturating_sub(1);
+    let col = if row == last {
+        line_chars(&read_line(buf, row)).saturating_sub(1)
+    } else {
+        0
+    };
+    write_cursor(buf, Position::new(row, col));
 }
 
 /// `[[` — backward to the previous `{` at column 0 (C section header).
@@ -1128,23 +1166,23 @@ fn prev_word_start<B: Query + ?Sized>(
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
     let mut cur = step_back(buf, cache, from)?;
-    // Skip whitespace backwards.
-    while cache
-        .char_at(buf, cur)
-        .map(|c| char_kind(c, big, iskeyword))
-        == Some(CharKind::Space)
-    {
-        match step_back(buf, cache, cur) {
-            Some(prev) => cur = prev,
-            None => {
-                // Hit buffer start inside leading whitespace.
-                // Only land here when we started on row 0
-                // (the previous "word" is the start of the line).
-                if from.row == 0 {
-                    return Some(cur);
+    // Skip whitespace backwards. Vim's `bck_word` stops the skip on an
+    // empty line — an empty line is a word (and a WORD) for the backward
+    // motions — and stops at the buffer start when the skip runs out of
+    // buffer inside leading whitespace (`dec_cursor() == -1` there returns
+    // OK, not FAIL, so the motion succeeds at (0, 0)).
+    loop {
+        match cache.char_at(buf, cur) {
+            // `step_back` only ever lands past end-of-line on an empty
+            // row, so this is vim's `col == 0 && LINEEMPTY` stop.
+            None => return Some(cur),
+            Some(c) if char_kind(c, big, iskeyword) == CharKind::Space => {
+                match step_back(buf, cache, cur) {
+                    Some(prev) => cur = prev,
+                    None => return Some(cur),
                 }
-                return None;
             }
+            Some(_) => break,
         }
     }
     let target_kind = cache

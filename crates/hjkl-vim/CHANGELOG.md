@@ -8,6 +8,30 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Operator ranges over `}` follow vim's three `findpar` / `:h exclusive` rules.
+  A `}` that lands on the last character of the last line makes the motion
+  inclusive, so `d}` in the final paragraph reaches end-of-buffer instead of
+  stopping one character short. An exclusive charwise range that ends in column
+  0 of a later row pulls its end back to the end of the previous line and turns
+  inclusive, and promotes to linewise when the start is at or before its line's
+  first non-blank — so `y}P` from column 0 pastes the paragraph back as whole
+  lines like nvim, and `d}` from mid-line no longer eats the line break. A
+  charwise `d` spanning more than one row whose range ends with only whitespace
+  left on the last row, started from within the indent, promotes to linewise
+  (vim's "strange Vi behaviour" in `op_delete`), which is what gives `d}` the
+  linewise register content nvim produces.
+- `(` and `)` are all-or-nothing under a count. `findsent` fails as soon as one
+  repetition has nowhere left to go and vim leaves the cursor untouched; the
+  motion previously moved as far as it could, so `2)` on a line with no sentence
+  terminator landed on the last character instead of staying put (the cause of
+  the `V}u2)1gUiW` composite divergence) and `3(` past the first sentence
+  stopped at `(0, 0)` instead of failing. A terminator that closes the buffer
+  still counts as a real boundary, so `3)` on `"One. Two."` succeeds while `3)`
+  on `"One. Two"` fails — the new `SentenceStep` classification in
+  `vim::text_object` is what separates the two.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed

@@ -23,6 +23,141 @@ keys = "{"
 expected_buffer = "alpha\n\nbeta\ngamma\n"
 expected_cursor = [1, 0]
 
+# `}` in the LAST paragraph lands on the last character of the last line, not
+# column 0 (vim's `findpar` tail). Single-line buffer: `}` from column 0 walks
+# to the end of the buffer.
+[[cases]]
+name = "paragraph_close_brace_reaches_last_char_single_line"
+initial_buffer = "    it's.{foo}.A-B.{A-B}"
+initial_cursor = [0, 0]
+keys = "}"
+expected_buffer = "    it's.{foo}.A-B.{A-B}"
+expected_cursor = [0, 23]
+
+# Same rule with two lines and no blank between them: `}` lands on the last
+# char of line 2, not on its column 0.
+[[cases]]
+name = "paragraph_close_brace_reaches_last_char_multiline"
+initial_buffer = "alpha\nbeta\n"
+initial_cursor = [0, 0]
+keys = "}"
+expected_buffer = "alpha\nbeta\n"
+expected_cursor = [1, 3]
+
+# `}` stops at the FIRST blank line below the cursor. The blank run is only
+# stepped over when the cursor already sits inside it (see
+# `paragraph_motions_walk_blank_lines`), never when the cursor is on text.
+[[cases]]
+name = "paragraph_close_brace_stops_at_adjacent_blank"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [0, 0]
+keys = "}"
+expected_buffer = "alpha\n\nbeta\n"
+expected_cursor = [1, 0]
+
+# Mirror for `{`: it stops at the blank line directly above, not at row 0.
+[[cases]]
+name = "paragraph_open_brace_stops_at_adjacent_blank"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [2, 0]
+keys = "{"
+expected_buffer = "alpha\n\nbeta\n"
+expected_cursor = [1, 0]
+
+# A counted `}` that runs out of paragraphs FAILS — vim leaves the cursor
+# exactly where it was rather than clamping to the last row.
+[[cases]]
+name = "paragraph_close_brace_counted_overshoot_fails"
+initial_buffer = "alpha\n\n\nbeta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "9}"
+expected_buffer = "alpha\n\n\nbeta\n\ngamma\n"
+expected_cursor = [0, 0]
+
+# `d}` over the final paragraph: the motion is inclusive at end-of-buffer and
+# the delete promotes to linewise (vim's "strange Vi behaviour"), so the whole
+# buffer goes and the register holds linewise text.
+[[cases]]
+name = "operator_d_close_brace_to_end_of_buffer"
+initial_buffer = "alpha\nbeta\n"
+initial_cursor = [0, 0]
+keys = "d}"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_register = ['"', "alpha\nbeta\n"]
+
+# `d}` starting past the first non-blank stays charwise and stops at the end of
+# the line above the blank — it does not eat the line break.
+[[cases]]
+name = "operator_d_close_brace_midline_stops_at_eol"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [0, 1]
+keys = "d}"
+expected_buffer = "a\n\nbeta\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "lpha"]
+
+# `y}` from column 0 yanks the paragraph LINEWISE (vim's exclusive-motion
+# adjustment), so `P` puts it back as a whole line above.
+[[cases]]
+name = "operator_y_close_brace_paragraph_is_linewise"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [0, 0]
+keys = "y}P"
+expected_buffer = "alpha\nalpha\n\nbeta\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "alpha\n"]
+
+# `B` from column 0 with an empty line above lands ON that empty line — vim
+# counts an empty line as a WORD for the backward motions.
+[[cases]]
+name = "word_B_from_col0_stops_on_empty_line"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [2, 0]
+keys = "B"
+expected_buffer = "alpha\n\nbeta\n"
+expected_cursor = [1, 0]
+
+# Same for `b`.
+[[cases]]
+name = "word_b_from_col0_stops_on_empty_line"
+initial_buffer = "alpha\n\nbeta\n"
+initial_cursor = [2, 0]
+keys = "b"
+expected_buffer = "alpha\n\nbeta\n"
+expected_cursor = [1, 0]
+
+# `B` from column 0 of row 1 when row 0 is empty: the motion succeeds and lands
+# at the start of the buffer (it must not fail and leave the cursor on row 1).
+[[cases]]
+name = "word_B_from_col0_first_line_empty"
+initial_buffer = "\nalpha\n"
+initial_cursor = [1, 0]
+keys = "B"
+expected_buffer = "\nalpha\n"
+expected_cursor = [0, 0]
+
+# Row 0 whitespace-only (NOT a paragraph boundary and not a WORD): the backward
+# skip runs out of buffer and vim still succeeds at (0, 0).
+[[cases]]
+name = "word_B_from_col0_first_line_blank"
+initial_buffer = "  \nalpha\n"
+initial_cursor = [1, 0]
+keys = "B"
+expected_buffer = "  \nalpha\n"
+expected_cursor = [0, 0]
+
+# Operator form of the same landing: `dB` deletes the blank first line and the
+# line break, joining onto row 1.
+[[cases]]
+name = "operator_dB_from_col0_first_line_blank"
+initial_buffer = "  \nalpha\n"
+initial_cursor = [1, 0]
+keys = "dB"
+expected_buffer = "alpha\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "  \n"]
+
 # `ge` jumps to end of previous word.
 [[cases]]
 name = "word_ge_end_back"

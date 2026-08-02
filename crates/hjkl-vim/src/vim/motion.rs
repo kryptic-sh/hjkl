@@ -693,17 +693,41 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::ParagraphNext => {
             hjkl_engine::motions::move_paragraph_next(ed.buffer_mut(), count);
         }
+        // `(` / `)` are all-or-nothing under a count: vim's `findsent` returns
+        // FAIL as soon as one repetition has nowhere left to go, and
+        // `nv_brace` then beeps with the cursor untouched. Moving as far as
+        // possible is what made `2)` on a single sentence-less line land on
+        // the last char instead of staying put.
         Motion::SentencePrev => {
+            let start = ed.cursor();
             for _ in 0..count.max(1) {
-                if let Some((row, col)) = sentence_boundary(ed, false) {
-                    ed.jump_cursor(row, col);
+                match sentence_boundary(ed, false) {
+                    Some((row, col)) => ed.jump_cursor(row, col),
+                    None => {
+                        ed.jump_cursor(start.0, start.1);
+                        break;
+                    }
                 }
             }
         }
         Motion::SentenceNext => {
-            for _ in 0..count.max(1) {
-                if let Some((row, col)) = sentence_boundary(ed, true) {
-                    ed.jump_cursor(row, col);
+            use crate::vim::text_object::SentenceStep;
+            let start = ed.cursor();
+            let total = count.max(1);
+            for i in 0..total {
+                match crate::vim::text_object::sentence_step_forward(ed) {
+                    SentenceStep::Boundary((row, col)) => ed.jump_cursor(row, col),
+                    // Already parked on the last cell: a no-op repetition,
+                    // not a failure (`9)` at end-of-buffer stays put).
+                    SentenceStep::AtEnd => {}
+                    SentenceStep::EndOfBuffer((row, col)) => {
+                        if i + 1 == total {
+                            ed.jump_cursor(row, col);
+                        } else {
+                            ed.jump_cursor(start.0, start.1);
+                            break;
+                        }
+                    }
                 }
             }
         }
