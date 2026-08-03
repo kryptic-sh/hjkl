@@ -14,5 +14,7 @@
 (for_statement) @fold
 (while_statement) @fold
 (switch_statement) @fold
+(try_statement) @fold
+(catch_clause) @fold
 
 (initializer_list) @fold

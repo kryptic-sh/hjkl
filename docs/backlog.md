@@ -273,15 +273,6 @@ regressions:
   `catch` block, gets its own fold), Java `(array_initializer)`, Ruby `(block)`
   (the `{ |x| … }` form) and `(begin)`, JS/TS `(statement_block)`. Ranges
   verified correct in every case.
-- **C++ `try`/`catch` folds shorter in hjkl.** `folds/cpp.scm` has no
-  `(try_statement)` or `(catch_clause)`, so the fold anchored on `try {` covers
-  only the try body: measured `(30, 34)` where neovim gives `(30, 36)`. Same
-  anchor, shorter span. Both are true node spans, so this is a missing node type
-  rather than a wrong range — but it is also an inconsistency inside hjkl's own
-  query set, since `java.scm`, `php.scm`, `c_sharp.scm`, `javascript.scm` and
-  `typescript.scm` all do capture `(try_statement)`. Adding the two node types
-  to `cpp.scm` is a one-line change; deliberately not taken in a pass scoped to
-  range correctness.
 - **vim's fold model truncates siblings; hjkl's does not.** Where two folds
   would abut (a consequence block ending on the same row an `else` block
   begins), vim ends the first one row early: neovim reports `(26, 27)` for a Go

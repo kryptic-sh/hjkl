@@ -38,6 +38,12 @@ patch bumps.
 
 ### Fixed
 
+- **A C++ `try` block now folds over its whole statement.** Under
+  `foldmethod=expr` the fold anchored on `try {` stopped at the `}` that opens
+  the `catch`, and the catch clause itself was not foldable at all — the bundled
+  C++ fold query captured neither node type, unlike hjkl's own Java, PHP, C#,
+  JavaScript and TypeScript queries. Both now fold exactly as neovim does.
+
 - **Grammars no longer fail to install when two hjkl instances warm a cold cache
   at once.** On a machine with no `~/.cache/bonsai` yet, two instances opening
   files of different types both cloned the shared nvim-treesitter / Helix query

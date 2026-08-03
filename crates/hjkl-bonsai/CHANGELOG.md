@@ -55,6 +55,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   The in-process per-key mutex is gone — it was the same invariant enforced
   twice, once incompletely.
 
+- **A C++ `try` block folded only as far as the `catch`.** The bundled
+  `folds/cpp.scm` captured neither `(try_statement)` nor `(catch_clause)`, so
+  the only fold anchored on `try {` was the try body's `(compound_statement)` —
+  it ended on the `}` that opens the catch instead of at the end of the whole
+  statement, and the catch clause got no fold at all. Both node types are
+  captured now, matching neovim and the `java.scm` / `php.scm` / `c_sharp.scm` /
+  `javascript.scm` / `typescript.scm` queries, which already had them. Pinned by
+  `cpp_try_catch_fold_ranges_match_neovim` in `hjkl-syntax`.
+
 - `folds::builtin_folds` now also answers to the grammar name `c-sharp`, not
   just `c_sharp`. `bonsai.toml` carries both entries for the same C# grammar and
   `GrammarRegistry` resolves `.cs` to the alphabetically first one (`c-sharp`),

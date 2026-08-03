@@ -2154,6 +2154,25 @@ mod tests {
         assert_eq!(folds_for("a.cpp", src), vec![(0, 9), (2, 7), (4, 6)]);
     }
 
+    /// nvim on this fixture: `(0, 7)`, `(1, 5)`, `(3, 5)` — identical.
+    ///
+    /// Regression: `folds/cpp.scm` used to capture neither `(try_statement)`
+    /// nor `(catch_clause)`, so the only fold anchored on `try {` was the try
+    /// body's `(compound_statement)` — `(1, 3)` here, ending at the `}` that
+    /// opens the catch instead of at the end of the whole statement. The
+    /// catch clause got no fold of its own at all.
+    #[test]
+    #[ignore = "network + compiler: fetches the cpp grammar"]
+    fn cpp_try_catch_fold_ranges_match_neovim() {
+        let src = concat!(
+            "int main() {\n",
+            "  try {\n    f();\n",
+            "  } catch (int e) {\n    g();\n  }\n",
+            "  return 0;\n}\n",
+        );
+        assert_eq!(folds_for("a.cpp", src), vec![(0, 7), (1, 5), (3, 5)]);
+    }
+
     /// nvim on this fixture: `(0, 7)`, `(1, 6)`, `(2, 4)` — identical.
     ///
     /// The anchors agree only because the braces are K&R. neovim folds Java's
