@@ -10,9 +10,9 @@ and this project adheres to
 
 ### Changed
 
-- `LastChange::OpMotion`, `OpTextObj`, `DeleteToEol` and `Paste` each carry a
-  `register: Option<char>` field, matching `LineOp`. Dot-repeat needs it to
-  replay a change into the register the original named (`:h redo-register`).
+- `LastChange::OpMotion`, `OpTextObj`, `DeleteToEol`, `Paste` and `CharDel` each
+  carry a `register: Option<char>` field, matching `LineOp`. Dot-repeat needs it
+  to replay a change into the register the original named (`:h redo-register`).
 
 ### Added
 

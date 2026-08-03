@@ -461,15 +461,12 @@ still open:
 - **The `:s` curswant fix has no oracle case.** It is covered by two unit tests
   in `hjkl-engine`'s `substitute` module, because the corpus driver cannot
   replay `:` keys. A corpus case would need the ex layer driven some other way.
-- **`LastChange::CharDel` still carries no register**, so `"ax` then `.` deletes
-  into the unnamed register. Not fixed here because `do_char_delete` writes the
-  register itself with `set_yank` and honours no `"reg` at all — nvim's `"ax`
-  puts the char in `"a`, hjkl's does not. That is the same defect
-  `command::delete_to_eol` had, and it wants the same `record_delete` treatment
-  plus a `register` field on `CharDel`. Verified against nvim 0.12.4; not
-  attempted, so `x` / `X` remain register-blind.
 - **`LastChange::GnOp`, `VisualOp` and the visual-block variants were not
-  checked** for the same missing field.
+  checked** for the same missing field. (`CharDel` was, and did have it: fixed
+  2026-08-04. The half of that entry claiming `do_char_delete` used `set_yank`
+  and ignored `"reg` was already stale when it was written — the live `x` / `X`
+  path routes through `record_delete` with the pending register, and only the
+  dot-repeat dropped it.)
 
 ### 1.6 Cursor-move API migration
 

@@ -96,7 +96,14 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 replay_insert_and_finish(ed, &text);
             }
         }
-        LastChange::CharDel { forward, count } => {
+        LastChange::CharDel {
+            forward,
+            count,
+            register,
+        } => {
+            // `"axl.` deletes into `"a` again — `do_char_delete` consumes
+            // `pending_register` itself, same as the live FSM path.
+            vim_mut(ed).pending_register = register;
             do_char_delete(ed, forward, scaled(count));
         }
         LastChange::ReplaceChar { ch, count } => {

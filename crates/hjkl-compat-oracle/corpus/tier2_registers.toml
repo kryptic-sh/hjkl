@@ -216,3 +216,65 @@ keys = "\"aywwywj\"ap."
 expected_buffer = "alpha bravo\nalpha alpha \n\n"
 expected_cursor = [1, 11]
 expected_mode = "normal"
+
+# ── `x` / `X` honour `"reg`, live and on dot-repeat ────────────────────────
+#
+# vim writes a named register from `x`/`X` like any other delete, and `:h
+# redo-register` makes `.` reuse the register the original change named.
+# `expected_register` pins the named register directly — the paste-back
+# cases above predate the oracle reading anything but the unnamed one.
+
+[[cases]]
+name = "register_x_writes_named_register"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "\"ax"
+expected_buffer = "bcdef\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['a', "a"]
+
+[[cases]]
+name = "register_X_writes_named_register"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 2]
+keys = "\"aX"
+expected_buffer = "acdef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['a', "b"]
+
+# A counted `x` puts all `count` chars in the named register, in reading
+# order.
+[[cases]]
+name = "register_x_count_writes_named_register"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "\"a3x"
+expected_buffer = "def\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['a', "abc"]
+
+# `.` after `"ax` deletes into `"a` again, not the unnamed register.
+[[cases]]
+name = "register_dot_repeat_x_reuses_named_register"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "\"axl."
+expected_buffer = "bdef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['a', "c"]
+
+# An uppercase register selector appends, so `"ax` then `"Ax` leaves both
+# deleted chars in `"a`.
+[[cases]]
+name = "register_x_uppercase_appends_to_named_register"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "\"axl\"Ax"
+expected_buffer = "bdef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['a', "ac"]

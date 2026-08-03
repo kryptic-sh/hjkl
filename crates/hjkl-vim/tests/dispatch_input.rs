@@ -986,6 +986,30 @@ fn dot_repeat_reuses_the_explicit_register() {
     }
 }
 
+/// Same rule for `x` / `X`. The live path already honoured `"a`;
+/// `LastChange::CharDel` carried no register, so the `.` deleted into the
+/// unnamed one and left `"a` holding the FIRST deletion. Every expectation
+/// measured on neovim 0.12.4 over `"abcdef"`.
+#[test]
+fn dot_repeat_char_delete_reuses_the_explicit_register() {
+    // `"axl.` — delete `a`, step right, repeat: `"a` ends up with `c`.
+    let mut e = editor_with("abcdef");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "\"axl."), "c");
+    assert_eq!(e.content(), "bdef\n");
+
+    // Backward `X` repeats the same way: `"aX` at `d` takes `c`, then `.`
+    // one column on takes `b`.
+    let mut e = editor_with("abcdef");
+    dispatch_keys(&mut e, "lll");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "\"aX."), "b");
+    assert_eq!(e.content(), "adef\n");
+
+    // A counted `x` carries its count into the repeat, register and all.
+    let mut e = editor_with("abcdef");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "\"a2x."), "cd");
+    assert_eq!(e.content(), "ef\n");
+}
+
 /// `"aD` / `"aC` write the named register at all — they used to reach only the
 /// unnamed one. nvim: `"aD` on `"alpha bravo"` leaves `a` holding the line.
 #[test]

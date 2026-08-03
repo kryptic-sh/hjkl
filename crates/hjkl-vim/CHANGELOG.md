@@ -16,6 +16,15 @@ and this project adheres to
   then `.` pasted from it. They now record it the way `LineOp` already did, and
   `dot_repeat` restores it before replaying. Four cases in
   `corpus/tier2_registers.toml` pin this against nvim.
+- `.` after `"ax` / `"aX` deletes into `"a` too. `LastChange::CharDel` was the
+  last variant with no `register` field, so the repeat fell back to the unnamed
+  register and left `"a` holding the FIRST deletion (`"axl.` on `"abcdef"` left
+  `"a` as `a` where nvim leaves `c`). The live `x` / `X` path already honoured
+  an explicit register; only the repeat did not. **`LastChange::CharDel` gained
+  a `register` field** — a breaking change for anyone matching on it.
+  `dot_repeat_char_delete_reuses_the_explicit_register` covers `x`, `X` and a
+  counted `x`, and five more cases in `corpus/tier2_registers.toml` pin the
+  whole family against nvim.
 - `"aD` and `"aC` write the named register. `command::delete_to_eol` wrote the
   deleted text with `set_yank`, which only ever reaches the unnamed register, so
   an explicit `"reg` was silently dropped. It now routes through

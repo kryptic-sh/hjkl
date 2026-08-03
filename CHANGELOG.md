@@ -54,6 +54,13 @@ patch bumps.
   take a cross-process lock on the destination and stage into a pid-private
   directory. Details in `crates/hjkl-bonsai/CHANGELOG.md`.
 
+- **`.` after `"ax` deletes into `"a`, not the unnamed register.** The `x` / `X`
+  keys already honoured an explicit register when typed, but the dot-repeat did
+  not carry it, so the repeat wrote the unnamed register and left `"a` holding
+  the first deletion — `"axl.` on `"abcdef"` left `"a` as `a` where neovim
+  leaves `c`. `x`, `X` and their counted forms now all repeat into the named
+  register, matching the operator and paste families fixed above.
+
 - **`}`, `{`, `b`/`B` and `(`/`)` landings match neovim.** Four vim-parity
   defects found by the differential oracle, all verified case by case against
   neovim 0.12.4 and now pinned in `crates/hjkl-compat-oracle/corpus` (812 → 832

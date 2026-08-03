@@ -139,11 +139,15 @@ pub fn delete_char_forward_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
+    // Read the register before `do_char_delete` consumes it, so `.` can
+    // reuse it (`:h redo-register`).
+    let register = vim(ed).pending_register;
     do_char_delete(ed, true, count.max(1));
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::CharDel {
             forward: true,
             count: count.max(1),
+            register,
         });
     }
 }
@@ -153,11 +157,14 @@ pub fn delete_char_backward_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
+    // Same as the `x` bridge: capture the register before it is consumed.
+    let register = vim(ed).pending_register;
     do_char_delete(ed, false, count.max(1));
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::CharDel {
             forward: false,
             count: count.max(1),
+            register,
         });
     }
 }

@@ -328,7 +328,13 @@ pub enum LastChange {
         register: Option<char>,
     },
     /// `x`, `X` with a count.
-    CharDel { forward: bool, count: usize },
+    CharDel {
+        forward: bool,
+        count: usize,
+        /// The explicit register the original change used (`"ax`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
+    },
     /// `r<ch>` with a count.
     ReplaceChar { ch: char, count: usize },
     /// `~` with a count.
