@@ -397,19 +397,31 @@ machine that has no neovim — including CI lanes that do not install it. The
 (`diff.rs::run_single`), which closed the "documentation-only field" half of
 this, but nothing compares hjkl against the authored values on its own.
 
-**A text object in blockwise visual collapses the block to charwise
-(2026-08-04).** `<C-v>iw` leaves hjkl in charwise `visual` where nvim stays
-`visual_block`: `editor_ext::visual_text_obj_extend` sets `visual_anchor` and
-the cursor but never `block_anchor` / `block_vcol`, which are what
-`block_bounds` reads, and the charwise arm of `apply_visual_operator` then runs
-the operator. That is why `<C-v>iw<` on `"\t(x).[y]"` still outdents the whole
-line — the blockwise `>` / `<` fix underneath it is correct and reached by every
-other blockwise path, but this case never gets there.
+**A text object in blockwise visual collapses the block (2026-08-04).**
+`editor_ext::visual_text_obj_extend` sends EVERY text object down one path —
+collapse to charwise (or linewise), set `visual_anchor`, move the cursor — and
+never writes `block_anchor` / `block_vcol`, which are what `block_bounds` reads.
+Its comment said vim does the same. It does not.
 
-Found while fixing the block-column shift; it is the other half of the
-"blockwise non-delete operators" item and wants its own change, since a text
-object has to yield a RECTANGLE (vim keeps the block's rows and takes the
-object's columns) rather than a charwise range.
+Measured on neovim 0.12.4, entering with `<C-v>j` and then the object, there are
+THREE behaviours:
+
+| Objects                       | neovim                                                 |
+| ----------------------------- | ------------------------------------------------------ |
+| `iw` `aw` `iW` `aW` `ip` `is` | stays BLOCKWISE; rows kept, cursor extends the columns |
+| `ib` `ab` `iB`                | collapses to charwise AND to the cursor's single row   |
+| `i"` `it`                     | no-op — the object does not apply                      |
+
+hjkl does the middle one for all of them. For the word objects the cursor
+already lands exactly where nvim puts it (verified for `<C-v>iw` and `<C-v>jiw`)
+— only the MODE is wrong, so that part is small: keep `FsmMode::VisualBlock` and
+write `block_vcol`. The bracket objects have a second, separate divergence:
+`<C-v>jib` leaves hjkl's cursor on row 1 where nvim puts it on row 0.
+
+This is what stops `<C-v>iw<` from reaching the blockwise `>` / `<` arm, so it
+still outdents the whole line even though the shift geometry underneath is
+correct. Not attempted: it needs per-object routing plus a re-verification of
+every case in `corpus/tier2_block_textobj.toml`, which is its own change.
 
 **The differential fuzzer still reports 77 divergences at seed 777** (89 before
 the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure rule, 78

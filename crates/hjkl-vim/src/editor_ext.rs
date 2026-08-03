@@ -1863,10 +1863,22 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         } else {
             (start, end)
         };
-        // vim switches from visual-block to the text-object's native mode
-        // (charwise for iw/aw/iquote/ibracket, linewise for ip/ap).  The
-        // block anchor is meaningless for the resulting charwise/linewise
-        // selection — replace it with the text object's computed start.
+        // NOTE: this collapses EVERY text object out of blockwise visual, and
+        // that is not what vim does. Measured on neovim 0.12.4 from a
+        // `<C-v>j` block, there are three behaviours, not one:
+        //
+        //   - `iw` / `aw` / `iW` / `aW` / `ip` / `is` stay BLOCKWISE and just
+        //     extend the cursor (so the block keeps its rows and takes the
+        //     object's columns);
+        //   - `ib` / `ab` / `iB` collapse to charwise AND to the cursor's
+        //     single row, which is what this branch does;
+        //   - `i"` / `it` do nothing at all.
+        //
+        // Only the middle one is right here. The mismatch is why `<C-v>iw<`
+        // still outdents the whole line: the operator never reaches the
+        // blockwise arm. Tracked in docs/backlog.md §1.5b — fixing it needs
+        // per-object routing, and the word objects additionally need to write
+        // `block_vcol` so `block_bounds` sees the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
             match kind {
                 RangeKind::Linewise => {
