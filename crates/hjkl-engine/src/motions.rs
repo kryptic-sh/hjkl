@@ -1058,6 +1058,13 @@ impl LineCache {
 }
 
 /// Step one position forward, wrapping into the next row.
+///
+/// The wrap is bounded by [`content_row_count`], never raw
+/// [`read_row_count`]: stepping past the last char of a trailing-`\n`
+/// buffer must return `None` instead of landing on ropey's phantom
+/// trailing empty row (which every other vertical motion already
+/// excludes). A *real* empty last line (`"foo\n\n"`) stays reachable —
+/// [`content_row_count`] only skips the single phantom row.
 fn step_forward<B: Query + ?Sized>(
     buf: &B,
     cache: &mut LineCache,
@@ -1067,7 +1074,7 @@ fn step_forward<B: Query + ?Sized>(
     if pos.col + 1 < len {
         return Some(Position::new(pos.row, pos.col + 1));
     }
-    if pos.row + 1 < read_row_count(buf) {
+    if pos.row + 1 < content_row_count(buf) {
         return Some(Position::new(pos.row + 1, 0));
     }
     None
@@ -1099,12 +1106,13 @@ fn dec<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Opti
 
 /// Vim's `inc()` — the inverse of [`dec`]. Inside a row it advances by one,
 /// which can land ON the virtual end-of-line cell; from that cell it wraps to
-/// column 0 of the next row.
+/// column 0 of the next row. The wrap is bounded by [`content_row_count`]
+/// (see [`step_forward`]) so it can never step onto the phantom trailing row.
 fn inc<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Option<Position> {
     if pos.col < cache.char_count(buf, pos.row) {
         return Some(Position::new(pos.row, pos.col + 1));
     }
-    if pos.row + 1 < read_row_count(buf) {
+    if pos.row + 1 < content_row_count(buf) {
         return Some(Position::new(pos.row + 1, 0));
     }
     None
@@ -1192,11 +1200,14 @@ fn next_word_start<B: Query + ?Sized>(
     Some(cur)
 }
 
-/// One past the last char of the last row — vim's "end of buffer"
-/// for operator-context word motions, so `yw` at end-of-line yanks
-/// up to and including the last char.
+/// One past the last char of the last CONTENT row — vim's "end of buffer"
+/// for operator-context word motions, so `yw` at end-of-line yanks up to and
+/// including the last char. Must use [`content_row_count`], not raw
+/// [`read_row_count`]: for a trailing-`\n` buffer the raw count's last row is
+/// ropey's phantom empty row, and `yw` would anchor one past nothing instead
+/// of one past the last real char.
 fn end_of_buffer<B: Query + ?Sized>(buf: &B) -> Position {
-    let last_row = read_row_count(buf).saturating_sub(1);
+    let last_row = content_row_count(buf).saturating_sub(1);
     let last_line = read_line(buf, last_row);
     Position::new(last_row, line_chars(&last_line))
 }
@@ -1570,6 +1581,61 @@ mod tests {
         let mut b = View::from_str("foo.bar baz");
         move_word_fwd(&mut b, true, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 8));
+    }
+
+    /// `w` / `W` from the last word of a trailing-`\n` buffer must land one
+    /// past the last char of the LAST REAL row — the same endpoint the
+    /// non-terminated buffer produces — never on ropey's phantom trailing
+    /// empty row. The vim layer's normal-mode clamp (`WordFwd` arm in
+    /// `hjkl-vim/src/vim/motion.rs`) pulls that one-past-end endpoint back
+    /// to the last char, so the observable cursor stays put on nvim; the
+    /// operator-context `yw` still yanks through the last char.
+    #[test]
+    fn move_word_fwd_at_eof_newline_terminated_stays_off_phantom_row() {
+        // Rows: ["abc def", ""] — the trailing `\n` synthesizes the phantom
+        // empty row. From the last char, `w` must not step onto it.
+        let mut b = View::from_str("abc def\n");
+        b.set_cursor(Position::new(0, 6));
+        move_word_fwd(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 7));
+
+        // Big-word `W` shares the same walk.
+        let mut b = View::from_str("abc def\n");
+        b.set_cursor(Position::new(0, 6));
+        move_word_fwd(&mut b, true, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 7));
+
+        // Non-newline-terminated buffer behaves as before: same landing.
+        let mut b = View::from_str("abc def");
+        b.set_cursor(Position::new(0, 6));
+        move_word_fwd(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 7));
+
+        // A REAL empty last line ("foo\n\n" -> rows ["foo", "", ""]) stays
+        // reachable: `w` off "foo" steps onto it, since only the single
+        // phantom row is excluded by `content_row_count`.
+        let mut b = View::from_str("foo\n\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_fwd(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    /// `e` / `E` from the last word of a trailing-`\n` buffer stays on the
+    /// last char — no next word end exists. `e` never returned the phantom
+    /// row (its walk gives up when `char_at` reads `None` there); this pins
+    /// the behavior against a future `step_forward` change.
+    #[test]
+    fn move_word_end_at_eof_newline_terminated_stays_on_last_char() {
+        let mut b = View::from_str("abc def\n");
+        b.set_cursor(Position::new(0, 6));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 6));
+
+        // Non-newline-terminated buffer behaves as before.
+        let mut b = View::from_str("abc def");
+        b.set_cursor(Position::new(0, 6));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 6));
     }
 
     #[test]
