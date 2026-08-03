@@ -16,6 +16,22 @@ and this project adheres to
   was ever read, so the four corpus cases pinning `"a` compared nothing.
 - Added changelog.
 
+### Changed
+
+- **A corpus case may hold non-ASCII text.** `NvimOutcome::cursor` is a char
+  column now, converted from the byte column nvim's API reports, and
+  `nvim_driver` converts `initial_cursor` the other way before calling
+  `set_cursor`. The oracle previously compared hjkl's char column straight
+  against nvim's byte column — the comment in `diff.rs` said the two were
+  "equivalent for ASCII-only cases", which confined every case to ASCII and left
+  the wide-character column math with no oracle coverage at all. `tier1.toml`
+  gains a wide-character group (`l`, `$`, `w`, `x`, `dw` and a `j` off a wide
+  line onto an ASCII one).
+
+  This is a semantic change to `OracleCase::initial_cursor` and
+  `expected_cursor`: both count CHARS now. Every existing case is ASCII, where
+  the two agree, so none needed editing.
+
 ### Fixed
 
 - **A corpus case's `expected_cursor`, `expected_mode` and `expected_register`

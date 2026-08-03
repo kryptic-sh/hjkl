@@ -176,10 +176,8 @@ async fn run_single(case: &OracleCase, nvim_ok: bool) -> CaseResult {
         };
     }
 
-    // Compare cursor.
-    // Note: hjkl cursor col is char-indexed; nvim cursor col is byte-indexed.
-    // For ASCII-only test cases these are equivalent. Differences on non-ASCII
-    // content will surface here naturally.
+    // Compare cursor. Both sides are char-indexed — `nvim_driver` converts
+    // the byte column nvim reports — so a case may hold non-ASCII text.
     if hjkl.cursor != nvim.cursor {
         return CaseResult {
             name,

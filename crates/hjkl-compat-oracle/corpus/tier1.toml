@@ -1,11 +1,12 @@
 # Tier 1 corpus — ~45 cases covering core vim motions, operators, text objects,
 # counts, insert mode, undo/redo, and registers.
 #
-# All buffers are ASCII-only (char-col == byte-col invariant holds).
 # Cases are grouped by category with TOML comments.
 #
 # Naming convention: <category>_<motion/op>_<descriptor>
-# Cursor positions: 0-based (row, col).
+# Cursor positions: 0-based (row, col), col counted in CHARS. `nvim_driver`
+# converts to and from nvim's byte columns, so a case may hold non-ASCII text
+# — see the wide-character group at the end.
 # Confirmed divergences from neovim semantics live in known_divergences.toml.
 
 # ─── Motions ──────────────────────────────────────────────────────────────────
@@ -911,3 +912,69 @@ initial_cursor = [0, 0]
 keys = "J"
 expected_buffer = "hello)world"
 expected_cursor = [0, 5]
+
+# ── Wide characters ────────────────────────────────────────────────────────
+#
+# Until `nvim_driver` converted between nvim's byte columns and the corpus's
+# char columns, every case here had to be ASCII: the oracle compared hjkl's
+# char column straight against nvim's byte column. These pin the conversion
+# in both directions — `wide_j_from_a_wide_line` starts the cursor at char 3
+# of a line whose bytes run to 10, so the set-cursor side is exercised too.
+
+[[cases]]
+name = "wide_l_moves_one_character"
+initial_buffer = "日本語x\n"
+initial_cursor = [0, 0]
+keys = "l"
+expected_buffer = "日本語x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "wide_dollar_lands_on_the_last_character"
+initial_buffer = "日本語x\n"
+initial_cursor = [0, 0]
+keys = "$"
+expected_buffer = "日本語x\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+[[cases]]
+name = "wide_w_crosses_a_space"
+initial_buffer = "日本 語x\n"
+initial_cursor = [0, 0]
+keys = "w"
+expected_buffer = "日本 語x\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+[[cases]]
+name = "wide_x_deletes_one_character"
+initial_buffer = "日本語x\n"
+initial_cursor = [0, 0]
+keys = "x"
+expected_buffer = "本語x\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "日"]
+
+[[cases]]
+name = "wide_dw_deletes_one_word"
+initial_buffer = "日本 語x\n"
+initial_cursor = [0, 0]
+keys = "dw"
+expected_buffer = "語x\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `j` off a wide line lands by DISPLAY column, so the three double-width
+# characters carry the cursor to column 6 of the ASCII row below — clamped to
+# its last column here.
+[[cases]]
+name = "wide_j_from_a_wide_line"
+initial_buffer = "日本語x\nabcdef\n"
+initial_cursor = [0, 3]
+keys = "j"
+expected_buffer = "日本語x\nabcdef\n"
+expected_cursor = [1, 5]
+expected_mode = "normal"

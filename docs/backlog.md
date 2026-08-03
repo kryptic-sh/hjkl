@@ -489,17 +489,18 @@ is what was NOT tackled.
 `hjkl_buffer::geom` is now `unicode-width`-aware and `Editor`'s duplicate
 `visual_col_for_char` delegates to it. Three things were deliberately NOT done.
 
-- **The compat oracle cannot express a wide-char cursor case.**
-  `hjkl-compat-oracle/src/diff.rs` compares hjkl's cursor column (a **char**
-  index) against nvim's (a **byte** index) directly — the comment there already
-  admits it and says the two are "equivalent for ASCII-only cases". So every
-  corpus case is confined to ASCII, and the strongest available oracle cannot
-  guard the behaviour this fix establishes. Fixing it means converting one side
-  in `diff.rs` (nvim byte col → char col via the buffer line it just read) and
-  then adding CJK/emoji/combining cases to `tier1.toml`. Not attempted here
-  because it changes the harness, not the engine. Until then wide-char coverage
-  is unit tests in `geom.rs`, `cursor_move.rs`, `editor.rs` and `render.rs`,
-  each with its nvim-derived expectation written into the test.
+- **Wide-char cursor cases are expressible now (2026-08-04), and they found a
+  divergence.** `nvim_driver` converts between nvim's byte columns and the
+  corpus's char columns in both directions, so `tier1.toml` carries a
+  wide-character group and the strongest available oracle guards the column
+  math. What it immediately surfaced is the char-vs-grapheme split: hjkl's `l`
+  moves one CHAR, nvim's moves one GRAPHEME. On `"e\u{301}abc"` hjkl lands on
+  the combining mark (char 1) where nvim lands on `a`; on
+  `"\u{2764}\u{fe0f}abc"` hjkl lands on the variation selector and nvim on `a`.
+  Both verified against neovim 0.12.4. Deliberately NOT in the corpus — they
+  would be cases pinning a known divergence — and the same root cause as the
+  emoji-width entry below; fixing either wants grapheme segmentation, which is
+  its own change.
 
 - **Emoji presentation sequences are one cell narrower than vim's.** vim widens
   `U+2764 U+FE0F` ("❤️") to two cells because it segments graphemes;

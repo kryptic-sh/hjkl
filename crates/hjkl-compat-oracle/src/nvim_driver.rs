@@ -12,7 +12,10 @@ pub struct NvimOutcome {
     /// original `initial_buffer` ended with `\n` (nvim strips trailing empty
     /// lines from `get_lines`).
     pub buffer: String,
-    /// `(row, col)` cursor, 0-based row, byte-col (mirrors nvim's encoding).
+    /// `(row, col)` cursor, 0-based row. `col` is a **char** index, converted
+    /// from the byte index nvim reports so it means the same thing as
+    /// [`crate::HjklOutcome::cursor`]. Comparing nvim's raw byte column
+    /// against hjkl's char column confined every corpus case to ASCII.
     pub cursor: (usize, usize),
     /// Lowercase mode name matching [`crate::hjkl_driver::HjklOutcome::mode`].
     pub mode: String,
@@ -103,11 +106,14 @@ async fn run_case_inner(
     let cur_buf = nvim.get_current_buf().await?;
     cur_buf.set_lines(0, -1, false, lines.clone()).await?;
 
-    // 3. Set initial cursor (nvim: 1-based row, 0-based byte-col).
+    // 3. Set initial cursor. The corpus counts columns in CHARS (hjkl's own
+    //    encoding); nvim's `set_cursor` wants a 1-based row and a 0-based
+    //    BYTE column.
     let (init_row, init_col) = case.initial_cursor;
+    let init_byte_col = char_col_to_byte_col(nth_line(&case.initial_buffer, init_row), init_col);
     let cur_win = nvim.get_current_win().await?;
     cur_win
-        .set_cursor((init_row as i64 + 1, init_col as i64))
+        .set_cursor((init_row as i64 + 1, init_byte_col as i64))
         .await?;
 
     // 3b. Apply per-case indent settings so `>>` / `<<` match hjkl's output.
@@ -193,7 +199,11 @@ async fn run_case_inner(
     // 7. Read back cursor (convert from 1-based row to 0-based). Clamp at 0
     //    so malformed RPC values can't wrap to huge usize garbage.
     let (nvim_row, nvim_col) = cur_win.get_cursor().await?;
-    let cursor = ((nvim_row - 1).max(0) as usize, nvim_col.max(0) as usize);
+    let row = (nvim_row - 1).max(0) as usize;
+    let cursor = (
+        row,
+        byte_col_to_char_col(nth_line(&buf_str, row), nvim_col.max(0) as usize),
+    );
 
     // 8. Read back mode.
     let mode_pairs = nvim.get_mode().await?;
@@ -233,6 +243,31 @@ async fn run_case_inner(
         default_register,
         pinned_register,
     })
+}
+
+/// Line `row` of a `\n`-joined buffer, or `""` when the row is past its end.
+fn nth_line(buffer: &str, row: usize) -> &str {
+    buffer.split('\n').nth(row).unwrap_or("")
+}
+
+/// Char index within `line` for a 0-based BYTE index.
+///
+/// nvim always reports a column on a character boundary, but a malformed or
+/// clamped value is walked down to the nearest one rather than panicking.
+fn byte_col_to_char_col(line: &str, byte_col: usize) -> usize {
+    let mut b = byte_col.min(line.len());
+    while b > 0 && !line.is_char_boundary(b) {
+        b -= 1;
+    }
+    line[..b].chars().count()
+}
+
+/// Byte index within `line` for a 0-based CHAR index. A column past the end
+/// of the line answers the line's length, which is where nvim clamps too.
+fn char_col_to_byte_col(line: &str, char_col: usize) -> usize {
+    line.char_indices()
+        .nth(char_col)
+        .map_or(line.len(), |(i, _)| i)
 }
 
 /// Rewrite any `<` that does NOT open a valid key-notation token (`<Esc>`,

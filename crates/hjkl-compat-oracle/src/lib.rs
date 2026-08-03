@@ -24,8 +24,9 @@ pub use nvim_driver::{NvimOutcome, nvim_available};
 /// A single vim-compatibility test case.
 ///
 /// All string keys use vim macro notation (`<Esc>`, `<C-r>`, `dd`, ...).
-/// Cursor positions are 0-based `(row, col)` with col measured in bytes
-/// within the line.
+/// Cursor positions are 0-based `(row, col)` with col measured in **chars**
+/// within the line — hjkl's own encoding. `nvim_driver` converts to and from
+/// the byte columns nvim's API speaks, so a case may hold non-ASCII text.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct OracleCase {
     /// Human-readable case identifier, e.g. `"motion_w_basic"`.
@@ -34,7 +35,7 @@ pub struct OracleCase {
     /// Initial buffer content, `\n`-separated lines.
     pub initial_buffer: String,
 
-    /// Initial cursor position as `(row, col)`, 0-based byte-col.
+    /// Initial cursor position as `(row, col)`, 0-based char-col.
     #[serde(default)]
     pub initial_cursor: (usize, usize),
 
