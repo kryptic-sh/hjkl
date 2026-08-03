@@ -589,6 +589,62 @@ unknown.
   fatal. The ~110 call sites are unchanged, so one panic while any of those
   locks is held still takes down every later access, including the save path.
 
+### 1.9 Left open by the 2026-08-03 explorer and file-discovery changes
+
+Two changes shipped that day: `explorer.open` became a startup preference only
+`:set` writes, and the explorer, both pickers and `:grep` moved onto one file
+policy in `hjkl_fs::project`. What they left behind, none of it blocking.
+
+**`:set explorer.open=…` is a string match, not a registry option.** It is
+handled in `App::dispatch_ex`'s host-owned pre-pass, beside `mouse` and
+`endofline`, because the left dock is host state with no engine `Settings` field
+to hang it on. Three consequences follow, and they are the same ones `mouse` and
+`endofline` already have — this joins that group rather than creating it:
+
+- `hjkl_engine::options_registry` does not know the name, so `:set all` omits it
+  and nothing completes it.
+- Only `=true` / `=false` / `?` parse. `:set explorer.open` bare and
+  `:set noexplorer.open` are not accepted; the dotted name makes the vim-style
+  `no` prefix read badly, which is why it was left out rather than forgotten.
+- **`--headless` and `--embed` never reach the pre-pass at all.** `headless.rs`
+  and `embed.rs` call `hjkl_ex::try_dispatch` against an `Editor` directly, so
+  the token falls through to the engine's `:set` and is rejected as unknown.
+  Neither mode has an explorer, so nothing is lost today — but it is the same
+  root cause as "`:set` write-through is TUI-only" in §1.8, and one fix (routing
+  those modes through a shared host pre-pass) would close both.
+
+**`explorer.width` still persists on interactive resize.** `<C-w><`/`<C-w>>` and
+a border drag write it immediately, while `explorer.open` now only moves on an
+explicit `:set`. The asymmetry is deliberate — dragging a border IS the user
+stating a width preference, whereas toggling a dock says nothing about how the
+next session should start — but it is an inconsistency a user can notice, and it
+is recorded so it is not "fixed" by accident in either direction.
+
+**`.gitignore` is honoured only inside a git repository.** Measured while
+building `hjkl_fs::project`: with no `.git` directory above the walk root, the
+`ignore` crate applies no gitignore rules at all, so an ignored path is listed
+and searched. This matches ripgrep and is why `project`'s own tests create a
+`.git` marker. Not a bug — recorded because it looks exactly like the policy
+silently failing, and the next person to hit it will assume it is broken.
+`.ignore` files are unaffected and apply everywhere.
+
+**The explorer's ignore-stack cost per rebuild was not measured.** It previously
+opened the repo once per rebuild (`git2::Repository::discover`) and asked
+`is_path_ignored` per entry; it now calls `project::list_dir` per expanded
+directory, and each of those builds the ignore stack for that directory
+including its parents. On a deep tree with many expanded directories that is
+strictly more ignore-file reading than before. Nothing was measured either way,
+and no slowness was observed — but the claim "this is not slower" is not one
+this pass can make. If it ever matters, the lever is a matcher built once per
+rebuild and threaded through `push_children`, the shape the old `repo` argument
+had.
+
+**`I` in the explorer is deliberately wider than the shared policy.** It reveals
+gitignored entries, which is the one place a path visible in the tree is NOT
+findable in the pickers or searchable by `:grep`. `H` only ever narrows, so it
+cannot produce the same mismatch. Intended; noted so a future consistency audit
+does not read it as a leak.
+
 ### 1.7 Harness, coverage, and hardening
 
 - Clear nvim undo history after fixture seeding, then fuzz undo/redo. Extend
@@ -758,6 +814,15 @@ Per item: run workspace clippy with warnings denied, format, full nextest
 edit the oracle corpus to make a change pass. Performance items require measured
 before/after results.
 
+**`cargo machete` is a CI job this list does not cover.** Moving a dependency's
+last use into another crate leaves the old `Cargo.toml` entry behind; clippy,
+fmt and the whole test suite stay green, and CI fails on
+`cargo-machete (unused deps)`. It cost a red run on `d71ee045` when the `ignore`
+walk moved from `hjkl-picker` to `hjkl-fs`. Run it after any change that moves
+code between crates. The fix is deleting the dependency — never a
+`[package.metadata.cargo-machete]` suppression, which would make the job blind
+to the next one.
+
 ### Platform lint coverage
 
 Linux-only lint runs do not cover platform-gated code. `hjkl-fs`,
@@ -792,6 +857,13 @@ crates pulling tree-sitter, mimalloc, or aws-lc-sys require CI runners.
   rejects the name with `EILSEQ`) across ~15 commits during the 0.40.0 work,
   because every slice was verified locally and pushed without checking the run.
   Check `gh run list` after pushing, not only before releasing.
+- **`gh run list --commit <sha>` matches nothing unless the SHA is full.** A
+  short SHA returns an empty list, which is indistinguishable from "no run has
+  started yet" — a poll loop written on it waits forever while the run finishes
+  and fails. Filter client-side instead:
+  `gh run list --limit 5 --json headSha,databaseId,status,conclusion`. This
+  matters precisely because it defeats the trap above: the check that is
+  supposed to catch a red CI run reports green-by-absence.
 - macOS and Windows are the two platforms local work never exercises: filename
   encoding, path separators, and symlink permissions all differ there. Gate on
   the capability (probe and skip) rather than on `cfg(unix)`, which includes
