@@ -10,6 +10,15 @@ and this project adheres to
 
 ### Fixed
 
+- `insert_newline_bridge` applies `autoindent` the way vim does: the computed
+  indent REPLACES the leading whitespace of the text that moves down, and it is
+  computed from the part of the line left of the cursor rather than the whole
+  line. Previously it inserted in front of that whitespace, so an Enter at
+  column 0 of an indented line produced a row carrying both the old indent and a
+  fresh copy — geometric growth under a held key. Only the plain autoindent path
+  changed; the autopair open-pair, code-fence and comment-continuation branches
+  are untouched, and `noautoindent` still moves the text down verbatim.
+
 - `.` reuses the register the repeated change named (`:h redo-register`).
   `LastChange::OpMotion`, `OpTextObj`, `DeleteToEol` and `Paste` did not carry
   the register, so `"adw` then `.` deleted into the unnamed register and `"ap`

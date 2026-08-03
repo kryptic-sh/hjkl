@@ -322,10 +322,42 @@ pub fn insert_newline_bridge<H: hjkl_engine::types::Host>(
         // baked into the continuation prefix.
         format!("\n{cont}")
     } else {
-        let indent = compute_enter_indent(ed.settings(), &prev_line);
+        // The indent comes from the line as it exists AFTER the split — the
+        // part left of the cursor — not from the whole line. At column 0 that
+        // part is empty, which is why neovim gives `['', 'foo']` for `    foo`
+        // rather than re-indenting the row it just pushed down.
+        let before_cursor: String = prev_line.chars().take(cursor.col).collect();
+        let indent = compute_enter_indent(ed.settings(), &before_cursor);
         format!("\n{indent}")
     };
-    ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+
+    // Autoindent REPLACES the moved text's own leading whitespace — it does not
+    // prepend to it. Inserting in front of that whitespace compounds it: at
+    // column 0 of an indented line the new row keeps the old indent AND gains a
+    // fresh copy, so every Enter doubles it and a held Enter grows the buffer
+    // geometrically. Measured against neovim 0.12.4 with `set autoindent`:
+    // `    foo` + `<CR>` at column 0 gives `['', 'foo']`, not `['', '    foo']`;
+    // mid-line (`    foo|bar`) gives `['    foo', '    bar']`, which is the same
+    // rule with an empty run to consume. `noautoindent` moves the text down
+    // untouched, so the consumption is gated on the option that causes it.
+    let ws_run = if ed.settings().autoindent {
+        prev_line
+            .chars()
+            .skip(cursor.col)
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .count()
+    } else {
+        0
+    };
+    if ws_run > 0 {
+        ed.mutate_edit(Edit::Replace {
+            start: cursor,
+            end: hjkl_buffer::Position::new(cursor.row, cursor.col + ws_run),
+            with: text,
+        });
+    } else {
+        ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+    }
     true
 }
 /// Insert a tab character (or spaces up to the next softtabstop boundary when

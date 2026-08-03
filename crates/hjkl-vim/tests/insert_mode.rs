@@ -596,3 +596,82 @@ mod prev_chars_multibyte_tests {
         assert_eq!(line0(&ed), "''é", "no lookback at col 0 → normal pairing");
     }
 }
+
+/// `autoindent` on Enter REPLACES the leading whitespace of the text that moves
+/// down; it does not prepend to it. Prepending compounds: pressing Enter at
+/// column 0 of an indented line doubles that indent every time, so a held Enter
+/// grows the buffer geometrically — a `handle_key` fuzz unit reached 394 MB and
+/// 20 s of CPU in 89 keystrokes.
+///
+/// Every expectation here is neovim 0.12.4's own output, measured with
+/// `set autoindent expandtab shiftwidth=4 tabstop=4` (and `noautoindent` for
+/// the last two).
+mod autoindent_enter_tests {
+    use hjkl_buffer::View;
+    use hjkl_engine::types::Options;
+    use hjkl_engine::{DefaultHost, Editor};
+    use hjkl_vim::VimEditorExt;
+
+    fn ed(content: &str, autoindent: bool) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
+        let mut ed = hjkl_vim::vim_editor(buf, DefaultHost::new(), Options::default());
+        ed.settings_mut().autoindent = autoindent;
+        ed.settings_mut().expandtab = true;
+        ed.settings_mut().shiftwidth = 4;
+        ed.settings_mut().tabstop = 4;
+        ed.settings_mut().smartindent = false;
+        ed
+    }
+
+    fn rows(ed: &Editor<View, DefaultHost>) -> Vec<String> {
+        let rope = ed.buffer().rope();
+        (0..rope.len_lines())
+            .map(|r| hjkl_buffer::rope_line_str(&rope, r))
+            .collect()
+    }
+
+    fn enter_at(content: &str, col: usize, times: usize, autoindent: bool) -> Vec<String> {
+        let mut e = ed(content, autoindent);
+        e.enter_insert_i(1);
+        e.jump_cursor(0, col);
+        for _ in 0..times {
+            e.insert_newline();
+        }
+        rows(&e)
+    }
+
+    #[test]
+    fn enter_at_col0_does_not_compound_the_indent() {
+        assert_eq!(enter_at("    foo", 0, 1, true), ["", "foo"]);
+    }
+
+    #[test]
+    fn enter_mid_line_indents_the_moved_text_once() {
+        assert_eq!(enter_at("    foobar", 7, 1, true), ["    foo", "    bar"]);
+    }
+
+    #[test]
+    fn repeated_enter_at_col0_stays_flat() {
+        assert_eq!(enter_at("        foo", 0, 2, true), ["", "", "foo"]);
+        assert_eq!(enter_at("        ", 0, 3, true), ["", "", "", ""]);
+    }
+
+    /// The fuzz finding itself, as a budget rather than an exact shape: 200
+    /// Enters at column 0 used to double an 8-space indent every stroke.
+    #[test]
+    fn held_enter_cannot_grow_the_buffer_geometrically() {
+        let out = enter_at("        foo", 0, 200, true);
+        let total: usize = out.iter().map(|l| l.len()).sum();
+        assert!(
+            total <= 16,
+            "200 Enters produced {total} bytes of content: {:?}",
+            &out[..out.len().min(4)]
+        );
+    }
+
+    #[test]
+    fn noautoindent_moves_the_text_down_untouched() {
+        assert_eq!(enter_at("    foo", 0, 1, false), ["", "    foo"]);
+        assert_eq!(enter_at("        ", 0, 3, false), ["", "", "", "        "]);
+    }
+}

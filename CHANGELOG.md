@@ -38,6 +38,19 @@ patch bumps.
 
 ### Fixed
 
+- **Holding `<CR>` on an indented line no longer grows the buffer
+  geometrically.** With `autoindent` (on by default), Enter inserted the copied
+  indent in front of the text moving down instead of replacing that text's own
+  leading whitespace, so pressing it at column 0 of an indented line doubled the
+  indent every stroke — 8 spaces became 16, then 32. It also took the indent
+  from the whole line rather than from the part left of the cursor, so the
+  pushed-down row was re-indented with its own indent. A `handle_key` fuzz unit
+  reached 394 MB and 20 s of CPU in 89 keystrokes; the same input now runs in 5
+  ms, and the libFuzzer OOM artifact alongside it (2061 MB) in 15 ms. Behaviour
+  is now neovim 0.12.4's, measured: `    foo` + `<CR>` at column 0 gives
+  `['', 'foo']`, mid-line `    foo|bar` gives `['    foo', '    bar']`, and
+  `noautoindent` moves the text down untouched.
+
 - **A line ending in a separator other than `\n` no longer reads one character
   too wide.** ropey's `unicode_lines` splits on lone `\r`, U+000B, U+000C,
   U+0085 and U+2028 / U+2029 as well as `\n`, but the row helpers stripped a
