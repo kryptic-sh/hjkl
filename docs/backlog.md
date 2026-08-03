@@ -659,6 +659,40 @@ with ripgrep installed are unaffected.
   enforces it: either fold the cheap ones into the release gate or add an
   explicit pre-release step that reads the last Cron result.
 
+- **The fuzz job persists neither its corpus nor its crash artifacts.**
+  `cron.yml`'s `fuzz` job runs
+  `cargo fuzz run handle_key -- -max_total_time=600` in a fresh checkout and
+  keeps nothing, so three things follow. Every weekly run rediscovers the corpus
+  from cold — the 2026-08-04 run reached `cov: 15557` in its ten minutes, all of
+  it thrown away. A crash that has been fixed is never re-fed to the fuzzer, so
+  the only guard on a past crash is whatever hand-written test its fix happened
+  to add. And when a crash recurs the artifact dies with the runner: the
+  `Base64:` line in the job log is the only copy, and Actions logs expire, which
+  is why the 2026-05-04 and 2026-04-27 fuzz failures can no longer be reproduced
+  at all. Levers: cache `fuzz/corpus` the way `Swatinem/rust-cache` caches
+  `target/`, and `actions/upload-artifact@v4 with: if: failure()` over
+  `fuzz/artifacts`. Caching the corpus makes each run deeper and also blinder to
+  a cold-start-only crash, which is the same trade-off the `grammar tests` lane
+  has above — decide it deliberately.
+
+  Verified 2026-08-04 while auditing the old runs: the eight `cargo-fuzz`
+  failures between 2026-04-27 and 2026-07-27 were two real editor crashes, both
+  fixed on 2026-07-28 by `bd7e6ad4` (`rope_row_range_str` slicing inside a
+  multi-byte line separator) and `a11351b5` (auto-indent bracket depth
+  saturating to `i32::MIN` and wrapping through `as usize`). Both have
+  regression tests. Nothing from that window is outstanding.
+
+- **A fuzz artifact replayed against the wrong commit proves nothing.** Chasing
+  the above, both artifacts were replayed at HEAD, passed, and then passed
+  against `10e3ca45^` too — a clean run on supposedly-buggy code, which makes
+  the HEAD result meaningless as well. `10e3ca45` is the CI commit; its message
+  says the crashes were "fixed in the two preceding commits", so its parent
+  already had both fixes. Replayed against `2ecd7c3b` each artifact reproduced
+  its exact CI panic. Two preconditions for this check to mean anything: pick
+  the commit before the FIX, not before the commit that mentions it, and confirm
+  `arbitrary`'s version is unchanged across the window (1.4.2 throughout, here)
+  or the same bytes decode to a different `FuzzInput`.
+
 - **The sibling repos pin `runs-on` to a concrete image; hjkl does not.** infr,
   and the other siblings its `cron.yml` names, run `ubuntu-26.04`. hjkl uses
   `ubuntu-latest` in both `ci.yml` and `cron.yml`, except `cron.yml`'s
