@@ -572,6 +572,16 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             // `[count]$`: move count-1 lines down, then to line end.
             // Vim normal-mode `$` lands on the last char, not one past it.
             if count > 1 {
+                // vim's `nv_dollar` runs `cursor_down(count - 1)` first and
+                // aborts the whole command when that FAILS — which it does
+                // only on the last line. A count that overshoots the buffer
+                // still succeeds, clamped (`5$` on three rows lands on row
+                // 2). Without this, `2$` on a one-line buffer moved to the
+                // line end and `2C` / `2D` emptied the line, where vim does
+                // nothing at all.
+                if ed.cursor().0 >= last_content_row(ed) {
+                    return;
+                }
                 let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
                 let mut sticky = ed.sticky_col();
                 let tabstop = ed.settings().tabstop;

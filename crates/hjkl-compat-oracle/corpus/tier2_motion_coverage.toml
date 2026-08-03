@@ -116,3 +116,68 @@ initial_buffer = "ab\ncd\n"
 keys = "G$3<BS>"
 expected_buffer = "ab\ncd\n"
 expected_cursor = [0, 0]
+
+# ── Counted `$` fails on the last line, clamps everywhere else ─────────────
+#
+# vim's `nv_dollar` runs `cursor_down(count - 1)` before moving to the line
+# end and aborts the whole command when that fails — which it does only when
+# the cursor is already on the last line. An overshooting count still
+# succeeds, clamped. hjkl's counted `$` always clamped, so `2C` / `2D` on a
+# one-line buffer emptied the line where vim does nothing.
+
+[[cases]]
+name = "count_dollar_fails_on_the_last_line"
+initial_buffer = "self.x\n"
+initial_cursor = [0, 1]
+keys = "2$"
+expected_buffer = "self.x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "count_change_to_eol_fails_on_the_last_line"
+initial_buffer = "self.x\n"
+initial_cursor = [0, 1]
+keys = "2C"
+expected_buffer = "self.x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "count_delete_to_eol_fails_on_the_last_line"
+initial_buffer = "self.x\n"
+initial_cursor = [0, 1]
+keys = "2D"
+expected_buffer = "self.x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# Same rule one row up in a three-row buffer: `2D` on the last row is a
+# no-op, while `2D` from the row above joins two rows.
+[[cases]]
+name = "count_delete_to_eol_fails_on_the_last_row_of_three"
+initial_buffer = "aa\nbb\ncc\n"
+initial_cursor = [2, 1]
+keys = "2D"
+expected_buffer = "aa\nbb\ncc\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+
+# An overshooting count is NOT a failure — it clamps to the last row.
+[[cases]]
+name = "count_dollar_overshooting_clamps_to_the_last_row"
+initial_buffer = "aa\nbb\ncc\n"
+initial_cursor = [0, 1]
+keys = "5$"
+expected_buffer = "aa\nbb\ncc\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "count_change_to_eol_overshooting_clamps_to_the_last_row"
+initial_buffer = "aa\nbb\ncc\n"
+initial_cursor = [0, 1]
+keys = "5C"
+expected_buffer = "a\n"
+expected_cursor = [0, 1]
+expected_mode = "insert"

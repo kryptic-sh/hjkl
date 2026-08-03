@@ -61,12 +61,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // final row for a trailing `\n`, and the motion itself stops on the last
     // real row (the `content_row_count` clamp `hjkl_engine::motions` shares
     // with `G`), so this must use the same row or `d}` never sees the landing.
-    let raw_rows = buf_row_count(ed.buffer());
-    let last_row = if raw_rows > 1 && buf_line_chars(ed.buffer(), raw_rows - 1) == 0 {
-        raw_rows - 2
-    } else {
-        raw_rows.saturating_sub(1)
-    };
+    let last_row = last_content_row(ed);
     if matches!(motion, Motion::ParagraphNext)
         && kind == RangeKind::Exclusive
         && end.0 == last_row

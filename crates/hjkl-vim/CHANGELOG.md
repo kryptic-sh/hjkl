@@ -39,6 +39,14 @@ and this project adheres to
   `replay_block_visual_op` passed a hardcoded `None` target to
   `record_delete_block`, so even with the register restored the repeat could not
   have written it.
+- A counted `$` fails on the last line instead of clamping to it. vim's
+  `nv_dollar` runs `cursor_down(count - 1)` before moving to the line end and
+  aborts the whole command when that fails — which happens only when the cursor
+  is already on the last line; an overshooting count still succeeds, clamped.
+  hjkl always clamped, so `2$` on a one-line buffer moved to the line end and
+  `2C` / `2D` emptied the line where vim does nothing at all. `5$` on three rows
+  still lands on row 2 and `5C` still collapses them. Found by the differential
+  fuzzer (seed 777, case 115); its divergence count drops from 84 to 83.
 - `"aD` and `"aC` write the named register. `command::delete_to_eol` wrote the
   deleted text with `set_yank`, which only ever reaches the unnamed register, so
   an explicit `"reg` was silently dropped. It now routes through

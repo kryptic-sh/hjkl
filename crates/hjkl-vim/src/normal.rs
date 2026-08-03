@@ -161,16 +161,7 @@ pub fn step_normal<H: Host>(
             // row past the real content (`:h phantom row`-style bug, same
             // class as H2's linewise-delete clamp).
             if had_explicit_count && count > 1 {
-                let total = hjkl_engine::buf_helpers::buf_row_count(ed.buffer());
-                let last_content_row = if total >= 2
-                    && hjkl_engine::buf_helpers::buf_line(ed.buffer(), total - 1)
-                        .is_some_and(|s| s.is_empty())
-                {
-                    total - 2
-                } else {
-                    total.saturating_sub(1)
-                };
-                let target_row = (row + count - 1).min(last_content_row);
+                let target_row = (row + count - 1).min(crate::vim::last_content_row(ed));
                 ed.jump_cursor(target_row, 0);
             }
             return true;

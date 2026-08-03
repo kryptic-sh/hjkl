@@ -425,14 +425,6 @@ also relax `d$` on an empty line, where the same shape must stay a no-op
 break). Needs a distinct "successful zero-width inclusive" signal, not a
 loosened guard.
 
-**`2C` on a single-line buffer changes the line.** `2C` on `"self.x"` (any
-column) empties the buffer in hjkl; nvim leaves it untouched, because `c2$`
-needs a line below to extend onto and fails without one. Surfaced by the
-differential fuzzer (seed 777, case 115) once the `}` divergence in the same
-generated case was fixed and the shrinker moved on. Not related to the paragraph
-work — `C` is `Operator::Change` with `Motion::LineEnd`, an inclusive range on
-one row, which none of the 2026-08-02 operator adjustments touch.
-
 **A corpus case cannot pin a value when nvim is absent.** Every oracle test
 skips wholesale without nvim, so the corpus expectations guard nothing on a
 machine that has no neovim — including CI lanes that do not install it. The
@@ -440,11 +432,11 @@ machine that has no neovim — including CI lanes that do not install it. The
 (`diff.rs::run_single`), which closed the "documentation-only field" half of
 this, but nothing compares hjkl against the authored values on its own.
 
-**The differential fuzzer still reports 84 divergences at seed 777** (was 89
-before this pass; re-run 2026-08-02 after the blockwise-paste rewrite, still
-84). The bulk are the known-excluded classes named in §5 (`u` / undo against the
-seeded nvim fixture, blockwise `<C-v>` non-delete operators) plus the two
-entries above.
+**The differential fuzzer still reports 83 divergences at seed 777** (89 before
+the 2026-08-02 pass, 84 after it, 83 once the counted-`$` failure rule landed on
+2026-08-04). The bulk are the known-excluded classes named in §5 (`u` / undo
+against the seeded nvim fixture, blockwise `<C-v>` non-delete operators) plus
+the entries above.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.

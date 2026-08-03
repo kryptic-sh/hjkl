@@ -316,3 +316,22 @@ impl hjkl_engine::DisciplineState for VimState {
         self
     }
 }
+
+/// The last row of the buffer that holds real content.
+///
+/// ropey stores a buffer's own trailing `\n` as a phantom empty final row,
+/// which is not a line vim can put a cursor on. Every vertical motion clamps
+/// to the row below — this is the `content_row_count` rule `hjkl_engine::
+/// motions` applies internally, spelled once here for the FSM sites that need
+/// the boundary themselves rather than a clamped cursor.
+pub fn last_content_row<H: hjkl_engine::types::Host>(
+    ed: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+) -> usize {
+    use hjkl_engine::buf_helpers::{buf_line, buf_row_count};
+    let total = buf_row_count(ed.buffer());
+    if total >= 2 && buf_line(ed.buffer(), total - 1).is_some_and(|s| s.is_empty()) {
+        total - 2
+    } else {
+        total.saturating_sub(1)
+    }
+}

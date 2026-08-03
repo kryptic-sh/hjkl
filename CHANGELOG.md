@@ -61,6 +61,14 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
+- **`2C` and `2D` no longer wipe a one-line buffer.** A counted `$` clamped to
+  the last line where vim fails on it, so `2$` on a single-line file moved to
+  end-of-line and `2C` / `2D` there emptied the line — vim does nothing at all,
+  because `c2$` needs a line below to extend onto. An overshooting count is
+  still not a failure: `5$` on three rows lands on the last one and `5C`
+  collapses all three, exactly as before. Found by the differential fuzzer,
+  whose divergence count at seed 777 drops from 84 to 83.
+
 - **Every `.`-repeatable change now repeats into the register it named.** The
   last three that did not were `x` / `X`, a visual-mode operator, and `dgn` /
   `cgn`: each fell back to the unnamed register on the repeat, leaving `"a`

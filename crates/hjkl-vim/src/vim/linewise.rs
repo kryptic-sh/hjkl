@@ -63,13 +63,7 @@ pub fn execute_line_op<H: hjkl_engine::types::Host>(
     //
     // A trailing newline is stored as a phantom empty final row, so the last
     // *content* line is one above it; use that as the boundary.
-    let last_content_row =
-        if total >= 2 && buf_line(ed.buffer(), total - 1).is_some_and(|s| s.is_empty()) {
-            total - 2
-        } else {
-            total.saturating_sub(1)
-        };
-    if count >= 2 && row >= last_content_row {
+    if count >= 2 && row >= last_content_row(ed) {
         return;
     }
     let end_row = (row + count.saturating_sub(1)).min(total.saturating_sub(1));
