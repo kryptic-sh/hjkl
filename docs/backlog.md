@@ -655,8 +655,27 @@ with ripgrep installed are unaffected.
 
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
-  not checked for 0.40.0. Either fold the cheap ones into the release gate or
-  add an explicit pre-release step that reads the last Cron result.
+  not checked for 0.40.0. `cron.yml` now says so in its header, but nothing
+  enforces it: either fold the cheap ones into the release gate or add an
+  explicit pre-release step that reads the last Cron result.
+
+- **The sibling repos pin `runs-on` to a concrete image; hjkl does not.** infr,
+  and the other siblings its `cron.yml` names, run `ubuntu-26.04`. hjkl uses
+  `ubuntu-latest` in both `ci.yml` and `cron.yml`, except `cron.yml`'s
+  `vim_compat`, which is pinned to `ubuntu-24.04` so a runner-image bump cannot
+  move the neovim the oracle diffs against. Deliberately not changed while
+  matching infr's other `cron.yml` features (2026-08-04): pinning the cron jobs
+  alone would leave one workflow disagreeing with the other, and pinning
+  `ci.yml` too changes glibc and every apt package the matrix installs — a
+  behaviour change to the test environment, not a workflow-hygiene one. Decide
+  it repo-wide or not at all.
+
+- **`vim_compat` does not diff against the neovim the corpus was measured on.**
+  Corpus expectations are taken from neovim 0.12.4 on the workstation; the CI
+  job installs whatever `ubuntu-24.04`'s apt carries, which is older. Not
+  measured — recorded because a corpus case that passes locally and fails (or
+  passes for the wrong reason) in CI would look like flake. Check what the job
+  actually reports before trusting either side.
 
 ## 2. Blocked on platform access
 

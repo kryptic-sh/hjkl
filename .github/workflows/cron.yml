@@ -1,26 +1,64 @@
 name: Cron
 
+# The checks that are worth running against a repo NOBODY PUSHED TO.
+#
+# `ci.yml` answers "did this change break something" and only runs when there is
+# a change. The jobs here answer a different question — "did the world move
+# under code that did not", or "is this too slow to gate a PR" — which per-PR CI
+# structurally cannot ask:
+#
+# * `deny` re-checks a quiet tree against a freshly fetched advisory DB, so a
+#   new RustSec advisory does not wait for the next commit to be noticed.
+# * `miri` interprets `hjkl-buffer`. Too slow to gate a PR, and the defects it
+#   finds — a pointer used after its tag was invalidated — are ones that never
+#   show up as a failing test, so nothing else in the tree looks for them.
+# * `fuzz` is the job that finds real crashes; a 10-minute libFuzzer run per
+#   harness has no place in a PR gate.
+# * `bench`, `vim_compat` and `wasm_size` are slow or environment-heavy.
+#
+# **A green `ci.yml` says NOTHING about this workflow.** Nothing in the release
+# path reads it, and it sat red for months without that being noticed. Check it
+# explicitly before cutting a release — see `docs/backlog.md` §1.7.
+#
+# Mirrors the sibling repos' `cron.yml` (infr, crcbl, hrdr, langr, tikr) in
+# schedule and shape. The one shape difference: those pin `runs-on` to a
+# concrete image where this repo still tracks `ci.yml`'s `ubuntu-latest`.
+
 on:
   schedule:
-    - cron: "0 6 * * 1" # Monday 06:00 UTC
+    - cron: "0 6 * * 1" # Monday 06:00 UTC — same slot as the sibling repos
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cron-${{ github.workflow }}-${{ github.ref }}
+  # NOT cancel-in-progress: a manual dispatch must not kill a scheduled run
+  # partway through half an hour of interpretation or a fuzz harness.
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Opt JS-based actions into Node 24 ahead of the GH default flip (June 2026)
+  # to surface upstream incompatibility early. Mirrors ci.yml.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # rust-toolchain.toml at the repo root pins the stable channel for
   # local dev. Cron jobs that need a different channel (nightly for
-  # miri / cargo-fuzz, musl for cargo-deny) override via RUSTUP_TOOLCHAIN.
-  # Without this, rustup refuses to install the requested channel
-  # because the in-repo toolchain file claims authority.
+  # miri / cargo-fuzz) override via RUSTUP_TOOLCHAIN. Without this,
+  # rustup refuses to install the requested channel because the
+  # in-repo toolchain file claims authority.
+
+# Every job carries a `timeout-minutes`. None of them is a target — each is set
+# well above the last measured run so a regression in cost fails visibly
+# instead of quietly burning a six-hour runner.
 
 jobs:
   miri:
     name: miri (hjkl-buffer)
     runs-on: ubuntu-latest
-    # miri interprets rather than executes, so a test that is cheap natively
-    # can run for tens of minutes here. Without a cap a regression in test
-    # cost silently burns a 6-hour runner before anyone notices; the scoped
-    # suite finishes well inside this.
+    # 28 min on 2026-08-03.
     timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: nightly
@@ -39,11 +77,18 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Its own cache: a miri sysroot build shares nothing with the stable
+          # artifacts every other job here and in ci.yml caches.
+          shared-key: miri
       - run: cargo miri test -p hjkl-buffer --all-features
 
   fuzz:
     name: cargo-fuzz (10 min per harness)
     runs-on: ubuntu-latest
+    # 12 min on 2026-08-03 with one harness. Two fit; a third needs this
+    # raised, which is the point — the bump is a decision someone makes.
+    timeout-minutes: 30
     env:
       RUSTUP_TOOLCHAIN: nightly
     steps:
@@ -51,6 +96,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-fuzz
+        # Built rather than installed from a release: taiki-e/install-action
+        # (used for cargo-deny below) does not carry cargo-fuzz.
+        #
         # No --locked: cargo-fuzz's published Cargo.lock pins an old rustix
         # that uses internal `rustc_layout_scalar_valid_range_*` attributes
         # rejected by current nightly. Letting cargo resolve newer deps
@@ -70,23 +118,26 @@ jobs:
           fi
 
   deny:
-    name: cargo-deny
+    name: cargo-deny (fresh advisory DB)
     runs-on: ubuntu-latest
+    # 1 min on 2026-08-03.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # Pinned: `deny.toml`'s gates were written and verified against this
+      # version, and cargo-deny changes what its checks mean between minors.
+      # A prebuilt binary rather than `cargo install` — nothing here needs to
+      # compile it, and it is the difference between seconds and minutes.
+      - uses: taiki-e/install-action@v2
         with:
-          toolchain: stable
-          cache: false
-      - run: rustup update --no-self-update stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+          tool: cargo-deny@0.19.7
       - run: cargo deny --all-features check
 
   bench:
     name: criterion vs main baseline
     runs-on: ubuntu-latest
+    # 15 min on 2026-08-03.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -106,6 +157,8 @@ jobs:
   wasm_size:
     name: wasm bundle size (deferred)
     runs-on: ubuntu-latest
+    # Fails in under a minute today; the cap is for the build it cannot do yet.
+    timeout-minutes: 20
     # hjkl-engine pulls ratatui + crossterm unconditionally until
     # phase 4 trait extraction lands the engine-native Style + Host
     # rewrite. crossterm is unix-only, so the wasm build can't
@@ -144,7 +197,13 @@ jobs:
 
   vim_compat:
     name: vim-compat oracle (neovim)
+    # Pinned since the job was written (319db53b), unlike the jobs above; the
+    # commit gives no reason. Keep the pin deliberately: the oracle diffs
+    # against whatever neovim this image's apt repository carries, so bumping
+    # the image moves the reference implementation out from under the corpus.
     runs-on: ubuntu-24.04
+    # 1 min on 2026-08-03.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
