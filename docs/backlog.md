@@ -659,57 +659,29 @@ with ripgrep installed are unaffected.
   enforces it: either fold the cheap ones into the release gate or add an
   explicit pre-release step that reads the last Cron result.
 
-- **The fuzz job persists neither its corpus nor its crash artifacts.**
-  `cron.yml`'s `fuzz` job runs
-  `cargo fuzz run handle_key -- -max_total_time=600` in a fresh checkout and
-  keeps nothing, so three things follow. Every weekly run rediscovers the corpus
-  from cold — the 2026-08-04 run reached `cov: 15557` in its ten minutes, all of
-  it thrown away. A crash that has been fixed is never re-fed to the fuzzer, so
-  the only guard on a past crash is whatever hand-written test its fix happened
-  to add. And when a crash recurs the artifact dies with the runner: the
-  `Base64:` line in the job log is the only copy, and Actions logs expire, which
-  is why the 2026-05-04 and 2026-04-27 fuzz failures can no longer be reproduced
-  at all. Levers: cache `fuzz/corpus` the way `Swatinem/rust-cache` caches
-  `target/`, and `actions/upload-artifact@v4 with: if: failure()` over
-  `fuzz/artifacts`.
+- **Considered and declined (2026-08-04): persisting the fuzz corpus or crash
+  artifacts.** A red `fuzz` job is signal enough on its own; caching state
+  across runs is not worth the machinery. The cost accepted with it is that a
+  crash artifact dies with the runner — the `Base64:` line in the job log is the
+  only copy, and Actions logs expire, which is why the 2026-05-04 and 2026-04-27
+  fuzz failures can no longer be reproduced. Reproduce from the log while the
+  run is still in retention, and fix forward.
 
-  **The agreed design (2026-08-04) is a crash QUEUE, not a corpus cache.** Cache
-  only the inputs that currently crash; replay them at the start of each run
-  with `-runs=0` (a bare directory argument makes libFuzzer treat it as a seed
-  corpus and START FUZZING, which is not a decidable check); keep one that still
-  crashes and fail the job on it, drop one that no longer does. The durable
-  guard is the regression test written with the fix — both 2026-07-28 crashes
-  got one — so an entry only needs to survive until the fix lands. That bounds
-  the cache by unfixed bugs and makes the job keep failing weekly until someone
-  acts, instead of the crash evaporating into an expiring log. Two things to
-  build in: log which entries were dropped, because a silent eviction hides a
-  fix that was incomplete (U+0085 handled, U+2028 not); and keep the artifact
-  upload regardless, since the queue's durability otherwise depends on the fixer
-  remembering to write a test. Caching the full coverage corpus is a separate
-  question and was NOT decided.
+  Old fuzz failures are settled, so the expiry costs nothing today: the eight
+  `cargo-fuzz` failures between 2026-04-27 and 2026-07-27 were two real editor
+  crashes, both fixed on 2026-07-28 by `bd7e6ad4` (`rope_row_range_str` slicing
+  inside a multi-byte line separator) and `a11351b5` (auto-indent bracket depth
+  saturating to `i32::MIN` and wrapping through `as usize`), and both have
+  regression tests.
 
-  Verified 2026-08-04 while auditing the old runs: the eight `cargo-fuzz`
-  failures between 2026-04-27 and 2026-07-27 were two real editor crashes, both
-  fixed on 2026-07-28 by `bd7e6ad4` (`rope_row_range_str` slicing inside a
-  multi-byte line separator) and `a11351b5` (auto-indent bracket depth
-  saturating to `i32::MIN` and wrapping through `as usize`). Both have
-  regression tests. Nothing from that window is outstanding.
-
-  What a single ten-minute campaign found the moment one was run by hand
-  (2026-08-04) is the argument for spending more than ten minutes a week on it:
-  four artifacts, three of them distinct live defects, all now fixed — see the
-  three commits `e365f42e`, `fa2a21b9` and the `\r`-separator entry in
-  `hjkl-buffer`'s changelog. The fourth reproduced only inside the campaign and
-  not standalone, which the queue design handles by dropping it.
-
-- **A fuzz artifact replayed against the wrong commit proves nothing.** Chasing
-  the above, both artifacts were replayed at HEAD, passed, and then passed
-  against `10e3ca45^` too — a clean run on supposedly-buggy code, which makes
-  the HEAD result meaningless as well. `10e3ca45` is the CI commit; its message
-  says the crashes were "fixed in the two preceding commits", so its parent
-  already had both fixes. Replayed against `2ecd7c3b` each artifact reproduced
-  its exact CI panic. Two preconditions for this check to mean anything: pick
-  the commit before the FIX, not before the commit that mentions it, and confirm
+- **A fuzz artifact replayed against the wrong commit proves nothing.** Both of
+  those artifacts were replayed at HEAD, passed, and then passed against
+  `10e3ca45^` too — a clean run on supposedly-buggy code, which makes the HEAD
+  result meaningless as well. `10e3ca45` is the CI commit; its message says the
+  crashes were "fixed in the two preceding commits", so its parent already had
+  both fixes. Replayed against `2ecd7c3b` each artifact reproduced its exact CI
+  panic. Two preconditions for this check to mean anything: pick the commit
+  before the FIX, not before the commit that mentions it, and confirm
   `arbitrary`'s version is unchanged across the window (1.4.2 throughout, here)
   or the same bytes decode to a different `FuzzInput`.
 
@@ -721,9 +693,7 @@ with ripgrep installed are unaffected.
   produced three more the week after a clean scheduled run. Whether to raise
   `-max_total_time`, add harnesses (an ex-command target and a `:s` target are
   the obvious gaps — neither is reachable from `handle_key`), or both, is an
-  owner decision about runner minutes. Recorded because the corpus-persistence
-  item above is the smaller lever of the two and would otherwise look like the
-  answer.
+  owner decision about runner minutes. Still open.
 
 - **The sibling repos pin `runs-on` to a concrete image; hjkl does not.** infr,
   and the other siblings its `cron.yml` names, run `ubuntu-26.04`. hjkl uses
