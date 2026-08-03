@@ -1710,7 +1710,6 @@ dependencies = [
  "hjkl-form",
  "hjkl-fs",
  "hjkl-fuzzy",
- "ignore",
  "regex",
  "tempfile",
 ]
