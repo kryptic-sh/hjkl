@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Editor::push_error` / `Editor::take_errors` — a queue for user-visible
+  messages raised by code that cannot reach the host's message bar. The `Host`
+  trait's only host-facing hook is `emit_intent`, and every implementor in the
+  workspace sets `type Intent = ()`, so a discipline crate had no channel at
+  all; the drain follows the `take_fold_ops` / `take_last_indent_range`
+  precedent. A host that does not drain it leaks the messages.
+
 ### Fixed
 
 - **`b`, `B`, `ge` and `gE` stop at a line boundary.** vim's `dec()` steps from

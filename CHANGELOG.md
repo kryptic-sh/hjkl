@@ -61,6 +61,12 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
+- **A paste rejected for being too large says so.** `p` / `P` of a register past
+  the 64 MiB budget did nothing and reported nothing — indistinguishable from
+  pasting an empty register. It now shows vim's own
+  `E342: Out of memory!  (allocating N bytes)`, where N is what was asked for.
+  Pasting an genuinely empty register stays silent, as in vim.
+
 - **`b`, `B`, `ge` and `gE` no longer walk through a line break.** A backward
   word motion from inside the first word of a line kept going onto the line
   above, because the step-back landed on the previous row's last character

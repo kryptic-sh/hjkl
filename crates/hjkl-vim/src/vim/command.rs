@@ -653,6 +653,15 @@ pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::S
 /// whose cost tracked iteration count rather than payload bytes.
 pub const MAX_PASTE_BYTES: usize = 64 * 1024 * 1024;
 
+/// Queue vim's own out-of-memory message for a paste that would exceed
+/// [`MAX_PASTE_BYTES`]. `bytes` is what the user asked for, not the cap.
+fn reject_oversized_paste<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    bytes: usize,
+) {
+    ed.push_error(format!("E342: Out of memory!  (allocating {bytes} bytes)"));
+}
+
 pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
@@ -713,10 +722,18 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
         return false;
     }
     // Bound requested source bytes before allocating or opening an undo entry.
+    // A rejection here used to be indistinguishable from an empty register:
+    // `do_paste` returned `false` and nothing downstream could tell the two
+    // apart. It reports vim's own code for the case now, through the engine's
+    // error queue (`apps/hjkl` drains it after each key). An arithmetic
+    // overflow is reported as the budget it would have blown rather than as a
+    // separate condition — the user's ask is the same size either way.
     let Some(requested_bytes) = yank.len().checked_mul(count) else {
+        reject_oversized_paste(ed, yank.len().saturating_mul(count));
         return false;
     };
     if requested_bytes > MAX_PASTE_BYTES {
+        reject_oversized_paste(ed, requested_bytes);
         return false;
     }
     if blockwise {
@@ -724,12 +741,15 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
             .checked_mul(yank.split('\n').count())
             .and_then(|bytes| bytes.checked_mul(count))
         else {
+            reject_oversized_paste(ed, usize::MAX);
             return false;
         };
         let Some(total_bytes) = requested_bytes.checked_add(block_bytes) else {
+            reject_oversized_paste(ed, usize::MAX);
             return false;
         };
         if total_bytes > MAX_PASTE_BYTES {
+            reject_oversized_paste(ed, total_bytes);
             return false;
         }
     }

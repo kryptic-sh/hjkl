@@ -234,6 +234,7 @@ impl App {
         // `recompute_and_install` (via `pending_recompute`)
         // handles the visual refresh.
         let _ = self.active_editor_mut().take_fold_ops();
+        self.drain_engine_errors();
         {
             let hint = self.active_editor_mut().take_scroll_anim_hint();
             if hint {

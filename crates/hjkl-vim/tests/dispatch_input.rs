@@ -142,6 +142,54 @@ fn oversized_block_paste_is_rejected_without_mutation() {
     assert_eq!(e.undo_stack_len(), undo_depth);
 }
 
+/// A rejection used to be silent AND indistinguishable from an empty
+/// register: `do_paste` returned `false` and there was no channel at all for
+/// a message. It queues vim's own code on the editor now, which the host
+/// drains after each key.
+#[test]
+fn oversized_paste_reports_vims_out_of_memory_error() {
+    let mut e = editor_with("base");
+    e.with_registers_mut(|r| r.record_yank("x".to_string(), false, None));
+
+    let count = hjkl_vim::MAX_PASTE_BYTES + 1;
+    dispatch_keys(&mut e, &format!("{count}p"));
+
+    let errors = e.take_errors();
+    assert_eq!(
+        errors,
+        vec![format!("E342: Out of memory!  (allocating {count} bytes)")],
+    );
+    // Draining is destructive: a second read must not repeat the message.
+    assert!(e.take_errors().is_empty());
+}
+
+/// An EMPTY register is not an error — it is the ordinary "nothing to paste"
+/// case, and vim says nothing about it either. This is the case the rejection
+/// message used to be indistinguishable from.
+#[test]
+fn pasting_an_empty_register_reports_nothing() {
+    let mut e = editor_with("base");
+    dispatch_keys(&mut e, "p");
+    assert!(e.take_errors().is_empty());
+    assert_eq!(e.content(), "base\n");
+}
+
+#[test]
+fn oversized_block_paste_reports_vims_out_of_memory_error() {
+    let mut e = editor_with("tail");
+    e.record_yank_block("x".to_string(), hjkl_vim::MAX_PASTE_BYTES + 1, None);
+
+    dispatch_keys(&mut e, "p");
+
+    let errors = e.take_errors();
+    assert_eq!(errors.len(), 1, "expected one message, got {errors:?}");
+    assert!(
+        errors[0].starts_with("E342: Out of memory!"),
+        "unexpected message: {}",
+        errors[0]
+    );
+}
+
 #[test]
 fn rejected_paste_preserves_the_prior_dot_change() {
     let mut e = editor_with("abc");

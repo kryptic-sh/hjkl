@@ -34,6 +34,7 @@ pub mod indent;
 pub mod macro_replay;
 pub mod noswap;
 pub mod paste;
+pub mod paste_budget;
 pub mod quickfix;
 pub mod recovery;
 pub mod register_count;

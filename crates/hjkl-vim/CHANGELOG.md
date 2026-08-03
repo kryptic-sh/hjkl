@@ -16,6 +16,12 @@ and this project adheres to
   then `.` pasted from it. They now record it the way `LineOp` already did, and
   `dot_repeat` restores it before replaying. Four cases in
   `corpus/tier2_registers.toml` pin this against nvim.
+- An over-budget paste reports `E342: Out of memory!  (allocating N bytes)`
+  instead of failing silently. `do_paste` returned `false` and nothing
+  downstream could tell that apart from an empty register; it queues the message
+  on the editor now (`Editor::push_error`), which the host drains. Both the
+  byte-budget checks and the arithmetic-overflow guards report it — the user's
+  ask is the same size either way. An empty register is still silent, as in vim.
 - **Visual mode takes a `"reg` selector.** `"` opened the register chord only in
   Normal mode, so in a selection the `"` fell through unconsumed, the register
   letter armed the around-text-object chord instead, and the operator key was
@@ -72,9 +78,8 @@ and this project adheres to
   measured on the current batched path, peak RSS is linear in payload (~3.1x
   charwise, ~4.1x linewise, ~2.9x blockwise) and independent of document size,
   so 64 MiB costs ~208 MiB peak and ~73 ms. Pasting is no longer stricter than
-  opening a file of the same size. Over-budget pastes are still rejected, and
-  still rejected silently — a paste of a register larger than the budget does
-  nothing and says nothing.
+  opening a file of the same size. Over-budget pastes are still rejected — but
+  no longer silently; see the `E342` entry above.
 - Blockwise `p` / `P` no longer rebuilds the whole document. It applied its edit
   by materializing every line into a `Vec<String>`, joining it back and
   replacing the entire buffer, so cost scaled with the DOCUMENT rather than the

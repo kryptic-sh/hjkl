@@ -1760,6 +1760,20 @@ impl App {
     /// cursor cache goes stale and the render shows the cursor at its old
     /// position. This helper consolidates the three previously duplicated
     /// ~15-line sync blocks in `event_loop.rs` into a single call site.
+    /// Show every message the engine queued via `Editor::push_error` since
+    /// the last drain.
+    ///
+    /// Engine and discipline crates cannot reach `HollerBus` — `hjkl-vim` does
+    /// not depend on `hjkl-holler`, and the `Host` trait's `emit_intent` hook
+    /// carries `()` in every implementor — so they queue messages on the
+    /// editor and this drains them. Both post-mutation sync paths call it, so
+    /// a message raised on either one is shown exactly once.
+    pub(crate) fn drain_engine_errors(&mut self) {
+        for message in self.active_editor_mut().take_errors() {
+            self.bus.error(message);
+        }
+    }
+
     pub(crate) fn sync_after_engine_mutation(&mut self) {
         self.sync_after_engine_mutation_inner(false);
     }
@@ -1824,6 +1838,7 @@ impl App {
         // `recompute_and_install` handles the visual refresh; the ops are
         // queued for host observation but this app has no other consumer.
         let had_fold_ops = !self.active_editor_mut().take_fold_ops().is_empty();
+        self.drain_engine_errors();
 
         // Only re-run the tree-sitter viewport query when something that
         // affects syntax spans actually changed: buffer content (dirty_gen

@@ -330,10 +330,9 @@ reproductions for resolved entries are preserved in the supporting-evidence
 appendix below, marked as fixed. Preserve each fixed case in the tier-2
 compatibility corpus and verify it against nvim before changing expectations.
 
-| Priority | Task                                                                                                                                                                 | Where / acceptance criterion                                                           |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| High     | Surface a user-visible error when a paste is rejected for exceeding `MAX_PASTE_BYTES`. `do_paste` returns `false` silently — there is no channel at all (see below). | `crates/hjkl-vim/src/vim/command.rs` `do_paste`; needs a new engine→host message seam. |
-| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior.                                                   | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim.        |
+| Priority | Task                                                                                                               | Where / acceptance criterion                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior. | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim. |
 
 The paragraph/WORD landings, and the `V}u2)1gUiW` composite, were fixed on
 2026-08-02 (`motions::move_paragraph_next` / `move_paragraph_prev` rewritten on
@@ -378,26 +377,18 @@ shipped — see the `hjkl-vim` changelog for what changed and the measurements.
   `block_paste_past_eof_preserves_the_trailing_newline` does. Whether other
   buffer-shape assertions in the suite are blunted the same way was not audited.
 
-**No message channel exists for the rejected-paste error.** `do_paste` bails out
-with `false` for an over-budget paste and nothing downstream can tell that apart
-from "empty register". There is no seam to hang the message on: the `Host`
-trait's only host-facing hook is `emit_intent`, and every implementor in the
-workspace (`apps/hjkl/src/host.rs`, `hjkl-form/src/host.rs`, `DefaultHost`, all
-test hosts) sets `type Intent = ()`, so it carries nothing. Every user-visible
-`E…` message in the tree is raised in `apps/hjkl` itself (`self.bus.error(...)`
-into `hjkl_holler::HollerBus`) or returned as `ExEffect::Error` from `hjkl-ex`;
-neither is reachable from `hjkl-vim`, which does not depend on `hjkl-holler`.
-Landing this needs three coordinated pieces:
+**The engine has a message channel now (2026-08-04).** `Editor::push_error` /
+`take_errors` is the queue the `take_lsp_intent` / `take_fold_ops` precedent
+suggested, `do_paste` pushes vim's `E342: Out of memory!  (allocating N bytes)`
+on every over-budget path, and `apps/hjkl` drains it in both post-mutation sync
+paths (`App::drain_engine_errors`). It is one channel, not a paste-specific one
+— any engine or discipline code that needs to say something to the user can push
+onto it now.
 
-1. an engine-side queue plus drain on `Editor` — the `take_lsp_intent` /
-   `take_fold_ops` / `take_last_indent_range` pattern is the precedent;
-2. `do_paste` pushing `"E342: Out of memory! (allocating N bytes)"` (vim's own
-   code for this) onto it before returning `false`;
-3. **an `apps/hjkl` change** to drain it after each key and call
-   `self.bus.error(...)` — without step 3 the queue is a channel with no
-   consumer, which is why the engine-side half was not landed on its own.
-
-Step 3 is outside the crates this pass owned, so the whole item is still open.
+Two things it deliberately does NOT do: an empty register is still silent (vim
+says nothing there either, and that was the case the rejection used to be
+indistinguishable from), and nothing rate-limits the queue, so code that pushes
+per-iteration would flood the toast bar.
 
 **A corpus case cannot pin a value when nvim is absent.** Every oracle test
 skips wholesale without nvim, so the corpus expectations guard nothing on a
@@ -995,8 +986,8 @@ edit payload; an empty inverse leaves registers untouched.
 **W3. `62bd4853` silently truncates oversized pastes.** A user asking for N
 copies of a large register gets fewer, with no message. Silent partial execution
 is arguably worse than refusing. Superseded by `b97e9bce`: oversized pastes are
-now rejected outright rather than silently truncated. The rejection is still
-silent — tracked in the ranked backlog above.
+now rejected outright rather than silently truncated, and no longer silently: it
+reports vim's `E342` through the engine's message queue (2026-08-04).
 
 #### Not covered by this pass
 

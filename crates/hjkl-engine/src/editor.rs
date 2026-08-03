@@ -1020,6 +1020,16 @@ pub struct Editor<
     /// [`Editor::take_last_indent_range`] so it can display a brief
     /// visual flash over the reindented rows.
     pub(crate) last_indent_range: Option<(usize, usize)>,
+    /// User-visible errors raised by engine code that has no way to reach
+    /// the host's message bar. Drained by the host via
+    /// [`Editor::take_errors`] after each key; same shape as
+    /// [`Editor::take_fold_ops`] and [`Editor::take_last_indent_range`].
+    ///
+    /// The `Host` trait's only host-facing hook is `emit_intent`, and every
+    /// implementor in the workspace sets `type Intent = ()`, so it carries
+    /// nothing. This queue is what a discipline crate (which cannot depend
+    /// on the host's message bus) uses instead.
+    pub(crate) pending_errors: Vec<String>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -1680,6 +1690,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             search_state: crate::search::SearchState::new(),
             buffer_spans: Vec::new(),
             last_indent_range: None,
+            pending_errors: Vec::new(),
         }
     }
 }
@@ -4945,6 +4956,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// uses this to arm a brief visual flash over the reindented rows.
     pub fn take_last_indent_range(&mut self) -> Option<(usize, usize)> {
         self.last_indent_range.take()
+    }
+
+    /// Queue a user-visible error message. Engine and discipline code calls
+    /// this where a host would call its message bar; the host drains it with
+    /// [`Editor::take_errors`].
+    ///
+    /// Messages carry vim's own `E`-codes so they read the same as the ones
+    /// `hjkl-ex` and `apps/hjkl` raise directly.
+    pub fn push_error(&mut self, message: impl Into<String>) {
+        self.pending_errors.push(message.into());
+    }
+
+    /// Drain every message queued by [`Editor::push_error`] since the last
+    /// call. A host that never drains this leaks the messages, which is why
+    /// `apps/hjkl` drains once per key rather than per command.
+    pub fn take_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_errors)
     }
 
     /// Replace rows `top..=bot` (0-based, inclusive) with `new_lines` via a
