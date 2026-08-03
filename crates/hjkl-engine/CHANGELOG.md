@@ -8,6 +8,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`b`, `B`, `ge` and `gE` stop at a line boundary.** vim's `dec()` steps from
+  column 0 of a row onto the PREVIOUS row's virtual end-of-line cell — one past
+  its last character — and reads that cell's class as whitespace, which is what
+  ends a same-class run at the boundary. hjkl's step-back went straight to the
+  last character, a real character of the same class, so a backward word motion
+  walked through the line break and kept consuming the row above: `b` on
+  `"abc def\nghi jkl"` from `(1, 1)` landed on `(0, 4)` where vim stays on
+  `(1, 0)`. `motions::prev_word_start` and `prev_word_end` are now transcribed
+  from vim's `bck_word` and `bckend_word` on top of `dec` / `inc` / `cls`, which
+  also fixes `ge` inside the buffer's first word (it did not move at all; vim
+  walks off the front and succeeds at `(0, 0)`). Verified over a matrix of 8
+  buffers × every legal cursor column × `b`/`B`/`ge`/`gE`/`2b`/`2B`/`3B`/`2ge`
+  against neovim 0.12.4: 221 disagreements before, 0 after. The differential
+  fuzzer's count at seed 777 drops from 83 to 78.
 - `:s` no longer leaves `curswant` pointing at the pre-substitute column, so the
   next `j` / `k` aims at the column the substitute landed on. Both
   `substitute::apply_substitute` and `substitute::apply_collected_matches` (the

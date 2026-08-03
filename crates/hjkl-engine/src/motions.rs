@@ -1073,8 +1073,20 @@ fn step_forward<B: Query + ?Sized>(
     None
 }
 
-/// Step one position back, wrapping into the previous row.
-fn step_back<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Option<Position> {
+/// Vim's `dec()` — step one position back, wrapping onto the previous row's
+/// VIRTUAL end-of-line cell (column `len`, one past the last character), not
+/// onto its last character.
+///
+/// That cell is what makes a backward word walk stop at a line boundary:
+/// `cls()` reads the line's NUL terminator there and answers "whitespace", so
+/// a same-class run cannot continue from one row onto the row above. Stepping
+/// straight to `len - 1` instead lands on a real character, and `b` on
+/// `"abc def\nghi jkl"` from `(1, 1)` walked all the way back to `(0, 4)`
+/// where vim stays on `(1, 0)`.
+///
+/// On an empty previous row the cell is `(row - 1, 0)`, which is also the
+/// position vim's "an empty line is a word" rule stops on.
+fn dec<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Option<Position> {
     if pos.col > 0 {
         return Some(Position::new(pos.row, pos.col - 1));
     }
@@ -1082,8 +1094,39 @@ fn step_back<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -
         return None;
     }
     let prev_row = pos.row - 1;
-    let prev_len = cache.char_count(buf, prev_row);
-    Some(Position::new(prev_row, prev_len.saturating_sub(1)))
+    Some(Position::new(prev_row, cache.char_count(buf, prev_row)))
+}
+
+/// Vim's `inc()` — the inverse of [`dec`]. Inside a row it advances by one,
+/// which can land ON the virtual end-of-line cell; from that cell it wraps to
+/// column 0 of the next row.
+fn inc<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, pos: Position) -> Option<Position> {
+    if pos.col < cache.char_count(buf, pos.row) {
+        return Some(Position::new(pos.row, pos.col + 1));
+    }
+    if pos.row + 1 < read_row_count(buf) {
+        return Some(Position::new(pos.row + 1, 0));
+    }
+    None
+}
+
+/// Vim's `cls()` — the character class at `pos`, where the virtual
+/// end-of-line cell (and any out-of-line position) reads as whitespace.
+fn cls<B: Query + ?Sized>(
+    buf: &B,
+    cache: &mut LineCache,
+    pos: Position,
+    big: bool,
+    iskeyword: &KeywordSpec,
+) -> CharKind {
+    cache
+        .char_at(buf, pos)
+        .map_or(CharKind::Space, |c| char_kind(c, big, iskeyword))
+}
+
+/// Vim's `LINEEMPTY(lnum)` — the row holds no characters at all.
+fn line_empty<B: Query + ?Sized>(buf: &B, cache: &mut LineCache, row: usize) -> bool {
+    cache.char_count(buf, row) == 0
 }
 
 fn next_word_start<B: Query + ?Sized>(
@@ -1165,44 +1208,41 @@ fn prev_word_start<B: Query + ?Sized>(
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    let mut cur = step_back(buf, cache, from)?;
-    // Skip whitespace backwards. Vim's `bck_word` stops the skip on an
-    // empty line — an empty line is a word (and a WORD) for the backward
-    // motions — and stops at the buffer start when the skip runs out of
-    // buffer inside leading whitespace (`dec_cursor() == -1` there returns
-    // OK, not FAIL, so the motion succeeds at (0, 0)).
-    loop {
-        match cache.char_at(buf, cur) {
-            // `step_back` only ever lands past end-of-line on an empty
-            // row, so this is vim's `col == 0 && LINEEMPTY` stop.
+    // Vim's `bck_word(count = 1, bigword, stop = false)`. `b` and `B` always
+    // pass `stop = false`, so the `sclass` early-out in vim's version can
+    // never fire and is not reproduced here.
+    let mut cur = dec(buf, cache, from)?; // vim: `dec_cursor() == -1` -> FAIL
+
+    // Skip whitespace before the word, stopping on an empty line — an empty
+    // line is a word (and a WORD) for the backward motions. Running out of
+    // buffer inside that whitespace is vim's `dec_cursor() == -1 -> return
+    // OK`: the motion succeeds where it stands.
+    let mut on_empty_line = false;
+    while cls(buf, cache, cur, big, iskeyword) == CharKind::Space {
+        if cur.col == 0 && line_empty(buf, cache, cur.row) {
+            on_empty_line = true;
+            break;
+        }
+        match dec(buf, cache, cur) {
+            Some(prev) => cur = prev,
             None => return Some(cur),
-            Some(c) if char_kind(c, big, iskeyword) == CharKind::Space => {
-                match step_back(buf, cache, cur) {
-                    Some(prev) => cur = prev,
-                    None => return Some(cur),
-                }
-            }
-            Some(_) => break,
         }
     }
-    let target_kind = cache
-        .char_at(buf, cur)
-        .map(|c| char_kind(c, big, iskeyword))?;
-    // Walk back while the previous char is still the same kind.
-    loop {
-        let Some(prev) = step_back(buf, cache, cur) else {
-            return Some(cur);
-        };
-        if cache
-            .char_at(buf, prev)
-            .map(|c| char_kind(c, big, iskeyword))
-            == Some(target_kind)
-        {
-            cur = prev;
-        } else {
-            return Some(cur);
+    if on_empty_line {
+        return Some(cur);
+    }
+
+    // vim's `skip_chars(cls(), BACKWARD)` — walk back off the front of this
+    // word, then `inc_cursor()` to undo the overshoot. Hitting the start of
+    // the buffer mid-run is again a success where it stands, with no `inc`.
+    let target = cls(buf, cache, cur, big, iskeyword);
+    while cls(buf, cache, cur, big, iskeyword) == target {
+        match dec(buf, cache, cur) {
+            Some(prev) => cur = prev,
+            None => return Some(cur),
         }
     }
+    Some(inc(buf, cache, cur).unwrap_or(cur))
 }
 
 /// `ge` / `gE` — walk back to the end of the previous word. The
@@ -1216,70 +1256,33 @@ fn prev_word_end<B: Query + ?Sized>(
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    let mut cur = step_back(buf, cache, from)?;
-    loop {
-        // Skip whitespace; if it spans across a row boundary, the
-        // step_back walk handles the row crossing for us.
-        if cache
-            .char_at(buf, cur)
-            .map(|c| char_kind(c, big, iskeyword))
-            == Some(CharKind::Space)
-        {
-            cur = step_back(buf, cache, cur)?;
-            continue;
-        }
-        let here = char_kind_or_space(buf, cache, cur, big, iskeyword);
-        let next = next_char_kind_in_row(buf, cache, cur, big, iskeyword);
-        let same = if big {
-            here != CharKind::Space && next != CharKind::Space
-        } else {
-            here == next
-        };
-        if !same {
-            return Some(cur);
-        }
-        cur = step_back(buf, cache, cur)?;
-    }
-}
+    // Vim's `bckend_word(count = 1, bigword, eol = false)`. `ge` and `gE`
+    // both pass `eol = false`, so the "stop at end-of-line" arm of vim's
+    // version can never fire and is not reproduced here.
+    let sclass = cls(buf, cache, from, big, iskeyword);
+    let mut cur = dec(buf, cache, from)?; // vim: `dec_cursor() == -1` -> FAIL
 
-/// Returns the kind of the char at `pos`, treating an out-of-line
-/// position as `Space`. Used by `prev_word_end` so the stopping
-/// rule matches the original sqeel-vim helper that synthesised an
-/// implicit whitespace at end-of-line.
-fn char_kind_or_space<B: Query + ?Sized>(
-    buf: &B,
-    cache: &mut LineCache,
-    pos: Position,
-    big: bool,
-    iskeyword: &KeywordSpec,
-) -> CharKind {
-    cache
-        .char_at(buf, pos)
-        .map_or(CharKind::Space, |c| char_kind(c, big, iskeyword))
-}
-
-/// Kind of the next char on the same row as `pos`. End-of-line
-/// counts as `Space` — vim treats line breaks as separators for
-/// `e` / `ge` end-of-word detection.
-fn next_char_kind_in_row<B: Query + ?Sized>(
-    buf: &B,
-    cache: &mut LineCache,
-    pos: Position,
-    big: bool,
-    iskeyword: &KeywordSpec,
-) -> CharKind {
-    let len = cache.char_count(buf, pos.row);
-    if pos.col + 1 < len {
-        char_kind_or_space(
-            buf,
-            cache,
-            Position::new(pos.row, pos.col + 1),
-            big,
-            iskeyword,
-        )
-    } else {
-        CharKind::Space
+    // Move back off the start of the word the cursor was inside.
+    if sclass != CharKind::Space {
+        while cls(buf, cache, cur, big, iskeyword) == sclass {
+            match dec(buf, cache, cur) {
+                Some(prev) => cur = prev,
+                None => return Some(cur),
+            }
+        }
     }
+
+    // Move back to the end of the previous word, stopping on an empty line.
+    while cls(buf, cache, cur, big, iskeyword) == CharKind::Space {
+        if cur.col == 0 && line_empty(buf, cache, cur.row) {
+            break;
+        }
+        match dec(buf, cache, cur) {
+            Some(prev) => cur = prev,
+            None => return Some(cur),
+        }
+    }
+    Some(cur)
 }
 
 fn next_word_end<B: Query + ?Sized>(
@@ -1715,6 +1718,63 @@ mod tests {
         assert_eq!(at(&b), Position::new(0, 6));
         move_word_end_back(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 2));
+    }
+
+    /// vim's `dec()` steps from column 0 onto the previous row's VIRTUAL
+    /// end-of-line cell, whose class is whitespace — that is what ends a
+    /// same-class run at the line boundary. Stepping to the last character
+    /// instead let the run continue onto the row above, so `b` from inside
+    /// the first word of row 1 walked back into row 0. Every expectation
+    /// measured on neovim 0.12.4.
+    #[test]
+    fn move_word_back_stops_at_the_line_boundary() {
+        // Inside "ghi": the word start is on this row, so `b` stays here.
+        let mut b = View::from_str("abc def\nghi jkl");
+        b.set_cursor(Position::new(1, 1));
+        move_word_back(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 0));
+
+        // Same for `B` over a punctuation-heavy WORD.
+        let mut b = View::from_str("'self.x'\n(foo) a, {xy}  ");
+        b.set_cursor(Position::new(1, 1));
+        move_word_back(&mut b, true, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 0));
+
+        // From column 0 there IS no word start left on the row, so the
+        // motion crosses — onto the previous word's start, not into it.
+        let mut b = View::from_str("abc def\nghi jkl");
+        b.set_cursor(Position::new(1, 0));
+        move_word_back(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 4));
+    }
+
+    /// An empty line is a word (and a WORD) for the backward motions: the
+    /// whitespace skip stops on it instead of running through to the
+    /// paragraph above.
+    #[test]
+    fn move_word_back_stops_on_an_empty_line() {
+        let mut b = View::from_str("abc\n\ndef");
+        b.set_cursor(Position::new(2, 1));
+        move_word_back(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(2, 0));
+        move_word_back(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    /// `ge` inside the first word of the buffer has no previous word end to
+    /// find. vim walks off the front and succeeds at the buffer start; the
+    /// old walk returned without moving at all.
+    #[test]
+    fn move_word_end_back_inside_first_word_lands_at_buffer_start() {
+        let mut b = View::from_str("abc def\nghi jkl");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end_back(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 0));
+
+        let mut b = View::from_str("'self.x'\n(foo) a, {xy}  ");
+        b.set_cursor(Position::new(0, 4));
+        move_word_end_back(&mut b, true, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]

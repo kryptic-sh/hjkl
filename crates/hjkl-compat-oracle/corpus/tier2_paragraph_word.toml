@@ -297,3 +297,112 @@ keys = "d$"
 expected_buffer = "abc\n\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
+
+# ── Backward word motions stop at a line boundary ──────────────────────────
+#
+# vim's `dec()` steps from column 0 of a row onto the PREVIOUS row's virtual
+# end-of-line cell — one past its last character — whose `cls()` is
+# whitespace. That cell is what ends a same-class run at the boundary. hjkl's
+# step-back went straight to the last character instead, a real char of the
+# same class, so `b` / `B` / `ge` / `gE` walked through the line break and
+# kept consuming the row above.
+
+[[cases]]
+name = "motion_b_stops_at_the_word_start_on_its_own_row"
+initial_buffer = "abc def\nghi jkl\n"
+initial_cursor = [1, 1]
+keys = "b"
+expected_buffer = "abc def\nghi jkl\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "motion_B_stops_at_the_WORD_start_on_its_own_row"
+initial_buffer = "'self.x'\n(foo) a, {xy}  \n"
+initial_cursor = [1, 1]
+keys = "B"
+expected_buffer = "'self.x'\n(foo) a, {xy}  \n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# From column 0 there is no word start left on the row, so the motion does
+# cross — onto the last word of the row above, not into the middle of it.
+[[cases]]
+name = "motion_b_from_column_zero_crosses_to_the_previous_word"
+initial_buffer = "abc def\nghi jkl\n"
+initial_cursor = [1, 0]
+keys = "b"
+expected_buffer = "abc def\nghi jkl\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+[[cases]]
+name = "motion_3B_walks_whole_WORDs_across_the_break"
+initial_buffer = "\"self.x\" a, (bar).'hello'\na.\"n1\"  'a' _id\n"
+initial_cursor = [1, 1]
+keys = "3B"
+expected_buffer = "\"self.x\" a, (bar).'hello'\na.\"n1\"  'a' _id\n"
+expected_cursor = [0, 9]
+expected_mode = "normal"
+
+# `ge` / `gE` ride the same step-back, and land on the END of the previous
+# word — the virtual EOL cell is skipped as whitespace rather than becoming
+# the landing site.
+[[cases]]
+name = "motion_ge_lands_on_the_previous_word_end_across_the_break"
+initial_buffer = "abc def\nghi jkl\n"
+initial_cursor = [1, 0]
+keys = "ge"
+expected_buffer = "abc def\nghi jkl\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+
+[[cases]]
+name = "motion_gE_lands_on_the_previous_WORD_end_across_the_break"
+initial_buffer = "a.b c\nd e.f\n"
+initial_cursor = [1, 0]
+keys = "gE"
+expected_buffer = "a.b c\nd e.f\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+# An empty line is a word for the backward motions: `b` stops ON it rather
+# than skipping through to the paragraph above.
+[[cases]]
+name = "motion_b_stops_on_an_empty_line"
+initial_buffer = "abc\n\ndef\n"
+initial_cursor = [2, 1]
+keys = "b"
+expected_buffer = "abc\n\ndef\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "motion_2b_stops_on_an_empty_line"
+initial_buffer = "abc\n\ndef\n"
+initial_cursor = [2, 1]
+keys = "2b"
+expected_buffer = "abc\n\ndef\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `ge` inside the FIRST word of the buffer has no previous word end to find.
+# vim walks off the front and succeeds at (0, 0); hjkl's old walk returned
+# without moving at all.
+[[cases]]
+name = "motion_ge_inside_the_first_word_lands_at_the_buffer_start"
+initial_buffer = "abc def\nghi jkl\n"
+initial_cursor = [0, 2]
+keys = "ge"
+expected_buffer = "abc def\nghi jkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "motion_gE_inside_the_first_WORD_lands_at_the_buffer_start"
+initial_buffer = "'self.x'\n(foo) a, {xy}  \n"
+initial_cursor = [0, 4]
+keys = "gE"
+expected_buffer = "'self.x'\n(foo) a, {xy}  \n"
+expected_cursor = [0, 0]
+expected_mode = "normal"

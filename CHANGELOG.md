@@ -61,6 +61,16 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
+- **`b`, `B`, `ge` and `gE` no longer walk through a line break.** A backward
+  word motion from inside the first word of a line kept going onto the line
+  above, because the step-back landed on the previous row's last character
+  rather than on the virtual end-of-line cell vim puts there — a real character
+  of the same class, so the word run never ended. `b` on `"abc def\nghi jkl"`
+  from `(1, 1)` went to `(0, 4)` where vim stays on `(1, 0)`. `ge` inside the
+  buffer's very first word did not move at all. Measured over every legal cursor
+  position in 8 buffers against neovim 0.12.4: 221 disagreements before, none
+  after.
+
 - **`d}` on the last character of a buffer deletes it.** vim's `}` counts as a
   successful inclusive motion even when it has nowhere left to go, so `d}` with
   the cursor already on the final character removes that character; hjkl read

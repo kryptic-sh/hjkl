@@ -399,26 +399,6 @@ Landing this needs three coordinated pieces:
 
 Step 3 is outside the crates this pass owned, so the whole item is still open.
 
-**`b` / `B` walk backwards across a line break.** `motions::step_back` moves
-from column 0 of a row to `prev_len - 1` — the last character of the previous
-row — while vim's `dec()` moves to `prev_len`, the virtual end-of-line cell,
-whose `cls()` is whitespace. That cell is what stops vim's same-class run
-walk-back at the line boundary. Without it the run keeps going onto the previous
-line:
-
-```
-`B` on "'self.x'\n(foo) a, {xy}  ", cursor (1,1)
-hjkl: (0, 0)     ← walked back through the line break and across row 0
-nvim: (1, 0)     ← start of the WORD the cursor is inside
-```
-
-Also reproduces as `3B` on `"\"self.x\" a, (bar).'hello'\na.\"n1\"  'a' _id"`
-from `(1,1)`: hjkl `(0,0)`, nvim `(0,9)`. Pre-existing — the 2026-08-02 change
-to `prev_word_start` only touched the whitespace-skip loop, which this case
-never enters. Fixing it means giving `step_back` / `step_forward` vim's virtual
-EOL position, which every `w`/`b`/`e`/`ge` scan sits on top of; that is a
-word-motion-wide change with its own regression surface, not a `B` fix.
-
 **A corpus case cannot pin a value when nvim is absent.** Every oracle test
 skips wholesale without nvim, so the corpus expectations guard nothing on a
 machine that has no neovim — including CI lanes that do not install it. The
@@ -426,11 +406,11 @@ machine that has no neovim — including CI lanes that do not install it. The
 (`diff.rs::run_single`), which closed the "documentation-only field" half of
 this, but nothing compares hjkl against the authored values on its own.
 
-**The differential fuzzer still reports 83 divergences at seed 777** (89 before
-the 2026-08-02 pass, 84 after it, 83 once the counted-`$` failure rule landed on
-2026-08-04). The bulk are the known-excluded classes named in §5 (`u` / undo
-against the seeded nvim fixture, blockwise `<C-v>` non-delete operators) plus
-the entries above.
+**The differential fuzzer still reports 78 divergences at seed 777** (89 before
+the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure rule and
+78 with the backward-word-motion rewrite, both 2026-08-04). The bulk are the
+known-excluded classes named in §5 (`u` / undo against the seeded nvim fixture,
+blockwise `<C-v>` non-delete operators) plus the entries above.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
