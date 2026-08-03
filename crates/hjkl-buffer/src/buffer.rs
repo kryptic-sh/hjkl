@@ -203,6 +203,15 @@ impl View {
         // visible height. O(distance) instead of recomputing
         // `cursor_screen_row_from` every step (which was O(distance^2) on a
         // large soft-wrapped jump).
+        // `screen` was summed only up to the cursor row clamped against the
+        // live rope (the clamp `cursor_screen_row_from` applies); a stale
+        // cursor row — another view shrank the shared Buffer since this
+        // view's cursor was last clamped — must not make the loop subtract
+        // past that point.
+        let cursor_row = {
+            let c = self.content.lock().unwrap();
+            cursor.row.min(c.text.len_lines().saturating_sub(1))
+        };
         let Some(mut screen) = self.cursor_screen_row_from(viewport, viewport.top_row) else {
             // Two ways to land here, both repaired by snapping `top_row` to the
             // cursor's row clamped against the live rope:
@@ -225,12 +234,12 @@ impl View {
         while screen >= height {
             let c = self.content.lock().unwrap();
             let mut next = viewport.top_row + 1;
-            while next <= cursor.row && c.folds.iter().any(|f| f.hides(next)) {
+            while next <= cursor_row && c.folds.iter().any(|f| f.hides(next)) {
                 next += 1;
             }
-            if next > cursor.row {
+            if next > cursor_row {
                 drop(c);
-                viewport.top_row = cursor.row;
+                viewport.top_row = cursor_row;
                 break;
             }
             // Removing rows [top_row, next) drops their visible heights (hidden
@@ -1135,6 +1144,34 @@ mod tests {
         v.top_row = 3;
         view_b.ensure_cursor_visible(&mut v);
         assert_eq!(v.top_row, 0, "top_row must clamp into the live rope");
+        assert_eq!(v.top_col, 0);
+    }
+
+    /// Regression: a stale cursor ROW past the live rope used to make the
+    /// scroll loop subtract more wrap segments than `cursor_screen_row_from`
+    /// had summed — `attempt to subtract with overflow` in debug, a
+    /// `rope.line()` panic in release. The loop must bound itself by the
+    /// clamped cursor row, and must not assign the raw stale row to
+    /// `top_row`.
+    #[test]
+    fn ensure_cursor_visible_survives_stale_cursor_row_after_shrink() {
+        // Row 5 is long enough that `set_cursor` stores col 26 unclamped.
+        let a = View::from_str(
+            "aa\nbb\nxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ncc\ndd\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        );
+        let arc = a.content_arc();
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        let mut view_b = View::new_view(Arc::clone(&arc));
+        view_b.set_cursor(Position::new(5, 26));
+        // view_a truncates the document to 3 rows; view_b's cursor (5, 26)
+        // is now stale — exactly the concurrent-shrink scenario.
+        view_a.replace_all("aa\nbb\nxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        let mut v = vp_wrap(4, 6);
+        view_b.ensure_cursor_visible(&mut v); // must not panic
+        assert_eq!(
+            v.top_row, 2,
+            "top_row must scroll to the clamped cursor row, not past the rope"
+        );
         assert_eq!(v.top_col, 0);
     }
 
