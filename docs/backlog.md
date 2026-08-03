@@ -671,9 +671,22 @@ with ripgrep installed are unaffected.
   is why the 2026-05-04 and 2026-04-27 fuzz failures can no longer be reproduced
   at all. Levers: cache `fuzz/corpus` the way `Swatinem/rust-cache` caches
   `target/`, and `actions/upload-artifact@v4 with: if: failure()` over
-  `fuzz/artifacts`. Caching the corpus makes each run deeper and also blinder to
-  a cold-start-only crash, which is the same trade-off the `grammar tests` lane
-  has above — decide it deliberately.
+  `fuzz/artifacts`.
+
+  **The agreed design (2026-08-04) is a crash QUEUE, not a corpus cache.** Cache
+  only the inputs that currently crash; replay them at the start of each run
+  with `-runs=0` (a bare directory argument makes libFuzzer treat it as a seed
+  corpus and START FUZZING, which is not a decidable check); keep one that still
+  crashes and fail the job on it, drop one that no longer does. The durable
+  guard is the regression test written with the fix — both 2026-07-28 crashes
+  got one — so an entry only needs to survive until the fix lands. That bounds
+  the cache by unfixed bugs and makes the job keep failing weekly until someone
+  acts, instead of the crash evaporating into an expiring log. Two things to
+  build in: log which entries were dropped, because a silent eviction hides a
+  fix that was incomplete (U+0085 handled, U+2028 not); and keep the artifact
+  upload regardless, since the queue's durability otherwise depends on the fixer
+  remembering to write a test. Caching the full coverage corpus is a separate
+  question and was NOT decided.
 
   Verified 2026-08-04 while auditing the old runs: the eight `cargo-fuzz`
   failures between 2026-04-27 and 2026-07-27 were two real editor crashes, both
@@ -681,6 +694,13 @@ with ripgrep installed are unaffected.
   multi-byte line separator) and `a11351b5` (auto-indent bracket depth
   saturating to `i32::MIN` and wrapping through `as usize`). Both have
   regression tests. Nothing from that window is outstanding.
+
+  What a single ten-minute campaign found the moment one was run by hand
+  (2026-08-04) is the argument for spending more than ten minutes a week on it:
+  four artifacts, three of them distinct live defects, all now fixed — see the
+  three commits `e365f42e`, `fa2a21b9` and the `\r`-separator entry in
+  `hjkl-buffer`'s changelog. The fourth reproduced only inside the campaign and
+  not standalone, which the queue design handles by dropping it.
 
 - **A fuzz artifact replayed against the wrong commit proves nothing.** Chasing
   the above, both artifacts were replayed at HEAD, passed, and then passed
@@ -692,6 +712,18 @@ with ripgrep installed are unaffected.
   the commit before the FIX, not before the commit that mentions it, and confirm
   `arbitrary`'s version is unchanged across the window (1.4.2 throughout, here)
   or the same bytes decode to a different `FuzzInput`.
+
+- **Ten minutes a week on one harness is the whole fuzz budget, and it is the
+  job with the best hit rate.** `handle_key` is the only target;
+  `-max_total_time=600` is the only budget. Everything it has ever found was a
+  real, keystroke-reachable defect (five now: the two fixed 2026-07-28 and the
+  three fixed 2026-08-04), and a single ad-hoc ten-minute run on 2026-08-04
+  produced three more the week after a clean scheduled run. Whether to raise
+  `-max_total_time`, add harnesses (an ex-command target and a `:s` target are
+  the obvious gaps — neither is reachable from `handle_key`), or both, is an
+  owner decision about runner minutes. Recorded because the corpus-persistence
+  item above is the smaller lever of the two and would otherwise look like the
+  answer.
 
 - **The sibling repos pin `runs-on` to a concrete image; hjkl does not.** infr,
   and the other siblings its `cron.yml` names, run `ubuntu-26.04`. hjkl uses
@@ -809,6 +841,12 @@ crates pulling tree-sitter, mimalloc, or aws-lc-sys require CI runners.
   `gh run list --limit 5 --json headSha,databaseId,status,conclusion`. This
   matters precisely because it defeats the trap above: the check that is
   supposed to catch a red CI run reports green-by-absence.
+- **`cargo fuzz run <target> <dir>` does not replay a directory — it seeds a
+  campaign from it and starts fuzzing.** Passing a single FILE runs that input
+  once; passing a directory reads it as a corpus and mutates. Add `-- -runs=0`
+  when the intent is to check a set of known inputs. Getting this wrong reads as
+  "the artifacts still crash" when what crashed is something the fuzzer just
+  invented.
 - **`:normal!` aborts the rest of its keys on a failed motion.** Probing nvim
   with one `-c 'normal! …'` per case makes a failed first motion look like "nvim
   left the buffer unchanged", i.e. like agreement with a hjkl no-op. Split the
