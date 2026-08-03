@@ -461,6 +461,56 @@ entries above.
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
 
+### 1.5c Confirmed by the 2026-08-03 full-codebase review
+
+Both entries were reproduced twice: once against neovim 0.12.4
+(`nvim --headless -u NONE`) for the expected behaviour, once through a scratch
+integration test on this tree for the actual. Neither is in the differential
+corpus yet.
+
+**`:s` leaves `curswant` stale, so the next `j`/`k` aims at the pre-substitute
+column.** `substitute::apply_substitute` and
+`substitute::apply_collected_matches` both move the cursor with
+`ed.buffer_mut().set_cursor(..)` directly, bypassing `Editor::jump_cursor` —
+which is the only thing that resets `Editor::sticky_col`. Every other explicit
+jump resets it: `Editor::search_advance_forward` / `search_advance_backward`
+call `sync_sticky_col_to_cursor` for exactly this reason (its doc comment
+records that four call sites got it wrong before the reset was made structural),
+and `Editor::apply_fold_op` sets `sticky_col = Some(0)` by hand. The substitute
+paths have no equivalent, and no caller does the fixup afterwards
+(`vim::operator` at both `apply_substitute` call sites, `hjkl-ex`'s `builtins`).
+
+```
+Buffer "abcdefgh\nab\nabcdefgh", cursor (0,7) via `$`, then :2s/ab/XX/ then j
+nvim: cursor (2, 0)   ← curswant reset to the column :s landed on
+hjkl: cursor (2, 7)   ← sticky_col still Some(7) from before the :s
+```
+
+The fix is the same shape as the search path: reset inside the two substitute
+functions rather than at each caller. Check the confirm (`c` flag) path too —
+`apply_collected_matches` is the one that runs per accepted match.
+
+**`.` after `"ap` pastes from the unnamed register.** `LastChange::Paste`
+carries `before` / `count` / `cursor_after` / `reindent` but no `register`, so
+`dot_repeat`'s `Paste` arm calls `do_paste` with nothing having set
+`pending_register` and the paste falls through to the unnamed register.
+`LastChange::LineOp` already models this correctly — it carries
+`register: Option<char>` and the `LineOp` arm restores
+`vim_mut(ed).pending_register = register` before executing, citing
+`:h redo-register`.
+
+```
+"aywwyw   (a = "alpha ", unnamed = "bravo")  then  j"ap.  on "alpha bravo\n\n"
+nvim: line 2 = "alpha alpha "   ← `.` reused register a
+hjkl: line 2 = "alpha bravo"    ← `.` fell back to the unnamed register
+```
+
+Add `register: Option<char>` to `LastChange::Paste`, set it where the paste is
+recorded (`vim::bridges`' paste bridge), and restore it in the `dot_repeat` arm.
+`LastChange::OpMotion`, `OpTextObj` and `DeleteToEol` have the same missing
+field and were **not** tested — the same divergence is likely for `"ad w` then
+`.`, and is worth checking in the same change.
+
 ### 1.6 Cursor-move API migration
 
 `Move` and the debug invariant shipped; remaining phases are:
@@ -588,9 +638,12 @@ unknown.
   `hjkl-menu`, `hjkl-picker`, `hjkl-anvil`, `hjkl-app`, `hjkl-fs`,
   `hjkl-clipboard`, `hjkl-bonsai`, and touched `hjkl-quickfix`,
   `hjkl-buffer-tui`, `hjkl-statusline`, `hjkl-which-key`, `hjkl-prompt-tui`,
-  `hjkl-css` only where a finding led there. Everything else in `crates/` has
-  never been reviewed — including `hjkl-config`, `hjkl-keymap(-tui)`,
-  `hjkl-layout`, `hjkl-syntax(-tui)`, `hjkl-markdown(-tui)`, `hjkl-theme(-tui)`,
+  `hjkl-css` only where a finding led there. The 2026-08-03 pass re-covered
+  `hjkl-buffer/src/undo.rs`, `hjkl-vim/src/`, and `hjkl-engine/src/` in full and
+  reached `hjkl-vim-types` and `hjkl-app`'s undofile path by call-chain tracing,
+  so it widened nothing. Everything else in `crates/` has never been reviewed —
+  including `hjkl-config`, `hjkl-keymap(-tui)`, `hjkl-layout`,
+  `hjkl-syntax(-tui)`, `hjkl-markdown(-tui)`, `hjkl-theme(-tui)`,
   `hjkl-tabs(-tui)`, `hjkl-hover(-tui)`, `hjkl-holler(-tui)`, `hjkl-form`,
   `hjkl-fs-watch`, `hjkl-fuzzy`, `hjkl-mangler`, `hjkl-kitty`, `hjkl-lang`,
   `hjkl-icons`, `hjkl-splash(-tui)`, `hjkl-info-popup(-tui)`, `hjkl-vim-tui`,
@@ -646,11 +699,66 @@ unknown.
     class of bug surfaces, and also why it is the slowest job. Caching
     `~/.cache/bonsai` would make it faster and blind to cold-start races.
     Deliberately not done.
-  - **`crates/hjkl-bonsai/CHANGELOG.md` has a second, empty `## [Unreleased]`
-    heading** stranded between the `0.40.0` and `0.7.5` sections — noticed while
-    adding an entry, left alone because deleting a heading in a released file is
-    the release step's call, not a bug fix's. BCTP step 2 will move entries into
-    the _first_ one and leave the stray behind.
+- **A corrupt undofile with a parent-link cycle hangs on load (2026-08-03).**
+  `UndoTree::from_serializable` validates that every parent / child /
+  `last_child` index is in range and that the root/non-root delta discipline
+  holds, but it never checks that parent links are acyclic. A `SerTree` whose
+  nodes 1 and 2 name each other as parent (with an independent valid root) loads
+  successfully. `UndoTree::materialize` then walks parent links in an unbounded
+  `loop`, pushing each node onto `path`, and never terminates — confirmed by a
+  scratch test in which `View::install_recovered_undo_tree` had not returned
+  after 3 s while `install_undo_tree` returned `true` for the same projection.
+  `depths_from_root` guards the same shape with a `seen` set and the `on_path`
+  setup loop bounds itself by `len`, so the gap is specifically the two hot
+  walks (`materialize`, and the second loop of `retarget_current`).
+
+  Reachable: `SerTree` is public API (`hjkl_buffer::SerTree`), the undofile's
+  header hash covers the _document_ for staleness rather than the tree bytes for
+  integrity, and `Buffer::install_recovered_undo_tree` — the swap-recovery path
+  — materializes `current` as its consistency check. Fix by rejecting cycles in
+  `from_serializable` (a `seen` walk from each node, or reuse `depths_from_root`
+  and reject anything unreachable from the root).
+
+  The original review claimed `retarget_current`'s _first_ loop also hangs; it
+  does not. That loop writes `on_path = true` as it walks, so it revisits a
+  marked node after at most N steps and stops. The reachable failure there is
+  the second loop's `expect` panicking when the fork is not an ancestor of
+  `current` — still a corrupt-input crash, but a panic and not a hang.
+
+- **Duplicate `seq` values in a corrupt `SerTree` silently drop nodes
+  (2026-08-03).** `from_serializable` builds `by_seq` with `.collect()` into a
+  `BTreeMap`, so two nodes sharing a `seq` keep only the last; the lost node
+  disappears from `g-` / `g+` seq traversal with no error. Confirmed:
+  `install_undo_tree` returns `true` for a two-node projection whose nodes both
+  carry `seq: 5`. Same class and same fix site as the cycle above — reject it in
+  the loader. Lower severity: a missing node beats a hang.
+
+- **Considered and declined: renumbering `depth` in `prune_root_side`
+  (2026-08-03).** When the root's on-path child is promoted, it keeps its
+  original `depth` instead of restarting at 0 the way `clear_all` does. That is
+  a real inconsistency, and it is harmless: `depth` is read in exactly two
+  places — `is_keyframe` (a multiple-of-`KEYFRAME_INTERVAL` test) and
+  `child_depth = parent.depth + 1` — so the keyframe ladder keeps its spacing
+  and only its offset from the new root moves, leaving the root-to-nearest-
+  keyframe distance bounded by `KEYFRAME_INTERVAL` as before. Serialization
+  fixes the offset anyway: `depths_from_root` recomputes from the new root on
+  load. The `depth` field's own comment already covers this ("assigned once at
+  creation and never renumbered", "a wrong depth costs speed, never content").
+  Not worth a change.
+
+- **Full-buffer allocation on motions and rectangular edits (2026-08-03).** Each
+  of these rebuilds the whole document into a `Vec` for an edit or query whose
+  extent is small. None is a correctness bug and none is measured; they are
+  recorded so the next perf pass has the list.
+  - `vim::text_object::sentence_boundary` and
+    `vim::text_object::sentence_step_forward` each collect the entire buffer
+    into a `Vec<Vec<char>>` on every `(` / `)` keystroke. Both were rewritten
+    for vim parity, not for allocation discipline.
+  - `vim::visual_ops::transform_block_case` and
+    `vim::visual_ops::block_replace_bounds` collect a full `Vec<String>` via
+    `rope_to_lines_vec` to edit one rectangle.
+  - `vim::text_object_ops`' `reflow_rows` and its bounds helper do the same for
+    a `gq` over a row range.
 
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
