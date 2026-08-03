@@ -717,3 +717,14 @@ expected_buffer = "ad\neh\nijkl\nmnop\n"
 expected_cursor = [0, 1]
 expected_mode = "normal"
 expected_register = ['a', "bc\nfg"]
+
+# A blockwise delete's register survives into the dot-repeat too.
+[[cases]]
+name = "visual_block_dot_repeat_reuses_named_register"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "l<C-v>jl\"adj0."
+expected_buffer = "ad\n\nkl\nmnop\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['a', "eh\nij"]

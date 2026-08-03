@@ -61,12 +61,13 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
-- **`.` after `"ax` deletes into `"a`, not the unnamed register.** The `x` / `X`
-  keys already honoured an explicit register when typed, but the dot-repeat did
-  not carry it, so the repeat wrote the unnamed register and left `"a` holding
-  the first deletion — `"axl.` on `"abcdef"` left `"a` as `a` where neovim
-  leaves `c`. `x`, `X` and their counted forms now all repeat into the named
-  register, matching the operator and paste families fixed above.
+- **Every `.`-repeatable change now repeats into the register it named.** The
+  last three that did not were `x` / `X`, a visual-mode operator, and `dgn` /
+  `cgn`: each fell back to the unnamed register on the repeat, leaving `"a`
+  holding the FIRST change's text. `"axl.` on `"abcdef"` left `"a` as `a` where
+  neovim leaves `c`, and the same shape held for `vll"adw.` and `"acgn`. In
+  every case the live keystroke already honoured the register — only the repeat
+  dropped it.
 
 - **`}`, `{`, `b`/`B` and `(`/`)` landings match neovim.** Four vim-parity
   defects found by the differential oracle, all verified case by case against

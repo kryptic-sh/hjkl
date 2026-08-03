@@ -32,6 +32,13 @@ and this project adheres to
   `dot_repeat_char_delete_reuses_the_explicit_register` covers `x`, `X` and a
   counted `x`, and five more cases in `corpus/tier2_registers.toml` pin the
   whole family against nvim.
+- `.` after a visual operator or `"acgn` reuses the register too, closing out
+  the family. `LastChange::GnOp` and `VisualOp` were the two remaining variants
+  with no `register` field — both **gained one**, a breaking change for anyone
+  matching on them. The blockwise replay had a second defect behind that one:
+  `replay_block_visual_op` passed a hardcoded `None` target to
+  `record_delete_block`, so even with the register restored the repeat could not
+  have written it.
 - `"aD` and `"aC` write the named register. `command::delete_to_eol` wrote the
   deleted text with `set_yank`, which only ever reaches the unnamed register, so
   an explicit `"reg` was silently dropped. It now routes through

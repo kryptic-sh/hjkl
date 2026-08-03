@@ -139,7 +139,9 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             op,
             forward,
             inserted,
+            register,
         } => {
+            vim_mut(ed).pending_register = register;
             gn_operate(ed, Some(op), forward, 1);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
@@ -149,7 +151,9 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             op,
             extent,
             inserted,
+            register,
         } => {
+            vim_mut(ed).pending_register = register;
             // B1: replay a visual-mode operator over a same-SIZE region
             // anchored at the CURRENT cursor (`:h v_.`), not the original
             // absolute range. `Line` extents are exactly `[count]dd`-style

@@ -118,3 +118,26 @@ expected_buffer = "alpha bravo\nalpha\n"
 expected_cursor = [1, 4]
 expected_mode = "normal"
 expected_register = ['a', "alpha"]
+
+# A visual operator's register survives into its dot-repeat (`:h redo-register`).
+# The repeat covers a same-size region at the cursor (`:h v_.`), so the text
+# differs each time and a fallback to the unnamed register shows up in `"a`.
+[[cases]]
+name = "visual_charwise_dot_repeat_reuses_named_register"
+initial_buffer = "alpha bravo charlie\n"
+initial_cursor = [0, 0]
+keys = "vll\"adw."
+expected_buffer = "ha vo charlie\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+expected_register = ['a', "bra"]
+
+[[cases]]
+name = "visual_linewise_dot_repeat_reuses_named_register"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "V\"adj."
+expected_buffer = "two\nfour\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['a', "three\n"]

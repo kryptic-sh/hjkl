@@ -21,6 +21,9 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     // `count` is the number of indent levels for `>` / `<` (vim `2>` = two
     // shiftwidths); other visual operators ignore it.
     let levels = count.max(1);
+    // Read the explicit register before an operator consumes it, so the
+    // dot-repeat entry can name it (`:h redo-register`).
+    let register = vim(ed).pending_register;
     match vim(ed).mode {
         Mode::VisualLine => {
             let cursor_row = buf_cursor_pos(ed.buffer()).row;
@@ -76,6 +79,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         VisualExtent::Line {
                             lines: bot - top + 1,
                         },
+                        register,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -90,6 +94,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         VisualExtent::Line {
                             lines: bot - top + 1,
                         },
+                        register,
                     );
                     change_linewise_rows(ed, top, bot);
                 }
@@ -108,6 +113,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         VisualExtent::Line {
                             lines: bot - top + 1,
                         },
+                        register,
                     );
                 }
                 Operator::Indent | Operator::Outdent => {
@@ -125,6 +131,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         VisualExtent::Line {
                             lines: bot - top + 1,
                         },
+                        register,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -181,14 +188,14 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
-                    record_visual_last_change(ed, op, charwise_extent(top, bot));
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     ed.push_undo();
                     // Record BEFORE entering insert: `AfterChange` patches
                     // `inserted` into this entry when the user hits Esc.
-                    record_visual_last_change(ed, op, charwise_extent(top, bot));
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
                     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
                 }
@@ -201,7 +208,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     apply_case_op_to_selection(ed, op, top, bot, RangeKind::Inclusive);
-                    record_visual_last_change(ed, op, charwise_extent(top, bot));
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
@@ -222,6 +229,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                         VisualExtent::Line {
                             lines: bot.0 - top.0 + 1,
                         },
+                        register,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -270,12 +278,14 @@ fn record_visual_last_change<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     extent: VisualExtent,
+    register: Option<char>,
 ) {
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::VisualOp {
             op,
             extent,
             inserted: None,
+            register,
         });
     }
 }
@@ -381,6 +391,9 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
     op: Operator,
     count: usize,
 ) {
+    // Same capture as `apply_visual_operator` — this is also reached
+    // directly from `range_ops`, so it cannot rely on that one.
+    let register = vim(ed).pending_register;
     let (top, bot, left, right) = block_bounds(ed);
     // `$` (`:h v_b_$`) makes the block ragged: every row resolves its own
     // right edge to its own EOL instead of the fixed `right` above. Read
@@ -426,14 +439,24 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             // rather than past it (`<C-v>jjD` on "abcd…" → (0,0), not (0,1)).
             let line_len = buf_line_chars(ed.buffer(), top);
             ed.jump_cursor(top, left.min(line_len.saturating_sub(1)));
-            record_visual_last_change(ed, op, block_extent(top, bot, left, right, to_eol));
+            record_visual_last_change(
+                ed,
+                op,
+                block_extent(top, bot, left, right, to_eol),
+                register,
+            );
         }
         Operator::Change => {
             ed.push_undo();
             // Record BEFORE entering insert: the `BlockChange` finish site
             // (comment.rs) patches `inserted` into this entry on Esc, exactly
             // as `AfterChange` does for charwise/linewise `c`.
-            record_visual_last_change(ed, op, block_extent(top, bot, left, right, to_eol));
+            record_visual_last_change(
+                ed,
+                op,
+                block_extent(top, bot, left, right, to_eol),
+                register,
+            );
             // `c`'s replicated typed text always lands at the LEFT column
             // on every row (`:h v_b_c`) — unaffected by a ragged right
             // edge, so only the delete side needs `to_eol`.
@@ -459,7 +482,12 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             transform_block_case(ed, op, top, bot, left, right, to_eol);
             vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left);
-            record_visual_last_change(ed, op, block_extent(top, bot, left, right, to_eol));
+            record_visual_last_change(
+                ed,
+                op,
+                block_extent(top, bot, left, right, to_eol),
+                register,
+            );
         }
         Operator::Indent | Operator::Outdent => {
             // VisualBlock `>` / `<` falls back to linewise indent over
@@ -739,7 +767,11 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
                 right + 1 - left
             };
             ed.record_yank_to_host(yank.clone());
-            ed.record_delete_block(yank, block_width, None);
+            // The replay's register comes from the change being repeated —
+            // `replay_last_change` puts it back in `pending_register` before
+            // calling here, so this consumes it exactly like the live path.
+            let target = vim_mut(ed).pending_register.take();
+            ed.record_delete_block(yank, block_width, target);
         }
     };
     match op {

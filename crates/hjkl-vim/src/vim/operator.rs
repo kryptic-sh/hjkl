@@ -162,6 +162,9 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
     let Some(re) = ed.search_state().pattern.clone() else {
         return;
     };
+    // Read the explicit register before an operator consumes it, so the
+    // dot-repeat entry can name it (`:h redo-register`).
+    let register = vim(ed).pending_register;
     ed.sync_buffer_content_from_textarea();
 
     let Some(mut range) = gn_find_range(ed, &re, forward) else {
@@ -198,6 +201,7 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
                     op: Operator::Delete,
                     forward,
                     inserted: None,
+                    register,
                 });
             }
         }
@@ -210,6 +214,7 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
                     op: Operator::Change,
                     forward,
                     inserted: None,
+                    register,
                 });
             }
             begin_insert_noundo(ed, 1, InsertReason::AfterChange);

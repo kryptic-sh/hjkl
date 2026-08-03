@@ -1032,6 +1032,23 @@ fn visual_mode_takes_an_explicit_register() {
     assert_eq!(e.content(), "two\nthree\nfour\n");
 }
 
+/// A visual operator's register survives into its dot-repeat. The repeat runs
+/// over a same-size region at the cursor (`:h v_.`), so each pass deletes
+/// different text and a fallback to the unnamed register leaves `"a` holding
+/// the FIRST rectangle. Expectations from neovim 0.12.4.
+#[test]
+fn visual_dot_repeat_reuses_the_explicit_register() {
+    // Charwise: three chars, step a word right, repeat.
+    let mut e = editor_with("alpha bravo charlie");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "vll\"adw."), "bra");
+    assert_eq!(e.content(), "ha vo charlie\n");
+
+    // Linewise.
+    let mut e = editor_with("one\ntwo\nthree\nfour");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "V\"adj."), "three\n");
+    assert_eq!(e.content(), "two\nfour\n");
+}
+
 /// `"aD` / `"aC` write the named register at all — they used to reach only the
 /// unnamed one. nvim: `"aD` on `"alpha bravo"` leaves `a` holding the line.
 #[test]

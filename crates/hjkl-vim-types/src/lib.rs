@@ -374,6 +374,9 @@ pub enum LastChange {
         op: Operator,
         forward: bool,
         inserted: Option<String>,
+        /// The explicit register the original change used (`"acgn`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
     },
     /// `R{text}<Esc>` — replace (overstrike) mode. `.` re-overtypes `text`.
     ReplaceMode { text: String },
@@ -392,6 +395,9 @@ pub enum LastChange {
         op: Operator,
         extent: VisualExtent,
         inserted: Option<String>,
+        /// The explicit register the original change used (`vll"ad`), if
+        /// any. See [`LastChange::LineOp::register`].
+        register: Option<char>,
     },
     /// Charwise (`v`) / linewise (`V`) `r{ch}` — dot-repeat re-replaces a
     /// same-SIZE region anchored at the cursor (`:h v_.`), mirroring

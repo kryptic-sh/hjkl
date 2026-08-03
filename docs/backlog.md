@@ -461,12 +461,16 @@ still open:
 - **The `:s` curswant fix has no oracle case.** It is covered by two unit tests
   in `hjkl-engine`'s `substitute` module, because the corpus driver cannot
   replay `:` keys. A corpus case would need the ex layer driven some other way.
-- **`LastChange::GnOp`, `VisualOp` and the visual-block variants were not
-  checked** for the same missing field. (`CharDel` was, and did have it: fixed
-  2026-08-04. The half of that entry claiming `do_char_delete` used `set_yank`
-  and ignored `"reg` was already stale when it was written — the live `x` / `X`
-  path routes through `record_delete` with the pending register, and only the
-  dot-repeat dropped it.)
+- **The whole `LastChange` register sweep is done (2026-08-04).** `CharDel`,
+  `GnOp` and `VisualOp` (charwise, linewise and blockwise) all carry a
+  `register` now, so every `.`-repeatable change repeats into the register it
+  named. Two things the original entry got wrong, recorded because they are the
+  kind of claim that gets re-derived: the live `x` / `X` path already honoured
+  `"reg` (it routes through `record_delete`, not `set_yank`), and the visual
+  variants had a bigger defect underneath — `"` armed the register chord in
+  Normal mode ONLY, so `vll"ad` did nothing at all. `VisualReplace` and the
+  visual-block replace variant are deliberately not in the sweep: `r` writes no
+  register in vim.
 
 ### 1.6 Cursor-move API migration
 

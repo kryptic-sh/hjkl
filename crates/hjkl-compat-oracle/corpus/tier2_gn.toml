@@ -51,3 +51,16 @@ initial_cursor = [0, 0]
 keys = "*cgnDOG<Esc>"
 expected_buffer = "cat catalog DOG\n"
 expected_mode = "normal"
+
+# `.` after `"acgn` changes into `"a` again (`:h redo-register`). The search
+# pattern matches different text each time, so a repeat that fell back to the
+# unnamed register would leave `"a` holding "bar".
+[[cases]]
+name = "gn_dot_repeat_reuses_named_register"
+initial_buffer = "foo bar foo baz foo\n"
+initial_cursor = [0, 0]
+keys = "/ba.<CR>\"acgnX<Esc>."
+expected_buffer = "foo X foo X foo\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+expected_register = ['a', "baz"]
