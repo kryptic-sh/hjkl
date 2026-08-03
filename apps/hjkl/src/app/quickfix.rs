@@ -691,11 +691,16 @@ impl crate::app::App {
         let backend = detect_grep_backend();
 
         let output = match backend {
+            // `RG_IGNORE_ARGS` is what keeps `:grep` searching the same files
+            // the explorer lists and the pickers find — see `hjkl_fs::project`.
+            // grep cannot read gitignore rules, so that backend only
+            // approximates the policy, excluding `.git` and nothing else.
             GrepBackend::Rg => std::process::Command::new("rg")
+                .args(hjkl_fs::project::RG_IGNORE_ARGS)
                 .args(["--json", "--no-config", "--smart-case", "--", pat, root_str])
                 .output(),
             GrepBackend::Grep => std::process::Command::new("grep")
-                .args(["-rnH", "--", pat, root_str])
+                .args(["-rnH", "--exclude-dir=.git", "--", pat, root_str])
                 .output(),
             GrepBackend::Findstr => std::process::Command::new("findstr")
                 // `/c:` binds the pattern as the search string so a pattern

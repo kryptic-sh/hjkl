@@ -31,6 +31,10 @@
 //! - [`identity`] — [`guard_not_swapped`] proves an open handle is still the
 //!   object a path names, and [`hardlink_count`] reports how many names share
 //!   that object.
+//! - [`project`] — which files on disk are part of the user's project. The one
+//!   gitignore-and-dotfiles policy behind hjkl's file tree, its file and grep
+//!   pickers, and `:grep`, so those four cannot disagree about whether a file
+//!   exists.
 //!
 //! # Choosing the write
 //!
@@ -120,6 +124,7 @@ pub mod identity;
 pub mod lock;
 pub mod open;
 pub mod path;
+pub mod project;
 pub mod read;
 
 // The flat re-exports are the common vocabulary; the modules stay public for

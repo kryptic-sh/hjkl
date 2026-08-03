@@ -398,6 +398,9 @@ impl PickerLogic for RgSource {
                 match backend {
                     GrepBackend::Rg => {
                         let child = std::process::Command::new("rg")
+                            // Same file set the explorer and the file picker
+                            // show — see `hjkl_fs::project`.
+                            .args(hjkl_fs::project::RG_IGNORE_ARGS)
                             .args([
                                 "--json",
                                 "--no-config",
@@ -490,6 +493,10 @@ impl PickerLogic for RgSource {
                                 "-rn",
                                 "-E",
                                 "--color=never",
+                                // grep cannot read gitignore rules, so this
+                                // backend only approximates `hjkl_fs::project`
+                                // — `.git` is the one exclusion it can express.
+                                "--exclude-dir=.git",
                                 "--",
                                 &q,
                                 root.to_str().unwrap_or("."),

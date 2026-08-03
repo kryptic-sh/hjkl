@@ -1549,6 +1549,7 @@ name = "hjkl-fs"
 version = "0.40.0"
 dependencies = [
  "hjkl-xdg",
+ "ignore",
  "libc",
  "tempfile",
  "windows-sys 0.61.2",
@@ -1707,6 +1708,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-form",
+ "hjkl-fs",
  "hjkl-fuzzy",
  "ignore",
  "regex",

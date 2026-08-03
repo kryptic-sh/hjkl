@@ -44,13 +44,15 @@ pub struct ExplorerTree {
     /// buffer folds. Indexed 1:1 with buffer lines after `render_text`.
     pub(crate) nodes: Vec<ExplorerNode>,
     /// When `false`, entries whose name starts with `.` are hidden. Defaults to
-    /// `true` (dotfiles shown). `H` toggles this. The `.git` dir is always
-    /// skipped regardless.
+    /// `true` (dotfiles shown), which is [`hjkl_fs::project`]'s policy and so
+    /// what the file picker lists and both grep paths search; `H` narrows the
+    /// tree below that for the session. The `.git` dir is skipped regardless.
     pub(crate) show_hidden: bool,
-    /// When `true` (default), entries matched by the repo's git ignore rules
-    /// (`.gitignore`, `.git/info/exclude`, core.excludesfile) are hidden — this
-    /// also prunes ignored dirs (e.g. `target/`, `node_modules/`) from the walk,
-    /// keeping it fast. `I` toggles this. No effect outside a repo.
+    /// When `true` (default), the tree lists exactly what [`hjkl_fs::project`]
+    /// calls the project — ignore-file rules honoured, ignored directories
+    /// pruned rather than walked. `I` turns that off to reveal ignored entries,
+    /// which is the one explorer view WIDER than the shared policy: those paths
+    /// are deliberately not listed by the pickers or searched by `:grep`.
     pub(crate) respect_gitignore: bool,
     /// Last-known on-disk git status map (keyed by the same absolute paths as
     /// [`hjkl_app::git::explorer_status_map`] produces). Populated on each
@@ -83,37 +85,40 @@ impl ExplorerTree {
     }
 
     /// Read one directory's children, sorted directories-first then by
-    /// case-insensitive name. The `.git` dir is always skipped; dotfiles are
-    /// filtered unless `show_hidden`; git-ignored entries are filtered when
-    /// `respect_gitignore` and a repo is available (`repo`).
-    fn read_children(&self, dir: &Path, repo: Option<&git2::Repository>) -> Vec<(PathBuf, bool)> {
-        let mut entries: Vec<(PathBuf, bool)> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let p = e.path();
-                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
-                    // Never show the repo internals dir.
-                    if name.as_deref() == Some(".git") {
-                        return None;
-                    }
-                    // Skip dotfiles unless show_hidden.
-                    if !self.show_hidden && name.as_deref().is_some_and(|n| n.starts_with('.')) {
-                        return None;
-                    }
-                    // Skip git-ignored entries (prunes ignored dirs from the walk).
-                    if self.respect_gitignore
-                        && let Some(r) = repo
-                        && r.is_path_ignored(&p).unwrap_or(false)
-                    {
-                        return None;
-                    }
-                    let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-                    Some((p, is_dir))
-                })
-                .collect(),
-            Err(_) => Vec::new(),
+    /// case-insensitive name.
+    ///
+    /// The default listing is [`hjkl_fs::project::list_dir`] — the same
+    /// gitignore-and-dotfiles policy the file picker walks and both grep paths
+    /// search, so a file visible here is a file those can find. The two
+    /// explorer toggles are overrides ON that policy rather than a second
+    /// implementation of it: `H` (`show_hidden = false`) additionally drops
+    /// dotfiles, and `I` (`respect_gitignore = false`) additionally restores
+    /// the ignored entries the shared walk pruned. `.git` stays out either way.
+    fn read_children(&self, dir: &Path) -> Vec<(PathBuf, bool)> {
+        let mut entries: Vec<(PathBuf, bool)> = if self.respect_gitignore {
+            hjkl_fs::project::list_dir(dir)
+        } else {
+            // `I` — show ignored entries too. That is a wider set than any
+            // configuration of the shared walk yields, so it is a plain
+            // directory read with only the `.git` exclusion kept.
+            match std::fs::read_dir(dir) {
+                Ok(rd) => rd
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_name() != hjkl_fs::project::GIT_DIR)
+                    .map(|e| {
+                        let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                        (e.path(), is_dir)
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
         };
+        if !self.show_hidden {
+            entries.retain(|(p, _)| {
+                !p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+            });
+        }
         entries.sort_by(|(a, a_dir), (b, b_dir)| {
             b_dir.cmp(a_dir).then_with(|| {
                 let an = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
@@ -122,15 +127,6 @@ impl ExplorerTree {
             })
         });
         entries
-    }
-
-    /// Open the git repo enclosing `root` for ignore checks. `None` when not in
-    /// a repo or when ignore-honoring is disabled.
-    fn open_repo(&self) -> Option<git2::Repository> {
-        if !self.respect_gitignore {
-            return None;
-        }
-        git2::Repository::discover(&self.root).ok()
     }
 
     /// Recursively append `dir`'s expanded children to `out`.
@@ -146,10 +142,9 @@ impl ExplorerTree {
         depth: usize,
         prefix: &[bool],
         out: &mut Vec<ExplorerNode>,
-        repo: Option<&git2::Repository>,
         status: &HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
     ) {
-        let mut children = self.read_children(dir, repo);
+        let mut children = self.read_children(dir);
 
         // Inject deleted files: paths in the status map whose parent is `dir`
         // and whose status is Deleted, that are not already present on disk.
@@ -199,7 +194,7 @@ impl ExplorerTree {
             if is_dir && self.expanded.contains(&path) {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children(&path, depth + 1, &child_prefix, out, repo, status);
+                self.push_children(&path, depth + 1, &child_prefix, out, status);
             }
         }
     }
@@ -224,8 +219,7 @@ impl ExplorerTree {
         });
         // Always walk the full tree — every node (including children of collapsed
         // dirs) is added to `nodes`. Fold state is managed via `compute_folds`.
-        let repo = self.open_repo();
-        self.push_children(&root, 1, &[], &mut out, repo.as_ref(), &status);
+        self.push_children(&root, 1, &[], &mut out, &status);
         roll_up_dir_status(&mut out);
         self.nodes = out;
     }
@@ -3087,6 +3081,86 @@ mod tests {
             "dotfiles should be shown again after second toggle"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The unification claim, made checkable: the explorer's tree and the
+    /// walk the file picker and both grep paths run must select the same set
+    /// of paths. Anything visible here is findable there and vice versa.
+    ///
+    /// Compared against `hjkl_fs::project::walk_builder` rather than against a
+    /// hand-written expected list, so the two cannot drift apart without this
+    /// failing — a hardcoded list would just be a second policy to keep in
+    /// step.
+    #[test]
+    fn explorer_tree_lists_exactly_what_the_shared_walk_selects() {
+        use std::collections::BTreeSet;
+        let base = std::env::temp_dir().join(format!(
+            "hjkl_explorer_policy_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        // `.gitignore` rules only apply inside a repository — the marker
+        // directory is what arms them, and it must also stay out of the tree.
+        fs::create_dir_all(base.join(".git")).unwrap();
+        fs::write(base.join(".git").join("config"), "x").unwrap();
+        fs::write(base.join(".gitignore"), "target/\nsecret.txt\n").unwrap();
+        fs::create_dir_all(base.join("target")).unwrap();
+        fs::write(base.join("target").join("build.o"), "x").unwrap();
+        fs::create_dir_all(base.join(".github")).unwrap();
+        fs::write(base.join(".github").join("ci.yml"), "x").unwrap();
+        fs::write(base.join(".env.example"), "x").unwrap();
+        fs::write(base.join("secret.txt"), "x").unwrap();
+        fs::write(base.join("main.rs"), "x").unwrap();
+
+        let mut tree = ExplorerTree::new(base.clone());
+        // Expand everything so the lazy tree covers the same depth as the walk.
+        for p in [base.join(".github"), base.join("target")] {
+            tree.expanded.insert(p);
+        }
+        tree.rebuild();
+
+        let from_tree: BTreeSet<String> = tree
+            .nodes
+            .iter()
+            .filter(|n| n.path != base)
+            .map(|n| {
+                n.path
+                    .strip_prefix(&base)
+                    .unwrap_or(&n.path)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let from_walk: BTreeSet<String> = hjkl_fs::project::walk_builder(&base)
+            .build()
+            .filter_map(Result::ok)
+            .filter(|e| e.depth() > 0)
+            .map(|e| {
+                e.path()
+                    .strip_prefix(&base)
+                    .unwrap_or_else(|_| e.path())
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+
+        assert_eq!(from_tree, from_walk);
+        // Spot-check the properties the equality is standing in for, so a
+        // future change that breaks BOTH sides the same way still fails.
+        assert!(from_tree.contains(".env.example"), "{from_tree:?}");
+        assert!(!from_tree.contains("secret.txt"), "{from_tree:?}");
+        assert!(
+            !from_tree.iter().any(|p| p.starts_with("target")),
+            "{from_tree:?}"
+        );
+        assert!(
+            !from_tree
+                .iter()
+                .any(|p| p.starts_with(".git/") || p == ".git"),
+            "{from_tree:?}"
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

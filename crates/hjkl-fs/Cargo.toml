@@ -15,6 +15,11 @@ readme = "README.md"
 [dependencies]
 hjkl-xdg.workspace = true
 
+# The gitignore/hidden-file walk behind `project` — the same crate ripgrep is
+# built on, so the in-process walk and the `rg` shell-out agree by construction
+# rather than by two hand-kept rule sets.
+ignore = "0.4"
+
 # `O_NOFOLLOW` for the write-permission probe. Unix-only; the probe degrades to a
 # plain write-open elsewhere.
 [target.'cfg(unix)'.dependencies]

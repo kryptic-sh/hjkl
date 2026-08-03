@@ -101,19 +101,19 @@ impl PickerLogic for FileSource {
     }
 }
 
-/// Background walker — streams `is_file()` entries into `items`,
-/// gitignore-aware via `ignore::WalkBuilder`.
+/// Background walker — streams `is_file()` entries into `items`, over the
+/// files [`hjkl_fs::project`] considers part of the project.
+///
+/// The policy lives there rather than here because the explorer tree and both
+/// grep paths have to reach the same verdict: a file you can see in the tree
+/// but cannot find in this picker is the bug that shared module exists to stop.
 fn scan_walk(
     root: &Path,
     items: &Arc<Mutex<Vec<PathBuf>>>,
     done: &Arc<AtomicBool>,
     cancel: &Arc<AtomicBool>,
 ) {
-    let walk = ignore::WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .parents(true)
-        .build();
+    let walk = hjkl_fs::project::walk_builder(root).build();
     let mut batch: Vec<PathBuf> = Vec::with_capacity(256);
     let mut total = 0usize;
     const HARD_CAP: usize = 50_000;
@@ -187,5 +187,50 @@ mod tests {
         assert!(status.is_empty(), "unexpected status: {status:?}");
         let preview_path = source.preview_path(idx).expect("preview_path");
         assert!(preview_path.ends_with("notes.txt"));
+    }
+
+    /// Collect every label the source enumerates, or give up after `2s`.
+    fn labels_of(root: &Path) -> Vec<String> {
+        let mut source = FileSource::new(root.to_path_buf());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let handle = source.enumerate(None, Arc::clone(&cancel));
+        if let Some(h) = handle {
+            let _ = h.join();
+        }
+        (0..source.item_count()).map(|i| source.label(i)).collect()
+    }
+
+    /// The picker enumerates what `hjkl_fs::project` calls the project: a
+    /// dotfile is findable, an ignored one is not. Before the policy was
+    /// shared, the first half of this was false — the walk skipped hidden
+    /// files, so a file the explorer showed could not be opened from here.
+    #[test]
+    fn enumerates_dotfiles_and_skips_ignored_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = tmp.path();
+        std::fs::create_dir_all(r.join(".git")).unwrap();
+        std::fs::write(r.join(".git").join("config"), "x").unwrap();
+        std::fs::write(r.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(r.join(".env.example"), "x").unwrap();
+        std::fs::write(r.join("ignored.txt"), "x").unwrap();
+        std::fs::write(r.join("kept.txt"), "x").unwrap();
+
+        let labels = labels_of(r);
+
+        assert!(
+            labels.iter().any(|l| l.contains(".env.example")),
+            "a dotfile must be findable: {labels:?}"
+        );
+        assert!(labels.iter().any(|l| l.contains("kept.txt")), "{labels:?}");
+        assert!(
+            !labels.iter().any(|l| l.contains("ignored.txt")),
+            "gitignored files must not be listed: {labels:?}"
+        );
+        assert!(
+            !labels
+                .iter()
+                .any(|l| l.contains(".git/") || l.contains(".git\\")),
+            "`.git` internals must not be listed: {labels:?}"
+        );
     }
 }

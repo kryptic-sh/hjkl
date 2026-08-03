@@ -8,6 +8,20 @@ this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `project` — one definition of "which files are part of this project", so the
+  explorer tree, the fuzzy file picker, the fuzzy grep picker and `:grep` stop
+  each deciding for themselves. The policy is everything git would show you,
+  plus dotfiles, minus `.git`: ignore-file rules honoured (`.gitignore`,
+  `.ignore`, `.git/info/exclude`, the global excludesfile, and the ones in
+  parent directories), hidden files listed and searched, `.git` always pruned.
+  `walk_builder` serves in-process walkers, `list_dir` the lazy one-level
+  listing a tree view needs, and `RG_IGNORE_ARGS` spells the same rules for
+  callers that shell out to ripgrep — a test asserts the two select the same
+  files rather than leaving it to a comment. Adds an `ignore` dependency, the
+  crate ripgrep itself is built on.
+
 ## [0.40.0] - 2026-08-01
 
 ### Added

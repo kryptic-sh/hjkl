@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The file picker lists hidden files. It walked with `hidden(true)`, so a
+  dotfile the explorer showed could not be opened from the picker at all
+  (`.github/workflows/ci.yml`, `.env.example`, …). It now walks
+  `hjkl_fs::project`, which is also what the explorer lists and both grep paths
+  search.
+- The live-grep source passes `hjkl_fs::project::RG_IGNORE_ARGS` to ripgrep, so
+  grepping reaches the same files. The `grep` fallback gains
+  `--exclude-dir=.git`; it cannot read gitignore rules, so that backend only
+  approximates the policy.
+
 ## [0.40.0] - 2026-08-01
 
 ### Security

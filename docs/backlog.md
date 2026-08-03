@@ -708,6 +708,18 @@ unknown.
   - `vim::text_object_ops`' `reflow_rows` and its bounds helper do the same for
     a `gq` over a row range.
 
+- **The `grep` / `findstr` search backends cannot honour gitignore
+  (2026-08-03).** `hjkl_fs::project` is the one policy behind the explorer, both
+  pickers and `:grep`, and ripgrep reproduces it exactly via `RG_IGNORE_ARGS`
+  (asserted by `rg_args_match_walk_policy`). The fallbacks `detect_grep_backend`
+  picks when ripgrep is absent cannot: `grep` and `findstr` have no notion of
+  ignore files, so they search ignored paths too. Both now exclude `.git`
+  (`--exclude-dir=.git` for grep; findstr has no equivalent and excludes
+  nothing), which is as close as those tools reach. Closing it properly means
+  enumerating with `project::walk_builder` and passing the file list to the
+  backend — bounded argv, and awkward for the streaming live-grep source, so it
+  was not attempted. Users with ripgrep installed are unaffected.
+
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
   not checked for 0.40.0. Either fold the cheap ones into the release gate or
