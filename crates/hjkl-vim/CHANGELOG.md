@@ -22,6 +22,23 @@ and this project adheres to
   on the editor now (`Editor::push_error`), which the host drains. Both the
   byte-budget checks and the arithmetic-overflow guards report it — the user's
   ask is the same size either way. An empty register is still silent, as in vim.
+- **Blockwise `>` / `<` shift at the block's left column.** They fell through to
+  the linewise `indent_rows` / `outdent_rows` under a comment claiming vim did
+  the same — it does not: `<C-v>jl>` with the block starting at column 2 turns
+  `"abcdef"` into `"ab    cdef"`, where the linewise fallback produced
+  `"    abcdef"`. New `indent_block` / `outdent_block` do the real thing: the
+  fill is built from the block's DISPLAY column so `noexpandtab` emits a tab
+  only where one actually reaches the next tab stop, a row too short to reach
+  the block column (or an empty one) is skipped, and an outdent splits a tab
+  that straddles the boundary — `"ab\tcd"` outdented from column 2 at
+  `tabstop=8 shiftwidth=4` becomes `"ab  cd"`. A row with no whitespace at the
+  block column is left alone. Six oracle cases; the differential fuzzer at seed
+  777 drops from 78 to 77.
+
+  Not fixed, and tracked in `docs/backlog.md`: `<C-v>iw<` still outdents the
+  whole line, because a text object collapses hjkl out of blockwise visual
+  before the operator runs. That is a separate defect from the shift geometry.
+
 - **Visual mode takes a `"reg` selector.** `"` opened the register chord only in
   Normal mode, so in a selection the `"` fell through unconsumed, the register
   letter armed the around-text-object chord instead, and the operator key was

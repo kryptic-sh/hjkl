@@ -490,16 +490,25 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             );
         }
         Operator::Indent | Operator::Outdent => {
-            // VisualBlock `>` / `<` falls back to linewise indent over
-            // the block's row range — vim does the same (column-wise
-            // indent/outdent doesn't make sense).
+            // VisualBlock `>` / `<` shifts at the BLOCK's left column, not at
+            // the start of the line. This used to fall through to the
+            // linewise `indent_rows` / `outdent_rows` under a comment
+            // claiming vim did the same; it does not — `<C-v>jl>` with the
+            // block starting at column 2 turns "abcdef" into "ab    cdef",
+            // where the linewise fallback produced "    abcdef".
             ed.push_undo();
             if op == Operator::Indent {
-                indent_rows(ed, top, bot, count.max(1));
+                indent_block(ed, top, bot, left, count.max(1));
             } else {
-                outdent_rows(ed, top, bot, count.max(1));
+                outdent_block(ed, top, bot, left, count.max(1));
             }
             vim_mut(ed).mode = Mode::Normal;
+            record_visual_last_change(
+                ed,
+                op,
+                block_extent(top, bot, left, right, to_eol),
+                register,
+            );
         }
         Operator::Fold => unreachable!("Visual zf takes its own path"),
         Operator::Reflow => {

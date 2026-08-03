@@ -728,3 +728,81 @@ expected_buffer = "ad\n\nkl\nmnop\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
 expected_register = ['a', "eh\nij"]
+
+# ── Blockwise `>` / `<` shift at the block's left column ───────────────────
+#
+# Not at the start of the line: `<C-v>jl>` with the block starting at column
+# 2 turns "abcdef" into "ab    cdef", where a linewise indent would produce
+# "    abcdef". hjkl used to fall through to the linewise `indent_rows` /
+# `outdent_rows` under a comment claiming vim did the same. Every expectation
+# below measured on neovim 0.12.4.
+
+[[cases]]
+name = "visual_block_indent_at_block_column"
+initial_buffer = "abcdef\nghijkl\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jl>"
+expected_buffer = "ab    cdef\ngh    ijkl\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+[[cases]]
+name = "visual_block_indent_counted"
+initial_buffer = "abcdef\nghijkl\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jl2>"
+expected_buffer = "ab        cdef\ngh        ijkl\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# A row too short to reach the block's left column is skipped — as is an
+# empty one.
+[[cases]]
+name = "visual_block_indent_skips_short_rows"
+initial_buffer = "abcdef\nx\nghijkl\n"
+initial_cursor = [0, 2]
+keys = "<C-v>2jl>"
+expected_buffer = "ab    cdef\nx\ngh    ijkl\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+[[cases]]
+name = "visual_block_indent_skips_empty_rows"
+initial_buffer = "abcdef\n\nghijkl\n"
+initial_cursor = [0, 2]
+keys = "<C-v>2jl>"
+expected_buffer = "ab    cdef\n\ngh    ijkl\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+[[cases]]
+name = "visual_block_outdent_at_block_column"
+initial_buffer = "ab    cd\nef    gh\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jl<"
+expected_buffer = "abcd\nefgh\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Less whitespace than one shiftwidth at the block column: all of it goes,
+# and a row with none there is untouched.
+[[cases]]
+name = "visual_block_outdent_takes_what_is_there"
+initial_buffer = "ab cd\nabefgh\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jl<"
+expected_buffer = "abcd\nabefgh\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true

@@ -386,6 +386,121 @@ pub fn indent_rows<H: hjkl_engine::types::Host>(
     ed.restore(&lines, (top, 0));
     move_first_non_whitespace(ed);
 }
+/// Render `width` display columns of indent that will START at display
+/// column `at_col`, honouring `expandtab` / `tabstop`.
+///
+/// Under `noexpandtab` this is NOT `width / tabstop` tabs plus a remainder:
+/// a tab advances to the next tab STOP, so how many columns it is worth
+/// depends on where it starts. Measured against neovim 0.12.4 — inserting 8
+/// columns at column 2 with `tabstop=8` gives one tab (to column 8) and two
+/// spaces, not one tab and no spaces.
+fn indent_fill(at_col: usize, width: usize, expandtab: bool, tabstop: usize) -> String {
+    if expandtab {
+        return " ".repeat(width);
+    }
+    let tabstop = tabstop.max(1);
+    let target = at_col + width;
+    let mut out = String::new();
+    let mut col = at_col;
+    while col < target {
+        let next_stop = col + tabstop - col % tabstop;
+        if next_stop <= target {
+            out.push('\t');
+            col = next_stop;
+        } else {
+            out.push_str(&" ".repeat(target - col));
+            col = target;
+        }
+    }
+    out
+}
+
+/// Blockwise `>` — insert `count * shiftwidth` display columns at the
+/// block's LEFT column on every row it covers.
+///
+/// vim does NOT treat a blockwise `>` as a linewise indent (hjkl did, with a
+/// comment claiming vim agreed): `<C-v>jl>` with the block starting at column
+/// 2 turns `"abcdef"` into `"ab    cdef"`, not `"    abcdef"`. A row too
+/// short to reach `left` is skipped, as is an empty one — both verified
+/// against neovim 0.12.4.
+pub fn indent_block<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    top: usize,
+    bot: usize,
+    left: usize,
+    count: usize,
+) {
+    ed.sync_buffer_content_from_textarea();
+    let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
+    let expandtab = ed.settings().expandtab;
+    let tabstop = ed.settings().tabstop.max(1);
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
+    let bot = bot.min(lines.len().saturating_sub(1));
+    for line in lines.iter_mut().take(bot + 1).skip(top) {
+        if line.chars().count() < left {
+            continue;
+        }
+        let at_col = hjkl_buffer::geom::char_col_to_visual_col(line, left, tabstop);
+        let byte = line.char_indices().nth(left).map_or(line.len(), |(i, _)| i);
+        line.insert_str(byte, &indent_fill(at_col, width, expandtab, tabstop));
+    }
+    ed.restore(&lines, (top, left));
+}
+
+/// Blockwise `<` — remove up to `count * shiftwidth` display columns of
+/// whitespace starting AT the block's left column.
+///
+/// A tab that straddles the boundary is SPLIT: with `tabstop=8` and
+/// `shiftwidth=4`, `"ab\tcd"` outdented from column 2 becomes `"ab  cd"` —
+/// the tab was worth six columns there, four came off, two remain. A row
+/// with no whitespace at that column is left alone, which is what makes
+/// `<C-v>iw<` on `"\t(x).[y]"` a no-op. Verified against neovim 0.12.4.
+pub fn outdent_block<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    top: usize,
+    bot: usize,
+    left: usize,
+    count: usize,
+) {
+    ed.sync_buffer_content_from_textarea();
+    let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
+    let tabstop = ed.settings().tabstop.max(1);
+    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
+    let bot = bot.min(lines.len().saturating_sub(1));
+    for line in lines.iter_mut().take(bot + 1).skip(top) {
+        if line.chars().count() < left {
+            continue;
+        }
+        let start_col = hjkl_buffer::geom::char_col_to_visual_col(line, left, tabstop);
+        let target = start_col + width;
+        let start_byte = line.char_indices().nth(left).map_or(line.len(), |(i, _)| i);
+        let mut col = start_col;
+        let mut end_byte = start_byte;
+        let mut leftover = 0usize;
+        for ch in line[start_byte..].chars() {
+            if !matches!(ch, ' ' | '\t') || col >= target {
+                break;
+            }
+            let next_col = if ch == '\t' {
+                col + tabstop - col % tabstop
+            } else {
+                col + 1
+            };
+            end_byte += ch.len_utf8();
+            if next_col > target {
+                // The tab straddles the boundary — keep the columns past it.
+                leftover = next_col - target;
+                break;
+            }
+            col = next_col;
+        }
+        if end_byte > start_byte {
+            line.replace_range(start_byte..end_byte, &" ".repeat(leftover));
+        }
+    }
+    ed.restore(&lines, (top, left));
+}
+
 /// Remove up to `count * shiftwidth` leading spaces (or tabs) from
 /// each row in `[top, bot]`. Rows with less leading whitespace have
 /// all their indent stripped, not clipped to zero length.

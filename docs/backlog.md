@@ -330,9 +330,9 @@ reproductions for resolved entries are preserved in the supporting-evidence
 appendix below, marked as fixed. Preserve each fixed case in the tier-2
 compatibility corpus and verify it against nvim before changing expectations.
 
-| Priority | Task                                                                                                               | Where / acceptance criterion                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| Medium   | Implement blockwise non-delete operators with block geometry, including `H`, `L`, and `gE` motion/cursor behavior. | 21 residual cases; `<C-v>iw<` on `"\t(x).[y]"` must remain unchanged like nvim. |
+| Priority | Task                                                                                                                                                                           | Where / acceptance criterion                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Medium   | Remaining blockwise non-delete divergences: a TEXT OBJECT in blockwise visual, and `H` / `L` / `gE` motion + cursor behaviour. Blockwise `>` / `<` geometry landed 2026-08-04. | `<C-v>iw` leaves hjkl in charwise `visual` where nvim stays `visual_block` — see §1.5b. |
 
 The paragraph/WORD landings, and the `V}u2)1gUiW` composite, were fixed on
 2026-08-02 (`motions::move_paragraph_next` / `move_paragraph_prev` rewritten on
@@ -397,11 +397,26 @@ machine that has no neovim — including CI lanes that do not install it. The
 (`diff.rs::run_single`), which closed the "documentation-only field" half of
 this, but nothing compares hjkl against the authored values on its own.
 
-**The differential fuzzer still reports 78 divergences at seed 777** (89 before
-the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure rule and
-78 with the backward-word-motion rewrite, both 2026-08-04). The bulk are the
-known-excluded classes named in §5 (`u` / undo against the seeded nvim fixture,
-blockwise `<C-v>` non-delete operators) plus the entries above.
+**A text object in blockwise visual collapses the block to charwise
+(2026-08-04).** `<C-v>iw` leaves hjkl in charwise `visual` where nvim stays
+`visual_block`: `editor_ext::visual_text_obj_extend` sets `visual_anchor` and
+the cursor but never `block_anchor` / `block_vcol`, which are what
+`block_bounds` reads, and the charwise arm of `apply_visual_operator` then runs
+the operator. That is why `<C-v>iw<` on `"\t(x).[y]"` still outdents the whole
+line — the blockwise `>` / `<` fix underneath it is correct and reached by every
+other blockwise path, but this case never gets there.
+
+Found while fixing the block-column shift; it is the other half of the
+"blockwise non-delete operators" item and wants its own change, since a text
+object has to yield a RECTANGLE (vim keeps the block's rows and takes the
+object's columns) rather than a charwise range.
+
+**The differential fuzzer still reports 77 divergences at seed 777** (89 before
+the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure rule, 78
+with the backward-word-motion rewrite and 77 with the blockwise-shift geometry,
+all 2026-08-04). The bulk are the known-excluded classes named in §5 (`u` / undo
+against the seeded nvim fixture, blockwise `<C-v>` non-delete operators) plus
+the entries above.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
@@ -926,6 +941,11 @@ on the indent operators and on `H` / `L` / `gE` motions:
 hjkl: "(x).[y]"     ← outdented the whole line
 nvim: "\t(x).[y]"   ← unchanged
 ```
+
+This exact case is now a TEXT-OBJECT bug, not a shift-geometry one: blockwise
+`>` / `<` shift at the block's left column since 2026-08-04, but `<C-v>iw`
+collapses hjkl to charwise visual before the operator runs, so this case never
+reaches the blockwise arm. See §1.5b.
 
 `<C-v>H>` also still diverges on cursor. Blockwise `~` is correct.
 

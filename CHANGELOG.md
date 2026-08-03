@@ -61,6 +61,14 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
+- **Blockwise `>` and `<` shift at the block's column, not the line's.** `<C-v>`
+  selecting a rectangle from column 2 and pressing `>` indented the whole line —
+  hjkl treated a blockwise shift as a linewise one. It now inserts (or removes)
+  the shift where the block actually is, so `"abcdef"` becomes `"ab    cdef"`.
+  Rows too short to reach the block's column are left alone, a tab that
+  straddles the outdent boundary is split, and a row with no whitespace at that
+  column is untouched.
+
 - **A paste rejected for being too large says so.** `p` / `P` of a register past
   the 64 MiB budget did nothing and reported nothing — indistinguishable from
   pasting an empty register. It now shows vim's own
