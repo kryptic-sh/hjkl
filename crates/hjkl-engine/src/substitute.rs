@@ -220,6 +220,32 @@ pub fn parse_flags(raw_flags: &str) -> Result<(SubstFlags, Option<usize>), Subst
     Ok((flags, count))
 }
 
+/// Rebase marks / global marks / jumplist / folds after a substitute's
+/// whole-content `replace_all`. `replace_all` swaps the rope outright and only
+/// clamps the cursor — unlike `mutate_edit` it never reaches
+/// `Editor::shift_marks_after_edit`, so a `\r` (newline) in a replacement that
+/// splits rows leaves `'a`-style marks, folds and jump entries below the change
+/// pointing at stale rows.
+///
+/// Each pre-substitute row that gained newlines is its own edit band: a row `i`
+/// whose replacement contains `k` newlines shifts every position below it by
+/// `k` (rows can only grow here — the substitution joins per-line entries, so
+/// `k >= 0`). Apply the bands in DESCENDING row order so earlier row indices
+/// stay valid: a higher band only moves rows below itself and never touches the
+/// index of a lower band, and the per-band rebase is order-independent for the
+/// marks it does shift (the shifts are additive).
+fn rebase_marks_after_row_growth<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    new_lines: &[String],
+) {
+    for (i, line) in new_lines.iter().enumerate().rev() {
+        let delta = line.matches('\n').count() as isize;
+        if delta != 0 {
+            ed.shift_marks_after_edit(i, delta);
+        }
+    }
+}
+
 /// Apply a parsed substitute command to `line_range` (0-based inclusive)
 /// in the editor's buffer.
 ///
@@ -354,6 +380,11 @@ pub fn apply_substitute<H: crate::types::Host>(
 
     // Apply the new content in one shot.
     ed.buffer_mut().replace_all(&new_lines.join("\n"));
+
+    // `replace_all` does not rebase marks/jumplist/folds (only `mutate_edit`
+    // does); a `\r` in the replacement that adds rows would leave positions
+    // below the change stale. Rebase per changed pre-substitute row.
+    rebase_marks_after_row_growth(ed, &new_lines);
 
     // Cursor lands on the first non-blank of the last changed line (vim). Clamp
     // the row defensively in case of any off-by-one at buffer edges.
@@ -573,6 +604,9 @@ pub fn apply_collected_matches<H: crate::types::Host>(
 
     if applied > 0 {
         ed.buffer_mut().replace_all(&lines_vec.join("\n"));
+        // Same rebase as `apply_substitute`: a `\r` in an accepted replacement
+        // adds rows, and `replace_all` alone leaves marks/jumplist/folds stale.
+        rebase_marks_after_row_growth(ed, &lines_vec);
         if let Some(row) = last_changed_row {
             // `row` is a PRE-split index into `lines_vec`: a `\r`/newline in
             // an accepted replacement can turn one entry into several
@@ -1121,6 +1155,60 @@ mod tests {
         assert_eq!(buf_line(&e, 2), "X");
         assert_eq!(out.last_row, Some(2));
         assert_eq!(e.buffer().cursor().row, 2);
+    }
+
+    /// Regression: `:s/a/b\r/` over the rows ABOVE a marked line adds one row
+    /// per matched line. `replace_all` (unlike `mutate_edit`) never rebases
+    /// marks, so the mark used to keep its stale pre-substitute row — `'a`
+    /// landed on the row that slid down, not the marked text. Must FAIL on the
+    /// old code.
+    #[test]
+    fn apply_backslash_r_rebases_marks_below_change() {
+        // 10 rows; mark 'a' on row 8 ("X"). Rows 0..=7 each contain 'a'.
+        let mut e = editor_with("a\na\na\na\na\na\na\na\nX\nlast");
+        e.set_mark('a', (8, 0));
+        let cmd = parse_substitute("/a/b\\r/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=7).unwrap();
+        assert_eq!(out.replacements, 8);
+        // Each matched row 0..=7 splits into two ("b", ""), so row 8 → 16.
+        assert_eq!(
+            e.mark('a'),
+            Some((16, 0)),
+            "mark below the substitution must shift by the rows added above it"
+        );
+        assert_eq!(buf_line(&e, 16), "X", "the marked text now lives on row 16");
+    }
+
+    /// A substitute with no `\r` in the replacement changes no row count, so
+    /// marks must be left exactly where they were.
+    #[test]
+    fn apply_no_newline_substitute_leaves_marks_untouched() {
+        let mut e = editor_with("a\na\na\na\na\na\na\na\nX\nlast");
+        e.set_mark('a', (8, 0));
+        let cmd = parse_substitute("/a/b/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=7).unwrap();
+        assert_eq!(out.replacements, 8);
+        assert_eq!(e.mark('a'), Some((8, 0)), "delta 0 must not move the mark");
+    }
+
+    /// Same rebase regression for the `:s///c` confirm path
+    /// (`apply_collected_matches`), which has its own `replace_all`.
+    #[test]
+    fn apply_collected_matches_backslash_r_rebases_marks_below_change() {
+        let mut e = editor_with("a\na\na\na\na\na\na\na\nX\nlast");
+        e.set_mark('a', (8, 0));
+        let cmd = parse_substitute("/a/b\\r/").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=7).unwrap();
+        assert_eq!(matches.len(), 8);
+        let accepted = vec![true; matches.len()];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 8);
+        assert_eq!(
+            e.mark('a'),
+            Some((16, 0)),
+            "confirm-path mark must shift by the rows added above it"
+        );
+        assert_eq!(buf_line(&e, 16), "X");
     }
 
     #[test]

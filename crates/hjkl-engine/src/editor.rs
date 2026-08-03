@@ -2777,7 +2777,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// `edit_start` changes the buffer's row count by `delta` (positive
     /// for inserts, negative for deletes). Marks tied to a deleted row
     /// are dropped; marks past the affected band shift by `delta`.
-    fn shift_marks_after_edit(&mut self, edit_start: usize, delta: isize) {
+    ///
+    /// `pub(crate)` so the substitute applicator (`substitute.rs`) can rebase
+    /// positions after its whole-content `replace_all`, which — unlike this
+    /// method's `mutate_edit` caller — never reaches here on its own.
+    pub(crate) fn shift_marks_after_edit(&mut self, edit_start: usize, delta: isize) {
         if delta == 0 {
             return;
         }
