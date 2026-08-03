@@ -169,7 +169,11 @@ pub fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     {
         ed.record_yank_to_host(text.clone());
         ed.set_yank_linewise(false);
-        ed.set_yank(text);
+        // `record_delete`, not `set_yank`: `"aD` / `"aC` must write the named
+        // register, and an unnamed `D` is a small delete, so vim also puts it
+        // in `"-`. `set_yank` reached neither.
+        let target = vim_mut(ed).pending_register.take();
+        ed.record_delete(text, false, target);
     }
     buf_set_cursor_pos(ed.buffer_mut(), cursor);
 }

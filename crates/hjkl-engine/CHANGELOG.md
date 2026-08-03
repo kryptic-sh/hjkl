@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `:s` no longer leaves `curswant` pointing at the pre-substitute column, so the
+  next `j` / `k` aims at the column the substitute landed on. Both
+  `substitute::apply_substitute` and `substitute::apply_collected_matches` (the
+  `c` confirm path) moved the cursor with `set_cursor`, which does not reset
+  `Editor::sticky_col`; they now use `Editor::jump_cursor` like every other
+  explicit jump. Verified against neovim 0.12.4: `$` on row 0 of
+  `"abcdefgh\nab\nabcdefgh"`, then `:2s/ab/XX/`, then `j`, lands on `(2, 0)`.
+
 - `motions::move_paragraph_next` / `move_paragraph_prev` (`}` / `{`) are a
   faithful port of vim's `findpar` instead of an approximation. Three behaviours
   change: `}` in the final paragraph now lands on the **last character** of the

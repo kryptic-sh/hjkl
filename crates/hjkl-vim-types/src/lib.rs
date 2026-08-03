@@ -303,6 +303,9 @@ pub enum LastChange {
         motion: Motion,
         count: usize,
         inserted: Option<String>,
+        /// The explicit register the original change used (`"adw`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
     },
     /// Operator over a text-object.
     OpTextObj {
@@ -310,6 +313,9 @@ pub enum LastChange {
         obj: TextObject,
         inner: bool,
         inserted: Option<String>,
+        /// The explicit register the original change used (`"adiw`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
     },
     /// `dd`, `cc`, `yy` with a count.
     LineOp {
@@ -337,9 +343,17 @@ pub enum LastChange {
         cursor_after: bool,
         /// `]p` / `[p` — reindent the pasted block to the current line.
         reindent: bool,
+        /// The explicit register the original paste read (`"ap`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
     },
     /// `D` (delete to EOL).
-    DeleteToEol { inserted: Option<String> },
+    DeleteToEol {
+        inserted: Option<String>,
+        /// The explicit register the original delete wrote (`"aD`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
+    },
     /// `o` / `O` + the inserted text.
     OpenLine { above: bool, inserted: String },
     /// `i`/`I`/`a`/`A` + inserted text.

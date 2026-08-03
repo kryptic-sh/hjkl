@@ -168,6 +168,7 @@ pub fn substitute_char_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
+    let register = vim(ed).pending_register;
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     for _ in 0..count.max(1) {
@@ -189,6 +190,7 @@ pub fn substitute_char_bridge<H: hjkl_engine::types::Host>(
             motion: Motion::Right,
             count: count.max(1),
             inserted: None,
+            register,
         });
     }
 }
@@ -209,13 +211,16 @@ pub fn substitute_line_bridge<H: hjkl_engine::types::Host>(
         });
     }
 }
-/// `D` — delete from the cursor to end-of-line, writing to the unnamed
-/// register. `[count]D` extends the deletion down `count-1` lines (equivalent
-/// to `d[count]$`). Cursor parks on the new last char. Records for dot-repeat.
+/// `D` — delete from the cursor to end-of-line, writing to the `"reg` register
+/// when one was named and the unnamed / `"-` pair otherwise. `[count]D` extends
+/// the deletion down `count-1` lines (equivalent to `d[count]$`). Cursor parks
+/// on the new last char. Records for dot-repeat.
 pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
+    // Peeked before the delete consumes it — see `operator::apply_op_double`.
+    let register = vim(ed).pending_register;
     if count <= 1 {
         ed.push_undo();
         delete_to_eol(ed);
@@ -224,7 +229,10 @@ pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
         apply_op_with_motion(ed, Operator::Delete, &Motion::LineEnd, count);
     }
     if !vim(ed).replaying {
-        vim_mut(ed).last_change = Some(LastChange::DeleteToEol { inserted: None });
+        vim_mut(ed).last_change = Some(LastChange::DeleteToEol {
+            inserted: None,
+            register,
+        });
     }
 }
 /// `C` — change from the cursor to end-of-line (delete then enter Insert).
@@ -236,18 +244,30 @@ pub fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
 ) {
     let count = count.max(1);
     if count <= 1 {
+        // Stash the register before `delete_to_eol` consumes it; the insert-exit
+        // handler rebuilds this `LastChange` to add the typed text and carries
+        // the register across.
+        let register = vim(ed).pending_register;
         ed.push_undo();
         delete_to_eol(ed);
+        if !vim(ed).replaying {
+            vim_mut(ed).last_change = Some(LastChange::DeleteToEol {
+                inserted: None,
+                register,
+            });
+        }
         begin_insert_noundo(ed, 1, InsertReason::DeleteToEol);
     } else {
         // Stash last_change before the operation so AfterChange insert-exit
         // can fill in the `inserted` text for dot-repeat.
         if !vim(ed).replaying {
+            let register = vim(ed).pending_register;
             vim_mut(ed).last_change = Some(LastChange::OpMotion {
                 op: Operator::Change,
                 motion: Motion::LineEnd,
                 count,
                 inserted: None,
+                register,
             });
         }
         apply_op_with_motion(ed, Operator::Change, &Motion::LineEnd, count);
@@ -332,12 +352,16 @@ pub fn paste_bridge<H: hjkl_engine::types::Host>(
     reindent: bool,
 ) {
     let count = count.clamp(1, MAX_COUNT);
+    // Peeked before `do_paste` consumes it, so `"ap` then `.` pastes register
+    // `a` again rather than falling back to the unnamed one.
+    let register = vim(ed).pending_register;
     if do_paste(ed, before, count, cursor_after, reindent) && !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::Paste {
             before,
             count,
             cursor_after,
             reindent,
+            register,
         });
     }
 }

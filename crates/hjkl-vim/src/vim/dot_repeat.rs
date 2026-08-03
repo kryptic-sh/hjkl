@@ -55,8 +55,10 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             motion,
             count,
             inserted,
+            register,
         } => {
             let total = scaled(count.max(1));
+            vim_mut(ed).pending_register = register;
             apply_op_with_motion(ed, op, &motion, total);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
@@ -67,9 +69,11 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             obj,
             inner,
             inserted,
+            register,
         } => {
             // Dot-repeat replays the text object at count 1 (the original
             // count is not retained in `LastChange::OpTextObj`).
+            vim_mut(ed).pending_register = register;
             apply_op_with_text_object(ed, op, obj, inner, 1);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
@@ -119,7 +123,9 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             count,
             cursor_after,
             reindent,
+            register,
         } => {
+            vim_mut(ed).pending_register = register;
             do_paste(ed, before, scaled(count), cursor_after, reindent);
         }
         LastChange::GnOp {
@@ -230,9 +236,10 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             }
             ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
         }
-        LastChange::DeleteToEol { inserted } => {
+        LastChange::DeleteToEol { inserted, register } => {
             use hjkl_buffer::{Edit, Position};
             ed.push_undo();
+            vim_mut(ed).pending_register = register;
             delete_to_eol(ed);
             if let Some(text) = inserted {
                 let cursor = ed.cursor();

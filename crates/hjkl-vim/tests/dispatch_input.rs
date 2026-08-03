@@ -965,3 +965,51 @@ fn block_paste_past_eof_preserves_the_trailing_newline() {
         );
     }
 }
+
+/// `"a` before a change names the register the change writes, and `.` must
+/// reuse it rather than falling back to the unnamed one (`:h redo-register`).
+/// Each expectation below was taken from neovim 0.12.4 with
+/// `nvim --headless -u NONE -c 'normal! <keys>'` over the same seed.
+#[test]
+fn dot_repeat_reuses_the_explicit_register() {
+    // `unnamed` is loaded with something distinguishable first, so a fallback
+    // to it is visible in the register rather than only in the buffer.
+    for (keys, want_a) in [
+        ("\"adw.", "bravo "),
+        ("\"adiw.", " "),
+        ("\"aD.", "alpha bravo charlie delta"),
+        ("\"adfa.", " bra"),
+    ] {
+        let mut e = editor_with("alpha bravo charlie delta\nsecond line here");
+        let got = dispatch_and_read_reg_a(&mut e, keys);
+        assert_eq!(got, want_a, "register a after {keys:?}");
+    }
+}
+
+/// `"aD` / `"aC` write the named register at all — they used to reach only the
+/// unnamed one. nvim: `"aD` on `"alpha bravo"` leaves `a` holding the line.
+#[test]
+fn delete_to_eol_honours_an_explicit_register() {
+    let mut e = editor_with("alpha bravo");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "\"aD"), "alpha bravo");
+
+    let mut e = editor_with("alpha bravo");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "\"aC"), "alpha bravo");
+}
+
+/// `"ap` then `.` pastes register `a` twice. nvim leaves
+/// `"alpha bravo\nalpha alpha "`; the unnamed register holds `"bravo"`, so a
+/// fallback shows up as `"alpha bravo"` on the second row.
+#[test]
+fn dot_repeat_paste_reuses_the_explicit_register() {
+    let mut e = editor_with("alpha bravo\n\n");
+    dispatch_keys(&mut e, "\"aywwyw");
+    dispatch_keys(&mut e, "j\"ap.");
+    assert_eq!(e.content(), "alpha bravo\nalpha alpha \n\n");
+}
+
+/// Run `keys` and read `"a` back out.
+fn dispatch_and_read_reg_a(e: &mut Editor, keys: &str) -> String {
+    dispatch_keys(e, keys);
+    e.with_registers(|r| r.named[0].text.clone())
+}

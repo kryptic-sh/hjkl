@@ -64,6 +64,8 @@ pub fn apply_op_motion_key<H: hjkl_engine::types::Host>(
         Motion::BigWordFwd if op == Operator::Change && cursor_on_nonblank => Motion::BigWordEnd,
         m => m,
     };
+    // Peeked before the operator consumes it — see `apply_op_double`.
+    let register = vim(ed).pending_register;
     apply_op_with_motion(ed, op, &motion, total_count);
     if let Motion::Find { ch, forward, till } = &motion {
         vim_mut(ed).last_find = Some((*ch, *forward, *till));
@@ -74,6 +76,7 @@ pub fn apply_op_motion_key<H: hjkl_engine::types::Host>(
             motion,
             count: total_count,
             inserted: None,
+            register,
         });
     }
 }
@@ -284,6 +287,7 @@ pub fn apply_op_g_inner<H: hjkl_engine::types::Host>(
         'k' => Motion::ScreenUp,
         _ => return, // Unknown char — no-op.
     };
+    let register = vim(ed).pending_register;
     apply_op_with_motion(ed, op, &motion, total_count);
     if !vim(ed).replaying && op_is_change(op) {
         vim_mut(ed).last_change = Some(LastChange::OpMotion {
@@ -291,6 +295,7 @@ pub fn apply_op_g_inner<H: hjkl_engine::types::Host>(
             motion,
             count: total_count,
             inserted: None,
+            register,
         });
     }
 }

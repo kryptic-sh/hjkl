@@ -1025,6 +1025,9 @@ fn handle_after_op<H: Host>(
             }
             m => m,
         };
+        // Peeked before the operator consumes it, so `.` can restore it
+        // (`:h redo-register`).
+        let register = ed.pending_register();
         ed.apply_op_with_motion_direct(op, &motion, total);
         if let Motion::Find { ch, forward, till } = &motion {
             ed.set_last_find(Some((*ch, *forward, *till)));
@@ -1039,6 +1042,7 @@ fn handle_after_op<H: Host>(
                 motion,
                 count: total,
                 inserted: None,
+                register,
             }));
         }
         return true;

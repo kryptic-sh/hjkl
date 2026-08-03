@@ -328,8 +328,16 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             }
         }
         InsertReason::DeleteToEol => {
+            // `C` stashed the register it ran with before entering insert; only
+            // the typed text is new here, so carry the register across rather
+            // than rebuilding the change without it.
+            let register = match vim(ed).last_change {
+                Some(LastChange::DeleteToEol { register, .. }) => register,
+                _ => None,
+            };
             vim_mut(ed).last_change = Some(LastChange::DeleteToEol {
                 inserted: Some(inserted),
+                register,
             });
         }
         InsertReason::ReplayOnly => {}

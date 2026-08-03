@@ -165,6 +165,7 @@ pub fn apply_op_find_motion<H: hjkl_engine::types::Host>(
     total_count: usize,
 ) {
     let motion = Motion::Find { ch, forward, till };
+    let register = vim(ed).pending_register;
     apply_op_with_motion(ed, op, &motion, total_count);
     vim_mut(ed).last_find = Some((ch, forward, till));
     if !vim(ed).replaying && op_is_change(op) {
@@ -173,6 +174,7 @@ pub fn apply_op_find_motion<H: hjkl_engine::types::Host>(
             motion,
             count: total_count,
             inserted: None,
+            register,
         });
     }
 }
@@ -206,6 +208,7 @@ pub fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
         's' => TextObject::Sentence,
         _ => return false,
     };
+    let register = vim(ed).pending_register;
     apply_op_with_text_object(ed, op, obj, inner, total_count.max(1));
     if !vim(ed).replaying && op_is_change(op) {
         vim_mut(ed).last_change = Some(LastChange::OpTextObj {
@@ -213,6 +216,7 @@ pub fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
             obj,
             inner,
             inserted: None,
+            register,
         });
     }
     true

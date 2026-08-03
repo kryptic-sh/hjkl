@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A corrupt undofile can no longer hang the editor on load.
+  `UndoTree::from_serializable` checked that every link index was in range but
+  not that the links described a tree, so a projection whose `parent` pointers
+  formed a cycle loaded successfully — and `materialize` follows `parent` in an
+  unbounded loop, so the first use of such a tree spun while growing its path
+  vector. `Buffer::install_recovered_undo_tree` (the swap-recovery path)
+  materializes on load, so a corrupt swap file reached it. The loader now
+  rejects a projection unless the `children` lists partition the non-root nodes,
+  each child agrees with the node that listed it, and every node is reachable
+  from the root. It also rejects a repeated `seq`, which used to silently drop a
+  node from the `g-` / `g+` index while leaving it in the arena. All of these
+  return `None`, so the file degrades to a fresh tree as any other structural
+  inconsistency already did.
+
 ### Performance
 
 - Holding `g-` / `:earlier 9999` over a deep history is ~2.6x faster: a

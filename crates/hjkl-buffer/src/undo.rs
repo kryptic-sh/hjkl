@@ -1351,15 +1351,25 @@ impl UndoTree {
 
     /// Rebuild an arena tree from a projection. Returns `None` on any structural
     /// inconsistency (out-of-range link, a non-root node missing its delta, a
-    /// root carrying one) so a corrupt-but-parseable file degrades to a fresh
-    /// tree rather than a broken one. The root's content comes from `base`; the
-    /// current node's is materialized on demand from base + deltas.
+    /// root carrying one, `children` lists that do not partition the non-root
+    /// nodes, a child disagreeing with the node that listed it, a node
+    /// unreachable from the root, a repeated `seq`) so a corrupt-but-parseable
+    /// file degrades to a fresh tree rather than a broken one. The root's
+    /// content comes from `base`; the current node's is materialized on demand
+    /// from base + deltas.
+    ///
+    /// The partition + reachability pair is what makes the parent links a tree,
+    /// and that is load-bearing rather than tidiness: [`Self::materialize`] and
+    /// [`Self::retarget_current`] follow `parent` in unbounded loops, so a
+    /// parent-link cycle is a hang (or an unbounded `path`) rather than a
+    /// degraded tree. Rejecting it here is the only place that can see it.
     pub(crate) fn from_serializable(s: &SerTree) -> Option<Self> {
         let len = s.nodes.len();
         if len == 0 || s.root as usize >= len || s.current as usize >= len {
             return None;
         }
         // Validate links and the root/non-root delta discipline up front.
+        let mut seqs = std::collections::BTreeSet::new();
         for (i, n) in s.nodes.iter().enumerate() {
             let is_root = i as u32 == s.root;
             match (is_root, &n.delta, &n.parent) {
@@ -1380,9 +1390,42 @@ impl UndoTree {
             {
                 return None;
             }
+            // `by_seq` is keyed by `seq`, so a repeat would drop a node from the
+            // `g-` / `g+` index without dropping it from the arena.
+            if !seqs.insert(n.seq) {
+                return None;
+            }
+        }
+        // The `children` lists must PARTITION the non-root nodes — each listed
+        // once, by nobody for the root — and every child's own `parent` must
+        // name the node that listed it. Mutual agreement alone is not enough:
+        // two nodes can name each other as parent AND as child while both stay
+        // reachable from the root through the lists they were originally in.
+        // Requiring a single lister is what turns the two directions into one
+        // tree. Runs after the range loop so the indices below are in bounds.
+        let mut listed_by: Vec<Option<u32>> = vec![None; len];
+        for (i, n) in s.nodes.iter().enumerate() {
+            for &c in &n.children {
+                if c == s.root || listed_by[c as usize].is_some() {
+                    return None;
+                }
+                listed_by[c as usize] = Some(i as u32);
+            }
+        }
+        if s.nodes
+            .iter()
+            .zip(listed_by.iter())
+            .any(|(n, &lister)| n.parent != lister)
+        {
+            return None;
         }
         let base = ropey::Rope::from_str(&s.base);
-        let depths = depths_from_root(s);
+        let (depths, reachable) = depths_from_root(s);
+        // With the lists partitioning the nodes, reachability from the root is
+        // what rules out a cycle: a node inside one is reachable from no root.
+        if reachable.iter().any(|&r| !r) {
+            return None;
+        }
         let mut nodes: Vec<Option<UndoNode>> = s
             .nodes
             .iter()
@@ -1413,8 +1456,9 @@ impl UndoTree {
         // doing it unconditionally is what stops a hand-edited or truncated one
         // from loading into a tree whose `<C-r>` direction contradicts its own
         // `current`, which `retarget_current` would no longer repair on the way
-        // past. Bounded by `len` because a malformed file's parent links can
-        // cycle (`depths_from_root` guards the same way).
+        // past. The validation above already rules out a parent-link cycle, so
+        // the `len` bound is belt-and-braces on the one walk that runs before
+        // any invariant of the rebuilt tree holds.
         let mut node = s.current as NodeId;
         for _ in 0..len {
             let n = nodes[node].as_mut().expect("the projection is dense");
@@ -1444,14 +1488,17 @@ impl UndoTree {
     }
 }
 
-/// Depth-from-root of every node in a projection, by BFS over `children`.
+/// Depth-from-root of every node in a projection, by BFS over `children`, plus
+/// the reachable set the walk visited.
 ///
 /// Depth is NOT part of the on-disk format — it is derivable, and the undofile
 /// deliberately stores only what is not (issue #302: keyframes are an in-memory
 /// cache, so nothing about them enters `SerTree`). The `seen` guard makes this
 /// terminate on a malformed file whose links form a cycle; anything unreachable
-/// from the root keeps depth 0, which at worst places a keyframe oddly.
-fn depths_from_root(s: &SerTree) -> Vec<usize> {
+/// from the root keeps depth 0. `from_serializable` rejects a projection with
+/// any unreachable node, so the returned depths are only ever used on a tree
+/// where every one of them was computed by the walk.
+fn depths_from_root(s: &SerTree) -> (Vec<usize>, Vec<bool>) {
     let mut depths = vec![0usize; s.nodes.len()];
     let mut seen = vec![false; s.nodes.len()];
     let mut queue = std::collections::VecDeque::new();
@@ -1467,7 +1514,7 @@ fn depths_from_root(s: &SerTree) -> Vec<usize> {
             }
         }
     }
-    depths
+    (depths, seen)
 }
 
 #[cfg(test)]
@@ -3147,6 +3194,88 @@ mod serialize_tests {
         // Blank a non-root node's delta ⇒ structurally invalid ⇒ rejected.
         let victim = if ser.root == 0 { 1 } else { 0 };
         ser.nodes[victim].delta = None;
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    /// A parent-link cycle must be rejected at load, not walked at use.
+    /// `materialize` follows `parent` in an unbounded loop, so a cycle there
+    /// hangs while growing `path` — this is the only place that can see it.
+    #[test]
+    fn from_serializable_rejects_a_parent_link_cycle() {
+        let mut ser = headline_tree().to_serializable();
+        assert!(ser.nodes.len() > 2, "fixture needs three nodes");
+        // Point two non-root nodes at each other, both ways, so the links stay
+        // mutually consistent and every node stays reachable from the root
+        // through the list it was already in. Only the single-lister rule
+        // rejects this.
+        let (a, b) = match ser.root {
+            0 => (1, 2),
+            1 => (0, 2),
+            _ => (0, 1),
+        };
+        ser.nodes[a].parent = Some(b as u32);
+        ser.nodes[b].parent = Some(a as u32);
+        ser.nodes[a].children.push(b as u32);
+        ser.nodes[b].children.push(a as u32);
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    /// A parent link that the named parent does not mirror as a child leaves
+    /// the two walks (`children` forward, `parent` back) disagreeing.
+    #[test]
+    fn from_serializable_rejects_an_unmirrored_parent_link() {
+        let mut ser = headline_tree().to_serializable();
+        let victim = if ser.root == 0 { 1 } else { 0 };
+        let parent = ser.nodes[victim].parent.expect("non-root") as usize;
+        ser.nodes[parent].children.retain(|&c| c != victim as u32);
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    /// A cycle that hangs off no root at all: nodes 1 and 2 name each other
+    /// both ways, so the lists still partition — reachability from the root is
+    /// the guard that catches this one. This is the shape that hung
+    /// `install_recovered_undo_tree` before the loader checked for it.
+    #[test]
+    fn from_serializable_rejects_a_cycle_unreachable_from_the_root() {
+        let d = || {
+            Some(Delta {
+                start: 0,
+                old: String::new(),
+                new: String::from("x"),
+            })
+        };
+        let n = |parent, children, delta, seq| SerNode {
+            parent,
+            children,
+            last_child: None,
+            delta,
+            cursor: (0, 0),
+            timestamp_unix_ms: 0,
+            marks: MarkSnapshot::default(),
+            seq,
+        };
+        let ser = SerTree {
+            base: "hello".into(),
+            nodes: vec![
+                n(None, vec![], None, 0),
+                n(Some(2), vec![2], d(), 1),
+                n(Some(1), vec![1], d(), 2),
+            ],
+            root: 0,
+            current: 1,
+            next_seq: 3,
+        };
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    /// `by_seq` is keyed by `seq`, so a repeat would silently drop a node from
+    /// the `g-` / `g+` index while leaving it in the arena.
+    #[test]
+    fn from_serializable_rejects_a_repeated_seq() {
+        let mut ser = headline_tree().to_serializable();
+        let victim = if ser.root == 0 { 1 } else { 0 };
+        let other = if victim == 0 { 1 } else { 0 };
+        ser.nodes[victim].seq = ser.nodes[other].seq;
         assert!(UndoTree::from_serializable(&ser).is_none());
     }
 

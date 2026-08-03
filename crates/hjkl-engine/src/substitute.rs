@@ -369,8 +369,10 @@ pub fn apply_substitute<H: crate::types::Host>(
         .chars()
         .count();
     let cursor_col = first_non_blank.min(line_len.saturating_sub(1));
-    ed.buffer_mut()
-        .set_cursor(hjkl_buffer::Position::new(cursor_row, cursor_col));
+    // `jump_cursor`, not `set_cursor`: `:s` is an explicit jump, so vim resets
+    // `curswant` to the column it lands on and the next `j`/`k` aims there
+    // rather than at the column the cursor held before the substitute.
+    ed.jump_cursor(cursor_row, cursor_col);
 
     ed.mark_content_dirty();
 
@@ -582,8 +584,9 @@ pub fn apply_collected_matches<H: crate::types::Host>(
                 .sum();
             let newlines_within = lines_vec[row].matches('\n').count();
             let row = row + newlines_before + newlines_within;
-            ed.buffer_mut()
-                .set_cursor(hjkl_buffer::Position::new(row, 0));
+            // `jump_cursor`, not `set_cursor`: `:s` is an explicit jump, so vim
+            // resets `curswant` to the column it lands on.
+            ed.jump_cursor(row, 0);
         }
         ed.mark_content_dirty();
     }
@@ -1467,5 +1470,42 @@ mod tests {
             !re.is_match("~"),
             "search `~` must not match a literal tilde"
         );
+    }
+
+    // ── curswant (sticky_col) reset ────────────────────────────────────────
+
+    /// `:s` is an explicit jump, so vim resets `curswant` to the column the
+    /// cursor lands on — the next `j`/`k` must aim there, not at the column
+    /// held before the substitute. Verified against neovim 0.12.4: `$` on row
+    /// 0 of `"abcdefgh\nab\nabcdefgh"`, then `:2s/ab/XX/`, then `j`, lands on
+    /// `(2, 0)`.
+    #[test]
+    fn apply_substitute_resets_sticky_col_to_the_landed_column() {
+        let mut e = editor_with("abcdefgh\nab\nabcdefgh");
+        e.jump_cursor(0, 7);
+        assert_eq!(e.sticky_col(), Some(7), "seeded curswant");
+        let cmd = parse_substitute("/ab/XX/").unwrap();
+        assert_eq!(
+            apply_substitute(&mut e, &cmd, 1..=1).unwrap().replacements,
+            1
+        );
+        assert_eq!(e.cursor(), (1, 0), "cursor lands on the changed line");
+        assert_eq!(e.sticky_col(), Some(0), "curswant follows the cursor");
+    }
+
+    /// Same reset on the `:s///c` confirm path, which lands the cursor through
+    /// a different function.
+    #[test]
+    fn apply_collected_matches_resets_sticky_col_to_the_landed_column() {
+        let mut e = editor_with("abcdefgh\nab\nabcdefgh");
+        e.jump_cursor(0, 7);
+        assert_eq!(e.sticky_col(), Some(7), "seeded curswant");
+        let cmd = parse_substitute("/ab/XX/").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 1..=1).unwrap();
+        assert_eq!(matches.len(), 1);
+        let accepted: Vec<bool> = vec![true];
+        assert_eq!(apply_collected_matches(&mut e, &matches, &accepted), 1);
+        assert_eq!(e.cursor(), (1, 0));
+        assert_eq!(e.sticky_col(), Some(0), "curswant follows the cursor");
     }
 }

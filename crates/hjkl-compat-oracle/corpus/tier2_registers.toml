@@ -168,3 +168,51 @@ initial_cursor = [1, 0]
 keys = "dd"
 expected_buffer = "a\nb\n"
 expected_mode = "normal"
+
+# `:h redo-register` — `.` reuses the register the original change named, not
+# the unnamed one. Each case pastes `"a` back afterwards so the buffer shows
+# which register the repeat actually wrote.
+
+# `"adw` then `.` — the repeat deletes into `"a` again, so `"ap` puts back
+# "bravo " (the SECOND word), not the "alpha " the first delete took.
+[[cases]]
+name = "register_dot_repeat_dw_reuses_named_register"
+initial_buffer = "alpha bravo charlie delta\n"
+initial_cursor = [0, 0]
+keys = "\"adw.\"ap"
+expected_buffer = "cbravo harlie delta\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+
+# Same for a text object: `"adiw` then `.` leaves `"a` holding the whitespace
+# the repeat consumed.
+[[cases]]
+name = "register_dot_repeat_diw_reuses_named_register"
+initial_buffer = "alpha bravo charlie\n"
+initial_cursor = [0, 0]
+keys = "\"adiw.\"ap"
+expected_buffer = "b ravo charlie\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# `"aD` writes the named register at all (it used to reach only the unnamed
+# one), so pasting `"a` on the next line brings the deleted text back.
+[[cases]]
+name = "register_delete_to_eol_writes_named_register"
+initial_buffer = "alpha bravo\nsecond\n"
+initial_cursor = [0, 0]
+keys = "\"aDj\"ap"
+expected_buffer = "\nsalpha bravoecond\n"
+expected_cursor = [1, 11]
+expected_mode = "normal"
+
+# `"ap` then `.` pastes `"a` twice. The unnamed register holds "bravo" (the
+# second yank), so a fallback to it would show up on the second row.
+[[cases]]
+name = "register_dot_repeat_paste_reuses_named_register"
+initial_buffer = "alpha bravo\n\n\n"
+initial_cursor = [0, 0]
+keys = "\"aywwywj\"ap."
+expected_buffer = "alpha bravo\nalpha alpha \n\n"
+expected_cursor = [1, 11]
+expected_mode = "normal"

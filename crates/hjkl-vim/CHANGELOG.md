@@ -8,6 +8,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `.` reuses the register the repeated change named (`:h redo-register`).
+  `LastChange::OpMotion`, `OpTextObj`, `DeleteToEol` and `Paste` did not carry
+  the register, so `"adw` then `.` deleted into the unnamed register and `"ap`
+  then `.` pasted from it. They now record it the way `LineOp` already did, and
+  `dot_repeat` restores it before replaying. Four cases in
+  `corpus/tier2_registers.toml` pin this against nvim.
+- `"aD` and `"aC` write the named register. `command::delete_to_eol` wrote the
+  deleted text with `set_yank`, which only ever reaches the unnamed register, so
+  an explicit `"reg` was silently dropped. It now routes through
+  `record_delete`, which also puts an unnamed `D` in the small-delete register
+  `"-` as vim does.
+
 ### Added
 
 - `MAX_PASTE_BYTES` is public, so a host can report the paste budget it hit

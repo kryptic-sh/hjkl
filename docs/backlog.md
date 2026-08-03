@@ -461,55 +461,27 @@ entries above.
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
 
-### 1.5c Confirmed by the 2026-08-03 full-codebase review
+### 1.5c Left open by the 2026-08-03 review fixes
 
-Both entries were reproduced twice: once against neovim 0.12.4
-(`nvim --headless -u NONE`) for the expected behaviour, once through a scratch
-integration test on this tree for the actual. Neither is in the differential
-corpus yet.
+The two divergences this section recorded — `:s` leaving `curswant` stale, and
+`.` losing the register the change named — are fixed, with the register fix
+widened to `LastChange::OpMotion` / `OpTextObj` / `DeleteToEol` after nvim
+confirmed the same semantics for `"adw.`, `"adiw.` and `"aD.`. Four cases in
+`corpus/tier2_registers.toml` pin the register behaviour against nvim. What is
+still open:
 
-**`:s` leaves `curswant` stale, so the next `j`/`k` aims at the pre-substitute
-column.** `substitute::apply_substitute` and
-`substitute::apply_collected_matches` both move the cursor with
-`ed.buffer_mut().set_cursor(..)` directly, bypassing `Editor::jump_cursor` —
-which is the only thing that resets `Editor::sticky_col`. Every other explicit
-jump resets it: `Editor::search_advance_forward` / `search_advance_backward`
-call `sync_sticky_col_to_cursor` for exactly this reason (its doc comment
-records that four call sites got it wrong before the reset was made structural),
-and `Editor::apply_fold_op` sets `sticky_col = Some(0)` by hand. The substitute
-paths have no equivalent, and no caller does the fixup afterwards
-(`vim::operator` at both `apply_substitute` call sites, `hjkl-ex`'s `builtins`).
-
-```
-Buffer "abcdefgh\nab\nabcdefgh", cursor (0,7) via `$`, then :2s/ab/XX/ then j
-nvim: cursor (2, 0)   ← curswant reset to the column :s landed on
-hjkl: cursor (2, 7)   ← sticky_col still Some(7) from before the :s
-```
-
-The fix is the same shape as the search path: reset inside the two substitute
-functions rather than at each caller. Check the confirm (`c` flag) path too —
-`apply_collected_matches` is the one that runs per accepted match.
-
-**`.` after `"ap` pastes from the unnamed register.** `LastChange::Paste`
-carries `before` / `count` / `cursor_after` / `reindent` but no `register`, so
-`dot_repeat`'s `Paste` arm calls `do_paste` with nothing having set
-`pending_register` and the paste falls through to the unnamed register.
-`LastChange::LineOp` already models this correctly — it carries
-`register: Option<char>` and the `LineOp` arm restores
-`vim_mut(ed).pending_register = register` before executing, citing
-`:h redo-register`.
-
-```
-"aywwyw   (a = "alpha ", unnamed = "bravo")  then  j"ap.  on "alpha bravo\n\n"
-nvim: line 2 = "alpha alpha "   ← `.` reused register a
-hjkl: line 2 = "alpha bravo"    ← `.` fell back to the unnamed register
-```
-
-Add `register: Option<char>` to `LastChange::Paste`, set it where the paste is
-recorded (`vim::bridges`' paste bridge), and restore it in the `dot_repeat` arm.
-`LastChange::OpMotion`, `OpTextObj` and `DeleteToEol` have the same missing
-field and were **not** tested — the same divergence is likely for `"ad w` then
-`.`, and is worth checking in the same change.
+- **The `:s` curswant fix has no oracle case.** It is covered by two unit tests
+  in `hjkl-engine`'s `substitute` module, because the corpus driver cannot
+  replay `:` keys. A corpus case would need the ex layer driven some other way.
+- **`LastChange::CharDel` still carries no register**, so `"ax` then `.` deletes
+  into the unnamed register. Not fixed here because `do_char_delete` writes the
+  register itself with `set_yank` and honours no `"reg` at all — nvim's `"ax`
+  puts the char in `"a`, hjkl's does not. That is the same defect
+  `command::delete_to_eol` had, and it wants the same `record_delete` treatment
+  plus a `register` field on `CharDel`. Verified against nvim 0.12.4; not
+  attempted, so `x` / `X` remain register-blind.
+- **`LastChange::GnOp`, `VisualOp` and the visual-block variants were not
+  checked** for the same missing field.
 
 ### 1.6 Cursor-move API migration
 
@@ -699,39 +671,15 @@ unknown.
     class of bug surfaces, and also why it is the slowest job. Caching
     `~/.cache/bonsai` would make it faster and blind to cold-start races.
     Deliberately not done.
-- **A corrupt undofile with a parent-link cycle hangs on load (2026-08-03).**
-  `UndoTree::from_serializable` validates that every parent / child /
-  `last_child` index is in range and that the root/non-root delta discipline
-  holds, but it never checks that parent links are acyclic. A `SerTree` whose
-  nodes 1 and 2 name each other as parent (with an independent valid root) loads
-  successfully. `UndoTree::materialize` then walks parent links in an unbounded
-  `loop`, pushing each node onto `path`, and never terminates — confirmed by a
-  scratch test in which `View::install_recovered_undo_tree` had not returned
-  after 3 s while `install_undo_tree` returned `true` for the same projection.
-  `depths_from_root` guards the same shape with a `seen` set and the `on_path`
-  setup loop bounds itself by `len`, so the gap is specifically the two hot
-  walks (`materialize`, and the second loop of `retarget_current`).
-
-  Reachable: `SerTree` is public API (`hjkl_buffer::SerTree`), the undofile's
-  header hash covers the _document_ for staleness rather than the tree bytes for
-  integrity, and `Buffer::install_recovered_undo_tree` — the swap-recovery path
-  — materializes `current` as its consistency check. Fix by rejecting cycles in
-  `from_serializable` (a `seen` walk from each node, or reuse `depths_from_root`
-  and reject anything unreachable from the root).
-
-  The original review claimed `retarget_current`'s _first_ loop also hangs; it
-  does not. That loop writes `on_path = true` as it walks, so it revisits a
-  marked node after at most N steps and stops. The reachable failure there is
-  the second loop's `expect` panicking when the fork is not an ancestor of
-  `current` — still a corrupt-input crash, but a panic and not a hang.
-
-- **Duplicate `seq` values in a corrupt `SerTree` silently drop nodes
-  (2026-08-03).** `from_serializable` builds `by_seq` with `.collect()` into a
-  `BTreeMap`, so two nodes sharing a `seq` keep only the last; the lost node
-  disappears from `g-` / `g+` seq traversal with no error. Confirmed:
-  `install_undo_tree` returns `true` for a two-node projection whose nodes both
-  carry `seq: 5`. Same class and same fix site as the cycle above — reject it in
-  the loader. Lower severity: a missing node beats a hang.
+- **The undofile loader now rejects a corrupt projection instead of hanging on
+  it (2026-08-03) — one claim from that review did not survive.** The cycle and
+  duplicate-`seq` gaps are fixed in `UndoTree::from_serializable`. The review
+  also said `retarget_current`'s first loop hangs on a cycle; it does not. That
+  loop writes `on_path = true` as it walks, so it revisits a marked node after
+  at most N steps and stops. Its reachable failure was the _second_ loop's
+  `expect` panicking when the fork is not an ancestor of `current` — a
+  corrupt-input crash, not a hang — and the loader change makes that unreachable
+  too. Recorded because the distinction is easy to re-derive wrong.
 
 - **Considered and declined: renumbering `depth` in `prune_root_side`
   (2026-08-03).** When the root's on-path child is promoted, it keeps its
