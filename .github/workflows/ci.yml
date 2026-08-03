@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-machete
       - run: cargo machete
@@ -252,19 +252,19 @@ jobs:
 
       - name: Install cargo-zigbuild
         if: matrix.zig == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-zigbuild
 
       - name: Install cargo-deb
         if: matrix.deb == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-deb
 
       - name: Install cargo-generate-rpm
         if: matrix.rpm == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-generate-rpm
 
