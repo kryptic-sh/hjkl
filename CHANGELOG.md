@@ -61,6 +61,14 @@ patch bumps.
   around-text-object chord, and the operator was eaten as that chord's target.
   Charwise, linewise and blockwise visual all take the selector now.
 
+- **`d}` on the last character of a buffer deletes it.** vim's `}` counts as a
+  successful inclusive motion even when it has nowhere left to go, so `d}` with
+  the cursor already on the final character removes that character; hjkl read
+  the zero-distance motion as a failure and did nothing. `y}` and `c}` in the
+  same position were equally inert. `d$` on an empty line is still a no-op — it
+  is the other zero-width range of that shape and is now pinned by a case of its
+  own.
+
 - **`2C` and `2D` no longer wipe a one-line buffer.** A counted `$` clamped to
   the last line where vim fails on it, so `2$` on a single-line file moved to
   end-of-line and `2C` / `2D` there emptied the line — vim does nothing at all,

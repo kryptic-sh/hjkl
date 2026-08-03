@@ -414,17 +414,6 @@ never enters. Fixing it means giving `step_back` / `step_forward` vim's virtual
 EOL position, which every `w`/`b`/`e`/`ge` scan sits on top of; that is a
 word-motion-wide change with its own regression surface, not a `B` fix.
 
-**A zero-distance inclusive operator range is dropped.** vim's `}` sets `*pincl`
-even when it does not move, so `d}` with the cursor already on the last
-character of the last line deletes that character (`d}` on `"abc"` at `(0,2)` →
-nvim `"ab"`, hjkl unchanged). hjkl aborts on `start == end` twice — in
-`apply_op_with_motion` and again in `run_operator_over_range` — and both guards
-are correct for exclusive ranges. Relaxing them for `RangeKind::Inclusive` would
-also relax `d$` on an empty line, where the same shape must stay a no-op
-(`cut_vim_range`'s inclusive branch would wrap to the next row and eat the line
-break). Needs a distinct "successful zero-width inclusive" signal, not a
-loosened guard.
-
 **A corpus case cannot pin a value when nvim is absent.** Every oracle test
 skips wholesale without nvim, so the corpus expectations guard nothing on a
 machine that has no neovim — including CI lanes that do not install it. The

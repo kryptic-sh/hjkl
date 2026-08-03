@@ -50,12 +50,14 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // motion inclusive — that is what lets `d}` in the final paragraph reach
     // end-of-buffer instead of stopping one char short.
     //
-    // Vim also applies this to the zero-distance form (cursor already on the
-    // last char of the last line: `d}` there deletes that one char). hjkl does
-    // not: the `start == end` abort below, and the matching guard in
-    // `run_operator_over_range`, treat every zero-length charwise range as a
-    // failed motion. Relaxing those for `Inclusive` would also relax `d$` on
-    // an empty line, which must stay a no-op — tracked in docs/backlog.md.
+    // Vim applies this to the zero-distance form too: with the cursor already
+    // on the last char of the last line, `}` does not move and `d}` still
+    // deletes that char. That case cannot be expressed as a zero-width
+    // INCLUSIVE range here, because the `start == end` abort below and the
+    // matching guard in `run_operator_over_range` reject every zero-width
+    // charwise range — and they must keep doing so, or `d$` on an empty line
+    // stops being a no-op. It is written as the equivalent one-char EXCLUSIVE
+    // range instead, the same shape `dl` on a line's final char produces.
     //
     // `last_row` is the last *content* row: ropey synthesizes a phantom empty
     // final row for a trailing `\n`, and the motion itself stops on the last
@@ -68,7 +70,11 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         && buf_line_chars(ed.buffer(), last_row) > 0
         && end.1 + 1 == buf_line_chars(ed.buffer(), last_row)
     {
-        kind = RangeKind::Inclusive;
+        if start == end {
+            end = (end.0, end.1 + 1);
+        } else {
+            kind = RangeKind::Inclusive;
+        }
     }
     // Linewise motions always cover their row when successful even if
     // `start == end` (e.g. `d_` with count 1 on a single row deletes it).

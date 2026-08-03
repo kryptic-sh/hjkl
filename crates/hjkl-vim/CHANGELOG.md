@@ -39,6 +39,13 @@ and this project adheres to
   `replay_block_visual_op` passed a hardcoded `None` target to
   `record_delete_block`, so even with the register restored the repeat could not
   have written it.
+- `d}` with the cursor already on the last character of the last line deletes
+  that character. vim's `}` sets `*pincl` even when it does not move, so the
+  zero-distance form is a successful INCLUSIVE motion; hjkl treated every
+  zero-width charwise range as a failed motion and did nothing. The landing is
+  now emitted as the equivalent one-char exclusive range — the shape `dl` on a
+  line's final char already produces — rather than by loosening the
+  `start == end` guards, which still have to reject `d$` on an empty line.
 - A counted `$` fails on the last line instead of clamping to it. vim's
   `nv_dollar` runs `cursor_down(count - 1)` before moving to the line end and
   aborts the whole command when that fails — which happens only when the cursor
