@@ -54,6 +54,13 @@ patch bumps.
   take a cross-process lock on the destination and stage into a pid-private
   directory. Details in `crates/hjkl-bonsai/CHANGELOG.md`.
 
+- **A visual selection can name its register.** `vll"ad`, `V"ay`, `"ap` over a
+  selection — every one of them did nothing at all: the buffer was untouched and
+  the selection stayed up, because the `"` register chord was wired into Normal
+  mode only. In a selection the `"` fell through, the register letter armed the
+  around-text-object chord, and the operator was eaten as that chord's target.
+  Charwise, linewise and blockwise visual all take the selector now.
+
 - **`.` after `"ax` deletes into `"a`, not the unnamed register.** The `x` / `X`
   keys already honoured an explicit register when typed, but the dot-repeat did
   not carry it, so the repeat wrote the unnamed register and left `"a` holding

@@ -566,6 +566,25 @@ pub fn step_normal<H: Host>(
         ed.set_pending(Pending::GotoMarkChar);
         return true;
     }
+
+    // `"x` picks the register the next operator writes or reads. Vim takes it
+    // in visual mode too, right before the operator (`vll"ad`), so this arm
+    // covers the visual modes the same way the `` ` `` one above does. When it
+    // was Normal-only the `"` fell through unconsumed, `a` armed the
+    // around-text-object chord, and the operator key was eaten as that
+    // chord's target — the whole sequence did nothing and the selection
+    // stayed up.
+    if !input.ctrl
+        && matches!(
+            ed.fsm_mode(),
+            FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+        )
+        && input.key == Key::Char('"')
+    {
+        ed.set_pending(Pending::SelectRegister);
+        return true;
+    }
+
     if !input.ctrl && ed.fsm_mode() == FsmMode::Normal {
         match input.key {
             Key::Char('m') => {
@@ -579,12 +598,6 @@ pub fn step_normal<H: Host>(
             Key::Char('`') => {
                 // Already handled above for all visual modes + normal.
                 ed.set_pending(Pending::GotoMarkChar);
-                return true;
-            }
-            Key::Char('"') => {
-                // Open the register-selector chord. The next char picks
-                // a register that the next y/d/c/p uses.
-                ed.set_pending(Pending::SelectRegister);
                 return true;
             }
             Key::Char('@') => {

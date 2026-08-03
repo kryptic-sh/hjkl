@@ -71,3 +71,50 @@ keys = "vw<Esc>gv"
 expected_buffer = "foo bar baz\n"
 expected_cursor = [0, 4]
 expected_mode = "visual"
+
+# ── `"reg` inside a visual selection ───────────────────────────────────────
+#
+# vim takes the register selector in visual mode too, right before the
+# operator (`vll"ad`). hjkl only opened the `"` chord in Normal mode, so the
+# whole `"a` + operator sequence was swallowed and the selection stayed up.
+
+[[cases]]
+name = "visual_charwise_delete_into_named_register"
+initial_buffer = "alpha bravo charlie\n"
+initial_cursor = [0, 0]
+keys = "vll\"ad"
+expected_buffer = "ha bravo charlie\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['a', "alp"]
+
+[[cases]]
+name = "visual_charwise_yank_into_named_register"
+initial_buffer = "alpha bravo charlie\n"
+initial_cursor = [0, 0]
+keys = "vll\"ay"
+expected_buffer = "alpha bravo charlie\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['a', "alp"]
+
+[[cases]]
+name = "visual_linewise_delete_into_named_register"
+initial_buffer = "one\ntwo\nthree\nfour\n"
+initial_cursor = [0, 0]
+keys = "V\"ad"
+expected_buffer = "two\nthree\nfour\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['a', "one\n"]
+
+# `"ap` in visual mode pastes the named register over the selection.
+[[cases]]
+name = "visual_paste_from_named_register"
+initial_buffer = "alpha bravo\nX\n"
+initial_cursor = [0, 0]
+keys = "\"ayiwjv\"ap"
+expected_buffer = "alpha bravo\nalpha\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+expected_register = ['a', "alpha"]

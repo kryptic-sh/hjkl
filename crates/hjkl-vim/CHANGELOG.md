@@ -16,6 +16,13 @@ and this project adheres to
   then `.` pasted from it. They now record it the way `LineOp` already did, and
   `dot_repeat` restores it before replaying. Four cases in
   `corpus/tier2_registers.toml` pin this against nvim.
+- **Visual mode takes a `"reg` selector.** `"` opened the register chord only in
+  Normal mode, so in a selection the `"` fell through unconsumed, the register
+  letter armed the around-text-object chord instead, and the operator key was
+  swallowed as that chord's target — `vll"ad` left the buffer untouched and the
+  selection still up. `"` now arms `Pending::SelectRegister` in charwise,
+  linewise and blockwise visual as well, so `"ad`, `"ay`, `"ac` and `"ap` all
+  reach the register they name.
 - `.` after `"ax` / `"aX` deletes into `"a` too. `LastChange::CharDel` was the
   last variant with no `register` field, so the repeat fell back to the unnamed
   register and left `"a` holding the FIRST deletion (`"axl.` on `"abcdef"` left

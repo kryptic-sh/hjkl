@@ -1010,6 +1010,28 @@ fn dot_repeat_char_delete_reuses_the_explicit_register() {
     assert_eq!(e.content(), "ef\n");
 }
 
+/// `"x` picks a register in visual mode too, right before the operator. The
+/// chord was Normal-only, so `"` fell through, `a` armed the around-text-object
+/// chord, and the operator was eaten as that chord's target: the buffer was
+/// untouched and the selection stayed up. Expectations from neovim 0.12.4.
+#[test]
+fn visual_mode_takes_an_explicit_register() {
+    // Charwise delete.
+    let mut e = editor_with("alpha bravo charlie");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "vll\"ad"), "alp");
+    assert_eq!(e.content(), "ha bravo charlie\n");
+
+    // Charwise yank leaves the buffer alone but still fills `"a`.
+    let mut e = editor_with("alpha bravo charlie");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "vll\"ay"), "alp");
+    assert_eq!(e.content(), "alpha bravo charlie\n");
+
+    // Linewise.
+    let mut e = editor_with("one\ntwo\nthree\nfour");
+    assert_eq!(dispatch_and_read_reg_a(&mut e, "V\"ad"), "one\n");
+    assert_eq!(e.content(), "two\nthree\nfour\n");
+}
+
 /// `"aD` / `"aC` write the named register at all — they used to reach only the
 /// unnamed one. nvim: `"aD` on `"alpha bravo"` leaves `a` holding the line.
 #[test]

@@ -706,3 +706,14 @@ keys = "Vjd."
 expected_buffer = ""
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# The register selector works in blockwise visual too.
+[[cases]]
+name = "visual_block_delete_into_named_register"
+initial_buffer = "abcd\nefgh\nijkl\nmnop\n"
+initial_cursor = [0, 0]
+keys = "l<C-v>jl\"ad"
+expected_buffer = "ad\neh\nijkl\nmnop\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['a', "bc\nfg"]
