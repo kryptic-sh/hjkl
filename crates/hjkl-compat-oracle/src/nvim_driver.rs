@@ -18,6 +18,10 @@ pub struct NvimOutcome {
     pub mode: String,
     /// Contents of the default `"` register.
     pub default_register: String,
+    /// Contents of the register the case named in
+    /// [`crate::OracleCase::expected_register`], or `None` when it named
+    /// none. Mirrors [`crate::HjklOutcome::pinned_register`].
+    pub pinned_register: Option<String>,
 }
 
 // ── Noop handler ──────────────────────────────────────────────────────────────
@@ -211,11 +215,23 @@ async fn run_case_inner(
         .await?;
     let default_register = reg_val.as_str().unwrap_or("").to_owned();
 
+    // 9a. Read back the register the case pinned, if any.
+    let pinned_register = match case.expected_register.as_ref() {
+        Some((reg, _)) => {
+            let val = nvim
+                .call_function("getreg", vec![Value::from(reg.to_string())])
+                .await?;
+            Some(val.as_str().unwrap_or("").to_owned())
+        }
+        None => None,
+    };
+
     Ok(NvimOutcome {
         buffer: buf_str,
         cursor,
         mode,
         default_register,
+        pinned_register,
     })
 }
 

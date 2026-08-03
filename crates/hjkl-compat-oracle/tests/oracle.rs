@@ -1042,3 +1042,119 @@ async fn tier2_undo_tree_corpus_passes() {
 // which does not go through that RPC path and behaves as expected). Pinned
 // instead as unit tests in `crates/hjkl-vim/tests/undo_line.rs`, each
 // annotated with the real-nvim-file invocation it was verified against.
+
+// ── The corpus's own expectations are checked against nvim ─────────────────
+//
+// `expected_buffer` has always been compared to nvim's outcome before the
+// two engines are diffed, so a mistyped buffer in a corpus file fails as an
+// author error. `expected_cursor`, `expected_mode` and `expected_register`
+// were not, which made them documentation: a case could pin any value at all
+// and still pass as long as hjkl and nvim agreed with each other. These
+// tests deliberately author each field wrong and require the oracle to say
+// so.
+
+/// A one-key case whose four expectations are all correct: `yy` on a
+/// one-line buffer leaves the buffer alone, the cursor at the origin, the
+/// mode normal, and the line in the given register.
+fn author_error_case(register: char) -> hjkl_compat_oracle::OracleCase {
+    hjkl_compat_oracle::OracleCase {
+        name: "author_error_probe".to_string(),
+        initial_buffer: "alpha\n".to_string(),
+        initial_cursor: (0, 0),
+        keys: format!("\"{register}yy"),
+        expected_buffer: "alpha\n".to_string(),
+        expected_cursor: Some((0, 0)),
+        expected_mode: Some("normal".to_string()),
+        expected_register: Some((register, "alpha\n".to_string())),
+        shiftwidth: None,
+        expandtab: None,
+        textwidth: None,
+        autoindent: None,
+        foldmethod: None,
+    }
+}
+
+/// Run one case through the oracle and return the field name it reported a
+/// mismatch on, or `None` when it passed.
+async fn mismatch_field(case: hjkl_compat_oracle::OracleCase) -> Option<String> {
+    let corpus = hjkl_compat_oracle::Corpus { cases: vec![case] };
+    let results = hjkl_compat_oracle::run_oracle(&corpus).await;
+    match &results[0].status {
+        hjkl_compat_oracle::CaseStatus::Pass => None,
+        hjkl_compat_oracle::CaseStatus::Mismatch { field, .. } => Some((*field).to_string()),
+        other => panic!("expected Pass or Mismatch, got {other:?}"),
+    }
+}
+
+/// The probe itself must pass, or the three tests below would be green
+/// against a case that was broken for some unrelated reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn author_error_probe_case_passes_when_correct() {
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+    assert_eq!(mismatch_field(author_error_case('a')).await, None);
+    assert_eq!(mismatch_field(author_error_case('"')).await, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_expected_cursor_fails_as_an_author_error() {
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+    let mut case = author_error_case('a');
+    case.expected_cursor = Some((9, 9));
+    assert_eq!(
+        mismatch_field(case).await.as_deref(),
+        Some("expected_cursor (corpus author error?)")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_expected_mode_fails_as_an_author_error() {
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+    let mut case = author_error_case('a');
+    case.expected_mode = Some("insert".to_string());
+    assert_eq!(
+        mismatch_field(case).await.as_deref(),
+        Some("expected_mode (corpus author error?)")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_expected_register_fails_as_an_author_error() {
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+    let mut case = author_error_case('a');
+    case.expected_register = Some(('a', "not what was yanked\n".to_string()));
+    assert_eq!(
+        mismatch_field(case).await.as_deref(),
+        Some("expected_register (corpus author error?)")
+    );
+}
+
+/// A named register is diffed between the engines too, not only checked
+/// against the corpus — `"ayy` must leave the same text in `"a` on both
+/// sides. Without a named-register read in each driver the oracle could
+/// only ever compare the unnamed one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_register_is_compared_between_the_engines() {
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+    let case = author_error_case('a');
+    let hjkl = hjkl_compat_oracle::hjkl_driver::run_case(&case).unwrap();
+    let nvim = hjkl_compat_oracle::nvim_driver::run_case(&case)
+        .await
+        .unwrap();
+    assert_eq!(hjkl.pinned_register.as_deref(), Some("alpha\n"));
+    assert_eq!(nvim.pinned_register, hjkl.pinned_register);
+}

@@ -115,4 +115,4 @@ name = "count_backspace_wraps_rows"
 initial_buffer = "ab\ncd\n"
 keys = "G$3<BS>"
 expected_buffer = "ab\ncd\n"
-expected_cursor = [0, 1]
+expected_cursor = [0, 0]

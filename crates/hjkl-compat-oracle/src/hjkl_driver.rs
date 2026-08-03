@@ -27,6 +27,25 @@ pub struct HjklOutcome {
     pub mode: String,
     /// Contents of the default `"` register after the keystroke sequence.
     pub default_register: String,
+    /// Contents of the register the case named in
+    /// [`OracleCase::expected_register`], or `None` when it named none. The
+    /// unnamed register is already in [`Self::default_register`]; this is
+    /// what lets a case pin `"a` and have it diffed.
+    pub pinned_register: Option<String>,
+}
+
+/// Read the register `case` pins via `expected_register`, if any. An
+/// unrecognised selector reads as an empty register, matching vim's
+/// `getreg()`.
+fn pinned_register_of<H: hjkl_engine::types::Host>(
+    case: &OracleCase,
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+) -> Option<String> {
+    let (reg, _) = case.expected_register.as_ref()?;
+    Some(editor.with_registers(|regs| {
+        regs.read(*reg)
+            .map_or_else(String::new, |slot| slot.text.clone())
+    }))
 }
 
 /// Run `case` through the hjkl engine and return the resulting state.
@@ -105,12 +124,14 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     .to_string();
 
     let default_register = editor.yank();
+    let pinned_register = pinned_register_of(case, &editor);
 
     Ok(HjklOutcome {
         buffer: buffer_str,
         cursor,
         mode,
         default_register,
+        pinned_register,
     })
 }
 
@@ -294,11 +315,23 @@ async fn run_case_via_nvim_api_inner(
         .await?;
     let default_register = reg_val.as_str().unwrap_or("").to_owned();
 
+    // 7a. Read back the register the case pinned, if any.
+    let pinned_register = match case.expected_register.as_ref() {
+        Some((reg, _)) => {
+            let val = nvim
+                .call_function("getreg", vec![Value::from(reg.to_string())])
+                .await?;
+            Some(val.as_str().unwrap_or("").to_owned())
+        }
+        None => None,
+    };
+
     Ok(HjklOutcome {
         buffer: buf_str,
         cursor,
         mode,
         default_register,
+        pinned_register,
     })
 }
 

@@ -433,15 +433,12 @@ generated case was fixed and the shrinker moved on. Not related to the paragraph
 work — `C` is `Operator::Change` with `Motion::LineEnd`, an inclusive range on
 one row, which none of the 2026-08-02 operator adjustments touch.
 
-**A corpus case's `expected_cursor` / `expected_mode` / `expected_register` are
-never asserted.** `diff.rs::run_single` compares only `expected_buffer` against
-nvim (as an author-error guard) and then hjkl against nvim on all four fields.
-So those three fields document the intent but cannot fail on their own, and a
-case with a wrong `expected_cursor` still passes as long as the two engines
-agree. The differential assertion is the real guard and it does cover cursor,
-mode and register — but the corpus **cannot** pin a value when nvim is absent
-(every test skips wholesale then). Cheap to close: assert each `Some` field
-against the nvim outcome in `run_single`.
+**A corpus case cannot pin a value when nvim is absent.** Every oracle test
+skips wholesale without nvim, so the corpus expectations guard nothing on a
+machine that has no neovim — including CI lanes that do not install it. The
+`expected_*` fields are now all checked against nvim's outcome
+(`diff.rs::run_single`), which closed the "documentation-only field" half of
+this, but nothing compares hjkl against the authored values on its own.
 
 **The differential fuzzer still reports 84 divergences at seed 777** (was 89
 before this pass; re-run 2026-08-02 after the blockwise-paste rewrite, still

@@ -117,6 +117,52 @@ async fn run_single(case: &OracleCase, nvim_ok: bool) -> CaseResult {
         };
     }
 
+    // Sanity-check nvim against the corpus's other pinned expectations, same
+    // role the `expected_buffer` guard above plays: without these, a case
+    // could author any cursor, mode or register at all and still pass as long
+    // as the two engines happened to agree with each other.
+    if let Some(expected) = case.expected_cursor
+        && nvim.cursor != expected
+    {
+        return CaseResult {
+            name,
+            status: CaseStatus::Mismatch {
+                field: "expected_cursor (corpus author error?)",
+                expected: format!("{expected:?}"),
+                got_hjkl: format!("{:?}", hjkl.cursor),
+                got_nvim: format!("{:?}", nvim.cursor),
+            },
+        };
+    }
+
+    if let Some(expected) = case.expected_mode.as_deref()
+        && nvim.mode != expected
+    {
+        return CaseResult {
+            name,
+            status: CaseStatus::Mismatch {
+                field: "expected_mode (corpus author error?)",
+                expected: expected.to_string(),
+                got_hjkl: hjkl.mode,
+                got_nvim: nvim.mode,
+            },
+        };
+    }
+
+    if let Some((_, expected)) = case.expected_register.as_ref()
+        && nvim.pinned_register.as_deref() != Some(expected.as_str())
+    {
+        return CaseResult {
+            name,
+            status: CaseStatus::Mismatch {
+                field: "expected_register (corpus author error?)",
+                expected: expected.clone(),
+                got_hjkl: format!("{:?}", hjkl.pinned_register),
+                got_nvim: format!("{:?}", nvim.pinned_register),
+            },
+        };
+    }
+
     // Compare buffer.
     if hjkl.buffer != nvim.buffer {
         return CaseResult {
@@ -168,6 +214,20 @@ async fn run_single(case: &OracleCase, nvim_ok: bool) -> CaseResult {
                 expected: nvim.default_register.clone(),
                 got_hjkl: hjkl.default_register,
                 got_nvim: nvim.default_register,
+            },
+        };
+    }
+
+    // Compare the pinned register. Only a case that names one has anything
+    // here; the unnamed register is already covered above.
+    if hjkl.pinned_register != nvim.pinned_register {
+        return CaseResult {
+            name,
+            status: CaseStatus::Mismatch {
+                field: "pinned_register",
+                expected: format!("{:?}", nvim.pinned_register),
+                got_hjkl: format!("{:?}", hjkl.pinned_register),
+                got_nvim: format!("{:?}", nvim.pinned_register),
             },
         };
     }

@@ -82,7 +82,7 @@ initial_buffer = "abc bar\n"
 initial_cursor = [0, 0]
 keys = "cwfoo<Esc>j`]"
 expected_buffer = "foo bar\n"
-expected_cursor = [0, 2]
+expected_cursor = [0, 3]
 
 # After `yyp` linewise paste, `` `[ `` returns to start of pasted line.
 [[cases]]

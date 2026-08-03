@@ -37,7 +37,7 @@ initial_buffer = "foo 42 bar\n"
 initial_cursor = [0, 4]
 keys = "<C-a>"
 expected_buffer = "foo 43 bar\n"
-expected_cursor = [0, 4]
+expected_cursor = [0, 5]
 
 # `<C-x>` decrements the number under cursor (42 → 41).
 [[cases]]
@@ -46,7 +46,7 @@ initial_buffer = "foo 42 bar\n"
 initial_cursor = [0, 4]
 keys = "<C-x>"
 expected_buffer = "foo 41 bar\n"
-expected_cursor = [0, 4]
+expected_cursor = [0, 5]
 
 # ─── Insert mode delete shortcuts ────────────────────────────────────────────
 
