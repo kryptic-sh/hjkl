@@ -158,6 +158,25 @@ fn parse_address(s: &str) -> Option<(Address, i64, &str)> {
     Some((base, offset, rest))
 }
 
+/// Number of real content rows in the buffer, excluding ropey's single
+/// phantom trailing empty row on newline-terminated text (vim treats a
+/// trailing `\n` as a line *terminator*, not a separator, so `"a\nb\n"` has
+/// 2 lines, not ropey's 3). A buffer whose *real* last line is empty
+/// (`"a\n\n"`) is untouched — only a single trailing phantom row is ever
+/// skipped, and single-row buffers (`""`, `"\n"`) are left alone (their one
+/// row is real). Mirrors `hjkl_engine::motions::content_row_count` (private
+/// there, so inlined here).
+fn content_row_count(buf: &hjkl_buffer::View) -> usize {
+    let raw_count = buf.row_count();
+    let raw_last = raw_count.saturating_sub(1);
+    // `raw_last < raw_count` here, so the row is always in bounds.
+    if raw_last > 0 && hjkl_engine::Query::line_bytes(buf, raw_last) == 0 {
+        raw_last
+    } else {
+        raw_count
+    }
+}
+
 /// Resolve a parsed address (base + offset) against the current editor
 /// state. Numbers are 1-based; the final `base + offset` is clamped to the
 /// buffer. Bad marks return an error.
@@ -173,9 +192,11 @@ fn resolve_address<H: hjkl_engine::Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
     from_row: Option<usize>,
 ) -> Result<usize, String> {
-    let line_count = editor.buffer().row_count();
-    // 1-based last line (at least 1 so single-line buffers work)
-    let last = line_count.max(1);
+    // 1-based last line (at least 1 so single-line buffers work). Must be the
+    // last REAL content line — `row_count()` includes ropey's phantom
+    // trailing empty row on newline-terminated buffers, which would make `$`
+    // (and thus `:$d`, `:$y`, `$-1`, ...) land past vim's last line.
+    let last = content_row_count(editor.buffer()).max(1);
     // 1-based current line: the `;`-separator override when present, else the
     // real (0-based) editor cursor.
     let current = from_row.unwrap_or_else(|| editor.cursor().0 + 1);
@@ -290,9 +311,10 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
     cmd: &'a str,
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<(Option<LineRange>, &'a str), String> {
-    // `%` — whole buffer
+    // `%` — whole buffer (1 through the last REAL content line; see
+    // `content_row_count` — `row_count()` includes the phantom trailing row)
     if let Some(rest) = cmd.strip_prefix('%') {
-        let line_count = editor.buffer().row_count().max(1);
+        let line_count = content_row_count(editor.buffer()).max(1);
         return Ok((Some(LineRange::new(1, line_count)), rest));
     }
 
@@ -442,6 +464,68 @@ mod tests {
         let (r, rest) = parse(".,$").unwrap();
         assert_eq!(r, Some((1, 5)));
         assert_eq!(rest, "");
+    }
+
+    // ---- phantom trailing row: `$` / `%` resolve to REAL content lines ----
+    //
+    // ropey's `len_lines()` synthesizes one phantom empty trailing row when
+    // the text ends in `\n`: "a\nb\n" → rows ["a", "b", ""]. `$` must mean
+    // vim's last REAL line (2), not the phantom (3), or `:$d` / `:$y` /
+    // `:$-1` operate on the wrong line.
+
+    fn make_editor_from_str(content: &str) -> Editor<hjkl_buffer::View, DefaultHost> {
+        hjkl_vim::vim_editor(
+            hjkl_buffer::View::from_str(content),
+            DefaultHost::new(),
+            hjkl_engine::Options::default(),
+        )
+    }
+
+    #[test]
+    fn dollar_is_last_real_line_on_newline_terminated_buffer() {
+        // Regression: `$` resolved to ropey's phantom trailing empty row (3)
+        // instead of vim's last real line (2), so `:$d` deleted the phantom
+        // (stripping the trailing newline) instead of line "b".
+        let e = make_editor_from_str("a\nb\n");
+        let (r, rest) = parse_range("$", &e).unwrap();
+        assert_eq!(r, Some(LineRange::new(2, 2)));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn dollar_minus_one_is_second_to_last_real_line() {
+        // `$-1` from `$` = 2 → 1 (line "a"); with the phantom it resolved to
+        // 2 (line "b"), so `:$-1d` deleted the wrong line.
+        let e = make_editor_from_str("a\nb\n");
+        let (r, rest) = parse_range("$-1", &e).unwrap();
+        assert_eq!(r, Some(LineRange::new(1, 1)));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn percent_is_real_content_lines_on_newline_terminated_buffer() {
+        // `%` = 1,$ must cover rows 1-2, not ropey's phantom row 3.
+        let e = make_editor_from_str("a\nb\n");
+        let (r, rest) = parse_range("%", &e).unwrap();
+        assert_eq!(r, Some(LineRange::new(1, 2)));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn dollar_on_real_empty_last_line_still_resolves_to_it() {
+        // "a\n\n" has a REAL empty last line — ropey rows ["a", "", ""];
+        // `$` must resolve to 2 (the real empty line), not 3 or 1.
+        let e = make_editor_from_str("a\n\n");
+        let (r, _) = parse_range("$", &e).unwrap();
+        assert_eq!(r, Some(LineRange::new(2, 2)));
+    }
+
+    #[test]
+    fn dollar_on_single_row_newline_terminated_buffer_is_one() {
+        // "\n" is a single (empty) line in vim — `$` = 1, not ropey's 2.
+        let e = make_editor_from_str("\n");
+        let (r, _) = parse_range("$", &e).unwrap();
+        assert_eq!(r, Some(LineRange::new(1, 1)));
     }
 
     #[test]
