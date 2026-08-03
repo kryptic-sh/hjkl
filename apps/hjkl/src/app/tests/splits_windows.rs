@@ -1814,10 +1814,13 @@ fn dock_resize_without_config_path_does_not_panic_or_write_anything() {
     assert_eq!(app.config.explorer.width, before + 2);
 }
 
-// ── Session-state persistence: explorer open/closed (#63 Phase C) ─────────
+// ── The `explorer.open` startup preference (#63 Phase C) ──────────────────
 
+/// Toggling the dock is session-only. `explorer.open` is what the user wants
+/// the NEXT session to start as, so a toggle must not touch it — otherwise
+/// whichever toggle happened to be last before quitting silently rewrote it.
 #[test]
-fn toggle_explorer_persists_open_state_to_config_file() {
+fn toggle_explorer_does_not_persist_open_state_to_config_file() {
     use crate::keymap_actions::AppAction;
     let dir = tempfile::tempdir().unwrap();
     let cfg_path = dir.path().join("config.toml");
@@ -1827,20 +1830,77 @@ fn toggle_explorer_persists_open_state_to_config_file() {
 
     app.dispatch_action(AppAction::ToggleExplorer, 1);
     assert!(app.tabs[app.active_tab].left_dock.is_some());
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.tabs[app.active_tab].left_dock.is_none());
+
+    // The write path creates the file on demand, so "no file" and "a file
+    // without the key" are both correct — neither can happen if a toggle wrote.
+    let text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    assert!(
+        !text.contains("open ="),
+        "toggling must not write explorer.open; got:\n{text}"
+    );
+}
+
+/// `:set explorer.open=…` is the only writer, and it applies the value now as
+/// well as persisting it — the same "apply + write back" every other `:set`
+/// does.
+#[test]
+fn set_explorer_open_applies_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_ex("set explorer.open=true");
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_some(),
+        "`:set explorer.open=true` must open the dock now, not only next launch"
+    );
+    assert!(app.config.explorer.open);
     let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
     assert!(text.contains("[explorer]"));
     assert!(
         text.contains("open = true"),
-        "opening the explorer must persist open = true; got:\n{text}"
+        "must persist open = true; got:\n{text}"
     );
 
-    app.dispatch_action(AppAction::ToggleExplorer, 1);
-    assert!(app.tabs[app.active_tab].left_dock.is_none());
+    app.dispatch_ex("set explorer.open=false");
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_none(),
+        "`:set explorer.open=false` must close the dock"
+    );
+    assert!(!app.config.explorer.open);
     let text = std::fs::read_to_string(&cfg_path).unwrap();
     assert!(
         text.contains("open = false"),
-        "closing the explorer must persist open = false; got:\n{text}"
+        "must persist open = false; got:\n{text}"
     );
+}
+
+/// Setting the value it already holds writes the key without toggling the dock
+/// — the guard that stops `:set explorer.open=true` on an open dock closing it.
+#[test]
+fn set_explorer_open_to_the_current_state_leaves_the_dock_alone() {
+    use crate::keymap_actions::AppAction;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let mut app = App::new(None, false, None, None)
+        .unwrap()
+        .with_config_path(cfg_path.clone());
+
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.tabs[app.active_tab].left_dock.is_some());
+
+    app.dispatch_ex("set explorer.open=true");
+
+    assert!(
+        app.tabs[app.active_tab].left_dock.is_some(),
+        "the dock was already open; `=true` must not toggle it shut"
+    );
+    let text = std::fs::read_to_string(&cfg_path).expect("config file must be created");
+    assert!(text.contains("open = true"), "got:\n{text}");
 }
 
 #[test]

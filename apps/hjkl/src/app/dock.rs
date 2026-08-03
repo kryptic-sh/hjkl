@@ -555,30 +555,34 @@ impl super::App {
         }
     }
 
-    // ── Session-state persistence (#63 Phase C) ─────────────────────────
+    // ── The `explorer.open` startup preference (#63 Phase C) ────────────
     //
-    // Unlike `persist_dock_width`/`persist_dock_height` (interactive resize
-    // only), open/closed state is written back on every toggle so the dock
-    // reopens automatically on the next launch. There is no separate
-    // "session file" mechanism anywhere in this codebase to hook into —
-    // `hjkl_config::write_key_at`'s surgical TOML patch (the same one Phase
-    // A/B already use for dock geometry) IS the closest existing precedent
-    // for "runtime state that survives a restart", so this reuses it rather
-    // than inventing a new persistence format.
+    // `explorer.open` is a preference, not a mirror of the live dock. It is
+    // written ONLY by an explicit `:set explorer.open=…` and read once, at
+    // startup, by `restore_dock_state_from_config`. `toggle_explorer`
+    // deliberately does not touch it: the dock's state during a session says
+    // nothing about how the user wants the next one to start, and writing it
+    // on every toggle made whichever toggle happened to be last before quitting
+    // overwrite a deliberately-set preference.
 
-    /// Write the left dock's current open/closed state back to the user's
-    /// config file. Called from [`super::App::toggle_explorer`] after every
-    /// toggle (both open and close), so `explorer.open` always reflects
-    /// reality — including when [`Self::restore_dock_state_from_config`]
-    /// itself calls `toggle_explorer` at startup (a harmless rewrite of the
-    /// same value already on disk). No-op — silently, matching
-    /// [`Self::persist_dock_width`] — when no config path is known.
-    pub(crate) fn persist_explorer_open(&mut self) {
+    /// Apply and persist `:set explorer.open=<want>`.
+    ///
+    /// Both halves, because that is what every other `:set` in this editor
+    /// does: the value takes effect now (opening or closing the dock through
+    /// [`super::App::toggle_explorer`], the same path `<leader>e` takes) and is
+    /// written back so the next launch starts that way. Already in the wanted
+    /// state ⇒ only the write happens. The write is a no-op — silently,
+    /// matching [`Self::persist_dock_width`] — when no config path is known
+    /// (`--clean`, or a test that never called `with_config_path`).
+    pub(crate) fn set_explorer_open(&mut self, want: bool) {
+        self.config.explorer.open = want;
+        if self.tabs[self.active_tab].explorer.is_some() != want {
+            self.toggle_explorer();
+        }
         let Some(path) = self.config_path.clone() else {
             return;
         };
-        let open = self.tabs[self.active_tab].explorer.is_some();
-        if let Err(e) = hjkl_config::write_key_at(&path, "explorer.open", open) {
+        if let Err(e) = hjkl_config::write_key_at(&path, "explorer.open", want) {
             self.bus
                 .warn(format!("couldn't save explorer open state: {e}"));
         }

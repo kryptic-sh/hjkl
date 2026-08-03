@@ -8,6 +8,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- `explorer.open` is a startup preference rather than a mirror of the live dock.
+  Toggling the explorer (`<leader>e`, `<C-w>c` on it) no longer writes the key,
+  so a toggle late in a session can no longer overwrite a value the user set
+  deliberately. `:set explorer.open=true` / `=false` is now the only writer; it
+  applies the value immediately and persists it, and `:set explorer.open?`
+  reports it.
+
 ### Added
 
 - Added changelog.

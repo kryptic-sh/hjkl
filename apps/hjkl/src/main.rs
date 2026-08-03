@@ -596,7 +596,7 @@ fn main() -> Result<()> {
     //
     // Under `--clean` we deliberately leave the path UNSET: a clean session
     // must never touch the user's config on disk, so runtime changes (dock
-    // resizes, `explorer.open` write-back) stay in-memory only.
+    // resizes, `:set` write-back) stay in-memory only.
     let cfg_path = if args.clean {
         None
     } else {
@@ -730,9 +730,9 @@ fn main() -> Result<()> {
     if args.picker {
         app.open_picker();
     }
-    // Reopen the left explorer dock if the user left it open last session
-    // (#63 Phase C — `explorer.open` in config, written back by every
-    // `toggle_explorer`). Runs after `with_config`/`with_config_path` (needs
+    // Reopen the left explorer dock if the user asked for it to start open
+    // (#63 Phase C — `explorer.open` in config, written only by
+    // `:set explorer.open=…`). Runs after `with_config`/`with_config_path` (needs
     // the loaded config) and after the CLI files are open (so the dock's
     // initial reveal-cursor lands on the file the user is actually editing,
     // same as an interactive `<leader>e` would). The bottom quickfix/

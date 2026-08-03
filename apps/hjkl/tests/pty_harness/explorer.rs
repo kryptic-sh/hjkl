@@ -204,12 +204,46 @@ fn dock_resize_ctrl_w_gt_persists_width_to_real_config_file() {
          {cfg_path:?}; got:\n{text}"
     );
     assert!(text.contains("[explorer]"));
-    // The explorer was opened during this same session (see `toggle_explorer`
-    // → `persist_explorer_open`, #63 Phase C), so `open = true` must have
-    // landed in the same file alongside the width.
+    // The explorer was opened during this same session, and that must NOT have
+    // written `explorer.open`: the key is a startup preference set only by
+    // `:set explorer.open=…`, never a mirror of the live dock. The width write
+    // above is what proves the write-back path was armed at all, so the absence
+    // here is a real observation rather than a config file nobody wrote to.
     assert!(
-        text.contains("open = true"),
-        "opening the explorer this session must also have persisted \
-         explorer.open = true; got:\n{text}"
+        !text.contains("open ="),
+        "toggling the explorer must not persist explorer.open; got:\n{text}"
+    );
+}
+
+/// `:set explorer.open=true` writes the startup preference to the real config
+/// file — the only thing that does, now that toggling does not.
+#[test]
+fn set_explorer_open_persists_to_real_config_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("hello.txt");
+    std::fs::write(&file, "hi\n").unwrap();
+
+    let mut session = TerminalSession::spawn_in_dir_with_file(tmp.path(), &file);
+    let cfg_path = session.config_file_path();
+
+    session.keys(":set explorer.open=true<CR>");
+    let wrote =
+        wait_until(|| std::fs::read_to_string(&cfg_path).is_ok_and(|t| t.contains("open = true")));
+    let text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    assert!(
+        wrote,
+        "`:set explorer.open=true` must persist open = true to {cfg_path:?}; got:\n{text}"
+    );
+
+    // And back off again, so the test pins both directions rather than just
+    // "the key appeared".
+    session.keys(":set explorer.open=false<CR>");
+    let cleared =
+        wait_until(|| std::fs::read_to_string(&cfg_path).is_ok_and(|t| t.contains("open = false")));
+    let text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    drop(session);
+    assert!(
+        cleared,
+        "`:set explorer.open=false` must persist open = false; got:\n{text}"
     );
 }

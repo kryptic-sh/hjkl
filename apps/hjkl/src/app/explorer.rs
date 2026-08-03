@@ -819,17 +819,21 @@ impl super::App {
             .is_some_and(|w| self.slots.get(w.slot).is_some_and(|s| s.is_explorer()))
     }
 
-    /// `<leader>e` toggle: closed → open + focus; open → close. Persists the
-    /// resulting open/closed state to the user's config (`explorer.open`,
-    /// #63 Phase C) so it's restored on the next launch — see
-    /// `dock::App::persist_explorer_open` / `restore_dock_state_from_config`.
+    /// `<leader>e` toggle: closed → open + focus; open → close.
+    ///
+    /// Session-only: this does NOT write `explorer.open` back to the user's
+    /// config. That key is the STARTUP preference, owned by the user through
+    /// `:set explorer.open=…` (see `dock::App::set_explorer_open`) and read
+    /// once by `dock::App::restore_dock_state_from_config`. Toggling the dock
+    /// during a session is not a statement about how the next one should start,
+    /// and writing it on every toggle meant the last toggle before quitting
+    /// silently rewrote a preference the user had set deliberately.
     pub(crate) fn toggle_explorer(&mut self) {
         if self.tabs[self.active_tab].explorer.is_some() {
             self.close_explorer();
         } else {
             self.open_explorer();
         }
-        self.persist_explorer_open();
     }
 
     /// Open the explorer window as the left dock (#63 Phase A — outside

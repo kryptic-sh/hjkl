@@ -184,11 +184,14 @@ transparent = false
 # your config file so it persists across sessions.
 width = 36
 
-# Whether the left file-explorer dock is open. Toggling it (`<leader>e` or
-# `<C-w>c` on the dock) writes this value back to your config file, so hjkl
-# reopens the explorer on the next launch iff you left it open. Does not
-# affect the bottom quickfix/location-list dock, which is never restored —
-# see `[panel]` below for why.
+# Whether hjkl opens the left file-explorer dock on startup. This is a
+# preference, not a record of the last session: toggling the dock
+# (`<leader>e`, `<C-w>c` on it) does NOT write here, so a toggle late in a
+# session can no longer overwrite what you set. Change it with
+# `:set explorer.open=true` / `=false`, which both applies it now and writes
+# it back. `:set explorer.open?` reports the current value. Does not affect
+# the bottom quickfix/location-list dock, which is never restored — see
+# `[panel]` below for why.
 open = false
 
 [panel]

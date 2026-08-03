@@ -254,6 +254,31 @@ impl App {
                             self.set_mouse_capture(any_on);
                             consumed_any = true;
                         }
+                        // `:set explorer.open=true|false` / `explorer.open?`.
+                        // The left dock is host state (it lives outside every
+                        // tab's `LayoutTree`), so there is no engine `Settings`
+                        // field for hjkl-ex to apply this to — same reason as
+                        // `mouse` and `endofline` above. This is the ONLY writer
+                        // of the key; toggling the dock deliberately leaves it
+                        // alone (see `dock::App::set_explorer_open`).
+                        "explorer.open?" => {
+                            let open = self.config.explorer.open;
+                            self.bus.info(format!("explorer.open={open}"));
+                            consumed_any = true;
+                        }
+                        other if other.starts_with("explorer.open=") => {
+                            match &other["explorer.open=".len()..] {
+                                "true" => self.set_explorer_open(true),
+                                "false" => self.set_explorer_open(false),
+                                bad => {
+                                    self.bus.error(format!(
+                                        "E474: Invalid argument: explorer.open={bad} \
+                                         (expected true or false)"
+                                    ));
+                                }
+                            }
+                            consumed_any = true;
+                        }
                         other => remaining.push(other),
                     }
                 }

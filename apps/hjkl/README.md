@@ -83,7 +83,7 @@ hjkl -s script.txt file.txt # replay script.txt's keystrokes, then continue inte
 
 `--clean` starts from the bundled defaults, ignoring the user config file at its
 default location (and any `--config` path), and does not persist runtime changes
-(dock resizes, `explorer.open`) back to disk. Mirrors `nvim --clean`.
+(dock resizes, `:set` write-back) back to disk. Mirrors `nvim --clean`.
 
 `-n` disables swap-file writing for the session: no crash-recovery file is
 created or updated, so edits live only in memory. Mirrors `vim -n` / `nvim -n`.
