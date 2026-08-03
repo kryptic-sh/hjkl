@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Fixed
 
 - `rope_line_str` and `rope_line_bytes` no longer leave a non-`\n` line

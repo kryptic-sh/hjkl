@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Changed
 
 - The file picker lists hidden files. It walked with `hidden(true)`, so a

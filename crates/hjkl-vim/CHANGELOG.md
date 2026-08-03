@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Fixed
 
 - `insert_newline_bridge` applies `autoindent` the way vim does: the computed

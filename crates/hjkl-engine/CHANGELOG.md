@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Added
 
 - `Editor::push_error` / `Editor::take_errors` — a queue for user-visible

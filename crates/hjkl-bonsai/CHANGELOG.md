@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Added
 
 - `folds::extract_fold_ranges_rope_with_injections` — fold extraction that also

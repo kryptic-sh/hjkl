@@ -8,6 +8,8 @@ this project adheres to
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Added
 
 - `project` — one definition of "which files are part of this project", so the

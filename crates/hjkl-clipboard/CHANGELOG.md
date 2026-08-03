@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Fixed
 
 - **The Wayland mock-compositor tests no longer depend on timing.** They waited

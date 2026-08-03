@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-04
+
 ### Fixed
 
 - The `cursorcolumn` bar lands on the cursor's cell on lines with CJK, emoji or
