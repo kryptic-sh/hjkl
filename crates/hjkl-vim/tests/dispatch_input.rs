@@ -1119,6 +1119,27 @@ fn dot_repeat_paste_reuses_the_explicit_register() {
     assert_eq!(e.content(), "alpha bravo\nalpha alpha \n\n");
 }
 
+/// A row ropey ended with a separator other than `\n` used to read one char
+/// longer than its content, because `rope_line_str` stripped a literal `'\n'`
+/// and nothing else. `j` then clamped against that inflated length, and the
+/// debug curswant invariant fired: "row 1 has 2 chars, so 2 is not a vertical
+/// clamp either" — while row 1's real content is the single `\t`.
+///
+/// Minimized by `cargo fuzz tmin` from a `handle_key` crash; `*` is only here
+/// because it is what puts the cursor on column 2 with `sticky_col` 2.
+#[test]
+fn vertical_clamp_ignores_a_non_newline_line_separator() {
+    let mut e = editor_with("\0/kkk\r\t\r\u{e}\0??kk");
+    // ropey splits on the lone `\r`; the row's content excludes it.
+    assert_eq!(e.line(1).as_deref(), Some("\t"));
+    dispatch_keys(&mut e, "*");
+    assert_eq!(e.cursor(), (0, 2));
+    // Row 1 holds one char, so the clamp lands on column 0 — and the invariant
+    // must agree, rather than measuring the row as two chars wide.
+    dispatch_keys(&mut e, "<Down>");
+    assert_eq!(e.cursor(), (1, 0));
+}
+
 /// Run `keys` and read `"a` back out.
 fn dispatch_and_read_reg_a(e: &mut Editor, keys: &str) -> String {
     dispatch_keys(e, keys);

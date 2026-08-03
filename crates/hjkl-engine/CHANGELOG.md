@@ -17,6 +17,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`Query::line` and `Query::line_bytes` agree on a row ending in a non-`\n`
+  separator.** Both delegate to `hjkl-buffer`'s row helpers, which used to strip
+  a literal `'\n'` and subtract a hard-coded one byte respectively — so on
+  `"a\u{2028}b"` they answered a 4-byte row and 3 bytes for content that is the
+  single byte `a`. `rope_util::rope_line_to_str` carried a third copy of the
+  same `'\n'`-only rule and now delegates instead of duplicating it. The test
+  that pinned this as a deliberate divergence asserted the buggy values and is
+  rewritten.
+
 - **`b`, `B`, `ge` and `gE` stop at a line boundary.** vim's `dec()` steps from
   column 0 of a row onto the PREVIOUS row's virtual end-of-line cell — one past
   its last character — and reads that cell's class as whitespace, which is what

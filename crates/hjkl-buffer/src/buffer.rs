@@ -811,18 +811,35 @@ pub fn floor_char_boundary(rope: &ropey::Rope, byte_idx: usize) -> usize {
     rope.char_to_byte(rope.byte_to_char(byte_idx))
 }
 
-/// Return logical line `row` as a `String`, stripping the trailing `\n`
-/// that ropey includes for non-final lines.
-pub fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
-    let mut s = rope.line(row).to_string();
-    // ropey includes the trailing '\n' for non-final lines; strip it.
-    if s.ends_with('\n') {
-        s.pop();
+/// Absolute byte index where row `row`'s content ends — the first byte of the
+/// separator ropey split on, or `len_bytes()` for the final row.
+///
+/// ropey's default `unicode_lines` feature splits on `\r`, U+000B, U+000C,
+/// U+0085 and U+2028 / U+2029 as well as `\n`, and those are 1–3 bytes wide.
+/// `line_to_byte(row + 1)` points just past the separator, so stepping back a
+/// hard-coded one byte lands *inside* a multi-byte one; flooring to the
+/// enclosing char start snaps to the separator's first byte, which is exactly
+/// the end of this row's content. `\r\n` is unaffected: `\n` begins a char, so
+/// the floor is the identity and a CRLF row keeps its trailing `\r` — the same
+/// rule [`crate::rope_row_range_str`]'s engine-side twin applies.
+fn rope_line_content_end(rope: &ropey::Rope, row: usize) -> usize {
+    if row + 1 >= rope.len_lines() {
+        return rope.len_bytes();
     }
-    s
+    let step_back = rope.line_to_byte(row + 1).saturating_sub(1);
+    floor_char_boundary(rope, step_back)
 }
 
-/// Byte length of logical line `row` (excluding the trailing `\n`).
+/// Return logical line `row` as a `String`, stripping the line separator that
+/// ropey includes for non-final lines.
+pub fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
+    // Preserves the previous contract: ropey panics for `row >= len_lines()`.
+    let start = rope.line_to_byte(row);
+    rope.byte_slice(start..rope_line_content_end(rope, row))
+        .to_string()
+}
+
+/// Byte length of logical line `row` (excluding the line separator).
 ///
 /// A `row` at or past `len_lines()` answers 0 rather than panicking: this is
 /// `pub`, so the row can arrive from a caller holding a position that went
@@ -831,17 +848,10 @@ pub fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
     if row >= rope.len_lines() {
         return 0;
     }
-    let slice = rope.line(row);
-    let bytes = slice.len_bytes();
-    // ropey includes the '\n' byte for non-final lines; subtract it.
-    if row + 1 < rope.len_lines() && bytes > 0 {
-        bytes - 1
-    } else {
-        bytes
-    }
+    rope_line_content_end(rope, row).saturating_sub(rope.line_to_byte(row))
 }
 
-/// Char count of logical line `row` (excluding the trailing `\n`).
+/// Char count of logical line `row` (excluding the line separator).
 ///
 /// Out of range (`row >= len_lines()`) answers 0, for the same reason as
 /// [`rope_line_bytes`]: a stale row from a `pub` caller must not panic ropey.
@@ -849,14 +859,9 @@ pub fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
     if row >= rope.len_lines() {
         return 0;
     }
-    let slice = rope.line(row);
-    let chars = slice.len_chars();
-    // ropey includes the '\n' char for non-final lines; subtract it.
-    if row + 1 < rope.len_lines() && chars > 0 {
-        chars - 1
-    } else {
-        chars
-    }
+    let end = rope_line_content_end(rope, row);
+    rope.byte_to_char(end)
+        .saturating_sub(rope.byte_to_char(rope.line_to_byte(row)))
 }
 
 /// Char index from `(row, col)` where `col` is a char index within the line.
@@ -895,6 +900,60 @@ mod tests {
         let b = View::from_str("foo\n");
         assert_eq!(b.row_count(), 2);
         assert_eq!(rope_line_str(&b.rope(), 1), "");
+    }
+
+    /// ropey's default `unicode_lines` feature splits on more than `\n`, and
+    /// those separators are 1–3 bytes wide. A row helper that strips a literal
+    /// `'\n'` — or subtracts a hard-coded one byte — leaves the separator in
+    /// the row's content, so the row reads one or more chars longer than it is.
+    /// Found by the `handle_key` fuzz target via the curswant invariant.
+    #[test]
+    fn line_helpers_strip_every_line_separator() {
+        // `\r\n` is deliberately absent: ropey makes it one break, and the
+        // established rule (`rope_row_range_str`) keeps the `\r` as content.
+        for sep in ["\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let rope = ropey::Rope::from_str(&format!("ab{sep}cd{sep}ef"));
+            assert_eq!(rope.len_lines(), 3, "separator {sep:?} must split rows");
+            for row in 0..3 {
+                let expect = ["ab", "cd", "ef"][row];
+                assert_eq!(
+                    rope_line_str(&rope, row),
+                    expect,
+                    "rope_line_str kept separator {sep:?} in row {row}"
+                );
+                assert_eq!(
+                    rope_line_bytes(&rope, row),
+                    expect.len(),
+                    "rope_line_bytes counted separator {sep:?} in row {row}"
+                );
+                assert_eq!(
+                    rope_line_char_count(&rope, row),
+                    expect.chars().count(),
+                    "rope_line_char_count counted separator {sep:?} in row {row}"
+                );
+            }
+        }
+    }
+
+    /// The three helpers must agree with each other on every row: they are
+    /// three views of one length, and the curswant invariant compares a column
+    /// derived from one against a clamp derived from another.
+    #[test]
+    fn line_helpers_agree_with_each_other() {
+        let rope = ropey::Rope::from_str("ab\r\ncd\re\u{2028}f\u{85}\u{0c}g\nh");
+        for row in 0..rope.len_lines() {
+            let s = rope_line_str(&rope, row);
+            assert_eq!(
+                rope_line_bytes(&rope, row),
+                s.len(),
+                "bytes differ on {row}"
+            );
+            assert_eq!(
+                rope_line_char_count(&rope, row),
+                s.chars().count(),
+                "char count differs on row {row}"
+            );
+        }
     }
 
     #[test]

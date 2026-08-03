@@ -9,13 +9,10 @@
 /// Return row `r` from a rope as an owned `String`, stripping the
 /// trailing `\n` that ropey includes on non-final lines.
 pub fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
-    let s = rope.line(r).to_string();
-    // ropey includes the newline; strip it so callers see bare content.
-    if s.ends_with('\n') {
-        s[..s.len() - 1].to_string()
-    } else {
-        s
-    }
+    // One rule, one implementation: stripping a literal `'\n'` here left every
+    // other separator ropey splits on (`\r`, U+000B/C, U+0085, U+2028/9) in the
+    // row's content, so this copy disagreed with `hjkl_buffer`'s.
+    hjkl_buffer::rope_line_str(rope, r)
 }
 
 /// Join rows `lo..=hi` from a rope into a single `String` separated by

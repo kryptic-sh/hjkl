@@ -709,24 +709,35 @@ mod tests {
         }
     }
 
-    /// Documented divergence: for rows terminated by a non-LF break that
-    /// ropey still counts as a line break (lone CR, NEL, U+2028/9),
-    /// `line_bytes` excludes the terminator while `line()` — which only
-    /// strips a trailing `'\n'` — keeps it. `line_bytes` is the tighter,
-    /// engine-consistent answer (it matches `rope_line_char_count`, which is
-    /// what cursor-column clamping uses), so span clamps can only shrink,
-    /// never overrun.
+    /// A row terminated by a non-LF break that ropey still counts as a line
+    /// break (lone CR, NEL, U+2028/9) reports only its own content.
+    ///
+    /// This test previously pinned a divergence here as deliberate: `line()`
+    /// kept the terminator while `line_bytes` dropped it. Neither half of the
+    /// rationale survived measurement. `line_bytes` subtracted a hard-coded
+    /// ONE byte, so on `"a\u{2028}b"` it answered 3 for a row whose content is
+    /// the single byte `a` — it kept two of the separator's three bytes — and
+    /// it therefore did not "match `rope_line_char_count`", which answered 1.
+    /// The `line()` half is what let a `\r`-terminated row read one char wide
+    /// than it is, which the debug curswant invariant caught via the
+    /// `handle_key` fuzz target. All three helpers now share one rule.
     #[test]
-    fn line_bytes_excludes_non_lf_line_break() {
-        for (text, row, line_len, bytes) in [
-            ("a\rb", 0, 2, 1),
-            ("a\u{2028}b", 0, 4, 3),
-            ("a\u{0085}b", 0, 3, 2),
-        ] {
+    fn line_helpers_exclude_a_non_lf_line_break() {
+        for text in ["a\rb", "a\u{2028}b", "a\u{0085}b", "a\u{0b}b", "a\u{0c}b"] {
             let b = RopeBuffer::from_str(text);
-            assert_eq!(Query::line(&b, row).len(), line_len, "{text:?}");
-            assert_eq!(Query::line_bytes(&b, row as usize), bytes, "{text:?}");
+            assert_eq!(Query::line(&b, 0), "a", "{text:?}");
+            assert_eq!(Query::line_bytes(&b, 0), 1, "{text:?}");
         }
+    }
+
+    /// `\r\n` is the one break whose `\r` stays in the row's content — ropey
+    /// makes it a single break, and stripping back to the `\r` would silently
+    /// rewrite CRLF text. Pinned so the shared rule cannot drift into it.
+    #[test]
+    fn crlf_keeps_its_carriage_return() {
+        let b = RopeBuffer::from_str("a\r\nb");
+        assert_eq!(Query::line(&b, 0), "a\r");
+        assert_eq!(Query::line_bytes(&b, 0), 2);
     }
 
     #[test]

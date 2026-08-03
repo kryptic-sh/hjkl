@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `rope_line_str` and `rope_line_bytes` no longer leave a non-`\n` line
+  separator in the row's content. ropey's `unicode_lines` splits on lone `\r`,
+  U+000B, U+000C, U+0085 and U+2028 / U+2029, but the first stripped a literal
+  `'\n'` and the second subtracted a hard-coded one byte — so a `\r`-terminated
+  row reported one char too many, and U+2028 kept two of its three bytes. Both,
+  and the internal `rope_line_char_count`, now share one rule: the row's content
+  ends at the separator's first byte, found by flooring
+  `line_to_byte(row + 1) - 1` to a char boundary. `\r\n` is unchanged and keeps
+  its `\r`, matching `rope_row_range_str`.
+
 - A corrupt undofile can no longer hang the editor on load.
   `UndoTree::from_serializable` checked that every link index was in range but
   not that the links described a tree, so a projection whose `parent` pointers

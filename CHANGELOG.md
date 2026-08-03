@@ -38,6 +38,17 @@ patch bumps.
 
 ### Fixed
 
+- **A line ending in a separator other than `\n` no longer reads one character
+  too wide.** ropey's `unicode_lines` splits on lone `\r`, U+000B, U+000C,
+  U+0085 and U+2028 / U+2029 as well as `\n`, but the row helpers stripped a
+  literal `'\n'` (`rope_line_str`) or subtracted a hard-coded one byte
+  (`rope_line_bytes`) — so the separator stayed in the row's reported content,
+  and `rope_line_bytes` kept two of U+2028's three bytes. A `j` onto such a row
+  then clamped against the inflated length, landing the cursor past the row's
+  last real character. All three helpers now derive the row's end from one rule,
+  the same one `rope_row_range_str` already used; `\r\n` still keeps its `\r`,
+  which is unchanged. Found by the `handle_key` fuzz target.
+
 - **A C++ `try` block now folds over its whole statement.** Under
   `foldmethod=expr` the fold anchored on `try {` stopped at the `}` that opens
   the `catch`, and the catch clause itself was not foldable at all — the bundled
