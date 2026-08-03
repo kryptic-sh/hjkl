@@ -284,13 +284,18 @@ Not verified in either pass: fold behaviour for these nine languages at
 non-trivial scale (all fixtures are hand-written and under 80 lines), and any
 language outside the 20 with a bundled `folds.scm`.
 
-Unrelated pre-existing failure noticed while running the grammar-backed lane:
-`hjkl_syntax`'s `incremental_path_matches_cold_for_small_edit` fails at HEAD
-(confirmed against a pristine checkout of `crates/hjkl-syntax/src/lib.rs`, so it
-is not from the fold work). The incremental reparse and the cold reparse
-disagree on highlight spans after a one-character insert — the incremental run
-loses the `type` capture on the edited identifier and reports byte ranges one
-short. It is a highlighting bug, not a fold one, and was left alone.
+`incremental_path_matches_cold_for_small_edit` was failing at HEAD for the whole
+of that pass and is fixed (2026-08-04): `SyntaxLayer::apply_edits` cleared the
+parse, row-start and sign caches but not the SPAN cache, leaving that one to the
+`dirty_gen` mismatch in `render_viewport`. The test builds two fresh `View`s,
+which share a `dirty_gen`, so the mismatch never fired and the incremental
+render returned the pre-edit span table — hence "byte ranges one short" and the
+missing capture, with the tree itself correctly reparsed. Not reachable from the
+app, where every edit advances `dirty_gen`.
+
+**No CI lane runs it.** Every grammar-backed test in `hjkl_syntax` is
+`#[ignore]`d because CI has no grammars, so this class of defect can only be
+caught by running `cargo test -p hjkl-syntax --lib -- --ignored` by hand.
 
 ### 1.4c Swap still derives its directory from the environment (2026-08-02)
 

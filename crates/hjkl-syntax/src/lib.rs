@@ -671,11 +671,14 @@ impl SyntaxLayer {
                 },
             });
         }
-        // dirty_gen will advance — invalidate parse + row_starts + sign caches.
-        // cache_spans / cache_rows are dropped on dirty_gen mismatch in render_viewport.
-        c.parsed_dirty_gen = None;
-        c.cache_row_starts = None;
-        c.cache_signs = None;
+        // Drop every cache, the span table included. This used to clear only
+        // the parse, row-start and sign caches and leave `cache_spans` to the
+        // `dirty_gen` mismatch in `render_viewport` — which does happen for a
+        // real buffer edit, but makes correctness here depend on a counter
+        // this function neither reads nor controls. A caller that edits
+        // through `apply_edits` without the buffer's `dirty_gen` moving got
+        // the PRE-edit spans back, reparse and all.
+        c.invalidate_cache();
     }
 
     /// Drop the buffer's retained tree. Next `render_viewport` reparses from scratch.
@@ -1798,6 +1801,13 @@ mod tests {
         );
     }
 
+    /// Regression: `apply_edits` used to clear the parse, row-start and sign
+    /// caches but leave `cache_spans`, relying on the buffer's `dirty_gen`
+    /// having moved by the time `render_viewport` next ran. Both buffers here
+    /// are freshly constructed and so share a `dirty_gen`, which is what makes
+    /// the omission visible: the incremental render returned the PRE-edit span
+    /// table, one byte short across the board and without the `@type` capture
+    /// that `Ymain`'s new capital earns.
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn incremental_path_matches_cold_for_small_edit() {
