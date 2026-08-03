@@ -499,13 +499,23 @@ pub fn search_forward<B: Cursor + Query + Search>(
     if total == 0 {
         return false;
     }
-    // To "skip the current cell", advance `from` one byte past the
+    // To "skip the current cell", advance `from` one char past the
     // cursor before asking `find_next` for the at-or-after match.
-    // `pos_at_byte` clamps overflow to end-of-buffer so this is
-    // safe even when the cursor sits at the trailing edge.
+    // `pos_at_byte` rounds a mid-char byte DOWN to the enclosing
+    // char's start, so stepping a single byte from the first byte of
+    // a multi-byte char lands back on the cursor itself and `n` never
+    // advances. Step by the full char width instead; when the cursor
+    // sits past end-of-line (no char there), fall back to one byte —
+    // `pos_at_byte` clamps overflow to end-of-buffer so this is safe
+    // even when the cursor sits at the trailing edge.
     let from = if skip_current {
         let from_byte = buf.byte_offset(cursor);
-        buf.pos_at_byte(from_byte.saturating_add(1))
+        let width = buf
+            .line(cursor.line)
+            .chars()
+            .nth(cursor.col as usize)
+            .map_or(1, char::len_utf8);
+        buf.pos_at_byte(from_byte.saturating_add(width))
     } else {
         cursor
     };
@@ -552,8 +562,14 @@ pub fn search_backward<B: Cursor + Query + Search>(
                 // commit state). Step past and re-query.
                 let cb = buf.byte_offset(m.start);
                 if cb == 0 {
-                    // No earlier byte — fall through to wrap.
-                    None
+                    // Current match starts at buffer byte 0 — there is
+                    // nothing earlier to step back to. Wrap to the
+                    // buffer's last match instead; when the current
+                    // match is the only one, `find_prev` from
+                    // end-of-buffer returns it again and the cursor
+                    // stays (matches vim).
+                    let end = buf.pos_at_byte(buf.len_bytes());
+                    buf.find_prev(end, &re)
                 } else {
                     let anchor = buf.pos_at_byte(cb.saturating_sub(1));
                     buf.find_prev(anchor, &re)
@@ -975,6 +991,35 @@ mod tests {
         s.wrap_around = true;
         assert!(search_forward(&mut b, &mut s, true));
         assert_eq!(Cursor::cursor(&b), Pos::new(0, 0));
+    }
+
+    /// `n` from a match whose first byte begins a multi-byte char must
+    /// advance to the next match. `pos_at_byte` rounds a mid-char byte
+    /// DOWN to the enclosing char's start, so a one-byte step from the
+    /// char's first byte lands back on the cursor itself — regression:
+    /// `n` was permanently stuck on "éé".
+    #[test]
+    fn forward_skip_current_past_multibyte_char() {
+        let mut b = View::from_str("éé");
+        let mut s = SearchState::new();
+        s.set_pattern(Some(re("é")));
+        // Cursor starts on the first `é` (col 0); `n` must land on the
+        // second one (col 1), not re-find the current match.
+        assert!(search_forward(&mut b, &mut s, true));
+        assert_eq!(Cursor::cursor(&b), Pos::new(0, 1));
+    }
+
+    /// `N` from a match that starts at buffer byte 0 wraps to the last
+    /// match of the buffer instead of staying put — regression: the
+    /// "no earlier byte" branch returned `None` and never wrapped.
+    #[test]
+    fn backward_skip_current_wraps_from_byte_zero() {
+        let mut b = View::from_str("foo\nfoo");
+        Cursor::set_cursor(&mut b, Pos::new(0, 0));
+        let mut s = SearchState::new();
+        s.set_pattern(Some(re("foo")));
+        assert!(search_backward(&mut b, &mut s, true));
+        assert_eq!(Cursor::cursor(&b), Pos::new(1, 0));
     }
 
     #[test]
