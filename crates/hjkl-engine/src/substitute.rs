@@ -246,6 +246,27 @@ fn rebase_marks_after_row_growth<H: crate::types::Host>(
     }
 }
 
+/// Emit the host-visible records `mutate_edit` produces for an edit, for the
+/// substitute path's whole-buffer `replace_all` swap. `pre_end` is the
+/// position one past the pre-replace content's last char (captured before the
+/// swap); `new_text` is the joined replacement content. The change-log entry
+/// is one coarse whole-buffer Replace (per the `take_changes` contract, hosts
+/// wanting per-cell deltas diff their own snapshot); the content-reset flag
+/// tells syntax hosts to drop the retained tree and reparse, exactly as
+/// `Editor::set_content` does for whole-buffer replaces.
+fn emit_whole_buffer_change<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    pre_end: crate::types::Pos,
+    new_text: &str,
+) {
+    ed.buffer_mut().extend_change_log([crate::types::Edit {
+        range: crate::types::Pos::new(0, 0)..pre_end,
+        replacement: new_text.to_string(),
+    }]);
+    ed.buffer_mut().clear_pending_content_edits();
+    ed.buffer_mut().set_pending_content_reset(true);
+}
+
 /// Apply a parsed substitute command to `line_range` (0-based inclusive)
 /// in the editor's buffer.
 ///
@@ -379,7 +400,21 @@ pub fn apply_substitute<H: crate::types::Host>(
     let last_changed_row = last_changed_row + newlines_before + newlines_within;
 
     // Apply the new content in one shot.
-    ed.buffer_mut().replace_all(&new_lines.join("\n"));
+    // `replace_all` bypasses `mutate_edit`'s host records, so capture the
+    // pre-replace end position (the change-log range must describe the OLD
+    // content) and emit the whole-buffer records after the swap.
+    let pre_rows = crate::types::Query::rope(ed.buffer()).len_lines();
+    let last_pre_row = pre_rows.saturating_sub(1);
+    let pre_end = crate::types::Pos::new(
+        last_pre_row as u32,
+        crate::buf_helpers::buf_line(ed.buffer(), last_pre_row)
+            .unwrap_or_default()
+            .chars()
+            .count() as u32,
+    );
+    let new_text = new_lines.join("\n");
+    ed.buffer_mut().replace_all(&new_text);
+    emit_whole_buffer_change(ed, pre_end, &new_text);
 
     // `replace_all` does not rebase marks/jumplist/folds (only `mutate_edit`
     // does); a `\r` in the replacement that adds rows would leave positions
@@ -603,7 +638,21 @@ pub fn apply_collected_matches<H: crate::types::Host>(
     }
 
     if applied > 0 {
-        ed.buffer_mut().replace_all(&lines_vec.join("\n"));
+        // Same host records as `apply_substitute`: `replace_all` bypasses
+        // `mutate_edit`, so emit the whole-buffer change-log entry and
+        // content-reset for the swap.
+        let pre_rows = crate::types::Query::rope(ed.buffer()).len_lines();
+        let last_pre_row = pre_rows.saturating_sub(1);
+        let pre_end = crate::types::Pos::new(
+            last_pre_row as u32,
+            crate::buf_helpers::buf_line(ed.buffer(), last_pre_row)
+                .unwrap_or_default()
+                .chars()
+                .count() as u32,
+        );
+        let new_text = lines_vec.join("\n");
+        ed.buffer_mut().replace_all(&new_text);
+        emit_whole_buffer_change(ed, pre_end, &new_text);
         // Same rebase as `apply_substitute`: a `\r` in an accepted replacement
         // adds rows, and `replace_all` alone leaves marks/jumplist/folds stale.
         rebase_marks_after_row_growth(ed, &lines_vec);
@@ -1209,6 +1258,82 @@ mod tests {
             "confirm-path mark must shift by the rows added above it"
         );
         assert_eq!(buf_line(&e, 16), "X");
+    }
+
+    // ── host change records (`take_changes` / `take_content_reset` /
+    //    `take_content_edits`) ──────────────────────────────────────────
+    //
+    // `:s` swaps the whole buffer via `replace_all`, bypassing `mutate_edit`,
+    // so the substitute path must emit the host-visible records itself. Each
+    // test drains the emission `editor_with`'s `set_content` left behind
+    // first, so the assertions observe only what the substitute produced.
+
+    #[test]
+    fn substitute_emits_change_log_and_reset() {
+        let mut e = editor_with("foo\nbar\nbaz");
+        let _ = e.take_changes();
+        let _ = e.take_content_reset();
+        let _ = e.take_content_edits();
+        let cmd = parse_substitute("/foo/qux/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=2).unwrap();
+        let changes = e.take_changes();
+        assert_eq!(changes.len(), 1, "one coarse whole-buffer Replace");
+        assert_eq!(changes[0].range.start, crate::types::Pos::new(0, 0));
+        assert_eq!(
+            changes[0].replacement,
+            e.buffer().rope().to_string(),
+            "replacement is the full post-state content"
+        );
+        assert!(e.take_content_reset(), "syntax hosts must reparse");
+        assert!(e.take_content_edits().is_empty());
+        assert!(e.take_changes().is_empty(), "take_changes drains");
+    }
+
+    #[test]
+    fn substitute_with_newline_emits_change_log_and_reset() {
+        let mut e = editor_with("a,b\nc,d");
+        let _ = e.take_changes();
+        let _ = e.take_content_reset();
+        let _ = e.take_content_edits();
+        let cmd = parse_substitute("/,/\\r/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=1).unwrap();
+        // `\r` in the replacement splits each row: rows must gain rows.
+        assert_eq!(e.buffer().rope().to_string(), "a\nb\nc\nd");
+        let changes = e.take_changes();
+        assert_eq!(changes.len(), 1, "one coarse whole-buffer Replace");
+        assert_eq!(changes[0].range.start, crate::types::Pos::new(0, 0));
+        assert_eq!(
+            changes[0].replacement,
+            e.buffer().rope().to_string(),
+            "replacement is the full post-state content"
+        );
+        assert!(e.take_content_reset(), "syntax hosts must reparse");
+        assert!(e.take_content_edits().is_empty());
+        assert!(e.take_changes().is_empty(), "take_changes drains");
+    }
+
+    #[test]
+    fn collected_substitute_emits_change_log_and_reset() {
+        let mut e = editor_with("foo\nfoo\nbar");
+        let _ = e.take_changes();
+        let _ = e.take_content_reset();
+        let _ = e.take_content_edits();
+        let cmd = parse_substitute("/foo/qux/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=2).unwrap();
+        let accepted = vec![true; matches.len()];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 2);
+        let changes = e.take_changes();
+        assert_eq!(changes.len(), 1, "one coarse whole-buffer Replace");
+        assert_eq!(changes[0].range.start, crate::types::Pos::new(0, 0));
+        assert_eq!(
+            changes[0].replacement,
+            e.buffer().rope().to_string(),
+            "replacement is the full post-state content"
+        );
+        assert!(e.take_content_reset(), "syntax hosts must reparse");
+        assert!(e.take_content_edits().is_empty());
+        assert!(e.take_changes().is_empty(), "take_changes drains");
     }
 
     #[test]
