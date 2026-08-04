@@ -115,27 +115,30 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             // Strip an optional leading `:` so both `-c ':wq'` and `-c 'wq'`
             // work — matches the `+:cmd` / `+cmd` tolerance for `+` tokens.
             let cmd = cmd.strip_prefix(':').unwrap_or(cmd);
-            // `:set endofline` / `:set noeol` / `:set eol?` — buffer-local host
-            // state, not an engine setting, so pull those tokens out before
-            // hjkl-ex sees the line (same interception the TUI does). Query
-            // replies are dropped: headless suppresses `Info` output.
+            // `:set mouse` / `:set explorer.open` / `:set endofline` — host
+            // state, not engine options (hjkl's option registry rejects
+            // them), so pull those tokens out before hjkl-ex sees the line
+            // (same interception the TUI does). Headless has no terminal / no
+            // explorer / no config file: mouse and explorer.open tokens are
+            // consumed as no-ops and query replies are dropped.
             let rebuilt_set: String;
-            let cmd: &str = match cmd.strip_prefix("set ") {
-                Some(body) if !body.trim().is_empty() => {
-                    let tokens: Vec<&str> = body.split_whitespace().collect();
-                    let before = tokens.len();
-                    let (rest, _replies) =
-                        crate::save::take_endofline_tokens(tokens.into_iter(), &mut eol);
-                    if rest.len() == before {
-                        cmd
-                    } else if rest.is_empty() {
-                        continue;
+            let intercepted: Option<crate::set_tokens::SetLine> =
+                cmd.strip_prefix("set ").map(|body| {
+                    let body = body.trim();
+                    if body.is_empty() {
+                        crate::set_tokens::SetLine::PassThrough
                     } else {
-                        rebuilt_set = format!("set {}", rest.join(" "));
-                        rebuilt_set.as_str()
+                        let mut host = crate::set_tokens::NonTuiSetHost { eol: &mut eol };
+                        crate::set_tokens::intercept_set_tokens(body, &mut host)
                     }
+                });
+            let cmd: &str = match intercepted {
+                None | Some(crate::set_tokens::SetLine::PassThrough) => cmd,
+                Some(crate::set_tokens::SetLine::Swallow) => continue,
+                Some(crate::set_tokens::SetLine::Rebuild(line)) => {
+                    rebuilt_set = line;
+                    &rebuilt_set
                 }
-                _ => cmd,
             };
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
             let effect = hjkl_ex::try_dispatch(&reg, &mut editor, cmd)
@@ -359,6 +362,21 @@ impl SharedBanks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Host-owned `:set` tokens (`mouse`, `explorer.open`, endofline) are
+    /// host state, not engine options — the engine rejects `explorer.open`
+    /// as an unknown option. The shared interception must consume them as
+    /// no-ops in `--headless` mode instead of letting them reach the engine.
+    /// Regression for the extraction of `set_tokens`: before it, a
+    /// `:set explorer.open=true` errored (exit 1) in headless mode.
+    #[test]
+    fn headless_consumes_host_set_tokens_as_noops() {
+        let code = run(vec![], vec!["set mouse=a explorer.open=true".to_string()]).expect("run");
+        assert_eq!(
+            code, 0,
+            "host-owned :set tokens must be no-ops in headless mode, not engine errors"
+        );
+    }
 
     /// Regression (audit R2, fix 4): before the fix, each file in a
     /// `--headless a b …` run got a fresh `vim_editor` with NO shared

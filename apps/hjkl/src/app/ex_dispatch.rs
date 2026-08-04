@@ -9,6 +9,7 @@ use hjkl_buffer::rope_line_str;
 
 use crate::host::TuiHost;
 use crate::save::save_file_durable;
+use crate::set_tokens::SetLine;
 
 use super::{App, DiskState, ex_host_cmds};
 
@@ -108,6 +109,110 @@ pub fn extra_ex_command_names() -> Vec<String> {
     .collect()
 }
 
+/// The TUI's [`crate::set_tokens::SetHost`]: `mouse` mutates terminal capture
+/// and the per-mode flags, `explorer.open` applies and persists the dock
+/// preference, and endofline tokens apply to the focused slot's
+/// [`crate::save::EolState`].
+///
+/// This is the EXACT logic of the inline pre-pass `dispatch_ex` used to run
+/// before the interception moved into [`crate::set_tokens`]; the shared fn
+/// preserves the order (mouse/explorer in one token pass, endofline on the
+/// remainder) so behavior is unchanged. `info` forwards endofline query
+/// replies (`:set eol?`) to the notification bus, as the inline block did.
+impl crate::set_tokens::SetHost for App {
+    fn set_mouse(&mut self, token: &str) -> bool {
+        match token {
+            "mouse" => {
+                self.set_mouse_capture(true);
+                self.mouse_flags = crate::app::MouseFlags::all();
+                true
+            }
+            "nomouse" => {
+                self.set_mouse_capture(false);
+                self.mouse_flags = crate::app::MouseFlags::none();
+                true
+            }
+            "mouse!" => {
+                let new_on = !self.mouse_enabled;
+                self.set_mouse_capture(new_on);
+                self.mouse_flags = if new_on {
+                    crate::app::MouseFlags::all()
+                } else {
+                    crate::app::MouseFlags::none()
+                };
+                true
+            }
+            "mouse?" => {
+                let flags_str = self.mouse_flags.as_flags_str();
+                self.bus.info(if self.mouse_enabled {
+                    format!("mouse={flags_str}")
+                } else {
+                    "nomouse".to_string()
+                });
+                true
+            }
+            other if other.starts_with("mouse=") => {
+                let flags_str = &other["mouse=".len()..];
+                let flags = crate::app::MouseFlags::from_flags(flags_str);
+                let any_on =
+                    flags.normal || flags.visual || flags.insert || flags.command || flags.help;
+                self.mouse_flags = flags;
+                self.set_mouse_capture(any_on);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_explorer_open(&mut self, token: &str) -> bool {
+        match token {
+            // The left dock is host state (it lives outside every tab's
+            // `LayoutTree`), so there is no engine `Settings` field for
+            // hjkl-ex to apply this to. This is the ONLY writer of the key;
+            // toggling the dock deliberately leaves it alone (see
+            // `dock::App::set_explorer_open`).
+            "explorer.open?" => {
+                let open = self.config.explorer.open;
+                self.bus.info(format!("explorer.open={open}"));
+                true
+            }
+            other if other.starts_with("explorer.open=") => {
+                match &other["explorer.open=".len()..] {
+                    "true" => self.set_explorer_open(true),
+                    "false" => self.set_explorer_open(false),
+                    bad => {
+                        self.error(format!(
+                            "E474: Invalid argument: explorer.open={bad} \
+                             (expected true or false)"
+                        ));
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_endofline<'a>(&mut self, tokens: Vec<&'a str>) -> (Vec<&'a str>, Vec<String>) {
+        // `'endofline'` is buffer-local host state derived from the bytes on
+        // disk (`BufferSlot::eol`), not an engine `Settings` field, so it is
+        // applied to the focused slot's `EolState` here.
+        let slot_idx = self.focused_slot_idx();
+        let mut eol = self.slots[slot_idx].eol;
+        let (rest, replies) = crate::save::take_endofline_tokens(tokens.into_iter(), &mut eol);
+        self.slots[slot_idx].eol = eol;
+        (rest, replies)
+    }
+
+    fn info(&mut self, msg: String) {
+        self.bus.info(msg);
+    }
+
+    fn error(&mut self, msg: String) {
+        self.bus.error(msg);
+    }
+}
+
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
@@ -195,125 +300,30 @@ impl App {
             }
         };
 
-        // App-level `:set mouse` / `:set nomouse` / `:set mouse=<flags>` / etc.
-        // Mouse capture is a terminal-I/O concern, not an editor-engine
-        // setting, so the app intercepts these tokens here. Residual
-        // tokens (if any) flow through to the engine as a rebuilt
-        // `:set ...` line so combined forms like `:set nu nomouse` work.
-        //
-        // `:set mouse=<flags>` additionally updates `mouse_flags` to control
-        // per-mode event gating (P11.2 / issue #114).
+        // App-level `:set mouse` / `:set nomouse` / `:set mouse=<flags>` /
+        // `:set explorer.open=…` / `:set endofline` — host-owned state, not
+        // engine options (hjkl's option registry rejects them), so the host
+        // intercepts these tokens here via the shared `set_tokens` pass.
+        // [`crate::set_tokens::SetHost`] for `App` applies what each token
+        // means in TUI mode; residual tokens (if any) flow through to the
+        // engine as a rebuilt `:set ...` line so combined forms like
+        // `:set nu nomouse` work.
         let rebuilt: String;
-        let cmd: &str = if let Some(body) = cmd.strip_prefix("set ") {
+        let intercepted: Option<SetLine> = cmd.strip_prefix("set ").map(|body| {
             let body = body.trim();
             if body.is_empty() {
-                cmd
+                SetLine::PassThrough
             } else {
-                let mut remaining: Vec<&str> = Vec::new();
-                let mut consumed_any = false;
-                for tok in body.split_whitespace() {
-                    match tok {
-                        "mouse" => {
-                            self.set_mouse_capture(true);
-                            self.mouse_flags = crate::app::MouseFlags::all();
-                            consumed_any = true;
-                        }
-                        "nomouse" => {
-                            self.set_mouse_capture(false);
-                            self.mouse_flags = crate::app::MouseFlags::none();
-                            consumed_any = true;
-                        }
-                        "mouse!" => {
-                            let new_on = !self.mouse_enabled;
-                            self.set_mouse_capture(new_on);
-                            self.mouse_flags = if new_on {
-                                crate::app::MouseFlags::all()
-                            } else {
-                                crate::app::MouseFlags::none()
-                            };
-                            consumed_any = true;
-                        }
-                        "mouse?" => {
-                            let flags_str = self.mouse_flags.as_flags_str();
-                            self.bus.info(if self.mouse_enabled {
-                                format!("mouse={flags_str}")
-                            } else {
-                                "nomouse".to_string()
-                            });
-                            consumed_any = true;
-                        }
-                        other if other.starts_with("mouse=") => {
-                            let flags_str = &other["mouse=".len()..];
-                            let flags = crate::app::MouseFlags::from_flags(flags_str);
-                            let any_on = flags.normal
-                                || flags.visual
-                                || flags.insert
-                                || flags.command
-                                || flags.help;
-                            self.mouse_flags = flags;
-                            self.set_mouse_capture(any_on);
-                            consumed_any = true;
-                        }
-                        // `:set explorer.open=true|false` / `explorer.open?`.
-                        // The left dock is host state (it lives outside every
-                        // tab's `LayoutTree`), so there is no engine `Settings`
-                        // field for hjkl-ex to apply this to — same reason as
-                        // `mouse` and `endofline` above. This is the ONLY writer
-                        // of the key; toggling the dock deliberately leaves it
-                        // alone (see `dock::App::set_explorer_open`).
-                        "explorer.open?" => {
-                            let open = self.config.explorer.open;
-                            self.bus.info(format!("explorer.open={open}"));
-                            consumed_any = true;
-                        }
-                        other if other.starts_with("explorer.open=") => {
-                            match &other["explorer.open=".len()..] {
-                                "true" => self.set_explorer_open(true),
-                                "false" => self.set_explorer_open(false),
-                                bad => {
-                                    self.bus.error(format!(
-                                        "E474: Invalid argument: explorer.open={bad} \
-                                         (expected true or false)"
-                                    ));
-                                }
-                            }
-                            consumed_any = true;
-                        }
-                        other => remaining.push(other),
-                    }
-                }
-                // App-level `:set endofline` / `:set noeol` / `:set eol?` /
-                // `:set eol!`. Same reason as mouse: `'endofline'` is
-                // buffer-local host state derived from the bytes on disk
-                // (`BufferSlot::eol`), not an engine `Settings` field, so
-                // hjkl-ex has nothing to apply it to. Runs on the tokens the
-                // mouse pass left behind; anything it doesn't recognise flows
-                // on to the engine unchanged.
-                {
-                    let slot_idx = self.focused_slot_idx();
-                    let mut eol = self.slots[slot_idx].eol;
-                    let before = remaining.len();
-                    let (rest, replies) =
-                        crate::save::take_endofline_tokens(remaining.into_iter(), &mut eol);
-                    self.slots[slot_idx].eol = eol;
-                    for reply in replies {
-                        self.bus.info(reply);
-                    }
-                    consumed_any |= rest.len() != before;
-                    remaining = rest;
-                }
-                if consumed_any {
-                    if remaining.is_empty() {
-                        return;
-                    }
-                    rebuilt = format!("set {}", remaining.join(" "));
-                    rebuilt.as_str()
-                } else {
-                    cmd
-                }
+                crate::set_tokens::intercept_set_tokens(body, self)
             }
-        } else {
-            cmd
+        });
+        let cmd: &str = match intercepted {
+            None | Some(SetLine::PassThrough) => cmd,
+            Some(SetLine::Swallow) => return,
+            Some(SetLine::Rebuild(line)) => {
+                rebuilt = line;
+                &rebuilt
+            }
         };
 
         // `:perf` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).

@@ -23,6 +23,7 @@ mod picker_git;
 mod picker_sources;
 mod render;
 mod save;
+mod set_tokens;
 mod start_screen;
 mod syntax;
 mod theme;

@@ -143,26 +143,26 @@ fn dispatch(
                 Err(msg) => return error_resp(id, ERR_INVALID_PARAMS, &msg),
             };
             let cmd = cmd.strip_prefix(':').unwrap_or(&cmd).to_string();
-            // `:set endofline` / `:set noeol` / `:set eol?` — buffer-local host
-            // state, not an engine setting, so pull those tokens out before
-            // hjkl-ex sees the line (same interception the TUI does).
-            // `None` = nothing consumed (dispatch `cmd` as-is); `Some(None)` =
-            // the whole line was eol tokens; `Some(Some(s))` = residual tokens.
-            let mut consumed: Option<Option<String>> = None;
-            if let Some(body) = cmd.strip_prefix("set ")
-                && !body.trim().is_empty()
-            {
-                let tokens: Vec<&str> = body.split_whitespace().collect();
-                let before = tokens.len();
-                let (rest, _replies) = crate::save::take_endofline_tokens(tokens.into_iter(), eol);
-                if rest.len() != before {
-                    consumed = Some((!rest.is_empty()).then(|| format!("set {}", rest.join(" "))));
-                }
-            }
-            let cmd = match consumed {
-                None => cmd,
-                Some(None) => return success(id, Value::Null),
-                Some(Some(rebuilt)) => rebuilt,
+            // `:set mouse` / `:set explorer.open` / `:set endofline` — host
+            // state, not engine options (hjkl's option registry rejects
+            // them), so pull those tokens out before hjkl-ex sees the line
+            // (same interception the TUI does). Embed has no terminal / no
+            // explorer / no config file: mouse and explorer.open tokens are
+            // consumed as no-ops and query replies are dropped.
+            let intercepted: Option<crate::set_tokens::SetLine> =
+                cmd.strip_prefix("set ").map(|body| {
+                    let body = body.trim();
+                    if body.is_empty() {
+                        crate::set_tokens::SetLine::PassThrough
+                    } else {
+                        let mut host = crate::set_tokens::NonTuiSetHost { eol: &mut *eol };
+                        crate::set_tokens::intercept_set_tokens(body, &mut host)
+                    }
+                });
+            let cmd = match intercepted {
+                None | Some(crate::set_tokens::SetLine::PassThrough) => cmd,
+                Some(crate::set_tokens::SetLine::Swallow) => return success(id, Value::Null),
+                Some(crate::set_tokens::SetLine::Rebuild(line)) => line,
             };
             let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
             let effect = hjkl_ex::try_dispatch(&reg, editor, &cmd)
