@@ -195,11 +195,14 @@ pub fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         }
     };
 
-    // Build diag count content.
-    let diag_count_content: String = {
+    // Diag count content + segment color, computed in ONE pass over the
+    // active slot's diagnostics. The two used to scan the whole list
+    // separately — the tally here, and severity-presence `.any()` checks in
+    // the segment builder below. One scan per frame instead of two.
+    let (diag_count_content, diag_fg): (String, SlColor) = {
         let diags = &app.active().lsp_diags;
         if diags.is_empty() {
-            String::new()
+            (String::new(), theme.diag_hint_fg)
         } else {
             let (mut e, mut w2, mut i, mut h) = (0usize, 0usize, 0usize, 0usize);
             for d in diags {
@@ -223,11 +226,24 @@ pub fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
             if h > 0 {
                 parts.push(format!("H:{h}"));
             }
-            if parts.is_empty() {
+            let content = if parts.is_empty() {
                 String::new()
             } else {
                 format!(" {} ", parts.join(" "))
-            }
+            };
+            // Highest severity present wins the color, mirroring the old
+            // `.any()` presence checks (counts are equivalent: each diag has
+            // exactly one severity).
+            let fg = if e > 0 {
+                theme.diag_error_fg
+            } else if w2 > 0 {
+                theme.diag_warning_fg
+            } else if i > 0 {
+                theme.diag_info_fg
+            } else {
+                theme.diag_hint_fg
+            };
+            (content, fg)
         }
     };
 
@@ -294,16 +310,8 @@ pub fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     if !diag_count_content.is_empty() {
         // Color by highest severity — routed through StatusTheme so the host
         // controls the palette (adapts to terminal-named colors vs RGB).
-        let diags = &app.active().lsp_diags;
-        let diag_fg = if diags.iter().any(|d| d.severity == DiagSeverity::Error) {
-            theme.diag_error_fg
-        } else if diags.iter().any(|d| d.severity == DiagSeverity::Warning) {
-            theme.diag_warning_fg
-        } else if diags.iter().any(|d| d.severity == DiagSeverity::Info) {
-            theme.diag_info_fg
-        } else {
-            theme.diag_hint_fg
-        };
+        // `diag_fg` was computed in the same pass as `diag_count_content`
+        // above, so the segment builder does not re-scan the diagnostics.
         bar.left.push(SlSegment::Text {
             content: diag_count_content.into(),
             style: SlStyle::default_style()
@@ -384,27 +392,27 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 /// `true` when `row` falls inside the visible viewport `[vp_top, vp_bot)`.
 ///
-/// Shared by [`build_diag_overlays`] and the eol-hint builder in
-/// `render_window` so both skip diagnostics outside the current viewport
-/// instead of touching every entry of the uncapped `slot.lsp_diags` list
-/// every frame (audit D2 — allocation churn proportional to total diagnostic
-/// count, independent of what's on screen).
+/// Shared by the per-window `visible_diags` precompute and the eol-hint
+/// builder in `render_window` so both skip diagnostics outside the current
+/// viewport instead of touching every entry of the uncapped
+/// `slot.lsp_diags` list every frame (audit D2 — allocation churn
+/// proportional to total diagnostic count, independent of what's on screen).
 fn row_in_viewport(row: usize, vp_top: usize, vp_bot: usize) -> bool {
     row >= vp_top && row < vp_bot
 }
 
-/// Build `DiagOverlay` items for the active buffer slot, filtered to the
-/// visible viewport `[vp_top, vp_bot)`. Called once per frame per visible
-/// window in `render_window`.
+/// Build `DiagOverlay` items from a viewport-filtered diagnostic slice.
+/// `render_window` filters `slot.lsp_diags` to the visible viewport ONCE
+/// per frame (`visible_diags`) and feeds the SAME slice to this pass and
+/// the eol-hint builder, so neither re-scans the uncapped list (the three
+/// consumers used to filter independently — three scans per window per
+/// frame, each with a fresh `Vec`).
 fn build_diag_overlays(
-    slot: &crate::app::BufferSlot,
+    diags: &[&crate::app::LspDiag],
     _ui: &crate::theme::UiTheme,
-    vp_top: usize,
-    vp_bot: usize,
 ) -> Vec<DiagOverlay> {
-    slot.lsp_diags
+    diags
         .iter()
-        .filter(|d| row_in_viewport(d.start_row, vp_top, vp_bot))
         .map(|d| DiagOverlay {
             row: d.start_row,
             col_start: d.start_col,
@@ -937,6 +945,21 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_bot = vp_top + area.height as usize;
+    // Per-window, per-frame viewport-filtered diagnostic list. Shared by the
+    // two `lsp_diags` consumers below — the overlay pass and the eol-hint
+    // builder — so neither re-scans the uncapped `slot.lsp_diags` list per
+    // frame (they used to each filter it independently: two scans + two
+    // fresh Vecs per window per frame). The sign column reads the
+    // precomputed per-slot `diag_signs_lsp` (already derived + viewport
+    // filtered in the merge below), not this list.
+    // Kept in `lsp_diags` order (NOT sorted by row): the overlay pass paints
+    // in list order, and reordering would change which of two overlapping
+    // same-row diags wins the shared cells.
+    let visible_diags: Vec<&crate::app::LspDiag> = app.slots()[slot_idx]
+        .lsp_diags
+        .iter()
+        .filter(|d| row_in_viewport(d.start_row, vp_top, vp_bot))
+        .collect();
     let mut visible_signs: Vec<hjkl_buffer_tui::Sign> = app.slots()[slot_idx]
         .diag_signs
         .iter()
@@ -1091,7 +1114,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             None
         };
 
-    let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui, vp_top, vp_bot);
+    let diag_overlays = build_diag_overlays(&visible_diags, &app.theme.ui);
 
     // Inline end-of-line ghost text, rendered comment-style (`// …` in
     // Rust/JS, `# …` in Python, …) so it reads like a trailing comment, with
@@ -1118,14 +1141,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         if is_focused && diag_mode != DiagInlineMode::Off {
             let mut by_row: std::collections::HashMap<usize, (DiagSeverity, &str)> =
                 std::collections::HashMap::new();
-            for d in &slot.lsp_diags {
-                // Skip diagnostics outside the visible viewport (audit D2):
-                // only a diagnostic whose start row is on screen can produce
-                // a visible EOL hint. Safe for `Current` mode too — the
-                // focused cursor row is always inside `[vp_top, vp_bot)`.
-                if !row_in_viewport(d.start_row, vp_top, vp_bot) {
-                    continue;
-                }
+            for d in &visible_diags {
+                // `visible_diags` is already clipped to `[vp_top, vp_bot)`
+                // (audit D2) — no per-diag viewport check needed here. Safe
+                // for `Current` mode too: the focused cursor row is always
+                // inside `[vp_top, vp_bot)`.
                 if diag_mode == DiagInlineMode::Current && d.start_row != cursor_row {
                     continue;
                 }
@@ -3406,12 +3426,12 @@ mod tests {
         assert!(!row_in_viewport(500, 5, 10), "far off-screen row is out");
     }
 
-    /// `build_diag_overlays` must only emit an overlay for a diagnostic whose
-    /// `start_row` is inside `[vp_top, vp_bot)`. Before the fix it mapped
-    /// every entry in `slot.lsp_diags` unconditionally — this is the direct
-    /// regression guard for that allocation-churn bug (audit D2): a
-    /// diagnostic thousands of lines off-screen must neither appear in the
-    /// output nor be touched by the `.map()` at all.
+    /// The viewport clip must live in the shared `visible_diags` precompute:
+    /// only a diagnostic whose `start_row` is inside `[vp_top, vp_bot)` may
+    /// reach `build_diag_overlays` at all. This is the direct regression
+    /// guard for the audit D2 allocation-churn bug — a diagnostic thousands
+    /// of lines off-screen must neither appear in the output nor be touched
+    /// by the overlay `.map()`.
     #[test]
     fn build_diag_overlays_clips_to_viewport() {
         use crate::app::{App, LspDiag};
@@ -3439,8 +3459,16 @@ mod tests {
             mk(50, "just past vp_bot, out"),
             mk(400, "far off-screen, out"),
         ];
+        let clip = |vp_top: usize, vp_bot: usize| {
+            let visible: Vec<&LspDiag> = app.slots()[0]
+                .lsp_diags
+                .iter()
+                .filter(|d| row_in_viewport(d.start_row, vp_top, vp_bot))
+                .collect();
+            build_diag_overlays(&visible, &app.theme.ui)
+        };
 
-        let overlays = build_diag_overlays(&app.slots()[0], &app.theme.ui, 0, 50);
+        let overlays = clip(0, 50);
         let mut rows: Vec<usize> = overlays.iter().map(|o| o.row).collect();
         rows.sort_unstable();
         assert_eq!(
@@ -3452,7 +3480,7 @@ mod tests {
         // Scrolling the viewport down must reveal the previously off-screen
         // diagnostic and hide the ones that scrolled out — proves the clip is
         // a real viewport window, not a fixed cutoff.
-        let overlays2 = build_diag_overlays(&app.slots()[0], &app.theme.ui, 400, 450);
+        let overlays2 = clip(400, 450);
         let rows2: Vec<usize> = overlays2.iter().map(|o| o.row).collect();
         assert_eq!(rows2, vec![400]);
     }
@@ -3520,6 +3548,80 @@ mod tests {
         assert!(
             !rendered.contains("offscreen diagnostic"),
             "the far off-screen diagnostic must never reach the screen buffer"
+        );
+    }
+
+    /// End-to-end regression guard for the shared `visible_diags` precompute:
+    /// a diagnostic on a visible row must still paint its underline overlay
+    /// at exactly the diagnostic's row/col, AND its EOL hint must render —
+    /// both consumers read the same pre-filtered list, so a wrong filter (or
+    /// a consumer that regressed to re-scanning) shows up here as a missing
+    /// or misplaced overlay.
+    #[test]
+    fn diag_overlay_underline_lands_on_the_diag_span_after_precompute() {
+        use crate::app::{App, LspDiag};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("diag_overlay.rs");
+        // Row 0 is the only line: the diagnostic span covers chars 4..7
+        // ("x = 1" → `x = 1;`), and its message must render as an EOL hint.
+        std::fs::write(&path, "let x = 1;\n").unwrap();
+
+        let mut app = App::new(Some(path), false, None, None).unwrap();
+        app.slots_mut()[0].lsp_diags = vec![LspDiag {
+            start_row: 0,
+            start_col: 4,
+            end_row: 0,
+            end_col: 7,
+            severity: DiagSeverity::Error,
+            message: "overlay anchor".to_string(),
+            source: None,
+            code: None,
+        }];
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| frame(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Locate the 'x' of "let x = 1;" — the first cell past the gutter.
+        let row0: Vec<(u16, &ratatui::buffer::Cell)> = (0..80u16)
+            .filter_map(|x| buf.cell((x, 0)).map(|c| (x, c)))
+            .collect();
+        let x_col = row0
+            .iter()
+            .find(|(_, c)| c.symbol() == "x")
+            .unwrap_or_else(|| panic!("row 0 must contain the 'x' of 'let x = 1;'"))
+            .0;
+        // The underline overlay covers doc cols 4..7 → the three cells at
+        // x_col..x_col+3 ("x = 1" is 5 chars: 'x',' ','=',' ','1' — the
+        // span is cols 4..7, which are 'x',' ','=' ... wait, 0-based: the
+        // span covers chars 4,5,6 of "let x = 1;"). Assert exactly those
+        // cells carry the UNDERLINED modifier and their neighbours do not.
+        for (i, expected) in [(0, true), (1, true), (2, true), (3, false)] {
+            let c = buf
+                .cell((x_col + i, 0))
+                .unwrap_or_else(|| panic!("cell ({}, 0) exists", x_col + i));
+            assert_eq!(
+                c.modifier.contains(Modifier::UNDERLINED),
+                expected,
+                "diag underline must cover exactly the span cells (offset {i} from 'x')"
+            );
+        }
+        // The EOL hint for the same diagnostic must still render (it reads
+        // the same pre-filtered list).
+        let mut rendered = String::new();
+        for y in 0..10u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    rendered.push_str(c.symbol());
+                }
+            }
+        }
+        assert!(
+            rendered.contains("overlay anchor"),
+            "the diagnostic's EOL hint must render: {rendered:?}"
         );
     }
 

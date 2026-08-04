@@ -488,6 +488,93 @@ fn display_width(line: &str, tab_width: usize) -> usize {
     col
 }
 
+/// Per-frame fold lookup index. The render loop used to scan the whole fold
+/// list per visible row (`folds.iter().any(|f| f.hides(row))`, plus a
+/// `.find()` for closed fold markers) — O(rows × F) per frame. This
+/// precomputes both queries once per frame:
+///
+/// * `hidden_at` — the closed-fold interval union, merged into disjoint
+///   half-open `(start, end]` ranges, so "is this row hidden" is a single
+///   binary search. Merging (not just sorting) matters: nested folds would
+///   otherwise hide a row that a later, shorter interval no longer covers.
+/// * `marker_at` — closed folds sorted by `start_row` (stable, so equal
+///   starts keep buffer order, matching the original `.find()`), giving the
+///   first closed fold whose `start_row == row`.
+struct FoldIndex {
+    /// Merged, disjoint half-open intervals `(start, end]` covering rows
+    /// hidden by at least one closed fold, sorted by `start`. A row `r` is
+    /// hidden iff `start < r <= end` for the interval with the greatest
+    /// `start <= r`.
+    hidden_ranges: Vec<(usize, usize)>,
+    /// Closed folds sorted by `start_row`; stable sort keeps the buffer
+    /// order among equal starts so `marker_at` matches
+    /// `folds.iter().find(|f| f.closed && f.start_row == row)`.
+    closed_by_start: Vec<hjkl_buffer::Fold>,
+}
+
+impl FoldIndex {
+    fn new(folds: &[hjkl_buffer::Fold]) -> Self {
+        // Merge the closed folds' (start, end] intervals into a disjoint
+        // union. `hides` membership is "in the union", so a single binary
+        // search over the merged ranges is correct even with nesting.
+        let mut closed: Vec<(usize, usize)> = folds
+            .iter()
+            .filter(|f| f.closed)
+            .map(|f| (f.start_row, f.end_row))
+            .collect();
+        closed.sort_unstable_by_key(|&(s, _)| s);
+        let mut hidden_ranges: Vec<(usize, usize)> = Vec::with_capacity(closed.len());
+        for (s, e) in closed {
+            match hidden_ranges.last_mut() {
+                // Overlaps the previous interval (or abuts it exactly —
+                // `s == last_end` leaves no uncovered row between them) →
+                // extend. A gap needs `s > last_end`, e.g. (0,5] then (7,9]:
+                // row 6 is covered by neither, so they stay separate.
+                Some((_, last_end)) if s <= *last_end => {
+                    *last_end = (*last_end).max(e);
+                }
+                _ => hidden_ranges.push((s, e)),
+            }
+        }
+        let mut closed_by_start: Vec<hjkl_buffer::Fold> =
+            folds.iter().copied().filter(|f| f.closed).collect();
+        closed_by_start.sort_by_key(|f| f.start_row); // stable
+        Self {
+            hidden_ranges,
+            closed_by_start,
+        }
+    }
+
+    /// True when `row` is hidden by a closed fold — the O(log F) twin of
+    /// `folds.iter().any(|f| f.hides(row))`.
+    fn hidden_at(&self, row: usize) -> bool {
+        let idx = self.hidden_ranges.partition_point(|&(s, _)| s <= row);
+        if idx == 0 {
+            return false;
+        }
+        let (s, e) = self.hidden_ranges[idx - 1];
+        row > s && row <= e
+    }
+    /// The first closed fold whose `start_row == row`, in buffer order —
+    /// the O(log F) twin of
+    /// `folds.iter().find(|f| f.closed && f.start_row == row).copied()`.
+    fn marker_at(&self, row: usize) -> Option<hjkl_buffer::Fold> {
+        let idx = self.closed_by_start.partition_point(|f| f.start_row < row);
+        let f = self.closed_by_start.get(idx)?;
+        (f.start_row == row).then_some(*f)
+    }
+}
+
+/// Sort `signs` by row (stable: equal rows keep buffer order, so the
+/// per-row `max_by_key(priority)` tie-break of "last wins" is preserved).
+/// Per-frame precompute turns the per-row `O(S)` sign scan into an
+/// `O(log S)` binary search.
+fn signs_sorted_by_row(signs: &[Sign]) -> Vec<&Sign> {
+    let mut v: Vec<&Sign> = signs.iter().collect();
+    v.sort_by_key(|s| s.row);
+    v
+}
+
 impl<R: StyleResolver> Widget for BufferView<'_, R> {
     fn render(self, area: Rect, term_buf: &mut TermBuffer) {
         // Boxed-blame layout: render the host-supplied plan instead of the
@@ -520,6 +607,14 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         let folds = self
             .folds_override
             .map_or_else(|| self.buffer.folds(), <[hjkl_buffer::Fold]>::to_vec);
+        // Per-frame fold + sign lookup indexes: the row walk below (main pass
+        // and indent-guide pass) queries "is this row hidden" and "is a
+        // closed fold marker here" once per visible row. Both used to scan
+        // the whole fold list per row — O(rows × F) per frame. Precompute
+        // once here so each query is O(log F); signs get the same treatment
+        // (O(rows × S) → O(log S) per row).
+        let fold_index = FoldIndex::new(&folds);
+        let signs_by_row = signs_sorted_by_row(self.signs);
         let top_row = viewport.top_row;
         let top_col = viewport.top_col;
         // Fetch only the viewport-bounded row slice. The render loop walks
@@ -623,14 +718,11 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             }
             // Skip rows hidden by a closed fold (any row past start
             // of a closed fold).
-            if folds.iter().any(|f| f.hides(doc_row)) {
+            if fold_index.hidden_at(doc_row) {
                 doc_row += 1;
                 continue;
             }
-            let folded_at_start = folds
-                .iter()
-                .find(|f| f.closed && f.start_row == doc_row)
-                .copied();
+            let folded_at_start = fold_index.marker_at(doc_row);
             let line_owned = line_at(doc_row);
             let line: &str = &line_owned;
             let row_spans = spans.get(doc_row).map_or(&[][..], Vec::as_slice);
@@ -639,7 +731,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             if let Some(fold) = folded_at_start {
                 if let Some(gutter) = self.gutter {
                     self.paint_gutter(term_buf, area, screen_row, doc_row, gutter);
-                    self.paint_signs(term_buf, area, screen_row, doc_row, gutter);
+                    self.paint_signs(term_buf, area, screen_row, doc_row, gutter, &signs_by_row);
                     self.paint_fold_column(term_buf, area, screen_row, doc_row, gutter, &folds);
                 }
                 // Render the fold's first line exactly like a normal line
@@ -741,7 +833,14 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 if let Some(gutter) = self.gutter {
                     if seg_idx == 0 {
                         self.paint_gutter(term_buf, area, screen_row, doc_row, gutter);
-                        self.paint_signs(term_buf, area, screen_row, doc_row, gutter);
+                        self.paint_signs(
+                            term_buf,
+                            area,
+                            screen_row,
+                            doc_row,
+                            gutter,
+                            &signs_by_row,
+                        );
                         self.paint_fold_column(term_buf, area, screen_row, doc_row, gutter, &folds);
                     } else {
                         self.paint_blank_gutter(term_buf, area, screen_row, gutter);
@@ -917,16 +1016,12 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                         break;
                     }
                 }
-                if folds.iter().any(|f| f.hides(ig_doc_row)) {
+                if fold_index.hidden_at(ig_doc_row) {
                     ig_doc_row += 1;
                     continue;
                 }
                 // Skip closed fold markers — they collapse to a single marker row.
-                if let Some(fold) = folds
-                    .iter()
-                    .find(|f| f.closed && f.start_row == ig_doc_row)
-                    .copied()
-                {
+                if let Some(fold) = fold_index.marker_at(ig_doc_row) {
                     ig_screen_row += 1;
                     ig_doc_row = fold.end_row.saturating_add(1);
                     continue;
@@ -1038,8 +1133,8 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let folds = self
             .folds_override
             .map_or_else(|| self.buffer.folds(), <[hjkl_buffer::Fold]>::to_vec);
+        let signs_by_row = signs_sorted_by_row(self.signs);
         let rope = self.buffer.rope();
-
         let frame_x = area.x;
         let right_x = area.x + area.width.saturating_sub(1);
         // Inner region after the left frame column.
@@ -1082,7 +1177,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     let is_cursor_row = dr == cursor.row;
                     if let Some(gutter) = self.gutter {
                         self.paint_gutter(term_buf, inner, screen_row, dr, gutter);
-                        self.paint_signs(term_buf, inner, screen_row, dr, gutter);
+                        self.paint_signs(term_buf, inner, screen_row, dr, gutter, &signs_by_row);
                         self.paint_fold_column(term_buf, inner, screen_row, dr, gutter, &folds);
                     }
                     let search_ranges = self.row_search_ranges(dr, line);
@@ -1215,6 +1310,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         screen_row: u16,
         doc_row: usize,
         gutter: Gutter,
+        signs_by_row: &[&Sign],
     ) {
         // Only paint when a sign column is reserved.
         if gutter.sign_column_width == 0 {
@@ -1230,12 +1326,13 @@ impl<R: StyleResolver> BufferView<'_, R> {
             }
         }
         // Paint the highest-priority sign for this row in the leftmost cell.
-        let Some(sign) = self
-            .signs
-            .iter()
-            .filter(|s| s.row == doc_row)
-            .max_by_key(|s| s.priority)
-        else {
+        // `signs_by_row` is pre-sorted by row (stable), so the row's signs
+        // form one contiguous run — binary search it instead of scanning the
+        // whole list per row. `max_by_key` over the run keeps the original
+        // "last max wins" tie-break because the stable sort preserves order.
+        let start = signs_by_row.partition_point(|s| s.row < doc_row);
+        let end = signs_by_row.partition_point(|s| s.row <= doc_row);
+        let Some(sign) = signs_by_row[start..end].iter().max_by_key(|s| s.priority) else {
             return;
         };
         if let Some(cell) = term_buf.cell_mut((sign_x, y)) {
@@ -3577,6 +3674,95 @@ mod tests {
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
         assert_eq!(term.cell((0, 1)).unwrap().symbol(), "b");
         assert_eq!(term.cell((0, 2)).unwrap().symbol(), "c");
+    }
+
+    // ── FoldIndex: per-frame hidden-set / marker precompute ────────────────
+
+    /// `FoldIndex` must answer exactly what the old per-row scans did —
+    /// `folds.iter().any(|f| f.hides(row))` and
+    /// `folds.iter().find(|f| f.closed && f.start_row == row)` — including
+    /// nested and degenerate closed folds, which a naive "last start <= row"
+    /// binary search gets wrong (a nested fold can end before an enclosing
+    /// one while still covering the query row).
+    #[test]
+    fn fold_index_matches_naive_fold_scans() {
+        use hjkl_buffer::Fold;
+        let folds = [
+            Fold {
+                start_row: 1,
+                end_row: 4,
+                closed: true,
+                auto_generated: false,
+            },
+            Fold {
+                start_row: 2,
+                end_row: 3,
+                closed: true,
+                auto_generated: false, // nested inside [1,4]
+            },
+            Fold {
+                start_row: 6,
+                end_row: 6,
+                closed: true,
+                auto_generated: false, // degenerate: hides nothing
+            },
+            Fold {
+                start_row: 8,
+                end_row: 10,
+                closed: false,
+                auto_generated: false, // open: hides nothing
+            },
+            Fold {
+                start_row: 12,
+                end_row: 14,
+                closed: true,
+                auto_generated: false,
+            },
+        ];
+        let idx = FoldIndex::new(&folds);
+        for row in 0..20 {
+            let naive_hidden = folds.iter().any(|f| f.hides(row));
+            assert_eq!(idx.hidden_at(row), naive_hidden, "hidden_at({row})");
+            let naive_marker = folds
+                .iter()
+                .find(|f| f.closed && f.start_row == row)
+                .copied();
+            assert_eq!(idx.marker_at(row), naive_marker, "marker_at({row})");
+        }
+    }
+
+    /// End-to-end: after the hidden-set precompute, a folded buffer still
+    /// renders each closed fold's marker at the same collapsed screen row —
+    /// rows inside a fold are skipped, the marker shows the fold's first
+    /// line, and content past the fold follows at the collapsed position.
+    #[test]
+    fn folded_buffer_renders_markers_at_collapsed_screen_rows() {
+        let mut b = View::from_str("a\nb\nc\nd\ne\nf");
+        let v = vp(30, 6);
+        b.add_fold(1, 2, true); // rows 1-2 collapse to a marker
+        b.add_fold(4, 4, true); // single-row closed fold → marker row too
+        let view = base_view(&b, &v);
+        let term = run_render(view, 30, 6);
+        // Screen rows: 0:'a', 1:'b' (fold 1-2 marker), 2:'d' (row 3, past
+        // the fold), 3:'e' (fold 4-4 marker), 4:'f', 5:'~' (past EOB).
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
+        assert_eq!(
+            term.cell((0, 1)).unwrap().symbol(),
+            "b",
+            "closed fold 1-2 must render its marker on screen row 1"
+        );
+        assert_eq!(
+            term.cell((0, 2)).unwrap().symbol(),
+            "d",
+            "row 3 must follow the collapsed fold on screen row 2"
+        );
+        assert_eq!(
+            term.cell((0, 3)).unwrap().symbol(),
+            "e",
+            "single-row closed fold 4 must render its marker on screen row 3"
+        );
+        assert_eq!(term.cell((0, 4)).unwrap().symbol(), "f");
+        assert_eq!(term.cell((0, 5)).unwrap().symbol(), "~");
     }
 
     #[test]

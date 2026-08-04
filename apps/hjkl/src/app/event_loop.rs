@@ -17,6 +17,13 @@ use crate::render;
 /// How long the mouse must rest on a Code zone before the LSP hover RPC fires.
 const HOVER_DELAY: Duration = Duration::from_millis(500);
 
+/// Inline-blame ghost idle gate, mirroring `render.rs::render_window`'s
+/// `BLAME_IDLE_DELAY`: the ghost appears once the cursor has been still for
+/// this long. The event loop keeps repainting within the window after each
+/// cursor move so the ghost's first appearance isn't skipped by the
+/// idle-draw gate (the renderer reads `blame_cursor_moved_at` directly).
+const BLAME_IDLE_DELAY: Duration = Duration::from_millis(400);
+
 /// Outcome returned by [`App::handle_keypress`].
 pub enum KeyOutcome {
     /// Continue the event loop (equivalent to `continue`).
@@ -329,15 +336,29 @@ impl App {
         vp.width = w;
         vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
         self.pending_recompute = true;
+        // Resize always repaints — even when called outside the event arm
+        // (both `run()` read arms set `needs_draw` too, but self-contained
+        // here so the draw-on-resize contract holds for any caller).
+        self.needs_draw = true;
     }
 
     /// Poll in-flight grammar loads, git signs, format results, and anvil jobs.
     /// Called once per event loop tick before the poll wait.
-    pub(crate) fn drain_async_polls(&mut self) {
+    ///
+    /// Returns `true` when any poll produced output that changed the frame
+    /// (a grammar load installed, git/blame data arrived, a format result
+    /// was applied, an anvil job surfaced a toast, or fs-watch reloaded a
+    /// buffer). The caller sets `needs_draw` from this — the polls run
+    /// AFTER `terminal.draw`, so without the flag the updated frame would
+    /// only appear on the next input event.
+    pub(crate) fn drain_async_polls(&mut self) -> bool {
+        let mut changed = false;
+
         // Poll any in-flight async grammar loads each tick so a freshly
         // compiled grammar installs without needing a keypress.
         if self.poll_grammar_loads() {
             self.recompute_and_install();
+            changed = true;
         }
 
         // Install any git diff-sign / blame results that arrived from workers.
@@ -347,20 +368,24 @@ impl App {
         // keypress because drain_async_polls runs AFTER terminal.draw.
         if self.poll_git_signs() | self.poll_blame() {
             self.pending_recompute = true;
+            changed = true;
         }
 
         // Install any completed async format results (#118).
-        let _ = self.poll_format_results();
+        changed |= self.poll_format_results();
 
         // Poll any in-flight anvil install jobs and surface status toasts.
-        let _ = self.poll_anvil_jobs();
+        changed |= self.poll_anvil_jobs();
 
         // Event-driven autoreload (#242): reconcile any external file changes
         // the fs-watch surfaced. Like the git/blame polls above, this runs AFTER
         // terminal.draw, so request a repaint when a buffer was reloaded.
         if self.drain_fs_watch_events() {
             self.pending_recompute = true;
+            changed = true;
         }
+
+        changed
     }
 
     /// Compute how long to wait for the next event.
@@ -437,6 +462,77 @@ impl App {
                 self.write_swap_for_slot(idx);
             }
         }
+    }
+
+    /// `true` when the current frame changes on wall-clock even with no input
+    /// — i.e. the event loop must keep repainting on idle polls, not just
+    /// when `needs_draw` is set. The renderer has several such elements:
+    ///
+    /// * the app's own animations — the start screen, smooth scroll
+    ///   (`scroll_anim`), and the indent flash;
+    /// * the status-line spinner (`hjkl_editor_tui::spinner::frame` is
+    ///   wall-clock based) while LSP requests or grammar loads are in flight;
+    /// * holler toast dimming + expiry (`render_active` is fed `now`);
+    /// * the picker's "scanning" spinner + `Spawn`-source requery debounce;
+    /// * the inline-blame ghost — it appears once the cursor has been still
+    ///   for [`BLAME_IDLE_DELAY`], so the 400 ms window after each cursor
+    ///   move needs repaints to land on the crossing tick.
+    ///
+    /// When none of these is active the frame is fully input/state-driven and
+    /// a purely idle poll skips the draw entirely — that is the perf win.
+    fn frame_is_time_animated(&self) -> bool {
+        self.start_screen.is_some()
+            || self.scroll_anim.is_some()
+            || self.indent_flash.is_some()
+            || self.picker.is_some()
+            || !self.lsp_pending.is_empty()
+            || !self.directory.in_flight_names().is_empty()
+            || self
+                .bus
+                .active(std::time::SystemTime::now())
+                .next()
+                .is_some()
+            || self.blame_cursor_moved_at.elapsed() < BLAME_IDLE_DELAY
+    }
+
+    /// Whether this loop iteration must repaint: an explicit redraw request
+    /// (input event, async poll output, resize, timeout-triggered UI), or a
+    /// wall-clock-driven element (see [`Self::frame_is_time_animated`]).
+    pub(crate) fn frame_needs_redraw(&self) -> bool {
+        self.needs_draw || self.frame_is_time_animated()
+    }
+
+    /// Cheap fingerprint of the render-visible LSP state that
+    /// [`Self::drain_lsp_events`] can change: the pending-request map (status
+    /// spinner + response handling), the live server set, active toasts,
+    /// hover/completion popups, and every slot's diagnostic list. The
+    /// diagnostic content is folded in (not just the count) so a same-count
+    /// `publishDiagnostics` still flips the fingerprint. The event loop
+    /// compares before/after the drain — the drain cannot be observed any
+    /// other way without modifying `drain_lsp_events` itself.
+    fn lsp_render_fingerprint(&self) -> (usize, usize, usize, bool, bool, u64, usize) {
+        let mut diag_hash = 0x517c_c1b7_2722_0a95u64; // FNV offset basis
+        let mut diag_count = 0usize;
+        for s in self.slots() {
+            for d in &s.lsp_diags {
+                diag_count += 1;
+                diag_hash = (diag_hash ^ (d.start_row as u64)).wrapping_mul(0x100_0000_01b3);
+                diag_hash = (diag_hash ^ (d.start_col as u64)).wrapping_mul(0x100_0000_01b3);
+                diag_hash = (diag_hash ^ (d.end_row as u64)).wrapping_mul(0x100_0000_01b3);
+                diag_hash = (diag_hash ^ (d.end_col as u64)).wrapping_mul(0x100_0000_01b3);
+                diag_hash = (diag_hash ^ d.severity as u64).wrapping_mul(0x100_0000_01b3);
+                diag_hash = (diag_hash ^ d.message.len() as u64).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        (
+            self.lsp_pending.len(),
+            self.lsp_state.len(),
+            self.bus.active(std::time::SystemTime::now()).count(),
+            self.hover_popup.is_some(),
+            self.completion.is_some(),
+            diag_hash,
+            diag_count,
+        )
     }
 
     /// Handle a single key event. Returns a [`KeyOutcome`] that tells `run()`
@@ -1907,13 +2003,17 @@ impl App {
     /// 4. Order is fixed: lsp drain → viewport → cursor shape → FLUSH →
     ///    draw → async polls → poll(timeout) → read → handle + drain.
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+        // Toast visibility as of the previous iteration. Toasts expire on a
+        // wall clock while `frame_is_time_animated` only keeps repainting
+        // while one is VISIBLE — the tick that flips Some→None must request
+        // the draw that clears the expired toast from the screen.
+        let mut last_toast_visible = false;
         loop {
             // ── Per-tick setup ────────────────────────────────────
             // NOTE: sync_viewport_to_editor() is NOT called here — it is
             // called only on focus change (switch_focus / close_focused_window
             // / move_window_to_new_tab).  Calling it before every keypress
             // clobbered sticky_col and broke j/k column preservation (#151).
-            self.drain_lsp_events();
             // Ensure every window has a view editor onto its slot's Buffer
             // (#151 Phase D). Splits create a window before its editor exists;
             // buffer switches change a window's slot. Idempotent — rebuilds a
@@ -1924,6 +2024,31 @@ impl App {
                 let vp = self.active_editor_mut().host_mut().viewport_mut();
                 vp.width = size.width;
                 vp.height = size.height.saturating_sub(STATUS_LINE_HEIGHT);
+                // A terminal size change that never produced a `Resize` event
+                // still changes the frame — repaint so the viewport catch-up
+                // is visible. `last_frame_rect` is the dims of the last
+                // actually-drawn frame; `None` (never drawn) forces the draw.
+                if self
+                    .last_frame_rect
+                    .is_none_or(|r| r.width != size.width || r.height != size.height)
+                {
+                    self.needs_draw = true;
+                }
+            }
+            // LSP async events can push toasts, update diagnostics/signs,
+            // show hover/completion popups, or drop stale pending requests —
+            // all render-visible. Fingerprint the LSP-driven state before and
+            // after the drain (the drain itself can't be observed otherwise)
+            // and repaint when it changed.
+            if self.lsp.is_some() {
+                let lsp_pre = self.lsp_render_fingerprint();
+                self.drain_lsp_events();
+                if self.lsp_render_fingerprint() != lsp_pre {
+                    self.needs_draw = true;
+                }
+            } else {
+                // No LSP manager — the drain is a guaranteed no-op.
+                self.drain_lsp_events();
             }
 
             // ── Cursor shape ──────────────────────────────────────
@@ -1957,36 +2082,71 @@ impl App {
             if self.pending_recompute {
                 self.pending_recompute = false;
                 self.recompute_and_install();
+                // New spans installed → the frame changed.
+                self.needs_draw = true;
             }
 
             if self.scroll_anim_expired() {
                 self.scroll_anim = None;
+                // Animation ended: the next frame shows the settled position.
+                self.needs_draw = true;
             }
 
             // ── Draw ──────────────────────────────────────────────
-            // `:redraw!` sets force_clear_screen; clear before drawing so
-            // stale terminal content is wiped. Cleared immediately so only
-            // the next frame pays the cost.
-            if self.force_clear_screen {
-                self.force_clear_screen = false;
-                terminal.clear()?;
-            }
-            // Refresh the inline-blame idle debounce from the cursor position
-            // (source-agnostic) before drawing so the blame ghost engages only
-            // after the cursor has settled for `BLAME_IDLE_DELAY`.
+            // 120 ms bookkeeping runs on EVERY poll regardless of whether a
+            // draw happens: the inline-blame idle debounce (source-agnostic,
+            // so the blame ghost engages only after the cursor has settled
+            // for `BLAME_IDLE_DELAY`) and the start-screen expiry (it must
+            // retire on time even with no input at all). When the expiry
+            // actually clears the splash, the transition frame must draw.
             self.note_blame_cursor_motion();
-            // Retire the start screen on time even with no input at all.
+            let had_start_screen = self.start_screen.is_some();
             self.expire_start_screen();
-            let t_draw = std::time::Instant::now();
-            terminal.draw(|frame| render::frame(frame, self))?;
-            tracing::debug!(
-                target: "hjkl::profile",
-                draw_us = t_draw.elapsed().as_micros(),
-                "draw"
-            );
+            if had_start_screen && self.start_screen.is_none() {
+                self.needs_draw = true;
+            }
+            // Same transition for toasts: while one is visible the repaints
+            // are continuous (`frame_is_time_animated`), but the tick it
+            // expires needs an explicit draw to clear it off the screen.
+            let toast_visible = self
+                .bus
+                .active(std::time::SystemTime::now())
+                .next()
+                .is_some();
+            if last_toast_visible && !toast_visible {
+                self.needs_draw = true;
+            }
+            last_toast_visible = toast_visible;
+            // Repaint only when something changed since the last frame, or a
+            // wall-clock-driven element is animating (`frame_is_time_animated`).
+            // Purely idle polls — no input, no async output, nothing animating
+            // — skip the redraw entirely.
+            if self.frame_needs_redraw() {
+                self.needs_draw = false;
+                // `:redraw!` sets force_clear_screen; clear before drawing so
+                // stale terminal content is wiped. Cleared immediately so only
+                // the next frame pays the cost.
+                if self.force_clear_screen {
+                    self.force_clear_screen = false;
+                    terminal.clear()?;
+                }
+                let t_draw = std::time::Instant::now();
+                terminal.draw(|frame| render::frame(frame, self))?;
+                tracing::debug!(
+                    target: "hjkl::profile",
+                    draw_us = t_draw.elapsed().as_micros(),
+                    "draw"
+                );
+            }
 
             // ── Async polls ───────────────────────────────────────
-            self.drain_async_polls();
+            // Runs after the draw; when a poll produced output, request a
+            // repaint so the next iteration shows it (the polls used to set
+            // `pending_recompute` and rely on the unconditional draw to pick
+            // the new state up).
+            if self.drain_async_polls() {
+                self.needs_draw = true;
+            }
 
             // ── Poll timeout ──────────────────────────────────────
             let poll_timeout = self.compute_poll_timeout();
@@ -1994,6 +2154,11 @@ impl App {
             // ── Wait for event ────────────────────────────────────
             if !event::poll(poll_timeout)? {
                 let now = std::time::Instant::now();
+                // Timeout-triggered UI changes (which-key popup, chord
+                // resolution, hover popup show/expiry, indent-flash end) all
+                // need a repaint — tracked here so a purely idle timeout
+                // (nothing to show) stays draw-free.
+                let mut repaint = false;
                 if !self.which_key_active
                     && !self.active_which_key_prefix().is_empty()
                     && hjkl_which_key::should_show(
@@ -2004,6 +2169,7 @@ impl App {
                     )
                 {
                     self.which_key_active = true;
+                    repaint = true;
                 }
                 // Chord timeout: only resolves an ambiguous prefix when the
                 // which-key popup is NOT visible. Once the popup shows, the
@@ -2020,9 +2186,14 @@ impl App {
                 {
                     replay_to_engine(self, &replay);
                     self.sync_after_engine_mutation();
+                    repaint = true;
                 }
                 // ── Idle swap-write (issue #185, audit-r2 fix 3) ───────
                 self.tick_idle_swap_write(now);
+                // The hover timer can show a popup (blame-mode hover sets it
+                // synchronously), and the expiry check below can clear one —
+                // both change the frame.
+                let had_hover = self.hover_popup.is_some();
                 self.tick_hover_timer();
                 if self
                     .hover_popup
@@ -2032,11 +2203,30 @@ impl App {
                     self.hover_popup = None;
                     self.hover_timer = None;
                 }
-                self.indent_flash_active();
+                if self.hover_popup.is_some() != had_hover {
+                    repaint = true;
+                }
+                // Indent flash: repaint while it animates (it is also part of
+                // `frame_is_time_animated`), and repaint on the tick that
+                // expires it so the flash's disappearance shows.
+                if self.indent_flash.is_some() {
+                    self.indent_flash_active();
+                    if self.indent_flash.is_none() {
+                        repaint = true;
+                    }
+                }
+                if repaint {
+                    self.needs_draw = true;
+                }
                 continue;
             }
 
             // ── Dispatch event ────────────────────────────────────
+            // ANY terminal event may have changed render state — flag the
+            // repaint before dispatching so a handler that mutates something
+            // the renderer reads can never be missed (conservative default:
+            // draw when in doubt).
+            self.needs_draw = true;
             match event::read()? {
                 Event::Key(key) => {
                     // Record keystroke time for the idle swap-write timer (#185).
@@ -2223,5 +2413,75 @@ impl App {
                 h.request_sent = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_app() -> App {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("needs_draw.txt");
+        std::fs::write(&path, "hello\nworld\n").unwrap();
+        App::new(Some(path), false, None, None).unwrap()
+    }
+
+    /// A fresh `App` must repaint its first frame: the loop draws at the top
+    /// of the first iteration before any event arrives, so `App::new` has to
+    /// seed the flag.
+    #[test]
+    fn fresh_app_requests_a_first_frame() {
+        let app = temp_app();
+        assert!(app.needs_draw, "App::new must seed needs_draw");
+        assert!(app.frame_needs_redraw(), "the first frame must be drawn");
+    }
+
+    /// The whole point of the gate: an input event requests a repaint, while
+    /// a purely idle poll (no state change, no wall-clock animation) must
+    /// NOT — that is where the draw cost is saved.
+    #[test]
+    fn input_event_requests_draw_but_pure_idle_poll_does_not() {
+        let mut app = temp_app();
+        // Settle every wall-clock-driven element so the frame is static: a
+        // fresh app has no start screen (file arg), scroll/indent animation,
+        // picker, toast, or in-flight request — but the blame idle window
+        // starts at "now", so push it far into the past.
+        app.blame_cursor_moved_at = std::time::Instant::now() - std::time::Duration::from_secs(5);
+        app.needs_draw = false; // simulate the loop having drawn the first frame
+
+        // Pure idle poll: nothing changed, nothing animating → no repaint.
+        assert!(
+            !app.frame_is_time_animated(),
+            "settled app has no time-animated element"
+        );
+        assert!(
+            !app.frame_needs_redraw(),
+            "a settled app must skip the idle redraw"
+        );
+
+        // An input event (the resize handler is the event-arm path that sets
+        // the flag inside its own handler; key/mouse/paste set it in the
+        // loop's event arm before dispatch) requests a repaint.
+        app.handle_resize(100, 40);
+        assert!(app.needs_draw, "an input event must set needs_draw");
+        assert!(
+            app.frame_needs_redraw(),
+            "an input event must request a repaint"
+        );
+    }
+
+    /// The draw arm clears the flag, so the NEXT idle poll is draw-free
+    /// again — the flag must not latch.
+    #[test]
+    fn draw_clears_flag_and_next_idle_poll_stays_draw_free() {
+        let mut app = temp_app();
+        app.blame_cursor_moved_at = std::time::Instant::now() - std::time::Duration::from_secs(5);
+        // The loop's draw arm clears `needs_draw` right before drawing.
+        app.needs_draw = false;
+        assert!(
+            !app.frame_needs_redraw(),
+            "after a draw, an idle poll must not redraw"
+        );
     }
 }

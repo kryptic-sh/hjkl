@@ -364,6 +364,17 @@ pub struct App {
     /// recompute once after the event-drain loop ends, so a burst of
     /// mouse-scroll events fires one sync query instead of N.
     pub(crate) pending_recompute: bool,
+    /// Repaint gate for the event loop. Set whenever anything the renderer
+    /// reads changed — an input event (key/mouse/resize/paste/focus), async
+    /// poll output (LSP events, git signs/blame, grammar loads, format
+    /// results, anvil jobs, fs-watch reloads), a timeout-triggered UI change
+    /// (which-key popup, chord resolution, hover popup show/expiry, indent
+    /// flash end, start-screen expiry), a viewport/size change, or the
+    /// per-tick recompute flush. The loop draws only when this is set (or a
+    /// wall-clock-driven element is animating — see
+    /// `App::frame_is_time_animated`), so a purely idle poll with no state
+    /// change skips the terminal redraw entirely, then clears the flag.
+    pub(crate) needs_draw: bool,
     pub last_signature_us: u128,
     /// `(buffer_id, viewport top_row, viewport height, content dirty_gen)` at
     /// the last syntax recompute driven by `sync_after_engine_mutation`. Lets
@@ -2370,6 +2381,8 @@ impl App {
             // Seed the first-frame recompute via the event-loop's drain
             // flush so render::frame doesn't need a redundant sync parse.
             pending_recompute: true,
+            // First frame must draw — the loop's gate starts dirty.
+            needs_draw: true,
             last_signature_us: 0,
             last_synced_syntax_view: None,
             config: hjkl_app::config::Config::default(),
