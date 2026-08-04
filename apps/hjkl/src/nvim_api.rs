@@ -1573,6 +1573,15 @@ fn dispatch(
             };
             // params[5] = opts dict — ignored
 
+            // Reject an inverted range (start after end) like nvim does —
+            // a start_row > end_row (or equal rows with start_col >
+            // end_col) would otherwise fall through the loop below and
+            // silently return an empty array. Mirrors the check and
+            // message in nvim_buf_set_text.
+            if start_row > end_row || (start_row == end_row && start_col > end_col) {
+                return err(stdout, msgid, "start is higher than end");
+            }
+
             let current_id = app.nvim_current_buffer_id();
             let rope = if buf_id == current_id {
                 app.active_editor().buffer().rope()
@@ -2558,6 +2567,21 @@ mod tests {
         buf_handle(id)
     }
 
+    /// Decode a buffer ext handle back to its u64 id.
+    fn decode_buf_id(v: &Value) -> u64 {
+        match v {
+            Value::Ext(tag, bytes) => {
+                assert_eq!(*tag, BUFFER_EXT, "expected a buffer ext handle");
+                let mut c = std::io::Cursor::new(bytes.as_slice());
+                rmpv::decode::read_value(&mut c)
+                    .expect("decode ext id")
+                    .as_u64()
+                    .expect("buffer id must be an unsigned integer")
+            }
+            other => panic!("expected Ext buffer handle, got {other:?}"),
+        }
+    }
+
     /// Decode the msgpack-rpc response written to `out` and return
     /// `[type, msgid, error, result]` as a `Vec<Value>`.
     fn decode_response(out: &[u8]) -> Vec<Value> {
@@ -2920,6 +2944,85 @@ mod tests {
         };
 
         assert_eq!(after, before + 1, "list_bufs should grow by 1 after create");
+    }
+
+    /// The initial buffer must get a real id (>= 1), not 0 — a 0 handle
+    /// means "current buffer" on the wire, so an id-0 initial buffer could
+    /// never be re-focused by its own handle (every use silently retargets
+    /// to whatever buffer is current).
+    #[test]
+    fn test_initial_buffer_has_nonzero_id_and_refocuses() {
+        let mut app = build_app(None).unwrap();
+
+        let initial_handle = assert_ok(call(&mut app, "nvim_get_current_buf", vec![]));
+        let initial_id = decode_buf_id(&initial_handle);
+        assert!(
+            initial_id >= 1,
+            "initial buffer id must be >= 1, got {initial_id} \
+             (0 collides with the 'current buffer' wildcard)"
+        );
+
+        // nvim_list_bufs must list the initial buffer under that id.
+        let bufs = match assert_ok(call(&mut app, "nvim_list_bufs", vec![])) {
+            Value::Array(v) => v,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert!(
+            bufs.contains(&initial_handle),
+            "list_bufs must contain the initial buffer handle"
+        );
+
+        // Name the initial buffer, then create and switch to a second one.
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_name",
+            vec![
+                initial_handle.clone(),
+                Value::from("/tmp/hjkl_initial_buf.txt"),
+            ],
+        ));
+        let other_handle = assert_ok(call(
+            &mut app,
+            "nvim_create_buf",
+            vec![Value::Boolean(true), Value::Boolean(false)],
+        ));
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_name",
+            vec![other_handle.clone(), Value::from("/tmp/hjkl_other_buf.txt")],
+        ));
+        assert_ok(call(
+            &mut app,
+            "nvim_set_current_buf",
+            vec![other_handle.clone()],
+        ));
+
+        // The initial handle must still name the INITIAL buffer, not the
+        // currently-focused one.
+        let name = match assert_ok(call(
+            &mut app,
+            "nvim_buf_get_name",
+            vec![initial_handle.clone()],
+        )) {
+            Value::String(s) => s.as_str().unwrap_or("").to_owned(),
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert!(
+            name.contains("hjkl_initial_buf.txt"),
+            "get_name on the initial handle must return the initial buffer's name, got {name:?}"
+        );
+
+        // Re-focusing by the initial handle must actually land on it.
+        assert_ok(call(
+            &mut app,
+            "nvim_set_current_buf",
+            vec![initial_handle.clone()],
+        ));
+        let current = assert_ok(call(&mut app, "nvim_get_current_buf", vec![]));
+        assert_eq!(
+            current, initial_handle,
+            "set_current_buf must refocus the initial buffer"
+        );
     }
 
     #[test]
@@ -5378,6 +5481,63 @@ mod tests {
             Value::Array(vec![Value::from("abc"), Value::from("def")]),
             "buffer must be unchanged after a rejected inverted-range edit"
         );
+    }
+
+    /// nvim_buf_get_text with start after end must error (like nvim's
+    /// E1206), not silently return an empty array — mirroring the
+    /// inverted-range rejection in nvim_buf_set_text.
+    #[test]
+    fn test_buf_get_text_inverted_range_errors() {
+        let mut app = build_app(None).unwrap();
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("abc"), Value::from("def")]),
+            ],
+        ));
+
+        // start_row AFTER end_row.
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_text",
+            vec![
+                Value::Nil,
+                Value::from(1i64), // start_row
+                Value::from(0i64),
+                Value::from(0i64), // end_row
+                Value::from(0i64),
+                Value::Map(vec![]),
+            ],
+        );
+        let msg = match &resp[2] {
+            Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
+            other => panic!("expected an error array, got {other:?}"),
+        };
+        assert_eq!(msg, "start is higher than end");
+
+        // Same row: start_col AFTER end_col must also error.
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_text",
+            vec![
+                Value::Nil,
+                Value::from(0i64), // start_row
+                Value::from(2i64), // start_col AFTER end_col
+                Value::from(0i64), // end_row
+                Value::from(0i64), // end_col
+                Value::Map(vec![]),
+            ],
+        );
+        let msg = match &resp[2] {
+            Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
+            other => panic!("expected an error array, got {other:?}"),
+        };
+        assert_eq!(msg, "start is higher than end");
     }
 
     // ── strict_indexing (audit R2, fix 3) ──────────────────────────────────

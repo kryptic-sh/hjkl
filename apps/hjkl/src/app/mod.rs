@@ -220,7 +220,7 @@ pub struct App {
     pub active_tab: usize,
     /// Counter for the next fresh `WindowId`.
     next_window_id: window::WindowId,
-    /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
+    /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 1; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
     /// the last slot consume the next value.
     next_buffer_id: BufferId,
@@ -2232,7 +2232,7 @@ impl App {
         let theme = crate::theme::AppTheme::default_dark();
         let directory = std::sync::Arc::new(hjkl_lang::LanguageDirectory::new()?);
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
-        let buffer_id: BufferId = 0;
+        let buffer_id: BufferId = 1;
         // App::new uses bundled config defaults; main wires the XDG-merged
         // value via `with_config` after construction. For build_slot's
         // initial Options seed, the bundled defaults are correct because
@@ -2333,7 +2333,7 @@ impl App {
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,
             next_window_id: 1,
-            next_buffer_id: 1,
+            next_buffer_id: 2,
             prev_active: None,
             // Window 0 exists and is regular at startup; recorded here so
             // opening the explorer before any focus change still has a
